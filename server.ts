@@ -183,18 +183,24 @@ app.post("/api/estimate-nutrition", nutritionEstimateRateLimiter, async (req, re
 
     if (errorMsg.includes("not configured") || errorMsg.includes("GEMINI_API_KEY")) {
       return res.status(503).json({
-        error: "Gemini API key is not configured on the server. Please check your environment variables.",
+        error: "Nutrition estimation service is not configured on the server. Please check your environment variables.",
       });
     }
 
-    if (errorMsg.includes("provide a list") || errorMsg.includes("valid ingredient")) {
+    if (errorMsg.includes("provide a list") || errorMsg.includes("valid ingredient") || errorMsg.includes("Maximum allowed")) {
       return res.status(400).json({
         error: errorMsg,
       });
     }
 
+    if (errorMsg.includes("quota") || errorMsg.includes("demand") || errorMsg.includes("temporarily unavailable") || errorMsg.includes("RESOURCE_EXHAUSTED")) {
+      return res.status(503).json({
+        error: "Nutrition estimation is temporarily unavailable. Please try again in a moment.",
+      });
+    }
+
     return res.status(500).json({
-      error: "Failed to estimate recipe nutrition. Please verify ingredient measurements and try again.",
+      error: "An unexpected error occurred during nutrition estimation. Please try again.",
     });
   }
 });

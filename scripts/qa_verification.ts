@@ -31,7 +31,7 @@ function assert(condition: boolean, testName: string, details?: string) {
 }
 
 console.log('====================================================');
-console.log('THE KITCHEN CODEX v0.2.0 — COMPREHENSIVE QA TEST SUITE');
+console.log('THE KITCHEN CODEX v0.2.1 — COMPREHENSIVE QA TEST SUITE');
 console.log('====================================================\n');
 
 // ----------------------------------------------------

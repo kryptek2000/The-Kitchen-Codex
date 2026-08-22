@@ -1,6 +1,6 @@
-# 🍳 The Kitchen Codex `v0.2.0`
+# 🍳 The Kitchen Codex `v0.2.1`
 
-[![Version](https://img.shields.io/badge/version-0.2.0-amber.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.2.1-amber.svg)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A markdown-native recipe manager, meal planner, culinary knowledge base, and interactive cooking companion built specifically for **Obsidian** vaults. Read, edit, sync, and cook directly from your Obsidian `.md` recipe collection with YAML frontmatter, Dataview tags, wikilinks (`[[Ingredient]]`, `[[Target|Alias]]`), AI nutrition estimation, dynamic portion scaling, multi-step cooking timers, and AI-powered web recipe scraping.
@@ -24,8 +24,9 @@ A markdown-native recipe manager, meal planner, culinary knowledge base, and int
 - **Direct Note Authoring**: Create new Markdown knowledge notes directly into your Obsidian `Notes/` folder with YAML frontmatter from the preview modal.
 
 ### 🥗 AI Nutritional Estimation
-- **Macronutrient & Calorie Breakdown**: Server-side nutrition analysis powered by Gemini 3.7 Flash, calculating calories, protein, carbohydrates, fat, dietary fiber, and sodium per serving.
-- **YAML Frontmatter Persistence**: Serializes nutritional data directly into note frontmatter for interoperability with Dataview.
+- **Multi-Tiered Nutritional Analysis**: High-precision nutritional estimation with a resilient multi-model fallback cascade: `gemini-3.6-flash` (primary), `gemini-3.1-flash-lite` (secondary fallback), and an offline culinary algorithmic estimator.
+- **Wikilink & Measurement Normalization**: Obsidian wikilinks (`[[Ingredient|Alias]]`) and Unicode/ASCII fractions are cleaned and parsed for consistent analysis.
+- **YAML Frontmatter Persistence**: Validates and serializes calories, protein, carbohydrates, fat, dietary fiber, and sodium per serving directly into note frontmatter for Dataview interoperability.
 - **Portion Scaling Compatibility**: Dynamically calculates and displays macro values scaled to current portions.
 
 ### 🌐 AI Web Recipe Grabber
@@ -210,7 +211,14 @@ favorite: true
 
 ## 📌 Changelog
 
-### `v0.2.0` (Current Release)
+### `v0.2.1` (Current Release)
+- **Resilient Nutrition Estimation Cascade**: Implemented primary model `gemini-3.6-flash` with automatic fallback to `gemini-3.1-flash-lite`, and a final offline algorithmic culinary estimator when external AI services or quotas are unavailable.
+- **Obsidian Wikilink Cleansing**: Stripped `[[Entity|Alias]]` and `[[Entity]]` syntax prior to AI nutritional analysis, preventing prompt confusion while preserving note syntax.
+- **Error Handling & Quota Resilience**: Replaced misleading measurement validation errors with transparent AI availability handling and graceful fallback calculations.
+- **Frontmatter Validation**: Strict validation of nutrition macro fields (`calories`, `protein`, `carbohydrates`, `fat`, `fiber`, `sodium`) before serializing to YAML.
+- **Metadata & Note Integrity**: Full preservation of recipe tags, callouts, instructions, notes, and custom frontmatter properties.
+
+### `v0.2.0`
 - **Interactive Wikilink Intelligence**: Full support for wikilinks (`[[Ingredient]]`, `[[Target|Alias]]`) with contextual modal previews, backlink recipe exploration, and direct Markdown note creation in the vault.
 - **AI Nutrition Estimation**: Server-side macro analysis powered by Gemini 3.7 Flash, calculating calories, protein, carbs, fat, fiber, and sodium per serving with YAML frontmatter persistence.
 - **Obsidian Theme System**: Support for Obsidian Dark, Warm Parchment, and Nordic Sage themes with responsive contrast.

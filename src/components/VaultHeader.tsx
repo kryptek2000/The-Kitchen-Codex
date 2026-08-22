@@ -115,7 +115,7 @@ export function VaultHeader({
                 Obsidian Culinary Vault
               </span>
               <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-medium">
-                v0.2.0
+                v0.2.1
               </span>
             </div>
             <p className="text-xs text-gray-500">

@@ -31,10 +31,23 @@ export interface NutritionEstimateResult {
   confidenceNote: string;
 }
 
+const PRIMARY_MODEL = "gemini-3.6-flash";
+const FALLBACK_MODEL = "gemini-3.1-flash-lite";
+
+/**
+ * Strips Obsidian wikilinks [[Target|Alias]] -> Alias, [[Target]] -> Target
+ * solely for prompt input clarity without touching raw recipe files.
+ */
+function cleanWikilinks(text: string): string {
+  return text
+    .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, "$2")
+    .replace(/\[\[([^\]]+)\]\]/g, "$1");
+}
+
 /**
  * Fallback algorithmic culinary nutritional estimator based on standard ingredient profiles
  */
-function estimateAlgorithmicNutrition(
+export function estimateAlgorithmicNutrition(
   recipeTitle: string,
   servings: number,
   ingredientLines: string[]
@@ -46,7 +59,8 @@ function estimateAlgorithmicNutrition(
   let totalFiber = 0;
   let totalSodium = 0;
 
-  for (const line of ingredientLines) {
+  for (const rawLine of ingredientLines) {
+    const line = cleanWikilinks(rawLine);
     const lower = line.toLowerCase();
     
     // Extract numerical amount if present
@@ -70,6 +84,12 @@ function estimateAlgorithmicNutrition(
       totalFat += (multiplier / 100) * 2;
       totalFiber += (multiplier / 100) * 3;
       totalSodium += (multiplier / 100) * 5;
+    } else if (lower.includes('chicken') || lower.includes('poultry') || lower.includes('turkey')) {
+      const multiplier = lower.includes('g') ? amount : lower.includes('oz') ? amount * 28.3 : lower.includes('lb') ? amount * 450 : amount * 120;
+      totalCalories += (multiplier / 100) * 165;
+      totalProtein += (multiplier / 100) * 31;
+      totalFat += (multiplier / 100) * 3.6;
+      totalSodium += (multiplier / 100) * 70;
     } else if (lower.includes('guanciale') || lower.includes('pancetta') || lower.includes('bacon') || lower.includes('pork') || lower.includes('beef') || lower.includes('steak')) {
       const multiplier = lower.includes('g') ? amount : lower.includes('oz') ? amount * 28.3 : lower.includes('lb') ? amount * 450 : amount * 50;
       totalCalories += (multiplier / 100) * 600;
@@ -86,7 +106,7 @@ function estimateAlgorithmicNutrition(
       totalProtein += amount * 6.3;
       totalFat += amount * 4.8;
       totalSodium += amount * 71;
-    } else if (lower.includes('pecorino') || lower.includes('parmesan') || lower.includes('cheese') || lower.includes('cheddar') || lower.includes('mozzarella')) {
+    } else if (lower.includes('pecorino') || lower.includes('parmesan') || lower.includes('parmigiano') || lower.includes('cheese') || lower.includes('cheddar') || lower.includes('mozzarella')) {
       const multiplier = lower.includes('cup') ? amount * 100 : lower.includes('g') ? amount : lower.includes('oz') ? amount * 28.3 : amount * 30;
       totalCalories += (multiplier / 100) * 390;
       totalProtein += (multiplier / 100) * 32;
@@ -96,6 +116,12 @@ function estimateAlgorithmicNutrition(
       const multiplier = lower.includes('tbsp') ? amount * 14 : lower.includes('tsp') ? amount * 5 : lower.includes('cup') ? amount * 220 : amount * 14;
       totalCalories += (multiplier / 14) * 120;
       totalFat += (multiplier / 14) * 14;
+    } else if (lower.includes('cream')) {
+      const multiplier = lower.includes('cup') ? amount * 240 : lower.includes('tbsp') ? amount * 15 : amount * 100;
+      totalCalories += (multiplier / 100) * 340;
+      totalFat += (multiplier / 100) * 36;
+      totalProtein += (multiplier / 100) * 2.8;
+      totalCarbs += (multiplier / 100) * 2.7;
     } else if (lower.includes('salt')) {
       totalSodium += (lower.includes('tsp') ? amount * 2300 : 300);
     } else if (lower.includes('sugar') || lower.includes('honey')) {
@@ -134,8 +160,110 @@ function estimateAlgorithmicNutrition(
   };
 }
 
+async function callGeminiForNutrition(
+  gemini: GoogleGenAI,
+  modelName: string,
+  recipeTitle: string,
+  servings: number,
+  cleanedIngredientLines: string[]
+): Promise<NutritionEstimateResult> {
+  const prompt = `You are a certified culinary nutritional analysis engine for The Kitchen Codex.
+Analyze the following recipe and its ingredients to calculate the estimated nutritional content PER SERVING (divided among ${servings} servings total).
+
+Recipe Title: ${recipeTitle}
+Total Servings: ${servings}
+
+Ingredients:
+${cleanedIngredientLines.map(line => `- ${line}`).join("\n")}
+
+Guidelines:
+1. Calculate per-serving values (divide total recipe batch nutrition by ${servings}).
+2. Account for cooking methods and typical absorption (e.g. oil used in sautéing/frying).
+3. If an ingredient has "to taste", "pinch", "dash", or unstated amount, estimate standard modest culinary quantities.
+4. Output strictly the requested JSON structure with integers/decimals rounded to 1 decimal place (calories as whole integer).
+5. Provide a brief, factual confidence note (e.g. "Nutrition values are estimates based on ${cleanedIngredientLines.length} ingredients across ${servings} servings.").`;
+
+  const response = await gemini.models.generateContent({
+    model: modelName,
+    contents: prompt,
+    config: {
+      temperature: 0.1,
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          calories: {
+            type: Type.NUMBER,
+            description: "Estimated calories per serving in kcal (integer)",
+          },
+          protein: {
+            type: Type.NUMBER,
+            description: "Estimated protein per serving in grams",
+          },
+          carbohydrates: {
+            type: Type.NUMBER,
+            description: "Estimated total carbohydrates per serving in grams",
+          },
+          fat: {
+            type: Type.NUMBER,
+            description: "Estimated total fat per serving in grams",
+          },
+          fiber: {
+            type: Type.NUMBER,
+            description: "Estimated dietary fiber per serving in grams",
+          },
+          sodium: {
+            type: Type.NUMBER,
+            description: "Estimated sodium per serving in milligrams",
+          },
+          confidenceNote: {
+            type: Type.STRING,
+            description: "A short qualification message regarding the estimation",
+          },
+        },
+        required: [
+          "calories",
+          "protein",
+          "carbohydrates",
+          "fat",
+          "fiber",
+          "sodium",
+        ],
+      },
+    },
+  });
+
+  const responseText = response.text?.trim();
+  if (!responseText) {
+    throw new Error("Empty response returned from AI model.");
+  }
+
+  const parsed = JSON.parse(responseText);
+  const calories = Math.max(0, Math.round(Number(parsed.calories) || 0));
+  const protein = Math.max(0, Math.round((Number(parsed.protein) || 0) * 10) / 10);
+  const carbohydrates = Math.max(0, Math.round((Number(parsed.carbohydrates) || 0) * 10) / 10);
+  const fat = Math.max(0, Math.round((Number(parsed.fat) || 0) * 10) / 10);
+  const fiber = Math.max(0, Math.round((Number(parsed.fiber) || 0) * 10) / 10);
+  const sodium = Math.max(0, Math.round(Number(parsed.sodium) || 0));
+  const confidenceNote =
+    typeof parsed.confidenceNote === "string" && parsed.confidenceNote.trim()
+      ? parsed.confidenceNote.trim()
+      : `Nutrition values are estimates based on ${cleanedIngredientLines.length} ingredients across ${servings} servings.`;
+
+  return {
+    calories,
+    protein,
+    carbohydrates,
+    fat,
+    fiber,
+    sodium,
+    confidenceNote,
+  };
+}
+
 /**
- * Estimates macronutrients and micronutrients per serving using Gemini AI
+ * Estimates macronutrients and micronutrients per serving using a resilient fallback chain:
+ * Primary (gemini-3.6-flash) -> Fallback (gemini-3.1-flash-lite) -> Algorithmic Fallback
  */
 export async function estimateRecipeNutrition(
   req: NutritionEstimateRequest
@@ -147,124 +275,50 @@ export async function estimateRecipeNutrition(
     throw new Error("Please provide a list of ingredients to estimate nutrition.");
   }
 
-  // Format ingredients list cleanly for the prompt
-  const ingredientLines: string[] = [];
+  // Format ingredients list and clean Obsidian wikilinks for the prompt
+  const rawIngredientLines: string[] = [];
+  const cleanedIngredientLines: string[] = [];
+
   for (let i = 0; i < Math.min(req.ingredients.length, 100); i++) {
     const item = req.ingredients[i];
+    let line = "";
     if (typeof item === "string") {
-      const trimmed = item.trim().slice(0, 300);
-      if (trimmed) ingredientLines.push(`- ${trimmed}`);
+      line = item.trim().slice(0, 300);
     } else if (item && typeof item === "object") {
-      const line = item.original || `${item.amount || ''} ${item.unit || ''} ${item.name || ''}`.trim();
-      const trimmed = line.trim().slice(0, 300);
-      if (trimmed) ingredientLines.push(`- ${trimmed}`);
+      line = (item.original || `${item.amount || ''} ${item.unit || ''} ${item.name || ''}`).trim().slice(0, 300);
+    }
+
+    if (line) {
+      rawIngredientLines.push(line);
+      cleanedIngredientLines.push(cleanWikilinks(line));
     }
   }
 
-  if (ingredientLines.length === 0) {
+  if (cleanedIngredientLines.length === 0) {
     throw new Error("No valid ingredient lines were provided.");
   }
 
   const gemini = getGemini();
   if (!gemini) {
-    return estimateAlgorithmicNutrition(recipeTitle, servings, ingredientLines);
+    console.info("[NutritionEstimator] No Gemini client configured. Using algorithmic nutrition estimation.");
+    return estimateAlgorithmicNutrition(recipeTitle, servings, rawIngredientLines);
   }
 
+  // Attempt 1: Primary Model (gemini-3.6-flash)
   try {
-    const prompt = `You are a certified culinary nutritional analysis engine for The Kitchen Codex.
-Analyze the following recipe and its ingredients to calculate the estimated nutritional content PER SERVING (divided among ${servings} servings total).
-
-Recipe Title: ${recipeTitle}
-Total Servings: ${servings}
-
-Ingredients:
-${ingredientLines.join("\n")}
-
-Guidelines:
-1. Calculate per-serving values (divide total recipe batch nutrition by ${servings}).
-2. Account for cooking methods and typical absorption (e.g. oil used in cooking).
-3. If an ingredient has "to taste" or unstated amount (e.g., salt, pepper), assume standard modest culinary pinches.
-4. Output strictly the requested JSON structure with integers/decimals rounded to 1 decimal place (calories as whole integer).
-5. Provide a brief, factual confidence note (e.g. "Nutrition values are estimates based on ${ingredientLines.length} ingredients across ${servings} servings.").`;
-
-    const response = await gemini.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-      config: {
-        temperature: 0.1,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            calories: {
-              type: Type.NUMBER,
-              description: "Estimated calories per serving in kcal (integer)",
-            },
-            protein: {
-              type: Type.NUMBER,
-              description: "Estimated protein per serving in grams",
-            },
-            carbohydrates: {
-              type: Type.NUMBER,
-              description: "Estimated total carbohydrates per serving in grams",
-            },
-            fat: {
-              type: Type.NUMBER,
-              description: "Estimated total fat per serving in grams",
-            },
-            fiber: {
-              type: Type.NUMBER,
-              description: "Estimated dietary fiber per serving in grams",
-            },
-            sodium: {
-              type: Type.NUMBER,
-              description: "Estimated sodium per serving in milligrams",
-            },
-            confidenceNote: {
-              type: Type.STRING,
-              description: "A short qualification message regarding the estimation",
-            },
-          },
-          required: [
-            "calories",
-            "protein",
-            "carbohydrates",
-            "fat",
-            "fiber",
-            "sodium",
-          ],
-        },
-      },
-    });
-
-    const responseText = response.text?.trim();
-    if (!responseText) {
-      return estimateAlgorithmicNutrition(recipeTitle, servings, ingredientLines);
+    return await callGeminiForNutrition(gemini, PRIMARY_MODEL, recipeTitle, servings, cleanedIngredientLines);
+  } catch (primaryErr: any) {
+    console.warn(`[NutritionEstimator] Primary model (${PRIMARY_MODEL}) failed: ${primaryErr?.message || primaryErr}. Attempting fallback (${FALLBACK_MODEL})...`);
+    
+    // Attempt 2: Fallback Model (gemini-3.1-flash-lite)
+    try {
+      return await callGeminiForNutrition(gemini, FALLBACK_MODEL, recipeTitle, servings, cleanedIngredientLines);
+    } catch (fallbackErr: any) {
+      console.warn(`[NutritionEstimator] Fallback model (${FALLBACK_MODEL}) failed: ${fallbackErr?.message || fallbackErr}. Engaging algorithmic fallback...`);
+      
+      // Attempt 3: Algorithmic Culinary Estimator
+      return estimateAlgorithmicNutrition(recipeTitle, servings, rawIngredientLines);
     }
-
-    const parsed = JSON.parse(responseText);
-    const calories = Math.max(0, Math.round(Number(parsed.calories) || 0));
-    const protein = Math.max(0, Math.round((Number(parsed.protein) || 0) * 10) / 10);
-    const carbohydrates = Math.max(0, Math.round((Number(parsed.carbohydrates) || 0) * 10) / 10);
-    const fat = Math.max(0, Math.round((Number(parsed.fat) || 0) * 10) / 10);
-    const fiber = Math.max(0, Math.round((Number(parsed.fiber) || 0) * 10) / 10);
-    const sodium = Math.max(0, Math.round(Number(parsed.sodium) || 0));
-    const confidenceNote =
-      typeof parsed.confidenceNote === "string" && parsed.confidenceNote.trim()
-        ? parsed.confidenceNote.trim()
-        : `Nutrition values are estimates based on ${ingredientLines.length} ingredients across ${servings} servings.`;
-
-    return {
-      calories,
-      protein,
-      carbohydrates,
-      fat,
-      fiber,
-      sodium,
-      confidenceNote,
-    };
-  } catch (err) {
-    console.warn("AI nutrition estimation fallback engaged:", err);
-    return estimateAlgorithmicNutrition(recipeTitle, servings, ingredientLines);
   }
 }
+
