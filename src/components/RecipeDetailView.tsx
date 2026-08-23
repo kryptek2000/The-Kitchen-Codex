@@ -27,11 +27,14 @@ import {
   Utensils,
   Share2,
   Trash2,
+  BrainCircuit,
 } from 'lucide-react';
 import { ObsidianRecipe, ParsedIngredient, VaultNote, RecipeNutrition } from '../types';
 import { scaleIngredientText } from '../utils/markdownParser';
 import { downloadMarkdownFile } from '../utils/vaultFileSystem';
 import { getRecipeImage, DEFAULT_FOOD_IMAGES } from '../utils/imageHelper';
+import { useVaultImage } from '../hooks/useVaultImage';
+import { assessRecipeHealth } from '../utils/vaultIntelligence';
 import { RecipeNutritionCard } from './RecipeNutritionCard';
 import { WikilinkPreviewModal } from './WikilinkPreviewModal';
 
@@ -50,6 +53,7 @@ interface RecipeDetailViewProps {
   onUpdateNutrition?: (recipe: ObsidianRecipe, nutrition: RecipeNutrition) => Promise<boolean | void> | void;
   onSelectRecipe?: (recipe: ObsidianRecipe) => void;
   onSaveNoteToVault?: (note: VaultNote) => Promise<boolean | void>;
+  onOpenVaultIntelligence?: (recipeId?: string) => void;
 }
 
 export function RecipeDetailView({
@@ -67,6 +71,7 @@ export function RecipeDetailView({
   onUpdateNutrition,
   onSelectRecipe,
   onSaveNoteToVault,
+  onOpenVaultIntelligence,
 }: RecipeDetailViewProps) {
   const [currentServings, setCurrentServings] = useState<number>(recipe.servings || 4);
   const [activeViewMode, setActiveViewMode] = useState<'visual' | 'markdown'>('visual');
@@ -77,7 +82,11 @@ export function RecipeDetailView({
   const [isDeleting, setIsDeleting] = useState(false);
   const [selectedWikilink, setSelectedWikilink] = useState<{ target: string; alias?: string } | null>(null);
 
+  const defaultImg = getRecipeImage(recipe);
+  const reactiveVaultImage = useVaultImage(recipe.image, defaultImg);
+
   const baseServings = recipe.servings || 4;
+  const recipeHealth = assessRecipeHealth(recipe);
 
   const toggleIngredientCheck = (idx: number) => {
     setCheckedIngredients((prev) => ({
@@ -190,6 +199,19 @@ export function RecipeDetailView({
             <span>{copiedLink ? 'Copied [[Link]]!' : '[[Wikilink]]'}</span>
           </button>
 
+          {/* Vault Intelligence Quick Button */}
+          {onOpenVaultIntelligence && (
+            <button
+              id="recipe-detail-vault-intelligence-btn"
+              onClick={() => onOpenVaultIntelligence(recipe.id)}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-purple-500/30 bg-purple-500/10 text-purple-300 hover:bg-purple-500/20 text-xs font-medium transition-colors"
+              title="Inspect metadata health & recover missing fields"
+            >
+              <BrainCircuit className="w-3.5 h-3.5 text-purple-400" />
+              <span className="hidden sm:inline">Vault Intelligence</span>
+            </button>
+          )}
+
           {/* Edit in Markdown */}
           <button
             id="edit-recipe-btn"
@@ -266,7 +288,7 @@ export function RecipeDetailView({
           {/* Hero Image Showcase */}
           <div className="relative w-full h-64 sm:h-80 md:h-96 rounded-3xl overflow-hidden border border-white/10 shadow-xl bg-[#141414]">
             <img
-              src={getRecipeImage(recipe)}
+              src={reactiveVaultImage || defaultImg}
               alt={recipe.title}
               referrerPolicy="no-referrer"
               className="w-full h-full object-cover"
@@ -316,6 +338,37 @@ export function RecipeDetailView({
               </div>
             </div>
           </div>
+
+          {/* Legacy / Incomplete Metadata Recovery Alert Banner */}
+          {(recipeHealth.status === 'legacy' || recipeHealth.status === 'incomplete') && onOpenVaultIntelligence && (
+            <div className="p-4 rounded-2xl bg-purple-950/20 border border-purple-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-purple-200 shadow-sm">
+              <div className="flex items-start sm:items-center gap-3">
+                <div className="p-2 rounded-xl bg-purple-500/20 text-purple-300 shrink-0">
+                  <BrainCircuit className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="text-xs font-bold text-white flex items-center gap-2">
+                    <span>{recipeHealth.status === 'legacy' ? 'Legacy Recipe Format Detected' : 'Missing Structured Metadata'}</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 font-mono font-bold">
+                      {recipeHealth.missingFields.length} missing fields
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    This note is missing <span className="text-purple-300 font-medium">{recipeHealth.missingFields.join(', ')}</span>. Use Vault Intelligence to analyze ingredients and instructions to recover timings and servings.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                id="recover-metadata-banner-btn"
+                onClick={() => onOpenVaultIntelligence(recipe.id)}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-lg bg-purple-500 hover:bg-purple-400 text-black shadow-xs transition-colors shrink-0 cursor-pointer"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Recover Metadata</span>
+              </button>
+            </div>
+          )}
 
           {/* Quick Metrics Bar */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-[#141414] border border-white/5 rounded-2xl p-4">

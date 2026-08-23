@@ -42,6 +42,8 @@ import { RecipeEditorModal } from './components/RecipeEditorModal';
 import { ActiveTimersBar } from './components/ActiveTimersBar';
 import { ConnectVaultModal } from './components/ConnectVaultModal';
 import { RecipeGrabberModal } from './components/RecipeGrabberModal';
+import { VaultIntelligenceModal } from './components/VaultIntelligenceModal';
+import { summarizeVaultHealth } from './utils/vaultIntelligence';
 
 const INITIAL_FILTERS: FilterState = {
   search: '',
@@ -101,6 +103,8 @@ export default function App() {
   const [isConnectVaultOpen, setIsConnectVaultOpen] = useState(false);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isGrabberOpen, setIsGrabberOpen] = useState(false);
+  const [isVaultIntelligenceOpen, setIsVaultIntelligenceOpen] = useState(false);
+  const [vaultIntelligenceRecipeId, setVaultIntelligenceRecipeId] = useState<string | null>(null);
   const [editingRecipe, setEditingRecipe] = useState<ObsidianRecipe | null>(null);
   const [isWindowDragging, setIsWindowDragging] = useState(false);
 
@@ -833,6 +837,10 @@ export default function App() {
     (filters.maxCookTime ? 1 : 0) +
     (filters.onlyFavorites ? 1 : 0);
 
+  const vaultHealthSummary = useMemo(() => {
+    return summarizeVaultHealth(recipes);
+  }, [recipes]);
+
   return (
     <div
       data-theme={theme}
@@ -917,6 +925,11 @@ export default function App() {
           setIsEditorOpen(true);
         }}
         onOpenRecipeGrabber={() => setIsGrabberOpen(true)}
+        onOpenVaultIntelligence={() => {
+          setVaultIntelligenceRecipeId(null);
+          setIsVaultIntelligenceOpen(true);
+        }}
+        legacyRecipeCount={vaultHealthSummary.legacyCount + vaultHealthSummary.incompleteCount}
         onRefreshVault={async () => {
           if (vaultStatus.isConnected && vaultStatus.folderHandle) {
             try {
@@ -973,6 +986,10 @@ export default function App() {
             onUpdateNutrition={handleUpdateNutrition}
             onSelectRecipe={(r) => setSelectedRecipe(r)}
             onSaveNoteToVault={handleSaveNoteToVault}
+            onOpenVaultIntelligence={(recipeId) => {
+              setVaultIntelligenceRecipeId(recipeId || null);
+              setIsVaultIntelligenceOpen(true);
+            }}
           />
         ) : activeTab === 'grid' ? (
           /* Recipe Gallery View */
@@ -1100,6 +1117,7 @@ export default function App() {
       {isEditorOpen && (
         <RecipeEditorModal
           initialRecipe={editingRecipe}
+          folderHandle={vaultStatus.folderHandle}
           onSave={handleSaveRecipe}
           onClose={() => {
             setIsEditorOpen(false);
@@ -1124,6 +1142,7 @@ export default function App() {
       {/* Web Recipe Grabber Modal */}
       <RecipeGrabberModal
         isOpen={isGrabberOpen}
+        folderHandle={vaultStatus.folderHandle}
         onClose={() => setIsGrabberOpen(false)}
         onSaveRecipe={async (savedRecipe) => {
           await handleSaveRecipe(savedRecipe);
@@ -1132,6 +1151,23 @@ export default function App() {
         onOpenInEditor={(recipe) => {
           setEditingRecipe(recipe);
           setIsEditorOpen(true);
+        }}
+      />
+
+      {/* Vault Intelligence & Legacy Recovery Modal */}
+      <VaultIntelligenceModal
+        isOpen={isVaultIntelligenceOpen}
+        onClose={() => {
+          setIsVaultIntelligenceOpen(false);
+          setVaultIntelligenceRecipeId(null);
+        }}
+        recipes={recipes}
+        initialSelectedRecipeId={vaultIntelligenceRecipeId}
+        onSaveRecipe={async (updatedRecipe) => {
+          await handleSaveRecipe(updatedRecipe);
+          if (selectedRecipe && selectedRecipe.id === updatedRecipe.id) {
+            setSelectedRecipe(updatedRecipe);
+          }
         }}
       />
     </div>

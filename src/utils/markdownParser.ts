@@ -610,14 +610,19 @@ export function parseObsidianRecipeMarkdown(
     dataviewFields.image ||
     dataviewFields.cover;
 
-  const image = getRecipeImage({
-    image: rawImage,
-    title,
-    category,
-    cuisine,
-    tags,
-    rawMarkdown,
-  });
+  let image: string = '';
+  if (typeof rawImage === 'string' && rawImage.trim() && rawImage.trim() !== 'undefined' && rawImage.trim() !== 'null') {
+    image = rawImage.trim();
+  } else {
+    image = getRecipeImage({
+      image: rawImage,
+      title,
+      category,
+      cuisine,
+      tags,
+      rawMarkdown,
+    });
+  }
 
   // 10. Parse Ingredients & Instructions Sections
   const ingredients: ParsedIngredient[] = [];

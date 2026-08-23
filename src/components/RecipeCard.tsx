@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { ObsidianRecipe } from '../types';
 import { getRecipeImage, DEFAULT_FOOD_IMAGES } from '../utils/imageHelper';
+import { useVaultImage } from '../hooks/useVaultImage';
 
 interface RecipeCardProps {
   recipe: ObsidianRecipe;
@@ -36,7 +37,9 @@ export function RecipeCard({
     Hard: 'bg-rose-950/80 text-rose-300 border-rose-700/60',
   };
 
-  const imageUrl = imageError ? DEFAULT_FOOD_IMAGES.default : getRecipeImage(recipe);
+  const defaultImg = getRecipeImage(recipe);
+  const reactiveVaultImage = useVaultImage(recipe.image, defaultImg);
+  const imageUrl = imageError ? DEFAULT_FOOD_IMAGES.default : (reactiveVaultImage || defaultImg);
   const firstCallout = recipe.callouts && recipe.callouts.length > 0 ? recipe.callouts[0] : null;
 
   return (

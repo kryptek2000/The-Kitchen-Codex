@@ -18,15 +18,19 @@ import {
   Edit3,
   Flame,
   BookOpen,
+  Image as ImageIcon,
+  FolderDown,
 } from 'lucide-react';
 import { ObsidianRecipe, ParsedIngredient, RecipeStep, ObsidianCallout } from '../types';
 import { serializeRecipeToObsidianMarkdown, parseObsidianRecipeMarkdown } from '../utils/markdownParser';
+import { saveImageToVaultAssets, syncResolveVaultAssetUrl } from '../utils/vaultAssets';
 
 interface RecipeGrabberModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSaveRecipe: (recipe: ObsidianRecipe) => Promise<void> | void;
   onOpenInEditor?: (recipe: ObsidianRecipe) => void;
+  folderHandle?: any;
 }
 
 interface GrabbedRecipeData {
@@ -80,6 +84,7 @@ export function RecipeGrabberModal({
   onClose,
   onSaveRecipe,
   onOpenInEditor,
+  folderHandle,
 }: RecipeGrabberModalProps) {
   const [inputMode, setInputMode] = useState<'url' | 'text'>('url');
   const [urlInput, setUrlInput] = useState('');
@@ -100,6 +105,8 @@ export function RecipeGrabberModal({
   const [editPrepTime, setEditPrepTime] = useState('');
   const [editCookTime, setEditCookTime] = useState('');
   const [editDifficulty, setEditDifficulty] = useState<'Easy' | 'Medium' | 'Hard'>('Medium');
+  const [editImage, setEditImage] = useState('');
+  const [saveImageToAssets, setSaveImageToAssets] = useState(true);
 
   if (!isOpen) return null;
 
@@ -148,6 +155,8 @@ export function RecipeGrabberModal({
       setEditPrepTime(recipe.prepTime || '');
       setEditCookTime(recipe.cookTime || '');
       setEditDifficulty(recipe.difficulty || 'Medium');
+      setEditImage(recipe.image || '');
+      setSaveImageToAssets(true);
     } catch (err: any) {
       console.error('Recipe grab error:', err);
       setErrorMsg(err.message || 'An error occurred while grabbing the recipe. Check the URL and try again.');
@@ -162,11 +171,30 @@ export function RecipeGrabberModal({
     setErrorMsg(null);
   };
 
-  const constructFinalRecipe = (): ObsidianRecipe => {
+  const processImageSave = async (titleToUse: string, imageSrc: string): Promise<string> => {
+    if (!saveImageToAssets || !imageSrc || !imageSrc.trim()) {
+      return imageSrc;
+    }
+    // If it's already an Assets/ path, keep it
+    if (imageSrc.startsWith('Assets/') || imageSrc.startsWith('assets/')) {
+      return imageSrc;
+    }
+    try {
+      setLoadingStep('Saving food image to Assets/ folder in Obsidian vault...');
+      const saved = await saveImageToVaultAssets(folderHandle, titleToUse, imageSrc);
+      return saved.relativePath;
+    } catch (err) {
+      console.warn('Failed to save image to Assets/ folder, falling back to original URL:', err);
+      return imageSrc;
+    }
+  };
+
+  const constructFinalRecipe = (finalImagePath?: string): ObsidianRecipe => {
     if (!grabbedData) throw new Error('No grabbed recipe available');
 
     const cleanTitle = editTitle.trim() || 'Untitled Recipe';
     const fileName = `${cleanTitle.replace(/[/\\?%*:|"<>]/g, '').trim()}.md`;
+    const resolvedImage = finalImagePath !== undefined ? finalImagePath : editImage;
 
     const updatedRecipeData: Partial<ObsidianRecipe> = {
       title: cleanTitle,
@@ -182,7 +210,7 @@ export function RecipeGrabberModal({
       rating: grabbedData.rating || 5,
       calories: grabbedData.calories,
       source: grabbedData.source || urlInput || 'Web Grabber',
-      image: grabbedData.image,
+      image: resolvedImage,
       tags: grabbedData.tags.length > 0 ? grabbedData.tags : ['food/recipes'],
       ingredients: grabbedData.ingredients,
       instructions: grabbedData.instructions,
@@ -198,18 +226,26 @@ export function RecipeGrabberModal({
 
   const handleSaveToVault = async () => {
     try {
-      const finalRecipe = constructFinalRecipe();
+      setIsLoading(true);
+      const cleanTitle = editTitle.trim() || 'Untitled Recipe';
+      const finalImage = await processImageSave(cleanTitle, editImage);
+      const finalRecipe = constructFinalRecipe(finalImage);
       await onSaveRecipe(finalRecipe);
       handleReset();
       onClose();
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to save recipe to vault.');
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const handleOpenEditor = () => {
+  const handleOpenEditor = async () => {
     try {
-      const finalRecipe = constructFinalRecipe();
+      setIsLoading(true);
+      const cleanTitle = editTitle.trim() || 'Untitled Recipe';
+      const finalImage = await processImageSave(cleanTitle, editImage);
+      const finalRecipe = constructFinalRecipe(finalImage);
       if (onOpenInEditor) {
         onOpenInEditor(finalRecipe);
       }
@@ -217,6 +253,8 @@ export function RecipeGrabberModal({
       onClose();
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to open recipe in editor.');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -224,6 +262,8 @@ export function RecipeGrabberModal({
     setGrabbedData(null);
     setUrlInput('');
     setTextInput('');
+    setEditImage('');
+    setSaveImageToAssets(true);
     setErrorMsg(null);
     setIsLoading(false);
   };
@@ -517,6 +557,49 @@ export function RecipeGrabberModal({
                     </div>
                   </div>
                 </div>
+
+                {/* Food Photography & Vault Assets Folder Settings */}
+                {editImage && (
+                  <div className="p-3 bg-[#0C0C0C] border border-white/10 rounded-xl space-y-2 text-xs">
+                    <div className="flex items-start gap-3">
+                      <div className="w-16 h-16 rounded-lg overflow-hidden bg-black/50 border border-white/10 shrink-0 relative">
+                        <img
+                          src={editImage.startsWith('Assets/') || editImage.startsWith('assets/') ? syncResolveVaultAssetUrl(editImage) || editImage : editImage}
+                          alt={editTitle || 'Recipe preview'}
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                      <div className="flex-1 min-w-0 space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs font-semibold text-white flex items-center gap-1.5">
+                            <ImageIcon className="w-3.5 h-3.5 text-amber-400" />
+                            <span>Recipe Photography</span>
+                          </label>
+                        </div>
+                        <input
+                          type="text"
+                          value={editImage}
+                          onChange={(e) => setEditImage(e.target.value)}
+                          placeholder="Image URL or Assets/filename.jpg"
+                          className="w-full px-2.5 py-1 bg-[#141414] border border-white/10 rounded-lg text-xs font-mono text-gray-300 focus:outline-none focus:border-amber-500"
+                        />
+                        <label className="flex items-center gap-2 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={saveImageToAssets}
+                            onChange={(e) => setSaveImageToAssets(e.target.checked)}
+                            className="rounded border-white/20 bg-[#141414] text-amber-500 focus:ring-amber-400 focus:ring-offset-0 w-3.5 h-3.5"
+                          />
+                          <span className="text-[11px] text-amber-300 font-medium flex items-center gap-1">
+                            <FolderDown className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                            Download &amp; store image in vault <code className="text-white font-mono bg-white/10 px-1 py-0.5 rounded text-[10px]">Assets/</code> folder
+                          </span>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* View Switcher: Visual Preview vs Markdown Source */}

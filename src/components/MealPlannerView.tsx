@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Calendar,
   Plus,
@@ -10,8 +10,11 @@ import {
   BookOpen,
   ChefHat,
   RotateCcw,
+  Search,
+  X,
 } from 'lucide-react';
 import { ObsidianRecipe, MealPlanDay } from '../types';
+import { getRecipeImage } from '../utils/imageHelper';
 
 interface MealPlannerViewProps {
   recipes: ObsidianRecipe[];
@@ -35,6 +38,27 @@ export function MealPlannerView({
   onResetMealPlan,
 }: MealPlannerViewProps) {
   const [selectingSlot, setSelectingSlot] = useState<{ dayIndex: number; mealType: 'breakfast' | 'lunch' | 'dinner' } | null>(null);
+  const [modalSearchQuery, setModalSearchQuery] = useState('');
+
+  // Always sort recipes in alphabetical order (A-Z) by title
+  const sortedRecipes = useMemo(() => {
+    return [...recipes].sort((a, b) =>
+      (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base', numeric: true })
+    );
+  }, [recipes]);
+
+  // Filter sorted recipes if a search query is entered
+  const filteredModalRecipes = useMemo(() => {
+    const query = modalSearchQuery.trim().toLowerCase();
+    if (!query) return sortedRecipes;
+    return sortedRecipes.filter((r) => {
+      const matchTitle = (r.title || '').toLowerCase().includes(query);
+      const matchCuisine = (r.cuisine || '').toLowerCase().includes(query);
+      const matchCategory = (r.category || '').toLowerCase().includes(query);
+      const matchTags = r.tags && r.tags.some((t) => t.toLowerCase().includes(query));
+      return matchTitle || matchCuisine || matchCategory || matchTags;
+    });
+  }, [sortedRecipes, modalSearchQuery]);
 
   const totalPlannedMeals = mealPlan.reduce(
     (acc, d) =>
@@ -50,6 +74,7 @@ export function MealPlannerView({
     const { dayIndex, mealType } = selectingSlot;
     onSelectSlotRecipe(dayIndex, mealType, recipe);
     setSelectingSlot(null);
+    setModalSearchQuery('');
   };
 
   const handleRemoveSlot = (dayIndex: number, mealType: 'breakfast' | 'lunch' | 'dinner') => {
@@ -254,36 +279,111 @@ export function MealPlannerView({
 
       {/* Recipe Selection Modal */}
       {selectingSlot && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-[#141414] rounded-2xl border border-white/10 max-w-lg w-full p-5 shadow-2xl space-y-4 max-h-[85vh] flex flex-col text-gray-200">
-            <div className="flex items-center justify-between pb-3 border-b border-white/5">
-              <h3 className="font-serif font-bold text-sm text-white">
-                Select Recipe for {mealPlan[selectingSlot.dayIndex]?.dayName} ({selectingSlot.mealType})
-              </h3>
+            {/* Modal Header */}
+            <div className="flex items-center justify-between pb-3 border-b border-white/10">
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-2">
+                  <h3 className="font-serif font-bold text-sm text-white">
+                    Select Recipe for {mealPlan[selectingSlot.dayIndex]?.dayName}
+                  </h3>
+                  <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 capitalize">
+                    {selectingSlot.mealType}
+                  </span>
+                </div>
+                <p className="text-[11px] text-gray-400">
+                  Sorted alphabetically ({filteredModalRecipes.length} of {recipes.length} {recipes.length === 1 ? 'recipe' : 'recipes'})
+                </p>
+              </div>
               <button
-                onClick={() => setSelectingSlot(null)}
-                className="text-xs text-gray-400 hover:text-white transition-colors"
+                onClick={() => {
+                  setSelectingSlot(null);
+                  setModalSearchQuery('');
+                }}
+                className="p-1 text-gray-400 hover:text-white rounded-lg hover:bg-white/5 transition-colors"
+                title="Close"
               >
-                Cancel
+                <X className="w-4 h-4" />
               </button>
             </div>
 
+            {/* Search Input for fast lookup */}
+            {recipes.length > 5 && (
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+                <input
+                  type="text"
+                  value={modalSearchQuery}
+                  onChange={(e) => setModalSearchQuery(e.target.value)}
+                  placeholder="Filter recipes by title, cuisine, or tag..."
+                  autoFocus
+                  className="w-full pl-8 pr-8 py-2 bg-[#0C0C0C] border border-white/10 rounded-xl text-xs text-white placeholder-gray-500 focus:outline-none focus:border-amber-500"
+                />
+                {modalSearchQuery && (
+                  <button
+                    onClick={() => setModalSearchQuery('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white p-0.5"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Alphabetical Recipe List */}
             <div className="overflow-y-auto space-y-2 flex-1 pr-1">
-              {recipes.map((recipe) => (
-                <div
-                  key={recipe.id}
-                  onClick={() => handleSelectRecipeForSlot(recipe)}
-                  className="p-3 rounded-xl border border-white/5 bg-[#0C0C0C] hover:border-amber-500/40 hover:bg-white/5 cursor-pointer transition-all flex items-center justify-between group"
-                >
-                  <div>
-                    <h4 className="font-serif font-bold text-xs text-white group-hover:text-amber-400 transition-colors">{recipe.title}</h4>
-                    <span className="text-[11px] text-gray-400">
-                      {recipe.cuisine} • {recipe.cookTime} • {recipe.difficulty}
-                    </span>
-                  </div>
-                  <ChevronRight className="w-4 h-4 text-gray-500 group-hover:text-amber-400 transition-colors" />
+              {filteredModalRecipes.length === 0 ? (
+                <div className="text-center py-8 text-gray-500 space-y-1.5">
+                  <Utensils className="w-7 h-7 mx-auto opacity-40 text-amber-400" />
+                  <p className="text-xs font-medium text-gray-400">
+                    {modalSearchQuery ? `No recipes matching "${modalSearchQuery}"` : 'No recipes available in your vault.'}
+                  </p>
+                  {modalSearchQuery && (
+                    <button
+                      onClick={() => setModalSearchQuery('')}
+                      className="text-[11px] text-amber-400 hover:underline"
+                    >
+                      Clear search filter
+                    </button>
+                  )}
                 </div>
-              ))}
+              ) : (
+                filteredModalRecipes.map((recipe) => {
+                  const thumb = getRecipeImage(recipe);
+                  return (
+                    <div
+                      key={recipe.id}
+                      onClick={() => handleSelectRecipeForSlot(recipe)}
+                      className="p-2.5 rounded-xl border border-white/5 bg-[#0C0C0C] hover:border-amber-500/40 hover:bg-white/5 cursor-pointer transition-all flex items-center justify-between gap-3 group"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        {thumb && (
+                          <div className="w-10 h-10 rounded-lg overflow-hidden shrink-0 border border-white/10 bg-black/50">
+                            <img
+                              src={thumb}
+                              alt={recipe.title}
+                              referrerPolicy="no-referrer"
+                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                            />
+                          </div>
+                        )}
+                        <div className="min-w-0">
+                          <h4 className="font-serif font-bold text-xs text-white group-hover:text-amber-400 transition-colors truncate">
+                            {recipe.title}
+                          </h4>
+                          <div className="flex items-center gap-2 text-[10px] text-gray-400 mt-0.5">
+                            {recipe.cuisine && <span>{recipe.cuisine}</span>}
+                            {recipe.cookTime && <span>• {recipe.cookTime}</span>}
+                            {recipe.difficulty && <span>• {recipe.difficulty}</span>}
+                          </div>
+                        </div>
+                      </div>
+                      <ChevronRight className="w-4 h-4 text-gray-500 group-hover:text-amber-400 group-hover:translate-x-0.5 transition-all shrink-0" />
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
         </div>

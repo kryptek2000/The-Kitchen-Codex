@@ -1,6 +1,6 @@
-# 🍳 The Kitchen Codex `v0.2.1`
+# 🍳 The Kitchen Codex `v0.2.2`
 
-[![Version](https://img.shields.io/badge/version-0.2.1-amber.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.2.2-amber.svg)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A markdown-native recipe manager, meal planner, culinary knowledge base, and interactive cooking companion built specifically for **Obsidian** vaults. Read, edit, sync, and cook directly from your Obsidian `.md` recipe collection with YAML frontmatter, Dataview tags, wikilinks (`[[Ingredient]]`, `[[Target|Alias]]`), AI nutrition estimation, dynamic portion scaling, multi-step cooking timers, and AI-powered web recipe scraping.
@@ -211,7 +211,15 @@ favorite: true
 
 ## 📌 Changelog
 
-### `v0.2.1` (Current Release)
+### `v0.2.2` (Current Release)
+- **Vault Intelligence & Metadata Recovery**: Health assessment engine for legacy recipes with missing prep/cook times or servings yields, powered by multi-tier AI recovery (`gemini-3.7-flash` / `gemini-3.1-flash-lite`) and offline heuristic calculations.
+- **Shared Markdown Ingredient Rendering**: Centralized `renderIngredientLine` across import, editing, and note generation pipelines to guarantee uniform ingredient formatting.
+- **Centralized Model Configuration**: Strict type safety and model identification in `server/modelConfig.ts` for web scraping, nutrition analysis, and vault intelligence recovery.
+- **Production Server & Asset Bundling**: Resolved production static file serving and client asset resolution in `dist/server.cjs`.
+- **Obsidian Markdown & Wikilink Preservation**: Enhanced fidelity tests verifying that bidirectional wikilinks (`[[Entity]]`, `[[Target|Alias]]`), custom YAML properties, callouts, and timers remain intact across all operations.
+- **Reverse Proxy Hardening**: Configured Express `trust proxy` and IP validation to protect against rate-limiter bypass.
+
+### `v0.2.1`
 - **Resilient Nutrition Estimation Cascade**: Implemented primary model `gemini-3.6-flash` with automatic fallback to `gemini-3.1-flash-lite`, and a final offline algorithmic culinary estimator when external AI services or quotas are unavailable.
 - **Obsidian Wikilink Cleansing**: Stripped `[[Entity|Alias]]` and `[[Entity]]` syntax prior to AI nutritional analysis, preventing prompt confusion while preserving note syntax.
 - **Error Handling & Quota Resilience**: Replaced misleading measurement validation errors with transparent AI availability handling and graceful fallback calculations.

@@ -154,3 +154,50 @@ export interface AppThemeConfig {
   highlights: string[];
   vibe: string;
 }
+
+export type MetadataHealthStatus = 'complete' | 'mostly_complete' | 'incomplete' | 'legacy';
+
+export interface MetadataHealthReport {
+  recipeId: string;
+  recipeTitle: string;
+  fileName: string;
+  status: MetadataHealthStatus;
+  healthScore: number; // 0 to 100
+  missingFields: string[]; // e.g. ['prepTime', 'cookTime', 'servings', 'calories', 'nutrition']
+  presentFields: string[];
+  legacyMarkers: string[];
+  totalFieldsCount: number;
+}
+
+export interface VaultHealthSummary {
+  totalRecipes: number;
+  completeCount: number;
+  mostlyCompleteCount: number;
+  incompleteCount: number;
+  legacyCount: number;
+  averageHealthScore: number;
+  reports: MetadataHealthReport[];
+}
+
+export type RecoveryConfidence = 'high' | 'medium' | 'low';
+export type RecoverySource = 'instructions_explicit' | 'body_parsed' | 'culinary_inference';
+
+export interface RecoveredField<T = any> {
+  value: T;
+  confidence: RecoveryConfidence;
+  source: RecoverySource;
+  explanation: string;
+}
+
+export interface RecoveredRecipeMetadata {
+  prepTime?: RecoveredField<string>;
+  cookTime?: RecoveredField<string>;
+  totalTime?: RecoveredField<string>;
+  servings?: RecoveredField<number>;
+  calories?: RecoveredField<number>;
+  nutrition?: RecoveredField<RecipeNutrition>;
+  category?: RecoveredField<string>;
+  cuisine?: RecoveredField<string>;
+  difficulty?: RecoveredField<'Easy' | 'Medium' | 'Hard'>;
+  suggestedTags?: RecoveredField<string[]>;
+}

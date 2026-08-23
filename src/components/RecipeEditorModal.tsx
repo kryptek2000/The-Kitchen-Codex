@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   X,
   Save,
@@ -13,21 +13,30 @@ import {
   Clock,
   Flame,
   Users,
+  FolderDown,
+  Upload,
+  Folder,
+  Image as ImageIcon,
+  BrainCircuit,
 } from 'lucide-react';
 import { ObsidianRecipe, ParsedIngredient, RecipeStep } from '../types';
 import {
   parseObsidianRecipeMarkdown,
   serializeRecipeToObsidianMarkdown,
 } from '../utils/markdownParser';
+import { saveImageToVaultAssets, vaultAssets } from '../utils/vaultAssets';
+import { useVaultImage } from '../hooks/useVaultImage';
 
 interface RecipeEditorModalProps {
   initialRecipe?: ObsidianRecipe | null;
+  folderHandle?: any;
   onSave: (recipe: ObsidianRecipe) => void;
   onClose: () => void;
 }
 
 export function RecipeEditorModal({
   initialRecipe,
+  folderHandle,
   onSave,
   onClose,
 }: RecipeEditorModalProps) {
@@ -58,6 +67,11 @@ export function RecipeEditorModal({
   const [isEstimatingNutrition, setIsEstimatingNutrition] = useState(false);
   const [nutritionError, setNutritionError] = useState<string | null>(null);
   const [nutritionSuccess, setNutritionSuccess] = useState(false);
+  const [isSavingImageAsset, setIsSavingImageAsset] = useState(false);
+  const [isAssetPickerOpen, setIsAssetPickerOpen] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const previewImageUrl = useVaultImage(image, folderHandle);
 
   // Callout
   const [calloutTitle, setCalloutTitle] = useState(
@@ -205,6 +219,113 @@ export function RecipeEditorModal({
     }
   };
 
+  const [isRecoveringMetadata, setIsRecoveringMetadata] = useState(false);
+  const [metadataRecoverySuccess, setMetadataRecoverySuccess] = useState<string | null>(null);
+
+  const handleAutoRecoverMetadata = async () => {
+    setIsRecoveringMetadata(true);
+    setMetadataRecoverySuccess(null);
+    setNutritionError(null);
+
+    try {
+      const ingList = ingredientsText
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0)
+        .map((raw) => ({
+          original: raw,
+          item: raw.replace(/^[-*•\d.]+\s*/, ''),
+          amount: 1,
+          unit: '',
+        }));
+
+      const stepList = instructionsText
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0)
+        .map((text, idx) => ({
+          stepNumber: idx + 1,
+          instruction: text.replace(/^\d+[.)]\s*/, ''),
+        }));
+
+      const payload = {
+        title: title || 'Untitled Recipe',
+        rawMarkdown: activeTab === 'markdown' ? rawMarkdown : generateCurrentMarkdown(),
+        ingredients: ingList,
+        instructions: stepList,
+        existingMetadata: {
+          prepTime,
+          cookTime,
+          servings: servings !== '' ? Number(servings) : undefined,
+          calories: calories ? Number(calories) : undefined,
+          category,
+          cuisine,
+          difficulty,
+        },
+      };
+
+      const res = await fetch('/api/recover-metadata', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error || `Server error (${res.status})`);
+      }
+
+      const data = await res.json();
+      if (data.recovered) {
+        const rec = data.recovered;
+        let recoveredCount = 0;
+
+        if (rec.prepTime?.value && !prepTime) {
+          setPrepTime(rec.prepTime.value);
+          recoveredCount++;
+        }
+        if (rec.cookTime?.value && !cookTime) {
+          setCookTime(rec.cookTime.value);
+          recoveredCount++;
+        }
+        if (rec.servings?.value && (!servings || servings === '')) {
+          setServings(rec.servings.value);
+          recoveredCount++;
+        }
+        if (rec.calories?.value && !calories) {
+          setCalories(rec.calories.value.toString());
+          recoveredCount++;
+        }
+        if (rec.category?.value && !category) {
+          setCategory(rec.category.value);
+          recoveredCount++;
+        }
+        if (rec.cuisine?.value && !cuisine) {
+          setCuisine(rec.cuisine.value);
+          recoveredCount++;
+        }
+        if (rec.difficulty?.value && (!difficulty || difficulty === 'Easy')) {
+          setDifficulty(rec.difficulty.value);
+          recoveredCount++;
+        }
+        if (rec.nutrition?.value) {
+          if (rec.nutrition.value.protein) setProtein(rec.nutrition.value.protein.toString());
+          if (rec.nutrition.value.carbohydrates) setCarbs(rec.nutrition.value.carbohydrates.toString());
+          if (rec.nutrition.value.fat) setFat(rec.nutrition.value.fat.toString());
+          if (rec.nutrition.value.fiber) setFiber(rec.nutrition.value.fiber.toString());
+        }
+
+        setMetadataRecoverySuccess(`Recovered ${recoveredCount} metadata fields from recipe text!`);
+        setTimeout(() => setMetadataRecoverySuccess(null), 4000);
+      }
+    } catch (err: any) {
+      console.error('Editor metadata recovery error:', err);
+      setNutritionError(`Metadata recovery error: ${err.message}`);
+    } finally {
+      setIsRecoveringMetadata(false);
+    }
+  };
+
   const handleSave = () => {
     let finalRecipe: ObsidianRecipe;
 
@@ -306,6 +427,33 @@ export function RecipeEditorModal({
             </div>
           ) : (
             <div className="space-y-4 text-xs">
+              {/* Quick AI Metadata Recovery Toolbar Button */}
+              <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-xl bg-purple-950/20 border border-purple-500/30 text-purple-200">
+                <div className="flex items-center gap-2">
+                  <BrainCircuit className="w-4 h-4 text-purple-400 shrink-0" />
+                  <span className="text-[11px]">
+                    Vault Intelligence: Auto-estimate prep/cook times, servings, and macros from ingredients and steps.
+                  </span>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleAutoRecoverMetadata}
+                  disabled={isRecoveringMetadata || (!ingredientsText && !instructionsText)}
+                  className="flex items-center gap-1.5 px-3 py-1 text-xs font-bold rounded-lg bg-purple-500 hover:bg-purple-400 text-black disabled:opacity-40 transition-all shadow-xs cursor-pointer"
+                >
+                  <Sparkles className={`w-3.5 h-3.5 ${isRecoveringMetadata ? 'animate-spin' : ''}`} />
+                  <span>{isRecoveringMetadata ? 'Analyzing...' : 'Auto-Fill Missing Fields'}</span>
+                </button>
+              </div>
+
+              {metadataRecoverySuccess && (
+                <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs flex items-center gap-2">
+                  <Check className="w-4 h-4 text-emerald-400" />
+                  <span>{metadataRecoverySuccess}</span>
+                </div>
+              )}
+
               {/* Title & File Name */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
@@ -530,23 +678,134 @@ export function RecipeEditorModal({
                 </div>
               </div>
 
-              {/* Recipe Cover Image URL */}
-              <div>
-                <label className="block font-medium text-gray-300 mb-1">
-                  Recipe Image URL (or leave empty for automatic keyword photography)
-                </label>
+              {/* Recipe Cover Image URL or Vault Asset */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="block font-medium text-gray-300">
+                    Recipe Food Image (Vault Asset or Web URL)
+                  </label>
+                  <div className="flex items-center gap-1.5 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setIsAssetPickerOpen(!isAssetPickerOpen)}
+                      className="px-2 py-1 bg-white/5 hover:bg-white/10 text-amber-300 border border-white/10 rounded-md flex items-center gap-1 transition-colors cursor-pointer"
+                    >
+                      <Folder className="w-3 h-3 text-amber-400" />
+                      <span>Vault Assets ({vaultAssets.getAll().length})</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="px-2 py-1 bg-white/5 hover:bg-white/10 text-gray-200 border border-white/10 rounded-md flex items-center gap-1 transition-colors cursor-pointer"
+                    >
+                      <Upload className="w-3 h-3 text-amber-400" />
+                      <span>Upload to Assets/</span>
+                    </button>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          try {
+                            setIsSavingImageAsset(true);
+                            const saved = await saveImageToVaultAssets(folderHandle, title || 'Recipe', file);
+                            setImage(saved.relativePath);
+                          } catch (err: any) {
+                            console.error('Failed to upload image to vault Assets/:', err);
+                          } finally {
+                            setIsSavingImageAsset(false);
+                            if (fileInputRef.current) fileInputRef.current.value = '';
+                          }
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {isAssetPickerOpen && (
+                  <div className="p-3 bg-[#0A0A0A] border border-amber-500/30 rounded-xl space-y-2 max-h-48 overflow-y-auto">
+                    <div className="flex items-center justify-between text-xs text-amber-400 font-semibold pb-1 border-b border-white/5">
+                      <span>Select Image from Obsidian Assets</span>
+                      <button
+                        type="button"
+                        onClick={() => setIsAssetPickerOpen(false)}
+                        className="text-gray-400 hover:text-white"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    {vaultAssets.getAll().length === 0 ? (
+                      <p className="text-xs text-gray-500 py-2 text-center">
+                        No image assets currently cached in vault. Upload an image or add files to your vault's Assets/ folder.
+                      </p>
+                    ) : (
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+                        {vaultAssets.getAll().map((item) => (
+                          <button
+                            key={item.path}
+                            type="button"
+                            onClick={() => {
+                              setImage(item.path);
+                              setIsAssetPickerOpen(false);
+                            }}
+                            className={`group text-left p-1.5 rounded-lg border transition-all flex flex-col gap-1 items-center bg-[#141414] ${
+                              image === item.path ? 'border-amber-500 bg-amber-500/10' : 'border-white/5 hover:border-white/20'
+                            }`}
+                          >
+                            <div className="w-full h-16 rounded bg-black/60 overflow-hidden">
+                              <img
+                                src={item.blobUrl}
+                                alt={item.fileName}
+                                className="w-full h-full object-cover"
+                              />
+                            </div>
+                            <span className="text-[10px] text-gray-300 truncate w-full font-mono text-center group-hover:text-amber-300">
+                              {item.fileName}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <div className="flex items-center gap-3">
                   <input
                     type="text"
                     value={image}
                     onChange={(e) => setImage(e.target.value)}
-                    placeholder="https://images.unsplash.com/... or custom food photo URL"
+                    placeholder="Assets/filename.jpg or https://... food photo URL"
                     className="flex-1 bg-[#0C0C0C] border border-white/10 rounded-lg p-2 text-gray-300 font-mono text-xs focus:border-amber-500 focus:outline-none"
                   />
-                  {image && (
+                  {image && (image.startsWith('http://') || image.startsWith('https://')) && (
+                    <button
+                      type="button"
+                      disabled={isSavingImageAsset}
+                      onClick={async () => {
+                        try {
+                          setIsSavingImageAsset(true);
+                          const saved = await saveImageToVaultAssets(folderHandle, title || 'Recipe', image);
+                          setImage(saved.relativePath);
+                        } catch (err: any) {
+                          console.error('Failed to download image to Assets/:', err);
+                        } finally {
+                          setIsSavingImageAsset(false);
+                        }
+                      }}
+                      className="px-2.5 py-2 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors shrink-0 disabled:opacity-50 cursor-pointer"
+                      title="Save remote image permanently to vault Assets/ folder"
+                    >
+                      <FolderDown className="w-3.5 h-3.5" />
+                      <span>{isSavingImageAsset ? 'Saving...' : 'Save to Assets/'}</span>
+                    </button>
+                  )}
+                  {previewImageUrl && (
                     <div className="w-10 h-10 rounded-lg overflow-hidden border border-white/15 shrink-0 bg-black">
                       <img
-                        src={image}
+                        src={previewImageUrl}
                         alt="Preview"
                         referrerPolicy="no-referrer"
                         className="w-full h-full object-cover"

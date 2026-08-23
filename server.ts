@@ -4,7 +4,9 @@ import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { grabRecipeFromWeb } from "./server/recipeGrabber.js";
 import { estimateRecipeNutrition } from "./server/nutritionEstimator.js";
-import { recipeImportRateLimiter, nutritionEstimateRateLimiter, getClientIp } from "./server/rateLimiter.js";
+import { recoverRecipeMetadata } from "./server/metadataRecovery.js";
+import { recipeImportRateLimiter, nutritionEstimateRateLimiter, metadataRecoveryRateLimiter, getClientIp } from "./server/rateLimiter.js";
+import { safeFetchImage } from "./server/ssrfGuard.js";
 
 dotenv.config();
 
@@ -159,6 +161,67 @@ app.post("/api/grab-recipe", recipeImportRateLimiter, async (req, res) => {
   }
 });
 
+// Safe Image Downloader & Proxy endpoint with rate limiting & SSRF protection
+app.post("/api/download-image", recipeImportRateLimiter, async (req, res) => {
+  const clientIp = getClientIp(req);
+
+  try {
+    const rawUrl = req.body?.imageUrl || req.body?.url;
+    if (!rawUrl || typeof rawUrl !== "string" || !rawUrl.trim()) {
+      return res.status(400).json({ error: "Missing or invalid imageUrl parameter." });
+    }
+
+    const trimmedUrl = rawUrl.trim();
+    if (!/^https?:\/\//i.test(trimmedUrl)) {
+      return res.status(400).json({ error: "Only HTTP and HTTPS URLs are supported." });
+    }
+
+    const { buffer, contentType, finalUrl } = await safeFetchImage(trimmedUrl);
+
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Content-Length", buffer.length);
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    res.setHeader("X-Final-URL", finalUrl);
+    return res.status(200).send(buffer);
+  } catch (error: any) {
+    const errorMsg = error?.message || "";
+    console.warn(`[${new Date().toISOString()}] [Client: ${clientIp}] Image download failed:`, errorMsg);
+
+    if (
+      errorMsg.includes("restricted") ||
+      errorMsg.includes("permitted") ||
+      errorMsg.includes("Invalid URL") ||
+      errorMsg.includes("credentials") ||
+      errorMsg.includes("resolve")
+    ) {
+      return res.status(400).json({ error: "The provided image URL is invalid or restricted." });
+    }
+
+    if (errorMsg.includes("timed out") || errorMsg.includes("limit")) {
+      return res.status(504).json({ error: errorMsg });
+    }
+
+    return res.status(500).json({ error: "Failed to download image from the remote server." });
+  }
+});
+
+app.get("/api/proxy-image", recipeImportRateLimiter, async (req, res) => {
+  const rawUrl = req.query?.url;
+  if (!rawUrl || typeof rawUrl !== "string" || !rawUrl.trim()) {
+    return res.status(400).json({ error: "Missing url parameter." });
+  }
+
+  try {
+    const { buffer, contentType } = await safeFetchImage(rawUrl.trim());
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Content-Length", buffer.length);
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    return res.status(200).send(buffer);
+  } catch (err: any) {
+    return res.status(400).json({ error: "Could not proxy image." });
+  }
+});
+
 // AI Nutrition Estimator endpoint with rate limiting & input validation
 app.post("/api/estimate-nutrition", nutritionEstimateRateLimiter, async (req, res) => {
   const clientIp = getClientIp(req);
@@ -217,6 +280,53 @@ app.post("/api/estimate-nutrition", nutritionEstimateRateLimiter, async (req, re
 
     return res.status(500).json({
       error: "An unexpected error occurred during nutrition estimation. Please try again.",
+    });
+  }
+});
+
+// AI Vault Intelligence Metadata Recovery endpoint with rate limiting & validation
+app.post("/api/recover-metadata", metadataRecoveryRateLimiter, async (req, res) => {
+  const clientIp = getClientIp(req);
+
+  try {
+    if (!req.body || typeof req.body !== "object") {
+      return res.status(400).json({
+        error: "Invalid request payload.",
+      });
+    }
+
+    const { title, rawMarkdown, ingredients, instructions, notes, existingMetadata, targetFields } = req.body;
+
+    if (!title && !rawMarkdown && (!ingredients || ingredients.length === 0)) {
+      return res.status(400).json({
+        error: "Please provide a recipe title, raw markdown, or ingredients to recover metadata.",
+      });
+    }
+
+    // Protect against oversized payloads
+    if (rawMarkdown && typeof rawMarkdown === "string" && rawMarkdown.length > 100000) {
+      return res.status(400).json({
+        error: "Recipe content exceeds maximum allowed length (100,000 characters).",
+      });
+    }
+
+    const result = await recoverRecipeMetadata({
+      title: typeof title === "string" ? title.slice(0, 300) : undefined,
+      rawMarkdown: typeof rawMarkdown === "string" ? rawMarkdown : undefined,
+      ingredients: Array.isArray(ingredients) ? ingredients.slice(0, 100) : undefined,
+      instructions: Array.isArray(instructions) ? instructions.slice(0, 100) : undefined,
+      notes: typeof notes === "string" ? notes.slice(0, 10000) : undefined,
+      existingMetadata: typeof existingMetadata === "object" && existingMetadata !== null ? existingMetadata : undefined,
+      targetFields: Array.isArray(targetFields) ? targetFields : undefined,
+    });
+
+    return res.json({ success: true, recovered: result });
+  } catch (error: any) {
+    const errorMsg = error?.message || "";
+    console.error(`[${new Date().toISOString()}] [Client: ${clientIp}] Metadata Recovery Error:`, errorMsg);
+
+    return res.status(500).json({
+      error: "An unexpected error occurred during metadata recovery. Please try again.",
     });
   }
 });

@@ -395,3 +395,115 @@ export async function safeFetchHtml(initialUrl: string): Promise<{ html: string;
 
   throw new Error("Exceeded maximum redirects.");
 }
+
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB limit for food photography
+
+/**
+ * Safely fetches a remote image file with strict SSRF protection, redirect tracking,
+ * timeout controls, and maximum byte size validation.
+ */
+export async function safeFetchImage(
+  rawUrl: string,
+  maxBytes: number = MAX_IMAGE_BYTES
+): Promise<{ buffer: Buffer; contentType: string; finalUrl: string }> {
+  let currentUrl = rawUrl.trim();
+  let redirectsFollowed = 0;
+
+  while (redirectsFollowed <= MAX_REDIRECTS) {
+    // 1. Validate current URL and DNS resolution for SSRF
+    const validatedUrl = await validateUrlForSSRF(currentUrl);
+
+    // 2. Outbound request with timeout signal (10s)
+    const timeoutSignal = AbortSignal.timeout(10000);
+
+    let response: Response;
+    try {
+      response = await fetch(validatedUrl.toString(), {
+        method: "GET",
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          Accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+          "Cache-Control": "no-cache",
+        },
+        redirect: "manual",
+        signal: timeoutSignal,
+      });
+    } catch (fetchErr: any) {
+      if (fetchErr.name === "TimeoutError" || fetchErr.name === "AbortError") {
+        throw new Error("Request timed out while downloading the image (10s limit).");
+      }
+      throw fetchErr;
+    }
+
+    // 3. Handle redirects manually and re-validate target
+    if (response.status >= 300 && response.status < 400) {
+      const locationHeader = response.headers.get("location");
+      if (!locationHeader) {
+        throw new Error("Redirect location header missing for image.");
+      }
+
+      redirectsFollowed++;
+      if (redirectsFollowed > MAX_REDIRECTS) {
+        throw new Error("Too many redirects encountered while fetching image.");
+      }
+
+      const nextUrl = new URL(locationHeader, validatedUrl).toString();
+      currentUrl = nextUrl;
+      continue;
+    }
+
+    if (!response.ok) {
+      throw new Error(`Remote image server responded with status HTTP ${response.status}.`);
+    }
+
+    // 4. Validate Content-Type
+    const contentType = response.headers.get("content-type") || "image/jpeg";
+
+    // 5. Check Content-Length header if present
+    const contentLength = response.headers.get("content-length");
+    if (contentLength) {
+      const parsedLength = parseInt(contentLength, 10);
+      if (!isNaN(parsedLength) && parsedLength > maxBytes) {
+        throw new Error(`Image size exceeds the ${Math.round(maxBytes / (1024 * 1024))}MB limit.`);
+      }
+    }
+
+    // 6. Stream response body with strict byte counter
+    if (!response.body) {
+      throw new Error("Empty image response received from server.");
+    }
+
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let receivedBytes = 0;
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) {
+          receivedBytes += value.length;
+          if (receivedBytes > maxBytes) {
+            await reader.cancel("Size limit exceeded");
+            throw new Error(`Image size exceeds the ${Math.round(maxBytes / (1024 * 1024))}MB limit.`);
+          }
+          chunks.push(value);
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    const fullBuffer = Buffer.concat(chunks);
+
+    return {
+      buffer: fullBuffer,
+      contentType,
+      finalUrl: validatedUrl.toString(),
+    };
+  }
+
+  throw new Error("Exceeded maximum redirects while downloading image.");
+}
+

@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.2] - 2026-08-23
+
+### 🚀 Enhancements & Features
+- **Vault Intelligence & Legacy Metadata Recovery**:
+  - Added comprehensive vault health scanning to identify recipes with missing cook times, prep times, servings yields, or legacy unstructured metadata.
+  - Implemented multi-tier metadata recovery: AI intelligence estimation powered by `gemini-3.7-flash` (primary) and `gemini-3.1-flash-lite` (secondary), backed by heuristic algorithmic extraction.
+  - Non-destructive YAML frontmatter merging preserves all existing custom properties, author fields, external URLs, Dataview tags, and note body Markdown.
+- **Shared Ingredient Markdown Rendering**:
+  - Unified ingredient Markdown generation via `renderIngredientLine` across the entire codebase, eliminating duplicated logic and preventing formatting drifts between UI authoring and disk serialization.
+- **Centralized Gemini Model Architecture**:
+  - Established centralized model configuration in `server/modelConfig.ts` with explicit type safety across recipe scraping, nutrition analysis, and vault intelligence recovery.
+
+### 🐛 Bug Fixes & Reliability
+- **Recipe Importer Wikilink Preservation**:
+  - Fixed recipe scraper and generator to retain bidirectional ingredient wikilinks (`[[Target]]` and `[[Target|Alias]]`) without double-wrapping or stripping user-curated links.
+- **Production Server & Static Asset Bundling**:
+  - Resolved production serving regression by properly injecting `NODE_ENV='production'` at build time via `esbuild` and serving static client assets from `dist/` with robust SPA fallback routing.
+- **Multi-Timer Audio & State Resumption**:
+  - Enhanced timer notification stability with Web Audio API context auto-resumption and independent alert channels across concurrent cooking timers.
+- **Obsidian Markdown & Frontmatter Preservation**:
+  - Verified 100% fidelity for Obsidian callouts (`> [!tip]`), instruction countdown timers, Dataview tag arrays, and shopping checklist states across iterative read/write cycles.
+
+### 🔒 Security & Hardening
+- **Reverse Proxy & Rate-Limiter Hardening**:
+  - Hardened Express `trust proxy` configuration to correctly parse `X-Forwarded-For` headers and prevent IP spoofing or rate-limiter bypass attempts.
+
+---
+
 ## [0.2.1] - 2026-08-22
 
 ### 🐛 Bug Fixes & Reliability

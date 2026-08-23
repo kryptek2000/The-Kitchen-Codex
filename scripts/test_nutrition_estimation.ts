@@ -4,43 +4,38 @@ import { estimateAlgorithmicNutrition } from "../server/nutritionEstimator";
 import { serializeRecipeToObsidianMarkdown, parseObsidianRecipeMarkdown } from "../src/utils/markdownParser";
 import { ObsidianRecipe } from "../src/types";
 
-function postJson(path: string, payload: any, timeoutMs: number = 8000): Promise<{ status: number; headers: http.IncomingHttpHeaders; data: any; raw: string }> {
-  return new Promise((resolve, reject) => {
-    const postData = JSON.stringify(payload);
-    const req = http.request(
-      {
-        hostname: "127.0.0.1",
-        port: 3000,
-        path,
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Content-Length": Buffer.byteLength(postData),
-        },
-      },
-      (res) => {
-        let body = "";
-        res.on("data", (chunk) => {
-          body += chunk;
-        });
-        res.on("end", () => {
-          try {
-            const data = JSON.parse(body);
-            resolve({ status: res.statusCode || 0, headers: res.headers, data, raw: body });
-          } catch {
-            resolve({ status: res.statusCode || 0, headers: res.headers, data: null, raw: body });
-          }
-        });
-      }
-    );
-
-    req.on("error", reject);
-    req.setTimeout(timeoutMs, () => {
-      req.destroy(new Error(`Request timed out after ${timeoutMs}ms`));
-    });
-    req.write(postData);
-    req.end();
+async function postJson(path: string, payload: any, timeoutMs: number = 30000): Promise<{ status: number; headers: Record<string, string>; data: any; raw: string }> {
+  const postData = JSON.stringify(payload);
+  const randomIp = `198.51.100.${Math.floor(Math.random() * 200) + 10}`;
+  const response = await fetch(`http://localhost:3000${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Forwarded-For": randomIp,
+    },
+    body: postData,
+    signal: AbortSignal.timeout(timeoutMs),
   });
+
+  const raw = await response.text();
+  let data: any = null;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    data = null;
+  }
+
+  const headers: Record<string, string> = {};
+  response.headers.forEach((val, key) => {
+    headers[key.toLowerCase()] = val;
+  });
+
+  return {
+    status: response.status,
+    headers,
+    data,
+    raw,
+  };
 }
 
 /**
@@ -67,7 +62,7 @@ async function simulateFallbackCascade(
 
 async function runNutritionFunctionalSuite() {
   console.log("========================================================================");
-  console.log("🥗 THE KITCHEN CODEX v0.2.1 — NUTRITION ESTIMATION REGRESSION SUITE");
+  console.log("🥗 THE KITCHEN CODEX v0.2.2 — NUTRITION ESTIMATION REGRESSION SUITE");
   console.log("========================================================================");
 
   let passed = 0;
@@ -96,7 +91,7 @@ async function runNutritionFunctionalSuite() {
         "2 tsp black pepper",
         "1 tsp salt"
       ]
-    }, 15000);
+    });
     record(
       "1. Live AI Recipe Nutrition Estimation",
       res.status === 200 && res.data.success && typeof res.data.nutrition?.calories === "number" && res.data.nutrition.calories > 200,

@@ -16,6 +16,7 @@ import {
   CheckCircle2,
   BookOpen,
   Globe,
+  BrainCircuit,
 } from 'lucide-react';
 import { VaultSyncStatus } from '../types';
 
@@ -31,6 +32,8 @@ interface VaultHeaderProps {
   onOpenConnectVaultModal: () => void;
   onOpenNewRecipeModal: () => void;
   onOpenRecipeGrabber: () => void;
+  onOpenVaultIntelligence: () => void;
+  legacyRecipeCount?: number;
   onRefreshVault: () => void;
 }
 
@@ -46,6 +49,8 @@ export function VaultHeader({
   onOpenConnectVaultModal,
   onOpenNewRecipeModal,
   onOpenRecipeGrabber,
+  onOpenVaultIntelligence,
+  legacyRecipeCount = 0,
   onRefreshVault,
 }: VaultHeaderProps) {
   return (
@@ -115,7 +120,7 @@ export function VaultHeader({
                 Obsidian Culinary Vault
               </span>
               <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-medium">
-                v0.2.1
+                v0.2.2
               </span>
             </div>
             <p className="text-xs text-gray-500">
@@ -126,6 +131,22 @@ export function VaultHeader({
 
         {/* Action Buttons */}
         <div className="flex flex-wrap items-center gap-2">
+          {/* Vault Intelligence Button */}
+          <button
+            id="vault-intelligence-header-btn"
+            onClick={onOpenVaultIntelligence}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 border border-purple-500/30 transition-colors shadow-xs"
+            title="Scan recipe metadata health, recover missing fields, and detect legacy formats"
+          >
+            <BrainCircuit className="w-4 h-4 text-purple-400" />
+            <span>Vault Intelligence</span>
+            {legacyRecipeCount > 0 && (
+              <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-purple-500 text-black font-bold">
+                {legacyRecipeCount}
+              </span>
+            )}
+          </button>
+
           {/* Grab Recipe from Web Button */}
           <button
             id="grab-recipe-header-btn"

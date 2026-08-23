@@ -503,6 +503,39 @@ created: 2026-08-01
 - When sliced, a vibrant green matcha and dark chocolate river flows out!
 `,
   },
+  {
+    fileName: 'Hawaiian Pork Rib Rub.md',
+    markdown: `---
+tags:
+  - recipe
+cuisine: Hawaiian
+category: Seasonings
+difficulty: Easy
+author: Derrick Riches
+url: https://example.com/hawaiian-pork-rib-rub
+---
+
+# Hawaiian Pork Rib Rub
+
+> [!tip] Application Tip
+> Massage the rub into the pork ribs and let it sit in the refrigerator for at least 1 hour before smoking for deep flavor penetration.
+
+### Ingredients
+- [ ] 1/4 cup [[Sea Salt]]
+- [ ] 1/4 cup [[Dark Brown Sugar]]
+- [ ] 2 tbsp [[Smoked Paprika]]
+- [ ] 1 tbsp [[Garlic Powder]]
+- [ ] 1 tbsp [[Onion Powder]]
+- [ ] 1 tsp [[Cayenne Pepper]]
+- [ ] 1 tsp [[Ground Ginger]]
+- [ ] 1 tsp [[Ground Black Pepper]]
+
+### Instructions
+1. Combine all dry ingredients in a medium mixing bowl.
+2. Whisk thoroughly until all brown sugar clumps are broken up and spices are evenly distributed.
+3. Store in an airtight mason jar or apply generously to pork ribs, pork shoulder, or chicken before smoking or slow grilling over kiawe/mesquite wood.
+`,
+  },
 ];
 
 export function getStarterVaultRecipes(): ObsidianRecipe[] {

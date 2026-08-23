@@ -30,7 +30,7 @@ function assert(condition: boolean, stepName: string, details?: string) {
 
 async function runFullE2EVaultLifecycle() {
   console.log('========================================================================');
-  console.log('THE KITCHEN CODEX v0.2.1 — END-TO-END OBSIDIAN VAULT LIFECYCLE TEST');
+  console.log('THE KITCHEN CODEX v0.2.2 — END-TO-END OBSIDIAN VAULT LIFECYCLE TEST');
   console.log('========================================================================\n');
 
   const uniqueId = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;

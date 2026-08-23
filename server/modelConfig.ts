@@ -21,4 +21,8 @@ export const MODEL_CONFIG = {
   nutritionPrimary: "gemini-3.6-flash",
   /** Nutrition estimation fallback model. */
   nutritionFallback: "gemini-3.1-flash-lite",
+  /** Vault metadata intelligence recovery primary model. */
+  metadataRecoveryPrimary: "gemini-3.7-flash",
+  /** Vault metadata intelligence recovery fallback model. */
+  metadataRecoveryFallback: "gemini-3.1-flash-lite",
 } as const;

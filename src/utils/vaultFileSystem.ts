@@ -8,6 +8,14 @@ import {
   serializeShoppingListToMarkdown,
   parseVaultNoteMarkdown,
 } from './markdownParser';
+import {
+  vaultAssets,
+  isImageFile,
+  saveImageToVaultAssets,
+  scanVaultAssetsFromHandle,
+} from './vaultAssets';
+
+export { saveImageToVaultAssets, scanVaultAssetsFromHandle };
 
 const IDB_NAME = 'ObsidianRecipeVaultDB';
 const IDB_STORE = 'vault_handles';
@@ -114,35 +122,45 @@ export async function scanVaultDirectory(dirHandle: any): Promise<VaultScanResul
     // @ts-ignore
     for await (const entry of handle.values()) {
       const entryPath = currentPath ? `${currentPath}/${entry.name}` : entry.name;
-      if (entry.kind === 'file' && entry.name.endsWith('.md')) {
-        try {
-          const file = await entry.getFile();
-          const text = await file.text();
+      if (entry.kind === 'file') {
+        if (entry.name.endsWith('.md')) {
+          try {
+            const file = await entry.getFile();
+            const text = await file.text();
 
-          const lowerName = entry.name.toLowerCase();
-          if (lowerName === 'meal plan.md' || lowerName === 'meal-plan.md' || lowerName === 'mealplan.md') {
-            foundMealPlan = parseMealPlanFromMarkdown(text);
-          } else if (
-            lowerName === 'shopping list.md' ||
-            lowerName === 'shopping-list.md' ||
-            lowerName === 'grocery list.md' ||
-            lowerName === 'shoppinglist.md'
-          ) {
-            foundShoppingList = parseShoppingListFromMarkdown(text);
-          } else {
-            const parsed = parseObsidianRecipeMarkdown(text, entry.name, entryPath);
-            parsed.fileHandle = entry;
-            // Check if it's a recipe or general reference note
-            if (parsed.ingredients.length > 0 || parsed.instructions.length > 0 || parsed.tags.some(t => t.toLowerCase().includes('recipe') || t.toLowerCase().includes('food'))) {
-              recipes.push(parsed);
+            const lowerName = entry.name.toLowerCase();
+            if (lowerName === 'meal plan.md' || lowerName === 'meal-plan.md' || lowerName === 'mealplan.md') {
+              foundMealPlan = parseMealPlanFromMarkdown(text);
+            } else if (
+              lowerName === 'shopping list.md' ||
+              lowerName === 'shopping-list.md' ||
+              lowerName === 'grocery list.md' ||
+              lowerName === 'shoppinglist.md'
+            ) {
+              foundShoppingList = parseShoppingListFromMarkdown(text);
             } else {
-              const genericNote = parseVaultNoteMarkdown(text, entry.name, entryPath);
-              genericNote.fileHandle = entry;
-              notes.push(genericNote);
+              const parsed = parseObsidianRecipeMarkdown(text, entry.name, entryPath);
+              parsed.fileHandle = entry;
+              // Check if it's a recipe or general reference note
+              if (parsed.ingredients.length > 0 || parsed.instructions.length > 0 || parsed.tags.some(t => t.toLowerCase().includes('recipe') || t.toLowerCase().includes('food'))) {
+                recipes.push(parsed);
+              } else {
+                const genericNote = parseVaultNoteMarkdown(text, entry.name, entryPath);
+                genericNote.fileHandle = entry;
+                notes.push(genericNote);
+              }
             }
+          } catch (e) {
+            console.warn('Failed to parse file:', entry.name, e);
           }
-        } catch (e) {
-          console.warn('Failed to parse file:', entry.name, e);
+        } else if (isImageFile(entry.name)) {
+          try {
+            const file = await entry.getFile();
+            const blobUrl = URL.createObjectURL(file);
+            vaultAssets.registerAsset(entryPath, entry, blobUrl);
+          } catch (err) {
+            console.warn('Failed to index vault image asset:', entry.name, err);
+          }
         }
       } else if (entry.kind === 'directory' && !entry.name.startsWith('.')) {
         await scanDirectory(entry, entryPath);
@@ -323,9 +341,9 @@ export async function parseUploadedFileList(fileList: FileList | File[]): Promis
   const count = 'length' in fileList ? fileList.length : 0;
   for (let i = 0; i < count; i++) {
     const file = fileList[i];
+    const relativePath = (file as any).webkitRelativePath || file.name;
     if (file.name.endsWith('.md') || file.name.endsWith('.markdown')) {
       const text = await file.text();
-      const relativePath = (file as any).webkitRelativePath || file.name;
       const lowerName = file.name.toLowerCase();
 
       if (lowerName === 'meal plan.md' || lowerName === 'meal-plan.md' || lowerName === 'mealplan.md') {
@@ -344,6 +362,13 @@ export async function parseUploadedFileList(fileList: FileList | File[]): Promis
         } else {
           notes.push(parseVaultNoteMarkdown(text, file.name, relativePath));
         }
+      }
+    } else if (isImageFile(file.name)) {
+      try {
+        const blobUrl = URL.createObjectURL(file);
+        vaultAssets.registerAsset(relativePath, file, blobUrl);
+      } catch (err) {
+        console.warn('Failed to index uploaded image file:', file.name, err);
       }
     }
   }
@@ -369,6 +394,7 @@ export async function parseDroppedFilesAndFolders(dataTransfer: DataTransfer): P
     return new Promise((resolve) => {
       fileEntry.file(
         async (file: File) => {
+          const filePath = path ? `${path}/${file.name}` : file.name;
           if (file.name.endsWith('.md') || file.name.endsWith('.markdown')) {
             try {
               const text = await file.text();
@@ -378,15 +404,22 @@ export async function parseDroppedFilesAndFolders(dataTransfer: DataTransfer): P
               } else if (lowerName === 'shopping list.md' || lowerName === 'shopping-list.md' || lowerName === 'grocery list.md') {
                 foundShoppingList = parseShoppingListFromMarkdown(text);
               } else {
-                const parsed = parseObsidianRecipeMarkdown(text, file.name, path ? `${path}/${file.name}` : file.name);
+                const parsed = parseObsidianRecipeMarkdown(text, file.name, filePath);
                 if (parsed.ingredients.length > 0 || parsed.instructions.length > 0 || parsed.tags.some(t => t.toLowerCase().includes('recipe') || t.toLowerCase().includes('food'))) {
                   recipes.push(parsed);
                 } else {
-                  notes.push(parseVaultNoteMarkdown(text, file.name, path ? `${path}/${file.name}` : file.name));
+                  notes.push(parseVaultNoteMarkdown(text, file.name, filePath));
                 }
               }
             } catch (err) {
               console.warn('Failed to parse dropped file:', file.name, err);
+            }
+          } else if (isImageFile(file.name)) {
+            try {
+              const blobUrl = URL.createObjectURL(file);
+              vaultAssets.registerAsset(filePath, file, blobUrl);
+            } catch (err) {
+              console.warn('Failed to index dropped image file:', file.name, err);
             }
           }
           resolve();

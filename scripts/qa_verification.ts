@@ -15,6 +15,13 @@ import {
 } from '../src/utils/markdownParser';
 import { isRestrictedIP, validateUrlForSSRF } from '../server/ssrfGuard';
 import { generateMarkdown } from '../server/recipeGrabber';
+import {
+  assessRecipeHealth,
+  summarizeVaultHealth,
+  mergeRecoveredMetadata,
+  normalizeTimeString,
+} from '../src/utils/vaultIntelligence';
+import { recoverMetadataAlgorithmically } from '../server/metadataRecovery';
 import type { ObsidianRecipe, MealPlanDay, ShoppingCategoryGroup } from '../src/types';
 
 let totalTests = 0;
@@ -33,7 +40,7 @@ function assert(condition: boolean, testName: string, details?: string) {
 }
 
 console.log('====================================================');
-console.log('THE KITCHEN CODEX v0.2.1 — COMPREHENSIVE QA TEST SUITE');
+console.log('THE KITCHEN CODEX v0.2.2 — COMPREHENSIVE QA TEST SUITE');
 console.log('====================================================\n');
 
 // ----------------------------------------------------
@@ -376,6 +383,75 @@ console.log('\n🧪 5. SECURITY, SSRF GUARD & INPUT VALIDATION');
     await testSSRFRejection('ftp://example.com/recipe', 'ftp scheme');
     await testSSRFRejection('http://admin:password@example.com/', 'embedded credentials');
   })();
+}
+
+// ----------------------------------------------------
+// SECTION 8: VAULT INTELLIGENCE & LEGACY RECOVERY TESTS
+// ----------------------------------------------------
+console.log('\n🧠 8. VAULT INTELLIGENCE & LEGACY METADATA RECOVERY');
+{
+  // Test 1: Legacy Recipe Detection
+  const legacyMarkdown = `---
+tags:
+  - recipe
+cuisine: Hawaiian
+category: Seasonings
+difficulty: Easy
+author: Derrick Riches
+url: https://example.com/recipe
+---
+
+# Hawaiian Pork Rib Rub
+
+### Ingredients
+- 1/4 cup brown sugar
+- 2 tbsp sea salt
+- 1 tbsp smoked paprika
+- 1 tsp garlic powder
+
+### Instructions
+1. Mix all dry spices thoroughly in a glass bowl.
+2. Rub evenly across pork ribs 30 minutes before smoking.
+`;
+
+  const parsedLegacy = parseObsidianRecipeMarkdown(legacyMarkdown, 'Hawaiian Pork Rib Rub.md');
+  const healthReport = assessRecipeHealth(parsedLegacy);
+
+  assert(healthReport.status === 'legacy', 'Legacy status identified correctly on un-migrated recipe note');
+  assert(healthReport.missingFields.includes('prepTime'), 'Identifies missing prepTime');
+  assert(healthReport.missingFields.includes('cookTime'), 'Identifies missing cookTime');
+  assert(healthReport.missingFields.includes('servings'), 'Identifies missing servings');
+  assert(healthReport.healthScore < 60, `Calculated health score (${healthReport.healthScore}%) reflects missing key metadata`);
+
+  // Test 2: Heuristic Algorithmic Fallback Recovery
+  const recoveredData = recoverMetadataAlgorithmically({
+    title: parsedLegacy.title,
+    rawMarkdown: parsedLegacy.rawMarkdown,
+    ingredients: parsedLegacy.ingredients,
+    instructions: parsedLegacy.instructions,
+  });
+
+  assert(recoveredData.prepTime !== undefined, 'Algorithmic recovery generated prep time');
+  assert(recoveredData.servings !== undefined && recoveredData.servings.value > 0, 'Algorithmic recovery generated valid servings yield');
+  assert(recoveredData.suggestedTags !== undefined && recoveredData.suggestedTags.value.length > 0, 'Algorithmic recovery inferred tags');
+
+  // Test 3: Safe Non-destructive Merging
+  const mergedRecipe = mergeRecoveredMetadata(parsedLegacy, recoveredData, ['prepTime', 'cookTime', 'servings', 'suggestedTags']);
+  assert(mergedRecipe.prepTime === recoveredData.prepTime.value, 'Merged prepTime correctly onto recipe');
+  assert(mergedRecipe.servings === recoveredData.servings.value, 'Merged servings yield onto recipe');
+  assert(mergedRecipe.rawMarkdown.includes('author: Derrick Riches'), 'Preserved custom non-recipe YAML frontmatter (author)');
+  assert(mergedRecipe.rawMarkdown.includes('url: https://example.com/recipe'), 'Preserved custom URL frontmatter');
+  assert(mergedRecipe.rawMarkdown.includes('# Hawaiian Pork Rib Rub'), 'Preserved recipe title markdown header');
+
+  // Test 4: Time Normalization
+  assert(normalizeTimeString('15 mins') === '15 mins', 'Normalize 15 mins');
+  assert(normalizeTimeString('1 hour 30 minutes') === '1 hr 30 mins', 'Normalize 1 hour 30 minutes');
+  assert(normalizeTimeString('PT45M') === '45 mins', 'Normalize ISO 8601 PT45M');
+
+  // Test 5: Vault Health Summary
+  const summary = summarizeVaultHealth([parsedLegacy, mergedRecipe]);
+  assert(summary.totalRecipes === 2, 'Vault summary counts total recipes');
+  assert(summary.legacyCount >= 1, 'Vault summary identifies legacy recipes');
 }
 
 // Summary display

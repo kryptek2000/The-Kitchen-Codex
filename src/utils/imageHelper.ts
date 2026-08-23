@@ -1,3 +1,5 @@
+import { syncResolveVaultAssetUrl, cleanImageReference, isImageFile } from './vaultAssets';
+
 /**
  * High-quality food photography helper for The Kitchen Codex
  */
@@ -25,15 +27,18 @@ export const DEFAULT_FOOD_IMAGES: Record<string, string> = {
   beef: 'https://images.unsplash.com/photo-1558030006-450675393462?auto=format&fit=crop&w=1200&q=80',
   burger: 'https://images.unsplash.com/photo-1568901346375-23c9450c58cd?auto=format&fit=crop&w=1200&q=80',
   taco: 'https://images.unsplash.com/photo-1565299585323-38d6b0865b47?auto=format&fit=crop&w=1200&q=80',
+  burrito: 'https://images.unsplash.com/photo-1626700051175-6818013e1d4f?auto=format&fit=crop&w=1200&q=80',
+  breakfast: 'https://images.unsplash.com/photo-1533089860892-a7c6f0a88666?auto=format&fit=crop&w=1200&q=80',
+  egg: 'https://images.unsplash.com/photo-1525351484163-7529414344d8?auto=format&fit=crop&w=1200&q=80',
   mexican: 'https://images.unsplash.com/photo-1504674900247-0877df9cc836?auto=format&fit=crop&w=1200&q=80',
   asian: 'https://images.unsplash.com/photo-1511690656952-34342bb7c2f2?auto=format&fit=crop&w=1200&q=80',
-  breakfast: 'https://images.unsplash.com/photo-1533089860892-a7c6f0a88666?auto=format&fit=crop&w=1200&q=80',
   default: 'https://images.unsplash.com/photo-1495521821757-a1efb6729352?auto=format&fit=crop&w=1200&q=80',
 };
 
 /**
  * Returns a valid, reliable image URL for a given recipe.
- * If recipe has an explicit image URL, returns it.
+ * If recipe has an explicit image URL or local vault path (e.g. Assets/Breakfast Burritos.jpg),
+ * resolves and returns it.
  * Otherwise analyzes title, cuisine, category, and tags to find the best matching food photograph.
  */
 export function getRecipeImage(recipe: {
@@ -44,20 +49,63 @@ export function getRecipeImage(recipe: {
   tags?: string[];
   rawMarkdown?: string;
 }): string {
-  // 1. Direct explicit image
-  if (recipe.image && recipe.image.trim().length > 0 && !recipe.image.startsWith('undefined')) {
-    return recipe.image.trim();
+  // 1. Direct explicit image or vault asset path
+  if (recipe.image && typeof recipe.image === 'string') {
+    const clean = cleanImageReference(recipe.image);
+    if (clean && clean !== 'undefined' && clean !== 'null') {
+      // If it's already an absolute URL or Blob URL, use directly
+      if (
+        clean.startsWith('http://') ||
+        clean.startsWith('https://') ||
+        clean.startsWith('data:') ||
+        clean.startsWith('blob:')
+      ) {
+        return clean;
+      }
+
+      // Check if it resolves in the local Obsidian vault asset cache (e.g. Assets/Breakfast Burritos.jpg)
+      const vaultBlobUrl = syncResolveVaultAssetUrl(clean);
+      if (vaultBlobUrl) {
+        return vaultBlobUrl;
+      }
+
+      // If it has an image extension or is in Assets folder, return the cleaned reference
+      if (isImageFile(clean) || clean.toLowerCase().startsWith('assets/')) {
+        return clean;
+      }
+    }
   }
 
   // 2. Search for markdown image embed in rawMarkdown
   if (recipe.rawMarkdown) {
-    const mdImgMatch = recipe.rawMarkdown.match(/!\[.*?\]\((https?:\/\/[^\s\)]+)\)/i);
-    if (mdImgMatch && mdImgMatch[1]) {
-      return mdImgMatch[1];
+    // Obsidian wikilink embed: ![[Assets/Breakfast Burritos.jpg]] or ![[Breakfast Burritos.jpg]]
+    const wikilinkImgMatch = recipe.rawMarkdown.match(/!\[\[([^\]]+\.(?:jpg|jpeg|png|webp|avif|gif|svg))\]\]/i);
+    if (wikilinkImgMatch && wikilinkImgMatch[1]) {
+      const targetRef = cleanImageReference(wikilinkImgMatch[1]);
+      const resolved = syncResolveVaultAssetUrl(targetRef);
+      if (resolved) return resolved;
     }
-    const htmlImgMatch = recipe.rawMarkdown.match(/<img\s+[^>]*src=["'](https?:\/\/[^"']+)["']/i);
+
+    // Standard markdown image: ![alt](url)
+    const mdImgMatch = recipe.rawMarkdown.match(/!\[.*?\]\((https?:\/\/[^\s\)]+|[^\s\)]+\.(?:jpg|jpeg|png|webp|avif|gif|svg))\)/i);
+    if (mdImgMatch && mdImgMatch[1]) {
+      const src = mdImgMatch[1].trim();
+      if (src.startsWith('http://') || src.startsWith('https://')) {
+        return src;
+      }
+      const resolved = syncResolveVaultAssetUrl(src);
+      if (resolved) return resolved;
+    }
+
+    // HTML image: <img src="..." />
+    const htmlImgMatch = recipe.rawMarkdown.match(/<img\s+[^>]*src=["']([^"']+)["']/i);
     if (htmlImgMatch && htmlImgMatch[1]) {
-      return htmlImgMatch[1];
+      const src = htmlImgMatch[1].trim();
+      if (src.startsWith('http://') || src.startsWith('https://')) {
+        return src;
+      }
+      const resolved = syncResolveVaultAssetUrl(src);
+      if (resolved) return resolved;
     }
   }
 
@@ -79,3 +127,4 @@ export function getRecipeImage(recipe: {
 
   return DEFAULT_FOOD_IMAGES.default;
 }
+
