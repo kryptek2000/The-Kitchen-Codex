@@ -6,3 +6,5 @@ coverage/
 *.log
 .env*
 !.env.example
+.test_obsidian_vault_*
+.test_obsidian_vault*/

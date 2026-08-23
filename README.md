@@ -88,8 +88,8 @@ Ensure you have the following installed on your machine:
 
 #### 1. Clone the repository
 ```bash
-git clone https://github.com/your-username/obsidian-recipe-manager.git
-cd obsidian-recipe-manager
+git clone https://github.com/kryptek2000/The-Kitchen-Codex.git
+cd The-Kitchen-Codex
 ```
 
 #### 2. Install dependencies
@@ -237,7 +237,7 @@ favorite: true
 
 ## 🤝 Contributing
 
-Contributions, issues, and feature requests are welcome! Feel free to check the [issues page](https://github.com/your-username/obsidian-recipe-manager/issues).
+Contributions, issues, and feature requests are welcome! Feel free to check the [issues page](https://github.com/kryptek2000/The-Kitchen-Codex/issues).
 
 ---
 
