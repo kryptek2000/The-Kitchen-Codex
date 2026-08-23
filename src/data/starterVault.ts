@@ -1,7 +1,52 @@
-import { ObsidianRecipe, VaultNote } from '../types';
+import { ObsidianRecipe, VaultNote, MealPlanDay, ShoppingCategoryGroup } from '../types';
 import { parseObsidianRecipeMarkdown, parseVaultNoteMarkdown } from '../utils/markdownParser';
 
 export const DEFAULT_VAULT_PATH = 'Obsidian Vault / Kitchen Codex';
+
+/**
+ * Initial demo meal plan shown before a vault is connected. Reference titles
+ * map to the starter recipes above so the grid/meal-plan/shopping demo state is
+ * coherent out of the box. Kept here so all starter/demo data lives in one place.
+ */
+export const STARTER_MEAL_PLAN: MealPlanDay[] = [
+  { dayName: 'Monday', dinner: { recipeTitle: 'Creamy Tuscan Garlic Chicken' } },
+  { dayName: 'Tuesday', dinner: { recipeTitle: 'Roman Carbonara' } },
+  { dayName: 'Wednesday', dinner: { recipeTitle: 'Thai Green Curry' } },
+  { dayName: 'Thursday', dinner: { recipeTitle: 'Lemon Herb Salmon' } },
+  { dayName: 'Friday', dinner: { recipeTitle: 'Cast-Iron Ribeye' } },
+  { dayName: 'Saturday' },
+  { dayName: 'Sunday' },
+];
+
+/**
+ * Initial demo shopping list shown before a vault is connected. Matches the
+ * starter meal plan above so the demo state stays coherent.
+ */
+export const STARTER_SHOPPING_CATEGORIES: ShoppingCategoryGroup[] = [
+  {
+    category: 'Monday Dinner: Creamy Tuscan Garlic Chicken',
+    items: [
+      { id: '1', text: '2 large boneless skinless chicken breasts', recipeSources: ['Creamy Tuscan Garlic Chicken'], isChecked: true },
+      { id: '2', text: '1 tbsp olive oil', recipeSources: ['Creamy Tuscan Garlic Chicken'], isChecked: true },
+      { id: '3', text: '4 cloves garlic, minced', recipeSources: ['Creamy Tuscan Garlic Chicken'], isChecked: false },
+      { id: '4', text: '1 cup heavy cream', recipeSources: ['Creamy Tuscan Garlic Chicken'], isChecked: false },
+      { id: '5', text: '1/2 cup chicken broth', recipeSources: ['Creamy Tuscan Garlic Chicken'], isChecked: false },
+      { id: '6', text: '1/2 cup sun-dried tomatoes, drained and sliced', recipeSources: ['Creamy Tuscan Garlic Chicken'], isChecked: false },
+      { id: '7', text: '2 cups fresh baby spinach', recipeSources: ['Creamy Tuscan Garlic Chicken'], isChecked: false },
+      { id: '8', text: '1/2 cup freshly grated Parmesan cheese', recipeSources: ['Creamy Tuscan Garlic Chicken'], isChecked: false },
+    ],
+  },
+  {
+    category: 'Tuesday Dinner: Roman Carbonara',
+    items: [
+      { id: '9', text: '400g spaghetti or rigatoni', recipeSources: ['Roman Carbonara'], isChecked: false },
+      { id: '10', text: '200g guanciale (or thick-cut pancetta)', recipeSources: ['Roman Carbonara'], isChecked: false },
+      { id: '11', text: '4 large egg yolks + 1 whole egg', recipeSources: ['Roman Carbonara'], isChecked: false },
+      { id: '12', text: '100g Pecorino Romano, freshly grated', recipeSources: ['Roman Carbonara'], isChecked: false },
+      { id: '13', text: 'Freshly cracked black pepper', recipeSources: ['Roman Carbonara'], isChecked: true },
+    ],
+  },
+];
 
 export const STARTER_RECIPE_MARKDOWNS: { fileName: string; markdown: string }[] = [
   {

@@ -717,6 +717,68 @@ export function parseObsidianRecipeMarkdown(
 }
 
 /**
+ * Renders a single ingredient as a checklist line, preserving an intended Obsidian
+ * wikilink when present. Handles both simple targets (`[[Garlic]]`) and aliased
+ * targets (`[[Garlic|Fresh Garlic]]`) without stripping or duplicating links.
+ *
+ * @param ing parsed ingredient with optional amount/unit/name/wikilink metadata
+ * @param check `[ ]` or `[x]` checklist marker
+ */
+export function renderIngredientLine(
+  ing: { original?: string; amount?: number | null; unit?: string; name?: string; wikilink?: string; wikilinkTarget?: string; wikilinkAlias?: string },
+  check: string = '[ ]'
+): string {
+  const original = (ing.original || '').trim();
+
+  // Preserve an existing inline wikilink verbatim (including Target|Alias form).
+  if (original.includes('[[')) {
+    return `- ${check} ${original}`;
+  }
+
+  // Build the display text from the original line, keeping measurements/description.
+  let text = original.replace(/^[-*+]\s*(\[[ xX]\]\s*)?/, '').trim();
+
+  // Determine the wikilink to emit, if any.
+  let link: string | null = null;
+  if (ing.wikilinkTarget) {
+    link =
+      ing.wikilinkAlias && ing.wikilinkAlias !== ing.wikilinkTarget
+        ? `[[${ing.wikilinkTarget}|${ing.wikilinkAlias}]]`
+        : `[[${ing.wikilinkTarget}]]`;
+  } else if (ing.wikilink) {
+    // A raw wikilink may itself already carry an alias (Target|Alias).
+    link = ing.wikilink.includes('|') ? `[[${ing.wikilink}]]` : `[[${ing.wikilink}]]`;
+  }
+
+  if (!text) {
+    // Fall back to reconstructing from structured fields when original is empty.
+    const amt = ing.amount != null ? `${formatAmount(ing.amount)} ` : '';
+    const unit = ing.unit ? `${ing.unit} ` : '';
+    text = `${amt}${unit}${ing.name || ''}`.trim();
+  }
+
+  if (link) {
+    const name = (ing.name || '').trim();
+    // If the whole line is just the ingredient name, wrap it entirely so we
+    // never duplicate the name (e.g. "- [ ] Olive Oil [[Olive Oil]]").
+    if (name && name.toLowerCase() === text.toLowerCase()) {
+      return `- ${check} ${link}`;
+    }
+    // Replace the trailing ingredient name with the wikilink when the name is
+    // cleanly identifiable and not already linked; otherwise append it so the
+    // link is never silently dropped.
+    if (name && text.toLowerCase().includes(name.toLowerCase())) {
+      const idx = text.toLowerCase().lastIndexOf(name.toLowerCase());
+      text = `${text.slice(0, idx)}${link}${text.slice(idx + name.length)}`;
+      return `- ${check} ${text.trim()}`;
+    }
+    return `- ${check} ${text} ${link}`.trim();
+  }
+
+  return `- ${check} ${text}`.trim();
+}
+
+/**
  * Serializes an ObsidianRecipe into pristine Obsidian Markdown with YAML frontmatter
  */
 export function serializeRecipeToObsidianMarkdown(recipe: Partial<ObsidianRecipe>): string {
@@ -779,23 +841,7 @@ export function serializeRecipeToObsidianMarkdown(recipe: Partial<ObsidianRecipe
   if (recipe.ingredients && recipe.ingredients.length > 0) {
     recipe.ingredients.forEach((ing) => {
       const check = ing.isChecked ? '[x]' : '[ ]';
-      if (ing.original) {
-        // Ensure checklist prefix
-        const clean = ing.original.replace(/^[-*+]\s*(\[[ xX]\]\s*)?/, '');
-        md += `- ${check} ${clean}\n`;
-      } else {
-        const amt = ing.amount ? `${formatAmount(ing.amount)} ` : '';
-        const unit = ing.unit ? `${ing.unit} ` : '';
-        let link = ing.name;
-        if (ing.wikilinkTarget) {
-          link = ing.wikilinkAlias && ing.wikilinkAlias !== ing.wikilinkTarget
-            ? `[[${ing.wikilinkTarget}|${ing.wikilinkAlias}]]`
-            : `[[${ing.wikilinkTarget}]]`;
-        } else if (ing.wikilink) {
-          link = `[[${ing.wikilink}]]`;
-        }
-        md += `- ${check} ${amt}${unit}${link}\n`;
-      }
+      md += `${renderIngredientLine(ing, check)}\n`;
     });
   } else {
     md += `- [ ] 2 tbsp [[Olive Oil]]\n- [ ] 1 tsp [[Salt]]\n`;

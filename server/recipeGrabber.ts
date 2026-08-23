@@ -1,6 +1,8 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import { safeFetchHtml } from "./ssrfGuard.js";
+import { renderIngredientLine } from "../src/utils/markdownParser.js";
+import { MODEL_CONFIG } from "./modelConfig.js";
 
 dotenv.config();
 
@@ -266,7 +268,7 @@ function parseRecipeFromJsonLd(jsonLdList: any[], url?: string): GrabbedRecipeRe
 /**
  * Generate Obsidian Markdown with YAML frontmatter
  */
-function generateMarkdown(recipe: Partial<GrabbedRecipeResult>): string {
+export function generateMarkdown(recipe: Partial<GrabbedRecipeResult>): string {
   const tagsStr = (recipe.tags || ["food/recipes"]).map((t) => `\n  - ${t}`).join("");
   let md = `---
 title: "${recipe.title || "Untitled Recipe"}"
@@ -297,14 +299,7 @@ created: "${new Date().toISOString().split("T")[0]}"
   md += `## 🥘 Ingredients\n`;
   if (recipe.ingredients && recipe.ingredients.length > 0) {
     recipe.ingredients.forEach((ing) => {
-      const clean = ing.original.replace(/^[-*+]\s*(\[[ xX]\]\s*)?/, "").trim();
-      const wikilink = ing.wikilink ? `[[${ing.wikilink}]]` : ing.name;
-      // If original doesn't have wikilink notation, incorporate it cleanly
-      if (!clean.includes("[[")) {
-        md += `- [ ] ${clean}\n`;
-      } else {
-        md += `- [ ] ${clean}\n`;
-      }
+      md += `${renderIngredientLine(ing, "[ ]")}\n`;
     });
   } else {
     md += `- [ ] 2 tbsp [[Olive Oil]]\n- [ ] 1 tsp [[Sea Salt]]\n`;
@@ -389,7 +384,7 @@ REQUIREMENTS:
 10. Generate Obsidian tags like "food/recipes", "cuisine/italian", "dinner", etc.`;
 
       const response = await ai.models.generateContent({
-        model: "gemini-3.7-flash",
+        model: MODEL_CONFIG.recipeGrabber,
         contents: prompt,
         config: {
           responseMimeType: "application/json",

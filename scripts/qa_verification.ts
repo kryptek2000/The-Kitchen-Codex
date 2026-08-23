@@ -10,9 +10,11 @@ import {
   serializeMealPlanToMarkdown,
   parseShoppingListFromMarkdown,
   serializeShoppingListToMarkdown,
-  parseVaultNoteMarkdown
+  parseVaultNoteMarkdown,
+  renderIngredientLine
 } from '../src/utils/markdownParser';
 import { isRestrictedIP, validateUrlForSSRF } from '../server/ssrfGuard';
+import { generateMarkdown } from '../server/recipeGrabber';
 import type { ObsidianRecipe, MealPlanDay, ShoppingCategoryGroup } from '../src/types';
 
 let totalTests = 0;
@@ -198,6 +200,79 @@ category: Ingredient Guide
   assert(parsedNote.title === 'Olive Oil', 'Vault note title extracted');
   assert(parsedNote.tags.includes('pantry'), 'Vault note tags extracted');
   assert(parsedNote.content.includes('Look for cold-pressed'), 'Vault note body content extracted');
+}
+
+// ----------------------------------------------------
+// REV 1: WIKILINK PRESERVATION IN SERIALIZATION & WEB GRABBER (regression)
+// ----------------------------------------------------
+console.log('\n🧪 REV-1. WIKILINK PRESERVATION (renderIngredientLine + generateMarkdown)');
+{
+  // A. renderIngredientLine: measured ingredient with a wikilink target.
+  const measured = renderIngredientLine({ original: '1 tbsp olive oil', name: 'olive oil', wikilink: 'Olive Oil' });
+  assert(measured.includes('[[Olive Oil]]'), 'renderIngredientLine emits [[Target]] for measured ingredient', measured);
+  assert(measured.includes('1 tbsp'), 'renderIngredientLine preserves measurement', measured);
+
+  // B. renderIngredientLine: ingredient name == whole line -> no duplication.
+  const nameOnly = renderIngredientLine({ original: 'Olive Oil', name: 'Olive Oil', wikilink: 'Olive Oil' });
+  assert(nameOnly.includes('[[Olive Oil]]'), 'renderIngredientLine wraps a name-only ingredient with link', nameOnly);
+  assert(countOccurrences(nameOnly, 'Olive Oil') === 1, 'renderIngredientLine does NOT duplicate the name', nameOnly);
+
+  // C. renderIngredientLine: aliased wikilink [[Target|Alias]] preserved.
+  const alias = renderIngredientLine({ original: '4 cloves garlic, minced', name: 'garlic', wikilinkTarget: 'Garlic', wikilinkAlias: 'cloves' });
+  assert(alias.includes('[[Garlic|cloves]]'), 'renderIngredientLine emits [[Target|Alias]] correctly', alias);
+  assert(alias.includes('4 cloves'), 'renderIngredientLine preserves measurement around alias link', alias);
+
+  // D. renderIngredientLine: no metadata -> original text untouched (no stray link).
+  const noLink = renderIngredientLine({ original: 'salt and pepper to taste', name: 'salt' });
+  assert(!noLink.includes('[[') && noLink.includes('salt and pepper to taste'), 'renderIngredientLine leaves link-less ingredients untouched', noLink);
+
+  // E. renderIngredientLine: already-inked original preserved verbatim (incl alias).
+  const inline = renderIngredientLine({ original: '2 large [[Chicken Breast|chicken breasts]], sliced', name: 'chicken breasts', wikilink: 'Chicken Breast' });
+  assert(inline.includes('2 large [[Chicken Breast|chicken breasts]], sliced'), 'renderIngredientLine preserves an existing [[Target|Alias]] verbatim', inline);
+
+  // F. generateMarkdown (Web Grabber): recipe WITH wikilink ingredients keeps them.
+  const withLinks = generateMarkdown({
+    title: 'Garlic Pasta',
+    tags: ['food/recipes'],
+    cuisine: 'Italian',
+    category: 'Dinner',
+    prepTime: '10 mins',
+    cookTime: '15 mins',
+    totalTime: '25 mins',
+    servings: 2,
+    ingredients: [
+      { original: '200g [[Spaghetti]]', name: 'Spaghetti', wikilink: 'Spaghetti' },
+      { original: '2 tbsp [[Olive Oil]]', name: 'Olive Oil', wikilink: 'Olive Oil' },
+      { original: '4 cloves [[Garlic]]', name: 'Garlic', wikilink: 'Garlic' },
+    ],
+    instructions: [{ stepNumber: 1, text: 'Boil spaghetti.' }],
+  });
+  assert(withLinks.includes('[[Spaghetti]]') && withLinks.includes('[[Olive Oil]]') && withLinks.includes('[[Garlic]]'),
+    'generateMarkdown retains ingredient wikilinks ([[]] targets)', withLinks.slice(0, 120));
+
+  // G. generateMarkdown (Web Grabber): recipe WITHOUT wikilinks adds none.
+  const noLinks = generateMarkdown({
+    title: 'Plain Salad',
+    tags: ['food/recipes'],
+    cuisine: 'General',
+    category: 'Dinner',
+    prepTime: '5 mins',
+    cookTime: '0 mins',
+    totalTime: '5 mins',
+    servings: 2,
+    ingredients: [
+      { original: '2 cups lettuce', name: 'lettuce' },
+      { original: '1 tbsp vinaigrette', name: 'vinaigrette' },
+    ],
+    instructions: [{ stepNumber: 1, text: 'Toss and serve.' }],
+  });
+  assert(!noLinks.includes('[['), 'generateMarkdown adds NO wikilinks when none are provided', noLinks.slice(0, 120));
+  assert(noLinks.includes('2 cups lettuce'), 'generateMarkdown keeps ingredient text intact', noLinks.slice(0, 120));
+}
+
+// helper used by REV-1 assertions
+function countOccurrences(haystack: string, needle: string): number {
+  return haystack.split(needle).length - 1;
 }
 
 // ----------------------------------------------------

@@ -11,7 +11,7 @@ import {
   VaultNote,
   RecipeNutrition,
 } from './types';
-import { DEFAULT_VAULT_PATH, getStarterVaultRecipes, getStarterVaultNotes } from './data/starterVault';
+import { DEFAULT_VAULT_PATH, getStarterVaultRecipes, getStarterVaultNotes, STARTER_MEAL_PLAN, STARTER_SHOPPING_CATEGORIES } from './data/starterVault';
 import { getRecipeImage } from './utils/imageHelper';
 import { cleanRecipeTitle, parseObsidianRecipeMarkdown, serializeRecipeToObsidianMarkdown } from './utils/markdownParser';
 import {
@@ -56,42 +56,6 @@ const INITIAL_FILTERS: FilterState = {
   sortBy: 'title',
   sortOrder: 'asc',
 };
-
-const INITIAL_MEAL_PLAN: MealPlanDay[] = [
-  { dayName: 'Monday', dinner: { recipeTitle: 'Creamy Tuscan Garlic Chicken' } },
-  { dayName: 'Tuesday', dinner: { recipeTitle: 'Roman Carbonara' } },
-  { dayName: 'Wednesday', dinner: { recipeTitle: 'Thai Green Curry' } },
-  { dayName: 'Thursday', dinner: { recipeTitle: 'Lemon Herb Salmon' } },
-  { dayName: 'Friday', dinner: { recipeTitle: 'Cast-Iron Ribeye' } },
-  { dayName: 'Saturday' },
-  { dayName: 'Sunday' },
-];
-
-const INITIAL_SHOPPING_CATEGORIES: ShoppingCategoryGroup[] = [
-  {
-    category: 'Monday Dinner: Creamy Tuscan Garlic Chicken',
-    items: [
-      { id: '1', text: '2 large boneless skinless chicken breasts', recipeSources: ['Creamy Tuscan Garlic Chicken'], isChecked: true },
-      { id: '2', text: '1 tbsp olive oil', recipeSources: ['Creamy Tuscan Garlic Chicken'], isChecked: true },
-      { id: '3', text: '4 cloves garlic, minced', recipeSources: ['Creamy Tuscan Garlic Chicken'], isChecked: false },
-      { id: '4', text: '1 cup heavy cream', recipeSources: ['Creamy Tuscan Garlic Chicken'], isChecked: false },
-      { id: '5', text: '1/2 cup chicken broth', recipeSources: ['Creamy Tuscan Garlic Chicken'], isChecked: false },
-      { id: '6', text: '1/2 cup sun-dried tomatoes, drained and sliced', recipeSources: ['Creamy Tuscan Garlic Chicken'], isChecked: false },
-      { id: '7', text: '2 cups fresh baby spinach', recipeSources: ['Creamy Tuscan Garlic Chicken'], isChecked: false },
-      { id: '8', text: '1/2 cup freshly grated Parmesan cheese', recipeSources: ['Creamy Tuscan Garlic Chicken'], isChecked: false },
-    ],
-  },
-  {
-    category: 'Tuesday Dinner: Roman Carbonara',
-    items: [
-      { id: '9', text: '400g spaghetti or rigatoni', recipeSources: ['Roman Carbonara'], isChecked: false },
-      { id: '10', text: '200g guanciale (or thick-cut pancetta)', recipeSources: ['Roman Carbonara'], isChecked: false },
-      { id: '11', text: '4 large egg yolks + 1 whole egg', recipeSources: ['Roman Carbonara'], isChecked: false },
-      { id: '12', text: '100g Pecorino Romano, freshly grated', recipeSources: ['Roman Carbonara'], isChecked: false },
-      { id: '13', text: 'Freshly cracked black pepper', recipeSources: ['Roman Carbonara'], isChecked: true },
-    ],
-  },
-];
 
 export default function App() {
   // 1. Vault Recipes State (Canonical Source: In-Memory working state hydrated from Obsidian vault files)
@@ -155,8 +119,8 @@ export default function App() {
   });
 
   // Meal Plan & Shopping List (Canonical Source: Vault Notes `Meal Plan.md` & `Shopping List.md`)
-  const [mealPlan, setMealPlan] = useState<MealPlanDay[]>(INITIAL_MEAL_PLAN);
-  const [shoppingCategories, setShoppingCategories] = useState<ShoppingCategoryGroup[]>(INITIAL_SHOPPING_CATEGORIES);
+  const [mealPlan, setMealPlan] = useState<MealPlanDay[]>(STARTER_MEAL_PLAN);
+  const [shoppingCategories, setShoppingCategories] = useState<ShoppingCategoryGroup[]>(STARTER_SHOPPING_CATEGORIES);
 
   // 1. Reconnect to IndexedDB directory handle on mount if permission granted
   useEffect(() => {
@@ -263,17 +227,22 @@ export default function App() {
       setActiveTimers((prevTimers) => {
         if (prevTimers.length === 0) return prevTimers;
 
-        let hasFinished = false;
+        // Track every timer that reaches zero in this tick so each gets its
+        // own completion notification (previously a single batch-wide flag
+        // meant multiple simultaneous timers fired only one chime).
+        let completedCount = 0;
         const updated = prevTimers.map((t) => {
           if (!t.isRunning || t.remainingSeconds <= 0) return t;
           const nextSec = t.remainingSeconds - 1;
           if (nextSec === 0) {
-            hasFinished = true;
+            completedCount += 1;
           }
           return { ...t, remainingSeconds: nextSec };
         });
 
-        if (hasFinished) {
+        // A timer already at <= 0 is left unchanged on later ticks, so it will
+        // never double-fire — we only chime for timers completed this tick.
+        for (let i = 0; i < completedCount; i += 1) {
           playTimerChime();
         }
 
@@ -961,8 +930,8 @@ export default function App() {
             }
           } else {
             setRecipes(getStarterVaultRecipes());
-            setMealPlan(INITIAL_MEAL_PLAN);
-            setShoppingCategories(INITIAL_SHOPPING_CATEGORIES);
+            setMealPlan(STARTER_MEAL_PLAN);
+            setShoppingCategories(STARTER_SHOPPING_CATEGORIES);
           }
         }}
       />

@@ -1,5 +1,6 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
+import { MODEL_CONFIG } from "./modelConfig.js";
 
 dotenv.config();
 
@@ -31,8 +32,8 @@ export interface NutritionEstimateResult {
   confidenceNote: string;
 }
 
-const PRIMARY_MODEL = "gemini-3.6-flash";
-const FALLBACK_MODEL = "gemini-3.1-flash-lite";
+const PRIMARY_MODEL = MODEL_CONFIG.nutritionPrimary;
+const FALLBACK_MODEL = MODEL_CONFIG.nutritionFallback;
 
 /**
  * Strips Obsidian wikilinks [[Target|Alias]] -> Alias, [[Target]] -> Target

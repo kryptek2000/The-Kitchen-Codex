@@ -18,15 +18,21 @@ setInterval(() => {
 }, 5 * 60 * 1000).unref();
 
 /**
- * Extracts a normalized client IP address from request headers or socket.
+ * Extracts a normalized client IP address from the request.
+ *
+ * We rely on Express's `trust proxy` setting (configured in server.ts) rather
+ * than reading the raw `X-Forwarded-For` header directly. When no trusted proxy
+ * is configured, Express exposes the direct socket address and ignores the
+ * client-supplied `X-Forwarded-For` header — preventing header spoofing from
+ * rotating the source IP to bypass rate limiting. When a trusted proxy is
+ * configured, Express resolves the real client IP correctly.
  */
 export function getClientIp(req: Request): string {
-  const forwarded = req.headers["x-forwarded-for"];
-  if (forwarded) {
-    const ips = Array.isArray(forwarded) ? forwarded[0] : forwarded.split(",")[0];
-    if (ips) return ips.trim();
-  }
-  return req.ip || req.socket.remoteAddress || "127.0.0.1";
+  const resolved = req.ip || req.socket.remoteAddress;
+  if (!resolved) return "127.0.0.1";
+  // Normalize IPv6 loopback / IPv4-mapped loopback to a stable, non-empty key.
+  if (resolved === "::1" || resolved === "::ffff:127.0.0.1") return "127.0.0.1";
+  return resolved;
 }
 
 /**

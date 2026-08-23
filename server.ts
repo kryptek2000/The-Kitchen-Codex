@@ -11,6 +11,22 @@ dotenv.config();
 const app = express();
 const PORT = 3000;
 
+// Trust proxy configuration.
+//
+// X-Forwarded-For is client-supplied and must NOT be trusted by default, or a
+// client can spoof it to rotate the source IP and bypass rate limiting.
+// - Locally (no proxy): leave TRUST_PROXY unset -> Express uses the direct
+//   socket IP; X-Forwarded-For is ignored entirely.
+// - Behind a trusted reverse proxy / Cloud Run: set TRUST_PROXY to the number
+//   of trusted proxy hops (e.g. TRUST_PROXY=1) so Express derives the real
+//   client IP from the proxy-added header while ignoring spoofed hops.
+app.set("trust proxy", (() => {
+  const raw = (process.env.TRUST_PROXY || "").trim();
+  if (raw === "") return false;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 0 ? n : raw;
+})());
+
 // Middleware for parsing JSON with request size bounds
 app.use(express.json({ limit: "2mb" }));
 
@@ -207,7 +223,15 @@ app.post("/api/estimate-nutrition", nutritionEstimateRateLimiter, async (req, re
 
 // Serve frontend with Vite in dev, static files in prod
 async function start() {
-  if (process.env.NODE_ENV !== "production") {
+  // The production build is bundled into dist/server.cjs (esbuild bakes
+  // NODE_ENV="production" into it). This defensive check also treats any run
+  // of the compiled bundle — detected via its `dist` path — as production so
+  // `node dist/server.cjs` never accidentally boots the Vite dev middleware.
+  const entryPath = process.argv[1] || "";
+  const isCompiledBundle = entryPath.split(path.sep).includes("dist");
+  const isProduction = process.env.NODE_ENV === "production" || isCompiledBundle;
+
+  if (!isProduction) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
