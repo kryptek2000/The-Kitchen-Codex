@@ -197,6 +197,13 @@ app.post("/api/download-image", recipeImportRateLimiter, async (req, res) => {
       return res.status(400).json({ error: "The provided image URL is invalid or restricted." });
     }
 
+    if (errorMsg.includes("non-image response")) {
+      return res.status(415).json({
+        error:
+          "The remote server did not return an image file. Please provide a direct link to a JPEG, PNG, WebP, GIF, or AVIF image.",
+      });
+    }
+
     if (errorMsg.includes("timed out") || errorMsg.includes("limit")) {
       return res.status(504).json({ error: errorMsg });
     }

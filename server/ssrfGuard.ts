@@ -1,5 +1,9 @@
 import dns from "dns/promises";
 import net from "net";
+import http from "http";
+import https from "https";
+import type { IncomingMessage } from "http";
+import type { LookupFunction } from "net";
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024; // 2 MB
 const FETCH_TIMEOUT_MS = 8000; // 8 seconds
@@ -227,10 +231,10 @@ function isRestrictedHostname(hostname: string): boolean {
 }
 
 /**
- * Validates a URL against SSRF rules by inspecting the scheme, hostname,
- * and performing a DNS lookup to ensure none of the resolved IPs are in private/restricted ranges.
+ * Performs the synchronous URL checks that do not require DNS:
+ * parsing, scheme allowlisting, credential rejection and hostname blacklisting.
  */
-export async function validateUrlForSSRF(urlString: string): Promise<URL> {
+function parseAndValidateUrl(urlString: string): URL {
   let parsedUrl: URL;
 
   try {
@@ -249,34 +253,72 @@ export async function validateUrlForSSRF(urlString: string): Promise<URL> {
     throw new Error("URLs with user authentication credentials are not permitted.");
   }
 
-  const hostname = parsedUrl.hostname;
-
   // 3. Fast-path hostname blacklist check
-  if (isRestrictedHostname(hostname)) {
+  if (isRestrictedHostname(parsedUrl.hostname)) {
     throw new Error("The target host is restricted.");
   }
 
-  // 4. If hostname is directly an IP literal (e.g. http://127.0.0.1 or http://[::1])
-  const cleanHost = hostname.replace(/^\[|\]$/g, "");
-  if (net.isIP(cleanHost)) {
+  return parsedUrl;
+}
+
+/**
+ * A URL that has passed every SSRF validation check together with the single,
+ * validated IP address that the outbound connection MUST use.
+ *
+ * Pinning the resolved IP into the connection itself closes the
+ * validation-to-connection DNS rebinding race (TOCTOU): the hostname is
+ * resolved exactly once here, every resulting address is checked with the
+ * full SSRF rule set, and the transport layer is forbidden from resolving
+ * the hostname again.
+ */
+export interface PinnedTarget {
+  /** Original URL (original hostname/port preserved for Host/SNI semantics). */
+  url: URL;
+  /** The validated IP address the socket must connect to. */
+  ip: string;
+  /** Address family of `ip` (4 or 6). */
+  family: 4 | 6;
+}
+
+/**
+ * Validates a URL against SSRF rules and resolves it exactly once.
+ *
+ * Checks performed (in order):
+ * 1. Scheme strictly HTTP or HTTPS.
+ * 2. No embedded credentials.
+ * 3. Hostname blacklist (localhost/metadata aliases).
+ * 4. If the hostname is a literal IP, that IP is validated directly.
+ * 5. Otherwise a SINGLE authoritative DNS lookup resolves ALL A/AAAA records
+ *    (verbatim order preserved) and every returned address must pass
+ *    `isRestrictedIP`. The first record becomes the pinned connection target.
+ *
+ * Because resolution happens exactly once per hop and the pinned IP is what
+ * the socket connects to, an attacker-controlled DNS server cannot change the
+ * destination between validation and connection (DNS rebinding).
+ */
+export async function validateAndPinUrl(urlString: string): Promise<PinnedTarget> {
+  const parsedUrl = parseAndValidateUrl(urlString);
+
+  // If hostname is directly an IP literal (e.g. http://127.0.0.1 or http://[::1])
+  const cleanHost = parsedUrl.hostname.replace(/^\[|\]$/g, "");
+  const literalFamily = net.isIP(cleanHost);
+  if (literalFamily !== 0) {
     if (isRestrictedIP(cleanHost)) {
       throw new Error("The target IP address is restricted.");
     }
-    return parsedUrl;
+    return {
+      url: parsedUrl,
+      ip: cleanHost,
+      family: literalFamily === 6 ? 6 : 4,
+    };
   }
 
-  // 5. DNS Resolution check: Resolve ALL IPv4 and IPv6 addresses for the hostname
+  // Single authoritative DNS resolution: resolve ALL IPv4 and IPv6 addresses
+  // once. This exact result set is what gets validated and pinned — no later
+  // lookup can override it.
+  let records: Array<{ address: string; family: number }>;
   try {
-    const records = await dns.lookup(hostname, { all: true, verbatim: true });
-    if (!records || records.length === 0) {
-      throw new Error("Unable to resolve target host.");
-    }
-
-    for (const record of records) {
-      if (isRestrictedIP(record.address)) {
-        throw new Error("The target host resolved to a restricted IP address.");
-      }
-    }
+    records = await dns.lookup(parsedUrl.hostname, { all: true, verbatim: true });
   } catch (dnsErr: any) {
     if (dnsErr?.message?.includes("restricted")) {
       throw dnsErr;
@@ -284,32 +326,206 @@ export async function validateUrlForSSRF(urlString: string): Promise<URL> {
     throw new Error("Failed to resolve hostname.");
   }
 
-  return parsedUrl;
+  if (!records || records.length === 0) {
+    throw new Error("Unable to resolve target host.");
+  }
+
+  for (const record of records) {
+    if (isRestrictedIP(record.address)) {
+      throw new Error("The target host resolved to a restricted IP address.");
+    }
+  }
+
+  // Preserve the resolver's verbatim ordering when choosing the pinned address.
+  const chosen = records[0];
+  return {
+    url: parsedUrl,
+    ip: chosen.address,
+    family: chosen.family === 6 ? 6 : 4,
+  };
 }
 
 /**
- * Secure HTTP fetch with:
- * - SSRF protection & DNS IP resolution checks
+ * Backwards-compatible validation entry point: validates the URL against all
+ * SSRF rules and returns the parsed URL on success.
+ */
+export async function validateUrlForSSRF(urlString: string): Promise<URL> {
+  const target = await validateAndPinUrl(urlString);
+  return target.url;
+}
+
+/**
+ * Derives the HTTP Host header value for the ORIGINAL hostname so that
+ * name-based virtual hosting and routing keep working even though the socket
+ * dials the pinned IP. Default ports are omitted by the WHATWG URL parser, so
+ * any remaining explicit port must be kept in the header value.
+ */
+export function deriveHostHeader(url: URL): string {
+  return url.port ? `${url.hostname}:${url.port}` : url.hostname;
+}
+
+/**
+ * The concrete wire-level plan for a pinned outbound request. Exposed for
+ * deterministic verification of SNI/Host/port behavior without a network.
+ */
+export interface PinnedRequestPlan {
+  /** Validated IP the socket will dial. */
+  host: string;
+  port: number;
+  family: 4 | 6;
+  path: string;
+  method: string;
+  /** HTTP Host header derived from the ORIGINAL hostname (never the IP). */
+  hostHeader: string;
+  /**
+   * TLS SNI / certificate identity: always the original hostname for HTTPS.
+   * Deliberately omitted for IP-literal hosts (RFC 6066 forbids literal IPs
+   * in SNI; certificate IP SANs are matched automatically by Node).
+   */
+  servername?: string;
+}
+
+export function planPinnedRequest(target: PinnedTarget, method: string = "GET"): PinnedRequestPlan {
+  const url = target.url;
+  const isIpLiteralHost = net.isIP(url.hostname) !== 0;
+  return {
+    host: target.ip,
+    port: url.port ? Number(url.port) : url.protocol === "https:" ? 443 : 80,
+    family: target.family,
+    path: `${url.pathname}${url.search}`,
+    method,
+    hostHeader: deriveHostHeader(url),
+    servername: url.protocol === "https:" && !isIpLiteralHost ? url.hostname : undefined,
+  };
+}
+
+/**
+ * Builds a DNS `lookup` function that hard-pins the connection to the
+ * already-validated address. Belt-and-suspenders: because we dial the IP
+ * literal directly no resolution should ever be attempted, but if anything
+ * downstream does attempt one it can only ever yield the validated IP.
+ */
+function createPinnedLookup(target: PinnedTarget): LookupFunction {
+  return (hostname, _options, callback) => {
+    if (hostname !== target.ip) {
+      callback(new Error("SSRF guard refused to resolve a non-validated address."), "");
+      return;
+    }
+    callback(null, target.ip, target.family);
+  };
+}
+
+interface PinnedHttpRequestOptions {
+  headers?: Record<string, string>;
+  signal?: AbortSignal;
+}
+
+/**
+ * Issues a GET request whose TCP/TLS connection is bound to the validated IP:
+ * - Connects to `target.ip` directly (no hostname resolution).
+ * - Sends Host derived from the ORIGINAL hostname (virtual-host compatible).
+ * - For HTTPS, sets TLS servername to the ORIGINAL hostname so certificate
+ *   validation and SNI behave exactly like a normal fetch to that hostname.
+ * - Uses a fresh connection (`agent: false`) so sockets are never reused
+ *   across different validation/pinning contexts.
+ */
+function pinnedHttpRequest(
+  target: PinnedTarget,
+  options: PinnedHttpRequestOptions = {}
+): Promise<IncomingMessage> {
+  const plan = planPinnedRequest(target);
+  const transport = target.url.protocol === "https:" ? https : http;
+
+  return new Promise<IncomingMessage>((resolve, reject) => {
+    const request = transport.request(
+      {
+        host: plan.host,
+        family: plan.family,
+        port: plan.port,
+        path: plan.path,
+        method: plan.method,
+        headers: {
+          ...(options.headers ?? {}),
+          Host: plan.hostHeader,
+        },
+        agent: false,
+        servername: plan.servername,
+        lookup: createPinnedLookup(target),
+        signal: options.signal,
+      },
+      resolve
+    );
+    request.on("error", reject);
+    request.end();
+  });
+}
+
+function isTimeoutError(err: unknown): boolean {
+  const e = err as { name?: string; code?: string };
+  return (
+    e?.name === "TimeoutError" ||
+    e?.name === "AbortError" ||
+    e?.code === "ABORT_ERR" ||
+    e?.code === "ETIMEDOUT"
+  );
+}
+
+function normalizeHeader(value: string | string[] | undefined): string | undefined {
+  if (Array.isArray(value)) return value[0];
+  return value;
+}
+
+/**
+ * Reads a response body as a stream with a strict byte counter, destroying
+ * the socket as soon as the cap would be exceeded.
+ */
+async function readBodyWithCap(
+  response: IncomingMessage,
+  maxBytes: number,
+  sizeErrorMessage: string
+): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let receivedBytes = 0;
+
+  for await (const chunk of response) {
+    const buf = chunk as Buffer;
+    receivedBytes += buf.length;
+    if (receivedBytes > maxBytes) {
+      response.destroy();
+      throw new Error(sizeErrorMessage);
+    }
+    chunks.push(buf);
+  }
+
+  return Buffer.concat(chunks);
+}
+
+/**
+ * Secure HTML fetch with:
+ * - SSRF protection with SINGLE-RESOLUTION DNS PINNING (anti-rebinding):
+ *   the hostname is resolved once, every address validated, and the outbound
+ *   socket is forced onto the validated IP while keeping the original
+ *   hostname for HTTP Host semantics and TLS SNI/certificate validation.
  * - Strict HTTP/HTTPS scheme restriction
  * - 8-second timeout via AbortSignal
  * - 2 MB max body size streaming enforcement
- * - Manual redirect validation (re-validating every redirect target against SSRF)
+ * - Manual redirect handling with FULL re-validation and re-pinning of every
+ *   redirect target (a redirect cannot smuggle in a second, unchecked hop)
  */
 export async function safeFetchHtml(initialUrl: string): Promise<{ html: string; finalUrl: string }> {
   let currentUrl = initialUrl;
   let redirectsFollowed = 0;
 
   while (redirectsFollowed <= MAX_REDIRECTS) {
-    // 1. Validate current URL and DNS resolution for SSRF
-    const validatedUrl = await validateUrlForSSRF(currentUrl);
+    // 1. Validate current URL and pin its single validated DNS resolution
+    const target = await validateAndPinUrl(currentUrl);
 
-    // 2. Outbound request with timeout signal
+    // 2. Outbound request pinned to the validated IP, with timeout signal
     const timeoutSignal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
 
-    let response: Response;
+    let response: IncomingMessage;
     try {
-      response = await fetch(validatedUrl.toString(), {
-        method: "GET",
+      response = await pinnedHttpRequest(target, {
         headers: {
           "User-Agent":
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -317,19 +533,21 @@ export async function safeFetchHtml(initialUrl: string): Promise<{ html: string;
           "Accept-Language": "en-US,en;q=0.9",
           "Cache-Control": "no-cache",
         },
-        redirect: "manual", // Crucial: manual redirects to prevent SSRF redirect bypasses
         signal: timeoutSignal,
       });
     } catch (fetchErr: any) {
-      if (fetchErr.name === "TimeoutError" || fetchErr.name === "AbortError") {
+      if (isTimeoutError(fetchErr)) {
         throw new Error("Request timed out while fetching the webpage (8s limit).");
       }
       throw fetchErr;
     }
 
-    // 3. Handle redirects manually and re-validate target
-    if (response.status >= 300 && response.status < 400) {
-      const locationHeader = response.headers.get("location");
+    const status = response.statusCode ?? 0;
+
+    // 3. Handle redirects manually and re-validate + re-pin each target
+    if (status >= 300 && status < 400) {
+      const locationHeader = normalizeHeader(response.headers["location"]);
+      response.destroy();
       if (!locationHeader) {
         throw new Error("Redirect location header missing.");
       }
@@ -340,56 +558,35 @@ export async function safeFetchHtml(initialUrl: string): Promise<{ html: string;
       }
 
       // Resolve relative redirect against current URL
-      const nextUrl = new URL(locationHeader, validatedUrl).toString();
-      currentUrl = nextUrl;
+      currentUrl = new URL(locationHeader, target.url).toString();
       continue;
     }
 
-    if (!response.ok) {
-      throw new Error(`Remote server responded with status HTTP ${response.status}.`);
+    if (status < 200 || status >= 300) {
+      response.destroy();
+      throw new Error(`Remote server responded with status HTTP ${status}.`);
     }
 
     // 4. Check Content-Length header if present
-    const contentLength = response.headers.get("content-length");
+    const contentLength = normalizeHeader(response.headers["content-length"]);
     if (contentLength) {
       const parsedLength = parseInt(contentLength, 10);
       if (!isNaN(parsedLength) && parsedLength > MAX_BODY_BYTES) {
+        response.destroy();
         throw new Error("Webpage response size exceeds the 2MB limit.");
       }
     }
 
     // 5. Stream response body with strict byte counter
-    if (!response.body) {
-      return { html: "", finalUrl: validatedUrl.toString() };
-    }
-
-    const reader = response.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let receivedBytes = 0;
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value) {
-          receivedBytes += value.length;
-          if (receivedBytes > MAX_BODY_BYTES) {
-            await reader.cancel("Size limit exceeded");
-            throw new Error("Webpage response size exceeds the 2MB limit.");
-          }
-          chunks.push(value);
-        }
-      }
-    } finally {
-      reader.releaseLock();
-    }
-
-    const fullBuffer = Buffer.concat(chunks);
-    const htmlText = fullBuffer.toString("utf-8");
+    const fullBuffer = await readBodyWithCap(
+      response,
+      MAX_BODY_BYTES,
+      "Webpage response size exceeds the 2MB limit."
+    );
 
     return {
-      html: htmlText,
-      finalUrl: validatedUrl.toString(),
+      html: fullBuffer.toString("utf-8"),
+      finalUrl: target.url.toString(),
     };
   }
 
@@ -399,8 +596,60 @@ export async function safeFetchHtml(initialUrl: string): Promise<{ html: string;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB limit for food photography
 
 /**
+ * Content types accepted from remote servers by the image proxy.
+ *
+ * Only concrete raster image formats used by recipe websites are allowed.
+ * Deliberately excluded:
+ * - image/svg+xml: SVG can embed <script> and is an XSS vector when relayed
+ *   from our origin.
+ * - Everything else (text/html, application/json, application/javascript,
+ *   XML variants, unknown types): relaying them would serve attacker-chosen
+ *   content from this application's own origin.
+ */
+export const ALLOWED_IMAGE_CONTENT_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+  "image/avif",
+] as const;
+
+export type AllowedImageContentType = (typeof ALLOWED_IMAGE_CONTENT_TYPES)[number];
+
+/**
+ * Parses and validates a raw Content-Type header against the image allowlist.
+ *
+ * Returns the canonical media type on success, or null when the header is
+ * missing, malformed, parameterized away from an allowed type, or simply not
+ * an allowed image type. A missing or malformed Content-Type is NEVER trusted
+ * with a permissive default.
+ */
+export function parseImageContentType(rawContentType: unknown): AllowedImageContentType | null {
+  if (typeof rawContentType !== "string") return null;
+
+  const mediaType = rawContentType.split(";")[0].trim().toLowerCase();
+  if (!mediaType) return null;
+
+  // Some recipe sites emit the historical "image/jpg" alias; canonicalize it.
+  if (mediaType === "image/jpg") return "image/jpeg";
+
+  return (ALLOWED_IMAGE_CONTENT_TYPES as readonly string[]).includes(mediaType)
+    ? (mediaType as AllowedImageContentType)
+    : null;
+}
+
+function describeRawContentType(rawContentType: string | undefined): string {
+  const sanitized = (rawContentType ?? "none")
+    .replace(/[\r\n\x00-\x1f]/g, " ")
+    .slice(0, 60);
+  return sanitized;
+}
+
+/**
  * Safely fetches a remote image file with strict SSRF protection, redirect tracking,
- * timeout controls, and maximum byte size validation.
+ * timeout controls, maximum byte size validation AND strict content-type
+ * enforcement: only allowlisted raster image types are ever returned, so the
+ * proxy can never relay HTML/JSON/JavaScript/XML from our origin.
  */
 export async function safeFetchImage(
   rawUrl: string,
@@ -410,35 +659,36 @@ export async function safeFetchImage(
   let redirectsFollowed = 0;
 
   while (redirectsFollowed <= MAX_REDIRECTS) {
-    // 1. Validate current URL and DNS resolution for SSRF
-    const validatedUrl = await validateUrlForSSRF(currentUrl);
+    // 1. Validate current URL and pin its single validated DNS resolution
+    const target = await validateAndPinUrl(currentUrl);
 
-    // 2. Outbound request with timeout signal (10s)
+    // 2. Outbound request pinned to the validated IP with timeout signal (10s)
     const timeoutSignal = AbortSignal.timeout(10000);
 
-    let response: Response;
+    let response: IncomingMessage;
     try {
-      response = await fetch(validatedUrl.toString(), {
-        method: "GET",
+      response = await pinnedHttpRequest(target, {
         headers: {
           "User-Agent":
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
           Accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
           "Cache-Control": "no-cache",
         },
-        redirect: "manual",
         signal: timeoutSignal,
       });
     } catch (fetchErr: any) {
-      if (fetchErr.name === "TimeoutError" || fetchErr.name === "AbortError") {
+      if (isTimeoutError(fetchErr)) {
         throw new Error("Request timed out while downloading the image (10s limit).");
       }
       throw fetchErr;
     }
 
-    // 3. Handle redirects manually and re-validate target
-    if (response.status >= 300 && response.status < 400) {
-      const locationHeader = response.headers.get("location");
+    const status = response.statusCode ?? 0;
+
+    // 3. Handle redirects manually and re-validate + re-pin each target
+    if (status >= 300 && status < 400) {
+      const locationHeader = normalizeHeader(response.headers["location"]);
+      response.destroy();
       if (!locationHeader) {
         throw new Error("Redirect location header missing for image.");
       }
@@ -448,62 +698,49 @@ export async function safeFetchImage(
         throw new Error("Too many redirects encountered while fetching image.");
       }
 
-      const nextUrl = new URL(locationHeader, validatedUrl).toString();
-      currentUrl = nextUrl;
+      currentUrl = new URL(locationHeader, target.url).toString();
       continue;
     }
 
-    if (!response.ok) {
-      throw new Error(`Remote image server responded with status HTTP ${response.status}.`);
+    if (status < 200 || status >= 300) {
+      response.destroy();
+      throw new Error(`Remote image server responded with status HTTP ${status}.`);
     }
 
-    // 4. Validate Content-Type
-    const contentType = response.headers.get("content-type") || "image/jpeg";
+    // 4. Validate Content-Type against the strict image allowlist BEFORE
+    // reading the body. Missing/malformed/non-image types are rejected.
+    const rawContentType = normalizeHeader(response.headers["content-type"]);
+    const contentType = parseImageContentType(rawContentType);
+    if (!contentType) {
+      response.destroy();
+      throw new Error(
+        `Blocked non-image response from remote server (content type: ${describeRawContentType(rawContentType)}). Expected JPEG, PNG, WebP, GIF, or AVIF.`
+      );
+    }
 
     // 5. Check Content-Length header if present
-    const contentLength = response.headers.get("content-length");
+    const contentLength = normalizeHeader(response.headers["content-length"]);
     if (contentLength) {
       const parsedLength = parseInt(contentLength, 10);
       if (!isNaN(parsedLength) && parsedLength > maxBytes) {
+        response.destroy();
         throw new Error(`Image size exceeds the ${Math.round(maxBytes / (1024 * 1024))}MB limit.`);
       }
     }
 
     // 6. Stream response body with strict byte counter
-    if (!response.body) {
-      throw new Error("Empty image response received from server.");
-    }
-
-    const reader = response.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let receivedBytes = 0;
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value) {
-          receivedBytes += value.length;
-          if (receivedBytes > maxBytes) {
-            await reader.cancel("Size limit exceeded");
-            throw new Error(`Image size exceeds the ${Math.round(maxBytes / (1024 * 1024))}MB limit.`);
-          }
-          chunks.push(value);
-        }
-      }
-    } finally {
-      reader.releaseLock();
-    }
-
-    const fullBuffer = Buffer.concat(chunks);
+    const fullBuffer = await readBodyWithCap(
+      response,
+      maxBytes,
+      `Image size exceeds the ${Math.round(maxBytes / (1024 * 1024))}MB limit.`
+    );
 
     return {
       buffer: fullBuffer,
       contentType,
-      finalUrl: validatedUrl.toString(),
+      finalUrl: target.url.toString(),
     };
   }
 
   throw new Error("Exceeded maximum redirects while downloading image.");
 }
-
