@@ -29,4 +29,13 @@ export const MODEL_CONFIG = {
   metadataRecoveryPrimary: "gemini-3.7-flash",
   /** Vault metadata intelligence recovery fallback model. */
   metadataRecoveryFallback: "gemini-3.1-flash-lite",
+  /**
+   * Hard ceiling for a single Gemini HTTP request (milliseconds).
+   *
+   * Without this, a hung connection or stalled generation pends the endpoint
+   * indefinitely ("freezing"), and the multi-model cascades multiply the
+   * wait before graceful degradation kicks in. On timeout the callers'
+   * existing fallback chains engage (next model, then offline estimators).
+   */
+  requestTimeoutMs: 15_000,
 } as const;

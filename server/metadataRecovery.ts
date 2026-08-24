@@ -17,6 +17,7 @@ function getGemini(): GoogleGenAI | null {
           headers: {
             "User-Agent": "aistudio-build",
           },
+          timeout: MODEL_CONFIG.requestTimeoutMs,
         },
       });
     }

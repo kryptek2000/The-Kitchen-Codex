@@ -10,6 +10,15 @@ const FETCH_TIMEOUT_MS = 8000; // 8 seconds
 const MAX_REDIRECTS = 5;
 
 /**
+ * Connect watchdog per candidate address. Dual-stack hosts commonly resolve
+ * AAAA-first even on networks without usable IPv6 transit; without a short
+ * per-attempt budget such a dial silently black-holes until the master
+ * timeout, killing the whole request. Each validated address therefore gets
+ * its own connect window, and the request moves on to the next address.
+ */
+const PER_ADDRESS_CONNECT_TIMEOUT_MS = 4000;
+
+/**
  * Checks whether an IPv4 number/array is in a restricted range.
  */
 function isRestrictedIPv4(octets: number[]): boolean {
@@ -274,9 +283,15 @@ function parseAndValidateUrl(urlString: string): URL {
 export interface PinnedTarget {
   /** Original URL (original hostname/port preserved for Host/SNI semantics). */
   url: URL;
-  /** The validated IP address the socket must connect to. */
+  /**
+   * ALL addresses from the single authoritative resolution, each individually
+   * validated, in the resolver's verbatim order. Connections attempt them in
+   * order (restoring Happy-Eyeballs-style resilience for dual-stack hosts
+   * with a broken first route) without ever re-resolving the hostname.
+   */
+  addresses: Array<{ ip: string; family: 4 | 6 }>;
+  /** The preferred (first validated) address — kept for compatibility. */
   ip: string;
-  /** Address family of `ip` (4 or 6). */
   family: 4 | 6;
 }
 
@@ -306,10 +321,12 @@ export async function validateAndPinUrl(urlString: string): Promise<PinnedTarget
     if (isRestrictedIP(cleanHost)) {
       throw new Error("The target IP address is restricted.");
     }
+    const family = literalFamily === 6 ? 6 : 4;
     return {
       url: parsedUrl,
+      addresses: [{ ip: cleanHost, family }],
       ip: cleanHost,
-      family: literalFamily === 6 ? 6 : 4,
+      family,
     };
   }
 
@@ -336,12 +353,16 @@ export async function validateAndPinUrl(urlString: string): Promise<PinnedTarget
     }
   }
 
-  // Preserve the resolver's verbatim ordering when choosing the pinned address.
-  const chosen = records[0];
+  // Preserve the resolver's verbatim ordering across the validated set.
+  const addresses = records.map((record) => ({
+    ip: record.address,
+    family: (record.family === 6 ? 6 : 4) as 4 | 6,
+  }));
   return {
     url: parsedUrl,
-    ip: chosen.address,
-    family: chosen.family === 6 ? 6 : 4,
+    addresses,
+    ip: addresses[0].ip,
+    family: addresses[0].family,
   };
 }
 
@@ -385,13 +406,19 @@ export interface PinnedRequestPlan {
   servername?: string;
 }
 
-export function planPinnedRequest(target: PinnedTarget, method: string = "GET"): PinnedRequestPlan {
+export function planPinnedRequest(
+  target: PinnedTarget,
+  method: string = "GET",
+  addressIndex: number = 0
+): PinnedRequestPlan {
   const url = target.url;
+  // Fall back to the preferred address for out-of-range indexes.
+  const address = target.addresses[addressIndex] ?? target.addresses[0];
   const isIpLiteralHost = net.isIP(url.hostname) !== 0;
   return {
-    host: target.ip,
+    host: address.ip,
     port: url.port ? Number(url.port) : url.protocol === "https:" ? 443 : 80,
-    family: target.family,
+    family: address.family,
     path: `${url.pathname}${url.search}`,
     method,
     hostHeader: deriveHostHeader(url),
@@ -400,29 +427,37 @@ export function planPinnedRequest(target: PinnedTarget, method: string = "GET"):
 }
 
 /**
- * Builds a DNS `lookup` function that hard-pins the connection to the
- * already-validated address. Belt-and-suspenders: because we dial the IP
- * literal directly no resolution should ever be attempted, but if anything
- * downstream does attempt one it can only ever yield the validated IP.
+ * Builds a DNS `lookup` function that hard-pins the connection to one of the
+ * already-validated addresses. Belt-and-suspenders: because we dial IP
+ * literals directly no resolution should ever be attempted, but if anything
+ * downstream does attempt one it can only ever yield a validated address.
  */
-function createPinnedLookup(target: PinnedTarget): LookupFunction {
+function createPinnedLookup(target: PinnedTarget, addressIndex: number = 0): LookupFunction {
+  const pinned = target.addresses[addressIndex] ?? target.addresses[0];
   return (hostname, _options, callback) => {
-    if (hostname !== target.ip) {
+    if (hostname !== pinned.ip) {
       callback(new Error("SSRF guard refused to resolve a non-validated address."), "");
       return;
     }
-    callback(null, target.ip, target.family);
+    callback(null, pinned.ip, pinned.family);
   };
 }
 
 interface PinnedHttpRequestOptions {
   headers?: Record<string, string>;
   signal?: AbortSignal;
+  /**
+   * Connect watchdog for THIS attempt. If no response headers arrive within
+   * the window, the attempt is destroyed so the caller can try the next
+   * validated address. The master `signal` still bounds the whole exchange.
+   */
+  connectTimeoutMs?: number;
 }
 
 /**
- * Issues a GET request whose TCP/TLS connection is bound to the validated IP:
- * - Connects to `target.ip` directly (no hostname resolution).
+ * Issues a GET request whose TCP/TLS connection is bound to ONE of the
+ * validated addresses (chosen by `addressIndex`):
+ * - Connects to that IP literal directly (no hostname resolution).
  * - Sends Host derived from the ORIGINAL hostname (virtual-host compatible).
  * - For HTTPS, sets TLS servername to the ORIGINAL hostname so certificate
  *   validation and SNI behave exactly like a normal fetch to that hostname.
@@ -431,9 +466,10 @@ interface PinnedHttpRequestOptions {
  */
 function pinnedHttpRequest(
   target: PinnedTarget,
-  options: PinnedHttpRequestOptions = {}
+  options: PinnedHttpRequestOptions = {},
+  addressIndex: number = 0
 ): Promise<IncomingMessage> {
-  const plan = planPinnedRequest(target);
+  const plan = planPinnedRequest(target, "GET", addressIndex);
   const transport = target.url.protocol === "https:" ? https : http;
 
   return new Promise<IncomingMessage>((resolve, reject) => {
@@ -450,14 +486,59 @@ function pinnedHttpRequest(
         },
         agent: false,
         servername: plan.servername,
-        lookup: createPinnedLookup(target),
+        lookup: createPinnedLookup(target, addressIndex),
         signal: options.signal,
       },
-      resolve
+      (response) => {
+        if (connectWatchdog) clearTimeout(connectWatchdog);
+        resolve(response);
+      }
     );
-    request.on("error", reject);
+
+    // Per-attempt connect watchdog: a black-holed route must not consume the
+    // whole master budget when other validated addresses are available.
+    let connectWatchdog: NodeJS.Timeout | null = null;
+    if (options.connectTimeoutMs && options.connectTimeoutMs > 0) {
+      connectWatchdog = setTimeout(() => {
+        request.destroy(
+          new Error(`Connection attempt timed out (per-address limit ${options.connectTimeoutMs}ms).`)
+        );
+      }, options.connectTimeoutMs);
+      connectWatchdog.unref?.();
+    }
+
+    request.on("error", (err) => {
+      if (connectWatchdog) clearTimeout(connectWatchdog);
+      reject(err);
+    });
     request.end();
   });
+}
+
+/**
+ * Runs `pinnedHttpRequest` across ALL validated addresses in verbatim order,
+ * moving to the next address whenever an attempt fails to connect (refused,
+ * unreachable, or per-attempt watchdog fired). This restores dual-stack
+ * resilience without re-resolving DNS and without ever dialing an address
+ * outside the validated set.
+ *
+ * The LAST error is thrown if every validated address fails.
+ */
+async function pinnedRequestWithFailover(
+  target: PinnedTarget,
+  options: PinnedHttpRequestOptions
+): Promise<IncomingMessage> {
+  let lastError: unknown;
+  for (let index = 0; index < target.addresses.length; index++) {
+    try {
+      return await pinnedHttpRequest(target, options, index);
+    } catch (err) {
+      lastError = err;
+      if (isTimeoutError(err)) throw err; // master budget exhausted — stop trying
+      if ((options.signal?.aborted ?? false) === true) throw err;
+    }
+  }
+  throw lastError;
 }
 
 function isTimeoutError(err: unknown): boolean {
@@ -525,7 +606,7 @@ export async function safeFetchHtml(initialUrl: string): Promise<{ html: string;
 
     let response: IncomingMessage;
     try {
-      response = await pinnedHttpRequest(target, {
+      response = await pinnedRequestWithFailover(target, {
         headers: {
           "User-Agent":
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -534,6 +615,7 @@ export async function safeFetchHtml(initialUrl: string): Promise<{ html: string;
           "Cache-Control": "no-cache",
         },
         signal: timeoutSignal,
+        connectTimeoutMs: PER_ADDRESS_CONNECT_TIMEOUT_MS,
       });
     } catch (fetchErr: any) {
       if (isTimeoutError(fetchErr)) {
@@ -667,7 +749,7 @@ export async function safeFetchImage(
 
     let response: IncomingMessage;
     try {
-      response = await pinnedHttpRequest(target, {
+      response = await pinnedRequestWithFailover(target, {
         headers: {
           "User-Agent":
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -675,6 +757,7 @@ export async function safeFetchImage(
           "Cache-Control": "no-cache",
         },
         signal: timeoutSignal,
+        connectTimeoutMs: PER_ADDRESS_CONNECT_TIMEOUT_MS,
       });
     } catch (fetchErr: any) {
       if (isTimeoutError(fetchErr)) {

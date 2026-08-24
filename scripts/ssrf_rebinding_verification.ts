@@ -239,6 +239,7 @@ async function expectValidationFailure(url: string, name: string, pattern?: RegE
 // Public test IPs used with the fake NAT.
 const PUB_A = "93.184.216.34"; // scripted answer for first-hop hosts
 const PUB_B = "8.8.8.8"; // scripted answer for second-hop hosts
+const PUB_C = "1.1.1.1"; // used as a dead FIRST address in failover tests
 
 async function main(): Promise<void> {
   installDnsMock();
@@ -398,6 +399,84 @@ async function main(): Promise<void> {
       "Nothing dialed for the flipped host yet",
       dialLog.length === 0
     );
+
+    // ---------------------------------------------------------------------
+    section("4b. Dual-stack failover: dead first route falls through to validated second");
+
+    scriptedAnswers.set("failover.test", () => [
+      { address: PUB_C, family: 4 },
+      { address: PUB_B, family: 4 },
+    ]);
+    // First address points at a port with no listener (guaranteed instant
+    // refusal on loopback), the second at a live capture server.
+    const refusedServer = await startCaptureServer(200, "unused");
+    const refusedPort = refusedServer.port;
+    await refusedServer.close();
+    fakeNat.set(PUB_C, refusedPort);
+    const failoverTarget = await startCaptureServer(200, "FAILOVER_SECOND_ADDRESS_OK");
+    fakeNat.set(PUB_B, failoverTarget.port);
+    resetLookups();
+    dialLog = [];
+    try {
+      const failover = await safeFetchHtml(`http://failover.test:${failoverTarget.port}/x`);
+      check(
+        "Request succeeded via SECOND validated address",
+        failover.html === "FAILOVER_SECOND_ADDRESS_OK"
+      );
+      check(
+        "Still exactly ONE DNS resolution (failover never re-resolves)",
+        lookupCountFor("failover.test") === 1
+      );
+      check(
+        "Dial order followed verbatim validation order",
+        dialLog.length === 2 &&
+          dialLog[0].host === PUB_C &&
+          dialLog[1].host === PUB_B,
+        `observed ${JSON.stringify(dialLog)}`
+      );
+      check(
+        "Host header preserved across failover",
+        failoverTarget.requests[0]?.host === `failover.test:${failoverTarget.port}`
+      );
+    } finally {
+      await failoverTarget.close();
+    }
+
+    // Watchdog variant: first address accepts TCP but NEVER responds, so the
+    // per-address connect timeout must burn it and move on. Deterministic.
+    const silent = http.createServer(() => {/* never responds */});
+    await new Promise<void>((r) => silent.listen(0, "127.0.0.1", r));
+    const silentPort = (silent.address() as AddressInfo).port;
+    scriptedAnswers.set("watchdog.test", () => [
+      { address: PUB_A, family: 4 },
+      { address: PUB_B, family: 4 },
+    ]);
+    const watchdogFinal = await startCaptureServer(200, "WATCHDOG_FAILOVER_OK");
+    fakeNat.set(PUB_A, silentPort);
+    fakeNat.set(PUB_B, watchdogFinal.port);
+    resetLookups();
+    dialLog = [];
+    try {
+      const t0 = Date.now();
+      const watched = await safeFetchHtml(`http://watchdog.test:${watchdogFinal.port}/y`);
+      const elapsed = Date.now() - t0;
+      check(
+        "Silent first address burned by watchdog, second served response",
+        watched.html === "WATCHDOG_FAILOVER_OK"
+      );
+      check(
+        "Watchdog bounded the dead attempt (~per-address budget)",
+        elapsed >= 3500 && elapsed < 7900,
+        `elapsed ${elapsed}ms`
+      );
+      check(
+        "Both addresses attempted in order",
+        dialLog.length === 2 && dialLog[0].host === PUB_A && dialLog[1].host === PUB_B
+      );
+    } finally {
+      silent.close();
+      await watchdogFinal.close();
+    }
 
     // ---------------------------------------------------------------------
     section("5. Redirects are re-validated and re-pinned per hop");
