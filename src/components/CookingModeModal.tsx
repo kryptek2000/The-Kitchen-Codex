@@ -334,12 +334,15 @@ export function CookingModeModal({
             </button>
           </div>
           <ul className="space-y-2.5 text-xs text-gray-300">
-            {recipe.ingredients.map((ing, idx) => (
-              <li key={idx} className="flex items-start gap-2">
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0 mt-1.5" />
-                <span>{scaleIngredientText(ing.original, baseServings, servings)}</span>
-              </li>
-            ))}
+            {recipe.ingredients.map((ing, idx) => {
+              const cleanText = (ing.original || '').replace(/\[\[(?:[^|\]]*\|)?([^\]]+)\]\]/g, '$1');
+              return (
+                <li key={idx} className="flex items-start gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0 mt-1.5" />
+                  <span>{scaleIngredientText(cleanText, baseServings, servings)}</span>
+                </li>
+              );
+            })}
           </ul>
         </div>
       )}

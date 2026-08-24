@@ -37,6 +37,7 @@ import { useVaultImage } from '../hooks/useVaultImage';
 import { assessRecipeHealth } from '../utils/vaultIntelligence';
 import { RecipeNutritionCard } from './RecipeNutritionCard';
 import { WikilinkPreviewModal } from './WikilinkPreviewModal';
+import { RecipeCardExportModal } from './RecipeCardExportModal';
 
 interface RecipeDetailViewProps {
   recipe: ObsidianRecipe;
@@ -76,11 +77,11 @@ export function RecipeDetailView({
   const [currentServings, setCurrentServings] = useState<number>(recipe.servings || 4);
   const [activeViewMode, setActiveViewMode] = useState<'visual' | 'markdown'>('visual');
   const [checkedIngredients, setCheckedIngredients] = useState<Record<number, boolean>>({});
-  const [copiedLink, setCopiedLink] = useState(false);
   const [copiedMarkdown, setCopiedMarkdown] = useState(false);
   const [isAddedToShop, setIsAddedToShop] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [selectedWikilink, setSelectedWikilink] = useState<{ target: string; alias?: string } | null>(null);
+  const [showCardStudio, setShowCardStudio] = useState(false);
 
   const defaultImg = getRecipeImage(recipe);
   const reactiveVaultImage = useVaultImage(recipe.image, defaultImg);
@@ -93,12 +94,6 @@ export function RecipeDetailView({
       ...prev,
       [idx]: !prev[idx],
     }));
-  };
-
-  const handleCopyWikilink = () => {
-    navigator.clipboard.writeText(`[[${recipe.title}]]`);
-    setCopiedLink(true);
-    setTimeout(() => setCopiedLink(false), 2000);
   };
 
   const handleCopyMarkdown = () => {
@@ -188,17 +183,6 @@ export function RecipeDetailView({
             </button>
           </div>
 
-          {/* Copy Wikilink */}
-          <button
-            id="copy-wikilink-btn"
-            onClick={handleCopyWikilink}
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-white/10 bg-white/5 text-gray-200 hover:bg-white/10 text-xs font-medium transition-colors"
-            title="Copy [[Wikilink]] for Obsidian"
-          >
-            {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-            <span>{copiedLink ? 'Copied [[Link]]!' : '[[Wikilink]]'}</span>
-          </button>
-
           {/* Vault Intelligence Quick Button */}
           {onOpenVaultIntelligence && (
             <button
@@ -248,6 +232,17 @@ export function RecipeDetailView({
           >
             <Download className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Export</span>
+          </button>
+
+          {/* Recipe Card Studio Button */}
+          <button
+            id="recipe-card-studio-btn"
+            onClick={() => setShowCardStudio(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 text-xs font-medium transition-colors"
+            title="Design & export gorgeous recipe cards"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+            <span className="hidden sm:inline">Recipe Card</span>
           </button>
 
           {/* Start Cooking Mode Button */}
@@ -488,14 +483,13 @@ export function RecipeDetailView({
               <ul className="space-y-2 text-xs sm:text-sm">
                 {recipe.ingredients.map((ing, idx) => {
                   const isChecked = !!checkedIngredients[idx];
+                  const rawClean = (ing.original || '').replace(/^[-*+]\s*(\[[ xX]\]\s*)?/, '').trim();
+                  const cleanText = rawClean.replace(/\[\[(?:[^|\]]*\|)?([^\]]+)\]\]/g, '$1');
                   const scaledText = scaleIngredientText(
-                    ing.original,
+                    cleanText,
                     baseServings,
                     currentServings
                   );
-
-                  const linkTarget = ing.wikilinkTarget || ing.wikilink;
-                  const linkAlias = ing.wikilinkAlias;
 
                   return (
                     <li
@@ -512,26 +506,7 @@ export function RecipeDetailView({
                         className="mt-0.5 rounded text-amber-500 focus:ring-amber-400 bg-[#0C0C0C] border-white/20 cursor-pointer"
                       />
                       <span className="flex-1 leading-snug">
-                        {linkTarget ? (
-                          <span>
-                            {scaledText.replace(/\[\[(.*?)\]\]/, '')}
-                            <span
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setSelectedWikilink({
-                                  target: linkTarget,
-                                  alias: linkAlias,
-                                });
-                              }}
-                              className="font-mono font-medium text-amber-300 bg-amber-500/10 border border-amber-500/20 px-1 py-0.5 rounded hover:bg-amber-500/20 ml-1 inline-flex items-center gap-0.5 transition-colors cursor-pointer"
-                              title={`Preview intelligence for [[${linkTarget}]]`}
-                            >
-                              [[{linkAlias ? `${linkTarget}|${linkAlias}` : linkTarget}]]
-                            </span>
-                          </span>
-                        ) : (
-                          scaledText
-                        )}
+                        {scaledText}
                       </span>
                     </li>
                   );
@@ -639,6 +614,15 @@ export function RecipeDetailView({
         onFilterByWikilink={onFilterByWikilink}
         onSaveNoteToVault={onSaveNoteToVault}
       />
+
+      {/* Recipe Card & Export Studio Modal */}
+      {showCardStudio && (
+        <RecipeCardExportModal
+          recipe={recipe}
+          currentServings={currentServings}
+          onClose={() => setShowCardStudio(false)}
+        />
+      )}
     </div>
   );
 }

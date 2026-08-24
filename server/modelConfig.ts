@@ -15,10 +15,14 @@
  * codebase. Update them in this single place after verifying availability.
  */
 export const MODEL_CONFIG = {
-  /** Recipe extraction (web/URL/HTML -> structured recipe). */
-  recipeGrabber: "gemini-3.7-flash",
+  /** Recipe extraction primary model (web/URL/HTML -> structured recipe). */
+  recipeGrabberPrimary: "gemini-3.7-flash",
+  /** Recipe extraction fallback model when high demand / 503 / 429 occurs. */
+  recipeGrabberFallback: "gemini-3.1-flash-lite",
+  /** Recipe extraction alias model for additional fallback. */
+  recipeGrabberAlias: "gemini-flash-latest",
   /** Nutrition estimation primary model. */
-  nutritionPrimary: "gemini-3.6-flash",
+  nutritionPrimary: "gemini-3.7-flash",
   /** Nutrition estimation fallback model. */
   nutritionFallback: "gemini-3.1-flash-lite",
   /** Vault metadata intelligence recovery primary model. */

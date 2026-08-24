@@ -351,10 +351,11 @@ export function parseIngredientLine(line: string): ParsedIngredient {
     if (wikilink.includes('|')) {
       const parts = wikilink.split('|');
       wikilinkTarget = parts[0].trim();
-      wikilinkAlias = parts.slice(1).join('|').trim();
+      const alias = parts.slice(1).join('|').trim();
+      wikilinkAlias = alias && alias !== wikilinkTarget ? alias : undefined;
     } else {
       wikilinkTarget = wikilink;
-      wikilinkAlias = wikilink;
+      wikilinkAlias = undefined;
     }
   }
 
@@ -735,49 +736,18 @@ export function renderIngredientLine(
 ): string {
   const original = (ing.original || '').trim();
 
-  // Preserve an existing inline wikilink verbatim (including Target|Alias form).
-  if (original.includes('[[')) {
-    return `- ${check} ${original}`;
-  }
-
-  // Build the display text from the original line, keeping measurements/description.
+  // If text has existing wikilinks like [[Target|Alias]] or [[Target]], strip the brackets cleanly
   let text = original.replace(/^[-*+]\s*(\[[ xX]\]\s*)?/, '').trim();
-
-  // Determine the wikilink to emit, if any.
-  let link: string | null = null;
-  if (ing.wikilinkTarget) {
-    link =
-      ing.wikilinkAlias && ing.wikilinkAlias !== ing.wikilinkTarget
-        ? `[[${ing.wikilinkTarget}|${ing.wikilinkAlias}]]`
-        : `[[${ing.wikilinkTarget}]]`;
-  } else if (ing.wikilink) {
-    // A raw wikilink may itself already carry an alias (Target|Alias).
-    link = ing.wikilink.includes('|') ? `[[${ing.wikilink}]]` : `[[${ing.wikilink}]]`;
+  if (text.includes('[[')) {
+    text = text.replace(/\[\[(?:[^|\]]*\|)?([^\]]+)\]\]/g, '$1').trim();
   }
 
   if (!text) {
     // Fall back to reconstructing from structured fields when original is empty.
     const amt = ing.amount != null ? `${formatAmount(ing.amount)} ` : '';
     const unit = ing.unit ? `${ing.unit} ` : '';
-    text = `${amt}${unit}${ing.name || ''}`.trim();
-  }
-
-  if (link) {
-    const name = (ing.name || '').trim();
-    // If the whole line is just the ingredient name, wrap it entirely so we
-    // never duplicate the name (e.g. "- [ ] Olive Oil [[Olive Oil]]").
-    if (name && name.toLowerCase() === text.toLowerCase()) {
-      return `- ${check} ${link}`;
-    }
-    // Replace the trailing ingredient name with the wikilink when the name is
-    // cleanly identifiable and not already linked; otherwise append it so the
-    // link is never silently dropped.
-    if (name && text.toLowerCase().includes(name.toLowerCase())) {
-      const idx = text.toLowerCase().lastIndexOf(name.toLowerCase());
-      text = `${text.slice(0, idx)}${link}${text.slice(idx + name.length)}`;
-      return `- ${check} ${text.trim()}`;
-    }
-    return `- ${check} ${text} ${link}`.trim();
+    const name = (ing.name || '').replace(/\[\[(?:[^|\]]*\|)?([^\]]+)\]\]/g, '$1').trim();
+    text = `${amt}${unit}${name}`.trim();
   }
 
   return `- ${check} ${text}`.trim();
@@ -849,7 +819,7 @@ export function serializeRecipeToObsidianMarkdown(recipe: Partial<ObsidianRecipe
       md += `${renderIngredientLine(ing, check)}\n`;
     });
   } else {
-    md += `- [ ] 2 tbsp [[Olive Oil]]\n- [ ] 1 tsp [[Salt]]\n`;
+    md += `- [ ] 2 tbsp Olive Oil\n- [ ] 1 tsp Salt\n`;
   }
   md += '\n';
 

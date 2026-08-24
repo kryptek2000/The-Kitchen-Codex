@@ -648,12 +648,9 @@ export function RecipeGrabberModal({
                             key={i}
                             className="text-xs p-2 rounded-lg bg-white/5 border border-white/5 flex items-center justify-between gap-2"
                           >
-                            <span className="text-gray-200">{ing.original}</span>
-                            {ing.wikilink && (
-                              <span className="text-[10px] font-mono text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20 shrink-0">
-                                [[{ing.wikilink}]]
-                              </span>
-                            )}
+                            <span className="text-gray-200">
+                              {(ing.original || '').replace(/\[\[(?:[^|\]]*\|)?([^\]]+)\]\]/g, '$1')}
+                            </span>
                           </div>
                         ))}
                       </div>

@@ -1,7 +1,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import { safeFetchHtml } from "./ssrfGuard.js";
-import { renderIngredientLine } from "../src/utils/markdownParser.js";
+import { renderIngredientLine, parseIngredientLine } from "../src/utils/markdownParser.js";
 import { MODEL_CONFIG } from "./modelConfig.js";
 
 dotenv.config();
@@ -12,7 +12,14 @@ function getGemini(): GoogleGenAI | null {
   if (!aiClient) {
     const key = process.env.GEMINI_API_KEY;
     if (key && key !== "MY_GEMINI_API_KEY") {
-      aiClient = new GoogleGenAI({ apiKey: key });
+      aiClient = new GoogleGenAI({
+        apiKey: key,
+        httpOptions: {
+          headers: {
+            "User-Agent": "aistudio-build",
+          },
+        },
+      });
     }
   }
   return aiClient;
@@ -185,13 +192,18 @@ function parseRecipeFromJsonLd(jsonLdList: any[], url?: string): GrabbedRecipeRe
     rawIngs.forEach((ingStr: any) => {
       if (typeof ingStr === "string" && ingStr.trim()) {
         const trimmed = ingStr.trim();
-        // Generate a likely wikilink
-        const words = trimmed.split(" ");
-        const likelyNoun = words.slice(-2).join(" ").replace(/[^a-zA-Z\s]/g, "").trim();
+        const parsed = parseIngredientLine(trimmed);
+        
+        // Clean out preparation phrases (e.g. ", finely diced") to find the pure ingredient noun
+        let pureNoun = (parsed.name || trimmed).split(',')[0].split('(')[0].trim();
+        pureNoun = pureNoun.replace(/\b(?:minced|diced|chopped|sliced|divided|softened|melted|grated|peeled|cooked|uncooked|to taste|for serving|optional|picked over for shells)\b/gi, '').trim();
+        pureNoun = pureNoun.replace(/[^a-zA-Z0-9\s\-_]/g, '').trim();
+
         ingredients.push({
           original: trimmed,
-          name: likelyNoun || trimmed,
-          wikilink: likelyNoun || trimmed,
+          amount: parsed.amount,
+          unit: parsed.unit,
+          name: parsed.name || trimmed,
         });
       }
     });
@@ -302,7 +314,7 @@ created: "${new Date().toISOString().split("T")[0]}"
       md += `${renderIngredientLine(ing, "[ ]")}\n`;
     });
   } else {
-    md += `- [ ] 2 tbsp [[Olive Oil]]\n- [ ] 1 tsp [[Sea Salt]]\n`;
+    md += `- [ ] 2 tbsp Olive Oil\n- [ ] 1 tsp Sea Salt\n`;
   }
   md += `\n`;
 
@@ -354,12 +366,11 @@ export async function grabRecipeFromWeb(params: {
   const metaTags = htmlContent ? extractMetaTags(htmlContent) : {};
   const cleanedText = htmlContent ? cleanHtmlToText(htmlContent) : rawText || "";
 
-  // 3. Attempt Gemini structured extraction
+  // 3. Attempt Gemini structured extraction with model fallback & retry
   const ai = getGemini();
 
   if (ai) {
-    try {
-      const prompt = `You are an expert culinary chef and Obsidian Markdown archivist.
+    const prompt = `You are an expert culinary chef and Obsidian Markdown archivist.
 Extract this recipe into an accurate, structured JSON recipe object tailored for an Obsidian culinary vault.
 
 Available Data:
@@ -377,121 +388,151 @@ REQUIREMENTS:
 3. Extract prepTime, cookTime, and totalTime with clear units (e.g. "15 mins", "45 mins").
 4. Extract servings as an integer number.
 5. Extract difficulty: must be "Easy", "Medium", or "Hard".
-6. Extract ingredients: for each ingredient, identify the original line, amount as number (or null), unit (e.g. "tbsp", "cups", "g", "cloves"), clean name, and a suitable keyword for Obsidian [[Wikilink]] (e.g. "Olive Oil", "Garlic", "Spaghetti").
+6. Extract ingredients: for each ingredient, identify the original line, amount as number (or null), unit (e.g. "tbsp", "cups", "g", "cloves"), and clean name (e.g. "Crab Meat", "Celery", "Mayonnaise", "Brioche Rolls", "Olive Oil", "Garlic"). Do NOT include brackets or wikilinks.
 7. Extract instructions: sequential steps with stepNumber and text. If a step involves a specific timer duration, extract timerMinutes as number.
 8. Extract callouts: culinary tips or warnings (type: "tip", "warning", "note", "important").
 9. Extract high-quality food image URL if present in meta or schema.
 10. Generate Obsidian tags like "food/recipes", "cuisine/italian", "dinner", etc.`;
 
-      const response = await ai.models.generateContent({
-        model: MODEL_CONFIG.recipeGrabber,
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              title: { type: Type.STRING },
-              description: { type: Type.STRING },
-              cuisine: { type: Type.STRING },
-              category: { type: Type.STRING },
-              difficulty: { type: Type.STRING, enum: ["Easy", "Medium", "Hard"] },
-              prepTime: { type: Type.STRING },
-              cookTime: { type: Type.STRING },
-              totalTime: { type: Type.STRING },
-              servings: { type: Type.INTEGER },
-              calories: { type: Type.STRING },
-              rating: { type: Type.NUMBER },
-              source: { type: Type.STRING },
-              image: { type: Type.STRING },
-              tags: { type: Type.ARRAY, items: { type: Type.STRING } },
-              ingredients: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    original: { type: Type.STRING },
-                    amount: { type: Type.NUMBER },
-                    unit: { type: Type.STRING },
-                    name: { type: Type.STRING },
-                    wikilink: { type: Type.STRING },
-                    note: { type: Type.STRING },
+    const modelsToTry = [
+      MODEL_CONFIG.recipeGrabberPrimary,
+      MODEL_CONFIG.recipeGrabberFallback,
+      MODEL_CONFIG.recipeGrabberAlias,
+    ];
+
+    for (const modelName of modelsToTry) {
+      let attempts = 0;
+      const maxAttempts = 2;
+
+      while (attempts < maxAttempts) {
+        attempts++;
+        try {
+          const response = await ai.models.generateContent({
+            model: modelName,
+            contents: prompt,
+            config: {
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING },
+                  description: { type: Type.STRING },
+                  cuisine: { type: Type.STRING },
+                  category: { type: Type.STRING },
+                  difficulty: { type: Type.STRING, enum: ["Easy", "Medium", "Hard"] },
+                  prepTime: { type: Type.STRING },
+                  cookTime: { type: Type.STRING },
+                  totalTime: { type: Type.STRING },
+                  servings: { type: Type.INTEGER },
+                  calories: { type: Type.STRING },
+                  rating: { type: Type.NUMBER },
+                  source: { type: Type.STRING },
+                  image: { type: Type.STRING },
+                  tags: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  ingredients: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        original: { type: Type.STRING },
+                        amount: { type: Type.NUMBER },
+                        unit: { type: Type.STRING },
+                        name: { type: Type.STRING },
+                        note: { type: Type.STRING },
+                      },
+                      required: ["original", "name"],
+                    },
                   },
-                  required: ["original", "name"],
-                },
-              },
-              instructions: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    stepNumber: { type: Type.INTEGER },
-                    text: { type: Type.STRING },
-                    timerMinutes: { type: Type.NUMBER },
+                  instructions: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        stepNumber: { type: Type.INTEGER },
+                        text: { type: Type.STRING },
+                        timerMinutes: { type: Type.NUMBER },
+                      },
+                      required: ["stepNumber", "text"],
+                    },
                   },
-                  required: ["stepNumber", "text"],
-                },
-              },
-              callouts: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    type: { type: Type.STRING, enum: ["tip", "warning", "info", "note", "important"] },
-                    title: { type: Type.STRING },
-                    content: { type: Type.STRING },
+                  callouts: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        type: { type: Type.STRING, enum: ["tip", "warning", "info", "note", "important"] },
+                        title: { type: Type.STRING },
+                        content: { type: Type.STRING },
+                      },
+                      required: ["type", "content"],
+                    },
                   },
-                  required: ["type", "content"],
+                  notes: { type: Type.STRING },
                 },
+                required: ["title", "cuisine", "category", "ingredients", "instructions"],
               },
-              notes: { type: Type.STRING },
             },
-            required: ["title", "cuisine", "category", "ingredients", "instructions"],
-          },
-        },
-      });
+          });
 
-      const responseText = response.text;
-      if (responseText) {
-        const parsed = JSON.parse(responseText);
-        
-        // Ensure image fallback if empty
-        const image = parsed.image || metaTags.image || "";
-        const source = parsed.source || metaTags.siteName || siteName || "Web Grabber";
-        const tags = Array.isArray(parsed.tags) && parsed.tags.length > 0 ? parsed.tags : ["food/recipes"];
+          const responseText = response.text;
+          if (responseText) {
+            const parsed = JSON.parse(responseText);
 
-        const rawMarkdown = generateMarkdown({
-          ...parsed,
-          image,
-          source,
-          tags,
-        });
+            // Ensure image fallback if empty
+            const image = parsed.image || metaTags.image || "";
+            const source = parsed.source || metaTags.siteName || siteName || "Web Grabber";
+            const tags = Array.isArray(parsed.tags) && parsed.tags.length > 0 ? parsed.tags : ["food/recipes"];
 
-        return {
-          title: parsed.title || metaTags.title || "Imported Recipe",
-          description: parsed.description || metaTags.description || "",
-          cuisine: parsed.cuisine || "General",
-          category: parsed.category || "Main Course",
-          difficulty: parsed.difficulty || "Medium",
-          prepTime: parsed.prepTime || "15 mins",
-          cookTime: parsed.cookTime || "30 mins",
-          totalTime: parsed.totalTime || "45 mins",
-          servings: parsed.servings || 4,
-          calories: parsed.calories || "",
-          rating: parsed.rating || 5,
-          source,
-          sourceUrl: url,
-          image,
-          tags,
-          ingredients: parsed.ingredients || [],
-          instructions: parsed.instructions || [],
-          callouts: parsed.callouts || [],
-          notes: parsed.notes || "",
-          rawMarkdown,
-        };
+            const rawMarkdown = generateMarkdown({
+              ...parsed,
+              image,
+              source,
+              tags,
+            });
+
+            return {
+              title: parsed.title || metaTags.title || "Imported Recipe",
+              description: parsed.description || metaTags.description || "",
+              cuisine: parsed.cuisine || "General",
+              category: parsed.category || "Main Course",
+              difficulty: parsed.difficulty || "Medium",
+              prepTime: parsed.prepTime || "15 mins",
+              cookTime: parsed.cookTime || "30 mins",
+              totalTime: parsed.totalTime || "45 mins",
+              servings: parsed.servings || 4,
+              calories: parsed.calories || "",
+              rating: parsed.rating || 5,
+              source,
+              sourceUrl: url,
+              image,
+              tags,
+              ingredients: parsed.ingredients || [],
+              instructions: parsed.instructions || [],
+              callouts: parsed.callouts || [],
+              notes: parsed.notes || "",
+              rawMarkdown,
+            };
+          }
+        } catch (aiErr: any) {
+          const errMsg = aiErr?.message || String(aiErr);
+          const isRetryable =
+            errMsg.includes("503") ||
+            errMsg.includes("UNAVAILABLE") ||
+            errMsg.includes("high demand") ||
+            errMsg.includes("429") ||
+            errMsg.includes("RESOURCE_EXHAUSTED");
+
+          console.warn(`[RecipeGrabber] Gemini model '${modelName}' attempt ${attempts} failed:`, errMsg);
+
+          if (isRetryable && attempts < maxAttempts) {
+            // Short backoff before retry
+            await new Promise((r) => setTimeout(r, 600 * attempts));
+            continue;
+          }
+          // Break to cascade to next model
+          break;
+        }
       }
-    } catch (aiErr) {
-      console.warn("Gemini extraction error:", aiErr);
     }
   }
 
@@ -501,36 +542,44 @@ REQUIREMENTS:
     if (fallbackResult) return fallbackResult;
   }
 
-  // 5. Final fallback if minimal raw text was given
-  if (rawText || metaTags.title) {
+  // 5. Final fallback if minimal raw text or HTML was given
+  if (rawText || cleanedText || metaTags.title) {
     const title = metaTags.title || "Custom Imported Recipe";
-    const lines = (rawText || "").split("\n").filter((l) => l.trim().length > 0);
+    const textToScan = rawText || cleanedText || "";
+    const lines = textToScan.split("\n").map((l) => l.trim()).filter(Boolean);
     const ingredients: GrabbedRecipeResult["ingredients"] = [];
     const instructions: GrabbedRecipeResult["instructions"] = [];
     let isInstructions = false;
 
     lines.forEach((line) => {
-      if (/instructions|directions|steps|method/i.test(line)) {
+      if (/instructions|directions|steps|method|preparation/i.test(line)) {
         isInstructions = true;
         return;
       }
       if (!isInstructions) {
-        ingredients.push({
-          original: line,
-          name: line.replace(/^[-*+]\s*/, ""),
-          wikilink: line.replace(/^[-*+]\s*/, ""),
-        });
+        if (/^\d|\b(cup|cups|tbsp|tsp|g|kg|oz|lb|clove|cloves|pinch|handful)\b/i.test(line) || line.startsWith("-") || line.startsWith("*")) {
+          const cleanLine = line.replace(/^[-*+]\s*/, "");
+          const parsed = parseIngredientLine(cleanLine);
+          ingredients.push({
+            original: cleanLine,
+            amount: parsed.amount,
+            unit: parsed.unit,
+            name: parsed.name || cleanLine,
+          });
+        }
       } else {
-        instructions.push({
-          stepNumber: instructions.length + 1,
-          text: line.replace(/^\d+[\.\)]\s*/, ""),
-        });
+        if (/^\d+[\.\)]\s*/.test(line) || line.length > 15) {
+          instructions.push({
+            stepNumber: instructions.length + 1,
+            text: line.replace(/^\d+[\.\)]\s*/, ""),
+          });
+        }
       }
     });
 
     const fallback: GrabbedRecipeResult = {
       title,
-      description: metaTags.description || "Recipe imported from text",
+      description: metaTags.description || "Recipe imported from web source",
       cuisine: "General",
       category: "Main Course",
       difficulty: "Medium",
@@ -539,12 +588,12 @@ REQUIREMENTS:
       totalTime: "45 mins",
       servings: 4,
       rating: 5,
-      source: siteName || "Imported Recipe",
+      source: siteName || metaTags.siteName || "Imported Recipe",
       sourceUrl: url,
       image: metaTags.image || "",
       tags: ["food/recipes", "imported"],
       ingredients: ingredients.length > 0 ? ingredients : [{ original: "Ingredients as noted", name: "Ingredients" }],
-      instructions: instructions.length > 0 ? instructions : [{ stepNumber: 1, text: "Follow recipe steps." }],
+      instructions: instructions.length > 0 ? instructions : [{ stepNumber: 1, text: "Follow recipe steps as written." }],
       callouts: [{ type: "tip", title: "Imported", content: "Recipe captured into Obsidian vault." }],
       notes: rawText || "",
       rawMarkdown: "",

@@ -89,7 +89,7 @@ export function MealPlannerView({
           <div className="flex items-center gap-2">
             <h2 className="text-lg font-serif font-bold text-white flex items-center gap-2">
               <Calendar className="w-5 h-5 text-amber-400" />
-              <span>Weekly Obsidian Meal Plan</span>
+              <span>Weekly Meal Plan</span>
             </h2>
             <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium border ${
               totalPlannedMeals > 0

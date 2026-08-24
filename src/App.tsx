@@ -67,14 +67,14 @@ export default function App() {
 
   // Vault Notes State (Non-recipe notes in the Obsidian vault, like ingredients, techniques, wine guides)
   const [notes, setNotes] = useState<VaultNote[]>(() => {
-    return getStarterVaultNotes();
+    return [];
   });
 
   // Vault Sync Status
   const [vaultStatus, setVaultStatus] = useState<VaultSyncStatus>({
     isConnected: false,
     vaultPath: DEFAULT_VAULT_PATH,
-    fileCount: recipes.length + notes.length,
+    fileCount: 8,
     accessType: 'starter_vault',
   });
 
