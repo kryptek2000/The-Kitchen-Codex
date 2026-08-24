@@ -1,6 +1,6 @@
-# 🍳 The Kitchen Codex `v0.2.2`
+# 🍳 The Kitchen Codex `v0.2.3`
 
-[![Version](https://img.shields.io/badge/version-0.2.2-amber.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.2.3-amber.svg)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A markdown-native recipe manager, meal planner, culinary knowledge base, and interactive cooking companion built specifically for **Obsidian** vaults. Read, edit, sync, and cook directly from your Obsidian `.md` recipe collection with YAML frontmatter, Dataview tags, wikilinks (`[[Ingredient]]`, `[[Target|Alias]]`), AI nutrition estimation, dynamic portion scaling, multi-step cooking timers, and AI-powered web recipe scraping.
@@ -33,10 +33,11 @@ A markdown-native recipe manager, meal planner, culinary knowledge base, and int
 - **URL & Text Importer**: Paste any recipe website URL, raw HTML, or recipe text to convert it into a structured Obsidian markdown note.
 - **Structured Schema & AI Parsing**: Extracts recipe metadata, ingredient amounts, wikilink entities, cooking step durations, and tips using Gemini AI and Schema.org JSON-LD extraction.
 
-### 🍳 Distraction-Free Interactive Cooking Mode
+### 🍳 Distraction-Free Interactive Cooking Mode & Recipe Cards
 - **Step-by-Step Focus**: Fullscreen hands-free cooking assistant with high-contrast typography.
 - **Automatic Timer Detection**: Detects durations in instruction steps (e.g., *"Simmer for 15 minutes"*) with one-click countdown timers, background alerts, and celebration audio chimes.
-- **Interactive Checklists**: Check off prepared ingredients and completed steps in real time.
+- **Markdown-Enabled Instruction Steps**: Instruction steps support clean inline Markdown rendering for bold, italic, and inline code formatting.
+- **Publication-Quality Recipe Cards & PDF Export**: Export standalone printable recipe cards with customizable Obsidian themes, clean layout wrapping, and strict print pagination.
 
 ### ⚖️ Dynamic Portion & Serving Scaling
 - Scale recipes seamlessly from **0.5× to 4×** with intelligent fraction and measurement arithmetic (e.g., `1 1/2 cups` scales accurately to `3 cups`).
@@ -211,7 +212,14 @@ favorite: true
 
 ## 📌 Changelog
 
-### `v0.2.2` (Current Release)
+### `v0.2.3` (Current Release)
+- **Inline Markdown Instruction Rendering**: Instruction steps now correctly parse and render inline Markdown (bold `**`, italics `*`, code `\``) for clean typographic emphasis.
+- **Clean Metadata Display**: Removed redundant duplicate servings sub-headers under ingredients, keeping primary serving counts in the top metadata panel.
+- **Recipe-Aware Footer Recommendations**: Replaced hardcoded universal serving advice with smart, category-aware recommendations (e.g., cooling instructions for sourdough bread, warm serving notes for soups).
+- **Strict Food Display Metadata Compliance**: Configured the Food Display panel to render strictly when actual presentation/food-display metadata exists, omitting the panel entirely when absent to prevent fabrication.
+- **Robust Print & PDF Pagination**: Enhanced print media styles with page-break protection (`break-inside: avoid`) across ingredients, instructions, and cards for publication-quality PDF exports.
+
+### `v0.2.2`
 - **Vault Intelligence & Metadata Recovery**: Health assessment engine for legacy recipes with missing prep/cook times or servings yields, powered by multi-tier AI recovery (`gemini-3.7-flash` / `gemini-3.1-flash-lite`) and offline heuristic calculations.
 - **Shared Markdown Ingredient Rendering**: Centralized `renderIngredientLine` across import, editing, and note generation pipelines to guarantee uniform ingredient formatting.
 - **Centralized Model Configuration**: Strict type safety and model identification in `server/modelConfig.ts` for web scraping, nutrition analysis, and vault intelligence recovery.
@@ -252,3 +260,4 @@ Contributions, issues, and feature requests are welcome! Feel free to check the 
 ## 📄 License
 
 This project is licensed under the [MIT License](LICENSE).
+
