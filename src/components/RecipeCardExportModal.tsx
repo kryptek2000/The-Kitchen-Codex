@@ -8,6 +8,7 @@ import { scaleIngredientText } from '../utils/markdownParser';
 import { downloadMarkdownFile } from '../utils/vaultFileSystem';
 import { getRecipeImage, DEFAULT_FOOD_IMAGES } from '../utils/imageHelper';
 import { useVaultImage } from '../hooks/useVaultImage';
+import { normalizeCardColors } from '../utils/cardExportColors';
 import html2canvas from 'html2canvas';
 
 interface RecipeCardExportModalProps {
@@ -97,36 +98,12 @@ export function RecipeCardExportModal({ recipe, currentServings: initialServings
         backgroundColor: null,
         logging: false,
         onclone: (clonedDoc) => {
-          // Remove external stylesheets (e.g. Tailwind v4 main CSS) that contain oklch definitions
-          const links = clonedDoc.querySelectorAll('link[rel="stylesheet"]');
-          links.forEach(link => link.remove());
-
-          // Replace modern CSS color functions in style tags
-          const styleSheets = clonedDoc.querySelectorAll('style');
-          styleSheets.forEach((styleTag) => {
-            if (styleTag.textContent) {
-              styleTag.textContent = styleTag.textContent
-                .replace(/oklch\([^)]+\)/gi, 'rgba(150, 150, 150, 0.3)')
-                .replace(/oklab\([^)]+\)/gi, 'rgba(150, 150, 150, 0.3)')
-                .replace(/color-mix\([^)]+\)/gi, 'rgba(150, 150, 150, 0.3)');
-            }
-          });
-
-          // Sanitize any element inline styles referencing oklch/oklab
-          const allElements = clonedDoc.querySelectorAll('*');
-          allElements.forEach(el => {
-            const htmlEl = el as HTMLElement;
-            if (htmlEl.style) {
-              for (let i = 0; i < htmlEl.style.length; i++) {
-                const prop = htmlEl.style[i];
-                const val = htmlEl.style.getPropertyValue(prop);
-                if (val && (val.includes('oklch') || val.includes('oklab') || val.includes('color-mix'))) {
-                  htmlEl.style.setProperty(prop, 'transparent');
-                }
-              }
-            }
-          });
-        }
+          // Keep stylesheets intact so the Tailwind v4 layout & typography are
+          // preserved. html2canvas 1.4.1 cannot parse the modern colour
+          // functions (oklch/oklab/color-mix) Tailwind v4 emits, so resolve
+          // only those to sRGB inline styles before capture.
+          normalizeCardColors(clonedDoc);
+        },
       });
       const image = canvas.toDataURL('image/png');
       const a = document.createElement('a');
