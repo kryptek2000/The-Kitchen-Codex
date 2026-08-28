@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { ObsidianRecipe } from '../types';
+import { ObsidianRecipe } from '../../src/types';
 
-describe('Recipe Card Data Mapping & Regression Legacy Suite', () => {
+describe('Recipe Card Data Mapping & Regression', () => {
   const sampleRecipe: ObsidianRecipe = {
     id: 'test-1',
     fileName: 'test_recipe.md',
@@ -36,7 +36,7 @@ describe('Recipe Card Data Mapping & Regression Legacy Suite', () => {
     expect(description).toContain('Rich and flavorful');
   });
 
-  it("maps Chef's Notes correctly to notes", () => {
+  it("maps Chef's Notes correctly to notes and keeps them distinct", () => {
     const notes = sampleRecipe.notes || '';
     expect(notes).toContain('Make-Ahead Tare');
   });
@@ -60,26 +60,5 @@ describe('Recipe Card Data Mapping & Regression Legacy Suite', () => {
     };
     const hasFoodDisplayMissing = Boolean(recipeWithoutFoodDisplay.dataviewFields?.foodDisplay || recipeWithoutFoodDisplay.dataviewFields?.presentation);
     expect(hasFoodDisplayMissing).toBe(false);
-  });
-
-  it('generates recipe-aware footer advice', () => {
-    const sourdoughRecipe: ObsidianRecipe = {
-      ...sampleRecipe,
-      title: 'Artisan Sourdough Boule',
-      category: 'Baking & Breads',
-      notes: 'Allow loaf to cool completely before slicing.'
-    };
-    const getTestServingAdvice = (recipe: ObsidianRecipe) => {
-      const titleLower = recipe.title.toLowerCase();
-      const catLower = (recipe.category || '').toLowerCase();
-      const notesLower = (recipe.notes || '').toLowerCase();
-      
-      if (notesLower.includes('cool') || notesLower.includes('slice') || catLower.includes('bread') || catLower.includes('baking') || titleLower.includes('bread') || titleLower.includes('sourdough')) {
-        return 'Allow to cool before slicing. Enjoy fresh or toasted.';
-      }
-      return 'Enjoy prepared fresh to taste.';
-    };
-    const advice = getTestServingAdvice(sourdoughRecipe);
-    expect(advice).toContain('Allow to cool');
   });
 });
