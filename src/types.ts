@@ -58,6 +58,7 @@ export interface ObsidianRecipe {
   callouts: ObsidianCallout[];
   dataviewFields: Record<string, string>;
   wikilinks: string[];
+  frontmatter?: Record<string, any>;
   lastModified?: string;
   fileHandle?: any; // Native FileSystemFileHandle if connected
   isFavorite?: boolean;

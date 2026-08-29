@@ -494,6 +494,20 @@ export function normalizeCanonicalRecipe(
     };
   });
 
+  // Nutrition normalization with top-level calories fallback
+  let nutrition = input.nutrition;
+  if (!nutrition && (input as any).calories !== undefined && (input as any).calories !== null) {
+    const calVal =
+      typeof (input as any).calories === 'number'
+        ? (input as any).calories
+        : parseFloat(String((input as any).calories)) || null;
+    if (calVal !== null) {
+      nutrition = {
+        calories: calVal,
+      };
+    }
+  }
+
   return {
     schemaVersion: CURRENT_RECIPE_SCHEMA_VERSION,
     identity,
@@ -501,10 +515,11 @@ export function normalizeCanonicalRecipe(
     timings,
     ingredients,
     instructions,
-    nutrition: input.nutrition,
+    nutrition,
     notes: input.notes || '',
     callouts: input.callouts || [],
     dataviewFields: input.dataviewFields || {},
+    frontmatter: (input as any).frontmatter || undefined,
     wikilinks: input.wikilinks || [],
     rawMarkdown: input.rawMarkdown || '',
   };

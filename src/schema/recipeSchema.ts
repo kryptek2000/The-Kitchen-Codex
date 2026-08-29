@@ -144,6 +144,8 @@ export interface CanonicalRecipe extends SchemaVersion {
   callouts: RecipeCallout[];
   /** Key-value pairs extracted from Obsidian Dataview inline annotations (`key:: value`) */
   dataviewFields: Record<string, string>;
+  /** Preserved raw YAML frontmatter fields */
+  frontmatter?: Record<string, any>;
   /** All extracted wikilinks in document */
   wikilinks: string[];
   /** Exact verbatim raw Markdown from disk */

@@ -80,6 +80,7 @@ export function canonicalToObsidianRecipe(
     callouts,
     dataviewFields: canonical.dataviewFields,
     wikilinks: canonical.wikilinks,
+    frontmatter: canonical.frontmatter,
     lastModified: canonical.identity.updatedAt,
     fileHandle,
     isFavorite: canonical.metadata.isFavorite,
@@ -90,6 +91,29 @@ export function canonicalToObsidianRecipe(
  * Converts a legacy ObsidianRecipe into the strict Schema v1 CanonicalRecipe format.
  */
 export function obsidianToCanonicalRecipe(legacy: ObsidianRecipe): CanonicalRecipe {
+  const caloriesVal =
+    typeof legacy.calories === 'number'
+      ? legacy.calories
+      : typeof legacy.calories === 'string'
+      ? parseFloat(legacy.calories) || undefined
+      : undefined;
+
+  const nutrition = legacy.nutrition
+    ? {
+        calories: legacy.nutrition.calories ?? caloriesVal,
+        proteinGrams: legacy.nutrition.protein,
+        carbsGrams: legacy.nutrition.carbohydrates,
+        fatGrams: legacy.nutrition.fat,
+        fiberGrams: legacy.nutrition.fiber,
+        sodiumMg: legacy.nutrition.sodium,
+        confidenceNote: legacy.nutrition.confidenceNote,
+      }
+    : caloriesVal !== undefined
+    ? {
+        calories: caloriesVal,
+      }
+    : undefined;
+
   return normalizeCanonicalRecipe({
     identity: {
       id: legacy.id,
@@ -132,18 +156,9 @@ export function obsidianToCanonicalRecipe(legacy: ObsidianRecipe): CanonicalReci
     notes: legacy.notes,
     callouts: legacy.callouts,
     dataviewFields: legacy.dataviewFields,
+    frontmatter: legacy.frontmatter,
     wikilinks: legacy.wikilinks,
     rawMarkdown: legacy.rawMarkdown,
-    nutrition: legacy.nutrition
-      ? {
-          calories: legacy.nutrition.calories,
-          proteinGrams: legacy.nutrition.protein,
-          carbsGrams: legacy.nutrition.carbohydrates,
-          fatGrams: legacy.nutrition.fat,
-          fiberGrams: legacy.nutrition.fiber,
-          sodiumMg: legacy.nutrition.sodium,
-          confidenceNote: legacy.nutrition.confidenceNote,
-        }
-      : undefined,
+    nutrition,
   });
 }

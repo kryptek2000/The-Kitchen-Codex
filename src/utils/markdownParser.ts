@@ -339,6 +339,7 @@ export function extractCalories(
  * Detects and parses an ingredient line
  */
 export function parseIngredientLine(line: string): ParsedIngredient {
+  const isChecked = /^[-*+]\s*\[[xX]\]/.test(line);
   const cleanLine = line.replace(/^[-*+]\s*(\[[ xX]\]\s*)?/, '').trim();
 
   // Wikilink extraction: [[Ingredient Name]] or [[Ingredient/Path|Alias]]
@@ -380,7 +381,7 @@ export function parseIngredientLine(line: string): ParsedIngredient {
       wikilink,
       wikilinkTarget,
       wikilinkAlias,
-      isChecked: false,
+      isChecked,
     };
   }
 
@@ -392,7 +393,7 @@ export function parseIngredientLine(line: string): ParsedIngredient {
     wikilink,
     wikilinkTarget,
     wikilinkAlias,
-    isChecked: false,
+    isChecked,
   };
 }
 
@@ -485,7 +486,7 @@ export function parseObsidianRecipeMarkdown(
   const dvRegex = /\[?([a-zA-Z0-9_-]+)::\s*([^\]\n]+)\]?/g;
   let dvMatch;
   while ((dvMatch = dvRegex.exec(content)) !== null) {
-    const key = dvMatch[1].trim().toLowerCase();
+    const key = dvMatch[1].trim();
     const val = dvMatch[2].trim();
     dataviewFields[key] = val;
   }
@@ -611,18 +612,9 @@ export function parseObsidianRecipeMarkdown(
     dataviewFields.image ||
     dataviewFields.cover;
 
-  let image: string = '';
+  let image: string | undefined = undefined;
   if (typeof rawImage === 'string' && rawImage.trim() && rawImage.trim() !== 'undefined' && rawImage.trim() !== 'null') {
     image = rawImage.trim();
-  } else {
-    image = getRecipeImage({
-      image: rawImage,
-      title,
-      category,
-      cuisine,
-      tags,
-      rawMarkdown,
-    });
   }
 
   // 10. Parse Ingredients & Instructions Sections
@@ -718,53 +710,107 @@ export function parseObsidianRecipeMarkdown(
     callouts,
     dataviewFields,
     wikilinks,
-    lastModified: frontmatter.created || new Date().toISOString().split('T')[0],
+    frontmatter,
+    lastModified: frontmatter.created || frontmatter.updated || frontmatter.date || undefined,
   };
 }
 
 /**
  * Renders a single ingredient as a checklist line, preserving an intended Obsidian
- * wikilink when present. Handles both simple targets (`[[Garlic]]`) and aliased
- * targets (`[[Garlic|Fresh Garlic]]`) without stripping or duplicating links.
+ * wikilink when present (e.g. `[[Garlic]]` or `[[Garlic|Fresh Garlic]]`).
+ * NOTE: Automatic wikilink generation is intentionally disabled. Plain ingredients remain plain.
  *
  * @param ing parsed ingredient with optional amount/unit/name/wikilink metadata
  * @param check `[ ]` or `[x]` checklist marker
  */
 export function renderIngredientLine(
-  ing: { original?: string; amount?: number | null; unit?: string; name?: string; wikilink?: string; wikilinkTarget?: string; wikilinkAlias?: string },
+  ing: {
+    original?: string;
+    amount?: number | null;
+    unit?: string;
+    name?: string;
+    wikilink?: string;
+    wikilinkTarget?: string;
+    wikilinkAlias?: string;
+    isChecked?: boolean;
+  },
   check: string = '[ ]'
 ): string {
+  if (check === '[ ]' && ing.isChecked) {
+    check = '[x]';
+  }
+
   const original = (ing.original || '').trim();
 
-  // If text has existing wikilinks like [[Target|Alias]] or [[Target]], strip the brackets cleanly
-  let text = original.replace(/^[-*+]\s*(\[[ xX]\]\s*)?/, '').trim();
-  if (text.includes('[[')) {
-    text = text.replace(/\[\[(?:[^|\]]*\|)?([^\]]+)\]\]/g, '$1').trim();
+  // If text has existing content, strip the checkbox marker prefix cleanly but PRESERVE wikilinks!
+  if (original) {
+    const text = original.replace(/^[-*+]\s*(\[[ xX]\]\s*)?/, '').trim();
+    if (text) {
+      return `- ${check} ${text}`.trim();
+    }
   }
 
-  if (!text) {
-    // Fall back to reconstructing from structured fields when original is empty.
-    const amt = ing.amount != null ? `${formatAmount(ing.amount)} ` : '';
-    const unit = ing.unit ? `${ing.unit} ` : '';
-    const name = (ing.name || '').replace(/\[\[(?:[^|\]]*\|)?([^\]]+)\]\]/g, '$1').trim();
-    text = `${amt}${unit}${name}`.trim();
+  // Fall back to reconstructing from structured fields when original is empty.
+  const amt = ing.amount != null ? `${formatAmount(ing.amount)} ` : '';
+  const unit = ing.unit ? `${ing.unit} ` : '';
+  let name = (ing.name || '').trim();
+
+  // If structured wikilink properties exist and name does not already contain brackets, preserve them
+  if (!name.includes('[[')) {
+    if (ing.wikilinkTarget) {
+      if (ing.wikilinkAlias && ing.wikilinkAlias !== ing.wikilinkTarget) {
+        name = `[[${ing.wikilinkTarget}|${ing.wikilinkAlias}]]`;
+      } else {
+        name = `[[${ing.wikilinkTarget}]]`;
+      }
+    } else if (ing.wikilink) {
+      name = ing.wikilink.startsWith('[[') ? ing.wikilink : `[[${ing.wikilink}]]`;
+    }
   }
 
-  return `- ${check} ${text}`.trim();
+  return `- ${check} ${amt}${unit}${name}`.trim();
 }
 
 /**
- * Serializes an ObsidianRecipe into pristine Obsidian Markdown with YAML frontmatter
+ * Serializes an ObsidianRecipe into pristine Obsidian Markdown with YAML frontmatter.
+ * Preserves custom/unknown frontmatter fields, Dataview inline fields, and exact wikilinks.
  */
 export function serializeRecipeToObsidianMarkdown(recipe: Partial<ObsidianRecipe>): string {
-  const frontmatterObj: Record<string, any> = {
-    title: recipe.title || 'Untitled Recipe',
-    tags: recipe.tags && recipe.tags.length > 0 ? recipe.tags : ['food/recipes'],
-    cuisine: recipe.cuisine || 'General',
-    category: recipe.category || 'Main Course',
-    difficulty: recipe.difficulty || 'Medium',
-    rating: recipe.rating || 5,
-  };
+  // Start with existing frontmatter if present to preserve user-authored custom fields
+  const frontmatterObj: Record<string, any> = {};
+  if (recipe.frontmatter && typeof recipe.frontmatter === 'object') {
+    for (const [k, v] of Object.entries(recipe.frontmatter)) {
+      if (v !== undefined && v !== null) {
+        frontmatterObj[k] = v;
+      }
+    }
+  }
+
+  if (recipe.title) {
+    frontmatterObj.title = recipe.title;
+  } else if (!frontmatterObj.title) {
+    frontmatterObj.title = 'Untitled Recipe';
+  }
+
+  if (recipe.tags && recipe.tags.length > 0) {
+    frontmatterObj.tags = recipe.tags;
+  } else if (!frontmatterObj.tags) {
+    frontmatterObj.tags = ['food/recipes'];
+  }
+
+  // Only assign defaults if no frontmatter existed or field was present
+  if (recipe.cuisine && (recipe.frontmatter?.cuisine !== undefined || !recipe.frontmatter)) {
+    frontmatterObj.cuisine = recipe.cuisine;
+  }
+  if (recipe.category && (recipe.frontmatter?.category !== undefined || !recipe.frontmatter)) {
+    frontmatterObj.category = recipe.category;
+  }
+  if (recipe.difficulty && (recipe.frontmatter?.difficulty !== undefined || !recipe.frontmatter)) {
+    frontmatterObj.difficulty = recipe.difficulty;
+  }
+  if (recipe.rating !== undefined && (recipe.frontmatter?.rating !== undefined || !recipe.frontmatter)) {
+    frontmatterObj.rating = recipe.rating;
+  }
 
   if (recipe.prepTime && recipe.prepTime.trim()) frontmatterObj.prep_time = recipe.prepTime.trim();
   if (recipe.cookTime && recipe.cookTime.trim()) frontmatterObj.cook_time = recipe.cookTime.trim();
@@ -773,6 +819,7 @@ export function serializeRecipeToObsidianMarkdown(recipe: Partial<ObsidianRecipe
   if (recipe.calories !== undefined && recipe.calories !== null && String(recipe.calories).trim()) {
     frontmatterObj.calories = recipe.calories;
   }
+
   if (recipe.nutrition && typeof recipe.nutrition === 'object') {
     const nut: Record<string, any> = {};
     if (recipe.nutrition.calories !== undefined && recipe.nutrition.calories !== null) nut.calories = recipe.nutrition.calories;
@@ -790,14 +837,34 @@ export function serializeRecipeToObsidianMarkdown(recipe: Partial<ObsidianRecipe
       }
     }
   }
+
   if (recipe.source && recipe.source.trim()) frontmatterObj.source = recipe.source.trim();
-  if (recipe.image && recipe.image.trim()) frontmatterObj.image = recipe.image.trim();
-  if (recipe.lastModified) frontmatterObj.created = recipe.lastModified;
+  // Only persist image if explicitly present (do not write empty or generated placeholders)
+  if (recipe.image && recipe.image.trim()) {
+    frontmatterObj.image = recipe.image.trim();
+  }
+  if (recipe.lastModified && (recipe.frontmatter?.created || recipe.frontmatter?.date)) {
+    frontmatterObj.created = recipe.lastModified;
+  }
 
   const yamlStr = yamlDump(frontmatterObj, { indent: 2, lineWidth: -1 }).trim();
 
   let md = `---\n${yamlStr}\n---\n\n`;
   md += `# ${recipe.title || 'Untitled Recipe'}\n\n`;
+
+  // Dataview inline fields (preserve any user-authored key:: value that are not standard frontmatter aliases)
+  if (recipe.dataviewFields && Object.keys(recipe.dataviewFields).length > 0) {
+    const customDv = Object.entries(recipe.dataviewFields).filter(([k]) => {
+      const lk = k.toLowerCase().replace(/[-_\s]/g, '');
+      return !['preptime', 'cooktime', 'totaltime', 'cuisine', 'category', 'image', 'cover', 'servings', 'calories', 'rating', 'difficulty'].includes(lk);
+    });
+    if (customDv.length > 0) {
+      for (const [k, v] of customDv) {
+        md += `${k}:: ${v}\n`;
+      }
+      md += '\n';
+    }
+  }
 
   // Callouts
   if (recipe.callouts && recipe.callouts.length > 0) {
