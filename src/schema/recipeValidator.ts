@@ -413,6 +413,7 @@ export type NormalizeRecipeInput = Omit<Partial<CanonicalRecipe>, 'ingredients' 
   servings?: number | null;
   difficulty?: string;
   rating?: number;
+  description?: string;
   ingredients?: Array<string | Partial<StructuredIngredient> | any>;
   instructions?: Array<string | Partial<StructuredStep> | any>;
 };
@@ -427,6 +428,7 @@ export function normalizeCanonicalRecipe(
   const fileName = input.identity?.fileName || `${title.replace(/[/\\?%*:|"<>]/g, '') || 'recipe'}.md`;
   const filePath = input.identity?.filePath || fileName;
   const id = input.identity?.id || `recipe-${fileName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+  const description = input.description || input.identity?.description || (input as any).description || undefined;
 
   // Timings normalization
   const prepMinutes = input.timings?.prepMinutes ?? parseDurationToMinutes(input.prepTime);
@@ -466,6 +468,7 @@ export function normalizeCanonicalRecipe(
     filePath,
     sourceUrl: input.identity?.sourceUrl || (input as any).source,
     author: input.identity?.author || (input as any).author,
+    description,
     createdAt: input.identity?.createdAt,
     updatedAt: input.identity?.updatedAt || (input as any).lastModified,
   };
@@ -516,6 +519,7 @@ export function normalizeCanonicalRecipe(
     ingredients,
     instructions,
     nutrition,
+    description,
     notes: input.notes || '',
     callouts: input.callouts || [],
     dataviewFields: input.dataviewFields || {},

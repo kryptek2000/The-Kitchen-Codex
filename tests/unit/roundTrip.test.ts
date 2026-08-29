@@ -368,5 +368,149 @@ total: 7 mins
     expect(serialized).not.toContain('cook-time:');
     expect(serialized).not.toContain('total: 7 mins');
   });
+
+  it('F1 — Preserves freeform body prose across full parse -> canonical -> serialize -> reload cycle without duplication', () => {
+    const noteWithProse = `# Chili
+
+This is a lovely intro paragraph explaining the recipe.
+
+This second paragraph contains additional user-authored notes.
+
+## Ingredients
+
+- 1 lb ground beef
+
+## Instructions
+
+1. Brown the beef.
+`;
+
+    // 1. Initial Parse (Production load boundary)
+    const parsed1 = parseObsidianRecipeMarkdown(noteWithProse, 'Chili.md');
+    expect(parsed1.title).toBe('Chili');
+    expect(parsed1.description).toContain('This is a lovely intro paragraph explaining the recipe.');
+    expect(parsed1.description).toContain('This second paragraph contains additional user-authored notes.');
+
+    // 2. Initial Save (Production save boundary)
+    const saved1 = serializeRecipeToObsidianMarkdown(parsed1);
+    expect(saved1).toContain('This is a lovely intro paragraph explaining the recipe.');
+    expect(saved1).toContain('This second paragraph contains additional user-authored notes.');
+
+    // 3. First Reload (Production load boundary)
+    const parsed2 = parseObsidianRecipeMarkdown(saved1, 'Chili.md');
+    expect(parsed2.description).toContain('This is a lovely intro paragraph explaining the recipe.');
+    expect(parsed2.description).toContain('This second paragraph contains additional user-authored notes.');
+
+    // 4. Second Save (Test repeated save/serialize does not duplicate prose)
+    const saved2 = serializeRecipeToObsidianMarkdown(parsed2);
+    
+    // Ensure exact occurrence count is 1 (no duplication)
+    const matchesPara1 = saved2.match(/This is a lovely intro paragraph explaining the recipe\./g);
+    const matchesPara2 = saved2.match(/This second paragraph contains additional user-authored notes\./g);
+    expect(matchesPara1?.length).toBe(1);
+    expect(matchesPara2?.length).toBe(1);
+
+    // 5. Third Reload
+    const parsed3 = parseObsidianRecipeMarkdown(saved2, 'Chili.md');
+    expect(parsed3.description).toBe(parsed2.description);
+    expect(parsed3.ingredients.length).toBe(1);
+    expect(parsed3.instructions.length).toBe(1);
+  });
+
+  it('F2 — Extracts Markdown-tolerant body timing variants and survives round-trip', () => {
+    const variants = [
+      {
+        name: 'Plain timing format',
+        body: `# Recipe 1\n\nPrep: 15 mins\nCook: 45 mins\nTotal: 1 hr\n\n## Ingredients\n- 1 cup Rice\n`,
+        expectedPrep: '15 mins',
+        expectedCook: '45 mins',
+        expectedTotal: '1 hr',
+      },
+      {
+        name: 'Bold with colon inside',
+        body: `# Recipe 2\n\n**Prep:** 15 mins\n**Cook:** 45 mins\n**Total:** 1 hr\n\n## Ingredients\n- 1 cup Rice\n`,
+        expectedPrep: '15 mins',
+        expectedCook: '45 mins',
+        expectedTotal: '1 hr',
+      },
+      {
+        name: 'List item with bold and "time" suffix',
+        body: `# Recipe 3\n\n- **Prep time:** 15 mins\n- **Cook time:** 45 mins\n\n## Ingredients\n- 1 cup Rice\n`,
+        expectedPrep: '15 mins',
+        expectedCook: '45 mins',
+        expectedTotal: '1 hr',
+      },
+      {
+        name: 'Bold with whitespace before colon',
+        body: `# Recipe 4\n\n**Prep** : 15 mins\n**Cook** : 45 mins\n\n## Ingredients\n- 1 cup Rice\n`,
+        expectedPrep: '15 mins',
+        expectedCook: '45 mins',
+        expectedTotal: '1 hr',
+      },
+    ];
+
+    for (const v of variants) {
+      // 1. Parse variant
+      const parsed = parseObsidianRecipeMarkdown(v.body, 'Recipe.md');
+      expect(parsed.prepTime, `${v.name} prepTime`).toBe(v.expectedPrep);
+      expect(parsed.cookTime, `${v.name} cookTime`).toBe(v.expectedCook);
+      expect(parsed.totalTime, `${v.name} totalTime`).toBe(v.expectedTotal);
+
+      // 2. Save
+      const saved = serializeRecipeToObsidianMarkdown(parsed);
+      expect(saved).toContain(`prep_time: ${v.expectedPrep}`);
+      expect(saved).toContain(`cook_time: ${v.expectedCook}`);
+
+      // 3. Reload
+      const reloaded = parseObsidianRecipeMarkdown(saved, 'Recipe.md');
+      expect(reloaded.prepTime, `${v.name} reloaded prepTime`).toBe(v.expectedPrep);
+      expect(reloaded.cookTime, `${v.name} reloaded cookTime`).toBe(v.expectedCook);
+      expect(reloaded.totalTime, `${v.name} reloaded totalTime`).toBe(v.expectedTotal);
+    }
+  });
+
+  it('F3 — Does not fabricate created: from date: in YAML frontmatter', () => {
+    const dateOnlyMarkdown = `---
+title: Roman Cacio e Pepe
+date: 2026-01-15
+author: Nonna Maria
+---
+
+# Roman Cacio e Pepe
+
+## Ingredients
+- [ ] 200g Pecorino Romano
+
+## Instructions
+1. Cook pasta.
+`;
+
+    // 1. Parse date-only markdown
+    const parsed = parseObsidianRecipeMarkdown(dateOnlyMarkdown, 'Cacio.md');
+    expect(parsed.frontmatter?.date).toBe('2026-01-15');
+    expect(parsed.frontmatter?.created).toBeUndefined();
+
+    // 2. Save
+    const saved = serializeRecipeToObsidianMarkdown(parsed);
+
+    // Verify date is preserved, and created is NOT fabricated
+    expect(saved).toMatch(/date:\s*['"]?2026-01-15['"]?/);
+    expect(saved).not.toContain('created:');
+
+    // 3. Confirm that notes with explicit created: STILL preserve created:
+    const createdMarkdown = `---
+title: Roman Cacio e Pepe
+created: 2026-01-15
+---
+
+# Roman Cacio e Pepe
+
+## Ingredients
+- [ ] 200g Pecorino Romano
+`;
+    const parsedWithCreated = parseObsidianRecipeMarkdown(createdMarkdown, 'Cacio.md');
+    const savedWithCreated = serializeRecipeToObsidianMarkdown(parsedWithCreated);
+    expect(savedWithCreated).toMatch(/created:\s*['"]?2026-01-15['"]?/);
+  });
 });
 

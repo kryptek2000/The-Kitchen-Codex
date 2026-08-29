@@ -200,6 +200,26 @@ function extractFromBodyRegex(content: string, patterns: RegExp[]): string | und
 }
 
 /**
+ * Generates regexes that match Markdown-formatted timing lines with optional
+ * markdown emphasis (bold/italic), optional list markers, optional colon inside/outside
+ * emphasis, and optional spacing before/after colon.
+ */
+function buildTimingRegex(labelPattern: string): RegExp[] {
+  return [
+    // Variant 1: Colon inside bold/italic e.g. `**Prep:** 15 mins` or `- **Prep time:** 15 mins`
+    new RegExp(
+      `(?:^|\\n)\\s*(?:[-*•+]\\s+)?(?:\\*{1,2}|_{1,2})\\s*(?:${labelPattern})\\s*[:\\-–]\\s*(?:\\*{1,2}|_{1,2})\\s*([0-9]+[^\\n\\r,;|]+)`,
+      'i'
+    ),
+    // Variant 2: Colon outside bold/italic or plain e.g. `Prep: 15 mins`, `**Prep**: 15 mins`, `**Prep** : 15 mins`, `- **Prep time** : 15 mins`
+    new RegExp(
+      `(?:^|\\n)\\s*(?:[-*•+]\\s+)?(?:\\*{1,2}|_{1,2})?\\s*(?:${labelPattern})\\s*(?:\\*{1,2}|_{1,2})?\\s*[:\\-–]\\s*([0-9]+[^\\n\\r,;|]+)`,
+      'i'
+    ),
+  ];
+}
+
+/**
  * Extracts prep time accurately from frontmatter, dataview fields, or body text
  */
 export function extractPrepTime(
@@ -219,10 +239,10 @@ export function extractPrepTime(
   ]);
   if (dvVal !== undefined) return String(dvVal).trim();
 
-  const bodyVal = extractFromBodyRegex(content, [
-    /(?:^|\n)\s*[-*•]?\s*(?:\*{1,2}|_{1,2})?(?:prep(?:\s*time|\s*duration)?|preparation(?:\s*time)?)\s*(?:\*{1,2}|_{1,2})?[:\-–]\s*([0-9]+[^\n\r,;|]+)/i,
-    /(?:^|\n)\s*[-*•]?\s*(?:\*{1,2}|_{1,2})?prep\s*(?:\*{1,2}|_{1,2})?[:\-–]\s*([0-9]+[^\n\r,;|]+)/i
-  ]);
+  const bodyVal = extractFromBodyRegex(
+    content,
+    buildTimingRegex('prep(?:\\s*time|\\s*duration)?|preparation(?:\\s*time)?')
+  );
   if (bodyVal) return bodyVal;
 
   return undefined;
@@ -248,10 +268,10 @@ export function extractCookTime(
   ]);
   if (dvVal !== undefined) return String(dvVal).trim();
 
-  const bodyVal = extractFromBodyRegex(content, [
-    /(?:^|\n)\s*[-*•]?\s*(?:\*{1,2}|_{1,2})?(?:cook(?:\s*time|\s*duration)?|cooking(?:\s*time)?|bake(?:\s*time)?)\s*(?:\*{1,2}|_{1,2})?[:\-–]\s*([0-9]+[^\n\r,;|]+)/i,
-    /(?:^|\n)\s*[-*•]?\s*(?:\*{1,2}|_{1,2})?cook\s*(?:\*{1,2}|_{1,2})?[:\-–]\s*([0-9]+[^\n\r,;|]+)/i
-  ]);
+  const bodyVal = extractFromBodyRegex(
+    content,
+    buildTimingRegex('cook(?:\\s*time|\\s*duration)?|cooking(?:\\s*time)?|bake(?:\\s*time)?')
+  );
   if (bodyVal) return bodyVal;
 
   return undefined;
@@ -275,9 +295,10 @@ export function extractTotalTime(
   ]);
   if (dvVal !== undefined) return String(dvVal).trim();
 
-  const bodyVal = extractFromBodyRegex(content, [
-    /(?:^|\n)\s*[-*•]?\s*(?:\*{1,2}|_{1,2})?(?:total(?:\s*time)?|ready\s*in)\s*(?:\*{1,2}|_{1,2})?[:\-–]\s*([0-9]+[^\n\r,;|]+)/i
-  ]);
+  const bodyVal = extractFromBodyRegex(
+    content,
+    buildTimingRegex('total(?:\\s*time)?|ready\\s*in')
+  );
   if (bodyVal) return bodyVal;
 
   return undefined;
@@ -635,10 +656,11 @@ export function parseObsidianRecipeMarkdown(
     image = rawImage.trim();
   }
 
-  // 10. Parse Ingredients & Instructions Sections
+  // 10. Parse Ingredients & Instructions Sections & Freeform Intro Prose
   const ingredients: ParsedIngredient[] = [];
   const instructions: RecipeStep[] = [];
   let notes = '';
+  const introLines: string[] = [];
 
   const lines = content.split('\n');
   let currentSection: 'header' | 'ingredients' | 'instructions' | 'notes' | 'other' = 'header';
@@ -661,7 +683,26 @@ export function parseObsidianRecipeMarkdown(
       }
     }
 
-    if (currentSection === 'ingredients') {
+    if (currentSection === 'header') {
+      // Skip H1 title line
+      if (line.match(/^#\s+/)) continue;
+      // Skip callout lines
+      if (line.match(/^>\s*/)) continue;
+      // Skip dataview inline field lines like `Key:: Value` or `[Key:: Value]`
+      if (line.match(/^\s*\[?[a-zA-Z0-9_\-\s]+::\s*[^\]\n]+\]?\s*$/)) continue;
+      // Skip standalone timing or metadata lines in body
+      if (
+        line.match(
+          /^\s*[-*•+]?\s*(?:\*{1,2}|_{1,2})?\s*(?:prep|cook|total|ready\s*in|servings?|yields?|serves|makes|calories|difficulty|cuisine|category|rating)(?:\s*time|\s*duration)?\s*[:\-–]?\s*(?:\*{1,2}|_{1,2})?\s*[:\-–]/i
+        )
+      ) {
+        continue;
+      }
+      // Skip markdown thematic breaks (horizontal rules)
+      if (line.match(/^\s*[-*_]{3,}\s*$/)) continue;
+
+      introLines.push(line);
+    } else if (currentSection === 'ingredients') {
       if (line.match(/^[-*+]\s+/)) {
         ingredients.push(parseIngredientLine(line));
       }
@@ -724,6 +765,7 @@ export function parseObsidianRecipeMarkdown(
     image,
     ingredients,
     instructions,
+    description: introLines.join('\n').trim() || frontmatter.description || undefined,
     notes: notes.trim(),
     callouts,
     dataviewFields,
@@ -913,7 +955,7 @@ export function serializeRecipeToObsidianMarkdown(recipe: Partial<ObsidianRecipe
   if (recipeToSerialize.image && recipeToSerialize.image.trim()) {
     frontmatterObj.image = recipeToSerialize.image.trim();
   }
-  if (recipeToSerialize.lastModified && (recipeToSerialize.frontmatter?.created || recipeToSerialize.frontmatter?.date)) {
+  if (recipeToSerialize.lastModified && recipeToSerialize.frontmatter?.created) {
     frontmatterObj.created = recipeToSerialize.lastModified;
   }
 
@@ -932,9 +974,14 @@ export function serializeRecipeToObsidianMarkdown(recipe: Partial<ObsidianRecipe
     md += '\n';
   }
 
+  // Freeform body prose / description (preserved before callouts and ingredients)
+  if (recipeToSerialize.description && recipeToSerialize.description.trim()) {
+    md += `${recipeToSerialize.description.trim()}\n\n`;
+  }
+
   // Callouts
-  if (recipe.callouts && recipe.callouts.length > 0) {
-    recipe.callouts.forEach((co) => {
+  if (recipeToSerialize.callouts && recipeToSerialize.callouts.length > 0) {
+    recipeToSerialize.callouts.forEach((co) => {
       md += `> [!${co.type || 'tip'}] ${co.title || "Chef's Note"}\n`;
       const coLines = co.content.split('\n');
       coLines.forEach((cl) => {
@@ -946,8 +993,8 @@ export function serializeRecipeToObsidianMarkdown(recipe: Partial<ObsidianRecipe
 
   // Ingredients
   md += `## 🥘 Ingredients\n`;
-  if (recipe.ingredients && recipe.ingredients.length > 0) {
-    recipe.ingredients.forEach((ing) => {
+  if (recipeToSerialize.ingredients && recipeToSerialize.ingredients.length > 0) {
+    recipeToSerialize.ingredients.forEach((ing) => {
       const check = ing.isChecked ? '[x]' : '[ ]';
       md += `${renderIngredientLine(ing, check)}\n`;
     });
@@ -958,8 +1005,8 @@ export function serializeRecipeToObsidianMarkdown(recipe: Partial<ObsidianRecipe
 
   // Instructions
   md += `## 🍳 Instructions\n`;
-  if (recipe.instructions && recipe.instructions.length > 0) {
-    recipe.instructions.forEach((step, idx) => {
+  if (recipeToSerialize.instructions && recipeToSerialize.instructions.length > 0) {
+    recipeToSerialize.instructions.forEach((step, idx) => {
       md += `${idx + 1}. ${step.text}\n`;
     });
   } else {
@@ -968,8 +1015,8 @@ export function serializeRecipeToObsidianMarkdown(recipe: Partial<ObsidianRecipe
   md += '\n';
 
   // Notes & Variations
-  if (recipe.notes) {
-    md += `## 💡 Notes & Variations\n${recipe.notes}\n\n`;
+  if (recipeToSerialize.notes) {
+    md += `## 💡 Notes & Variations\n${recipeToSerialize.notes}\n\n`;
   }
 
   return md;

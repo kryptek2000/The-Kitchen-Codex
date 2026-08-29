@@ -54,6 +54,7 @@ export interface ObsidianRecipe {
   image?: string;
   ingredients: ParsedIngredient[];
   instructions: RecipeStep[];
+  description?: string;
   notes?: string;
   callouts: ObsidianCallout[];
   dataviewFields: Record<string, string>;

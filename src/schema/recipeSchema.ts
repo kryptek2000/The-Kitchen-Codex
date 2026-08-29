@@ -24,6 +24,8 @@ export interface RecipeIdentity {
   sourceUrl?: string;
   /** Original recipe author / chef / publisher */
   author?: string;
+  /** Freeform introductory prose / recipe summary */
+  description?: string;
   /** ISO 8601 creation timestamp */
   createdAt?: string;
   /** ISO 8601 last modified timestamp */
@@ -138,6 +140,8 @@ export interface CanonicalRecipe extends SchemaVersion {
   ingredients: StructuredIngredient[];
   instructions: StructuredStep[];
   nutrition?: RecipeNutritionData;
+  /** Freeform introductory body prose or recipe description */
+  description?: string;
   /** Chef notes / tips section text */
   notes?: string;
   /** All document callouts */
