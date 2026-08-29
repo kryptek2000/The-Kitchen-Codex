@@ -168,6 +168,21 @@ function findFlexibleKey(obj: Record<string, any>, candidateKeys: string[]): any
 }
 
 /**
+ * Deletes alternate/redundant frontmatter keys that match alias variants of a canonical key,
+ * preventing duplicate frontmatter fields (e.g. `prepTime:` and `prep_time:`).
+ */
+function cleanAlternateFrontmatterKeys(obj: Record<string, any>, canonicalKey: string, aliasKeys: string[]): void {
+  if (!obj || typeof obj !== 'object') return;
+  const normalizedAliases = aliasKeys.map((k) => k.toLowerCase().replace(/[-_\s]/g, ''));
+  for (const key of Object.keys(obj)) {
+    const normalizedKey = key.toLowerCase().replace(/[-_\s]/g, '');
+    if (normalizedAliases.includes(normalizedKey) && key !== canonicalKey) {
+      delete obj[key];
+    }
+  }
+}
+
+/**
  * Extracts a metadata string or number from Markdown body lines like:
  * - **Prep time:** 15 mins
  * - Cook: 30 minutes
@@ -835,28 +850,17 @@ export function serializeRecipeToObsidianMarkdown(recipe: Partial<ObsidianRecipe
     frontmatterObj.rating = recipeToSerialize.rating;
   }
 
-  if (
-    recipeToSerialize.prepTime &&
-    recipeToSerialize.prepTime.trim() &&
-    (findFlexibleKey(recipeToSerialize.frontmatter, ['prep_time', 'prepTime', 'prep-time', 'prep']) !== undefined ||
-      !recipeToSerialize.frontmatter)
-  ) {
+  // Timings: Persist prep_time, cook_time, total_time when present and clean alternate alias keys to avoid duplicate frontmatter fields
+  if (recipeToSerialize.prepTime && recipeToSerialize.prepTime.trim()) {
+    cleanAlternateFrontmatterKeys(frontmatterObj, 'prep_time', ['prep_time', 'prepTime', 'prep-time', 'prep', 'preptime']);
     frontmatterObj.prep_time = recipeToSerialize.prepTime.trim();
   }
-  if (
-    recipeToSerialize.cookTime &&
-    recipeToSerialize.cookTime.trim() &&
-    (findFlexibleKey(recipeToSerialize.frontmatter, ['cook_time', 'cookTime', 'cook-time', 'cook']) !== undefined ||
-      !recipeToSerialize.frontmatter)
-  ) {
+  if (recipeToSerialize.cookTime && recipeToSerialize.cookTime.trim()) {
+    cleanAlternateFrontmatterKeys(frontmatterObj, 'cook_time', ['cook_time', 'cookTime', 'cook-time', 'cook', 'cooktime']);
     frontmatterObj.cook_time = recipeToSerialize.cookTime.trim();
   }
-  if (
-    recipeToSerialize.totalTime &&
-    recipeToSerialize.totalTime.trim() &&
-    (findFlexibleKey(recipeToSerialize.frontmatter, ['total_time', 'totalTime', 'total-time', 'total']) !== undefined ||
-      !recipeToSerialize.frontmatter)
-  ) {
+  if (recipeToSerialize.totalTime && recipeToSerialize.totalTime.trim()) {
+    cleanAlternateFrontmatterKeys(frontmatterObj, 'total_time', ['total_time', 'totalTime', 'total-time', 'total', 'totaltime']);
     frontmatterObj.total_time = recipeToSerialize.totalTime.trim();
   }
   if (recipeToSerialize.servings !== undefined && recipeToSerialize.servings !== null) {

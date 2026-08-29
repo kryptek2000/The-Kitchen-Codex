@@ -287,5 +287,86 @@ Region:: Lazio
     expect(savedMarkdown).toMatch(/date:\s*['"]?2026-01-15['"]?/);
     expect(savedMarkdown).toContain('total_time: 15 mins');
   });
+
+  it('preserves body-derived timing values across full production parse -> canonical -> serialize -> reload cycle', () => {
+    const bodyTimingNote = `# Chili
+
+Prep: 15 mins
+Cook: 45 mins
+
+## Ingredients
+- [ ] 500g Ground Beef
+- [ ] 1 can Kidney Beans
+
+## Instructions
+1. Brown the beef and simmer with beans and spices.
+`;
+
+    // 1. Initial Parse: Markdown -> ObsidianRecipe (via CanonicalRecipe production boundary)
+    const initialParsed = parseObsidianRecipeMarkdown(bodyTimingNote, 'Chili.md');
+
+    expect(initialParsed.prepTime).toBe('15 mins');
+    expect(initialParsed.cookTime).toBe('45 mins');
+    expect(initialParsed.totalTime).toBe('1 hr'); // normalized 15m + 45m = 60m = 1 hr
+
+    // 2. Production Save: ObsidianRecipe -> Serialized Obsidian Markdown
+    const savedMarkdown = serializeRecipeToObsidianMarkdown(initialParsed);
+
+    // Verify timings are persisted into frontmatter and not discarded
+    expect(savedMarkdown).toContain('prep_time: 15 mins');
+    expect(savedMarkdown).toContain('cook_time: 45 mins');
+    expect(savedMarkdown).toContain('total_time: 1 hr');
+
+    // 3. Reload: Saved Markdown -> ObsidianRecipe (via CanonicalRecipe production boundary)
+    const reloaded = parseObsidianRecipeMarkdown(savedMarkdown, 'Chili.md');
+
+    expect(reloaded.prepTime).toBe('15 mins');
+    expect(reloaded.cookTime).toBe('45 mins');
+    expect(reloaded.totalTime).toBe('1 hr');
+    expect(reloaded.title).toBe('Chili');
+    expect(reloaded.ingredients.length).toBe(2);
+
+    // Verify no unrelated metadata (e.g. image, calories) was fabricated
+    expect(reloaded.image).toBeUndefined();
+    expect(reloaded.calories).toBeUndefined();
+    expect(savedMarkdown).not.toContain('image:');
+    expect(savedMarkdown).not.toContain('calories:');
+  });
+
+  it('normalizes frontmatter timing aliases into canonical keys without creating duplicate YAML fields', () => {
+    const noteWithAliasTimings = `---
+title: Quick Oatmeal
+prepTime: 2 mins
+cook-time: 5 mins
+total: 7 mins
+---
+
+# Quick Oatmeal
+
+## Ingredients
+- [ ] 1 cup Rolled Oats
+- [ ] 2 cups Water
+
+## Instructions
+1. Microwave on high for 2 minutes.
+`;
+
+    const parsed = parseObsidianRecipeMarkdown(noteWithAliasTimings, 'Oatmeal.md');
+    expect(parsed.prepTime).toBe('2 mins');
+    expect(parsed.cookTime).toBe('5 mins');
+    expect(parsed.totalTime).toBe('7 mins');
+
+    const serialized = serializeRecipeToObsidianMarkdown(parsed);
+
+    // Should contain canonical keys
+    expect(serialized).toContain('prep_time: 2 mins');
+    expect(serialized).toContain('cook_time: 5 mins');
+    expect(serialized).toContain('total_time: 7 mins');
+
+    // Should NOT contain duplicate alias keys in frontmatter
+    expect(serialized).not.toContain('prepTime:');
+    expect(serialized).not.toContain('cook-time:');
+    expect(serialized).not.toContain('total: 7 mins');
+  });
 });
 
