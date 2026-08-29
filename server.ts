@@ -6,7 +6,7 @@ import { grabRecipeFromWeb } from "./server/recipeGrabber.js";
 import { estimateRecipeNutrition } from "./server/nutritionEstimator.js";
 import { recoverRecipeMetadata } from "./server/metadataRecovery.js";
 import { recipeImportRateLimiter, nutritionEstimateRateLimiter, metadataRecoveryRateLimiter, getClientIp } from "./server/rateLimiter.js";
-import { safeFetchImage } from "./server/ssrfGuard.js";
+import { safeFetchImage, WafProtectionError } from "./server/ssrfGuard.js";
 
 dotenv.config();
 
@@ -113,7 +113,17 @@ app.post("/api/grab-recipe", recipeImportRateLimiter, async (req, res) => {
     return res.json({ success: true, recipe });
   } catch (error: any) {
     const errorMsg = error?.message || "";
+    const isWafBlock =
+      error instanceof WafProtectionError ||
+      error?.code === "WAF_PROTECTION_BLOCKED" ||
+      errorMsg.includes("WAF_PROTECTION_BLOCKED") ||
+      errorMsg.includes("bot protection") ||
+      errorMsg.includes("HTTP 402") ||
+      errorMsg.includes("HTTP 403") ||
+      errorMsg.includes("HTTP 429");
+
     const isSecurityOrClientError =
+      isWafBlock ||
       errorMsg.includes("restricted") ||
       errorMsg.includes("permitted") ||
       errorMsg.includes("Invalid URL") ||
@@ -128,6 +138,16 @@ app.post("/api/grab-recipe", recipeImportRateLimiter, async (req, res) => {
       console.warn(`[${new Date().toISOString()}] [Client: ${clientIp}] Recipe Import Blocked/Rejected: ${errorMsg}`);
     } else {
       console.error(`[${new Date().toISOString()}] [Client: ${clientIp}] Recipe Import Unexpected Error:`, error);
+    }
+
+    if (isWafBlock) {
+      return res.status(403).json({
+        success: false,
+        error: "WAF_PROTECTION_BLOCKED",
+        code: "WAF_PROTECTION_BLOCKED",
+        message:
+          "This recipe website is protected by automated bot protection or a Web Application Firewall (Cloudflare/Akamai). Please use the 'Paste Recipe Text / HTML' tab to import directly.",
+      });
     }
 
     // Return safe, user-friendly error messages without leaking internal topology

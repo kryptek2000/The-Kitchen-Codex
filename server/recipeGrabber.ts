@@ -67,7 +67,7 @@ export interface GrabbedRecipeResult {
 /**
  * Strips heavy HTML tags (scripts, styles, SVGs, iframes) and retrieves clean readable text
  */
-function cleanHtmlToText(html: string): string {
+export function cleanHtmlToText(html: string): string {
   let cleaned = html
     .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
     .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, "")
@@ -82,25 +82,31 @@ function cleanHtmlToText(html: string): string {
 }
 
 /**
- * Extract JSON-LD scripts from HTML
+ * Extract JSON-LD scripts from HTML, handling nested @graph and multi-type arrays
  */
-function extractJsonLd(html: string): any[] {
+export function extractJsonLd(html: string): any[] {
   const jsonLdBlocks: any[] = [];
   const scriptRegex = /<script\s+[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
   let match;
+
+  const flattenItem = (item: any) => {
+    if (!item) return;
+    if (Array.isArray(item)) {
+      item.forEach(flattenItem);
+    } else if (typeof item === "object") {
+      if (item["@graph"] && Array.isArray(item["@graph"])) {
+        item["@graph"].forEach(flattenItem);
+      }
+      jsonLdBlocks.push(item);
+    }
+  };
 
   while ((match = scriptRegex.exec(html)) !== null) {
     try {
       const raw = match[1].trim();
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          jsonLdBlocks.push(...parsed);
-        } else if (parsed["@graph"] && Array.isArray(parsed["@graph"])) {
-          jsonLdBlocks.push(...parsed["@graph"]);
-        } else {
-          jsonLdBlocks.push(parsed);
-        }
+        flattenItem(parsed);
       }
     } catch {
       // Ignore JSON parse errors in malformed inline scripts
@@ -113,7 +119,7 @@ function extractJsonLd(html: string): any[] {
 /**
  * Extract OpenGraph and standard meta tags from HTML
  */
-function extractMetaTags(html: string): Record<string, string> {
+export function extractMetaTags(html: string): Record<string, string> {
   const meta: Record<string, string> = {};
 
   // Title
@@ -136,12 +142,131 @@ function extractMetaTags(html: string): Record<string, string> {
 }
 
 /**
- * Fallback parser for Schema.org Recipe JSON-LD if Gemini key is missing
+ * Format ISO 8601 duration (e.g. PT20M, PT1H30M, P0DT0H45M0S) or human string into clean readable string.
+ * ZERO-FABRICATION: returns "" if input is missing or empty.
  */
-function parseRecipeFromJsonLd(jsonLdList: any[], url?: string): GrabbedRecipeResult | null {
-  const recipeObj = jsonLdList.find(
-    (item) => item["@type"] === "Recipe" || (Array.isArray(item["@type"]) && item["@type"].includes("Recipe"))
-  );
+export function formatDuration(d?: string | number): string {
+  if (d === undefined || d === null) return "";
+  if (typeof d === "number") {
+    if (isNaN(d) || d <= 0) return "";
+    const hours = Math.floor(d / 60);
+    const mins = Math.round(d % 60);
+    if (hours === 0) return `${mins} mins`;
+    if (mins === 0) return hours === 1 ? "1 hr" : `${hours} hrs`;
+    return `${hours} hr${hours > 1 ? "s" : ""} ${mins} min${mins > 1 ? "s" : ""}`;
+  }
+  const str = String(d).trim();
+  if (!str) return "";
+
+  // ISO 8601 duration: P1DT2H30M or PT1H30M or PT45M or P0DT0H45M0S
+  const isoRegex = /^P(?:(\d+(?:\.\d+)?)D)?(?:T(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?)?$/i;
+  const match = str.match(isoRegex);
+  if (match && (match[1] || match[2] || match[3] || match[4])) {
+    const days = match[1] ? parseFloat(match[1]) : 0;
+    const hours = match[2] ? parseFloat(match[2]) : 0;
+    const mins = match[3] ? parseFloat(match[3]) : 0;
+    const secs = match[4] ? parseFloat(match[4]) : 0;
+
+    const totalMins = Math.round(days * 24 * 60 + hours * 60 + mins + secs / 60);
+    if (totalMins > 0) {
+      const h = Math.floor(totalMins / 60);
+      const m = totalMins % 60;
+      if (h === 0) return `${m} mins`;
+      if (m === 0) return h === 1 ? "1 hr" : `${h} hrs`;
+      return `${h} hr${h > 1 ? "s" : ""} ${m} min${m > 1 ? "s" : ""}`;
+    }
+  }
+
+  // Pure PT notation check
+  if (/^PT/i.test(str)) {
+    const hMatch = str.match(/(\d+(?:\.\d+)?)H/i);
+    const mMatch = str.match(/(\d+(?:\.\d+)?)M/i);
+    const sMatch = str.match(/(\d+(?:\.\d+)?)S/i);
+    const hours = hMatch ? parseFloat(hMatch[1]) : 0;
+    const mins = mMatch ? parseFloat(mMatch[1]) : 0;
+    const secs = sMatch ? parseFloat(sMatch[1]) : 0;
+    const totalMins = Math.round(hours * 60 + mins + secs / 60);
+    if (totalMins > 0) {
+      const h = Math.floor(totalMins / 60);
+      const m = totalMins % 60;
+      if (h === 0) return `${m} mins`;
+      if (m === 0) return h === 1 ? "1 hr" : `${h} hrs`;
+      return `${h} hr${h > 1 ? "s" : ""} ${m} min${m > 1 ? "s" : ""}`;
+    }
+  }
+
+  // Pure digits
+  if (/^\d+$/.test(str)) {
+    const mins = parseInt(str, 10);
+    if (!isNaN(mins) && mins > 0) {
+      const h = Math.floor(mins / 60);
+      const m = mins % 60;
+      if (h === 0) return `${m} mins`;
+      if (m === 0) return h === 1 ? "1 hr" : `${h} hrs`;
+      return `${h} hr${h > 1 ? "s" : ""} ${m} min${m > 1 ? "s" : ""}`;
+    }
+  }
+
+  return str;
+}
+
+/**
+ * Parses recipe yield or servings field into a positive integer without defaulting blindly to 4.
+ */
+export function parseRecipeYield(recipeYield: any): number | undefined {
+  if (recipeYield === undefined || recipeYield === null) return undefined;
+  if (typeof recipeYield === "number") {
+    return isNaN(recipeYield) || recipeYield <= 0 ? undefined : Math.round(recipeYield);
+  }
+
+  const rawList = Array.isArray(recipeYield) ? recipeYield : [recipeYield];
+  for (const item of rawList) {
+    if (typeof item === "number" && item > 0) return Math.round(item);
+    if (typeof item !== "string") continue;
+    const str = item.trim();
+    if (!str) continue;
+
+    // Check for "4 to 6 servings", "4-6 servings", "serves 4 to 6"
+    const rangeMatch = str.match(/(\d+)\s*(?:-|to)\s*(\d+)/i);
+    if (rangeMatch) {
+      const min = parseInt(rangeMatch[1], 10);
+      if (!isNaN(min) && min > 0) return min;
+    }
+
+    // Check for "1 loaf (8 slices)" or "8 slices" or "24 cookies" or "4 servings"
+    const specificUnitMatch = str.match(/(\d+)\s*(?:servings?|portions?|people|slices?|pieces?|cookies?|muffins?|biscuits?|bars?|cups?|items?)\b/i);
+    if (specificUnitMatch) {
+      const num = parseInt(specificUnitMatch[1], 10);
+      if (!isNaN(num) && num > 0) return num;
+    }
+
+    // First integer in string e.g. "Makes 12"
+    const anyIntMatch = str.match(/\b(\d+)\b/);
+    if (anyIntMatch) {
+      const num = parseInt(anyIntMatch[1], 10);
+      if (!isNaN(num) && num > 0) return num;
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Checks if a Schema.org @type represents a Recipe
+ */
+function isRecipeType(type: any): boolean {
+  if (!type) return false;
+  if (typeof type === "string") return type.toLowerCase().includes("recipe");
+  if (Array.isArray(type)) return type.some((t) => typeof t === "string" && t.toLowerCase().includes("recipe"));
+  return false;
+}
+
+/**
+ * Parser for Schema.org Recipe JSON-LD (supports @graph, arrays, HowToStep, HowToSection)
+ * STRICT ZERO-FABRICATION: If times or metadata are absent, leave them empty/undefined.
+ */
+export function parseRecipeFromJsonLd(jsonLdList: any[], url?: string): GrabbedRecipeResult | null {
+  const recipeObj = jsonLdList.find((item) => isRecipeType(item["@type"]));
 
   if (!recipeObj) return null;
 
@@ -150,33 +275,25 @@ function parseRecipeFromJsonLd(jsonLdList: any[], url?: string): GrabbedRecipeRe
   const cuisine = (Array.isArray(recipeObj.recipeCuisine) ? recipeObj.recipeCuisine[0] : recipeObj.recipeCuisine) || "General";
   const category = (Array.isArray(recipeObj.recipeCategory) ? recipeObj.recipeCategory[0] : recipeObj.recipeCategory) || "Main Course";
   
-  // Format ISO duration like PT20M -> 20 mins
-  const formatDuration = (d?: string) => {
-    if (!d || typeof d !== "string") return "";
-    const m = d.match(/PT(?:(\d+)H)?(?:(\d+)M)?/i);
-    if (!m) return d;
-    const hours = m[1] ? `${m[1]} hr ` : "";
-    const mins = m[2] ? `${m[2]} mins` : "";
-    return (hours + mins).trim() || d;
-  };
+  // Zero-fabrication: do NOT default to "15 mins", "30 mins", "45 mins"
+  const prepTime = formatDuration(recipeObj.prepTime);
+  const cookTime = formatDuration(recipeObj.cookTime);
+  const totalTime = formatDuration(recipeObj.totalTime);
 
-  const prepTime = formatDuration(recipeObj.prepTime) || "15 mins";
-  const cookTime = formatDuration(recipeObj.cookTime) || "30 mins";
-  const totalTime = formatDuration(recipeObj.totalTime) || "45 mins";
-
-  let servings = 4;
-  if (recipeObj.recipeYield) {
-    const yieldStr = Array.isArray(recipeObj.recipeYield) ? recipeObj.recipeYield[0] : String(recipeObj.recipeYield);
-    const parsedYield = parseInt(yieldStr, 10);
-    if (!isNaN(parsedYield) && parsedYield > 0) servings = parsedYield;
-  }
+  const parsedYield = parseRecipeYield(recipeObj.recipeYield || recipeObj.yield);
+  const servings = parsedYield !== undefined ? parsedYield : 4;
 
   // Image
   let image = "";
   if (recipeObj.image) {
-    if (typeof recipeObj.image === "string") image = recipeObj.image;
-    else if (Array.isArray(recipeObj.image)) image = typeof recipeObj.image[0] === "string" ? recipeObj.image[0] : recipeObj.image[0]?.url || "";
-    else if (recipeObj.image.url) image = recipeObj.image.url;
+    if (typeof recipeObj.image === "string") {
+      image = recipeObj.image;
+    } else if (Array.isArray(recipeObj.image)) {
+      const first = recipeObj.image[0];
+      image = typeof first === "string" ? first : first?.url || "";
+    } else if (recipeObj.image && typeof recipeObj.image === "object") {
+      image = recipeObj.image.url || "";
+    }
   }
 
   // Rating
@@ -186,20 +303,20 @@ function parseRecipeFromJsonLd(jsonLdList: any[], url?: string): GrabbedRecipeRe
     if (!isNaN(r)) rating = Math.min(5, Math.max(1, Math.round(r * 10) / 10));
   }
 
-  // Ingredients
+  // Calories
+  let calories: string | undefined;
+  if (recipeObj.nutrition?.calories) {
+    calories = String(recipeObj.nutrition.calories).replace(/calories/i, "").trim();
+  }
+
+  // Ingredients (Zero automatic wikilink insertion)
   const ingredients: GrabbedRecipeResult["ingredients"] = [];
-  const rawIngs = recipeObj.recipeIngredient || [];
+  const rawIngs = recipeObj.recipeIngredient || recipeObj.ingredients || [];
   if (Array.isArray(rawIngs)) {
     rawIngs.forEach((ingStr: any) => {
       if (typeof ingStr === "string" && ingStr.trim()) {
         const trimmed = ingStr.trim();
         const parsed = parseIngredientLine(trimmed);
-        
-        // Clean out preparation phrases (e.g. ", finely diced") to find the pure ingredient noun
-        let pureNoun = (parsed.name || trimmed).split(',')[0].split('(')[0].trim();
-        pureNoun = pureNoun.replace(/\b(?:minced|diced|chopped|sliced|divided|softened|melted|grated|peeled|cooked|uncooked|to taste|for serving|optional|picked over for shells)\b/gi, '').trim();
-        pureNoun = pureNoun.replace(/[^a-zA-Z0-9\s\-_]/g, '').trim();
-
         ingredients.push({
           original: trimmed,
           amount: parsed.amount,
@@ -210,25 +327,55 @@ function parseRecipeFromJsonLd(jsonLdList: any[], url?: string): GrabbedRecipeRe
     });
   }
 
-  // Instructions
+  // Instructions (Handles strings, HowToStep, HowToSection, nested itemListElement)
   const instructions: GrabbedRecipeResult["instructions"] = [];
   const rawSteps = recipeObj.recipeInstructions || [];
-  if (Array.isArray(rawSteps)) {
-    let stepNum = 1;
-    rawSteps.forEach((s: any) => {
+
+  const extractSteps = (steps: any[]) => {
+    if (!Array.isArray(steps)) return;
+    steps.forEach((s: any) => {
       if (typeof s === "string" && s.trim()) {
-        instructions.push({ stepNumber: stepNum++, text: s.trim() });
+        instructions.push({ stepNumber: instructions.length + 1, text: s.trim() });
       } else if (s && typeof s === "object") {
-        if (s["@type"] === "HowToStep" && s.text) {
-          instructions.push({ stepNumber: stepNum++, text: s.text.trim() });
-        } else if (s["@type"] === "HowToSection" && Array.isArray(s.itemListElement)) {
-          s.itemListElement.forEach((sub: any) => {
-            if (sub.text) instructions.push({ stepNumber: stepNum++, text: sub.text.trim() });
-          });
+        if (s["@type"] === "HowToSection" || Array.isArray(s.itemListElement)) {
+          if (Array.isArray(s.itemListElement)) {
+            extractSteps(s.itemListElement);
+          }
+        } else if (s.text || s.name) {
+          const stepText = (s.text || s.name || "").trim();
+          if (stepText) {
+            instructions.push({ stepNumber: instructions.length + 1, text: stepText });
+          }
         }
       }
     });
+  };
+
+  extractSteps(Array.isArray(rawSteps) ? rawSteps : [rawSteps]);
+
+  // Author & Source
+  let authorName = "";
+  if (recipeObj.author) {
+    if (typeof recipeObj.author === "string") {
+      authorName = recipeObj.author;
+    } else if (Array.isArray(recipeObj.author)) {
+      const first = recipeObj.author[0];
+      authorName = typeof first === "string" ? first : first?.name || "";
+    } else if (typeof recipeObj.author === "object") {
+      authorName = recipeObj.author.name || "";
+    }
   }
+
+  let sourceHost = "";
+  if (url) {
+    try {
+      sourceHost = new URL(url).hostname.replace(/^www\./, "");
+    } catch {
+      sourceHost = "";
+    }
+  }
+
+  const source = authorName || sourceHost || "Web Grabber";
 
   const tags = [
     "food/recipes",
@@ -245,9 +392,10 @@ function parseRecipeFromJsonLd(jsonLdList: any[], url?: string): GrabbedRecipeRe
     cookTime,
     totalTime,
     servings,
+    calories,
     difficulty: "Medium",
     rating,
-    source: recipeObj.author?.name || url || "Web Grabber",
+    source,
     image,
     ingredients,
     instructions,
@@ -265,8 +413,9 @@ function parseRecipeFromJsonLd(jsonLdList: any[], url?: string): GrabbedRecipeRe
     cookTime,
     totalTime,
     servings,
+    calories,
     rating,
-    source: recipeObj.author?.name || (url ? new URL(url).hostname : "Web Grabber"),
+    source,
     sourceUrl: url,
     image,
     tags,
@@ -280,6 +429,7 @@ function parseRecipeFromJsonLd(jsonLdList: any[], url?: string): GrabbedRecipeRe
 
 /**
  * Generate Obsidian Markdown with YAML frontmatter
+ * ZERO-FABRICATION: Only outputs optional timing fields if they exist and are non-empty.
  */
 export function generateMarkdown(recipe: Partial<GrabbedRecipeResult>): string {
   const tagsStr = (recipe.tags || ["food/recipes"]).map((t) => `\n  - ${t}`).join("");
@@ -289,12 +439,26 @@ tags:${tagsStr}
 cuisine: "${recipe.cuisine || "General"}"
 category: "${recipe.category || "Main Course"}"
 difficulty: "${recipe.difficulty || "Medium"}"
-rating: ${recipe.rating || 5}
-prep_time: "${recipe.prepTime || "15 mins"}"
-cook_time: "${recipe.cookTime || "30 mins"}"
-total_time: "${recipe.totalTime || "45 mins"}"
-servings: ${recipe.servings || 4}
-source: "${recipe.source || "Web Recipe Grabber"}"
+rating: ${recipe.rating !== undefined ? recipe.rating : 5}
+`;
+
+  if (recipe.prepTime) {
+    md += `prep_time: "${recipe.prepTime}"\n`;
+  }
+  if (recipe.cookTime) {
+    md += `cook_time: "${recipe.cookTime}"\n`;
+  }
+  if (recipe.totalTime) {
+    md += `total_time: "${recipe.totalTime}"\n`;
+  }
+  if (recipe.servings !== undefined) {
+    md += `servings: ${recipe.servings}\n`;
+  }
+  if (recipe.calories) {
+    md += `calories: "${recipe.calories}"\n`;
+  }
+
+  md += `source: "${recipe.source || "Web Recipe Grabber"}"
 image: "${recipe.image || ""}"
 created: "${new Date().toISOString().split("T")[0]}"
 ---
@@ -337,7 +501,8 @@ created: "${new Date().toISOString().split("T")[0]}"
 }
 
 /**
- * Main grabber engine using Gemini 3.7 Flash with smart extraction
+ * Main grabber engine supporting { url, html, rawText } inputs.
+ * Priority: JSON-LD -> Gemini (LLM) -> Heuristic Text Parsing
  */
 export async function grabRecipeFromWeb(params: {
   url?: string;
@@ -348,7 +513,7 @@ export async function grabRecipeFromWeb(params: {
   let htmlContent = params.html || "";
   let siteName = "";
 
-  // 1. Fetch web page securely if URL provided
+  // 1. Fetch web page securely if URL provided and HTML not already supplied
   let effectiveSourceUrl = url;
   if (url && !htmlContent) {
     const fetchResult = await safeFetchHtml(url);
@@ -362,15 +527,29 @@ export async function grabRecipeFromWeb(params: {
     }
   }
 
-  // 2. Extract JSON-LD and meta tags
+  // 2. Extract JSON-LD and meta tags if HTML is present
   const jsonLdList = htmlContent ? extractJsonLd(htmlContent) : [];
   const metaTags = htmlContent ? extractMetaTags(htmlContent) : {};
+
+  // Pipeline Priority 1: High-fidelity JSON-LD Schema (zero-cost, zero-latency, deterministic)
+  if (jsonLdList.length > 0) {
+    const jsonLdResult = parseRecipeFromJsonLd(jsonLdList, effectiveSourceUrl);
+    if (
+      jsonLdResult &&
+      jsonLdResult.title &&
+      jsonLdResult.ingredients.length > 0 &&
+      jsonLdResult.instructions.length > 0
+    ) {
+      return jsonLdResult;
+    }
+  }
+
   const cleanedText = htmlContent ? cleanHtmlToText(htmlContent) : rawText || "";
 
-  // 3. Attempt Gemini structured extraction with model fallback & retry
+  // Pipeline Priority 2: Gemini structured extraction with model fallback & retry
   const ai = getGemini();
 
-  if (ai) {
+  if (ai && (cleanedText.length > 0 || Object.keys(metaTags).length > 0)) {
     const prompt = `You are an expert culinary chef and Obsidian Markdown archivist.
 Extract this recipe into an accurate, structured JSON recipe object tailored for an Obsidian culinary vault.
 
@@ -386,9 +565,9 @@ ${cleanedText.slice(0, 24000)}
 REQUIREMENTS:
 1. Extract the true title of the recipe (clean of website prefixes like "Best Ever..." or "| Serious Eats").
 2. Extract cuisine (e.g. Italian, Mexican, French, Thai, Japanese, American, Indian, etc.) and category (e.g. Dinner, Lunch, Breakfast, Dessert, Soup, Side Dish, Baking).
-3. Extract prepTime, cookTime, and totalTime with clear units (e.g. "15 mins", "45 mins").
+3. Extract prepTime, cookTime, and totalTime with clear units (e.g. "15 mins", "45 mins") ONLY if present in source text. Do NOT invent or guess timing if missing.
 4. Extract servings as an integer number.
-5. Extract difficulty: must be "Easy", "Medium", or "Hard".
+5. Extract difficulty: "Easy", "Medium", or "Hard".
 6. Extract ingredients: for each ingredient, identify the original line, amount as number (or null), unit (e.g. "tbsp", "cups", "g", "cloves"), and clean name (e.g. "Crab Meat", "Celery", "Mayonnaise", "Brioche Rolls", "Olive Oil", "Garlic"). Do NOT include brackets or wikilinks.
 7. Extract instructions: sequential steps with stepNumber and text. If a step involves a specific timer duration, extract timerMinutes as number.
 8. Extract callouts: culinary tips or warnings (type: "tip", "warning", "note", "important").
@@ -497,10 +676,10 @@ REQUIREMENTS:
               cuisine: parsed.cuisine || "General",
               category: parsed.category || "Main Course",
               difficulty: parsed.difficulty || "Medium",
-              prepTime: parsed.prepTime || "15 mins",
-              cookTime: parsed.cookTime || "30 mins",
-              totalTime: parsed.totalTime || "45 mins",
-              servings: parsed.servings || 4,
+              prepTime: parsed.prepTime || "",
+              cookTime: parsed.cookTime || "",
+              totalTime: parsed.totalTime || "",
+              servings: parsed.servings !== undefined ? parsed.servings : 4,
               calories: parsed.calories || "",
               rating: parsed.rating || 5,
               source,
@@ -526,24 +705,22 @@ REQUIREMENTS:
           console.warn(`[RecipeGrabber] Gemini model '${modelName}' attempt ${attempts} failed:`, errMsg);
 
           if (isRetryable && attempts < maxAttempts) {
-            // Short backoff before retry
             await new Promise((r) => setTimeout(r, 600 * attempts));
             continue;
           }
-          // Break to cascade to next model
           break;
         }
       }
     }
   }
 
-  // 4. Fallback: Parse from JSON-LD if Gemini is offline
+  // Pipeline Priority 3: Fallback JSON-LD if partial
   if (jsonLdList.length > 0) {
-    const fallbackResult = parseRecipeFromJsonLd(jsonLdList, url);
+    const fallbackResult = parseRecipeFromJsonLd(jsonLdList, effectiveSourceUrl);
     if (fallbackResult) return fallbackResult;
   }
 
-  // 5. Final fallback if minimal raw text or HTML was given
+  // Pipeline Priority 4: Regex & Heuristic Text Fallback
   if (rawText || cleanedText || metaTags.title) {
     const title = metaTags.title || "Custom Imported Recipe";
     const textToScan = rawText || cleanedText || "";
@@ -584,9 +761,9 @@ REQUIREMENTS:
       cuisine: "General",
       category: "Main Course",
       difficulty: "Medium",
-      prepTime: "15 mins",
-      cookTime: "30 mins",
-      totalTime: "45 mins",
+      prepTime: "",
+      cookTime: "",
+      totalTime: "",
       servings: 4,
       rating: 5,
       source: siteName || metaTags.siteName || "Imported Recipe",

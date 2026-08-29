@@ -581,6 +581,20 @@ async function readBodyWithCap(
   return Buffer.concat(chunks);
 }
 
+export class WafProtectionError extends Error {
+  readonly code = "WAF_PROTECTION_BLOCKED";
+  readonly statusCode: number;
+
+  constructor(statusCode: number, message?: string) {
+    super(
+      message ||
+        `Target website returned HTTP ${statusCode} (bot protection or Web Application Firewall active).`
+    );
+    this.name = "WafProtectionError";
+    this.statusCode = statusCode;
+  }
+}
+
 /**
  * Secure HTML fetch with:
  * - SSRF protection with SINGLE-RESOLUTION DNS PINNING (anti-rebinding):
@@ -610,9 +624,15 @@ export async function safeFetchHtml(initialUrl: string): Promise<{ html: string;
         headers: {
           "User-Agent":
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          Accept:
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
           "Accept-Language": "en-US,en;q=0.9",
-          "Cache-Control": "no-cache",
+          "Sec-Fetch-Dest": "document",
+          "Sec-Fetch-Mode": "navigate",
+          "Sec-Fetch-Site": "none",
+          "Sec-Fetch-User": "?1",
+          "Upgrade-Insecure-Requests": "1",
+          "Cache-Control": "max-age=0",
         },
         signal: timeoutSignal,
         connectTimeoutMs: PER_ADDRESS_CONNECT_TIMEOUT_MS,
@@ -642,6 +662,12 @@ export async function safeFetchHtml(initialUrl: string): Promise<{ html: string;
       // Resolve relative redirect against current URL
       currentUrl = new URL(locationHeader, target.url).toString();
       continue;
+    }
+
+    // Handle anti-bot / WAF protection blocks
+    if (status === 402 || status === 403 || status === 429) {
+      response.destroy();
+      throw new WafProtectionError(status);
     }
 
     if (status < 200 || status >= 300) {

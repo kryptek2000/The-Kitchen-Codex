@@ -92,6 +92,7 @@ export function RecipeGrabberModal({
   const [isLoading, setIsLoading] = useState(false);
   const [loadingStep, setLoadingStep] = useState('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [wafBlockedUrl, setWafBlockedUrl] = useState<string | null>(null);
   
   // Extracted Result State
   const [grabbedData, setGrabbedData] = useState<GrabbedRecipeData | null>(null);
@@ -113,6 +114,7 @@ export function RecipeGrabberModal({
   const handleGrabRecipe = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setErrorMsg(null);
+    setWafBlockedUrl(null);
 
     const trimmedUrl = urlInput.trim();
     const trimmedText = textInput.trim();
@@ -131,18 +133,24 @@ export function RecipeGrabberModal({
     setLoadingStep('Connecting to website source & extracting recipe data...');
 
     try {
+      const isHtmlText = trimmedText.includes('<') && (trimmedText.includes('</') || trimmedText.includes('/>') || trimmedText.includes('<html') || trimmedText.includes('<body') || trimmedText.includes('<div') || trimmedText.includes('<script'));
       const response = await fetch('/api/grab-recipe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           url: inputMode === 'url' ? trimmedUrl : undefined,
-          rawText: inputMode === 'text' ? trimmedText : undefined,
+          rawText: inputMode === 'text' && !isHtmlText ? trimmedText : undefined,
+          html: inputMode === 'text' && isHtmlText ? trimmedText : undefined,
         }),
       });
 
       const data = await response.json();
 
       if (!response.ok || !data.success) {
+        if (data.code === 'WAF_PROTECTION_BLOCKED' || data.error === 'WAF_PROTECTION_BLOCKED' || response.status === 403) {
+          setWafBlockedUrl(trimmedUrl);
+          throw new Error(data.message || 'This recipe website is protected by automated bot protection (Cloudflare / Akamai).');
+        }
         throw new Error(data.error || 'Failed to extract recipe from website.');
       }
 
@@ -454,15 +462,47 @@ export function RecipeGrabberModal({
 
               {/* Error Message */}
               {errorMsg && (
-                <div className="p-3.5 bg-rose-500/10 border border-rose-500/20 rounded-xl flex items-start gap-2.5 text-rose-300 text-xs">
-                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                  <div className="space-y-1">
-                    <p className="font-semibold">Extraction Error</p>
-                    <p className="text-rose-400/90">{errorMsg}</p>
+                <div className="p-4 bg-rose-500/10 border border-rose-500/20 rounded-xl space-y-3 text-rose-300 text-xs">
+                  <div className="flex items-start gap-2.5">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <div className="space-y-1">
+                      <p className="font-semibold">
+                        {wafBlockedUrl ? "WAF / Bot Protection Blocked Fetch" : "Extraction Error"}
+                      </p>
+                      <p className="text-rose-400/90">{errorMsg}</p>
+                    </div>
+                  </div>
+
+                  {wafBlockedUrl && (
+                    <div className="pt-2 border-t border-rose-500/20 flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setInputMode('text');
+                          setErrorMsg(null);
+                        }}
+                        className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-stone-950 font-medium rounded-lg text-xs transition-colors flex items-center gap-1.5 cursor-pointer shadow-sm"
+                      >
+                        <FileText className="w-3.5 h-3.5" />
+                        Switch to Paste Recipe Text / HTML
+                      </button>
+                      <a
+                        href={wafBlockedUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-3 py-1.5 bg-stone-800 hover:bg-stone-700 text-stone-300 rounded-lg text-xs transition-colors inline-flex items-center gap-1"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        Open Site in New Tab
+                      </a>
+                    </div>
+                  )}
+
+                  {!wafBlockedUrl && (
                     <p className="text-[11px] text-gray-400">
                       Tip: If the website is blocked or behind a paywall, switch to the <strong>&quot;Paste Recipe Text&quot;</strong> tab to import directly.
                     </p>
-                  </div>
+                  )}
                 </div>
               )}
             </div>
