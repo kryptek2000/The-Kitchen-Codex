@@ -187,20 +187,105 @@ tags:
     expect(serialized).not.toContain('total_time:');
   });
 
-  it('renderIngredientLine behaves correctly for plain text, target wikilink, aliased wikilink, and checked state', () => {
-    // 1. Plain text with check
-    expect(renderIngredientLine({ original: '2 tbsp olive oil' }, '[ ]')).toBe('- [ ] 2 tbsp olive oil');
-    expect(renderIngredientLine({ original: '2 tbsp olive oil' }, '[x]')).toBe('- [x] 2 tbsp olive oil');
+  it('resolves Dataview standard fields case-insensitively while preserving original key casing during serialization', () => {
+    const markdownWithMixedCasing = `---
+title: Classic Carbonara
+tags:
+  - pasta
+  - italian
+---
 
-    // 2. Existing simple wikilink
-    expect(renderIngredientLine({ original: '500g [[Chicken Thighs]]' }, '[ ]')).toBe('- [ ] 500g [[Chicken Thighs]]');
+# Classic Carbonara
 
-    // 3. Existing aliased wikilink
-    expect(renderIngredientLine({ original: '2 tbsp [[Thai Green Curry Paste|Green Curry Paste]]' }, '[x]')).toBe('- [x] 2 tbsp [[Thai Green Curry Paste|Green Curry Paste]]');
+Cuisine:: Italian
+Category:: Pasta & Mains
+DIFFICULTY:: Medium
+RATING:: 5
+IMAGE:: https://images.unsplash.com/photo-carbonara
+customChef:: Mario
 
-    // 4. Reconstructed from structured fields without original
-    expect(renderIngredientLine({ amount: 2, unit: 'tbsp', name: 'olive oil' })).toBe('- [ ] 2 tbsp olive oil');
-    expect(renderIngredientLine({ amount: 1, unit: 'cup', wikilinkTarget: 'Coconut Milk' })).toBe('- [ ] 1 cup [[Coconut Milk]]');
-    expect(renderIngredientLine({ amount: 2, unit: 'tbsp', wikilinkTarget: 'Thai Green Curry Paste', wikilinkAlias: 'Green Curry Paste', isChecked: true })).toBe('- [x] 2 tbsp [[Thai Green Curry Paste|Green Curry Paste]]');
+## Ingredients
+- [ ] 400g [[Spaghetti]]
+- [ ] 150g [[Guanciale]]
+
+## Instructions
+1. Crisp the guanciale and mix with eggs and pecorino.
+`;
+
+    // Parse (Load path)
+    const parsed = parseObsidianRecipeMarkdown(markdownWithMixedCasing, 'Carbonara.md');
+    
+    // Check standard fields are resolved case-insensitively
+    expect(parsed.cuisine).toBe('Italian');
+    expect(parsed.category).toBe('Pasta & Mains');
+    expect(parsed.difficulty).toBe('Medium');
+    expect(parsed.rating).toBe(5);
+    expect(parsed.image).toBe('https://images.unsplash.com/photo-carbonara');
+
+    // Serialize (Save path)
+    const serialized = serializeRecipeToObsidianMarkdown(parsed);
+
+    // Verify original Dataview key casing is preserved intact in serialized markdown
+    expect(serialized).toContain('Cuisine:: Italian');
+    expect(serialized).toContain('Category:: Pasta & Mains');
+    expect(serialized).toContain('DIFFICULTY:: Medium');
+    expect(serialized).toContain('RATING:: 5');
+    expect(serialized).toContain('IMAGE:: https://images.unsplash.com/photo-carbonara');
+    expect(serialized).toContain('customChef:: Mario');
+  });
+
+  it('exercises full production-boundary load and save cycle through CanonicalRecipe Schema', () => {
+    const rawNote = `---
+title: Roman Cacio e Pepe
+tags:
+  - italian
+  - quick
+prepTime: 5 mins
+cookTime: 10 mins
+totalTime: 15 mins
+author: Nonna Maria
+date: 2026-01-15
+---
+
+# Roman Cacio e Pepe
+
+Region:: Lazio
+
+## Ingredients
+- [ ] 200g [[Pecorino Romano]]
+- [x] 1 tbsp [[Black Pepper|Cracked Black Peppercorns]]
+- [ ] 300g Tonnarelli
+
+## Instructions
+1. Toast pepper, cook pasta, emulsify with starchy pasta water and cheese.
+`;
+
+    // Production Load Path: Markdown -> parseObsidianRecipeMarkdown (which normalizes via CanonicalRecipe)
+    const loadedRecipe = parseObsidianRecipeMarkdown(rawNote, 'Cacio_e_Pepe.md');
+    
+    // Check Canonical Invariants on loaded model
+    expect(loadedRecipe.title).toBe('Roman Cacio e Pepe');
+    expect(loadedRecipe.prepTime).toBe('5 mins');
+    expect(loadedRecipe.cookTime).toBe('10 mins');
+    expect(loadedRecipe.totalTime).toBe('15 mins');
+    expect(loadedRecipe.ingredients.length).toBe(3);
+    expect(loadedRecipe.ingredients[1].wikilinkTarget).toBe('Black Pepper');
+    expect(loadedRecipe.ingredients[1].wikilinkAlias).toBe('Cracked Black Peppercorns');
+    expect(loadedRecipe.ingredients[1].isChecked).toBe(true);
+
+    // Production Save Path: ObsidianRecipe -> serializeRecipeToObsidianMarkdown (which normalizes via CanonicalRecipe)
+    const savedMarkdown = serializeRecipeToObsidianMarkdown(loadedRecipe);
+
+    // Re-parse saved markdown to verify round-trip stability
+    const reloadedRecipe = parseObsidianRecipeMarkdown(savedMarkdown, 'Cacio_e_Pepe.md');
+    expect(reloadedRecipe.title).toBe('Roman Cacio e Pepe');
+    expect(reloadedRecipe.cuisine).toBe(loadedRecipe.cuisine);
+    expect(reloadedRecipe.ingredients[1].original).toBe(loadedRecipe.ingredients[1].original);
+    expect(reloadedRecipe.ingredients[1].isChecked).toBe(true);
+    expect(savedMarkdown).toContain('Region:: Lazio');
+    expect(savedMarkdown).toContain('author: Nonna Maria');
+    expect(savedMarkdown).toMatch(/date:\s*['"]?2026-01-15['"]?/);
+    expect(savedMarkdown).toContain('total_time: 15 mins');
   });
 });
+

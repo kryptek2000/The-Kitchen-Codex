@@ -10,6 +10,7 @@ import {
   VaultNote,
 } from '../types';
 import { getRecipeImage } from './imageHelper';
+import { obsidianToCanonicalRecipe, canonicalToObsidianRecipe } from '../schema/legacyAdapter';
 
 /**
  * Parses fraction strings (e.g., "1 1/2", "3/4", "0.5", "½", "1 ½") into decimal numbers
@@ -462,7 +463,8 @@ export function extractTimerMinutes(text: string): number | null {
 export function parseObsidianRecipeMarkdown(
   rawMarkdown: string,
   fileName: string = 'Untitled Recipe.md',
-  filePath: string = '6 - Full Notes/Food/Recipes/Untitled Recipe.md'
+  filePath: string = '6 - Full Notes/Food/Recipes/Untitled Recipe.md',
+  fileHandle?: any
 ): ObsidianRecipe {
   let frontmatter: Record<string, any> = {};
   let content = rawMarkdown;
@@ -553,9 +555,9 @@ export function parseObsidianRecipeMarkdown(
   }
   const tags = Array.from(new Set(rawTags.map((t) => String(t).replace(/^#/, '').trim()))).filter(Boolean);
 
-  // 7. Cuisine & Category
-  const cuisine = frontmatter.cuisine || dataviewFields.cuisine || 'General';
-  const category = frontmatter.category || dataviewFields.category || 'Main Course';
+  // 7. Cuisine & Category (Case-insensitive lookup across frontmatter and dataview inline fields)
+  const cuisine = findFlexibleKey(frontmatter, ['cuisine']) || findFlexibleKey(dataviewFields, ['cuisine']) || 'General';
+  const category = findFlexibleKey(frontmatter, ['category', 'course']) || findFlexibleKey(dataviewFields, ['category', 'course']) || 'Main Course';
 
   // 8. Timings, Servings & Calories (Strict extraction without fake fallback values)
   const prepTime = extractPrepTime(frontmatter, dataviewFields, content);
@@ -598,19 +600,20 @@ export function parseObsidianRecipeMarkdown(
     };
   }
 
-  // 9. Difficulty & Rating & Source & Image
-  const difficulty = (frontmatter.difficulty || 'Medium') as 'Easy' | 'Medium' | 'Hard';
-  const rating = typeof frontmatter.rating === 'number' ? Math.min(5, Math.max(1, frontmatter.rating)) : 5;
-  const source = frontmatter.source || frontmatter.url;
+  // 9. Difficulty & Rating & Source & Image (Case-insensitive lookup across frontmatter and dataview inline fields)
+  const rawDifficulty = findFlexibleKey(frontmatter, ['difficulty']) || findFlexibleKey(dataviewFields, ['difficulty']);
+  const difficulty = (rawDifficulty || 'Medium') as 'Easy' | 'Medium' | 'Hard';
+  const rawRating = findFlexibleKey(frontmatter, ['rating']) ?? findFlexibleKey(dataviewFields, ['rating']);
+  const rating =
+    typeof rawRating === 'number'
+      ? Math.min(5, Math.max(1, rawRating))
+      : typeof rawRating === 'string'
+      ? Math.min(5, Math.max(1, parseFloat(rawRating) || 5))
+      : 5;
+  const source = findFlexibleKey(frontmatter, ['source', 'url']) || findFlexibleKey(dataviewFields, ['source', 'url']);
   const rawImage =
-    frontmatter.image ||
-    frontmatter.cover ||
-    frontmatter.thumbnail ||
-    frontmatter.photo ||
-    frontmatter.heroImage ||
-    frontmatter.banner ||
-    dataviewFields.image ||
-    dataviewFields.cover;
+    findFlexibleKey(frontmatter, ['image', 'cover', 'thumbnail', 'photo', 'heroImage', 'banner']) ||
+    findFlexibleKey(dataviewFields, ['image', 'cover', 'thumbnail', 'photo', 'heroImage', 'banner']);
 
   let image: string | undefined = undefined;
   if (typeof rawImage === 'string' && rawImage.trim() && rawImage.trim() !== 'undefined' && rawImage.trim() !== 'null') {
@@ -685,7 +688,7 @@ export function parseObsidianRecipeMarkdown(
 
   const id = filePath || fileName.replace(/\.md$/i, '').toLowerCase().replace(/[^a-z0-9]+/g, '-');
 
-  return {
+  const rawParsedRecipe: ObsidianRecipe = {
     id,
     fileName,
     filePath,
@@ -712,7 +715,14 @@ export function parseObsidianRecipeMarkdown(
     wikilinks,
     frontmatter,
     lastModified: frontmatter.created || frontmatter.updated || frontmatter.date || undefined,
+    fileHandle,
   };
+
+  // Production Canonical Boundary (Load Path):
+  // Convert through CanonicalRecipe to enforce Schema v1 normalization & validation
+  // before delivering to the UI as an ObsidianRecipe.
+  const canonical = obsidianToCanonicalRecipe(rawParsedRecipe);
+  return canonicalToObsidianRecipe(canonical, fileHandle);
 }
 
 /**
@@ -776,59 +786,113 @@ export function renderIngredientLine(
  * Preserves custom/unknown frontmatter fields, Dataview inline fields, and exact wikilinks.
  */
 export function serializeRecipeToObsidianMarkdown(recipe: Partial<ObsidianRecipe>): string {
+  // Production Canonical Boundary (Save Path):
+  // If the recipe has sufficient structure, normalize through Canonical Schema
+  // before converting back to the Obsidian format for serialization.
+  let recipeToSerialize = recipe;
+  if (recipe.title || (recipe.ingredients && recipe.ingredients.length > 0)) {
+    try {
+      const canonical = obsidianToCanonicalRecipe(recipe as ObsidianRecipe);
+      recipeToSerialize = canonicalToObsidianRecipe(canonical, recipe.fileHandle);
+    } catch {
+      recipeToSerialize = recipe;
+    }
+  }
+
   // Start with existing frontmatter if present to preserve user-authored custom fields
   const frontmatterObj: Record<string, any> = {};
-  if (recipe.frontmatter && typeof recipe.frontmatter === 'object') {
-    for (const [k, v] of Object.entries(recipe.frontmatter)) {
+  if (recipeToSerialize.frontmatter && typeof recipeToSerialize.frontmatter === 'object') {
+    for (const [k, v] of Object.entries(recipeToSerialize.frontmatter)) {
       if (v !== undefined && v !== null) {
         frontmatterObj[k] = v;
       }
     }
   }
 
-  if (recipe.title) {
-    frontmatterObj.title = recipe.title;
+  if (recipeToSerialize.title) {
+    frontmatterObj.title = recipeToSerialize.title;
   } else if (!frontmatterObj.title) {
     frontmatterObj.title = 'Untitled Recipe';
   }
 
-  if (recipe.tags && recipe.tags.length > 0) {
-    frontmatterObj.tags = recipe.tags;
+  if (recipeToSerialize.tags && recipeToSerialize.tags.length > 0) {
+    frontmatterObj.tags = recipeToSerialize.tags;
   } else if (!frontmatterObj.tags) {
     frontmatterObj.tags = ['food/recipes'];
   }
 
   // Only assign defaults if no frontmatter existed or field was present
-  if (recipe.cuisine && (recipe.frontmatter?.cuisine !== undefined || !recipe.frontmatter)) {
-    frontmatterObj.cuisine = recipe.cuisine;
+  if (recipeToSerialize.cuisine && (recipeToSerialize.frontmatter?.cuisine !== undefined || !recipeToSerialize.frontmatter)) {
+    frontmatterObj.cuisine = recipeToSerialize.cuisine;
   }
-  if (recipe.category && (recipe.frontmatter?.category !== undefined || !recipe.frontmatter)) {
-    frontmatterObj.category = recipe.category;
+  if (recipeToSerialize.category && (recipeToSerialize.frontmatter?.category !== undefined || !recipeToSerialize.frontmatter)) {
+    frontmatterObj.category = recipeToSerialize.category;
   }
-  if (recipe.difficulty && (recipe.frontmatter?.difficulty !== undefined || !recipe.frontmatter)) {
-    frontmatterObj.difficulty = recipe.difficulty;
+  if (recipeToSerialize.difficulty && (recipeToSerialize.frontmatter?.difficulty !== undefined || !recipeToSerialize.frontmatter)) {
+    frontmatterObj.difficulty = recipeToSerialize.difficulty;
   }
-  if (recipe.rating !== undefined && (recipe.frontmatter?.rating !== undefined || !recipe.frontmatter)) {
-    frontmatterObj.rating = recipe.rating;
-  }
-
-  if (recipe.prepTime && recipe.prepTime.trim()) frontmatterObj.prep_time = recipe.prepTime.trim();
-  if (recipe.cookTime && recipe.cookTime.trim()) frontmatterObj.cook_time = recipe.cookTime.trim();
-  if (recipe.totalTime && recipe.totalTime.trim()) frontmatterObj.total_time = recipe.totalTime.trim();
-  if (recipe.servings !== undefined && recipe.servings !== null) frontmatterObj.servings = recipe.servings;
-  if (recipe.calories !== undefined && recipe.calories !== null && String(recipe.calories).trim()) {
-    frontmatterObj.calories = recipe.calories;
+  if (recipeToSerialize.rating !== undefined && (recipeToSerialize.frontmatter?.rating !== undefined || !recipeToSerialize.frontmatter)) {
+    frontmatterObj.rating = recipeToSerialize.rating;
   }
 
-  if (recipe.nutrition && typeof recipe.nutrition === 'object') {
+  if (
+    recipeToSerialize.prepTime &&
+    recipeToSerialize.prepTime.trim() &&
+    (findFlexibleKey(recipeToSerialize.frontmatter, ['prep_time', 'prepTime', 'prep-time', 'prep']) !== undefined ||
+      !recipeToSerialize.frontmatter)
+  ) {
+    frontmatterObj.prep_time = recipeToSerialize.prepTime.trim();
+  }
+  if (
+    recipeToSerialize.cookTime &&
+    recipeToSerialize.cookTime.trim() &&
+    (findFlexibleKey(recipeToSerialize.frontmatter, ['cook_time', 'cookTime', 'cook-time', 'cook']) !== undefined ||
+      !recipeToSerialize.frontmatter)
+  ) {
+    frontmatterObj.cook_time = recipeToSerialize.cookTime.trim();
+  }
+  if (
+    recipeToSerialize.totalTime &&
+    recipeToSerialize.totalTime.trim() &&
+    (findFlexibleKey(recipeToSerialize.frontmatter, ['total_time', 'totalTime', 'total-time', 'total']) !== undefined ||
+      !recipeToSerialize.frontmatter)
+  ) {
+    frontmatterObj.total_time = recipeToSerialize.totalTime.trim();
+  }
+  if (recipeToSerialize.servings !== undefined && recipeToSerialize.servings !== null) {
+    frontmatterObj.servings = recipeToSerialize.servings;
+  }
+  if (
+    recipeToSerialize.calories !== undefined &&
+    recipeToSerialize.calories !== null &&
+    String(recipeToSerialize.calories).trim()
+  ) {
+    frontmatterObj.calories = recipeToSerialize.calories;
+  }
+
+  if (recipeToSerialize.nutrition && typeof recipeToSerialize.nutrition === 'object') {
     const nut: Record<string, any> = {};
-    if (recipe.nutrition.calories !== undefined && recipe.nutrition.calories !== null) nut.calories = recipe.nutrition.calories;
-    if (recipe.nutrition.protein !== undefined && recipe.nutrition.protein !== null) nut.protein = recipe.nutrition.protein;
-    if (recipe.nutrition.carbohydrates !== undefined && recipe.nutrition.carbohydrates !== null) nut.carbohydrates = recipe.nutrition.carbohydrates;
-    if (recipe.nutrition.fat !== undefined && recipe.nutrition.fat !== null) nut.fat = recipe.nutrition.fat;
-    if (recipe.nutrition.fiber !== undefined && recipe.nutrition.fiber !== null) nut.fiber = recipe.nutrition.fiber;
-    if (recipe.nutrition.sodium !== undefined && recipe.nutrition.sodium !== null) nut.sodium = recipe.nutrition.sodium;
-    if (recipe.nutrition.confidenceNote && recipe.nutrition.confidenceNote.trim()) nut.confidenceNote = recipe.nutrition.confidenceNote.trim();
+    if (recipeToSerialize.nutrition.calories !== undefined && recipeToSerialize.nutrition.calories !== null) {
+      nut.calories = recipeToSerialize.nutrition.calories;
+    }
+    if (recipeToSerialize.nutrition.protein !== undefined && recipeToSerialize.nutrition.protein !== null) {
+      nut.protein = recipeToSerialize.nutrition.protein;
+    }
+    if (recipeToSerialize.nutrition.carbohydrates !== undefined && recipeToSerialize.nutrition.carbohydrates !== null) {
+      nut.carbohydrates = recipeToSerialize.nutrition.carbohydrates;
+    }
+    if (recipeToSerialize.nutrition.fat !== undefined && recipeToSerialize.nutrition.fat !== null) {
+      nut.fat = recipeToSerialize.nutrition.fat;
+    }
+    if (recipeToSerialize.nutrition.fiber !== undefined && recipeToSerialize.nutrition.fiber !== null) {
+      nut.fiber = recipeToSerialize.nutrition.fiber;
+    }
+    if (recipeToSerialize.nutrition.sodium !== undefined && recipeToSerialize.nutrition.sodium !== null) {
+      nut.sodium = recipeToSerialize.nutrition.sodium;
+    }
+    if (recipeToSerialize.nutrition.confidenceNote && recipeToSerialize.nutrition.confidenceNote.trim()) {
+      nut.confidenceNote = recipeToSerialize.nutrition.confidenceNote.trim();
+    }
 
     if (Object.keys(nut).length > 0) {
       frontmatterObj.nutrition = nut;
@@ -838,32 +902,30 @@ export function serializeRecipeToObsidianMarkdown(recipe: Partial<ObsidianRecipe
     }
   }
 
-  if (recipe.source && recipe.source.trim()) frontmatterObj.source = recipe.source.trim();
-  // Only persist image if explicitly present (do not write empty or generated placeholders)
-  if (recipe.image && recipe.image.trim()) {
-    frontmatterObj.image = recipe.image.trim();
+  if (recipeToSerialize.source && recipeToSerialize.source.trim()) {
+    frontmatterObj.source = recipeToSerialize.source.trim();
   }
-  if (recipe.lastModified && (recipe.frontmatter?.created || recipe.frontmatter?.date)) {
-    frontmatterObj.created = recipe.lastModified;
+  // Only persist image if explicitly present (do not write empty or generated placeholders)
+  if (recipeToSerialize.image && recipeToSerialize.image.trim()) {
+    frontmatterObj.image = recipeToSerialize.image.trim();
+  }
+  if (recipeToSerialize.lastModified && (recipeToSerialize.frontmatter?.created || recipeToSerialize.frontmatter?.date)) {
+    frontmatterObj.created = recipeToSerialize.lastModified;
   }
 
   const yamlStr = yamlDump(frontmatterObj, { indent: 2, lineWidth: -1 }).trim();
 
   let md = `---\n${yamlStr}\n---\n\n`;
-  md += `# ${recipe.title || 'Untitled Recipe'}\n\n`;
+  md += `# ${recipeToSerialize.title || 'Untitled Recipe'}\n\n`;
 
-  // Dataview inline fields (preserve any user-authored key:: value that are not standard frontmatter aliases)
-  if (recipe.dataviewFields && Object.keys(recipe.dataviewFields).length > 0) {
-    const customDv = Object.entries(recipe.dataviewFields).filter(([k]) => {
-      const lk = k.toLowerCase().replace(/[-_\s]/g, '');
-      return !['preptime', 'cooktime', 'totaltime', 'cuisine', 'category', 'image', 'cover', 'servings', 'calories', 'rating', 'difficulty'].includes(lk);
-    });
-    if (customDv.length > 0) {
-      for (const [k, v] of customDv) {
+  // Dataview inline fields (preserve all user-authored key:: value pairs in their original casing)
+  if (recipeToSerialize.dataviewFields && Object.keys(recipeToSerialize.dataviewFields).length > 0) {
+    for (const [k, v] of Object.entries(recipeToSerialize.dataviewFields)) {
+      if (v !== undefined && v !== null && String(v).trim()) {
         md += `${k}:: ${v}\n`;
       }
-      md += '\n';
     }
+    md += '\n';
   }
 
   // Callouts

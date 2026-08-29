@@ -121,6 +121,8 @@ export function obsidianToCanonicalRecipe(legacy: ObsidianRecipe): CanonicalReci
       fileName: legacy.fileName,
       filePath: legacy.filePath,
       sourceUrl: legacy.source,
+      author: legacy.frontmatter?.author,
+      createdAt: legacy.frontmatter?.created || legacy.frontmatter?.date,
       updatedAt: legacy.lastModified,
     },
     metadata: {
