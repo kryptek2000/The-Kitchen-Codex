@@ -512,5 +512,42 @@ created: 2026-01-15
     const savedWithCreated = serializeRecipeToObsidianMarkdown(parsedWithCreated);
     expect(savedWithCreated).toMatch(/created:\s*['"]?2026-01-15['"]?/);
   });
+
+  it('does NOT fabricate ingredients/instructions/servings/image when a recipe is empty', () => {
+    // Save path: an empty recipe (no ingredients, no instructions, no servings, no image)
+    const empty = serializeRecipeToObsidianMarkdown({
+      title: 'Empty Recipe',
+    } as any);
+
+    // No fabricated ingredient/instruction rows or invented servings
+    expect(empty).not.toContain('2 tbsp Olive Oil');
+    expect(empty).not.toContain('1 tsp Sea Salt');
+    expect(empty).not.toContain('Prepare ingredients');
+    expect(empty).not.toContain('servings:');
+
+    // Reload: no fabricated data appears after re-parse
+    const reparsed = parseObsidianRecipeMarkdown(empty, 'Empty Recipe.md');
+    expect(reparsed.ingredients).toHaveLength(0);
+    expect(reparsed.instructions).toHaveLength(0);
+    expect(reparsed.servings).toBeUndefined();
+    expect(reparsed.image).toBeUndefined();
+
+    // Regression: a normal recipe with real content still serializes correctly
+    const normal = serializeRecipeToObsidianMarkdown({
+      title: 'Real Recipe',
+      prepTime: '15 mins',
+      cookTime: '30 mins',
+      servings: 4,
+      ingredients: [
+        { original: '2 cups flour', name: 'flour', amount: 2, unit: 'cup', isChecked: false },
+        { original: '[[Salt|Sea Salt]]', name: 'Salt', wikilinkTarget: 'Salt', wikilinkAlias: 'Sea Salt', isChecked: false },
+      ],
+      instructions: [{ stepNumber: 1, text: 'Mix the dry ingredients.' }],
+    } as any);
+    expect(normal).toContain('2 cups flour');
+    expect(normal).toContain('[[Salt|Sea Salt]]');
+    expect(normal).toContain('Mix the dry ingredients.');
+    expect(normal).toContain('servings: 4');
+  });
 });
 

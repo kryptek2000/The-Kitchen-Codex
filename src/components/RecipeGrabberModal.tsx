@@ -42,7 +42,7 @@ interface GrabbedRecipeData {
   prepTime: string;
   cookTime: string;
   totalTime: string;
-  servings: number;
+  servings?: number;
   calories?: string | number;
   rating: number;
   source: string;
@@ -102,7 +102,7 @@ export function RecipeGrabberModal({
   const [editTitle, setEditTitle] = useState('');
   const [editCuisine, setEditCuisine] = useState('');
   const [editCategory, setEditCategory] = useState('');
-  const [editServings, setEditServings] = useState<number>(4);
+  const [editServings, setEditServings] = useState<number | undefined>(undefined);
   const [editPrepTime, setEditPrepTime] = useState('');
   const [editCookTime, setEditCookTime] = useState('');
   const [editDifficulty, setEditDifficulty] = useState<'Easy' | 'Medium' | 'Hard'>('Medium');
@@ -159,7 +159,7 @@ export function RecipeGrabberModal({
       setEditTitle(recipe.title || 'Untitled Recipe');
       setEditCuisine(recipe.cuisine || 'General');
       setEditCategory(recipe.category || 'Main Course');
-      setEditServings(recipe.servings || 4);
+      setEditServings(recipe.servings);
       setEditPrepTime(recipe.prepTime || '');
       setEditCookTime(recipe.cookTime || '');
       setEditDifficulty(recipe.difficulty || 'Medium');
@@ -211,7 +211,7 @@ export function RecipeGrabberModal({
       cuisine: editCuisine.trim() || 'General',
       category: editCategory.trim() || 'Main Course',
       difficulty: editDifficulty,
-      servings: editServings || 4,
+      servings: editServings,
       prepTime: editPrepTime.trim() || undefined,
       cookTime: editCookTime.trim() || undefined,
       totalTime: grabbedData.totalTime,
@@ -570,8 +570,11 @@ export function RecipeGrabberModal({
                       <input
                         type="number"
                         min={1}
-                        value={editServings}
-                        onChange={(e) => setEditServings(parseInt(e.target.value, 10) || 1)}
+                        value={editServings ?? ''}
+                        onChange={(e) => {
+                          const n = parseInt(e.target.value, 10);
+                          setEditServings(Number.isNaN(n) ? undefined : n);
+                        }}
                         className="w-full px-2.5 py-1.5 bg-[#0C0C0C] border border-white/10 rounded-lg text-gray-200 focus:outline-none focus:border-amber-500"
                       />
                     </div>

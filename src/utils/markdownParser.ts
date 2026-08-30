@@ -991,28 +991,24 @@ export function serializeRecipeToObsidianMarkdown(recipe: Partial<ObsidianRecipe
     });
   }
 
-  // Ingredients
-  md += `## 🥘 Ingredients\n`;
+  // Ingredients (ZERO-FABRICATION: only emit when real ingredients exist)
   if (recipeToSerialize.ingredients && recipeToSerialize.ingredients.length > 0) {
+    md += `## 🥘 Ingredients\n`;
     recipeToSerialize.ingredients.forEach((ing) => {
       const check = ing.isChecked ? '[x]' : '[ ]';
       md += `${renderIngredientLine(ing, check)}\n`;
     });
-  } else {
-    md += `- [ ] 2 tbsp Olive Oil\n- [ ] 1 tsp Salt\n`;
+    md += '\n';
   }
-  md += '\n';
 
-  // Instructions
-  md += `## 🍳 Instructions\n`;
+  // Instructions (ZERO-FABRICATION: only emit when real instructions exist)
   if (recipeToSerialize.instructions && recipeToSerialize.instructions.length > 0) {
+    md += `## 🍳 Instructions\n`;
     recipeToSerialize.instructions.forEach((step, idx) => {
       md += `${idx + 1}. ${step.text}\n`;
     });
-  } else {
-    md += `1. Prepare ingredients.\n2. Cook thoroughly and serve warm.\n`;
+    md += '\n';
   }
-  md += '\n';
 
   // Notes & Variations
   if (recipeToSerialize.notes) {

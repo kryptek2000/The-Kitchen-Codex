@@ -283,4 +283,83 @@ describe("RecipeGrabber - Extraction & Parsing", () => {
       expect(customErr.message).toBe("Cloudflare WAF Block (Payment Required / Blocked)");
     });
   });
+
+  describe("ZERO-FABRICATION Data Fidelity", () => {
+    it("Test A: missing yield -> servings undefined and no fabricated servings in Markdown", () => {
+      const result = parseRecipeFromJsonLd([{
+        "@type": "Recipe",
+        name: "No Yield Recipe",
+        recipeIngredient: ["2 cups flour"],
+        recipeInstructions: ["Mix."],
+      }]);
+
+      expect(result).not.toBeNull();
+      expect(result!.servings).toBeUndefined();
+      expect(result!.rawMarkdown).not.toContain("servings:");
+      expect(result!.rawMarkdown).not.toMatch(/servings:\s*\d/);
+    });
+
+    it("Test B: valid yield strings still resolve correctly", () => {
+      const cases: Array<[string, number]> = [
+        ["4 servings", 4],
+        ["Serves 4", 4],
+        ["4 to 6 servings", 4],
+        ["4-6 servings", 4],
+        ["Makes 24 cookies", 24],
+      ];
+      for (const [yieldStr, expected] of cases) {
+        const r = parseRecipeFromJsonLd([{
+          "@type": "Recipe",
+          name: "Yielded Recipe",
+          recipeYield: yieldStr,
+          recipeIngredient: ["1 cup flour"],
+          recipeInstructions: ["Mix."],
+        }]);
+        expect(r?.servings).toBe(expected);
+      }
+    });
+
+    it("Test C: missing ingredients/instructions -> no fabricated placeholder content", async () => {
+      const viaJsonLd = parseRecipeFromJsonLd([{
+        "@type": "Recipe",
+        name: "Empty Recipe",
+        recipeIngredient: [],
+        recipeInstructions: [],
+      }]);
+      expect(viaJsonLd?.ingredients).toHaveLength(0);
+      expect(viaJsonLd?.instructions).toHaveLength(0);
+
+      // Heuristic fallback path: raw text that yields no structure
+      const viaHeuristic = await grabRecipeFromWeb({ rawText: "Just a vague note with no structure to extract." });
+      expect(viaHeuristic.ingredients).toHaveLength(0);
+      expect(viaHeuristic.instructions).toHaveLength(0);
+
+      for (const md of [viaJsonLd?.rawMarkdown ?? "", viaHeuristic.rawMarkdown]) {
+        expect(md).not.toContain("Ingredients as noted");
+        expect(md).not.toContain("Follow recipe steps as written.");
+        expect(md).not.toContain("2 tbsp Olive Oil");
+        expect(md).not.toContain("1 tsp Sea Salt");
+        expect(md).not.toContain("Prepare ingredients");
+      }
+    });
+
+    it("Test D: missing image -> no image key; present image preserved", () => {
+      const noImage = parseRecipeFromJsonLd([{
+        "@type": "Recipe",
+        name: "No Image Recipe",
+        recipeIngredient: ["1 cup flour"],
+        recipeInstructions: ["Mix."],
+      }]);
+      expect(noImage?.rawMarkdown).not.toContain("image:");
+
+      const withImage = parseRecipeFromJsonLd([{
+        "@type": "Recipe",
+        name: "With Image Recipe",
+        image: "https://images.example.com/photo.jpg",
+        recipeIngredient: ["1 cup flour"],
+        recipeInstructions: ["Mix."],
+      }]);
+      expect(withImage?.rawMarkdown).toContain('image: "https://images.example.com/photo.jpg"');
+    });
+  });
 });

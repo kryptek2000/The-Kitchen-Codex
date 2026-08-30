@@ -35,7 +35,8 @@ export interface GrabbedRecipeResult {
   prepTime: string;
   cookTime: string;
   totalTime: string;
-  servings: number;
+  /** Number of servings/yield; undefined when the source provides no valid yield. ZERO-FABRICATION. */
+  servings?: number;
   calories?: string | number;
   rating: number;
   source: string;
@@ -281,7 +282,7 @@ export function parseRecipeFromJsonLd(jsonLdList: any[], url?: string): GrabbedR
   const totalTime = formatDuration(recipeObj.totalTime);
 
   const parsedYield = parseRecipeYield(recipeObj.recipeYield || recipeObj.yield);
-  const servings = parsedYield !== undefined ? parsedYield : 4;
+  const servings = parsedYield;
 
   // Image
   let image = "";
@@ -458,9 +459,11 @@ rating: ${recipe.rating !== undefined ? recipe.rating : 5}
     md += `calories: "${recipe.calories}"\n`;
   }
 
-  md += `source: "${recipe.source || "Web Recipe Grabber"}"
-image: "${recipe.image || ""}"
-created: "${new Date().toISOString().split("T")[0]}"
+  md += `source: "${recipe.source || "Web Recipe Grabber"}"\n`;
+  if (recipe.image && recipe.image.trim()) {
+    md += `image: "${recipe.image.trim()}"\n`;
+  }
+  md += `created: "${new Date().toISOString().split("T")[0]}"
 ---
 
 # ${recipe.title || "Untitled Recipe"}
@@ -473,25 +476,22 @@ created: "${new Date().toISOString().split("T")[0]}"
     });
   }
 
-  md += `## 🥘 Ingredients\n`;
+  // ZERO-FABRICATION: only emit sections that actually contain source data.
   if (recipe.ingredients && recipe.ingredients.length > 0) {
+    md += `## 🥘 Ingredients\n`;
     recipe.ingredients.forEach((ing) => {
       md += `${renderIngredientLine(ing, "[ ]")}\n`;
     });
-  } else {
-    md += `- [ ] 2 tbsp Olive Oil\n- [ ] 1 tsp Sea Salt\n`;
+    md += `\n`;
   }
-  md += `\n`;
 
-  md += `## 🍳 Instructions\n`;
   if (recipe.instructions && recipe.instructions.length > 0) {
+    md += `## 🍳 Instructions\n`;
     recipe.instructions.forEach((inst, idx) => {
       md += `${idx + 1}. ${inst.text}\n`;
     });
-  } else {
-    md += `1. Prepare ingredients according to measurements.\n2. Cook thoroughly and enjoy.\n`;
+    md += `\n`;
   }
-  md += `\n`;
 
   if (recipe.notes) {
     md += `## 💡 Notes & Chef Tips\n${recipe.notes}\n\n`;
@@ -679,7 +679,7 @@ REQUIREMENTS:
               prepTime: parsed.prepTime || "",
               cookTime: parsed.cookTime || "",
               totalTime: parsed.totalTime || "",
-              servings: parsed.servings !== undefined ? parsed.servings : 4,
+              servings: typeof parsed.servings === "number" && parsed.servings > 0 ? parsed.servings : undefined,
               calories: parsed.calories || "",
               rating: parsed.rating || 5,
               source,
@@ -764,14 +764,14 @@ REQUIREMENTS:
       prepTime: "",
       cookTime: "",
       totalTime: "",
-      servings: 4,
+      servings: undefined,
       rating: 5,
       source: siteName || metaTags.siteName || "Imported Recipe",
       sourceUrl: url,
       image: metaTags.image || "",
       tags: ["food/recipes", "imported"],
-      ingredients: ingredients.length > 0 ? ingredients : [{ original: "Ingredients as noted", name: "Ingredients" }],
-      instructions: instructions.length > 0 ? instructions : [{ stepNumber: 1, text: "Follow recipe steps as written." }],
+      ingredients,
+      instructions,
       callouts: [{ type: "tip", title: "Imported", content: "Recipe captured into Obsidian vault." }],
       notes: rawText || "",
       rawMarkdown: "",
