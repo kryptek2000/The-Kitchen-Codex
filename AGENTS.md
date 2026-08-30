@@ -99,15 +99,16 @@ in dev (Vite HMR). `frame-ancestors` is configurable via `CSP_FRAME_ANCESTORS`.
 
 ## Current state / open items
 
-- `main` HEAD: `b7daf22` (clean). Includes GenAI 2.19.0, esbuild 0.28.2,
-  actions/checkout v7, TS7 baseline, security hardening, deps cleanup.
-- **Express 5 migration**: on branch **`fix/express-5`** (commit `13ba36e`),
-  pushed to origin but **NOT merged into main**. `main` still uses
-  `express ^4.21.2`. Express 5 requires the SPA fallback
-  `app.get('*')` -> `app.get('/{*splat}')`. This is a major bump — merge after a
-  manual browser smoke-test. Left intentionally un-merged.
-- **Vite 8** (6.4.3 -> 8.2.2) was evaluated: passes automated checks but has no
-  browser E2E in the repo. Not merged; considered optional.
+- `main` HEAD is clean and pushed (see `git log`). It includes the Express 5
+  migration (merged via PR #7), GenAI 2.19.0, esbuild 0.28.2, actions/checkout
+  v7, TS7 baseline, security hardening, deps cleanup, and this doc.
+- **Express 5 is merged into `main`** (`express ^5.2.1`, `@types/express ^5.0.6`).
+  The SPA fallback uses `app.get('/{*splat}')` (Express 5 / path-to-regexp v8
+  rejects the bare `*`). Because this was a major bump, a manual browser
+  smoke-test after deploy is still worthwhile.
+- **Vite 8** (6.4.3 -> 8.2.2) was evaluated but **not merged**: it passes
+  automated checks but the repo has no browser E2E. Treat as optional; if adopted,
+  do a manual in-browser smoke-test first.
 - Tests: **92/92 (12 files)**. `bun audit`: clean. `security_verification.ts`:
   33/33.
 
