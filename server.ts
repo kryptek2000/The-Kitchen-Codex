@@ -396,7 +396,10 @@ async function start() {
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get("*", (req, res) => {
+    // Express 5 (path-to-regexp v8) no longer accepts the bare "*" wildcard.
+    // Use an optional splat so the SPA fallback matches the site root (/),
+    // nested client routes, and leaves already-registered /api routes intact.
+    app.get("/{*splat}", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
