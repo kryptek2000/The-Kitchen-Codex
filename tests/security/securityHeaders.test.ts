@@ -57,6 +57,24 @@ describe("createSecurityMiddleware", () => {
     expect(csp).toContain("frame-ancestors 'none'");
   });
 
+  it("supports custom frame-ancestors when CSP_FRAME_ANCESTORS is set", async () => {
+    const orig = process.env.CSP_FRAME_ANCESTORS;
+    try {
+      process.env.CSP_FRAME_ANCESTORS = "'self' https://ai.studio";
+      const baseUrl = await withServer(true);
+      const headers = await getHeaders(baseUrl);
+      const csp = headers.get("content-security-policy") || "";
+      expect(csp).toContain("frame-ancestors 'self' https://ai.studio");
+      expect(headers.get("x-frame-options")).toBeNull();
+    } finally {
+      if (orig !== undefined) {
+        process.env.CSP_FRAME_ANCESTORS = orig;
+      } else {
+        delete process.env.CSP_FRAME_ANCESTORS;
+      }
+    }
+  });
+
   it("sets a restrictive Referrer-Policy", async () => {
     const baseUrl = await withServer(true);
     const headers = await getHeaders(baseUrl);

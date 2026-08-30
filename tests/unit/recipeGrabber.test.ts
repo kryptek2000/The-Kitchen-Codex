@@ -320,26 +320,36 @@ describe("RecipeGrabber - Extraction & Parsing", () => {
     });
 
     it("Test C: missing ingredients/instructions -> no fabricated placeholder content", async () => {
-      const viaJsonLd = parseRecipeFromJsonLd([{
-        "@type": "Recipe",
-        name: "Empty Recipe",
-        recipeIngredient: [],
-        recipeInstructions: [],
-      }]);
-      expect(viaJsonLd?.ingredients).toHaveLength(0);
-      expect(viaJsonLd?.instructions).toHaveLength(0);
+      const origKey = process.env.GEMINI_API_KEY;
+      try {
+        // Ensure deterministic offline fallback test without external network latency
+        delete process.env.GEMINI_API_KEY;
 
-      // Heuristic fallback path: raw text that yields no structure
-      const viaHeuristic = await grabRecipeFromWeb({ rawText: "Just a vague note with no structure to extract." });
-      expect(viaHeuristic.ingredients).toHaveLength(0);
-      expect(viaHeuristic.instructions).toHaveLength(0);
+        const viaJsonLd = parseRecipeFromJsonLd([{
+          "@type": "Recipe",
+          name: "Empty Recipe",
+          recipeIngredient: [],
+          recipeInstructions: [],
+        }]);
+        expect(viaJsonLd?.ingredients).toHaveLength(0);
+        expect(viaJsonLd?.instructions).toHaveLength(0);
 
-      for (const md of [viaJsonLd?.rawMarkdown ?? "", viaHeuristic.rawMarkdown]) {
-        expect(md).not.toContain("Ingredients as noted");
-        expect(md).not.toContain("Follow recipe steps as written.");
-        expect(md).not.toContain("2 tbsp Olive Oil");
-        expect(md).not.toContain("1 tsp Sea Salt");
-        expect(md).not.toContain("Prepare ingredients");
+        // Heuristic fallback path: raw text that yields no structure
+        const viaHeuristic = await grabRecipeFromWeb({ rawText: "Just a vague note with no structure to extract." });
+        expect(viaHeuristic.ingredients).toHaveLength(0);
+        expect(viaHeuristic.instructions).toHaveLength(0);
+
+        for (const md of [viaJsonLd?.rawMarkdown ?? "", viaHeuristic.rawMarkdown]) {
+          expect(md).not.toContain("Ingredients as noted");
+          expect(md).not.toContain("Follow recipe steps as written.");
+          expect(md).not.toContain("2 tbsp Olive Oil");
+          expect(md).not.toContain("1 tsp Sea Salt");
+          expect(md).not.toContain("Prepare ingredients");
+        }
+      } finally {
+        if (origKey !== undefined) {
+          process.env.GEMINI_API_KEY = origKey;
+        }
       }
     });
 
