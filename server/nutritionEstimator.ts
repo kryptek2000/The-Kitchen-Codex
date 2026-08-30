@@ -272,7 +272,7 @@ Guidelines:
 
 /**
  * Estimates macronutrients and micronutrients per serving using a resilient fallback chain:
- * Primary (gemini-3.6-flash) -> Fallback (gemini-3.1-flash-lite) -> Algorithmic Fallback
+ * Primary (gemini-3.7-flash) -> Fallback (gemini-3.1-flash-lite) -> Algorithmic Fallback
  */
 export async function estimateRecipeNutrition(
   req: NutritionEstimateRequest
@@ -313,7 +313,7 @@ export async function estimateRecipeNutrition(
     return estimateAlgorithmicNutrition(recipeTitle, servings, rawIngredientLines);
   }
 
-  // Attempt 1: Primary Model (gemini-3.6-flash)
+  // Attempt 1: Primary Model (gemini-3.7-flash)
   try {
     return await callGeminiForNutrition(gemini, PRIMARY_MODEL, recipeTitle, servings, cleanedIngredientLines);
   } catch (primaryErr: any) {

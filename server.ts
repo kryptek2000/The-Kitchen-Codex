@@ -7,11 +7,29 @@ import { estimateRecipeNutrition } from "./server/nutritionEstimator.js";
 import { recoverRecipeMetadata } from "./server/metadataRecovery.js";
 import { recipeImportRateLimiter, nutritionEstimateRateLimiter, metadataRecoveryRateLimiter, getClientIp } from "./server/rateLimiter.js";
 import { safeFetchImage, WafProtectionError } from "./server/ssrfGuard.js";
+import { createSecurityMiddleware } from "./server/securityHeaders.js";
+import { requireAiAccessToken } from "./server/aiEndpointAuth.js";
 
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
+
+// Default to loopback-only binding so the app is local-only unless explicitly
+// exposed. Set HOST=0.0.0.0 (or another interface) to bind publicly.
+const HOST = (process.env.HOST || "127.0.0.1").trim() || "127.0.0.1";
+
+// The production build is bundled into dist/server.cjs (esbuild bakes
+// NODE_ENV="production" into it). This defensive check also treats any run
+// of the compiled bundle — detected via its `dist` path — as production so
+// `node dist/server.cjs` never accidentally boots the Vite dev middleware.
+const entryPath = process.argv[1] || "";
+const isCompiledBundle = entryPath.split(path.sep).includes("dist");
+const isProduction = process.env.NODE_ENV === "production" || isCompiledBundle;
+
+// Security headers (X-Content-Type-Options, clickjacking protection, referrer
+// policy, and a production-only Content Security Policy).
+app.use(createSecurityMiddleware(isProduction));
 
 // Trust proxy configuration.
 //
@@ -38,7 +56,7 @@ app.get("/api/health", (req, res) => {
 });
 
 // Recipe Grabber Web Importer endpoint with rate limiting & input validation
-app.post("/api/grab-recipe", recipeImportRateLimiter, async (req, res) => {
+app.post("/api/grab-recipe", requireAiAccessToken, recipeImportRateLimiter, async (req, res) => {
   const clientIp = getClientIp(req);
 
   try {
@@ -250,7 +268,7 @@ app.get("/api/proxy-image", recipeImportRateLimiter, async (req, res) => {
 });
 
 // AI Nutrition Estimator endpoint with rate limiting & input validation
-app.post("/api/estimate-nutrition", nutritionEstimateRateLimiter, async (req, res) => {
+app.post("/api/estimate-nutrition", requireAiAccessToken, nutritionEstimateRateLimiter, async (req, res) => {
   const clientIp = getClientIp(req);
 
   try {
@@ -312,7 +330,7 @@ app.post("/api/estimate-nutrition", nutritionEstimateRateLimiter, async (req, re
 });
 
 // AI Vault Intelligence Metadata Recovery endpoint with rate limiting & validation
-app.post("/api/recover-metadata", metadataRecoveryRateLimiter, async (req, res) => {
+app.post("/api/recover-metadata", requireAiAccessToken, metadataRecoveryRateLimiter, async (req, res) => {
   const clientIp = getClientIp(req);
 
   try {
@@ -360,14 +378,6 @@ app.post("/api/recover-metadata", metadataRecoveryRateLimiter, async (req, res) 
 
 // Serve frontend with Vite in dev, static files in prod
 async function start() {
-  // The production build is bundled into dist/server.cjs (esbuild bakes
-  // NODE_ENV="production" into it). This defensive check also treats any run
-  // of the compiled bundle — detected via its `dist` path — as production so
-  // `node dist/server.cjs` never accidentally boots the Vite dev middleware.
-  const entryPath = process.argv[1] || "";
-  const isCompiledBundle = entryPath.split(path.sep).includes("dist");
-  const isProduction = process.env.NODE_ENV === "production" || isCompiledBundle;
-
   if (!isProduction) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -382,8 +392,9 @@ async function start() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`The Kitchen Codex Server running on http://localhost:${PORT}`);
+  // Bind to HOST (default 127.0.0.1). Set HOST=0.0.0.0 to expose publicly.
+  app.listen(PORT, HOST, () => {
+    console.log(`The Kitchen Codex Server running on http://${HOST}:${PORT}`);
   });
 }
 

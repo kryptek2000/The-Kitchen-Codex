@@ -28,7 +28,7 @@ What happened instead?
 
 ## Environment
 
-- Recipe Vault version:
+- The Kitchen Codex version:
 - Obsidian version:
 - Operating system:
 - Device:

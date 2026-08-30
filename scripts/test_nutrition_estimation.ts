@@ -215,7 +215,7 @@ async function runNutritionFunctionalSuite() {
   try {
     const fallbackResult = await simulateFallbackCascade(
       async () => {
-        const err: any = new Error("404 Model Not Found / Resource Unavailable: gemini-3.6-flash");
+        const err: any = new Error("404 Model Not Found / Resource Unavailable: gemini-3.7-flash");
         err.status = 404;
         throw err;
       },

@@ -33,17 +33,25 @@ import { VaultHeader } from './components/VaultHeader';
 import { RecipeFilterBar } from './components/RecipeFilterBar';
 import { RecipeCard } from './components/RecipeCard';
 import { RecipeDetailView } from './components/RecipeDetailView';
-import { CookingModeModal } from './components/CookingModeModal';
 import { DataviewTableView } from './components/DataviewTableView';
 import { MealPlannerView } from './components/MealPlannerView';
 import { ShoppingListView } from './components/ShoppingListView';
 import { ThemesView } from './components/ThemesView';
-import { RecipeEditorModal } from './components/RecipeEditorModal';
 import { ActiveTimersBar } from './components/ActiveTimersBar';
 import { ConnectVaultModal } from './components/ConnectVaultModal';
 import { RecipeGrabberModal } from './components/RecipeGrabberModal';
 import { VaultIntelligenceModal } from './components/VaultIntelligenceModal';
 import { summarizeVaultHealth } from './utils/vaultIntelligence';
+
+// Cooking Mode and the Recipe Editor are modal-heavy views only opened on
+// demand. Lazy-load them so their code ships in separate chunks and is fetched
+// when the user actually enters cooking mode or edits a recipe.
+const CookingModeModal = React.lazy(() =>
+  import('./components/CookingModeModal').then((m) => ({ default: m.CookingModeModal }))
+);
+const RecipeEditorModal = React.lazy(() =>
+  import('./components/RecipeEditorModal').then((m) => ({ default: m.RecipeEditorModal }))
+);
 
 const INITIAL_FILTERS: FilterState = {
   search: '',
@@ -1105,25 +1113,29 @@ export default function App() {
 
       {/* Fullscreen Cooking Mode Modal */}
       {cookingRecipe && (
-        <CookingModeModal
-          recipe={cookingRecipe.recipe}
-          servings={cookingRecipe.servings}
-          onClose={() => setCookingRecipe(null)}
-          onStartTimer={handleStartTimer}
-        />
+        <React.Suspense fallback={null}>
+          <CookingModeModal
+            recipe={cookingRecipe.recipe}
+            servings={cookingRecipe.servings}
+            onClose={() => setCookingRecipe(null)}
+            onStartTimer={handleStartTimer}
+          />
+        </React.Suspense>
       )}
 
       {/* Recipe Editor Modal */}
       {isEditorOpen && (
-        <RecipeEditorModal
-          initialRecipe={editingRecipe}
-          folderHandle={vaultStatus.folderHandle}
-          onSave={handleSaveRecipe}
-          onClose={() => {
-            setIsEditorOpen(false);
-            setEditingRecipe(null);
-          }}
-        />
+        <React.Suspense fallback={<div className="p-8 text-center text-gray-400">Loading editor…</div>}>
+          <RecipeEditorModal
+            initialRecipe={editingRecipe}
+            folderHandle={vaultStatus.folderHandle}
+            onSave={handleSaveRecipe}
+            onClose={() => {
+              setIsEditorOpen(false);
+              setEditingRecipe(null);
+            }}
+          />
+        </React.Suspense>
       )}
 
       {/* Connect Obsidian Vault Modal */}

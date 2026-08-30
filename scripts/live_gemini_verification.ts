@@ -18,8 +18,8 @@ const ai = new GoogleGenAI({ apiKey });
 
 const modelsToTest = [
   "gemini-3.7-flash",
-  "gemini-3.6-flash",
   "gemini-3.1-flash-lite",
+  "gemini-flash-latest",
 ];
 
 export interface ModelTestResult {

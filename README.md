@@ -24,7 +24,7 @@ A markdown-native recipe manager, meal planner, culinary knowledge base, and int
 - **Direct Note Authoring**: Create new Markdown knowledge notes directly into your Obsidian `Notes/` folder with YAML frontmatter from the preview modal.
 
 ### 🥗 AI Nutritional Estimation
-- **Multi-Tiered Nutritional Analysis**: High-precision nutritional estimation with a resilient multi-model fallback cascade: `gemini-3.6-flash` (primary), `gemini-3.1-flash-lite` (secondary fallback), and an offline culinary algorithmic estimator.
+- **Multi-Tiered Nutritional Analysis**: High-precision nutritional estimation with a resilient multi-model fallback cascade: `gemini-3.7-flash` (primary), `gemini-3.1-flash-lite` (secondary fallback), and an offline culinary algorithmic estimator.
 - **Wikilink & Measurement Normalization**: Obsidian wikilinks (`[[Ingredient|Alias]]`) and Unicode/ASCII fractions are cleaned and parsed for consistent analysis.
 - **YAML Frontmatter Persistence**: Validates and serializes calories, protein, carbohydrates, fat, dietary fiber, and sodium per serving directly into note frontmatter for Dataview interoperability.
 - **Portion Scaling Compatibility**: Dynamically calculates and displays macro values scaled to current portions.
@@ -94,10 +94,14 @@ cd The-Kitchen-Codex
 ```
 
 #### 2. Install dependencies
+
+This repository uses **Bun** (a `bun.lock` lockfile is committed and CI installs with `bun install --frozen-lockfile`). Install and run with Bun for a reproducible setup:
+
 ```bash
-npm install
+bun install
 ```
-*(or `bun install` / `pnpm install`)*
+
+Advanced note: npm is also compatible and is used throughout the scripts below (`npm run dev`, etc.). Using npm adds a `package-lock.json`; prefer Bun to avoid maintaining a competing lockfile.
 
 #### 3. Set up environment variables
 Copy the template configuration file:
@@ -131,6 +135,18 @@ npm run build
 npm run start
 ```
 The production server will listen on `http://localhost:3000`.
+
+---
+
+### 🔐 Security, Local-Only Default & Public Deployment
+
+The Express server ships with hardened security headers (`X-Content-Type-Options: nosniff`, clickjacking protection via `X-Frame-Options` + CSP `frame-ancestors`, and a `Referrer-Policy`). In production a Content Security Policy is also emitted.
+
+To keep the app safe-by-default:
+
+- **Bind to loopback by default.** The server listens on `127.0.0.1` unless you set `HOST`. To expose it to your LAN or a public host, set `HOST=0.0.0.0` (see `.env.example`).
+- **AI endpoints are local-only unless you opt in.** The Gemini-backed endpoints (`/api/estimate-nutrition`, `/api/recover-metadata`, `/api/grab-recipe`) are unauthenticated so local development is friction-free, but they must not be left open on a public host. When you deploy publicly, set a strong random `AI_ENDPOINT_TOKEN`; clients then must send `Authorization: Bearer <token>`, otherwise they receive `HTTP 401`. The `GEMINI_API_KEY` is only ever used server-side and is never sent to the browser.
+- **Rate limiting** is always on, and `TRUST_PROXY` should be set to the number of trusted reverse-proxy hops when deployed behind a proxy to prevent IP spoofing.
 
 ---
 

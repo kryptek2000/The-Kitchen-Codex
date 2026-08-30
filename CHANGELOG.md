@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased] - Production Hardening & Repository Hygiene
+
+### 🔐 Security
+- Added hardened Express security headers via `helmet`: `X-Content-Type-Options: nosniff`, clickjacking protection (`X-Frame-Options` + CSP `frame-ancestors`), a strict `Referrer-Policy`, and a production-only Content Security Policy.
+- The server now binds to `127.0.0.1` (loopback) by default. Set `HOST=0.0.0.0` to expose it publicly; the port is configurable via `PORT`.
+- AI endpoints (`/api/estimate-nutrition`, `/api/recover-metadata`, `/api/grab-recipe`) can be protected behind a shared bearer token via the optional `AI_ENDPOINT_TOKEN` environment variable. When unset (local dev) they remain open; when set for a public deployment, clients must send `Authorization: Bearer <token>` or receive `HTTP 401`.
+- `GEMINI_API_KEY` continues to be used only server-side and is never exposed to the browser.
+
+### 🔧 Maintenance
+- Consolidated the Gemini model references to `gemini-3.7-flash` (primary), `gemini-3.1-flash-lite` (fallback), and `gemini-flash-latest`; removed the retired `gemini-3.6-flash` identifier from active code and documentation.
+- Removed the deprecated `@types/html2canvas` stub (html2canvas ships its own TypeScript declarations).
+- Added `helmet` and updated the `bun.lock`.
+- Strengthened CI to run dependency install, TypeScript typechecking, the full Vitest suite, and the production build on every push and pull request.
+- Added Dependabot configuration for the `bun` package ecosystem and GitHub Actions.
+- Standardized product naming to **The Kitchen Codex** across `SECURITY.md`, `CONTRIBUTING.md`, the bug-report template, and the CI workflow name.
+
+---
+
 ## [0.2.2] - 2026-08-23
 
 ### 🚀 Enhancements & Features

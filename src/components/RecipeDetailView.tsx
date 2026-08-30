@@ -37,7 +37,14 @@ import { useVaultImage } from '../hooks/useVaultImage';
 import { assessRecipeHealth } from '../utils/vaultIntelligence';
 import { RecipeNutritionCard } from './RecipeNutritionCard';
 import { WikilinkPreviewModal } from './WikilinkPreviewModal';
-import { RecipeCardExportModal } from './RecipeCardExportModal';
+
+// The recipe-card export studio pulls in html2canvas, a heavy dependency
+// (hundreds of kB) that is only needed when a user actually exports a card.
+// Lazy-load it so it lives in its own chunk and is fetched on demand, keeping
+// the initial application bundle smaller.
+const RecipeCardExportModal = React.lazy(() =>
+  import('./RecipeCardExportModal').then((m) => ({ default: m.RecipeCardExportModal }))
+);
 
 interface RecipeDetailViewProps {
   recipe: ObsidianRecipe;
@@ -617,11 +624,13 @@ export function RecipeDetailView({
 
       {/* Recipe Card & Export Studio Modal */}
       {showCardStudio && (
-        <RecipeCardExportModal
-          recipe={recipe}
-          currentServings={currentServings}
-          onClose={() => setShowCardStudio(false)}
-        />
+        <React.Suspense fallback={<div className="p-8 text-center text-gray-400">Loading card studio…</div>}>
+          <RecipeCardExportModal
+            recipe={recipe}
+            currentServings={currentServings}
+            onClose={() => setShowCardStudio(false)}
+          />
+        </React.Suspense>
       )}
     </div>
   );

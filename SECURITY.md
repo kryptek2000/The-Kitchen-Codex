@@ -2,7 +2,7 @@
 
 ## Reporting a Security Vulnerability
 
-The security of Recipe Vault and its users is important.
+The security of The Kitchen Codex and its users is important.
 
 If you discover a potential security vulnerability, please do not disclose the details publicly through a GitHub issue.
 
@@ -22,7 +22,7 @@ Please avoid including passwords, API keys, personal information, or other sensi
 
 ## Supported Versions
 
-Recipe Vault is currently under active development. Security fixes will generally be applied to the latest version of the project.
+The Kitchen Codex is currently under active development. Security fixes will generally be applied to the latest version of the project.
 
 Older versions may not receive security updates.
 
@@ -30,4 +30,4 @@ Older versions may not receive security updates.
 
 Please allow reasonable time for a vulnerability to be investigated and addressed before publicly disclosing security details.
 
-Thank you for helping keep Recipe Vault and its users safe.
+Thank you for helping keep The Kitchen Codex and its users safe.

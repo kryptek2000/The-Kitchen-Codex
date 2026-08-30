@@ -1,4 +1,4 @@
-name: Build Recipe Vault
+name: Build The Kitchen Codex
 
 on:
   push:
@@ -10,7 +10,7 @@ on:
 
 jobs:
   build:
-    name: Build Application
+    name: Install, Typecheck, Test & Build
     runs-on: ubuntu-latest
 
     steps:
@@ -24,6 +24,12 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
+
+      - name: Typecheck (tsc --noEmit)
+        run: bun run lint
+
+      - name: Run test suite
+        run: bun run test
 
       - name: Build application
         run: bun run build

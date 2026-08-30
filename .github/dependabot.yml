@@ -1,0 +1,18 @@
+# Keep The Kitchen Codex dependencies and GitHub Actions up to date.
+#
+# - "bun" tracks the JavaScript/TypeScript dependencies declared in package.json
+#   and resolved by bun.lock (the repository's package manager).
+# - "github-actions" tracks the third-party Actions referenced in workflows.
+#
+# Kept deliberately simple: weekly checks, no aggressive update policies.
+version: 2
+updates:
+  - package-ecosystem: "bun"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

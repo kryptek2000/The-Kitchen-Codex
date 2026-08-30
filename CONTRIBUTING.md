@@ -1,12 +1,12 @@
-# Contributing to Recipe Vault
+# Contributing to The Kitchen Codex
 
-Thank you for your interest in contributing to Recipe Vault! Contributions, ideas, bug reports, and feature requests are welcome.
+Thank you for your interest in contributing to The Kitchen Codex! Contributions, ideas, bug reports, and feature requests are welcome.
 
-Recipe Vault is an Obsidian-based recipe management project designed to make it easier to organize, discover, and work with recipes stored in an Obsidian vault.
+The Kitchen Codex is an Obsidian-based recipe management project designed to make it easier to organize, discover, and work with recipes stored in an Obsidian vault.
 
 ## Ways to Contribute
 
-There are several ways you can help improve Recipe Vault:
+There are several ways you can help improve The Kitchen Codex:
 
 * Report bugs
 * Suggest new features
@@ -86,4 +86,4 @@ If you're unsure about something, feel free to open an issue and start a discuss
 
 All contributors are expected to follow the project's [Code of Conduct](CODE_OF_CONDUCT.md).
 
-Thank you for helping make Recipe Vault better!
+Thank you for helping make The Kitchen Codex better!
