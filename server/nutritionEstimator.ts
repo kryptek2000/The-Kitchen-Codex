@@ -85,14 +85,28 @@ export function estimateAlgorithmicNutrition(
       }
     }
 
-    if (lower.includes('pasta') || lower.includes('spaghetti') || lower.includes('rigatoni') || lower.includes('noodle') || lower.includes('rice') || lower.includes('flour')) {
-      const multiplier = lower.includes('lb') || lower.includes('pound') ? amount * 450 : lower.includes('g') ? amount : amount * 100;
+    if (lower.includes('pasta') || lower.includes('spaghetti') || lower.includes('rigatoni') || lower.includes('noodle') || lower.includes('rice') || lower.includes('flour') || lower.includes('oat') || lower.includes('grain') || lower.includes('quinoa') || lower.includes('couscous') || lower.includes('barley')) {
+      const multiplier = lower.includes('lb') || lower.includes('pound') ? amount * 450 : lower.includes('cup') ? amount * 80 : lower.includes('g') ? amount : amount * 100;
       totalCalories += (multiplier / 100) * 360;
       totalProtein += (multiplier / 100) * 12;
-      totalCarbs += (multiplier / 100) * 75;
-      totalFat += (multiplier / 100) * 2;
-      totalFiber += (multiplier / 100) * 3;
+      totalCarbs += (multiplier / 100) * 70;
+      totalFat += (multiplier / 100) * 3;
+      totalFiber += (multiplier / 100) * 6;
       totalSodium += (multiplier / 100) * 5;
+    } else if (lower.includes('walnut') || lower.includes('almond') || lower.includes('pecan') || lower.includes('cashew') || lower.includes('peanut') || lower.includes('nut') || lower.includes('seed') || lower.includes('chia') || lower.includes('flax')) {
+      const multiplier = lower.includes('cup') ? amount * 120 : lower.includes('tbsp') ? amount * 15 : lower.includes('g') ? amount : lower.includes('oz') ? amount * 28.3 : amount * 30;
+      totalCalories += (multiplier / 100) * 600;
+      totalProtein += (multiplier / 100) * 18;
+      totalCarbs += (multiplier / 100) * 16;
+      totalFat += (multiplier / 100) * 55;
+      totalFiber += (multiplier / 100) * 8;
+      totalSodium += (multiplier / 100) * 5;
+    } else if (lower.includes('salmon') || lower.includes('tuna') || lower.includes('fish') || lower.includes('shrimp') || lower.includes('seafood') || lower.includes('cod')) {
+      const multiplier = lower.includes('g') ? amount : lower.includes('oz') ? amount * 28.3 : lower.includes('lb') ? amount * 450 : amount * 120;
+      totalCalories += (multiplier / 100) * 180;
+      totalProtein += (multiplier / 100) * 25;
+      totalFat += (multiplier / 100) * 8;
+      totalSodium += (multiplier / 100) * 80;
     } else if (lower.includes('chicken') || lower.includes('poultry') || lower.includes('turkey')) {
       const multiplier = lower.includes('g') ? amount : lower.includes('oz') ? amount * 28.3 : lower.includes('lb') ? amount * 450 : amount * 120;
       totalCalories += (multiplier / 100) * 165;
@@ -105,6 +119,14 @@ export function estimateAlgorithmicNutrition(
       totalProtein += (multiplier / 100) * 15;
       totalFat += (multiplier / 100) * 60;
       totalSodium += (multiplier / 100) * 1200;
+    } else if (lower.includes('bean') || lower.includes('chickpea') || lower.includes('lentil') || lower.includes('tofu') || lower.includes('edamame')) {
+      const multiplier = lower.includes('cup') ? amount * 180 : lower.includes('can') ? amount * 240 : lower.includes('g') ? amount : amount * 100;
+      totalCalories += (multiplier / 100) * 140;
+      totalProtein += (multiplier / 100) * 9;
+      totalCarbs += (multiplier / 100) * 22;
+      totalFat += (multiplier / 100) * 2;
+      totalFiber += (multiplier / 100) * 7;
+      totalSodium += (multiplier / 100) * 150;
     } else if (lower.includes('egg yolk') || lower.includes('yolk')) {
       totalCalories += amount * 55;
       totalProtein += amount * 2.7;
@@ -121,6 +143,13 @@ export function estimateAlgorithmicNutrition(
       totalProtein += (multiplier / 100) * 32;
       totalFat += (multiplier / 100) * 28;
       totalSodium += (multiplier / 100) * 1800;
+    } else if (lower.includes('milk') || lower.includes('yogurt')) {
+      const multiplier = lower.includes('cup') ? amount * 240 : lower.includes('tbsp') ? amount * 15 : amount * 100;
+      totalCalories += (multiplier / 100) * 60;
+      totalProtein += (multiplier / 100) * 4;
+      totalCarbs += (multiplier / 100) * 5;
+      totalFat += (multiplier / 100) * 3;
+      totalSodium += (multiplier / 100) * 50;
     } else if (lower.includes('oil') || lower.includes('butter')) {
       const multiplier = lower.includes('tbsp') ? amount * 14 : lower.includes('tsp') ? amount * 5 : lower.includes('cup') ? amount * 220 : amount * 14;
       totalCalories += (multiplier / 14) * 120;
@@ -133,10 +162,16 @@ export function estimateAlgorithmicNutrition(
       totalCarbs += (multiplier / 100) * 2.7;
     } else if (lower.includes('salt')) {
       totalSodium += (lower.includes('tsp') ? amount * 2300 : 300);
-    } else if (lower.includes('sugar') || lower.includes('honey')) {
+    } else if (lower.includes('sugar') || lower.includes('honey') || lower.includes('syrup')) {
       const multiplier = lower.includes('tbsp') ? amount * 15 : lower.includes('cup') ? amount * 200 : amount * 15;
       totalCalories += (multiplier / 15) * 60;
       totalCarbs += (multiplier / 15) * 15;
+    } else if (lower.includes('berry') || lower.includes('blueberr') || lower.includes('strawberr') || lower.includes('apple') || lower.includes('banana') || lower.includes('fruit')) {
+      const multiplier = lower.includes('cup') ? amount * 150 : lower.includes('g') ? amount : amount * 100;
+      totalCalories += (multiplier / 100) * 60;
+      totalCarbs += (multiplier / 100) * 14;
+      totalFiber += (multiplier / 100) * 3;
+      totalProtein += (multiplier / 100) * 1;
     } else {
       // General vegetable, spice, broth, condiment baseline
       totalCalories += 25;
@@ -147,8 +182,8 @@ export function estimateAlgorithmicNutrition(
     }
   }
 
-  // Ensure reasonable baseline if ingredients provided
-  if (totalCalories < 100 * servings) {
+  // Ensure reasonable baseline only if no ingredients yielded calories
+  if (totalCalories <= 0) {
     totalCalories = 450 * servings;
     totalProtein = 18 * servings;
     totalCarbs = 45 * servings;
