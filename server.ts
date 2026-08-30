@@ -61,7 +61,7 @@ app.use(express.json({ limit: "2mb" }));
 
 // Health check endpoint
 app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
+  res.json({ status: "ok", version: "0.2.4", timestamp: new Date().toISOString() });
 });
 
 // Recipe Grabber Web Importer endpoint with rate limiting & input validation

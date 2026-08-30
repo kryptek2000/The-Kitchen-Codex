@@ -28,6 +28,7 @@ import {
   isFileSystemAccessSupported,
 } from './utils/vaultFileSystem';
 import { playTimerChime } from './utils/audioAlert';
+import { APP_VERSION } from './version';
 
 import { VaultHeader } from './components/VaultHeader';
 import { RecipeFilterBar } from './components/RecipeFilterBar';
@@ -133,6 +134,11 @@ export default function App() {
   // Meal Plan & Shopping List (Canonical Source: Vault Notes `Meal Plan.md` & `Shopping List.md`)
   const [mealPlan, setMealPlan] = useState<MealPlanDay[]>(STARTER_MEAL_PLAN);
   const [shoppingCategories, setShoppingCategories] = useState<ShoppingCategoryGroup[]>(STARTER_SHOPPING_CATEGORIES);
+
+  // Update document title with version
+  useEffect(() => {
+    document.title = `The Kitchen Codex ${APP_VERSION} — Obsidian Culinary Vault`;
+  }, []);
 
   // 1. Reconnect to IndexedDB directory handle on mount if permission granted
   useEffect(() => {
@@ -1102,6 +1108,25 @@ export default function App() {
           </div>
         )}
       </main>
+
+      {/* App Footer */}
+      <footer className="border-t border-stone-800/60 bg-stone-900/40 mt-auto">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-stone-500">
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-stone-400">The Kitchen Codex</span>
+            <span>•</span>
+            <span>Markdown-Native Culinary Vault</span>
+            <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-medium">
+              {APP_VERSION}
+            </span>
+          </div>
+          <div className="flex items-center gap-4 text-[11px]">
+            <span>Obsidian Compatible</span>
+            <span>•</span>
+            <span>Local-First & Schema v1 Compliant</span>
+          </div>
+        </div>
+      </footer>
 
       {/* Floating Active Timers Bar */}
       <ActiveTimersBar

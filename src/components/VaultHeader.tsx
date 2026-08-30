@@ -19,6 +19,7 @@ import {
   BrainCircuit,
 } from 'lucide-react';
 import { VaultSyncStatus } from '../types';
+import { APP_VERSION } from '../version';
 
 interface VaultHeaderProps {
   vaultStatus: VaultSyncStatus;
@@ -120,7 +121,7 @@ export function VaultHeader({
                 Obsidian Culinary Vault
               </span>
               <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-medium">
-                v0.2.2
+                {APP_VERSION}
               </span>
             </div>
             <p className="text-xs text-gray-500">
