@@ -37,5 +37,5 @@ export const MODEL_CONFIG = {
    * wait before graceful degradation kicks in. On timeout the callers'
    * existing fallback chains engage (next model, then offline estimators).
    */
-  requestTimeoutMs: 15_000,
+  requestTimeoutMs: 25_000,
 } as const;

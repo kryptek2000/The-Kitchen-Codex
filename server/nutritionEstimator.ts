@@ -1,25 +1,28 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
 import dotenv from "dotenv";
 import { MODEL_CONFIG } from "./modelConfig.js";
 
 dotenv.config();
 
 let aiClient: GoogleGenAI | null = null;
+let lastApiKey: string | undefined = undefined;
 
 function getGemini(): GoogleGenAI | null {
-  if (!aiClient) {
-    const key = process.env.GEMINI_API_KEY;
-    if (key && key !== "MY_GEMINI_API_KEY") {
-      aiClient = new GoogleGenAI({
-        apiKey: key,
-        httpOptions: {
-          headers: {
-            "User-Agent": "aistudio-build",
-          },
-          timeout: MODEL_CONFIG.requestTimeoutMs,
+  const key = process.env.GEMINI_API_KEY;
+  if (!key || key === "MY_GEMINI_API_KEY") {
+    return null;
+  }
+  if (!aiClient || lastApiKey !== key) {
+    lastApiKey = key;
+    aiClient = new GoogleGenAI({
+      apiKey: key,
+      httpOptions: {
+        headers: {
+          "User-Agent": "aistudio-build",
         },
-      });
-    }
+        timeout: MODEL_CONFIG.requestTimeoutMs,
+      },
+    });
   }
   return aiClient;
 }
@@ -232,6 +235,7 @@ Guidelines:
     contents: prompt,
     config: {
       temperature: 0.1,
+      thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
       responseMimeType: "application/json",
       responseSchema: {
         type: Type.OBJECT,

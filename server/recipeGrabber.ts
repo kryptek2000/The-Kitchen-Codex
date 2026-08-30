@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
 import dotenv from "dotenv";
 import { safeFetchHtml } from "./ssrfGuard.js";
 import { renderIngredientLine, parseIngredientLine } from "../src/utils/markdownParser.js";
@@ -594,6 +594,8 @@ REQUIREMENTS:
             model: modelName,
             contents: prompt,
             config: {
+              temperature: 0.1,
+              thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
               responseMimeType: "application/json",
               responseSchema: {
                 type: Type.OBJECT,
