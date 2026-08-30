@@ -6,7 +6,7 @@
 A markdown-native recipe manager, meal planner, culinary knowledge base, and interactive cooking companion built specifically for **Obsidian** vaults. Read, edit, sync, and cook directly from your Obsidian `.md` recipe collection with YAML frontmatter, Dataview tags, wikilinks (`[[Ingredient]]`, `[[Target|Alias]]`), AI nutrition estimation, dynamic portion scaling, multi-step cooking timers, and AI-powered web recipe scraping.
 
 <p align="center">
-  <img src="./src/assets/images/app_screenshot_1787266053153.jpg" alt="The Kitchen Codex UI Screenshot" width="100%" />
+  <img src="./public/images/app_screenshot_1787266053153.jpg" alt="The Kitchen Codex UI Screenshot" width="100%" />
 </p>
 
 ---
