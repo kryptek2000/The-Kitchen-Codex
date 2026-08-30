@@ -144,7 +144,7 @@ The Express server ships with hardened security headers (`X-Content-Type-Options
 
 To keep the app safe-by-default:
 
-- **Bind to loopback by default.** The server listens on `127.0.0.1` unless you set `HOST`. To expose it to your LAN or a public host, set `HOST=0.0.0.0` (see `.env.example`).
+- **Bind to loopback by default.** The server listens on `127.0.0.1` unless you set `HOST`. To expose it to your LAN or a public host, set `HOST=0.0.0.0` (see `.env.example`). Cloud Run / AI Studio deployments are auto-detected (via `K_SERVICE`/`K_REVISION`/`K_CONFIGURATION`) and bind to `0.0.0.0` automatically.
 - **AI endpoints are local-only unless you opt in.** The Gemini-backed endpoints (`/api/estimate-nutrition`, `/api/recover-metadata`, `/api/grab-recipe`) are unauthenticated so local development is friction-free, but they must not be left open on a public host. When you deploy publicly, set a strong random `AI_ENDPOINT_TOKEN`; clients then must send `Authorization: Bearer <token>`, otherwise they receive `HTTP 401`. The `GEMINI_API_KEY` is only ever used server-side and is never sent to the browser.
 - **Rate limiting** is always on, and `TRUST_PROXY` should be set to the number of trusted reverse-proxy hops when deployed behind a proxy to prevent IP spoofing.
 

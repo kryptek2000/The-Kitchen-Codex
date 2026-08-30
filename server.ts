@@ -15,9 +15,18 @@ dotenv.config();
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
-// Default to loopback-only binding so the app is local-only unless explicitly
-// exposed. Set HOST=0.0.0.0 (or another interface) to bind publicly.
-const HOST = (process.env.HOST || "127.0.0.1").trim() || "127.0.0.1";
+// Cloud Run (used by AI Studio) injects K_SERVICE / K_REVISION / K_CONFIGURATION
+// and requires the process to listen on all interfaces (0.0.0.0) so the
+// platform's ingress proxy can reach it. Detect it automatically so deploys
+// start without extra configuration. Otherwise default to loopback so a local
+// run stays local-only unless the user opts in. An explicit HOST always wins.
+const isCloudRun =
+  !!process.env.K_SERVICE ||
+  !!process.env.K_REVISION ||
+  !!process.env.K_CONFIGURATION;
+const HOST =
+  (process.env.HOST || "").trim() ||
+  (isCloudRun ? "0.0.0.0" : "127.0.0.1");
 
 // The production build is bundled into dist/server.cjs (esbuild bakes
 // NODE_ENV="production" into it). This defensive check also treats any run
@@ -392,7 +401,8 @@ async function start() {
     });
   }
 
-  // Bind to HOST (default 127.0.0.1). Set HOST=0.0.0.0 to expose publicly.
+  // Bind to HOST: autodetected 0.0.0.0 on Cloud Run/AI Studio, else 127.0.0.1.
+  // Set HOST explicitly to override.
   app.listen(PORT, HOST, () => {
     console.log(`The Kitchen Codex Server running on http://${HOST}:${PORT}`);
   });
