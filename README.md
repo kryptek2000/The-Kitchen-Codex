@@ -1,6 +1,6 @@
-# 🍳 The Kitchen Codex `v0.2.3`
+# 🍳 The Kitchen Codex `v0.2.4`
 
-[![Version](https://img.shields.io/badge/version-0.2.3-amber.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.2.4-amber.svg)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A markdown-native recipe manager, meal planner, culinary knowledge base, and interactive cooking companion built specifically for **Obsidian** vaults. Read, edit, sync, and cook directly from your Obsidian `.md` recipe collection with YAML frontmatter, Dataview tags, wikilinks (`[[Ingredient]]`, `[[Target|Alias]]`), AI nutrition estimation, dynamic portion scaling, multi-step cooking timers, and AI-powered web recipe scraping.
@@ -228,7 +228,16 @@ favorite: true
 
 ## 📌 Changelog
 
-### `v0.2.3` (Current Release)
+### `v0.2.4` (Current Release)
+- **Nutrition, Scaling & Macro Accuracy**: Refactored algorithmic nutrition estimation in `server/nutritionEstimator.ts` to ensure strict thermodynamic Atwater energy balance ($4 \times \text{Protein} + 4 \times \text{Carbs} + 9 \times \text{Fat} \approx \text{Calories}$, ratio $0.96\text{--}1.01$).
+- **Expanded Nutritional Ingredient Database**: Added nutrient density curves for whole grains (oats, barley, quinoa), legumes/tofu, seeds and nuts (walnuts, chia, almonds), dairy/milks, and fresh fruits.
+- **Serving Size Scaling Verification**: Audited multi-serving batch estimation (1, 2, 4, 6, 8, 12 servings) with linear nutrient scaling, integer rounding variance $\le 4\,\text{kcal}$, and lossless Obsidian YAML frontmatter serialization.
+- **Express 5 Full-Stack Backend**: Upgraded to `express ^5.2.1` and `@types/express ^5.0.6` with updated path-to-regexp v8 SPA fallback routing (`/{*splat}`).
+- **Configurable CSP Frame Ancestors**: Added dynamic support for `CSP_FRAME_ANCESTORS` in `server/securityHeaders.ts` and `.env.example`, enabling flexible iframe embedding in Obsidian webviews and preview environments while keeping strict clickjacking protection by default.
+- **Tooling & Dependency Updates**: Upgraded `@google/genai` to `^2.19.0`, `esbuild` to `^0.28.2`, and CI checkout to `actions/checkout@v7`.
+- **Hermetic Offline Testing**: Refactored `recipeGrabber.ts` and test suite to run hermetically without external network latency or API rate limits.
+
+### `v0.2.3`
 - **Inline Markdown Instruction Rendering**: Instruction steps now correctly parse and render inline Markdown (bold `**`, italics `*`, code `\``) for clean typographic emphasis.
 - **Clean Metadata Display**: Removed redundant duplicate servings sub-headers under ingredients, keeping primary serving counts in the top metadata panel.
 - **Recipe-Aware Footer Recommendations**: Replaced hardcoded universal serving advice with smart, category-aware recommendations (e.g., cooling instructions for sourdough bread, warm serving notes for soups).

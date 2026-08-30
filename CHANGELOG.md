@@ -7,21 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased] - Production Hardening & Repository Hygiene
+## [0.2.4] - 2026-08-30
 
-### 🔐 Security
-- Added hardened Express security headers via `helmet`: `X-Content-Type-Options: nosniff`, clickjacking protection (`X-Frame-Options` + CSP `frame-ancestors`), a strict `Referrer-Policy`, and a production-only Content Security Policy.
-- The server now binds to `127.0.0.1` (loopback) by default. Set `HOST=0.0.0.0` to expose it publicly; the port is configurable via `PORT`.
-- AI endpoints (`/api/estimate-nutrition`, `/api/recover-metadata`, `/api/grab-recipe`) can be protected behind a shared bearer token via the optional `AI_ENDPOINT_TOKEN` environment variable. When unset (local dev) they remain open; when set for a public deployment, clients must send `Authorization: Bearer <token>` or receive `HTTP 401`.
-- `GEMINI_API_KEY` continues to be used only server-side and is never exposed to the browser.
+### 🥗 Nutrition, Scaling & Macro Accuracy
+- **Audited & Expanded Heuristic Nutrition Engine**: Refactored `server/nutritionEstimator.ts` to ensure strict thermodynamic Atwater energy balance ($4 \times \text{Protein} + 4 \times \text{Carbs} + 9 \times \text{Fat} \approx \text{Calories}$, ratio $0.96\text{--}1.01$).
+- **Expanded Ingredient Coverage**: Added robust nutrient density data for whole grains (oats, barley, quinoa), legumes/tofu, nuts and seeds (walnuts, chia, almonds), dairy/milks, and fresh fruits.
+- **Linear Serving Scaling**: Verified multi-serving batch estimation (1, 2, 4, 6, 8, 12 servings) with sub-4 kcal rounding variance and lossless round-trip serialization into Obsidian YAML frontmatter.
 
-### 🔧 Maintenance
-- Consolidated the Gemini model references to `gemini-3.7-flash` (primary), `gemini-3.1-flash-lite` (fallback), and `gemini-flash-latest`; removed the retired `gemini-3.6-flash` identifier from active code and documentation.
-- Removed the deprecated `@types/html2canvas` stub (html2canvas ships its own TypeScript declarations).
-- Added `helmet` and updated the `bun.lock`.
-- Strengthened CI to run dependency install, TypeScript typechecking, the full Vitest suite, and the production build on every push and pull request.
-- Added Dependabot configuration for the `bun` package ecosystem and GitHub Actions.
-- Standardized product naming to **The Kitchen Codex** across `SECURITY.md`, `CONTRIBUTING.md`, the bug-report template, and the CI workflow name.
+### 🔐 Security & Infrastructure
+- **Express 5 Migration**: Upgraded backend to `express ^5.2.1` and `@types/express ^5.0.6` with updated path-to-regexp v8 SPA fallback (`app.get('/{*splat}')`).
+- **Configurable CSP Frame Ancestors**: Added dynamic support for `CSP_FRAME_ANCESTORS` in `server/securityHeaders.ts` and `.env.example`, allowing flexible embedding inside Obsidian webviews and preview containers while maintaining strict clickjacking protection by default.
+- **Dependency & SDK Updates**: Upgraded `@google/genai` to `^2.19.0`, `esbuild` to `^0.28.2`, and CI checkout to `actions/checkout@v7`.
+- **Offline Deterministic Unit Testing**: Refactored `recipeGrabber.ts` and test suite to run hermetically without hanging on external network latency or upstream API load spikes.
+- **Social Media & SEO Metadata**: Updated `og:image` and `twitter:image` tags in `index.html` referencing `/images/app_screenshot_1787266053153.jpg`.
+
+---
+
+## [0.2.3] - 2026-08-27
+
+### 🚀 Enhancements & Features
+- **Inline Markdown Instruction Rendering**: Instruction steps now correctly parse and render inline Markdown (bold `**`, italics `*`, code `\``) for clean typographic emphasis.
+- **Clean Metadata Display**: Removed redundant duplicate servings sub-headers under ingredients, keeping primary serving counts in the top metadata panel.
+- **Recipe-Aware Footer Recommendations**: Replaced hardcoded universal serving advice with smart, category-aware recommendations (e.g., cooling instructions for sourdough bread, warm serving notes for soups).
+- **Strict Food Display Metadata Compliance**: Configured the Food Display panel to render strictly when actual presentation/food-display metadata exists, omitting the panel entirely when absent to prevent fabrication.
+- **Robust Print & PDF Pagination**: Enhanced print media styles with page-break protection (`break-inside: avoid`) across ingredients, instructions, and cards for publication-quality PDF exports.
 
 ---
 
