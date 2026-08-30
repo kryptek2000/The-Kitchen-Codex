@@ -118,3 +118,97 @@ in dev (Vite HMR). `frame-ancestors` is configurable via `CSP_FRAME_ANCESTORS`.
 - There is no browser test setup (no Playwright/DOM) — lazy-loaded modals
   (`CookingModeModal`, `RecipeEditorModal`, `RecipeCardExportModal`) are
   verified via build chunk-splitting + typecheck, not browser automation.
+
+---
+
+## Product Vision & Roadmap (The Kitchen Codex 3.0 Game Plan)
+
+Source: `Obsidian Vault/The Kitchen Codex Game Plan/The-Kitchen-Codex-3.0-Game-Plan.md`.
+
+### Vision
+
+Turn a collection of recipes into an **intelligent personal cooking system**.
+Evolve from an Obsidian recipe manager into a complete, **local-first** cooking
+platform. Core loop: `Discover -> Import -> Organize -> Plan -> Shop -> Cook ->
+Learn -> Improve`. **Obsidian remains the canonical source of truth**; The
+Kitchen Codex is the polished interface/automation layer on top of the user's
+own Markdown knowledge base.
+
+### Phases
+
+1. **Stabilize the Foundation** — automated testing + CI (typecheck/tests/
+   integration/security/build) and a versioned formal recipe schema.
+2. **Make AI Actually Useful** — "Ask My Kitchen" (query the user's own vault,
+   grounded answers): "What can I make with chicken thighs, rice and broccoli?"
+   Principle: *personal recipe intelligence > generic AI generation.*
+3. **Intelligent Meal Planning** — plan N days from vault recipes, servings,
+   inventory, leftovers, time, dietary, budget, variety (e.g. reuse leftovers).
+4. **Smart Shopping** — merge/aggregate quantities by item, categorize
+   (Meat/Produce/Dairy/Pantry/Frozen), plus a **pantry system** (staples,
+   quantities, freezer, expirations) linked to planning/shopping.
+5. **Cooking Mode 2.0** — large-screen step UI with timers, plus voice commands
+   ("what's next?", "start a 10 minute timer").
+6. **Recipe Intelligence** — import from images, screenshots, PDFs,
+   handwritten/scanned cards. Preserve the original source; never silently
+   overwrite.
+7. **Recipe Relationships** — a lightweight knowledge graph (recipe <-> cuisine/
+   ingredient/time/sauce) enabling "show similar recipes", "recipes using this
+   sauce", etc.
+8. **Cooking History** — log with rating + change notes ("more pepper"),
+   enabling "make the pot pie again but apply my changes" (personal intelligence).
+9. **Recipe Card Studio 3.0** — templates (Classic/Modern/Rustic/Cookbook/
+   Minimal/Dark/Vintage), font/color/layout/QR/source control, PNG/PDF/print,
+   and a **Cookbook Generator** (select 30 recipes -> generate cookbook).
+10. **Mobile / PWA** — installable, offline recipes, mobile cooking mode.
+    (Phone + tablet > desktop for kitchen use.)
+11. **Privacy** — recipes stay in the vault; local-first; AI only on necessary
+    data; no centralized recipe database; users own their Markdown.
+12. **Optional Monetization** — free (core) vs pro (AI assistant, advanced
+    planning, cookbook, premium templates, OCR, voice); keep core open source.
+
+### Feature priority
+
+- **Must-have:** automated test suite, formal schema/versioning, improved recipe
+  search, AI "Ask My Kitchen", smart meal planning, smart shopping lists,
+  mobile/PWA, offline cooking mode.
+- **Major:** pantry/inventory, cooking history, recommendations, recipe
+  relationships, OCR/image import, voice, cookbook generator.
+- **Polish:** Recipe Card Studio 3.0, themes/templates, accessibility,
+  performance, docs/API cleanup.
+
+### Recommended roadmap (milestones)
+
+`v0.2.3 (current) -> v0.3 (testing, schema, search, perf) -> v0.4 (AI assistant,
+semantic search, relationships) -> v0.5 (smart meal planner, pantry, shopping)
+-> v0.6 (cooking mode 2.0, voice, history) -> v0.7 (OCR/PDF/recipe intelligence)
+-> v0.8 (cookbook, card studio 3.0, print/PDF) -> v0.9 (mobile/PWA, offline,
+accessibility, perf) -> v3.0 (intelligent cooking platform)`.
+
+### Product rules
+
+- Every feature must answer: **"Does this make it easier to manage, plan, shop
+  for, cook, or learn from recipes?"** If yes it belongs; if not, question it.
+- Avoid "feature soup" — do not add tech merely because it's possible.
+- Prioritize: practical cooking utility, reliability, local-first ownership,
+  Obsidian compatibility, intelligent automation, UX, security, maintainability.
+
+### Core architecture
+
+**Obsidian = canonical source of truth.** The Kitchen Codex is a cooking
+intelligence layer (AI + cooking UX + planning/shopping/cookbook) on top of the
+user's Markdown knowledge base.
+
+### 3.0 end goal
+
+From "I have chicken thighs, rice, broccoli, half an onion and some cream":
+search the vault, understand what's on hand, pick recipes, account for servings,
+optimize leftovers, generate + categorize a shopping list, build the meal plan,
+guide cooking, record what happened, and learn from feedback — a **personal
+cooking system**, not just a recipe database.
+
+### Guiding principle
+
+> **Make the user's recipes more useful without taking ownership of them.**
+> Obsidian stores the knowledge; The Kitchen Codex organizes it; AI understands
+> it; the planner uses it; the shopping list makes it actionable; Cooking Mode
+> brings it to the kitchen; cooking history makes it smarter over time.
