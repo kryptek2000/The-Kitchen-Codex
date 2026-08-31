@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { ObsidianRecipe } from '../types';
 import { scaleIngredientText } from '../utils/markdownParser';
+import { nutritionForServings, roundNutritionForDisplay, resolveNutritionBase } from '../utils/nutrition';
 import { downloadMarkdownFile } from '../utils/vaultFileSystem';
 import { getRecipeImage, DEFAULT_FOOD_IMAGES } from '../utils/imageHelper';
 import { useVaultImage } from '../hooks/useVaultImage';
@@ -33,6 +34,11 @@ export function RecipeCardExportModal({ recipe, currentServings: initialServings
   const cardRef = useRef<HTMLDivElement>(null);
 
   const baseServings = recipe.servings || 4;
+  // Nutrition displayed on the card is scaled deterministically to the selected
+  // servings, matching the recipe-total / baseServings × requested contract.
+  const cardNutrition = roundNutritionForDisplay(
+    nutritionForServings(recipe.nutrition, resolveNutritionBase(recipe.nutrition), servings)
+  );
   const defaultImg = getRecipeImage(recipe);
   const reactiveVaultImage = useVaultImage(recipe.image, defaultImg);
   const imageUrl = imageError ? DEFAULT_FOOD_IMAGES.default : (reactiveVaultImage || defaultImg);
@@ -438,22 +444,22 @@ export function RecipeCardExportModal({ recipe, currentServings: initialServings
                 >
                   <div className="text-center">
                     <span className="block text-[10px] uppercase opacity-70">Calories</span>
-                    <span className="font-bold">{recipe.nutrition.calories || recipe.calories || '—'} kcal</span>
+                    <span className="font-bold">{cardNutrition.calories ?? recipe.calories ?? '—'} kcal</span>
                   </div>
                   <div className="w-px h-6 bg-current opacity-20" />
                   <div className="text-center">
                     <span className="block text-[10px] uppercase opacity-70">Protein</span>
-                    <span className="font-bold">{recipe.nutrition.protein ? `${recipe.nutrition.protein}g` : '—'}</span>
+                    <span className="font-bold">{cardNutrition.protein ? `${cardNutrition.protein}g` : '—'}</span>
                   </div>
                   <div className="w-px h-6 bg-current opacity-20" />
                   <div className="text-center">
                     <span className="block text-[10px] uppercase opacity-70">Carbs</span>
-                    <span className="font-bold">{recipe.nutrition.carbohydrates ? `${recipe.nutrition.carbohydrates}g` : '—'}</span>
+                    <span className="font-bold">{cardNutrition.carbohydrates ? `${cardNutrition.carbohydrates}g` : '—'}</span>
                   </div>
                   <div className="w-px h-6 bg-current opacity-20" />
                   <div className="text-center">
                     <span className="block text-[10px] uppercase opacity-70">Fat</span>
-                    <span className="font-bold">{recipe.nutrition.fat ? `${recipe.nutrition.fat}g` : '—'}</span>
+                    <span className="font-bold">{cardNutrition.fat ? `${cardNutrition.fat}g` : '—'}</span>
                   </div>
                 </div>
               )}

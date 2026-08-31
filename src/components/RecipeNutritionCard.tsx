@@ -11,6 +11,13 @@ import {
   ChevronUp,
 } from 'lucide-react';
 import { ObsidianRecipe, RecipeNutrition } from '../types';
+import {
+  normalizeServings,
+  nutritionForServings,
+  roundNutritionForDisplay,
+  resolveNutritionBase,
+  resolveRecipeBaseServings,
+} from '../utils/nutrition';
 
 interface RecipeNutritionCardProps {
   recipe: ObsidianRecipe;
@@ -29,13 +36,32 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
   const [isExpanded, setIsExpanded] = useState(true);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
-  const currentServings = servings || recipe.servings || 4;
+  const recipeBaseServings = resolveRecipeBaseServings(recipe.servings);
+  const currentServings = normalizeServings(servings ?? recipe.servings, recipeBaseServings);
   const currentNutrition = recipe.nutrition;
 
-  // Macro calculations for ratio bar
-  const protein = currentNutrition?.protein || 0;
-  const carbs = currentNutrition?.carbohydrates || 0;
-  const fat = currentNutrition?.fat || 0;
+  // Stored nutrition is the stable recipe-total baseline. The base used to
+  // scale it is the explicit `servings` denominator when present (total mode),
+  // otherwise 1 (legacy per-serving blocks). The displayed value is always the
+  // deterministic requested-serving result.
+  const storedBase = resolveNutritionBase(currentNutrition);
+  const displayedNutrition = roundNutritionForDisplay(
+    nutritionForServings(currentNutrition, storedBase, currentServings)
+  );
+
+  // A freshly estimated value from the backend is TOTAL nutrition for the base
+  // batch. Scale it deterministically to the currently requested servings for
+  // display, exactly like the persisted baseline.
+  const displayedPending = pendingEstimate
+    ? roundNutritionForDisplay(
+        nutritionForServings(pendingEstimate, recipeBaseServings, currentServings)
+      )
+    : null;
+
+  // Macro calculations for ratio bar (ratios are scale-invariant)
+  const protein = displayedNutrition?.protein || 0;
+  const carbs = displayedNutrition?.carbohydrates || 0;
+  const fat = displayedNutrition?.fat || 0;
   const totalMacroGrams = protein + carbs + fat;
 
   const proteinPct = totalMacroGrams > 0 ? Math.round((protein / totalMacroGrams) * 100) : 0;
@@ -55,7 +81,11 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           title: recipe.title,
-          servings: currentServings,
+          // The estimator is called against the recipe AS WRITTEN (unscaled base
+          // ingredient batch). `servings` is accepted for API compatibility and is
+          // never used as a nutrition denominator; we send the recipe's original
+          // serving count for clarity.
+          servings: recipeBaseServings,
           ingredients: ingredientList,
         }),
       });
@@ -77,7 +107,9 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
   const handleApplyEstimate = async () => {
     if (!pendingEstimate) return;
     try {
-      await onUpdateNutrition(pendingEstimate);
+      // Persist the STABLE recipe-total baseline plus its original serving
+      // denominator. The displayed value is a deterministic derivation of this.
+      await onUpdateNutrition({ ...pendingEstimate, servings: recipeBaseServings });
       setPendingEstimate(null);
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
@@ -105,7 +137,7 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
             <h3 className="text-sm font-serif font-bold text-white flex items-center gap-1.5">
               <span>Nutrition & Macros</span>
               <span className="text-[10px] font-mono text-gray-400 font-normal">
-                (per serving • {currentServings} servings)
+                (for {currentServings} servings)
               </span>
             </h3>
           </div>
@@ -170,32 +202,32 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
           <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 text-center">
             <div className="p-2 rounded-lg bg-[#111] border border-white/5">
               <span className="text-[10px] text-gray-400 uppercase font-mono block">Calories</span>
-              <span className="text-sm font-bold text-white">{pendingEstimate.calories}</span>
+              <span className="text-sm font-bold text-white">{displayedPending?.calories ?? pendingEstimate.calories}</span>
               <span className="text-[10px] text-gray-500 block">kcal</span>
             </div>
             <div className="p-2 rounded-lg bg-[#111] border border-white/5">
               <span className="text-[10px] text-gray-400 uppercase font-mono block">Protein</span>
-              <span className="text-sm font-bold text-emerald-400">{pendingEstimate.protein ?? '—'}</span>
+              <span className="text-sm font-bold text-emerald-400">{displayedPending?.protein ?? pendingEstimate.protein ?? '—'}</span>
               <span className="text-[10px] text-gray-500 block">g</span>
             </div>
             <div className="p-2 rounded-lg bg-[#111] border border-white/5">
               <span className="text-[10px] text-gray-400 uppercase font-mono block">Carbs</span>
-              <span className="text-sm font-bold text-blue-400">{pendingEstimate.carbohydrates ?? '—'}</span>
+              <span className="text-sm font-bold text-blue-400">{displayedPending?.carbohydrates ?? pendingEstimate.carbohydrates ?? '—'}</span>
               <span className="text-[10px] text-gray-500 block">g</span>
             </div>
             <div className="p-2 rounded-lg bg-[#111] border border-white/5">
               <span className="text-[10px] text-gray-400 uppercase font-mono block">Fat</span>
-              <span className="text-sm font-bold text-amber-400">{pendingEstimate.fat ?? '—'}</span>
+              <span className="text-sm font-bold text-amber-400">{displayedPending?.fat ?? pendingEstimate.fat ?? '—'}</span>
               <span className="text-[10px] text-gray-500 block">g</span>
             </div>
             <div className="p-2 rounded-lg bg-[#111] border border-white/5">
               <span className="text-[10px] text-gray-400 uppercase font-mono block">Fiber</span>
-              <span className="text-sm font-bold text-purple-400">{pendingEstimate.fiber ?? '—'}</span>
+              <span className="text-sm font-bold text-purple-400">{displayedPending?.fiber ?? pendingEstimate.fiber ?? '—'}</span>
               <span className="text-[10px] text-gray-500 block">g</span>
             </div>
             <div className="p-2 rounded-lg bg-[#111] border border-white/5">
               <span className="text-[10px] text-gray-400 uppercase font-mono block">Sodium</span>
-              <span className="text-sm font-bold text-orange-400">{pendingEstimate.sodium ?? '—'}</span>
+              <span className="text-sm font-bold text-orange-400">{displayedPending?.sodium ?? pendingEstimate.sodium ?? '—'}</span>
               <span className="text-[10px] text-gray-500 block">mg</span>
             </div>
           </div>
@@ -235,7 +267,7 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
                 <div className="p-2.5 rounded-xl bg-[#0E0E0E] border border-white/5">
                   <span className="text-[10px] text-gray-500 uppercase font-mono block">Calories</span>
                   <span className="text-base font-serif font-bold text-white">
-                    {currentNutrition?.calories ?? recipe.calories ?? '—'}
+                    {displayedNutrition?.calories ?? recipe.calories ?? '—'}
                   </span>
                   <span className="text-[10px] text-gray-500 block">kcal</span>
                 </div>
@@ -243,7 +275,7 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
                 <div className="p-2.5 rounded-xl bg-[#0E0E0E] border border-white/5">
                   <span className="text-[10px] text-gray-500 uppercase font-mono block">Protein</span>
                   <span className="text-base font-serif font-bold text-emerald-400">
-                    {currentNutrition?.protein !== undefined ? `${currentNutrition.protein}g` : '—'}
+                    {displayedNutrition?.protein !== undefined ? `${displayedNutrition.protein}g` : '—'}
                   </span>
                   <span className="text-[10px] text-gray-500 block">{proteinPct > 0 ? `${proteinPct}%` : 'macro'}</span>
                 </div>
@@ -251,7 +283,7 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
                 <div className="p-2.5 rounded-xl bg-[#0E0E0E] border border-white/5">
                   <span className="text-[10px] text-gray-500 uppercase font-mono block">Carbs</span>
                   <span className="text-base font-serif font-bold text-blue-400">
-                    {currentNutrition?.carbohydrates !== undefined ? `${currentNutrition.carbohydrates}g` : '—'}
+                    {displayedNutrition?.carbohydrates !== undefined ? `${displayedNutrition.carbohydrates}g` : '—'}
                   </span>
                   <span className="text-[10px] text-gray-500 block">{carbsPct > 0 ? `${carbsPct}%` : 'macro'}</span>
                 </div>
@@ -259,7 +291,7 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
                 <div className="p-2.5 rounded-xl bg-[#0E0E0E] border border-white/5">
                   <span className="text-[10px] text-gray-500 uppercase font-mono block">Fat</span>
                   <span className="text-base font-serif font-bold text-amber-400">
-                    {currentNutrition?.fat !== undefined ? `${currentNutrition.fat}g` : '—'}
+                    {displayedNutrition?.fat !== undefined ? `${displayedNutrition.fat}g` : '—'}
                   </span>
                   <span className="text-[10px] text-gray-500 block">{fatPct > 0 ? `${fatPct}%` : 'macro'}</span>
                 </div>
@@ -267,7 +299,7 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
                 <div className="p-2.5 rounded-xl bg-[#0E0E0E] border border-white/5">
                   <span className="text-[10px] text-gray-500 uppercase font-mono block">Fiber</span>
                   <span className="text-base font-serif font-bold text-purple-400">
-                    {currentNutrition?.fiber !== undefined ? `${currentNutrition.fiber}g` : '—'}
+                    {displayedNutrition?.fiber !== undefined ? `${displayedNutrition.fiber}g` : '—'}
                   </span>
                   <span className="text-[10px] text-gray-500 block">dietary</span>
                 </div>
@@ -275,7 +307,7 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
                 <div className="p-2.5 rounded-xl bg-[#0E0E0E] border border-white/5">
                   <span className="text-[10px] text-gray-500 uppercase font-mono block">Sodium</span>
                   <span className="text-base font-serif font-bold text-orange-400">
-                    {currentNutrition?.sodium !== undefined ? `${currentNutrition.sodium}mg` : '—'}
+                    {displayedNutrition?.sodium !== undefined ? `${displayedNutrition.sodium}mg` : '—'}
                   </span>
                   <span className="text-[10px] text-gray-500 block">mineral</span>
                 </div>

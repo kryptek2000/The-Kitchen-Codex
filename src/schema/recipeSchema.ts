@@ -119,6 +119,11 @@ export interface RecipeNutritionData {
   fatGrams?: number | null;
   fiberGrams?: number | null;
   sodiumMg?: number | null;
+  /**
+   * Original/base serving count this nutrition block applies to. When present,
+   * the numeric fields are TOTAL recipe nutrition across `servings` servings.
+   */
+  servings?: number | null;
   servingSize?: string;
   source?: 'ai_estimate' | 'source_metadata' | 'user_defined';
   confidenceNote?: string;

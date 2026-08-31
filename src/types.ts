@@ -17,6 +17,14 @@ export interface RecipeNutrition {
   fat?: number; // in grams
   fiber?: number; // in grams
   sodium?: number; // in milligrams
+  /**
+   * Original/base serving count this nutrition block applies to.
+   *
+   * When present, the numeric fields represent TOTAL nutrition for the entire
+   * recipe batch across `servings` servings. When absent (legacy), the numeric
+   * fields are treated as PER-SERVING values (see src/utils/nutrition.ts).
+   */
+  servings?: number;
   confidenceNote?: string;
 }
 

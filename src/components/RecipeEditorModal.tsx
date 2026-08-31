@@ -67,6 +67,7 @@ export function RecipeEditorModal({
   const [isEstimatingNutrition, setIsEstimatingNutrition] = useState(false);
   const [nutritionError, setNutritionError] = useState<string | null>(null);
   const [nutritionSuccess, setNutritionSuccess] = useState(false);
+  const [nutritionFromEstimate, setNutritionFromEstimate] = useState(false);
   const [isSavingImageAsset, setIsSavingImageAsset] = useState(false);
   const [isAssetPickerOpen, setIsAssetPickerOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -129,6 +130,18 @@ export function RecipeEditorModal({
       }));
 
     const parsedServings = typeof servings === 'number' ? servings : parseInt(String(servings), 10);
+    // Only a total-mode nutrition block carries a serving denominator. Legacy
+    // per-serving blocks (no explicit servings from the source) are preserved
+    // untouched. New estimates (or blocks that already declare servings) store
+    // the editor's current serving count as the denominator.
+    const nutritionUsesServings =
+      nutritionFromEstimate || typeof initialRecipe?.nutrition?.servings === 'number';
+    const nutritionServings =
+      nutritionUsesServings && !isNaN(parsedServings) && parsedServings > 0
+        ? parsedServings
+        : typeof initialRecipe?.nutrition?.servings === 'number'
+        ? initialRecipe.nutrition.servings
+        : undefined;
 
     const parsedProtein = protein.trim() ? parseFloat(protein.trim()) : undefined;
     const parsedCarbs = carbs.trim() ? parseFloat(carbs.trim()) : undefined;
@@ -158,6 +171,7 @@ export function RecipeEditorModal({
             fat: parsedFat,
             fiber: parsedFiber,
             sodium: parsedSodium,
+            servings: nutritionServings,
           }
         : undefined,
       image: image || undefined,
@@ -209,6 +223,7 @@ export function RecipeEditorModal({
         if (data.nutrition.fat !== undefined) setFat(data.nutrition.fat.toString());
         if (data.nutrition.fiber !== undefined) setFiber(data.nutrition.fiber.toString());
         if (data.nutrition.sodium !== undefined) setSodium(data.nutrition.sodium.toString());
+        setNutritionFromEstimate(true);
         setNutritionSuccess(true);
         setTimeout(() => setNutritionSuccess(false), 3000);
       }
@@ -313,6 +328,9 @@ export function RecipeEditorModal({
           if (rec.nutrition.value.carbohydrates) setCarbs(rec.nutrition.value.carbohydrates.toString());
           if (rec.nutrition.value.fat) setFat(rec.nutrition.value.fat.toString());
           if (rec.nutrition.value.fiber) setFiber(rec.nutrition.value.fiber.toString());
+          // Recovered nutrition is TOTAL for the recipe batch; tag it so the
+          // saved block carries its serving denominator.
+          setNutritionFromEstimate(true);
         }
 
         setMetadataRecoverySuccess(`Recovered ${recoveredCount} metadata fields from recipe text!`);

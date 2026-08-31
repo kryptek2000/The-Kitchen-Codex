@@ -71,6 +71,7 @@ export interface MetadataRecoveryResult {
     fat?: number;
     fiber?: number;
     sodium?: number;
+    servings?: number;
     confidenceNote?: string;
   }>;
   category?: RecoveredFieldResponse<string>;
@@ -263,7 +264,7 @@ export function recoverMetadataAlgorithmically(
       value: nutResult.calories,
       confidence: "medium",
       source: "culinary_inference",
-      explanation: `Calculated from ${rawIngs.length} ingredients divided across ${estimatedServings} servings`,
+      explanation: `Calculated as total nutrition for the entire recipe batch across ${estimatedServings} servings`,
     },
     nutrition: {
       value: {
@@ -273,6 +274,7 @@ export function recoverMetadataAlgorithmically(
         fat: nutResult.fat,
         fiber: nutResult.fiber,
         sodium: nutResult.sodium,
+        servings: estimatedServings,
         confidenceNote: nutResult.confidenceNote,
       },
       confidence: "medium",
@@ -342,7 +344,7 @@ Guidelines:
 3. For servings:
    - Provide a sensible integer (e.g. 4 for dinners, 12 for cookies/muffins/rubs, 8 for breads/cakes).
 4. For calories and nutrition:
-   - Calculate reasonable per-serving values based on ingredients and servings.
+   - Calculate TOTAL nutrition for the entire recipe batch as written (do NOT divide by servings).
 5. For category and cuisine:
    - Provide standard culinary categories (e.g., "Main Course", "Seasonings & Rubs", "Baking & Breads", "Soups & Stews", "Salads & Bowls", "Dessert", "Pasta", "Side Dish", "Appetizer").
 6. For each recovered field, provide:
@@ -405,7 +407,7 @@ Guidelines:
           calories: {
             type: Type.OBJECT,
             properties: {
-              value: { type: Type.NUMBER, description: "Estimated calories per serving" },
+              value: { type: Type.NUMBER, description: "Estimated total calories for the entire recipe batch" },
               confidence: { type: Type.STRING, enum: ["high", "medium", "low"] },
               source: { type: Type.STRING, enum: ["instructions_explicit", "body_parsed", "culinary_inference"] },
               explanation: { type: Type.STRING },
@@ -424,6 +426,7 @@ Guidelines:
                   fat: { type: Type.NUMBER },
                   fiber: { type: Type.NUMBER },
                   sodium: { type: Type.NUMBER },
+                  servings: { type: Type.NUMBER },
                   confidenceNote: { type: Type.STRING },
                 },
                 required: ["calories", "protein", "carbohydrates", "fat", "fiber", "sodium"],

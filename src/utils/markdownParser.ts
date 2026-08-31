@@ -612,6 +612,7 @@ export function parseObsidianRecipeMarkdown(
     const numFat = typeof fn.fat === 'number' ? fn.fat : typeof fn.fat === 'string' ? parseFloat(fn.fat) : undefined;
     const numFiber = typeof fn.fiber === 'number' ? fn.fiber : typeof fn.fiber === 'string' ? parseFloat(fn.fiber) : undefined;
     const numSodium = typeof fn.sodium === 'number' ? fn.sodium : typeof fn.sodium === 'string' ? parseFloat(fn.sodium) : undefined;
+    const numServings = typeof fn.servings === 'number' ? fn.servings : typeof fn.servings === 'string' ? parseFloat(fn.servings) : undefined;
     const confNote = typeof fn.confidenceNote === 'string' ? fn.confidenceNote : undefined;
 
     if (numCal !== undefined || numProt !== undefined || numCarb !== undefined || numFat !== undefined || numFiber !== undefined || numSodium !== undefined) {
@@ -622,6 +623,7 @@ export function parseObsidianRecipeMarkdown(
         fat: numFat,
         fiber: numFiber,
         sodium: numSodium,
+        servings: numServings,
         confidenceNote: confNote,
       };
     }
@@ -935,6 +937,9 @@ export function serializeRecipeToObsidianMarkdown(recipe: Partial<ObsidianRecipe
     }
     if (recipeToSerialize.nutrition.sodium !== undefined && recipeToSerialize.nutrition.sodium !== null) {
       nut.sodium = recipeToSerialize.nutrition.sodium;
+    }
+    if (recipeToSerialize.nutrition.servings !== undefined && recipeToSerialize.nutrition.servings !== null) {
+      nut.servings = recipeToSerialize.nutrition.servings;
     }
     if (recipeToSerialize.nutrition.confidenceNote && recipeToSerialize.nutrition.confidenceNote.trim()) {
       nut.confidenceNote = recipeToSerialize.nutrition.confidenceNote.trim();

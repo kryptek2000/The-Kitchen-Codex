@@ -34,12 +34,12 @@ export interface NutritionEstimateRequest {
 }
 
 export interface NutritionEstimateResult {
-  calories: number; // kcal per serving
-  protein: number; // g per serving
-  carbohydrates: number; // g per serving
-  fat: number; // g per serving
-  fiber: number; // g per serving
-  sodium: number; // mg per serving
+  calories: number; // kcal for the entire recipe batch
+  protein: number; // g for the entire recipe batch
+  carbohydrates: number; // g for the entire recipe batch
+  fat: number; // g for the entire recipe batch
+  fiber: number; // g for the entire recipe batch
+  sodium: number; // mg for the entire recipe batch
   confidenceNote: string;
 }
 
@@ -57,7 +57,12 @@ function cleanWikilinks(text: string): string {
 }
 
 /**
- * Fallback algorithmic culinary nutritional estimator based on standard ingredient profiles
+ * Fallback algorithmic culinary nutritional estimator based on standard
+ * ingredient profiles.
+ *
+ * Returns TOTAL nutrition for the supplied recipe batch as written. The
+ * `servings` argument is accepted for signature compatibility only and is NOT
+ * used as a divisor — the result is invariant to the requested serving count.
  */
 export function estimateAlgorithmicNutrition(
   recipeTitle: string,
@@ -185,25 +190,33 @@ export function estimateAlgorithmicNutrition(
     }
   }
 
-  // Ensure reasonable baseline only if no ingredients yielded calories
+  // Ensure a reasonable serving-independent baseline only if no ingredients
+  // yielded calories. The baseline scales with the number of ingredient lines,
+  // NOT with the requested serving count, so the recipe-total nutrition stays
+  // stable regardless of how many servings the user later selects.
   if (totalCalories <= 0) {
-    totalCalories = 450 * servings;
-    totalProtein = 18 * servings;
-    totalCarbs = 45 * servings;
-    totalFat = 15 * servings;
-    totalFiber = 3 * servings;
-    totalSodium = 600 * servings;
+    const count = Math.max(1, ingredientLines.length);
+    totalCalories = 450 * count;
+    totalProtein = 18 * count;
+    totalCarbs = 45 * count;
+    totalFat = 15 * count;
+    totalFiber = 3 * count;
+    totalSodium = 600 * count;
   }
 
-  const s = Math.max(1, servings);
+  // These are TOTAL nutrition values for the entire recipe batch as written.
+  // They are intentionally independent of the requested serving count; serving
+  // arithmetic is performed deterministically by the application on the frontend
+  // (nutritionForServings). The `servings` argument is accepted for signature
+  // compatibility only and is never used as a divisor.
   return {
-    calories: Math.max(0, Math.round(totalCalories / s)),
-    protein: Math.max(0, Math.round((totalProtein / s) * 10) / 10),
-    carbohydrates: Math.max(0, Math.round((totalCarbs / s) * 10) / 10),
-    fat: Math.max(0, Math.round((totalFat / s) * 10) / 10),
-    fiber: Math.max(0, Math.round((totalFiber / s) * 10) / 10),
-    sodium: Math.max(0, Math.round(totalSodium / s)),
-    confidenceNote: `Nutrition values are estimated based on ${ingredientLines.length} ingredients across ${s} servings.`
+    calories: Math.max(0, Math.round(totalCalories)),
+    protein: Math.max(0, Math.round(totalProtein * 10) / 10),
+    carbohydrates: Math.max(0, Math.round(totalCarbs * 10) / 10),
+    fat: Math.max(0, Math.round(totalFat * 10) / 10),
+    fiber: Math.max(0, Math.round(totalFiber * 10) / 10),
+    sodium: Math.max(0, Math.round(totalSodium)),
+    confidenceNote: `Nutrition values are estimates for the entire recipe based on ${ingredientLines.length} ingredients.`
   };
 }
 
@@ -215,20 +228,19 @@ async function callGeminiForNutrition(
   cleanedIngredientLines: string[]
 ): Promise<NutritionEstimateResult> {
   const prompt = `You are a certified culinary nutritional analysis engine for The Kitchen Codex.
-Analyze the following recipe and its ingredients to calculate the estimated nutritional content PER SERVING (divided among ${servings} servings total).
+Analyze the following recipe and its ingredients to calculate the estimated TOTAL nutritional content for the ENTIRE recipe batch, exactly as written. Do NOT divide by any number of servings.
 
 Recipe Title: ${recipeTitle}
-Total Servings: ${servings}
 
 Ingredients:
 ${cleanedIngredientLines.map(line => `- ${line}`).join("\n")}
 
 Guidelines:
-1. Calculate per-serving values (divide total recipe batch nutrition by ${servings}).
+1. Calculate total values for the entire supplied ingredient batch (do NOT divide by servings).
 2. Account for cooking methods and typical absorption (e.g. oil used in sautéing/frying).
 3. If an ingredient has "to taste", "pinch", "dash", or unstated amount, estimate standard modest culinary quantities.
 4. Output strictly the requested JSON structure with integers/decimals rounded to 1 decimal place (calories as whole integer).
-5. Provide a brief, factual confidence note (e.g. "Nutrition values are estimates based on ${cleanedIngredientLines.length} ingredients across ${servings} servings.").`;
+5. Provide a brief, factual confidence note.`;
 
   const response = await gemini.models.generateContent({
     model: modelName,
@@ -242,27 +254,27 @@ Guidelines:
         properties: {
           calories: {
             type: Type.NUMBER,
-            description: "Estimated calories per serving in kcal (integer)",
+            description: "Estimated total calories for the entire recipe batch in kcal",
           },
           protein: {
             type: Type.NUMBER,
-            description: "Estimated protein per serving in grams",
+            description: "Estimated total protein for the entire recipe batch in grams",
           },
           carbohydrates: {
             type: Type.NUMBER,
-            description: "Estimated total carbohydrates per serving in grams",
+            description: "Estimated total carbohydrates for the entire recipe batch in grams",
           },
           fat: {
             type: Type.NUMBER,
-            description: "Estimated total fat per serving in grams",
+            description: "Estimated total fat for the entire recipe batch in grams",
           },
           fiber: {
             type: Type.NUMBER,
-            description: "Estimated dietary fiber per serving in grams",
+            description: "Estimated total dietary fiber for the entire recipe batch in grams",
           },
           sodium: {
             type: Type.NUMBER,
-            description: "Estimated sodium per serving in milligrams",
+            description: "Estimated total sodium for the entire recipe batch in milligrams",
           },
           confidenceNote: {
             type: Type.STRING,
@@ -296,7 +308,7 @@ Guidelines:
   const confidenceNote =
     typeof parsed.confidenceNote === "string" && parsed.confidenceNote.trim()
       ? parsed.confidenceNote.trim()
-      : `Nutrition values are estimates based on ${cleanedIngredientLines.length} ingredients across ${servings} servings.`;
+      : `Nutrition values are estimates for the entire recipe based on ${cleanedIngredientLines.length} ingredients.`;
 
   return {
     calories,
@@ -310,8 +322,14 @@ Guidelines:
 }
 
 /**
- * Estimates macronutrients and micronutrients per serving using a resilient fallback chain:
- * Primary (gemini-3.7-flash) -> Fallback (gemini-3.1-flash-lite) -> Algorithmic Fallback
+ * Estimates TOTAL nutrition for the entire recipe batch using a resilient
+ * fallback chain: Primary (gemini-3.7-flash) -> Fallback (gemini-3.1-flash-lite)
+ * -> Algorithmic Fallback.
+ *
+ * The returned values represent the ENTIRE supplied recipe batch, not per
+ * serving. They are invariant to the `servings` field in the request (accepted
+ * for API compatibility only; it is never used as a nutrition denominator).
+ * All serving arithmetic is performed deterministically by the application.
  */
 export async function estimateRecipeNutrition(
   req: NutritionEstimateRequest

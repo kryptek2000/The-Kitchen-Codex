@@ -403,8 +403,11 @@ created: "2026-08-21"
     assert(nutData.nutrition.calories > 300, `Calories calculated: ${nutData.nutrition.calories}`);
     assert(nutData.nutrition.protein > 10, `Protein calculated: ${nutData.nutrition.protein}g`);
 
-    // Attach nutrition to recipe
-    reloadedRecipe.nutrition = nutData.nutrition;
+    // Attach nutrition to recipe. The API returns TOTAL nutrition for the
+    // recipe batch; persist it together with the recipe's original serving
+    // count as the re-scalable denominator (the canonical serving contract).
+    const nutritionBase = reloadedRecipe.servings || 4;
+    reloadedRecipe.nutrition = { ...nutData.nutrition, servings: nutritionBase };
     reloadedRecipe.calories = nutData.nutrition.calories;
 
     // Reserialize and write to disk

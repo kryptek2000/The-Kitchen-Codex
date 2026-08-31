@@ -69,6 +69,7 @@ export function canonicalToObsidianRecipe(
           fat: canonical.nutrition.fatGrams ?? undefined,
           fiber: canonical.nutrition.fiberGrams ?? undefined,
           sodium: canonical.nutrition.sodiumMg ?? undefined,
+          servings: canonical.nutrition.servings ?? undefined,
           confidenceNote: canonical.nutrition.confidenceNote,
         }
       : undefined,
@@ -107,6 +108,7 @@ export function obsidianToCanonicalRecipe(legacy: ObsidianRecipe): CanonicalReci
         fatGrams: legacy.nutrition.fat,
         fiberGrams: legacy.nutrition.fiber,
         sodiumMg: legacy.nutrition.sodium,
+        servings: legacy.nutrition.servings,
         confidenceNote: legacy.nutrition.confidenceNote,
       }
     : caloriesVal !== undefined
