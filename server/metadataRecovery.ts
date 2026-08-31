@@ -357,7 +357,7 @@ Guidelines:
     contents: prompt,
     config: {
       temperature: 0.1,
-      thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+      thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
       responseMimeType: "application/json",
       responseSchema: {
         type: Type.OBJECT,
