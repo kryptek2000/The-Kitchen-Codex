@@ -68,19 +68,23 @@ find_and_kill_port_owner() {
 
 find_and_kill_port_owner "$PORT"
 
-# 3. Start fresh production server in the background
+# 3. Start fresh production server fully detached so it survives this launcher
+#    and its desktop session exiting. Use setsid to run in a new session, nohup to
+#    ignore SIGHUP, and redirect all streams so the process is not tied to a TTY.
 echo "🚀 Launching Node.js production server (node dist/server.cjs)..."
-NODE_ENV=production PORT="$PORT" HOST="$HOST" node dist/server.cjs &
+LOG_FILE="${KITCHEN_CODEX_LOG:-/tmp/kitchen-codex.log}"
+setsid nohup env NODE_ENV=production PORT="$PORT" HOST="$HOST" node dist/server.cjs \
+  >"${LOG_FILE}" 2>&1 </dev/null &
 SERVER_PID=$!
 
-echo "Server started with PID: ${SERVER_PID}"
+echo "Server started with PID: ${SERVER_PID} (log: ${LOG_FILE})"
 
 # 4. Wait for server health endpoint to respond
 echo "⏳ Waiting for server health check on ${BASE_URL}/api/health..."
 server_ready=false
 for i in $(seq 1 "$MAX_WAIT_SECONDS"); do
   if ! kill -0 "$SERVER_PID" 2>/dev/null; then
-    echo "❌ Server process terminated unexpectedly during startup."
+    echo "❌ Server process terminated unexpectedly during startup. See ${LOG_FILE}"
     exit 1
   fi
 
@@ -92,7 +96,7 @@ for i in $(seq 1 "$MAX_WAIT_SECONDS"); do
 done
 
 if [ "$server_ready" = false ]; then
-  echo "❌ Server failed to respond to health check within ${MAX_WAIT_SECONDS} seconds."
+  echo "❌ Server failed to respond to health check within ${MAX_WAIT_SECONDS} seconds. See ${LOG_FILE}"
   kill "$SERVER_PID" 2>/dev/null || true
   exit 1
 fi
@@ -100,12 +104,11 @@ fi
 echo "✅ The Kitchen Codex is live and healthy at ${BASE_URL}"
 echo "💡 Tip: If your browser displays cached content, perform a hard reload: Ctrl+Shift+R (or Cmd+Shift+R)."
 
-# 5. Open browser if in desktop environment
+# 5. Open browser if in desktop environment (do not block the launcher on it)
 if command -v xdg-open >/dev/null 2>&1; then
   xdg-open "${BASE_URL}" >/dev/null 2>&1 || true
 elif command -v open >/dev/null 2>&1; then
   open "${BASE_URL}" >/dev/null 2>&1 || true
 fi
 
-# Wait on the server process so Ctrl+C forwards to it cleanly
-wait "$SERVER_PID"
+echo "Launcher finished. Server continues running in the background (PID ${SERVER_PID})."
