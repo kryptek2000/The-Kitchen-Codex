@@ -125,3 +125,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - AI web recipe grabber and structured schema parser.
 - 7-day weekly meal planner and synchronized categorized grocery shopping list.
 - Dataview-inspired table view and rich recipe card grid.
+
