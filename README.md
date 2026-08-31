@@ -1,6 +1,6 @@
-# 🍳 The Kitchen Codex `v0.2.4`
+# 🍳 The Kitchen Codex `v0.2.5`
 
-[![Version](https://img.shields.io/badge/version-0.2.4-amber.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.2.5-amber.svg)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A markdown-native recipe manager, meal planner, culinary knowledge base, and interactive cooking companion built specifically for **Obsidian** vaults. Read, edit, sync, and cook directly from your Obsidian `.md` recipe collection with YAML frontmatter, Dataview tags, wikilinks (`[[Ingredient]]`, `[[Target|Alias]]`), AI nutrition estimation, dynamic portion scaling, multi-step cooking timers, and AI-powered web recipe scraping.
@@ -228,7 +228,13 @@ favorite: true
 
 ## 📌 Changelog
 
-### `v0.2.4` (Current Release)
+### `v0.2.5` (Current Release)
+- **AI & Nutrition Reliability**: Fixed Gemini `504 DEADLINE_EXCEEDED` timeouts affecting nutrition and macro calculations by reducing Gemini thinking to `MINIMAL` for fast structured JSON extraction and raising the request timeout from 15s to 25s.
+- **Dynamic Gemini Client Refresh**: The Gemini client now re-initializes when `GEMINI_API_KEY` changes, keeping the AI pipeline in sync with key rotation.
+- **Multi-Tier Fallback Preserved**: Retained the robust cascade — `gemini-3.7-flash` (primary) → `gemini-3.1-flash-lite` (fallback) → offline algorithmic estimator.
+- **CI & Lockfile Integrity**: Added Bun lockfile consistency verification to `build.yml`, synchronized `bun.lock` with the actual dependency tree, and kept `--frozen-lockfile` enforcement in CI.
+
+### `v0.2.4`
 - **Nutrition, Scaling & Macro Accuracy**: Refactored algorithmic nutrition estimation in `server/nutritionEstimator.ts` to ensure strict thermodynamic Atwater energy balance ($4 \times \text{Protein} + 4 \times \text{Carbs} + 9 \times \text{Fat} \approx \text{Calories}$, ratio $0.96\text{--}1.01$).
 - **Expanded Nutritional Ingredient Database**: Added nutrient density curves for whole grains (oats, barley, quinoa), legumes/tofu, seeds and nuts (walnuts, chia, almonds), dairy/milks, and fresh fruits.
 - **Serving Size Scaling Verification**: Audited multi-serving batch estimation (1, 2, 4, 6, 8, 12 servings) with linear nutrient scaling, integer rounding variance $\le 4\,\text{kcal}$, and lossless Obsidian YAML frontmatter serialization.

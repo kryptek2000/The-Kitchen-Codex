@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.5] - 2026-08-30
+
+### 🧠 AI & Nutrition Reliability
+- **Fixed Gemini `504 DEADLINE_EXCEEDED` timeouts** affecting nutrition and macro calculations.
+- **Reduced Gemini thinking to `MINIMAL`** for fast, deterministic structured JSON extraction across nutrition estimation, metadata recovery, and recipe grabbing.
+- **Increased the Gemini request timeout** from 15 seconds to 25 seconds in `server/modelConfig.ts`.
+- **Dynamic Gemini client refresh** when `GEMINI_API_KEY` changes, keeping the AI pipeline in sync with key rotation.
+- **Preserved the multi-tier Gemini fallback architecture**: `gemini-3.7-flash` (primary) → `gemini-3.1-flash-lite` (fallback) → offline algorithmic estimator.
+
+### 🔧 CI & Build Reliability
+- **Added Bun lockfile consistency verification** to `.github/workflows/build.yml`.
+- **Synchronized `bun.lock`** with the actual dependency tree and kept `--frozen-lockfile` enforcement in CI.
+
+---
+
 ## [0.2.4] - 2026-08-30
 
 ### 🥗 Nutrition, Scaling & Macro Accuracy
