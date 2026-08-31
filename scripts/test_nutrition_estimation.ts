@@ -62,7 +62,7 @@ async function simulateFallbackCascade(
 
 async function runNutritionFunctionalSuite() {
   console.log("========================================================================");
-  console.log("🥗 THE KITCHEN CODEX v0.2.4 — NUTRITION ESTIMATION REGRESSION SUITE");
+  console.log("🥗 THE KITCHEN CODEX v0.2.5 — NUTRITION ESTIMATION REGRESSION SUITE");
   console.log("========================================================================");
 
   let passed = 0;
