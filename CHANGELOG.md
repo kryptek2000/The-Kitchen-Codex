@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.6] - 2026-08-31
+
+### 🎯 Deterministic Nutrition Serving Math
+- **Fixed incorrect nutrition scaling when changing recipe serving counts** — the serving selector could previously cause displayed nutrition to decrease as the requested count increased, and estimation was repeated per count leading to AI variance.
+- **Estimate nutrition once** for the recipe's complete ingredient batch; serving changes now perform pure local arithmetic.
+- **Deterministic per-serving scaling** applied uniformly to calories, protein, carbohydrates, fat, fiber, and sodium.
+- **No re-estimation on serving change** — changing 1 → 2 → 4 → 8 servings no longer calls Gemini or reinterprets the recipe.
+- **Persistent serving denominator** — saved nutrition now stores total recipe nutrition plus the original/base serving count so it is self-describing and re-scalable.
+- **Backward compatibility** — existing recipes with legacy per-serving nutrition (without a stored serving denominator) are preserved and interpreted under the legacy per-serving contract, with no re-estimation.
+- **Unified display & export scaling** — the nutrition card, editor, and exported recipe cards use the same deterministic serving calculations.
+
+### 🧪 Testing & Verification
+- **107 / 107 Vitest tests passing**, including **15 new nutrition serving-math regression tests**.
+- Production build, production regression (6/6), security verification (33/33), SSRF rebinding (48/48), image content-type (38/38), and vault lifecycle E2E (49/49) all passing.
+- `bun audit` reports **no known vulnerabilities**.
+- TypeScript typecheck (`tsc --noEmit`) passing and lockfile/frozen-install verification passing.
+
+---
+
 ## [0.2.5] - 2026-08-30
 
 ### 🧠 AI & Nutrition Reliability
