@@ -9,6 +9,7 @@ import { recipeImportRateLimiter, nutritionEstimateRateLimiter, metadataRecovery
 import { safeFetchImage, WafProtectionError } from "./server/ssrfGuard.js";
 import { createSecurityMiddleware } from "./server/securityHeaders.js";
 import { requireAiAccessToken } from "./server/aiEndpointAuth.js";
+import { RELEASE_VERSION } from "./src/appVersion.js";
 
 dotenv.config();
 
@@ -61,7 +62,7 @@ app.use(express.json({ limit: "2mb" }));
 
 // Health check endpoint
 app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", version: "0.2.5", timestamp: new Date().toISOString() });
+  res.json({ status: "ok", version: RELEASE_VERSION, timestamp: new Date().toISOString() });
 });
 
 // Recipe Grabber Web Importer endpoint with rate limiting & input validation
