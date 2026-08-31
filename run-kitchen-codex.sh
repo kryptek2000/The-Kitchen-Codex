@@ -16,13 +16,49 @@ PORT="${PORT:-3000}"
 HOST="${HOST:-127.0.0.1}"
 BASE_URL="http://${HOST}:${PORT}"
 MAX_WAIT_SECONDS=15
+APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$APP_DIR" || exit 1
 
 echo "🍳 Starting The Kitchen Codex runner..."
 
-# 1. Check if dist/server.cjs exists; if not, build it
-if [ ! -f "dist/server.cjs" ]; then
-  echo "📦 Production build not found. Running build..."
-  npm run build || bun run build
+# 0. Auto-update: pull the latest main from origin and rebuild if there are new
+#    commits. This keeps the production bundle in sync with pushed changes.
+#    Skips gracefully (with a notice, not an error) if this isn't a git repo or
+#    the remote isn't reachable / offline.
+AUTO_UPDATE="${KITCHEN_CODEX_AUTO_UPDATE:-1}"
+CHANGED=0
+
+if [ "$AUTO_UPDATE" = "1" ] && git -C "$APP_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  if git -C "$APP_DIR" remote get-url origin >/dev/null 2>&1; then
+    echo "🔄 Checking for updates from origin/main..."
+    BEFORE="$(git -C "$APP_DIR" rev-parse HEAD 2>/dev/null || true)"
+    git -C "$APP_DIR" fetch origin --quiet 2>/dev/null && {
+      git -C "$APP_DIR" pull --ff-only origin main >/dev/null 2>&1 || true
+    } || echo "   (remote unreachable — continuing with existing code)"
+    AFTER="$(git -C "$APP_DIR" rev-parse HEAD 2>/dev/null || true)"
+
+    if [ -n "$BEFORE" ] && [ -n "$AFTER" ] && [ "$BEFORE" != "$AFTER" ]; then
+      CHANGED=1
+      echo "   ✨ Updated $(git -C "$APP_DIR" log --oneline "$BEFORE..$AFTER" 2>/dev/null | grep -c .) commit(s)."
+    else
+      echo "   ✓ Up to date."
+    fi
+  else
+    echo "   (no 'origin' remote configured — skipping auto-update)"
+  fi
+else
+  echo "   (auto-update disabled via KITCHEN_CODEX_AUTO_UPDATE=0, or not a git repo)"
+fi
+
+# 1. Rebuild when new code was pulled, or when dist/server.cjs is missing.
+if [ "$CHANGED" = "1" ] || [ ! -f "dist/server.cjs" ]; then
+  if [ "$CHANGED" = "1" ]; then
+    echo "📦 Installing dependencies and rebuilding for updated source..."
+  else
+    echo "📦 Production build not found. Running build..."
+  fi
+  (cd "$APP_DIR" && (bun install --no-save >/dev/null 2>&1 || true))
+  (cd "$APP_DIR" && (npm run build || bun run build))
 fi
 
 # 2. Detect and kill any stale running process on the target port
