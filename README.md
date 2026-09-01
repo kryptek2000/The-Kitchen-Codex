@@ -1,6 +1,6 @@
-# 🍳 The Kitchen Codex `v0.2.5`
+# 🍳 The Kitchen Codex `v0.2.6`
 
-[![Version](https://img.shields.io/badge/version-0.2.5-amber.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.2.6-amber.svg)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A markdown-native recipe manager, meal planner, culinary knowledge base, and interactive cooking companion built specifically for **Obsidian** vaults. Read, edit, sync, and cook directly from your Obsidian `.md` recipe collection with YAML frontmatter, Dataview tags, wikilinks (`[[Ingredient]]`, `[[Target|Alias]]`), AI nutrition estimation, dynamic portion scaling, multi-step cooking timers, and AI-powered web recipe scraping.
@@ -228,7 +228,12 @@ favorite: true
 
 ## 📌 Changelog
 
-### `v0.2.5` (Current Release)
+### `v0.2.6` (Current Release)
+- **Deterministic Nutrition Serving Math**: Fixed incorrect nutrition scaling when changing recipe serving counts. Nutrition is now estimated once for the recipe's complete ingredient batch; serving changes are pure deterministic arithmetic (never a new AI estimate), with a persistent serving denominator for self-describing, re-scalable totals.
+- **Backward Compatibility**: Legacy per-serving nutrition (no stored denominator) is preserved and interpreted under the legacy per-serving contract, with no re-estimation and no rewrite.
+- **Shared Gemini Client & API Consolidation** (v0.2.7-in-progress foundation): centralized the Gemini client, added a global malformed-JSON/error handler, made the version a single source of truth, and expanded regression coverage.
+
+### `v0.2.5` (Previous Release)
 - **AI & Nutrition Reliability**: Fixed Gemini `504 DEADLINE_EXCEEDED` timeouts affecting nutrition and macro calculations by reducing Gemini thinking to `MINIMAL` for fast structured JSON extraction and raising the request timeout from 15s to 25s.
 - **Dynamic Gemini Client Refresh**: The Gemini client now re-initializes when `GEMINI_API_KEY` changes, keeping the AI pipeline in sync with key rotation.
 - **Multi-Tier Fallback Preserved**: Retained the robust cascade — `gemini-3.7-flash` (primary) → `gemini-3.1-flash-lite` (fallback) → offline algorithmic estimator.

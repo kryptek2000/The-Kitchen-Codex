@@ -11,55 +11,20 @@ import {
 } from '../types';
 import { getRecipeImage } from './imageHelper';
 import { obsidianToCanonicalRecipe, canonicalToObsidianRecipe } from '../schema/legacyAdapter';
+import { parseFraction } from '../schema/recipeValidator';
 
 /**
- * Parses fraction strings (e.g., "1 1/2", "3/4", "0.5", "½", "1 ½") into decimal numbers
+ * Parses fraction strings (e.g., "1 1/2", "3/4", "0.5", "½", "1 ½") into decimal numbers.
+ *
+ * This is a shared, single implementation of fraction parsing. The real parser
+ * lives in `schema/recipeValidator.ts` (`parseFraction`), which already handles
+ * unicode fractions, mixed numbers, hyphenated mixed numbers ("1-1/2"), and
+ * finite-number guards. It is a strict superset of the historical local logic,
+ * so delegating here removes a duplicated parser without changing behavior for
+ * any already-correct input (and fixes "1-1/2", which previously degraded to 1).
  */
 export function parseFractionToDecimal(str: string): number | null {
-  let trimmed = str.trim();
-  if (!trimmed) return null;
-
-  // Unicode fraction mapping
-  const unicodeMap: Record<string, number> = {
-    '½': 0.5,
-    '⅓': 1 / 3,
-    '⅔': 2 / 3,
-    '¼': 0.25,
-    '¾': 0.75,
-    '⅛': 0.125,
-    '⅜': 0.375,
-    '⅝': 0.625,
-    '⅞': 0.875,
-  };
-
-  // Check for standalone or mixed unicode fraction (e.g. "1 ½" or "½" or "1½")
-  const unicodeMatch = trimmed.match(/^(\d+)?\s*([½⅓⅔¼¾⅛⅜⅝⅞])$/);
-  if (unicodeMatch) {
-    const whole = unicodeMatch[1] ? parseInt(unicodeMatch[1], 10) : 0;
-    const fracVal = unicodeMap[unicodeMatch[2]] || 0;
-    return whole + fracVal;
-  }
-
-  // Mixed fraction: "1 1/2" or "2 3/4"
-  const mixedMatch = trimmed.match(/^(\d+)\s+(\d+)\/(\d+)$/);
-  if (mixedMatch) {
-    const whole = parseInt(mixedMatch[1], 10);
-    const num = parseInt(mixedMatch[2], 10);
-    const den = parseInt(mixedMatch[3], 10);
-    if (den !== 0) return whole + num / den;
-  }
-
-  // Simple fraction: "3/4" or "1/2"
-  const fracMatch = trimmed.match(/^(\d+)\/(\d+)$/);
-  if (fracMatch) {
-    const num = parseInt(fracMatch[1], 10);
-    const den = parseInt(fracMatch[2], 10);
-    if (den !== 0) return num / den;
-  }
-
-  // Regular number / float: "2", "2.5"
-  const num = parseFloat(trimmed);
-  return isNaN(num) ? null : num;
+  return parseFraction(str);
 }
 
 /**

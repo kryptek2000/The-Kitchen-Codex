@@ -1,33 +1,11 @@
-import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
+import { Type, ThinkingLevel } from "@google/genai";
 import dotenv from "dotenv";
 import { safeFetchHtml } from "./ssrfGuard.js";
 import { renderIngredientLine, parseIngredientLine } from "../src/utils/markdownParser.js";
 import { MODEL_CONFIG } from "./modelConfig.js";
+import { getGemini } from "./geminiClient.js";
 
 dotenv.config();
-
-let aiClient: GoogleGenAI | null = null;
-let lastApiKey: string | undefined = undefined;
-
-export function getGemini(): GoogleGenAI | null {
-  const key = process.env.GEMINI_API_KEY;
-  if (!key || key === "MY_GEMINI_API_KEY") {
-    return null;
-  }
-  if (!aiClient || lastApiKey !== key) {
-    lastApiKey = key;
-    aiClient = new GoogleGenAI({
-      apiKey: key,
-      httpOptions: {
-        headers: {
-          "User-Agent": "aistudio-build",
-        },
-        timeout: MODEL_CONFIG.requestTimeoutMs,
-      },
-    });
-  }
-  return aiClient;
-}
 
 export interface GrabbedRecipeResult {
   title: string;

@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased] - v0.2.7 (Consolidation & Reliability)
+
+### 🧹 Consolidation & Reliability
+- **Single-source release version**: runtime version now lives only in
+  `src/appVersion.ts`, shared by the client and `/api/health`. Added
+  `scripts/bump_version.ts` and removed the `VITE_APP_VERSION` build override
+  that could silently pin an old release.
+- **Shared Gemini client**: extracted the duplicated bootstrap/key-rotation logic
+  into `server/geminiClient.ts` (used by nutrition, metadata recovery, grabber).
+- **Centralized error handling**: added `server/errorHandler.ts`. Malformed JSON
+  now returns a JSON `400` (not an Express HTML page), without leaking filesystem
+  paths or stack traces; unknown `/api` routes return JSON `404`.
+- **Zero-fabrication**: recipe-card export shows a neutral dash instead of
+  fabricated "15 mins"/"30 mins"; algorithmic metadata recovery omits
+  `cookTime`/`totalTime`/`servings` when there is no evidence rather than
+  falling back to "20 mins"/"4 servings".
+- **Single fraction parser**: `parseFractionToDecimal` now delegates to the one
+  canonical parser in `src/schema/recipeValidator.ts`.
+- **Regression coverage**: added Vitest suites for versioning, the shared Gemini
+  client, Express wiring (malformed JSON, health, auth, headers, 404), rate
+  limiting, metadata recovery, and ingredient quantity scaling.
+
+---
+
 ## [0.2.6] - 2026-08-31
 
 ### 🎯 Deterministic Nutrition Serving Math

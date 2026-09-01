@@ -19,7 +19,7 @@ markdown/vault sync.
 bun install --frozen-lockfile   # dry check that lockfile matches package.json
 bun run dev                     # tsx server.ts (Vite dev middleware, port 3000)
 bun run lint                    # tsc --noEmit  (this is the "typecheck" step)
-bun run test                    # vitest run — expect 92/92 (12 files)
+bun run test                    # vitest run — expect 148/148 (20 files)
 bun run build                   # vite build && esbuild server.ts -> dist/server.cjs
 bun run test:prod               # needs server running on :3000 (see note)
 bun x tsx scripts/security_verification.ts   # needs server running on :3000
@@ -60,8 +60,10 @@ bun audit                       # dependency vulnerability check
 - Recipe Grabber supports `{ url }`, `{ html }`, `{ rawText }`.
 - Zero-fabrication invariant: never invent servings, prep/cook/total time,
   calories, image, ingredients, or instructions when source data is absent.
-- Recipe grabber's `getGemini()` is keyed to key rotation (recreates the client
-  when `GEMINI_API_KEY` changes); offline fallback returns when key is unset.
+- Recipe grabber's Gemini client comes from `server/geminiClient.ts`, which is
+  keyed to key rotation (recreates the client when `GEMINI_API_KEY` changes);
+  offline fallback returns when key is unset. The nutrition estimator and
+  metadata recovery use the same shared client.
 - No automatic ingredient wikilinks. Do not re-introduce them.
 
 ## Canonical Schema v1
@@ -81,6 +83,10 @@ serializeRecipeToObsidianMarkdown -> obsidianToCanonicalRecipe -> canonicalToObs
 
 `validateCanonicalRecipe`/`normalizeCanonicalRecipe` live in
 `src/schema/recipeValidator.ts`. The canonical boundary is active; keep it.
+
+The canonical fraction parser is `parseFraction` in `src/schema/recipeValidator.ts`.
+`parseFractionToDecimal` in `src/utils/markdownParser.ts` now delegates to it —
+there is a SINGLE fraction/quantity parser, not two.
 
 ## Server binding & deployment
 
@@ -102,6 +108,10 @@ in dev (Vite HMR). `frame-ancestors` is configurable via `CSP_FRAME_ANCESTORS`.
 - `main` HEAD is clean and pushed (see `git log`). It includes the Express 5
   migration (merged via PR #7), GenAI 2.19.0, esbuild 0.28.2, actions/checkout
   v7, TS7 baseline, security hardening, deps cleanup, and this doc.
+- **v0.2.6** is the current release. `RELEASE_VERSION` in `src/appVersion.ts`
+  is the single runtime source of truth for BOTH the client (`src/version.ts`)
+  and the server (`/api/health`). `package.json`/`README.md` reference the same
+  release. To bump, run `bun x tsx scripts/bump_version.ts vX.Y.Z`.
 - **Express 5 is merged into `main`** (`express ^5.2.1`, `@types/express ^5.0.6`).
   The SPA fallback uses `app.get('/{*splat}')` (Express 5 / path-to-regexp v8
   rejects the bare `*`). Because this was a major bump, a manual browser
@@ -109,7 +119,16 @@ in dev (Vite HMR). `frame-ancestors` is configurable via `CSP_FRAME_ANCESTORS`.
 - **Vite 8** (6.4.3 -> 8.2.2) was evaluated but **not merged**: it passes
   automated checks but the repo has no browser E2E. Treat as optional; if adopted,
   do a manual in-browser smoke-test first.
-- Tests: **92/92 (12 files)**. `bun audit`: clean. `security_verification.ts`:
+- **Server app is now built by `server/app.ts`** (`createApp({ isProduction })`),
+  which owns headers, JSON parsing, all `/api` routes, and the centralized error
+  handler (`server/errorHandler.ts`). `server.ts` is the entrypoint: it attaches
+  Vite (dev) / static + SPA fallback (prod) and binds the port. The API is
+  therefore hermetic-testable via the `serverWiring` suite without booting Vite.
+- **Zero-fabrication in algorithmic metadata recovery**: the offline fallback in
+  `server/metadataRecovery.ts` only emits `cookTime`/`totalTime`/`servings` when
+  there is real evidence; otherwise those fields are absent (prefer absence over
+  a baked-in "20 mins"/"4 servings").
+- Tests: **148/148 (20 files)**. `bun audit`: clean. `security_verification.ts`:
   33/33.
 
 ## Notes
@@ -178,11 +197,14 @@ own Markdown knowledge base.
 
 ### Recommended roadmap (milestones)
 
-`v0.2.3 (current) -> v0.3 (testing, schema, search, perf) -> v0.4 (AI assistant,
-semantic search, relationships) -> v0.5 (smart meal planner, pantry, shopping)
--> v0.6 (cooking mode 2.0, voice, history) -> v0.7 (OCR/PDF/recipe intelligence)
--> v0.8 (cookbook, card studio 3.0, print/PDF) -> v0.9 (mobile/PWA, offline,
-accessibility, perf) -> v3.0 (intelligent cooking platform)`.
+`v0.2.6 (current) -> v0.2.7 (consolidation: shared Gemini client, centralized
+error handler, version single-source-of-truth, zero-fabrication + regression
+coverage) -> v0.3 (trustworthy data layer / nutrition accuracy, search, perf)
+-> v0.4 (AI assistant, semantic search, relationships) -> v0.5 (smart meal
+planner, pantry, shopping) -> v0.6 (cooking mode 2.0, voice, history)
+-> v0.7 (OCR/PDF/recipe intelligence) -> v0.8 (cookbook, card studio 3.0,
+print/PDF) -> v0.9 (mobile/PWA, offline, accessibility, perf)
+-> v3.0 (intelligent cooking platform)`.
 
 ### Product rules
 

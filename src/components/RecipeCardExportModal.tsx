@@ -20,6 +20,14 @@ interface RecipeCardExportModalProps {
 
 type CardTheme = 'classic' | 'modern' | 'obsidian' | 'kraft';
 
+/**
+ * Zero-fabrication: show a recipe's prep/cook time verbatim, or a neutral em
+ * dash when the recipe has no such value. Never invent a placeholder duration.
+ */
+export function cardTiming(value?: string): string {
+  return value && value.trim() ? value : '—';
+}
+
 export function RecipeCardExportModal({ recipe, currentServings: initialServings, onClose }: RecipeCardExportModalProps) {
   const [servings, setServings] = useState<number>(initialServings || recipe.servings || 4);
   const [theme, setTheme] = useState<CardTheme>('classic');
@@ -396,13 +404,13 @@ export function RecipeCardExportModal({ recipe, currentServings: initialServings
                     <div className="flex flex-col items-center justify-center">
                       <Clock className="w-4 h-4 mb-1 opacity-75" style={{ color: currentThemeConfig.accent }} />
                       <span className="text-[10px] uppercase font-bold tracking-wider opacity-60">Prep Time</span>
-                      <span className="text-xs sm:text-sm font-serif font-bold mt-0.5">{recipe.prepTime || '15 mins'}</span>
+                      <span className="text-xs sm:text-sm font-serif font-bold mt-0.5">{cardTiming(recipe.prepTime)}</span>
                     </div>
 
                     <div className="flex flex-col items-center justify-center border-x" style={{ borderColor: currentThemeConfig.boxBorder }}>
                       <Flame className="w-4 h-4 mb-1 opacity-75" style={{ color: currentThemeConfig.accent }} />
                       <span className="text-[10px] uppercase font-bold tracking-wider opacity-60">Cook Time</span>
-                      <span className="text-xs sm:text-sm font-serif font-bold mt-0.5">{recipe.cookTime || '30 mins'}</span>
+                      <span className="text-xs sm:text-sm font-serif font-bold mt-0.5">{cardTiming(recipe.cookTime)}</span>
                     </div>
 
                     <div className="flex flex-col items-center justify-center">

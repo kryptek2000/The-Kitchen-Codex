@@ -2,31 +2,9 @@ import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
 import dotenv from "dotenv";
 import { estimateAlgorithmicNutrition } from "./nutritionEstimator.js";
 import { MODEL_CONFIG } from "./modelConfig.js";
+import { getGemini } from "./geminiClient.js";
 
 dotenv.config();
-
-let aiClient: GoogleGenAI | null = null;
-let lastApiKey: string | undefined = undefined;
-
-function getGemini(): GoogleGenAI | null {
-  const key = process.env.GEMINI_API_KEY;
-  if (!key || key === "MY_GEMINI_API_KEY") {
-    return null;
-  }
-  if (!aiClient || lastApiKey !== key) {
-    lastApiKey = key;
-    aiClient = new GoogleGenAI({
-      apiKey: key,
-      httpOptions: {
-        headers: {
-          "User-Agent": "aistudio-build",
-        },
-        timeout: MODEL_CONFIG.requestTimeoutMs,
-      },
-    });
-  }
-  return aiClient;
-}
 
 const PRIMARY_MODEL = MODEL_CONFIG.metadataRecoveryPrimary;
 const FALLBACK_MODEL = MODEL_CONFIG.metadataRecoveryFallback;
@@ -130,49 +108,51 @@ export function recoverMetadataAlgorithmically(
     }
   }
 
-  // Heuristic Cook Time
-  let cookTimeStr = "20 mins";
-  let cookTimeConf: "high" | "medium" | "low" = "low";
-  let cookTimeSrc: "instructions_explicit" | "body_parsed" | "culinary_inference" = "culinary_inference";
-  let cookExplanation = "Estimated based on standard culinary preparation times";
+  // Heuristic Cook Time — only emit when there is real evidence. Prefer absence
+  // over a fabricated default ("20 mins") that the recovery UI would otherwise
+  // surface as a confidently-recovered value. Inference branches are still
+  // labelled `medium`/`culinary_inference` so the modal shows them as guesses.
+  type RecoveredText = { value: string; confidence: "high" | "medium" | "low"; source: "instructions_explicit" | "body_parsed" | "culinary_inference"; explanation: string };
+  let cookTime: RecoveredText | undefined;
+  let cookMinutes: number | null = null;
 
   if (extractedCookMins > 0) {
-    if (extractedCookMins >= 60) {
-      const h = Math.floor(extractedCookMins / 60);
-      const m = extractedCookMins % 60;
-      cookTimeStr = m > 0 ? `${h} hr ${m} mins` : `${h} ${h === 1 ? 'hr' : 'hrs'}`;
-    } else {
-      cookTimeStr = `${extractedCookMins} mins`;
-    }
-    cookTimeConf = "high";
-    cookTimeSrc = "instructions_explicit";
-    cookExplanation = `Calculated from specific cooking durations mentioned in the instructions (${extractedCookMins} mins)`;
+    cookMinutes = extractedCookMins;
+    const h = Math.floor(extractedCookMins / 60);
+    const m = extractedCookMins % 60;
+    const value =
+      extractedCookMins < 60
+        ? `${extractedCookMins} mins`
+        : m > 0
+        ? `${h} hr ${m} mins`
+        : `${h} ${h === 1 ? 'hr' : 'hrs'}`;
+    cookTime = {
+      value,
+      confidence: "high",
+      source: "instructions_explicit",
+      explanation: `Calculated from specific cooking durations mentioned in the instructions (${extractedCookMins} mins)`,
+    };
   } else if (allText.includes("rub") || allText.includes("seasoning") || allText.includes("marinade") || allText.includes("dressing")) {
-    cookTimeStr = "0 mins";
-    cookTimeConf = "medium";
-    cookTimeSrc = "culinary_inference";
-    cookExplanation = "Seasoning/rub blend requires no cooking time";
+    cookMinutes = 0;
+    cookTime = { value: "0 mins", confidence: "medium", source: "culinary_inference", explanation: "Seasoning/rub blend requires no cooking time" };
   } else if (allText.includes("slow cooker") || allText.includes("crockpot")) {
-    cookTimeStr = "4 hrs";
-    cookTimeConf = "medium";
-    cookTimeSrc = "culinary_inference";
-    cookExplanation = "Inferred from slow-cooker method";
+    cookMinutes = 240;
+    cookTime = { value: "4 hrs", confidence: "medium", source: "culinary_inference", explanation: "Inferred from slow-cooker method" };
   } else if (allText.includes("bake") || allText.includes("roast")) {
-    cookTimeStr = "35 mins";
-    cookTimeConf = "medium";
-    cookTimeSrc = "culinary_inference";
-    cookExplanation = "Estimated typical oven baking duration";
+    cookMinutes = 35;
+    cookTime = { value: "35 mins", confidence: "medium", source: "culinary_inference", explanation: "Estimated typical oven baking duration" };
   }
 
-  // Heuristic Prep Time
+  // Heuristic Prep Time (bounded inference derived from ingredient count)
   let prepMins = Math.min(30, Math.max(5, (rawIngs.length || 5) * 2));
   if (allText.includes("rub") || allText.includes("seasoning")) prepMins = 5;
   const prepTimeStr = `${prepMins} mins`;
 
-  // Heuristic Servings
-  let estimatedServings = 4;
+  // Heuristic Servings — only emit when an explicit yield exists or the recipe is
+  // clearly a batch rub/seasoning. Never fall back to a baked-in "4 servings".
+  let estimatedServings: number | undefined;
   let servingsConf: "high" | "medium" | "low" = "medium";
-  let servingsExplanation = "Estimated standard household yield of 4 servings";
+  let servingsExplanation = "";
 
   const servMatch = allText.match(/(?:serves|servings|yield|yields|makes)\s*[:\-–]?\s*(\d+)/i);
   if (servMatch) {
@@ -183,6 +163,11 @@ export function recoverMetadataAlgorithmically(
     estimatedServings = 12;
     servingsExplanation = "Yield estimated for spice rub batch (~12 portions)";
   }
+
+  // The offline nutrition estimator always returns TOTAL batch nutrition, so a
+  // serving count is only a label; fall back to a neutral number for labelling
+  // without fabricating a recovered servings field.
+  const nutritionServings = estimatedServings ?? 4;
 
   // Heuristic Cuisine & Category
   let cuisine = "General";
@@ -233,38 +218,28 @@ export function recoverMetadataAlgorithmically(
   }
 
   // Nutrition estimation
-  const nutResult = estimateAlgorithmicNutrition(title, estimatedServings, rawIngs.length > 0 ? rawIngs : ["1 portion ingredients"]);
+  const nutResult = estimateAlgorithmicNutrition(title, nutritionServings, rawIngs.length > 0 ? rawIngs : ["1 portion ingredients"]);
 
-  return {
+  const result: MetadataRecoveryResult = {
     prepTime: {
       value: prepTimeStr,
       confidence: "medium",
       source: "culinary_inference",
       explanation: `Estimated prep time based on ingredient count (${rawIngs.length} ingredients)`,
     },
-    cookTime: {
-      value: cookTimeStr,
-      confidence: cookTimeConf,
-      source: cookTimeSrc,
-      explanation: cookExplanation,
-    },
-    totalTime: {
-      value: `${prepMins + (extractedCookMins || 20)} mins`,
-      confidence: "medium",
-      source: "culinary_inference",
-      explanation: "Sum of estimated prep and cook times",
-    },
-    servings: {
-      value: estimatedServings,
-      confidence: servingsConf,
-      source: "culinary_inference",
-      explanation: servingsExplanation,
-    },
+    totalTime: cookTime
+      ? {
+          value: `${prepMins + (cookMinutes ?? 0)} mins`,
+          confidence: "medium",
+          source: "culinary_inference",
+          explanation: "Sum of estimated prep and cook times",
+        }
+      : undefined,
     calories: {
       value: nutResult.calories,
       confidence: "medium",
       source: "culinary_inference",
-      explanation: `Calculated as total nutrition for the entire recipe batch across ${estimatedServings} servings`,
+      explanation: `Calculated as total nutrition for the entire recipe batch across ${nutritionServings} servings`,
     },
     nutrition: {
       value: {
@@ -274,7 +249,7 @@ export function recoverMetadataAlgorithmically(
         fat: nutResult.fat,
         fiber: nutResult.fiber,
         sodium: nutResult.sodium,
-        servings: estimatedServings,
+        servings: nutritionServings,
         confidenceNote: nutResult.confidenceNote,
       },
       confidence: "medium",
@@ -306,6 +281,22 @@ export function recoverMetadataAlgorithmically(
       explanation: "Curated Obsidian hashtags for culinary search and Dataview tables",
     },
   };
+
+  // Zero-fabrication: only attach cooked/serving fields that actually have
+  // evidence. Fields left `undefined` are not offered to the user for approval.
+  if (cookTime) {
+    result.cookTime = cookTime;
+  }
+  if (estimatedServings !== undefined) {
+    result.servings = {
+      value: estimatedServings,
+      confidence: servingsConf,
+      source: "culinary_inference",
+      explanation: servingsExplanation,
+    };
+  }
+
+  return result;
 }
 
 async function callGeminiForRecovery(

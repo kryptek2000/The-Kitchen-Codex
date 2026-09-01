@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ObsidianRecipe } from '../../src/types';
+import { cardTiming } from '../../src/components/RecipeCardExportModal';
 
 describe('Recipe Card Data Mapping & Regression', () => {
   const sampleRecipe: ObsidianRecipe = {
@@ -60,5 +61,17 @@ describe('Recipe Card Data Mapping & Regression', () => {
     };
     const hasFoodDisplayMissing = Boolean(recipeWithoutFoodDisplay.dataviewFields?.foodDisplay || recipeWithoutFoodDisplay.dataviewFields?.presentation);
     expect(hasFoodDisplayMissing).toBe(false);
+  });
+
+  it('does not fabricate prep/cook time on the exported card', () => {
+    // A recipe with no timings must NOT get placeholder "15 mins"/"30 mins".
+    expect(cardTiming(undefined)).toBe('—');
+    expect(cardTiming('')).toBe('—');
+    expect(cardTiming('   ')).toBe('—');
+    // Real values pass through verbatim.
+    expect(cardTiming('30 mins')).toBe('30 mins');
+    expect(cardTiming('1 hr 15 mins')).toBe('1 hr 15 mins');
+    expect(cardTiming(sampleRecipe.prepTime)).toBe('30 mins');
+    expect(cardTiming(sampleRecipe.cookTime)).toBe('45 mins');
   });
 });
