@@ -1,6 +1,6 @@
-# 🍳 The Kitchen Codex `v0.2.6`
+# 🍳 The Kitchen Codex `v0.2.7`
 
-[![Version](https://img.shields.io/badge/version-0.2.6-amber.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.2.7-amber.svg)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A markdown-native recipe manager, meal planner, culinary knowledge base, and interactive cooking companion built specifically for **Obsidian** vaults. Read, edit, sync, and cook directly from your Obsidian `.md` recipe collection with YAML frontmatter, Dataview tags, wikilinks (`[[Ingredient]]`, `[[Target|Alias]]`), AI nutrition estimation, dynamic portion scaling, multi-step cooking timers, and AI-powered web recipe scraping.
@@ -228,7 +228,12 @@ favorite: true
 
 ## 📌 Changelog
 
-### `v0.2.6` (Current Release)
+### `v0.2.7` (Current Release)
+- **Consolidation & Reliability**: made the release version a single source of truth (`scripts/bump_version.ts`), centralized the Gemini client (`server/geminiClient.ts`) and the Express app (`server/app.ts`), added safe JSON/API error handling (`server/errorHandler.ts`), improved metadata-recovery and recipe-card zero-fabrication, and consolidated fraction parsing.
+- **Ingredient Scaling UX**: fixed missing spacing when scaling no-unit quantities and added conservative singularization of known units.
+- **Testing**: 153/153 Vitest tests across 20 files; typecheck, production build, production/security/E2E verification, and `bun audit` all green.
+
+### `v0.2.6` (Previous Release)
 - **Deterministic Nutrition Serving Math**: Fixed incorrect nutrition scaling when changing recipe serving counts. Nutrition is now estimated once for the recipe's complete ingredient batch; serving changes are pure deterministic arithmetic (never a new AI estimate), with a persistent serving denominator for self-describing, re-scalable totals.
 - **Backward Compatibility**: Legacy per-serving nutrition (no stored denominator) is preserved and interpreted under the legacy per-serving contract, with no re-estimation and no rewrite.
 - **Shared Gemini Client & API Consolidation** (v0.2.7-in-progress foundation): centralized the Gemini client, added a global malformed-JSON/error handler, made the version a single source of truth, and expanded regression coverage.

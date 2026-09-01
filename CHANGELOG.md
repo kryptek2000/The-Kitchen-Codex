@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased] - v0.2.7 (Consolidation & Reliability)
+## [0.2.7] - 2026-09-01
 
 ### 🧹 Consolidation & Reliability
 - **Single-source release version**: runtime version now lives only in
@@ -28,6 +28,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Regression coverage**: added Vitest suites for versioning, the shared Gemini
   client, Express wiring (malformed JSON, health, auth, headers, 404), rate
   limiting, metadata recovery, and ingredient quantity scaling.
+
+### 🥄 Ingredient Scaling UX
+- **Fixed missing spacing** when scaling quantities that have no recognized unit
+  (e.g. `2 eggs` → `1 eggs`, `4 chicken breasts` → `2 chicken breasts`).
+- **Conservative singularization** of known cooking units when the scaled amount
+  is exactly one (e.g. `2 cups` → `1 cup`, `2 tablespoons` → `1 tablespoon`).
+- **Preserved fractions, unicode fractions, and wikilinks** during scaling. Recipe
+  Markdown serialization is unchanged — it always writes the original ingredient line.
+
+### 🧪 Testing & Verification
+- **153 / 153 Vitest tests passing** across **20 test files**.
+- TypeScript typecheck (`tsc --noEmit`) passing with 0 errors.
+- Production build clean; production regression (6/6), security verification
+  (33/33), SSRF rebinding (48/48), image content-type (38/38), and vault lifecycle
+  E2E (49/49) all passing.
+- `bun audit` reports **no known vulnerabilities**.
 
 ---
 
