@@ -400,6 +400,35 @@ export function parseIngredientLine(line: string): ParsedIngredient {
 }
 
 /**
+ * Conservative singularization for KNOWN cooking units only. This is applied
+ * only when the scaled amount is exactly 1 and the token is a recognized unit,
+ * so it can never alter the meaning of an ingredient noun (e.g. we deliberately
+ * do not touch "eggs", "oats", "greens", etc.).
+ */
+const SINGULAR_UNIT: Record<string, string> = {
+  tablespoons: 'tablespoon',
+  teaspoons: 'teaspoon',
+  cups: 'cup',
+  ounces: 'ounce',
+  pounds: 'pound',
+  grams: 'gram',
+  kilograms: 'kilogram',
+  milliliters: 'milliliter',
+  liters: 'liter',
+  cloves: 'clove',
+  pinches: 'pinch',
+  dashes: 'dash',
+  slices: 'slice',
+  cans: 'can',
+  stalks: 'stalk',
+  bunches: 'bunch',
+  sprigs: 'sprig',
+  pieces: 'piece',
+  heads: 'head',
+  handfuls: 'handful',
+};
+
+/**
  * Rescales an ingredient string by ratio (targetServings / currentServings)
  */
 export function scaleIngredientText(
@@ -412,17 +441,29 @@ export function scaleIngredientText(
   }
 
   const ratio = targetServings / currentServings;
-  
-  // Replace quantities in the beginning or middle
+
+  // Replace quantities in the beginning or middle.
+  // The unit is matched with a REQUIRED leading whitespace so that when there is
+  // no unit (e.g. "2 eggs", "4 chicken breasts") the trailing space is left in
+  // the remaining text, preserving correct spacing. Previously this consumed the
+  // space and produced "1eggs" / "2chicken breasts".
   const units = '(?:tbsp|tablespoon|tablespoons|tsp|teaspoon|teaspoons|cup|cups|oz|ounce|ounces|lb|lbs|pound|pounds|g|gram|grams|kg|kilogram|kilograms|ml|milliliter|milliliters|l|liter|liters|clove|cloves|pinch|pinches|dash|dashes|slice|slices|can|cans|stalk|stalks|bunch|bunches|sprig|sprigs|piece|pieces|head|heads|handful|handfuls)';
-  const regex = new RegExp(`(\\b\\d+\\s+\\d+\\/\\d+|\\b\\d+\\/\\d+|\\b\\d+\\s*[½⅓⅔¼¾⅛⅜⅝⅞]|[½⅓⅔¼¾⅛⅜⅝⅞]|\\b\\d+(?:\\.\\d+)?)\\s*(${units})?`, 'gi');
+  // A trailing \b after the unit prevents the alternation from matching only a
+  // singular prefix of a plural unit (e.g. "cup" inside "cups"), which would
+  // otherwise leave a stray "s" and defeat singularization.
+  const regex = new RegExp(`(\\b\\d+\\s+\\d+\\/\\d+|\\b\\d+\\/\\d+|\\b\\d+\\s*[½⅓⅔¼¾⅛⅜⅝⅞]|[½⅓⅔¼¾⅛⅜⅝⅞]|\\b\\d+(?:\\.\\d+)?)(?:\\s+(${units})\\b)?`, 'gi');
 
   const scaled = originalText.replace(regex, (match, amountStr, unitStr) => {
     const dec = parseFractionToDecimal(amountStr);
     if (dec !== null && dec > 0) {
       const newAmount = dec * ratio;
       const formatted = formatAmount(newAmount);
-      return unitStr ? `${formatted} ${unitStr}` : formatted;
+      // Singularize a known unit only when the result is exactly "1".
+      const unit =
+        unitStr && formatted === '1' && SINGULAR_UNIT[unitStr.toLowerCase()]
+          ? SINGULAR_UNIT[unitStr.toLowerCase()]
+          : unitStr;
+      return unit ? `${formatted} ${unit}` : formatted;
     }
     return match;
   });
