@@ -71,6 +71,8 @@ export function canonicalToObsidianRecipe(
           sodium: canonical.nutrition.sodiumMg ?? undefined,
           servings: canonical.nutrition.servings ?? undefined,
           confidenceNote: canonical.nutrition.confidenceNote,
+          source: canonical.nutrition.source,
+          confidence: canonical.nutrition.confidence,
         }
       : undefined,
     source: canonical.identity.sourceUrl,
@@ -110,6 +112,8 @@ export function obsidianToCanonicalRecipe(legacy: ObsidianRecipe): CanonicalReci
         sodiumMg: legacy.nutrition.sodium,
         servings: legacy.nutrition.servings,
         confidenceNote: legacy.nutrition.confidenceNote,
+        source: legacy.nutrition.source,
+        confidence: legacy.nutrition.confidence,
       }
     : caloriesVal !== undefined
     ? {

@@ -25,6 +25,29 @@ interface RecipeNutritionCardProps {
   servings?: number;
 }
 
+/** Human-readable provenance label; null when provenance is absent. */
+function nutritionSourceLabel(source?: RecipeNutrition['source']): string | null {
+  switch (source) {
+    case 'ai_estimate': return 'AI Estimate';
+    case 'offline_heuristic': return 'Offline Estimate';
+    case 'user_defined': return 'User Defined';
+    case 'source_metadata': return 'Source Nutrition';
+    case 'database': return 'Database';
+    default: return null;
+  }
+}
+
+/** Human-readable confidence label; null when confidence is absent. */
+function nutritionConfidenceLabel(confidence?: RecipeNutrition['confidence']): string | null {
+  switch (confidence) {
+    case 'high': return 'High confidence';
+    case 'medium': return 'Medium confidence';
+    case 'low': return 'Low confidence';
+    case 'unknown': return 'Unknown confidence';
+    default: return null;
+  }
+}
+
 export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
   recipe,
   onUpdateNutrition,
@@ -57,6 +80,15 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
         nutritionForServings(pendingEstimate, recipeBaseServings, currentServings)
       )
     : null;
+
+  // Provenance labels (subtle; null when absent so nothing misleading is shown).
+  const currentSourceLabel = nutritionSourceLabel(currentNutrition?.source);
+  const currentConfidenceLabel = nutritionConfidenceLabel(currentNutrition?.confidence);
+  const pendingSourceLabel = nutritionSourceLabel(pendingEstimate?.source);
+  const pendingConfidenceLabel = nutritionConfidenceLabel(pendingEstimate?.confidence);
+  const provenanceText = [currentSourceLabel, currentConfidenceLabel]
+    .filter(Boolean)
+    .join(' · ');
 
   // Macro calculations for ratio bar (ratios are scale-invariant)
   const protein = displayedNutrition?.protein || 0;
@@ -232,6 +264,12 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
             </div>
           </div>
 
+          {(pendingSourceLabel || pendingConfidenceLabel) && (
+            <p className="text-[11px] text-gray-400 font-medium">
+              {[pendingSourceLabel, pendingConfidenceLabel].filter(Boolean).join(' · ')}
+            </p>
+          )}
+
           {pendingEstimate.confidenceNote && (
             <p className="text-[11px] text-gray-400 italic">
               Note: {pendingEstimate.confidenceNote}
@@ -262,6 +300,14 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
         <div className="space-y-4">
           {currentNutrition || (recipe.calories !== undefined && recipe.calories !== null) ? (
             <>
+              {/* Provenance (subtle; omitted when absent) */}
+              {provenanceText && (
+                <div className="flex items-center justify-center">
+                  <span className="text-[10px] font-mono text-gray-500 uppercase tracking-wide bg-white/5 border border-white/5 rounded-full px-2 py-0.5">
+                    {provenanceText}
+                  </span>
+                </div>
+              )}
               {/* Macro Cards Grid */}
               <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 text-center">
                 <div className="p-2.5 rounded-xl bg-[#0E0E0E] border border-white/5">

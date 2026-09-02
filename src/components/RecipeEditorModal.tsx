@@ -19,7 +19,7 @@ import {
   Image as ImageIcon,
   BrainCircuit,
 } from 'lucide-react';
-import { ObsidianRecipe, ParsedIngredient, RecipeStep } from '../types';
+import { ObsidianRecipe, ParsedIngredient, RecipeStep, RecipeNutrition } from '../types';
 import {
   parseObsidianRecipeMarkdown,
   serializeRecipeToObsidianMarkdown,
@@ -29,9 +29,32 @@ import { useVaultImage } from '../hooks/useVaultImage';
 
 interface RecipeEditorModalProps {
   initialRecipe?: ObsidianRecipe | null;
-  folderHandle?: any;
-  onSave: (recipe: ObsidianRecipe) => void;
-  onClose: () => void;
+  folderHandle?: any;  onSave: (recipe: ObsidianRecipe) => void;
+   onClose: () => void;
+}
+
+/**
+ * Determines the provenance attached to a nutrition block on save.
+ *
+ * - When the user directly edited a nutrition value (`nutritionDirty`), the
+ *   block becomes `user_defined` (a deliberate human action; confidence medium).
+ * - Otherwise the existing provenance is preserved verbatim (including the
+ *   `undefined` absence for legacy recipes). Opening/editing unrelated metadata
+ *   never relabels an existing AI/database/source block.
+ */
+export function deriveNutritionProvenance(
+  nutritionDirty: boolean,
+  current: Pick<RecipeNutrition, 'source' | 'confidence' | 'confidenceNote'> | undefined
+): Pick<RecipeNutrition, 'source' | 'confidence' | 'confidenceNote'> {
+  if (nutritionDirty) {
+    // Fresh manual values: drop the old note because it described prior provenance.
+    return { source: 'user_defined', confidence: 'medium', confidenceNote: undefined };
+  }
+  return {
+    source: current?.source,
+    confidence: current?.confidence,
+    confidenceNote: current?.confidenceNote,
+  };
 }
 
 export function RecipeEditorModal({
@@ -68,6 +91,14 @@ export function RecipeEditorModal({
   const [nutritionError, setNutritionError] = useState<string | null>(null);
   const [nutritionSuccess, setNutritionSuccess] = useState(false);
   const [nutritionFromEstimate, setNutritionFromEstimate] = useState(false);
+  const [nutritionDirty, setNutritionDirty] = useState(false);
+  const [nutritionProvenance, setNutritionProvenance] = useState<
+    Pick<RecipeNutrition, 'source' | 'confidence' | 'confidenceNote'>
+  >(() => ({
+    source: initialRecipe?.nutrition?.source,
+    confidence: initialRecipe?.nutrition?.confidence,
+    confidenceNote: initialRecipe?.nutrition?.confidenceNote,
+  }));
   const [isSavingImageAsset, setIsSavingImageAsset] = useState(false);
   const [isAssetPickerOpen, setIsAssetPickerOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -164,15 +195,21 @@ export function RecipeEditorModal({
       rating,
       calories: calories.trim() || (parsedCalNum ? parsedCalNum.toString() : undefined),
       nutrition: hasNutrition
-        ? {
-            calories: parsedCalNum,
-            protein: parsedProtein,
-            carbohydrates: parsedCarbs,
-            fat: parsedFat,
-            fiber: parsedFiber,
-            sodium: parsedSodium,
-            servings: nutritionServings,
-          }
+        ? (() => {
+            const prov = deriveNutritionProvenance(nutritionDirty, nutritionProvenance);
+            return {
+              calories: parsedCalNum,
+              protein: parsedProtein,
+              carbohydrates: parsedCarbs,
+              fat: parsedFat,
+              fiber: parsedFiber,
+              sodium: parsedSodium,
+              servings: nutritionServings,
+              source: prov.source,
+              confidence: prov.confidence,
+              confidenceNote: prov.confidenceNote,
+            };
+          })()
         : undefined,
       image: image || undefined,
       callouts: calloutContent ? [{ type: 'tip', title: calloutTitle, content: calloutContent }] : [],
@@ -224,6 +261,12 @@ export function RecipeEditorModal({
         if (data.nutrition.fiber !== undefined) setFiber(data.nutrition.fiber.toString());
         if (data.nutrition.sodium !== undefined) setSodium(data.nutrition.sodium.toString());
         setNutritionFromEstimate(true);
+        setNutritionDirty(false);
+        setNutritionProvenance({
+          source: data.nutrition.source,
+          confidence: data.nutrition.confidence,
+          confidenceNote: data.nutrition.confidenceNote,
+        });
         setNutritionSuccess(true);
         setTimeout(() => setNutritionSuccess(false), 3000);
       }
@@ -331,6 +374,12 @@ export function RecipeEditorModal({
           // Recovered nutrition is TOTAL for the recipe batch; tag it so the
           // saved block carries its serving denominator.
           setNutritionFromEstimate(true);
+          setNutritionDirty(false);
+          setNutritionProvenance({
+            source: rec.nutrition.value.source,
+            confidence: rec.nutrition.value.confidence,
+            confidenceNote: rec.nutrition.value.confidenceNote,
+          });
         }
 
         setMetadataRecoverySuccess(`Recovered ${recoveredCount} metadata fields from recipe text!`);
@@ -589,7 +638,7 @@ export function RecipeEditorModal({
                   <input
                     type="text"
                     value={calories}
-                    onChange={(e) => setCalories(e.target.value)}
+                    onChange={(e) => { setCalories(e.target.value); setNutritionDirty(true); }}
                     placeholder="e.g. 520"
                     className="w-full bg-[#0C0C0C] border border-white/10 rounded-lg p-2 text-gray-300 font-mono focus:border-amber-500 focus:outline-none"
                   />
@@ -645,7 +694,7 @@ export function RecipeEditorModal({
                       type="number"
                       step="0.1"
                       value={protein}
-                      onChange={(e) => setProtein(e.target.value)}
+                      onChange={(e) => { setProtein(e.target.value); setNutritionDirty(true); }}
                       placeholder="e.g. 32"
                       className="w-full bg-[#0C0C0C] border border-white/10 rounded-lg p-2 text-emerald-400 font-mono focus:border-amber-500 focus:outline-none"
                     />
@@ -656,7 +705,7 @@ export function RecipeEditorModal({
                       type="number"
                       step="0.1"
                       value={carbs}
-                      onChange={(e) => setCarbs(e.target.value)}
+                      onChange={(e) => { setCarbs(e.target.value); setNutritionDirty(true); }}
                       placeholder="e.g. 45"
                       className="w-full bg-[#0C0C0C] border border-white/10 rounded-lg p-2 text-blue-400 font-mono focus:border-amber-500 focus:outline-none"
                     />
@@ -667,7 +716,7 @@ export function RecipeEditorModal({
                       type="number"
                       step="0.1"
                       value={fat}
-                      onChange={(e) => setFat(e.target.value)}
+                      onChange={(e) => { setFat(e.target.value); setNutritionDirty(true); }}
                       placeholder="e.g. 18"
                       className="w-full bg-[#0C0C0C] border border-white/10 rounded-lg p-2 text-amber-400 font-mono focus:border-amber-500 focus:outline-none"
                     />
@@ -678,7 +727,7 @@ export function RecipeEditorModal({
                       type="number"
                       step="0.1"
                       value={fiber}
-                      onChange={(e) => setFiber(e.target.value)}
+                      onChange={(e) => { setFiber(e.target.value); setNutritionDirty(true); }}
                       placeholder="e.g. 6"
                       className="w-full bg-[#0C0C0C] border border-white/10 rounded-lg p-2 text-purple-400 font-mono focus:border-amber-500 focus:outline-none"
                     />
@@ -688,7 +737,7 @@ export function RecipeEditorModal({
                     <input
                       type="number"
                       value={sodium}
-                      onChange={(e) => setSodium(e.target.value)}
+                      onChange={(e) => { setSodium(e.target.value); setNutritionDirty(true); }}
                       placeholder="e.g. 580"
                       className="w-full bg-[#0C0C0C] border border-white/10 rounded-lg p-2 text-orange-400 font-mono focus:border-amber-500 focus:outline-none"
                     />

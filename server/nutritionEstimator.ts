@@ -2,6 +2,7 @@ import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
 import dotenv from "dotenv";
 import { MODEL_CONFIG } from "./modelConfig.js";
 import { getGemini } from "./geminiClient.js";
+import type { NutritionSource, NutritionConfidence } from "../src/schema/recipeSchema.js";
 
 dotenv.config();
 
@@ -19,6 +20,10 @@ export interface NutritionEstimateResult {
   fiber: number; // g for the entire recipe batch
   sodium: number; // mg for the entire recipe batch
   confidenceNote: string;
+  /** Provenance authority, assigned by application logic (never model-self-rated). */
+  source: NutritionSource;
+  /** Application-assigned confidence (never model-self-rated). */
+  confidence: NutritionConfidence;
 }
 
 const PRIMARY_MODEL = MODEL_CONFIG.nutritionPrimary;
@@ -194,7 +199,9 @@ export function estimateAlgorithmicNutrition(
     fat: Math.max(0, Math.round(totalFat * 10) / 10),
     fiber: Math.max(0, Math.round(totalFiber * 10) / 10),
     sodium: Math.max(0, Math.round(totalSodium)),
-    confidenceNote: `Nutrition values are estimates for the entire recipe based on ${ingredientLines.length} ingredients.`
+    confidenceNote: `Nutrition values are estimates for the entire recipe based on ${ingredientLines.length} ingredients.`,
+    source: 'offline_heuristic' as NutritionSource,
+    confidence: 'low' as NutritionConfidence,
   };
 }
 
@@ -296,6 +303,8 @@ Guidelines:
     fiber,
     sodium,
     confidenceNote,
+    source: 'ai_estimate' as NutritionSource,
+    confidence: 'medium' as NutritionConfidence,
   };
 }
 

@@ -1,3 +1,5 @@
+import type { NutritionSource, NutritionConfidence } from './schema/recipeSchema';
+
 export interface ParsedIngredient {
   original: string;
   amount?: number | null;
@@ -26,6 +28,13 @@ export interface RecipeNutrition {
    */
   servings?: number;
   confidenceNote?: string;
+  /**
+   * Where the nutrition numbers came from (see NutritionSource). Optional and
+   * additive; absence means the provenance is unknown, never inferred.
+   */
+  source?: NutritionSource;
+  /** Application-assigned confidence (never model-self-rated). */
+  confidence?: NutritionConfidence;
 }
 
 export interface RecipeStep {

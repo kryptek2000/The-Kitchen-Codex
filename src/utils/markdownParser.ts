@@ -12,6 +12,18 @@ import {
 import { getRecipeImage } from './imageHelper';
 import { obsidianToCanonicalRecipe, canonicalToObsidianRecipe } from '../schema/legacyAdapter';
 import { parseFraction } from '../schema/recipeValidator';
+import type { NutritionSource, NutritionConfidence } from '../schema/recipeSchema';
+
+/** Valid nutrition provenance authorities; used to gate parsing (never invented). */
+const NUTRITION_SOURCE_VALUES: ReadonlyArray<string> = [
+  'ai_estimate',
+  'offline_heuristic',
+  'user_defined',
+  'source_metadata',
+  'database',
+];
+/** Valid confidence levels; used to gate parsing (never invented). */
+const NUTRITION_CONFIDENCE_VALUES: ReadonlyArray<string> = ['high', 'medium', 'low', 'unknown'];
 
 /**
  * Parses fraction strings (e.g., "1 1/2", "3/4", "0.5", "½", "1 ½") into decimal numbers.
@@ -620,6 +632,16 @@ export function parseObsidianRecipeMarkdown(
     const numSodium = typeof fn.sodium === 'number' ? fn.sodium : typeof fn.sodium === 'string' ? parseFloat(fn.sodium) : undefined;
     const numServings = typeof fn.servings === 'number' ? fn.servings : typeof fn.servings === 'string' ? parseFloat(fn.servings) : undefined;
     const confNote = typeof fn.confidenceNote === 'string' ? fn.confidenceNote : undefined;
+    // Provenance is only accepted when it is a known enum value; otherwise
+    // remain undefined (absence), never inferred.
+    const numSource =
+      typeof fn.source === 'string' && NUTRITION_SOURCE_VALUES.includes(fn.source)
+        ? (fn.source as NutritionSource)
+        : undefined;
+    const numConfidence =
+      typeof fn.confidence === 'string' && NUTRITION_CONFIDENCE_VALUES.includes(fn.confidence)
+        ? (fn.confidence as NutritionConfidence)
+        : undefined;
 
     if (numCal !== undefined || numProt !== undefined || numCarb !== undefined || numFat !== undefined || numFiber !== undefined || numSodium !== undefined) {
       nutrition = {
@@ -631,6 +653,8 @@ export function parseObsidianRecipeMarkdown(
         sodium: numSodium,
         servings: numServings,
         confidenceNote: confNote,
+        source: numSource,
+        confidence: numConfidence,
       };
     }
   } else if (frontmatter.protein || frontmatter.carbs || frontmatter.carbohydrates || frontmatter.fat || frontmatter.fiber || frontmatter.sodium) {
@@ -946,6 +970,12 @@ export function serializeRecipeToObsidianMarkdown(recipe: Partial<ObsidianRecipe
     }
     if (recipeToSerialize.nutrition.servings !== undefined && recipeToSerialize.nutrition.servings !== null) {
       nut.servings = recipeToSerialize.nutrition.servings;
+    }
+    if (recipeToSerialize.nutrition.source && NUTRITION_SOURCE_VALUES.includes(recipeToSerialize.nutrition.source)) {
+      nut.source = recipeToSerialize.nutrition.source;
+    }
+    if (recipeToSerialize.nutrition.confidence && NUTRITION_CONFIDENCE_VALUES.includes(recipeToSerialize.nutrition.confidence)) {
+      nut.confidence = recipeToSerialize.nutrition.confidence;
     }
     if (recipeToSerialize.nutrition.confidenceNote && recipeToSerialize.nutrition.confidenceNote.trim()) {
       nut.confidenceNote = recipeToSerialize.nutrition.confidenceNote.trim();

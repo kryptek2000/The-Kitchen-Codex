@@ -89,6 +89,29 @@ export interface StructuredStep {
 
 export type RecipeDifficulty = 'Easy' | 'Medium' | 'Hard' | 'Unspecified';
 
+/**
+ * Provenance authority for a nutrition block. Describes WHERE the nutrition
+ * numbers came from. Purely additive/optional; absence means "unknown".
+ * Note: 'database' is reserved for the upcoming deterministic nutrition engine
+ * and is not yet produced by any code path.
+ */
+export type NutritionSource =
+  | 'ai_estimate'
+  | 'offline_heuristic'
+  | 'user_defined'
+  | 'source_metadata'
+  | 'database';
+
+/**
+ * Application-assigned confidence in a nutrition block. Never model-self-rated;
+ * derived deterministically by the code that produces the value.
+ */
+export type NutritionConfidence =
+  | 'high'
+  | 'medium'
+  | 'low'
+  | 'unknown';
+
 export interface RecipeMetadata {
   /** Normalized tag strings without leading '#' */
   tags: string[];
@@ -125,7 +148,8 @@ export interface RecipeNutritionData {
    */
   servings?: number | null;
   servingSize?: string;
-  source?: 'ai_estimate' | 'source_metadata' | 'user_defined';
+  source?: NutritionSource;
+  confidence?: NutritionConfidence;
   confidenceNote?: string;
 }
 
