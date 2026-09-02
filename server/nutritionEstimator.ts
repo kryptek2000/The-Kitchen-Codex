@@ -2,6 +2,7 @@ import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
 import dotenv from "dotenv";
 import { MODEL_CONFIG } from "./modelConfig.js";
 import { getGemini } from "./geminiClient.js";
+import { estimateDeterministicNutrition, type DeterministicNutritionResult } from "./deterministicNutrition.js";
 import type { NutritionSource, NutritionConfidence } from "../src/schema/recipeSchema.js";
 
 dotenv.config();
@@ -28,6 +29,29 @@ export interface NutritionEstimateResult {
 
 const PRIMARY_MODEL = MODEL_CONFIG.nutritionPrimary;
 const FALLBACK_MODEL = MODEL_CONFIG.nutritionFallback;
+
+/**
+ * Builds the estimator result shape from a deterministic curated estimate,
+ * applying the SAME presentation rounding used elsewhere (calories/sodium whole
+ * integers, macro grams rounded to 1 decimal). The deterministic engine already
+ * computed full-precision whole-recipe totals; rounding happens here, at the
+ * persistent result boundary.
+ */
+function buildDeterministicEstimateResult(
+  det: DeterministicNutritionResult
+): NutritionEstimateResult {
+  return {
+    calories: Math.max(0, Math.round(det.totals.calories)),
+    protein: Math.max(0, Math.round(det.totals.protein * 10) / 10),
+    carbohydrates: Math.max(0, Math.round(det.totals.carbohydrates * 10) / 10),
+    fat: Math.max(0, Math.round(det.totals.fat * 10) / 10),
+    fiber: Math.max(0, Math.round(det.totals.fiber * 10) / 10),
+    sodium: Math.max(0, Math.round(det.totals.sodium)),
+    confidenceNote: det.confidenceNote,
+    source: det.source,
+    confidence: det.confidence,
+  };
+}
 
 /**
  * Strips Obsidian wikilinks [[Target|Alias]] -> Alias, [[Target]] -> Target
@@ -352,6 +376,19 @@ export async function estimateRecipeNutrition(
   }
 
   const gemini = getGemini();
+
+  // Attempt 0: deterministic curated estimation. This is the FIRST preference.
+  // The engine computes whole-recipe totals and returns an explicit eligibility
+  // flag; it is selected as the final estimate ONLY when coverage is sufficient
+  // (every measurable/non-qualitative ingredient resolved). Otherwise we fall
+  // through to the existing AI -> offline cascade untouched, rather than
+  // presenting an incomplete total as complete.
+  const deterministic = estimateDeterministicNutrition(req.ingredients);
+  if (deterministic.eligible) {
+    console.info("[NutritionEstimator] Deterministic curated estimate selected (sufficient coverage).");
+    return buildDeterministicEstimateResult(deterministic);
+  }
+
   if (!gemini) {
     console.info("[NutritionEstimator] No Gemini client configured. Using algorithmic nutrition estimation.");
     return estimateAlgorithmicNutrition(recipeTitle, servings, rawIngredientLines);
