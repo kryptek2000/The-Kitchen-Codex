@@ -126,3 +126,26 @@ export function roundNutritionForDisplay(nutrition: RecipeNutrition | null | und
 export function resolveRecipeBaseServings(recipeServings: unknown): number {
   return normalizeServings(recipeServings, 4);
 }
+
+/**
+ * THE single display contract for serving-scaled nutrition.
+ *
+ * Given a stored nutrition block and a requested serving count, this resolves
+ * the block's OWN base serving denominator (via `resolveNutritionBase`) and
+ * applies the ONE serving-math implementation (`nutritionForServings`), then
+ * rounds at the display boundary (`roundNutritionForDisplay`). This is exactly
+ * the deterministic derivation used by RecipeNutritionCard, so the top
+ * recipe-info Calories summary and the Nutrition Card can never drift apart.
+ *
+ * The requested count may be any positive number; unsafe values fall back
+ * through the shared math's own normalization. This is a pure local
+ * calculation — it never re-estimates, mutates stored nutrition, or makes a
+ * request.
+ */
+export function nutritionForRequestedServings(
+  nutrition: RecipeNutrition | null | undefined,
+  requestedServings: number
+): RecipeNutrition {
+  const base = resolveNutritionBase(nutrition);
+  return roundNutritionForDisplay(nutritionForServings(nutrition, base, requestedServings));
+}

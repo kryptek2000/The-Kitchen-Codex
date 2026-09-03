@@ -15,7 +15,7 @@ import {
   normalizeServings,
   nutritionForServings,
   roundNutritionForDisplay,
-  resolveNutritionBase,
+  nutritionForRequestedServings,
   resolveRecipeBaseServings,
 } from '../utils/nutrition';
 
@@ -63,14 +63,11 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
   const currentServings = normalizeServings(servings ?? recipe.servings, recipeBaseServings);
   const currentNutrition = recipe.nutrition;
 
-  // Stored nutrition is the stable recipe-total baseline. The base used to
-  // scale it is the explicit `servings` denominator when present (total mode),
-  // otherwise 1 (legacy per-serving blocks). The displayed value is always the
-  // deterministic requested-serving result.
-  const storedBase = resolveNutritionBase(currentNutrition);
-  const displayedNutrition = roundNutritionForDisplay(
-    nutritionForServings(currentNutrition, storedBase, currentServings)
-  );
+  // Stored nutrition is the stable recipe-total baseline. The displayed value is
+  // always the deterministic requested-serving result, produced by the SAME
+  // shared display contract used by the top recipe-info Calories summary (via
+  // nutritionForRequestedServings) so the two can never drift apart.
+  const displayedNutrition = nutritionForRequestedServings(currentNutrition, currentServings);
 
   // A freshly estimated value from the backend is TOTAL nutrition for the base
   // batch. Scale it deterministically to the currently requested servings for

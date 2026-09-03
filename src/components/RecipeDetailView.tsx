@@ -36,6 +36,7 @@ import { downloadMarkdownFile } from '../utils/vaultFileSystem';
 import { getRecipeImage, DEFAULT_FOOD_IMAGES } from '../utils/imageHelper';
 import { useVaultImage } from '../hooks/useVaultImage';
 import { assessRecipeHealth } from '../utils/vaultIntelligence';
+import { nutritionForRequestedServings } from '../utils/nutrition';
 import { buildRecipeRelationshipIndex, recipeIdentity } from '../utils/recipeRelationships';
 import { RecipeNutritionCard } from './RecipeNutritionCard';
 import { WikilinkPreviewModal } from './WikilinkPreviewModal';
@@ -100,6 +101,13 @@ export function RecipeDetailView({
 
   const baseServings = recipe.servings || 4;
   const recipeHealth = assessRecipeHealth(recipe);
+
+  // The top recipe-info Calories summary MUST track the currently selected
+  // serving count, using the SAME deterministic serving-scaled contract as the
+  // RecipeNutritionCard. Stored nutrition is the stable base; the displayed
+  // value is a pure local derivation — never a re-estimation or re-fetch.
+  const displayedHeaderCalories: number | string | undefined =
+    nutritionForRequestedServings(recipe.nutrition, currentServings).calories ?? recipe.calories;
 
   // Derived relationship data (Step 6). Built from the currently loaded recipe
   // collection, memoized so it is not rebuilt on every render; it recomputes only
@@ -447,8 +455,8 @@ export function RecipeDetailView({
               <div>
                 <span className="text-[11px] text-gray-500 block font-medium">Calories</span>
                 <span className="text-sm font-bold text-white">
-                  {recipe.calories !== undefined && recipe.calories !== null && String(recipe.calories).trim()
-                    ? `${recipe.calories}${String(recipe.calories).toLowerCase().includes('cal') ? '' : ' kcal'}`
+                  {displayedHeaderCalories !== undefined && displayedHeaderCalories !== null && String(displayedHeaderCalories).trim()
+                    ? `${displayedHeaderCalories}${String(displayedHeaderCalories).toLowerCase().includes('cal') ? '' : ' kcal'}`
                     : '—'}
                 </span>
               </div>

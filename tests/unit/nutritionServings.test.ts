@@ -9,6 +9,7 @@ import {
   normalizeServings,
   resolveNutritionBase,
   resolveRecipeBaseServings,
+  nutritionForRequestedServings,
 } from "../../src/utils/nutrition";
 import {
   serializeRecipeToObsidianMarkdown,
@@ -313,5 +314,91 @@ describe("Schema / Markdown round-trip of the serving denominator", () => {
     // Legacy scaling treats it as per-serving (base = 1) => requested = value × requested.
     const twoServings = nutritionForServings(parsed.nutrition!, resolveNutritionBase(parsed.nutrition!), 2);
     expect(twoServings.calories).toBe(1385 * 2);
+  });
+});
+
+// Regression suite for the v0.3.1 hotfix: the TOP recipe-info Calories summary
+// must track the currently selected serving count using the SAME deterministic
+// serving-scaled contract as the RecipeNutritionCard. nutritionForRequestedServings
+// is the shared display selector both consume; it REUSES the one serving-math
+// implementation (nutritionForServings) and never re-estimates, mutates stored
+// nutrition, or invents values.
+describe("nutritionForRequestedServings - top recipe-info Calories contract", () => {
+  it("v0.3.1-1) header calories at base servings are unchanged", () => {
+    const stored = { calories: 506, servings: 2 };
+    expect(nutritionForRequestedServings(stored, 2).calories).toBe(506);
+    // Canonical example from the nutrition audit: total 5540 over 4 servings.
+    expect(nutritionForRequestedServings(TOTAL, 4).calories).toBe(5540);
+  });
+
+  it("v0.3.1-2) halving requested servings halves displayed calories (bug example)", () => {
+    // Bug report scenario: base servings = 2, stored calories = 506.
+    const stored = { calories: 506, servings: 2 };
+    // Selected/current servings = 1 => expected 253 kcal (no longer 506).
+    expect(nutritionForRequestedServings(stored, 1).calories).toBe(253);
+    // Halving the canonical TOTAL(4) to 2 servings halves to 2770.
+    expect(nutritionForRequestedServings(TOTAL, 2).calories).toBe(2770);
+  });
+
+  it("v0.3.1-3) doubling requested servings doubles displayed calories", () => {
+    const stored = { calories: 506, servings: 2 };
+    expect(nutritionForRequestedServings(stored, 4).calories).toBe(1012);
+    expect(nutritionForRequestedServings(TOTAL, 8).calories).toBe(11080);
+  });
+
+  it("v0.3.1-4) changing servings back to base restores the original display", () => {
+    const stored = { calories: 506, servings: 2 };
+    const atBase = nutritionForRequestedServings(stored, 2);
+    const halved = nutritionForRequestedServings(stored, 1);
+    expect(halved.calories).toBe(253);
+    expect(nutritionForRequestedServings(stored, 2).calories).toBe(atBase.calories);
+    expect(nutritionForRequestedServings(stored, 2).calories).toBe(506);
+  });
+
+  it("v0.3.1-5) missing calories remain neutral (never fabricates 0 / N/A-derived)", () => {
+    // No nutrition block at all.
+    expect(nutritionForRequestedServings(undefined, 2).calories).toBeUndefined();
+    // Nutrition block present but no calories field.
+    const noCal = nutritionForRequestedServings({ protein: 10, servings: 2 }, 2);
+    expect(noCal.calories).toBeUndefined();
+    expect(noCal.protein).toBe(10);
+  });
+
+  it("v0.3.1-6) does NOT mutate the stored nutrition object", () => {
+    const stored = { calories: 506, fat: 20, servings: 2, confidenceNote: "n" };
+    const snapshot = JSON.parse(JSON.stringify(stored));
+    nutritionForRequestedServings(stored, 1);
+    nutritionForRequestedServings(stored, 4);
+    expect(stored).toEqual(snapshot);
+    expect(stored.calories).toBe(506);
+    expect(stored.servings).toBe(2);
+  });
+
+  it("v0.3.1-7) reuses the one serving-math implementation (no independent formula)", () => {
+    const stored = { calories: 506, servings: 2 };
+    // The selector is exactly the existing math composed with the display rounder.
+    const expected = roundNutritionForDisplay(
+      nutritionForServings(stored, resolveNutritionBase(stored), 1)
+    );
+    expect(nutritionForRequestedServings(stored, 1)).toEqual(expected);
+  });
+
+  it("v0.3.1-8) honors the nutrition block's own denominator, not recipe.servings", () => {
+    // Stored nutrition carries servings=2 as its CANONICAL denominator. Scaling
+    // must use IT (base=2), not a recipe-level servings=4. A buggy scale-from-4
+    // would turn 506 kcal into 126.5 kcal for 1 serving; correct is 253.
+    const stored = { calories: 506, servings: 2 };
+    expect(nutritionForRequestedServings(stored, 1).calories).toBe(253);
+    // A legacy per-serving block (no denominator) is treated as base = 1.
+    expect(nutritionForRequestedServings({ calories: 1385 }, 2).calories).toBe(2770);
+  });
+
+  it("v0.3.1-9) zero / invalid requested servings fall back safely (no NaN/negative)", () => {
+    const stored = { calories: 506, servings: 2 };
+    const res = nutritionForRequestedServings(stored, 0);
+    expect(Number.isFinite(res.calories)).toBe(true);
+    expect(res.calories).toBeGreaterThanOrEqual(0);
+    const nan = nutritionForRequestedServings(stored, NaN);
+    expect(Number.isFinite(nan.calories)).toBe(true);
   });
 });
