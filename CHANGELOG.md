@@ -7,6 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.0] - 2026-09-02
+
+### 🎯 Trustworthy Data Layer — Nutrition Intelligence
+
+- **Provenance & confidence metadata**: every nutrition block now carries a
+  provenance `source` and an application-assigned `confidence`, so AI/offline
+  and deterministic results are never confused as nutrition truth.
+- **Deterministic measurement normalization**: a dependency-free, exact mass /
+  volume / count / unknown measurement layer (`src/utils/measurements.ts`) —
+  only mathematically valid conversions, no invented ingredient densities.
+- **Curated local food reference**: an explicit, deeply-frozen,
+  representative-per-100g reference for a curated set of foods
+  (`src/data/foodReference.ts`), with densities and count weights each carrying
+  a confidence and note. Unknown foods stay unknown rather than being guessed.
+- **Deterministic food-aware nutrition estimation**: a pure engine computes
+  whole-recipe nutrition from the curated reference when coverage is fully
+  resolvable; it is selected only when *every* measurable ingredient resolves,
+  otherwise the existing AI → offline cascade runs unchanged (zero-fabrication
+  preserved).
+- **Deterministic nutrition cache**: a bounded, in-memory LRU cache memoizes an
+  eligible deterministic whole-recipe result keyed only on nutrition-relevant
+  inputs (never on the requested serving count). A cache hit is a performance
+  optimization only — it is non-authoritative, preserves `source = database` and
+  confidence, never caches a partial/heuristic result, and is immutable.
+- **Serving invariance**: requested serving display count never changes the
+  cached deterministic total; per-serving arithmetic stays in the existing
+  `nutritionForServings` contract.
+
+### 🔗 Recipe Relationships
+
+- **Ingredient relationship index**: a pure, deterministic derived-data layer
+  (`src/utils/recipeRelationships.ts`) exposing ingredient → recipes, recipe →
+  ingredient profile, shared ingredients, and a transparent Jaccard similarity
+  score. No AI, no embeddings, no TF-IDF — an auditable foundation only.
+- **Recipes Using This Ingredient**: tap any ingredient on a recipe to see the
+  other recipes that use the same exact ingredient identity.
+- **Similar Recipes**: a compact panel ranks recipes by shared-ingredient
+  similarity (score descending, deterministic tie-break), excluding the current
+  recipe and zero-overlap results.
+- **Conservative, exact ingredient identity**: no substring/fuzzy matching, so
+  `egg` never matches `eggplant`, `butter` ≠ `peanut butter`, `cream` ≠ `cream
+  cheese`, `garlic` ≠ `garlic powder`, `chicken breast` ≠ `chicken thigh`,
+  `all-purpose flour` ≠ `almond flour`.
+- **Wikilink target authority**: a wikilink's identity derives from its TARGET
+  (so `[[Chicken Breast|chicken]]` ≠ `[[Chicken Thigh|chicken]]`); alias/display
+  text is preserved for display only.
+- **No auto-generated ingredient wikilinks**: relationship derivation never
+  creates, edits, or rewrites wikilinks, aliases, ingredient text, or Markdown.
+  All relationship queries are local (no network / no AI).
+
+### 🧪 Testing & Verification
+
+- **415 / 415 Vitest tests passing** across **27 test files** (`100% green`).
+- TypeScript typecheck (`tsc --noEmit`) clean; production build clean.
+- Relationship layer and UI verified (index lifecycle, similar-recipe selection,
+  ingredient lookup incl. false-positive and wikilink-target-authority cases,
+  immutability, local/no-AI behavior).
+
+### ⚠️ Known Limitations
+
+- The **offline culinary heuristic** fallback still emits estimated numbers with
+  `source = offline_heuristic` and `confidence = low`; it is clearly labelled and
+  is never cached as a deterministic result. Deterministic (`database`) output is
+  only produced when every measurable ingredient is fully resolvable.
+- Descriptor/size and singular/plural ingredient variants are intentionally kept
+  distinct (e.g. `large eggs` vs `eggs`) to favour safety over recall.
+- No semantic search, embeddings, full knowledge-graph, USDA database API
+  integration, browser E2E suite, Ask My Kitchen, smart meal planning, or smart
+  shopping aggregation yet — those remain future milestones.
+
+---
+
 ## [0.2.7] - 2026-09-01
 
 ### 🧹 Consolidation & Reliability

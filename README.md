@@ -1,6 +1,6 @@
-# 🍳 The Kitchen Codex `v0.2.7`
+# 🍳 The Kitchen Codex `v0.3.0`
 
-[![Version](https://img.shields.io/badge/version-0.2.7-amber.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.3.0-amber.svg)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A markdown-native recipe manager, meal planner, culinary knowledge base, and interactive cooking companion built specifically for **Obsidian** vaults. Read, edit, sync, and cook directly from your Obsidian `.md` recipe collection with YAML frontmatter, Dataview tags, wikilinks (`[[Ingredient]]`, `[[Target|Alias]]`), AI nutrition estimation, dynamic portion scaling, multi-step cooking timers, and AI-powered web recipe scraping.
@@ -25,9 +25,17 @@ A markdown-native recipe manager, meal planner, culinary knowledge base, and int
 
 ### 🥗 AI Nutritional Estimation
 - **Multi-Tiered Nutritional Analysis**: High-precision nutritional estimation with a resilient multi-model fallback cascade: `gemini-3.7-flash` (primary), `gemini-3.1-flash-lite` (secondary fallback), and an offline culinary algorithmic estimator.
+- **Deterministic local estimation first**: when every measurable ingredient resolves against the curated local food reference, whole-recipe nutrition is computed deterministically (`source = database`) before any AI/offline cascade, with provenance/confidence metadata and an in-memory deterministic cache. Heuristic/AI output stays clearly labelled and is never treated as deterministic.
 - **Wikilink & Measurement Normalization**: Obsidian wikilinks (`[[Ingredient|Alias]]`) and Unicode/ASCII fractions are cleaned and parsed for consistent analysis.
 - **YAML Frontmatter Persistence**: Validates and serializes calories, protein, carbohydrates, fat, dietary fiber, and sodium per serving directly into note frontmatter for Dataview interoperability.
 - **Portion Scaling Compatibility**: Dynamically calculates and displays macro values scaled to current portions.
+
+### 🔗 Recipe Relationships & Similar Recipes
+- **Recipes Using This Ingredient**: Tap any ingredient on a recipe to see the other recipes that use the exact same ingredient (derived locally, no network/AI).
+- **Similar Recipes**: A compact panel ranks recipes by shared-ingredient similarity (deterministic Jaccard over unique ingredients), excluding the current recipe.
+- **Conservative, exact ingredient identity**: no substring/fuzzy matching, so `egg` never matches `eggplant`, `butter` ≠ `peanut butter`, `cream` ≠ `cream cheese`, `chicken breast` ≠ `chicken thigh`, and `all-purpose flour` ≠ `almond flour`.
+- **Wikilink target authority**: an ingredient link's identity derives from its target (`[[Chicken Breast|chicken]]` ≠ `[[Chicken Thigh|chicken]]`) while alias/display text is preserved for display.
+- **No auto-generated wikilinks**: relationship derivation never creates, edits, or rewrites wikilinks, aliases, ingredient text, or Markdown.
 
 ### 🌐 AI Web Recipe Grabber
 - **URL & Text Importer**: Paste any recipe website URL, raw HTML, or recipe text to convert it into a structured Obsidian markdown note.
@@ -228,7 +236,12 @@ favorite: true
 
 ## 📌 Changelog
 
-### `v0.2.7` (Current Release)
+### `v0.3.0` (Current Release)
+- **Trustworthy Data Layer**: deterministic measurement normalization, a curated local food reference, provenance/confidence metadata, deterministic whole-recipe nutrition estimation (used when coverage is fully resolvable), and a bounded deterministic nutrition cache. Requested serving count never changes the deterministic total.
+- **Recipe Relationships**: an ingredient relationship index, "Recipes Using This Ingredient", and "Similar Recipes" — all derived locally (no network/AI), with conservative exact ingredient identity and wikilink target authority; no auto-generated ingredient wikilinks.
+- **Testing**: 415/415 Vitest tests across 27 files; typecheck and production build clean.
+
+### `v0.2.7` (Previous Release)
 - **Consolidation & Reliability**: made the release version a single source of truth (`scripts/bump_version.ts`), centralized the Gemini client (`server/geminiClient.ts`) and the Express app (`server/app.ts`), added safe JSON/API error handling (`server/errorHandler.ts`), improved metadata-recovery and recipe-card zero-fabrication, and consolidated fraction parsing.
 - **Ingredient Scaling UX**: fixed missing spacing when scaling no-unit quantities and added conservative singularization of known units.
 - **Testing**: 153/153 Vitest tests across 20 files; typecheck, production build, production/security/E2E verification, and `bun audit` all green.

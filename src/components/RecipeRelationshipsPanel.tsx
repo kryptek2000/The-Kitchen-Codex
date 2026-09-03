@@ -5,7 +5,18 @@ import {
   RecipeRelationshipIndex,
   SimilarRecipeResult,
   findSimilarRecipes,
+  recipeIdentity,
 } from '../utils/recipeRelationships';
+
+/**
+ * Formats a Jaccard similarity score (0..1) as a restrained percentage. A tiny
+ * positive score that rounds to 0% is shown as "<1%" rather than a misleading
+ * "0%", so a genuine (if weak) relationship is never presented as absent.
+ */
+export function formatSimilarityPercent(score: number): string {
+  const percent = Math.round(score * 100);
+  return percent === 0 && score > 0 ? '<1%' : `${percent}%`;
+}
 
 /** A similar recipe resolved to a loaded recipe, with its similarity result. */
 export interface RelatedRecipeEntry {
@@ -52,10 +63,13 @@ export function RecipeRelationshipsPanel({
   onSelectRecipe,
 }: RecipeRelationshipsPanelProps) {
   // `recipeByIdentity` is a stable map reference between renders for the same
-  // vault, so this recomputes only when the loaded recipe set changes.
+  // vault, so this recomputes only when the loaded recipe set changes. The
+  // current recipe is identified via `recipeIdentity` (id ?? filePath ??
+  // fileName) — the same stable identity the index is keyed on, never title.
+  const currentIdentity = recipeIdentity(recipe);
   const relations = useMemo(
-    () => selectSimilarRelations(recipe.id, index, recipeByIdentity),
-    [recipe.id, index, recipeByIdentity]
+    () => selectSimilarRelations(currentIdentity, index, recipeByIdentity),
+    [currentIdentity, index, recipeByIdentity]
   );
 
   return (
@@ -93,7 +107,7 @@ export function RecipeRelationshipsPanel({
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   <span className="text-[11px] font-mono text-amber-400">
-                    {Math.round(sim.score * 100)}%
+                    {formatSimilarityPercent(sim.score)}
                   </span>
                   <ChevronRight className="w-4 h-4 text-gray-500 group-hover:text-amber-400 transition-colors" />
                 </div>

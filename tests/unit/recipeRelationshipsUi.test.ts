@@ -9,6 +9,7 @@ import {
 import {
   RecipeRelationshipsPanel,
   selectSimilarRelations,
+  formatSimilarityPercent,
 } from '../../src/components/RecipeRelationshipsPanel';
 import {
   IngredientUsageModal,
@@ -197,31 +198,25 @@ describe('relationship UI: ingredient lookup', () => {
 });
 
 describe('relationship UI: nav + immutability', () => {
-  it('selecting a related recipe hands the resolved recipe to the opener', () => {
+  it('resolves similar recipes to live recipe objects by stable identity', () => {
+    // NOTE: static rendering cannot execute click handlers or effects, so this
+    // verifies the DATA the panel would pass to onSelectRecipe (identity
+    // resolution), not the click wiring itself. Interaction coverage is via the
+    // pure selectors, not a browser harness.
     const recipes = miniVault();
     const index = buildRecipeRelationshipIndex(recipes);
     const map = mapByIdentity(recipes);
-    const relations = selectSimilarRelations('chicken-alfredo', index, map);
 
-    let opened: ObsidianRecipe | null = null;
-    // Simulate the panel's onClick wiring.
-    for (const { recipe } of relations) {
-      if (recipe.id === 'creamy-garlic-chicken') opened = recipe;
-    }
-    // Second, call the actual panel with a spy onSelectRecipe.
-    let fromPanel: ObsidianRecipe | null = null;
-    renderToStaticMarkup(
-      React.createElement(RecipeRelationshipsPanel, {
-        recipe: recipes[0],
-        index,
-        recipeByIdentity: map,
-        onSelectRecipe: (r: ObsidianRecipe) => { fromPanel = r; },
-      })
-    );
-    // The panel is a thin shell: it resolves recipe objects by identity; the
-    // button just calls onSelectRecipe(related). Verify the resolver produced it.
-    expect(opened?.id).toBe('creamy-garlic-chicken');
-    void fromPanel;
+    const relations = selectSimilarRelations('chicken-alfredo', index, map);
+    const chickenId = 'creamy-garlic-chicken';
+    const resolved = relations.find((r) => r.recipe.id === chickenId);
+
+    // The selector hands back the LIVE recipe object from the loaded collection,
+    // so the panel's onSelectRecipe(related) navigates with the real record.
+    expect(resolved?.recipe).toBeDefined();
+    expect(resolved?.recipe.id).toBe(chickenId);
+    // And the identity used to resolve is the stable Step 6 identity.
+    expect(map.get(chickenId)?.title).toBe('Creamy Garlic Chicken');
   });
 
   it('does not mutate the input recipe ingredient data', () => {
@@ -305,5 +300,30 @@ describe('relationship UI: static render smoke tests (no AI / no server)', () =>
       })
     );
     expect(html).toContain('Not used by other recipes.');
+  });
+
+  it("uses the stable recipe identity (id ?? filePath ?? fileName) to resolve similar recipes", () => {
+    // A recipe whose `id` is absent but which has a unique filePath must still be
+    // found/similar via its identity; the panel never relies on `title` alone.
+    const recipes = [
+      mkRecipe('has-id', 'Has Id', ['garlic', 'butter']),
+      { ...mkRecipe('', 'No Id', ['garlic', 'bread']), filePath: 'Folder/No Id.md', fileName: 'No Id.md' } as ObsidianRecipe,
+    ];
+    const map = mapByIdentity(recipes);
+    const index = buildRecipeRelationshipIndex(recipes);
+    // The second recipe's index key is its filePath identity.
+    const relations = selectSimilarRelations(recipeIdentity(recipes[0]), index, map);
+    expect(relations.some((r) => r.recipe.title === 'No Id')).toBe(true);
+  });
+});
+
+describe('relationship UI: percent formatting guard', () => {
+  it('never displays a genuine positive similarity as 0%', () => {
+    expect(formatSimilarityPercent(0)).toBe('0%');
+    expect(formatSimilarityPercent(0.004)).toBe('<1%');
+    expect(formatSimilarityPercent(0.0049)).toBe('<1%');
+    expect(formatSimilarityPercent(0.05)).toBe('5%');
+    expect(formatSimilarityPercent(0.6)).toBe('60%');
+    expect(formatSimilarityPercent(1)).toBe('100%');
   });
 });
