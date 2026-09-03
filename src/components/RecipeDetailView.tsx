@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   ArrowLeft,
   Play,
@@ -28,6 +28,7 @@ import {
   Share2,
   Trash2,
   BrainCircuit,
+  Search,
 } from 'lucide-react';
 import { ObsidianRecipe, ParsedIngredient, VaultNote, RecipeNutrition } from '../types';
 import { scaleIngredientText } from '../utils/markdownParser';
@@ -35,8 +36,11 @@ import { downloadMarkdownFile } from '../utils/vaultFileSystem';
 import { getRecipeImage, DEFAULT_FOOD_IMAGES } from '../utils/imageHelper';
 import { useVaultImage } from '../hooks/useVaultImage';
 import { assessRecipeHealth } from '../utils/vaultIntelligence';
+import { buildRecipeRelationshipIndex, recipeIdentity } from '../utils/recipeRelationships';
 import { RecipeNutritionCard } from './RecipeNutritionCard';
 import { WikilinkPreviewModal } from './WikilinkPreviewModal';
+import { RecipeRelationshipsPanel } from './RecipeRelationshipsPanel';
+import { IngredientUsageModal } from './IngredientUsageModal';
 
 // The recipe-card export studio pulls in html2canvas, a heavy dependency
 // (hundreds of kB) that is only needed when a user actually exports a card.
@@ -89,12 +93,38 @@ export function RecipeDetailView({
   const [isDeleting, setIsDeleting] = useState(false);
   const [selectedWikilink, setSelectedWikilink] = useState<{ target: string; alias?: string } | null>(null);
   const [showCardStudio, setShowCardStudio] = useState(false);
+  const [ingredientUsage, setIngredientUsage] = useState<{ query: string; display: string } | null>(null);
 
   const defaultImg = getRecipeImage(recipe);
   const reactiveVaultImage = useVaultImage(recipe.image, defaultImg);
 
   const baseServings = recipe.servings || 4;
   const recipeHealth = assessRecipeHealth(recipe);
+
+  // Derived relationship data (Step 6). Built from the currently loaded recipe
+  // collection, memoized so it is not rebuilt on every render; it recomputes only
+  // when `allRecipes` changes. Purely derived — never persisted, never written to
+  // Markdown. `recipeByIdentity` maps the Step 6 stable identity to the live recipe.
+  const relationshipIndex = useMemo(() => buildRecipeRelationshipIndex(allRecipes), [allRecipes]);
+  const recipeByIdentity = useMemo(() => {
+    const map = new Map<string, ObsidianRecipe>();
+    for (const r of allRecipes) {
+      const identity = recipeIdentity(r);
+      if (identity) map.set(identity, r);
+    }
+    return map;
+  }, [allRecipes]);
+  const currentIdentity = recipeIdentity(recipe);
+
+  const handleOpenIngredientUsage = (ingredient: ParsedIngredient) => {
+    const query = (ingredient.original || ingredient.name || '').trim();
+    if (!query) return;
+    const display = (ingredient.name || ingredient.original || '').replace(
+      /\[\[(?:[^|\]]*\|)?([^\]]+)\]\]/g,
+      '$1'
+    ).trim();
+    setIngredientUsage({ query, display: display || query });
+  };
 
   const toggleIngredientCheck = (idx: number) => {
     setCheckedIngredients((prev) => ({
@@ -515,6 +545,19 @@ export function RecipeDetailView({
                       <span className="flex-1 leading-snug">
                         {scaledText}
                       </span>
+                      <button
+                        id={`ingredient-usage-btn-${idx}`}
+                        type="button"
+                        aria-label={`Find recipes using ${cleanText}`}
+                        title="Find recipes using this ingredient"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleOpenIngredientUsage(ing);
+                        }}
+                        className="shrink-0 p-1.5 rounded-lg bg-white/5 hover:bg-amber-500/20 text-gray-400 hover:text-amber-300 border border-white/10 hover:border-amber-500/40 transition-colors"
+                      >
+                        <Search className="w-3.5 h-3.5" />
+                      </button>
                     </li>
                   );
                 })}
@@ -603,8 +646,28 @@ export function RecipeDetailView({
               )}
             </div>
           </div>
+
+          {/* Similar Recipes (derived from the Step 6 relationship index) */}
+          <RecipeRelationshipsPanel
+            recipe={recipe}
+            index={relationshipIndex}
+            recipeByIdentity={recipeByIdentity}
+            onSelectRecipe={(r) => onSelectRecipe?.(r)}
+          />
         </div>
       )}
+
+      {/* Ingredient Usage Modal (recipes using a tapped ingredient) */}
+      <IngredientUsageModal
+        isOpen={!!ingredientUsage}
+        display={ingredientUsage?.display ?? ''}
+        query={ingredientUsage?.query ?? ''}
+        currentIdentity={currentIdentity}
+        index={relationshipIndex}
+        recipeByIdentity={recipeByIdentity}
+        onClose={() => setIngredientUsage(null)}
+        onSelectRecipe={(r) => onSelectRecipe?.(r)}
+      />
 
       {/* Wikilink Intelligence Modal */}
       <WikilinkPreviewModal

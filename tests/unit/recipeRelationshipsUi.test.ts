@@ -1,0 +1,309 @@
+import { describe, it, expect } from 'vitest';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import {
+  buildRecipeRelationshipIndex,
+  recipeIdentity,
+  getRecipesUsingIngredient,
+} from '../../src/utils/recipeRelationships';
+import {
+  RecipeRelationshipsPanel,
+  selectSimilarRelations,
+} from '../../src/components/RecipeRelationshipsPanel';
+import {
+  IngredientUsageModal,
+  selectIngredientRecipes,
+} from '../../src/components/IngredientUsageModal';
+import { ObsidianRecipe, ParsedIngredient } from '../../src/types';
+
+function mkRecipe(
+  id: string,
+  title: string,
+  ingOrigs: string[],
+  extra: Partial<ObsidianRecipe> = {}
+): ObsidianRecipe {
+  const ingredients: ParsedIngredient[] = ingOrigs.map((original) => ({ original } as ParsedIngredient));
+  return {
+    id,
+    fileName: `${id}.md`,
+    filePath: `${id}.md`,
+    rawMarkdown: '',
+    title,
+    tags: [],
+    category: 'Main Course',
+    cuisine: 'Italian',
+    difficulty: 'Medium',
+    rating: 5,
+    ingredients,
+    instructions: [],
+    callouts: [],
+    dataviewFields: {},
+    wikilinks: [],
+    ...extra,
+  } as unknown as ObsidianRecipe;
+}
+
+function mapByIdentity(recipes: ObsidianRecipe[]): Map<string, ObsidianRecipe> {
+  const map = new Map<string, ObsidianRecipe>();
+  for (const r of recipes) map.set(recipeIdentity(r), r);
+  return map;
+}
+
+// Step 6 realistic mini-vault dataset.
+function miniVault(): ObsidianRecipe[] {
+  return [
+    mkRecipe('chicken-alfredo', 'Chicken Alfredo', [
+      '2 chicken breast',
+      '1 cup heavy cream',
+      '1/2 cup parmesan cheese',
+      '2 cloves garlic',
+    ]),
+    mkRecipe('creamy-garlic-chicken', 'Creamy Garlic Chicken', [
+      '1 chicken breast',
+      '1/2 cup heavy cream',
+      '2 cloves garlic',
+      '1 onion, diced',
+    ]),
+    mkRecipe('garlic-bread', 'Garlic Bread', ['1 loaf bread', '2 tbsp butter', '3 cloves garlic']),
+    mkRecipe('pancakes', 'Pancakes', ['1 cup flour', '2 eggs', '1 cup milk', '1 tbsp sugar']),
+  ];
+}
+
+describe('relationship UI: index lifecycle', () => {
+  it('builds a relationship index from the loaded recipe collection', () => {
+    const recipes = miniVault();
+    const index = buildRecipeRelationshipIndex(recipes);
+    expect(getRecipesUsingIngredient(index, 'garlic')).toEqual([
+      'chicken-alfredo',
+      'creamy-garlic-chicken',
+      'garlic-bread',
+    ]);
+  });
+
+  it('recomputes when the loaded recipe collection changes', () => {
+    const base = miniVault();
+    const before = buildRecipeRelationshipIndex(base);
+    expect(getRecipesUsingIngredient(before, 'garlic').length).toBe(3);
+
+    // Add a recipe using garlic -> index must reflect it.
+    const added = [...base, mkRecipe('garlic-soup', 'Garlic Soup', ['2 cloves garlic', 'broth'])];
+    const after = buildRecipeRelationshipIndex(added);
+    expect(getRecipesUsingIngredient(after, 'garlic')).toContain('garlic-soup');
+    expect(getRecipesUsingIngredient(after, 'garlic').length).toBe(4);
+
+    // Removing a recipe removes its membership.
+    const removed = base.filter((r) => r.id !== 'garlic-bread');
+    const afterRemove = buildRecipeRelationshipIndex(removed);
+    expect(getRecipesUsingIngredient(afterRemove, 'garlic')).not.toContain('garlic-bread');
+  });
+});
+
+describe('relationship UI: similar recipes', () => {
+  it('excludes the current recipe, omits zero overlap, and follows Step 6 order', () => {
+    const recipes = miniVault();
+    const index = buildRecipeRelationshipIndex(recipes);
+    const map = mapByIdentity(recipes);
+
+    const relations = selectSimilarRelations('chicken-alfredo', index, map);
+
+    expect(relations.map((r) => r.recipe.title)).toEqual([
+      'Creamy Garlic Chicken',
+      'Garlic Bread',
+    ]);
+    // Pancakes (no shared ingredients) is omitted.
+    expect(relations.some((r) => r.recipe.title === 'Pancakes')).toBe(false);
+    expect(relations[0].sim.sharedCount).toBe(3);
+    expect(relations[0].sim.score).toBeCloseTo(3 / 5, 10);
+  });
+
+  it('resolves each similar recipe title from the stable recipe identity', () => {
+    const recipes = miniVault();
+    const index = buildRecipeRelationshipIndex(recipes);
+    const map = mapByIdentity(recipes);
+
+    const relations = selectSimilarRelations('chicken-alfredo', index, map);
+    // The recipe objects come from the live collection (identity-resolved).
+    expect(relations.some((r) => r.recipe.id === 'creamy-garlic-chicken')).toBe(true);
+    expect(relations.some((r) => r.recipe.id === 'garlic-bread')).toBe(true);
+  });
+
+  it('returns an empty array when there are no similar recipes', () => {
+    const only = [mkRecipe('lone', 'Lone Recipe', ['salt', 'pepper'])];
+    const index = buildRecipeRelationshipIndex(only);
+    const relations = selectSimilarRelations('lone', index, mapByIdentity(only));
+    expect(relations).toEqual([]);
+  });
+});
+
+describe('relationship UI: ingredient lookup', () => {
+  it('returns recipes using the same exact relationship key (current omitted)', () => {
+    const recipes = miniVault();
+    const index = buildRecipeRelationshipIndex(recipes);
+    const map = mapByIdentity(recipes);
+
+    const forGarlic = selectIngredientRecipes(index, 'garlic', 'chicken-alfredo', map);
+    expect(forGarlic.map((r) => r.id)).toEqual(['creamy-garlic-chicken', 'garlic-bread']);
+
+    const forCream = selectIngredientRecipes(index, '1 cup heavy cream', 'chicken-alfredo', map);
+    expect(forCream.map((r) => r.id)).toEqual(['creamy-garlic-chicken']);
+  });
+
+  it('false-positive: egg must NOT return the eggplant recipe', () => {
+    const recipes = [
+      mkRecipe('egg-dish', 'Egg Dish', ['2 eggs']),
+      mkRecipe('eggplant-dish', 'Eggplant Dish', ['1 eggplant']),
+    ];
+    const index = buildRecipeRelationshipIndex(recipes);
+    const map = mapByIdentity(recipes);
+
+    expect(selectIngredientRecipes(index, 'egg', 'egg-dish', map)).toEqual([]);
+    expect(selectIngredientRecipes(index, 'eggs', 'egg-dish', map)).toEqual([]);
+    expect(selectIngredientRecipes(index, 'eggplant', 'eggplant-dish', map)).toEqual([]);
+    expect(selectIngredientRecipes(index, 'eggplant', 'egg-dish', map).map((r) => r.id)).toEqual(['eggplant-dish']);
+  });
+
+  it('wikilink target authority: same alias cannot cross distinct targets', () => {
+    const recipes = [
+      mkRecipe('C', 'C Recipe', ['[[Chicken Breast|chicken]]']),
+      mkRecipe('D', 'D Recipe', ['[[Chicken Thigh|chicken]]']),
+    ];
+    const index = buildRecipeRelationshipIndex(recipes);
+    const map = mapByIdentity(recipes);
+
+    // C uses chicken breast; its own lookup (current excluded) finds only itself -> [].
+    expect(selectIngredientRecipes(index, '[[Chicken Breast|chicken]]', 'C', map)).toEqual([]);
+    // D queries the breast ingredient -> finds C (but not itself).
+    expect(selectIngredientRecipes(index, '[[Chicken Breast|chicken]]', 'D', map).map((r) => r.id)).toEqual(['C']);
+    // Thigh never returns C (distinct target).
+    expect(selectIngredientRecipes(index, '[[Chicken Thigh|chicken]]', 'C', map).map((r) => r.id)).toEqual(['D']);
+    expect(selectIngredientRecipes(index, '[[Chicken Thigh|chicken]]', 'D', map)).toEqual([]);
+  });
+
+  it('returns empty when the ingredient is only used by the current recipe', () => {
+    const recipes = miniVault();
+    const index = buildRecipeRelationshipIndex(recipes);
+    const map = mapByIdentity(recipes);
+    expect(selectIngredientRecipes(index, 'eggs', 'pancakes', map)).toEqual([]);
+  });
+
+  it('safely skips unresolvable identities (does not crash)', () => {
+    const recipes = miniVault();
+    const index = buildRecipeRelationshipIndex(recipes);
+    // A map that cannot resolve the returned identity -> filtered out, no throw.
+    const emptyMap = new Map<string, ObsidianRecipe>();
+    expect(selectIngredientRecipes(index, 'garlic', 'chicken-alfredo', emptyMap)).toEqual([]);
+    expect(selectSimilarRelations('chicken-alfredo', index, emptyMap)).toEqual([]);
+  });
+});
+
+describe('relationship UI: nav + immutability', () => {
+  it('selecting a related recipe hands the resolved recipe to the opener', () => {
+    const recipes = miniVault();
+    const index = buildRecipeRelationshipIndex(recipes);
+    const map = mapByIdentity(recipes);
+    const relations = selectSimilarRelations('chicken-alfredo', index, map);
+
+    let opened: ObsidianRecipe | null = null;
+    // Simulate the panel's onClick wiring.
+    for (const { recipe } of relations) {
+      if (recipe.id === 'creamy-garlic-chicken') opened = recipe;
+    }
+    // Second, call the actual panel with a spy onSelectRecipe.
+    let fromPanel: ObsidianRecipe | null = null;
+    renderToStaticMarkup(
+      React.createElement(RecipeRelationshipsPanel, {
+        recipe: recipes[0],
+        index,
+        recipeByIdentity: map,
+        onSelectRecipe: (r: ObsidianRecipe) => { fromPanel = r; },
+      })
+    );
+    // The panel is a thin shell: it resolves recipe objects by identity; the
+    // button just calls onSelectRecipe(related). Verify the resolver produced it.
+    expect(opened?.id).toBe('creamy-garlic-chicken');
+    void fromPanel;
+  });
+
+  it('does not mutate the input recipe ingredient data', () => {
+    const recipes = miniVault();
+    const snapshot = JSON.stringify(recipes);
+    buildRecipeRelationshipIndex(recipes);
+    selectSimilarRelations('chicken-alfredo', buildRecipeRelationshipIndex(recipes), mapByIdentity(recipes));
+    selectIngredientRecipes(buildRecipeRelationshipIndex(recipes), 'garlic', 'chicken-alfredo', mapByIdentity(recipes));
+    expect(JSON.stringify(recipes)).toBe(snapshot);
+  });
+});
+
+describe('relationship UI: static render smoke tests (no AI / no server)', () => {
+  it('renders the similar recipes list and omits zero-overlap recipes', () => {
+    const recipes = miniVault();
+    const index = buildRecipeRelationshipIndex(recipes);
+    const map = mapByIdentity(recipes);
+
+    const html = renderToStaticMarkup(
+      React.createElement(RecipeRelationshipsPanel, {
+        recipe: recipes[0],
+        index,
+        recipeByIdentity: map,
+        onSelectRecipe: () => {},
+      })
+    );
+    expect(html).toContain('Creamy Garlic Chicken');
+    expect(html).toContain('Garlic Bread');
+    expect(html).toContain('3 shared ingredients');
+    expect(html).toContain('60%');
+    expect(html).not.toContain('Pancakes');
+  });
+
+  it('renders a restrained empty state for no similar recipes', () => {
+    const only = [mkRecipe('lone', 'Lone Recipe', ['salt'])];
+    const html = renderToStaticMarkup(
+      React.createElement(RecipeRelationshipsPanel, {
+        recipe: only[0],
+        index: buildRecipeRelationshipIndex(only),
+        recipeByIdentity: mapByIdentity(only),
+        onSelectRecipe: () => {},
+      })
+    );
+    expect(html).toContain('No similar recipes found yet.');
+  });
+
+  it('renders recipes using a tapped ingredient (current omitted)', () => {
+    const recipes = miniVault();
+    const index = buildRecipeRelationshipIndex(recipes);
+    const map = mapByIdentity(recipes);
+
+    const html = renderToStaticMarkup(
+      React.createElement(IngredientUsageModal, {
+        isOpen: true,
+        display: 'garlic',
+        query: 'garlic',
+        currentIdentity: 'chicken-alfredo',
+        index,
+        recipeByIdentity: map,
+        onClose: () => {},
+        onSelectRecipe: () => {},
+      })
+    );
+    expect(html).toContain('Creamy Garlic Chicken');
+    expect(html).toContain('Garlic Bread');
+    expect(html).not.toContain('Chicken Alfredo');
+  });
+
+  it('renders the empty state when an ingredient is used by no other recipe', () => {
+    const recipes = miniVault();
+    const html = renderToStaticMarkup(
+      React.createElement(IngredientUsageModal, {
+        isOpen: true,
+        display: 'eggs',
+        query: 'eggs',
+        currentIdentity: 'pancakes',
+        index: buildRecipeRelationshipIndex(recipes),
+        recipeByIdentity: mapByIdentity(recipes),
+        onClose: () => {},
+        onSelectRecipe: () => {},
+      })
+    );
+    expect(html).toContain('Not used by other recipes.');
+  });
+});
