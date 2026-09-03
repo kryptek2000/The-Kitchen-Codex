@@ -3,6 +3,11 @@ import dotenv from "dotenv";
 import { MODEL_CONFIG } from "./modelConfig.js";
 import { getGemini } from "./geminiClient.js";
 import { estimateDeterministicNutrition, type DeterministicNutritionResult } from "./deterministicNutrition.js";
+import {
+  buildDeterministicCacheKey,
+  getDeterministicNutritionCache,
+  setDeterministicNutritionCache,
+} from "./nutritionCache.js";
 import type { NutritionSource, NutritionConfidence } from "../src/schema/recipeSchema.js";
 
 dotenv.config();
@@ -375,6 +380,19 @@ export async function estimateRecipeNutrition(
     throw new Error("No valid ingredient lines were provided.");
   }
 
+  // Deterministic cache lookup. The cache is a bounded, in-memory LRU over
+  // WHOLE-RECIPE deterministic (source = 'database') results, keyed ONLY on the
+  // nutrition-relevant inputs (never on the requested serving count or metadata).
+  // A cache hit is a performance optimization, NOT a nutrition authority: it
+  // re-returns the identical deterministic result (source = 'database', same
+  // confidence) and never changes fallback behavior. A cache miss simply falls
+  // through to the deterministic engine below untouched.
+  const cacheKey = buildDeterministicCacheKey(req.ingredients);
+  const cached = getDeterministicNutritionCache(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   const gemini = getGemini();
 
   // Attempt 0: deterministic curated estimation. This is the FIRST preference.
@@ -385,8 +403,12 @@ export async function estimateRecipeNutrition(
   // presenting an incomplete total as complete.
   const deterministic = estimateDeterministicNutrition(req.ingredients);
   if (deterministic.eligible) {
+    const result = buildDeterministicEstimateResult(deterministic);
+    // Only an eligible/sufficient deterministic result is ever cached; a partial
+    // or fallback result is never inserted into the deterministic cache.
+    setDeterministicNutritionCache(cacheKey, result);
     console.info("[NutritionEstimator] Deterministic curated estimate selected (sufficient coverage).");
-    return buildDeterministicEstimateResult(deterministic);
+    return result;
   }
 
   if (!gemini) {

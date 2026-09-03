@@ -228,7 +228,22 @@ export function normalizeRawIngredientLine(
   return { amount, unit, name: name || trimmed };
 }
 
-function toIngredientParts(
+/**
+ * Derives the single nutrition-relevant "parts" tuple ({ originalText, amount,
+ * unit, name }) for a raw ingredient input. This is the EXACT input the engine
+ * feeds into measurement normalization and curated food matching, and it is the
+ * canonical shape the deterministic cache keys on so a cache key can never
+ * diverge from the inputs that actually drive a result.
+ *
+ *   - originalText : the trimmed/truncated working text (drives qualitative cues).
+ *   - amount       : parsed numeric quantity, or null (drives mass resolution).
+ *   - unit         : the leading mass/volume unit token, or null (drives kind).
+ *   - name         : the food-name text (drives curated food matching).
+ *
+ * This is exported so `server/nutritionCache.ts` derives cache keys with the same
+ * single source of truth rather than re-implementing ingredient normalization.
+ */
+export function toIngredientParts(
   item: DeterministicIngredient
 ): { originalText: string; amount: number | null; unit: string | null; name: string } {
   if (typeof item === 'string') {
