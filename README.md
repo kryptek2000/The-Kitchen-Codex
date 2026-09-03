@@ -1,6 +1,6 @@
-# 🍳 The Kitchen Codex `v0.3.0`
+# 🍳 The Kitchen Codex `v0.3.1`
 
-[![Version](https://img.shields.io/badge/version-0.3.0-amber.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.3.1-amber.svg)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A markdown-native recipe manager, meal planner, culinary knowledge base, and interactive cooking companion built specifically for **Obsidian** vaults. Read, edit, sync, and cook directly from your Obsidian `.md` recipe collection with YAML frontmatter, Dataview tags, wikilinks (`[[Ingredient]]`, `[[Target|Alias]]`), AI nutrition estimation, dynamic portion scaling, multi-step cooking timers, and AI-powered web recipe scraping.
@@ -236,7 +236,11 @@ favorite: true
 
 ## 📌 Changelog
 
-### `v0.3.0` (Current Release)
+### `v0.3.1` (Current Release)
+- **Serving-Calorie Display Fix**: Recipe Detail Quick Metrics calories now scale correctly when the selected serving count changes. Header calories and the RecipeNutritionCard now share the same persisted-nutrition serving-scaling path, and nutrition serving denominators continue to respect `nutrition.servings` to prevent double-scaling.
+- **Testing**: 424/424 Vitest tests across 27 files; typecheck, production build, and GitHub Actions green on the hotfix commit.
+
+### `v0.3.0` (Previous Release)
 - **Trustworthy Data Layer**: deterministic measurement normalization, a curated local food reference, provenance/confidence metadata, deterministic whole-recipe nutrition estimation (used when coverage is fully resolvable), and a bounded deterministic nutrition cache. Requested serving count never changes the deterministic total.
 - **Recipe Relationships**: an ingredient relationship index, "Recipes Using This Ingredient", and "Similar Recipes" — all derived locally (no network/AI), with conservative exact ingredient identity and wikilink target authority; no auto-generated ingredient wikilinks.
 - **Testing**: 415/415 Vitest tests across 27 files; typecheck and production build clean.

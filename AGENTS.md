@@ -19,7 +19,7 @@ markdown/vault sync.
 bun install --frozen-lockfile   # dry check that lockfile matches package.json
 bun run dev                     # tsx server.ts (Vite dev middleware, port 3000)
 bun run lint                    # tsc --noEmit  (this is the "typecheck" step)
-bun run test                    # vitest run — expect 415/415 (27 files)
+bun run test                    # vitest run — expect 424/424 (27 files)
 bun run build                   # vite build && esbuild server.ts -> dist/server.cjs
 bun run test:prod               # needs server running on :3000 (see note)
 bun x tsx scripts/security_verification.ts   # needs server running on :3000
@@ -108,7 +108,7 @@ in dev (Vite HMR). `frame-ancestors` is configurable via `CSP_FRAME_ANCESTORS`.
 - `main` HEAD is clean and pushed (see `git log`). It includes the Express 5
   migration (merged via PR #7), GenAI 2.19.0, esbuild 0.28.2, actions/checkout
   v7, TS7 baseline, security hardening, deps cleanup, and this doc.
-- **v0.3.0** is the current release. `RELEASE_VERSION` in `src/appVersion.ts`
+- **v0.3.1** is the current release. `RELEASE_VERSION` in `src/appVersion.ts`
   is the single runtime source of truth for BOTH the client (`src/version.ts`)
   and the server (`/api/health`). `package.json`/`README.md` reference the same
   release. To bump, run `bun x tsx scripts/bump_version.ts vX.Y.Z`.
@@ -137,7 +137,7 @@ in dev (Vite HMR). `frame-ancestors` is configurable via `CSP_FRAME_ANCESTORS`.
   `server/metadataRecovery.ts` only emits `cookTime`/`totalTime`/`servings` when
   there is real evidence; otherwise those fields are absent (prefer absence over
   a baked-in "20 mins"/"4 servings").
-- Tests: **415/415 (27 files)**. `bun audit`: clean. `security_verification.ts`:
+- Tests: **424/424 (27 files)**. `bun audit`: clean. `security_verification.ts`:
   33/33.
 
 ## Notes

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.1] - 2026-09-03
+
+### 🐛 Fixed
+
+- Recipe Detail Quick Metrics calories now scale correctly when servings change.
+- Header calories and RecipeNutritionCard now share the same persisted-nutrition serving-scaling path.
+- Nutrition serving denominators continue to respect `nutrition.servings`, preventing double-scaling.
+
+### 🧪 Testing & Verification
+
+- **424 / 424 Vitest tests passing** across **27 test files**.
+- TypeScript typecheck (`tsc --noEmit`) clean; production build clean.
+- GitHub Actions green on hotfix commit `151b311`.
+
+---
+
 ## [0.3.0] - 2026-09-02
 
 ### 🎯 Trustworthy Data Layer — Nutrition Intelligence

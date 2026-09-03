@@ -10,4 +10,4 @@
  * script for the full release-bump process). Do not edit this constant and
  * `package.json` independently — they drive the same release.
  */
-export const RELEASE_VERSION = "v0.3.0";
+export const RELEASE_VERSION = "v0.3.1";
