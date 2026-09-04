@@ -145,6 +145,12 @@ describe('kitchenQueryInterpreter: deterministic fallback parser', () => {
     expect(deterministicInterpret('What can I make with eggs but no milk?').excludeIngredients).toEqual(['milk']);
   });
 
+  it('stops an exclude clause at "in" ("but no milk in the fridge" -> milk)', () => {
+    const q = deterministicInterpret('What can I make with eggs but no milk in the fridge?');
+    expect(q.excludeIngredients).toEqual(['milk']);
+    expect(q.includeIngredients).toEqual(['eggs']);
+  });
+
   it('does not fold lookalike ingredients', () => {
     expect(deterministicInterpret('with cream cheese').includeIngredients).toEqual(['cream cheese']);
     expect(deterministicInterpret('with black beans').includeIngredients).toEqual(['black beans']);

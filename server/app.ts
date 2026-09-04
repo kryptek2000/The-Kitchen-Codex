@@ -16,9 +16,15 @@ import {
   nutritionEstimateRateLimiter,
   metadataRecoveryRateLimiter,
   kitchenInterpretRateLimiter,
+  kitchenAnswerRateLimiter,
   getClientIp,
 } from "./rateLimiter.js";
 import { interpretKitchenQuestionOnServer } from "./kitchenInterpret.js";
+import { answerKitchenQuestionOnServer } from "./kitchenAnswer.js";
+import {
+  sanitizeAnswerEvidenceList,
+  MAX_ANSWER_RECIPES,
+} from "../src/utils/kitchenAnswer.js";
 import { safeFetchImage, WafProtectionError } from "./ssrfGuard.js";
 import { createSecurityMiddleware } from "./securityHeaders.js";
 import { requireAiAccessToken } from "./aiEndpointAuth.js";
@@ -442,6 +448,67 @@ export function createApp(opts: CreateAppOptions): express.Express {
       return res.status(500).json({
         ok: false,
         error: "An unexpected error occurred while interpreting the question. Please try again.",
+      });
+    }
+  });
+
+  // Ask My Kitchen grounded answer endpoint with rate limiting & input
+  // validation. Accepts a question, the sanitized query, and a compact evidence
+  // list derived from DETERMINISTIC retrieval — never arbitrary recipe objects.
+  // The model only grounds on the retrieved allowlist; the vault is never sent.
+  app.post("/api/kitchen/answer", requireAiAccessToken, kitchenAnswerRateLimiter, async (req, res) => {
+    const clientIp = getClientIp(req);
+
+    try {
+      if (!req.body || typeof req.body !== "object") {
+        return res.status(400).json({
+          ok: false,
+          error: "Invalid request payload.",
+        });
+      }
+
+      const rawQuestion = req.body.question;
+      if (typeof rawQuestion !== "string") {
+        return res.status(400).json({ ok: false, error: '"question" must be a string.' });
+      }
+      const question = rawQuestion.trim();
+      if (!question) {
+        return res.status(400).json({ ok: false, error: '"question" is required.' });
+      }
+      if (question.length > 500) {
+        return res.status(400).json({ ok: false, error: '"question" exceeds maximum length (500 characters).' });
+      }
+
+      if (!req.body.query || typeof req.body.query !== "object" || Array.isArray(req.body.query)) {
+        return res.status(400).json({ ok: false, error: '"query" must be an object.' });
+      }
+
+      if (!Array.isArray(req.body.results)) {
+        return res.status(400).json({ ok: false, error: '"results" must be an array.' });
+      }
+      if (req.body.results.length > MAX_ANSWER_RECIPES) {
+        return res.status(400).json({
+          ok: false,
+          error: `"results" exceeds maximum length (${MAX_ANSWER_RECIPES}).`,
+        });
+      }
+
+      const evidence = sanitizeAnswerEvidenceList(req.body.results);
+      const answer = await answerKitchenQuestionOnServer(question, req.body.query, evidence);
+
+      return res.json({
+        ok: answer.ok,
+        noMatches: answer.noMatches,
+        summary: answer.summary,
+        items: answer.items,
+        source: answer.source,
+      });
+    } catch (error: any) {
+      const errorMsg = error?.message || "";
+      console.error(`[${new Date().toISOString()}] [Client: ${clientIp}] Kitchen Answer Error:`, errorMsg);
+      return res.status(500).json({
+        ok: false,
+        error: "An unexpected error occurred while answering the question. Please try again.",
       });
     }
   });

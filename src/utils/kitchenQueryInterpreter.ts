@@ -339,18 +339,20 @@ export function deterministicInterpret(question: string): KitchenQuery {
   const lower = text.toLowerCase();
 
   // --- Ingredient include / exclude (exact user terms only) ---
-  // `for` is a conservative clause boundary ("with chicken for dinner" -> "chicken").
+  // `for` and `in` are conservative clause boundaries
+  // ("with chicken for dinner" -> "chicken"; "with rice in under 30" -> "rice").
   const includeStop =
-    'but|without|excluding|no|for|under|less than|within|rated|rating|at least|minimum|favorite|similar';
+    'but|without|excluding|no|for|in|under|less than|within|rated|rating|at least|minimum|favorite|similar';
   const excludeStop =
-    'but|with|for|under|less than|within|rated|rating|at least|minimum|favorite|similar';
+    'but|with|for|in|under|less than|within|rated|rating|at least|minimum|favorite|similar';
 
   const includes = findTerms(lower, /\bwith\b/, includeStop);
   const exceptWithout = findTerms(lower, /\bwithout\b/, excludeStop);
   const exceptExcluding = findTerms(lower, /\bexcluding\b/, excludeStop);
 
-  // "but no milk" / "but without milk" -> exclude.
-  const butNo = lower.match(/\bbut\s+(?:no|without|not)\s+([^.;!?]+?)(?=\s+but\b|\s+with\b|\s+under\b|\s+less than\b|\s+within\b|\s+rated\b|\s+at least\b|\s+minimum\b|\s+favorite\b|\.|!|\?|$)/i);
+  // "but no milk" / "but without milk" -> exclude. `in`/`for` are conservative
+  // clause boundaries ("but no milk in the fridge" -> "milk").
+  const butNo = lower.match(/\bbut\s+(?:no|without|not)\s+([^.;!?]+?)(?=\s+but\b|\s+with\b|\s+in\b|\s+for\b|\s+under\b|\s+less than\b|\s+within\b|\s+rated\b|\s+at least\b|\s+minimum\b|\s+favorite\b|\.|!|\?|$)/i);
   let excludes = [...exceptWithout, ...exceptExcluding];
   if (butNo && butNo[1]) excludes = [...excludes, ...splitTerms(butNo[1])];
 
