@@ -15,8 +15,10 @@ import {
   recipeImportRateLimiter,
   nutritionEstimateRateLimiter,
   metadataRecoveryRateLimiter,
+  kitchenInterpretRateLimiter,
   getClientIp,
 } from "./rateLimiter.js";
+import { interpretKitchenQuestionOnServer } from "./kitchenInterpret.js";
 import { safeFetchImage, WafProtectionError } from "./ssrfGuard.js";
 import { createSecurityMiddleware } from "./securityHeaders.js";
 import { requireAiAccessToken } from "./aiEndpointAuth.js";
@@ -379,6 +381,67 @@ export function createApp(opts: CreateAppOptions): express.Express {
 
       return res.status(500).json({
         error: "An unexpected error occurred during metadata recovery. Please try again.",
+      });
+    }
+  });
+
+  // Ask My Kitchen question interpretation endpoint with rate limiting & input
+  // validation. Accepts ONLY a question (no recipe/vault data), interprets it
+  // into a structured KitchenQuery, and returns it: the client performs the
+  // deterministic local retrieval (searchKitchenRecipes).
+  app.post("/api/kitchen/interpret", requireAiAccessToken, kitchenInterpretRateLimiter, async (req, res) => {
+    const clientIp = getClientIp(req);
+
+    try {
+      if (!req.body || typeof req.body !== "object") {
+        return res.status(400).json({
+          ok: false,
+          error: "Invalid request payload.",
+        });
+      }
+
+      const rawQuestion = req.body.question;
+      if (typeof rawQuestion !== "string") {
+        return res.status(400).json({
+          ok: false,
+          error: '"question" must be a string.',
+        });
+      }
+
+      const question = rawQuestion.trim();
+      if (!question) {
+        return res.status(400).json({
+          ok: false,
+          error: '"question" is required.',
+        });
+      }
+      if (question.length > 500) {
+        return res.status(400).json({
+          ok: false,
+          error: '"question" exceeds maximum length (500 characters).',
+        });
+      }
+
+      const result = await interpretKitchenQuestionOnServer(question);
+      if (!result.ok) {
+        return res.status(422).json({
+          ok: false,
+          source: result.source,
+          error: result.error,
+        });
+      }
+
+      return res.json({
+        ok: true,
+        source: result.source,
+        query: result.query,
+      });
+    } catch (error: any) {
+      const errorMsg = error?.message || "";
+      console.error(`[${new Date().toISOString()}] [Client: ${clientIp}] Kitchen Interpretation Error:`, errorMsg);
+      return res.status(500).json({
+        ok: false,
+        error: "An unexpected error occurred while interpreting the question. Please try again.",
       });
     }
   });
