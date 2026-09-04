@@ -105,13 +105,18 @@ in dev (Vite HMR). `frame-ancestors` is configurable via `CSP_FRAME_ANCESTORS`.
 
 ## Current state / open items
 
-- `main` HEAD is clean and pushed (see `git log`). It includes the Express 5
-  migration (merged via PR #7), GenAI 2.19.0, esbuild 0.28.2, actions/checkout
-  v7, TS7 baseline, security hardening, deps cleanup, and this doc.
-- **v0.4.0** is the current release. `RELEASE_VERSION` in `src/appVersion.ts`
-  is the single runtime source of truth for BOTH the client (`src/version.ts`)
-  and the server (`/api/health`). `package.json`/`README.md` reference the same
-  release. To bump, run `bun x tsx scripts/bump_version.ts vX.Y.Z`.
+- **v0.4.0 is the current release** ("The Kitchen Codex v0.4.0 — Ask My
+  Kitchen"). Release commit `5d06d2e5192f850a0f94802e61fba1f9a5479569`,
+  released 2026-09-04. Release verification baseline: **593/593 tests across
+  33 files**. `RELEASE_VERSION` in `src/appVersion.ts` is the single runtime
+  source of truth for BOTH the client (`src/version.ts`) and the server
+  (`/api/health`). `package.json`/`README.md` reference the same release. To
+  bump, run `bun x tsx scripts/bump_version.ts vX.Y.Z`.
+- **v0.4.1 hardening is in progress** on `main` (uncommitted work in the
+  tree): Ask My Kitchen interpretation reliability, AI availability/fallback
+  distinction, and culinary-similarity hardening. See the roadmap section
+  below. As of this writing the v0.4.1 working tree passes 636/636 tests
+  across 34 files; the release baseline will be re-verified at release time.
 - **v0.4.0 shipped Ask My Kitchen**: deterministic vault-only retrieval
   (`searchKitchenRecipes`), natural-language interpretation
   (`kitchenQueryInterpreter`), a grounded answer layer (`kitchenAnswer`), a
@@ -144,8 +149,9 @@ in dev (Vite HMR). `frame-ancestors` is configurable via `CSP_FRAME_ANCESTORS`.
   `server/metadataRecovery.ts` only emits `cookTime`/`totalTime`/`servings` when
   there is real evidence; otherwise those fields are absent (prefer absence over
   a baked-in "20 mins"/"4 servings").
-- Tests: **593/593 (33 files)**. `bun audit`: clean. `security_verification.ts`:
-  33/33.
+- Tests: v0.4.0 release baseline **593/593 (33 files)** (in-progress v0.4.1
+  tree currently 636/636, 34 files). `bun audit`: clean.
+  `security_verification.ts`: 33/33.
 
 ## Notes
 
@@ -176,6 +182,7 @@ own Markdown knowledge base.
 2. **Make AI Actually Useful** — "Ask My Kitchen" (query the user's own vault,
    grounded answers): "What can I make with chicken thighs, rice and broccoli?"
    Principle: *personal recipe intelligence > generic AI generation.*
+   (Shipped as v0.4.0; being deepened by v0.5.0 — see below.)
 3. **Intelligent Meal Planning** — plan N days from vault recipes, servings,
    inventory, leftovers, time, dietary, budget, variety (e.g. reuse leftovers).
 4. **Smart Shopping** — merge/aggregate quantities by item, categorize
@@ -213,15 +220,248 @@ own Markdown knowledge base.
 
 ### Recommended roadmap (milestones)
 
-`v0.2.6 -> v0.2.7 (consolidation: shared Gemini client, centralized error
-handler, version single-source-of-truth, zero-fabrication + regression
-coverage) [shipped] -> v0.3.0 (trustworthy data layer: deterministic nutrition,
-curated food reference, nutrition cache, ingredient relationship index + UI)
-[shipped] -> v0.4 (AI assistant, semantic search, Ask My Kitchen, meal planning
-intelligence) -> v0.5 (smart meal planner, pantry, shopping) -> v0.6 (cooking
-mode 2.0, voice, history) -> v0.7 (OCR/PDF/recipe intelligence) -> v0.8
-(cookbook, card studio 3.0, print/PDF) -> v0.9 (mobile/PWA, offline,
-accessibility, perf) -> v3.0 (intelligent cooking platform)`.
+- **v0.2.6 -> v0.2.7** — consolidation: shared Gemini client, centralized
+  error handler, version single-source-of-truth, zero-fabrication + regression
+  coverage. [SHIPPED]
+- **v0.3.0** — trustworthy data layer: deterministic nutrition, curated food
+  reference, nutrition cache, ingredient relationship index + UI (ingredient
+  relationships used a raw ingredient-Jaccard "Similar Recipes" signal; see
+  v0.4.1 for its replacement). [SHIPPED]
+- **v0.3.1** — serving-calorie display fix. [SHIPPED]
+- **v0.4.0 — Ask My Kitchen v1** — natural-language vault Q&A with
+  deterministic retrieval and grounded answers. [SHIPPED]
+- **v0.4.1 — Ask My Kitchen Reliability + Culinary Similarity Hardening** —
+  interpretation reliability, AI availability/fallback distinction,
+  culinary-similarity rework. [CURRENT HARDENING — not yet released]
+- **v0.5.0 — Ask My Kitchen Intelligence + Discovery** — Ask My Kitchen
+  becomes meaningfully more capable than Search and Filter; richer intent
+  model, explicit web discovery, Grab Recipe handoff. [NEXT MAJOR OBJECTIVE]
+- **v0.6.0 and later** — resume other roadmap work: intelligent meal planning,
+  smart shopping/pantry, cooking history, Cooking Mode 2.0/voice, recipe
+  intelligence (OCR/PDF/image import), Recipe Card Studio 3.0/cookbook,
+  mobile/PWA. [FUTURE — reprioritized after the Ask My Kitchen intelligence
+  leap; none of these ideas are dropped]
+- **v3.0** — the intelligent cooking platform. [LONG-TERM VISION]
+
+Detailed sections for v0.4.0 / v0.4.1 / v0.5.0 follow.
+
+### Release baseline: v0.4.0 — Ask My Kitchen [SHIPPED]
+
+**The Kitchen Codex v0.4.0 — Ask My Kitchen**. Release commit
+`5d06d2e5192f850a0f94802e61fba1f9a5479569`, released 2026-09-04. Release
+verification baseline: **593/593 tests across 33 files**.
+
+What shipped:
+
+- Ask My Kitchen UI (`AskMyKitchenModal`)
+- natural-language interpretation layer (`kitchenQueryInterpreter`)
+- deterministic local vault retrieval (`searchKitchenRecipes`)
+- grounded answer layer (`kitchenAnswer`)
+- trusted similar-recipe context (opened from Recipe Detail)
+- compact evidence-only server requests (no full-vault upload)
+- read-only operation
+
+Explicit non-goals at v0.4.0: no web discovery, no external recipe search,
+no writes. These are addressed later by v0.5.0.
+
+**Trust rule (preserved from v0.4.0 onward):** AI interprets intent when
+available. Deterministic local code decides which vault recipes actually
+qualify. The answer layer may reference only retrieved evidence. AI is never
+authoritative storage.
+
+### v0.4.1 — Ask My Kitchen Reliability + Culinary Similarity Hardening
+[CURRENT HARDENING]
+
+This is **NOT** a new product direction. It hardens v0.4.0 before the next
+major feature push.
+
+**Ask My Kitchen interpretation reliability:**
+
+- verify AI interpreter availability in deployment
+- distinguish genuine "could not understand" from AI/service failure
+- deterministic parser remains fallback/resilience only — not primary
+  intelligence
+- improve obvious fallback phrases conservatively
+- avoid turning the regex fallback into the main NLP engine
+- preserve question-only interpretation privacy (question text only; no vault
+  content in interpretation requests)
+- verify live Gemini model/key configuration
+
+**Culinary Similarity:**
+
+- replace raw ingredient-Jaccard-driven recommendations
+- dish family/type first, related dish family second
+- cuisine/category compatibility
+- useful tags
+- ingredient overlap only as a secondary signal
+- the same deterministic similarity authority powers both the Similar Recipes
+  UI and Ask My Kitchen "similar to this" retrieval
+
+Examples: salads should primarily recommend salads; tacos should favor tacos /
+burritos / enchiladas / quesadillas / fajitas; drinks, sauces, soups, and
+sandwiches should not become "similar" merely because they share garlic,
+onion, etc.
+
+### v0.5.0 — Ask My Kitchen Intelligence + Discovery
+[NEXT MAJOR OBJECTIVE]
+
+Theme:
+
+> Ask My Kitchen should feel like an intelligent kitchen assistant, not a
+> verbose search box.
+
+**Key product insight.** Simple queries such as "chicken", "Italian",
+"under 30 minutes", "dessert" already belong to Search and Filter. Ask My
+Kitchen should focus on things that benefit from AI understanding, judgment,
+comparison, discovery, and multi-step reasoning:
+
+- "What should I make tonight?"
+- "I want something easy and comforting but not too heavy."
+- "What would go well with this taco recipe?"
+- "Find something similar to this but not another taco."
+- "I need a dinner for six that won't take all night."
+- "What can I make with chicken that isn't another pasta dish?"
+- "Find me a gumbo recipe online."
+- "What recipes am I missing from my Mexican collection?"
+
+**Intelligence architecture.** The processing pipeline is:
+
+```
+natural language
+  -> AI intent interpretation
+  -> sanitized structured KitchenIntent
+  -> deterministic vault retrieval
+  -> grounded vault answer
+  -> optional explicit web discovery
+  -> user-selected import handoff
+```
+
+The AI should understand intent. Deterministic code remains authoritative for:
+vault membership, recipe existence, local metadata, navigation, and writes.
+Do not allow the model to fabricate vault recipes.
+
+**Richer KitchenIntent model (conceptual contract — not a requirement to
+implement this exact TypeScript shape verbatim):**
+
+```
+KitchenIntent
+
+intent:
+  - find_recipes
+  - meal_suggestion
+  - similar_recipe
+  - pairing
+  - compare
+  - ingredient_use
+  - discover_online
+  - browse_category
+
+source:
+  - vault
+  - vault_then_web
+  - web
+
+constraints:
+  - existing KitchenQuery-compatible hard filters
+
+preferences:
+  - effort
+  - mood
+  - style
+  - meal context
+  - dietary preference where explicitly supplied
+  - novelty / "something different"
+  - pairing intent
+
+requiresClarification: boolean
+```
+
+**Web discovery — explicit source separation.** Ask My Kitchen may search
+online for recipes that are NOT in the vault, under strict rules:
+
+- A. Vault-first by default where appropriate.
+- B. Web discovery must be explicit or clearly user-requested, e.g.
+  "Find me a gumbo recipe online.", "Look online for something similar.",
+  "I don't have anything good — find me something new."
+- C. Do NOT silently mix web recipes with vault recipes. Results must be
+  clearly labeled: `FROM MY VAULT` vs `FROM THE WEB`.
+- D. Web results must not become local recipes automatically.
+
+**Grab Recipe handoff.** Online discoveries integrate with the existing Grab
+Recipe workflow:
+
+```
+Ask My Kitchen web result
+  -> user selects recipe
+  -> Send to Grab Recipe
+  -> existing importer/security/extraction pipeline
+  -> preview
+  -> user confirms
+  -> save to Obsidian vault
+```
+
+Do NOT design a second independent importer inside Ask My Kitchen. Preserve:
+SSRF protections, redirect validation, WAF behavior, the extraction cascade,
+zero-fabrication rules, and user confirmation before writing. UI action names
+may be "Open", "Send to Grab Recipe", or "Import" — but actual import always
+passes through the existing trusted Grab pipeline.
+
+**Vault vs web product behavior.** Example:
+
+User: "I want something spicy, quick, and not too heavy."
+
+Ask My Kitchen:
+
+1. interpret intent
+2. search vault
+3. rank/explain useful local matches
+4. if results are weak, offer: "Want me to look online for more options?"
+5. if approved, search web
+6. show clearly-labeled online candidates
+7. allow handoff to Grab Recipe
+
+Where the user explicitly requests web ("Find me a great gumbo recipe
+online."), Ask My Kitchen may go directly to web discovery.
+
+**Why AI beyond filters matters.** Intelligence Search/Filter cannot provide
+well — this is the core reason Ask My Kitchen exists:
+
+- meal suggestions from fuzzy intent ("comforting but light")
+- pairing dishes
+- variety / novelty ("not another pasta dish")
+- identify gaps in a cuisine collection
+- compare several vault recipes
+- explain why a recipe fits the request
+- decide when vault results are weak
+- ask a useful clarification question when intent is ambiguous
+- recommend whether to use vault or web discovery
+
+**Trust / safety / privacy non-negotiables for v0.5.0:**
+
+- Obsidian Markdown remains canonical source of truth
+- no silent writes; no silent imports
+- no fabricated vault recipes; no fabricated recipe metadata presented as
+  vault truth
+- full vault should not be uploaded when targeted evidence is sufficient
+- interpretation should receive the smallest data necessary
+- web sources must be labeled as web
+- imported web recipes must pass through Grab Recipe
+- AI is interpretation/reasoning layer, not authoritative storage
+- basic recipe management must continue without AI
+
+### Immediate next steps
+
+1. **Finish v0.4.1 hardening** — parser false-positive fixes; culinary-
+   similarity gate hardening; verify AI interpreter model/key; full audit;
+   release if appropriate.
+2. **Design v0.5.0 contracts before implementation** — KitchenIntent; source
+   policy; web discovery result schema; vault/web result labeling; Grab Recipe
+   handoff contract; security/privacy boundaries.
+3. **Implement v0.5.0 in small audited steps** — AI intent layer; richer vault
+   recommendations; explicit web discovery; Grab Recipe handoff; UI
+   refinement; regression/security tests.
+4. **Independent audit.**
+5. **Release.**
 
 ### Product rules
 
@@ -239,11 +479,15 @@ user's Markdown knowledge base.
 
 ### 3.0 end goal
 
-From "I have chicken thighs, rice, broccoli, half an onion and some cream":
-search the vault, understand what's on hand, pick recipes, account for servings,
-optimize leftovers, generate + categorize a shopping list, build the meal plan,
-guide cooking, record what happened, and learn from feedback — a **personal
-cooking system**, not just a recipe database.
+The Kitchen Codex evolves into **the intelligence layer for the user's
+Obsidian recipe vault**, spanning: vault intelligence, recipe discovery,
+clearly-separated web discovery, trusted import, meal planning, shopping,
+cooking, and learning/personalization. From "I have chicken thighs, rice,
+broccoli, half an onion and some cream": search the vault, understand what's
+on hand, pick recipes, account for servings, optimize leftovers, generate +
+categorize a shopping list, build the meal plan, guide cooking, record what
+happened, and learn from feedback — a **personal cooking system**, not just a
+recipe database. Obsidian remains authoritative for owned recipes.
 
 ### Guiding principle
 
