@@ -42,6 +42,7 @@ import { ActiveTimersBar } from './components/ActiveTimersBar';
 import { ConnectVaultModal } from './components/ConnectVaultModal';
 import { RecipeGrabberModal } from './components/RecipeGrabberModal';
 import { VaultIntelligenceModal } from './components/VaultIntelligenceModal';
+import { AskMyKitchenModal } from './components/AskMyKitchenModal';
 import { summarizeVaultHealth } from './utils/vaultIntelligence';
 
 // Cooking Mode and the Recipe Editor are modal-heavy views only opened on
@@ -113,6 +114,7 @@ export default function App() {
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isGrabberOpen, setIsGrabberOpen] = useState(false);
   const [isVaultIntelligenceOpen, setIsVaultIntelligenceOpen] = useState(false);
+  const [isAskMyKitchenOpen, setIsAskMyKitchenOpen] = useState(false);
   const [vaultIntelligenceRecipeId, setVaultIntelligenceRecipeId] = useState<string | null>(null);
   const [editingRecipe, setEditingRecipe] = useState<ObsidianRecipe | null>(null);
   const [isWindowDragging, setIsWindowDragging] = useState(false);
@@ -943,6 +945,7 @@ export default function App() {
           setVaultIntelligenceRecipeId(null);
           setIsVaultIntelligenceOpen(true);
         }}
+        onOpenAskMyKitchen={() => setIsAskMyKitchenOpen(true)}
         legacyRecipeCount={vaultHealthSummary.legacyCount + vaultHealthSummary.incompleteCount}
         onRefreshVault={async () => {
           if (vaultStatus.isConnected && vaultStatus.folderHandle) {
@@ -1206,6 +1209,15 @@ export default function App() {
             setSelectedRecipe(updatedRecipe);
           }
         }}
+      />
+
+      {/* Ask My Kitchen Modal */}
+      <AskMyKitchenModal
+        isOpen={isAskMyKitchenOpen}
+        onClose={() => setIsAskMyKitchenOpen(false)}
+        allRecipes={recipes}
+        currentRecipe={selectedRecipe}
+        onSelectRecipe={(recipe) => setSelectedRecipe(recipe)}
       />
     </div>
   );

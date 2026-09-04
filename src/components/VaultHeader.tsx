@@ -17,6 +17,7 @@ import {
   BookOpen,
   Globe,
   BrainCircuit,
+  Sparkles,
 } from 'lucide-react';
 import { VaultSyncStatus } from '../types';
 import { APP_VERSION } from '../version';
@@ -34,6 +35,7 @@ interface VaultHeaderProps {
   onOpenNewRecipeModal: () => void;
   onOpenRecipeGrabber: () => void;
   onOpenVaultIntelligence: () => void;
+  onOpenAskMyKitchen: () => void;
   legacyRecipeCount?: number;
   onRefreshVault: () => void;
 }
@@ -51,6 +53,7 @@ export function VaultHeader({
   onOpenNewRecipeModal,
   onOpenRecipeGrabber,
   onOpenVaultIntelligence,
+  onOpenAskMyKitchen,
   legacyRecipeCount = 0,
   onRefreshVault,
 }: VaultHeaderProps) {
@@ -132,6 +135,17 @@ export function VaultHeader({
 
         {/* Action Buttons */}
         <div className="flex flex-wrap items-center gap-2">
+          {/* Ask My Kitchen Button */}
+          <button
+            id="ask-my-kitchen-header-btn"
+            onClick={onOpenAskMyKitchen}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition-colors shadow-xs"
+            title="Ask a question and search your vault for matching recipes"
+          >
+            <Sparkles className="w-4 h-4 text-amber-400" />
+            <span>Ask My Kitchen</span>
+          </button>
+
           {/* Vault Intelligence Button */}
           <button
             id="vault-intelligence-header-btn"
