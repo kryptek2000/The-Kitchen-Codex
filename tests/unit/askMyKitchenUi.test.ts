@@ -10,6 +10,9 @@ import {
   buildAnswerRequest,
   isInterpretResponse,
   isAnswerResponse,
+  httpErrorMessage,
+  NETWORK_ERROR_MESSAGE,
+  INVALID_RESPONSE_MESSAGE,
 } from '../../src/utils/askMyKitchenUi';
 
 function asRecipe(partial: Record<string, unknown>): ObsidianRecipe {
@@ -139,5 +142,67 @@ describe('askMyKitchenUi: response shape validation', () => {
     expect(isAnswerResponse({ ok: true, summary: '', noMatches: false, items: [{ recipeIdentity: 5 }] })).toBe(false);
     expect(isAnswerResponse({ ok: true, summary: '', noMatches: false, items: [{ recipeIdentity: 'a' }] })).toBe(false);
     expect(isAnswerResponse(null)).toBe(false);
+  });
+
+  it('validates item title strictly (audit fix A)', () => {
+    const ok = (items: unknown[]) => ({ ok: true, source: 'deterministic', summary: 'x', noMatches: false, items });
+    // string title accepted
+    expect(isAnswerResponse(ok([{ recipeIdentity: 'a', explanation: 'e', title: 'Alpha' }]))).toBe(true);
+    // title absent accepted (UI falls back to identity)
+    expect(isAnswerResponse(ok([{ recipeIdentity: 'a', explanation: 'e' }]))).toBe(true);
+    // non-string title rejected (object/array/number must never reach React)
+    expect(isAnswerResponse(ok([{ recipeIdentity: 'a', explanation: 'e', title: { x: 1 } }]))).toBe(false);
+    expect(isAnswerResponse(ok([{ recipeIdentity: 'a', explanation: 'e', title: ['x'] }]))).toBe(false);
+    expect(isAnswerResponse(ok([{ recipeIdentity: 'a', explanation: 'e', title: 5 }]))).toBe(false);
+  });
+});
+
+describe('askMyKitchenUi: safe UI error messages', () => {
+  it('maps known HTTP statuses to fixed, non-technical messages', () => {
+    expect(httpErrorMessage(400)).toBe('That request was invalid. Please check your question and try again.');
+    expect(httpErrorMessage(401)).toBe('This action is not available with the current vault setup.');
+    expect(httpErrorMessage(422)).toBe('I could not understand that question. Please try a different wording.');
+    expect(httpErrorMessage(429)).toBe('Too many requests. Please wait a moment and try again.');
+    expect(httpErrorMessage(500)).toBe('Something went wrong on the server. Please try again.');
+    // Unknown/other statuses fall back to the generic server message.
+    expect(httpErrorMessage(503)).toBe('Something went wrong on the server. Please try again.');
+  });
+
+  it('provides fixed network and invalid-response messages', () => {
+    expect(NETWORK_ERROR_MESSAGE).toContain('server');
+    expect(INVALID_RESPONSE_MESSAGE).toContain('unexpected response');
+  });
+});
+
+describe('askMyKitchenUi: strict similar-to cues (audit fix B)', () => {
+  const trusted = 'recipe-a';
+
+  it('seeds similarToRecipeId for explicit similar-to phrases (true positives)', () => {
+    const questions = [
+      'what is similar to this recipe?',
+      'recipes similar to this',
+      'something similar to this',
+      'recipes like this',
+    ];
+    for (const q of questions) {
+      expect(applyTrustedSimilarContext({}, trusted, q).similarToRecipeId).toBe(trusted);
+    }
+  });
+
+  it('does NOT seed for similar/like phrasing that is not recipe-similarity (false positives)', () => {
+    const questions = [
+      'I like this recipe',
+      "I'd like this for dinner",
+      'this looks similar in color',
+      'how is this similar to other cuisines',
+    ];
+    for (const q of questions) {
+      expect(applyTrustedSimilarContext({}, trusted, q).similarToRecipeId).toBeUndefined();
+    }
+  });
+
+  it('still always strips a model-inferred similarToRecipeId (trusted source wins)', () => {
+    expect(applyTrustedSimilarContext({ similarToRecipeId: 'guess' }, undefined, 'similar to this').similarToRecipeId).toBeUndefined();
+    expect(applyTrustedSimilarContext({ similarToRecipeId: 'guess' }, trusted, 'what desserts are there?').similarToRecipeId).toBeUndefined();
   });
 });

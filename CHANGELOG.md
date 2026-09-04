@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.0] - 2026-09-04
+
+### 🧭 Ask My Kitchen — Flagship Kitchen Intelligence
+
+- **Deterministic vault-only recipe retrieval** (`src/utils/kitchenSearch.ts`): a question is turned into a structured `KitchenQuery`, then a pure local engine (`searchKitchenRecipes`) is the sole authority on which recipes match — the model never chooses recipes or widens filters.
+- **Natural-language query interpretation** (`src/utils/kitchenQueryInterpreter.ts` + `server/kitchenInterpret.ts`): a thin boundary maps questions into query constraints (ingredients include/exclude, tags, cuisines, courses, difficulties, time bounds, rating, favorites) with a conservative deterministic fallback when AI is unavailable.
+- **Grounded conversational answer layer** (`src/utils/kitchenAnswer.ts` + `server/kitchenAnswer.ts`): a compact evidence set (retrieved recipes + deterministic reasons) produces grounded, evidence-backed answers with a deterministic fallback; the model never owns final recipe membership, ordering, count, or provenance.
+- **Ask My Kitchen UI** (`src/components/AskMyKitchenModal.tsx`): a minimal one-shot question/answer flow wired into the app header, with loading/error/no-match states and clickable recipe navigation.
+- **Trusted "similar to this recipe" context**: opened from a Recipe Detail, Ask My Kitchen seeds `similarToRecipeId` only from the trusted current recipe identity — never a model-invented identity.
+- **Local recipe-membership authority**: retrieval is authoritative; the answer and UI can only surface recipes from the retrieved set.
+- **Compact evidence-only server requests**: only retrieved compact evidence is sent; no vault data, raw Markdown, notes, or unrelated recipes leave the client. Read-only; no web search; no recipe fabrication.
+- **Deterministic fallback / no-match behavior**: grounded "I couldn't find a matching recipe in your vault." responses when nothing matches.
+
+### 🧪 Testing & Verification
+
+- **593 / 593 Vitest tests passing** across **33 test files**.
+- TypeScript typecheck (`tsc --noEmit`) clean; production build clean.
+- GitHub Actions green on commit `d0799b5`.
+- Privacy/security invariants preserved: SSRF guard, AI key containment, endpoint auth, rate limiting, security headers; no breaking vault-format changes.
+
+---
+
 ## [0.3.1] - 2026-09-03
 
 ### 🐛 Fixed

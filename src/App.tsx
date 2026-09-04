@@ -1217,7 +1217,10 @@ export default function App() {
         onClose={() => setIsAskMyKitchenOpen(false)}
         allRecipes={recipes}
         currentRecipe={selectedRecipe}
-        onSelectRecipe={(recipe) => setSelectedRecipe(recipe)}
+        onSelectRecipe={(recipe) => {
+          setIsAskMyKitchenOpen(false);
+          setSelectedRecipe(recipe);
+        }}
       />
     </div>
   );

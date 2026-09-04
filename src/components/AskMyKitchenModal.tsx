@@ -20,8 +20,11 @@ import {
   applyTrustedSimilarContext,
   buildAnswerRequest,
   buildInterpretRequest,
+  httpErrorMessage,
+  INVALID_RESPONSE_MESSAGE,
   isAnswerResponse,
   isInterpretResponse,
+  NETWORK_ERROR_MESSAGE,
   resolveAnswerRecipe,
 } from '../utils/askMyKitchenUi';
 
@@ -56,17 +59,6 @@ function progressLabel(status: AskStatus): string {
     default:
       return '';
   }
-}
-
-function statusMessage(status: number, data: unknown): string {
-  const error = (data as Record<string, unknown>)?.error;
-  const safeError = typeof error === 'string' && error.length <= 200 ? error : undefined;
-  if (status === 401) return 'This action is not available with the current vault setup.';
-  if (status === 429) return 'Too many requests. Please wait a moment and try again.';
-  if (status === 422) return safeError || 'I could not understand that question. Please try a different wording.';
-  if (status === 400) return safeError || 'That request was invalid. Please check your question.';
-  if (status === 500) return 'Something went wrong on the server. Please try again.';
-  return safeError || 'Something went wrong. Please try again.';
 }
 
 function renderAnswerItem(
@@ -144,6 +136,15 @@ export function AskMyKitchenModal({
     onClose();
   }, [onClose, reset]);
 
+  const handleSelectRecipe = useCallback(
+    (recipe: ObsidianRecipe) => {
+      tokenRef.current += 1; // invalidate any in-flight request
+      reset();
+      onSelectRecipe(recipe);
+    },
+    [onSelectRecipe, reset]
+  );
+
   useEffect(() => {
     if (!isOpen) return;
     const onKeyDown = (e: KeyboardEvent) => {
@@ -184,9 +185,14 @@ export function AskMyKitchenModal({
       });
       const interpretData = await interpretRes.json().catch(() => null);
       if (tokenRef.current !== token) return;
-      if (!interpretRes.ok || !isInterpretResponse(interpretData)) {
+      if (!interpretRes.ok) {
         setStatus('error');
-        setErrorMsg(statusMessage(interpretRes.status, interpretData));
+        setErrorMsg(httpErrorMessage(interpretRes.status));
+        return;
+      }
+      if (!isInterpretResponse(interpretData)) {
+        setStatus('error');
+        setErrorMsg(INVALID_RESPONSE_MESSAGE);
         return;
       }
 
@@ -209,9 +215,14 @@ export function AskMyKitchenModal({
       });
       const answerData = await answerRes.json().catch(() => null);
       if (tokenRef.current !== token) return;
-      if (!answerRes.ok || !isAnswerResponse(answerData)) {
+      if (!answerRes.ok) {
         setStatus('error');
-        setErrorMsg(statusMessage(answerRes.status, answerData));
+        setErrorMsg(httpErrorMessage(answerRes.status));
+        return;
+      }
+      if (!isAnswerResponse(answerData)) {
+        setStatus('error');
+        setErrorMsg(INVALID_RESPONSE_MESSAGE);
         return;
       }
 
@@ -227,7 +238,7 @@ export function AskMyKitchenModal({
     } catch {
       if (tokenRef.current !== token) return;
       setStatus('error');
-      setErrorMsg('Could not reach the server. Please check your connection and try again.');
+      setErrorMsg(NETWORK_ERROR_MESSAGE);
     }
   };
 
@@ -346,7 +357,7 @@ export function AskMyKitchenModal({
             <div className="space-y-4">
               <p className="text-sm text-gray-200">{answer.summary}</p>
               <ul className="space-y-2">
-                {answer.items.map((item) => renderAnswerItem(item, allRecipes, onSelectRecipe))}
+                {answer.items.map((item) => renderAnswerItem(item, allRecipes, handleSelectRecipe))}
               </ul>
             </div>
           )}

@@ -22,8 +22,21 @@ export function resolveAnswerRecipe(
   return recipes.find((recipe) => recipeIdentity(recipe) === identity);
 }
 
-/** A conservative cue for "similar to this recipe". Not broad NLP. */
-const SIMILAR_CUE = /\b(?:similar|like this|such as this)\b/i;
+/**
+ * A conservative, explicit set of phrases that clearly mean "similar to THIS
+ * recipe". Deliberately narrow: standalone "like this" / "similar" / "such as
+ * this" are NOT trusted because they false-positive on "I like this recipe". The
+ * phrase must anchor recipe-similarity intent (e.g. it ends in/surrounds "this").
+ */
+const SIMILAR_PHRASES = [
+  /similar to this/i, // "similar to this", "recipes similar to this", "what is similar to this recipe"
+  /something similar to/i, // "something similar to this"
+  /recipes? like this/i, // "recipes like this", "recipe like this"
+];
+
+function hasSimilarIntent(question: string): boolean {
+  return SIMILAR_PHRASES.some((pattern) => pattern.test(question ?? ''));
+}
 
 /**
  * Applies TRUSTED similar-to context after Step 2 interpretation.
@@ -45,7 +58,7 @@ export function applyTrustedSimilarContext(
   const next: KitchenQuery = { ...query };
   delete next.similarToRecipeId;
 
-  if (trustedCurrentRecipeIdentity && SIMILAR_CUE.test(question ?? '')) {
+  if (trustedCurrentRecipeIdentity && hasSimilarIntent(question)) {
     next.similarToRecipeId = trustedCurrentRecipeIdentity;
   }
   return next;
@@ -102,11 +115,38 @@ export function isAnswerResponse(
   ) {
     return false;
   }
-  return (p['items'] as unknown[]).every(
-    (item) =>
-      !!item &&
-      typeof item === 'object' &&
-      typeof (item as Record<string, unknown>)['recipeIdentity'] === 'string' &&
-      typeof (item as Record<string, unknown>)['explanation'] === 'string'
-  );
+  return (p['items'] as unknown[]).every((item) => {
+    if (!item || typeof item !== 'object') return false;
+    const rec = item as Record<string, unknown>;
+    if (typeof rec['recipeIdentity'] !== 'string') return false;
+    if (typeof rec['explanation'] !== 'string') return false;
+    // A title is okay to be absent (the UI falls back to the identity), but if
+    // present it MUST be a string so an object/array/number never reaches React.
+    if (rec['title'] !== undefined && typeof rec['title'] !== 'string') return false;
+    return true;
+  });
 }
+
+/** Fixed, non-technical message for a known HTTP status from Ask My Kitchen maps. */
+export function httpErrorMessage(status: number): string {
+  switch (status) {
+    case 400:
+      return 'That request was invalid. Please check your question and try again.';
+    case 401:
+      return 'This action is not available with the current vault setup.';
+    case 422:
+      return 'I could not understand that question. Please try a different wording.';
+    case 429:
+      return 'Too many requests. Please wait a moment and try again.';
+    default:
+      return 'Something went wrong on the server. Please try again.';
+  }
+}
+
+/** Fixed message for a network/unreachable failure. */
+export const NETWORK_ERROR_MESSAGE =
+  'Could not reach the server. Please check your connection and try again.';
+
+/** Fixed message for an invalid/malformed response shape. */
+export const INVALID_RESPONSE_MESSAGE =
+  'I received an unexpected response. Please try again.';

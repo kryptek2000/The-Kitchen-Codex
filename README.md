@@ -1,6 +1,6 @@
-# 🍳 The Kitchen Codex `v0.3.1`
+# 🍳 The Kitchen Codex `v0.4.0`
 
-[![Version](https://img.shields.io/badge/version-0.3.1-amber.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.4.0-amber.svg)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A markdown-native recipe manager, meal planner, culinary knowledge base, and interactive cooking companion built specifically for **Obsidian** vaults. Read, edit, sync, and cook directly from your Obsidian `.md` recipe collection with YAML frontmatter, Dataview tags, wikilinks (`[[Ingredient]]`, `[[Target|Alias]]`), AI nutrition estimation, dynamic portion scaling, multi-step cooking timers, and AI-powered web recipe scraping.
@@ -40,6 +40,14 @@ A markdown-native recipe manager, meal planner, culinary knowledge base, and int
 ### 🌐 AI Web Recipe Grabber
 - **URL & Text Importer**: Paste any recipe website URL, raw HTML, or recipe text to convert it into a structured Obsidian markdown note.
 - **Structured Schema & AI Parsing**: Extracts recipe metadata, ingredient amounts, wikilink entities, cooking step durations, and tips using Gemini AI and Schema.org JSON-LD extraction.
+
+### 🧭 Ask My Kitchen
+- **Natural-language questions, vault-only answers**: ask "What can I make with chicken and rice?", "Which recipes use black beans?", or "Show me my favorite Italian recipes" — and get answers grounded only in the recipes already in your Obsidian vault. No web search, no external recipe discovery.
+- **Deterministic local retrieval**: your question is interpreted into a structured `KitchenQuery`, then a deterministic engine (`searchKitchenRecipes`) decides exactly which recipes match — the model never chooses recipes or widens filters.
+- **Grounded conversational answers**: a compact evidence set (retrieved recipes + deterministic reasons) feeds a grounded answer layer that explains the results without inventing recipes, metadata, times, or ratings.
+- **Privacy-first evidence flow**: only the compact retrieved evidence is sent to the server; the full vault, raw Markdown, notes, and unrelated recipes never leave the client.
+- **Read-only & safe**: Ask My Kitchen only answers questions — it never edits recipes or Markdown, never writes, and clearly reports when no recipe matches ("I couldn't find a matching recipe in your vault.").
+- **Trusted similar-recipe context**: opened from a Recipe Detail, ask "what is similar to this?" to find recipes similar to the current one, using trusted local context (never a model-invented identity).
 
 ### 🍳 Distraction-Free Interactive Cooking Mode & Recipe Cards
 - **Step-by-Step Focus**: Fullscreen hands-free cooking assistant with high-contrast typography.
@@ -236,7 +244,12 @@ favorite: true
 
 ## 📌 Changelog
 
-### `v0.3.1` (Current Release)
+### `v0.4.0` (Current Release)
+- **Ask My Kitchen**: ask natural-language questions about the recipes already in your Obsidian vault. Deterministic, vault-only retrieval via `searchKitchenRecipes`; natural-language interpretation into a structured `KitchenQuery`; a grounded conversational answer layer; a minimal Ask My Kitchen UI; trusted "similar to this recipe" context; and local recipe-membership authority.
+- **Privacy-first evidence flow**: only compact retrieved evidence is sent to the server; no vault data, raw Markdown, notes, or unrelated recipes ever leave the client. Read-only; no web search; no recipe fabrication; grounded no-match/fallback behavior.
+- **Testing**: 593/593 Vitest tests across 33 files; typecheck and production build clean.
+
+### `v0.3.1` (Previous Release)
 - **Serving-Calorie Display Fix**: Recipe Detail Quick Metrics calories now scale correctly when the selected serving count changes. Header calories and the RecipeNutritionCard now share the same persisted-nutrition serving-scaling path, and nutrition serving denominators continue to respect `nutrition.servings` to prevent double-scaling.
 - **Testing**: 424/424 Vitest tests across 27 files; typecheck, production build, and GitHub Actions green on the hotfix commit.
 
