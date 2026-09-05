@@ -19,7 +19,7 @@ markdown/vault sync.
 bun install --frozen-lockfile   # dry check that lockfile matches package.json
 bun run dev                     # tsx server.ts (Vite dev middleware, port 3000)
 bun run lint                    # tsc --noEmit  (this is the "typecheck" step)
-bun run test                    # vitest run — expect 593/593 (33 files)
+bun run test                    # vitest run — expect 675/675 (34 files)
 bun run build                   # vite build && esbuild server.ts -> dist/server.cjs
 bun run test:prod               # needs server running on :3000 (see note)
 bun x tsx scripts/security_verification.ts   # needs server running on :3000
@@ -105,18 +105,21 @@ in dev (Vite HMR). `frame-ancestors` is configurable via `CSP_FRAME_ANCESTORS`.
 
 ## Current state / open items
 
-- **v0.4.0 is the current release** ("The Kitchen Codex v0.4.0 — Ask My
-  Kitchen"). Release commit `5d06d2e5192f850a0f94802e61fba1f9a5479569`,
-  released 2026-09-04. Release verification baseline: **593/593 tests across
-  33 files**. `RELEASE_VERSION` in `src/appVersion.ts` is the single runtime
-  source of truth for BOTH the client (`src/version.ts`) and the server
-  (`/api/health`). `package.json`/`README.md` reference the same release. To
-  bump, run `bun x tsx scripts/bump_version.ts vX.Y.Z`.
-- **v0.4.1 hardening is in progress** on `main` (uncommitted work in the
-  tree): Ask My Kitchen interpretation reliability, AI availability/fallback
-  distinction, and culinary-similarity hardening. See the roadmap section
-  below. As of this writing the v0.4.1 working tree passes 636/636 tests
-  across 34 files; the release baseline will be re-verified at release time.
+- **v0.4.1 is the current release** ("The Kitchen Codex v0.4.1 — Ask My
+  Kitchen Reliability & Culinary Relevance"). `RELEASE_VERSION` in
+  `src/appVersion.ts` is the single runtime source of truth for BOTH the
+  client (`src/version.ts`) and the server (`/api/health`). `package.json`/
+  `README.md` reference the same release. To bump, run
+  `bun x tsx scripts/bump_version.ts vX.Y.Z`.
+- **v0.4.1 hardening landed in two commits**: culinary-similarity relevance
+  (`72c9704` — dish-family-first Similar Recipes with a hard known-family
+  mismatch gate, one authority shared with Ask My Kitchen's
+  `similarToRecipeId`) and interpretation reliability (`404a227` — fallback
+  false-positive hardening, unsupported dish-family subjects fail safely,
+  hour parsing, compound intent preservation, `aiAttempted`/`aiFailed`
+  signalling, 422-vs-503 distinction, safe fixed UI error messages).
+  Verification baseline: **675/675 tests across 34 files**. Release notes:
+  `RELEASE_NOTES_v0.4.1.md`.
 - **v0.4.0 shipped Ask My Kitchen**: deterministic vault-only retrieval
   (`searchKitchenRecipes`), natural-language interpretation
   (`kitchenQueryInterpreter`), a grounded answer layer (`kitchenAnswer`), a
@@ -149,8 +152,7 @@ in dev (Vite HMR). `frame-ancestors` is configurable via `CSP_FRAME_ANCESTORS`.
   `server/metadataRecovery.ts` only emits `cookTime`/`totalTime`/`servings` when
   there is real evidence; otherwise those fields are absent (prefer absence over
   a baked-in "20 mins"/"4 servings").
-- Tests: v0.4.0 release baseline **593/593 (33 files)** (in-progress v0.4.1
-  tree currently 636/636, 34 files). `bun audit`: clean.
+- Tests: v0.4.1 baseline **675/675 (34 files)**. `bun audit`: clean.
   `security_verification.ts`: 33/33.
 
 ## Notes
@@ -232,7 +234,7 @@ own Markdown knowledge base.
   deterministic retrieval and grounded answers. [SHIPPED]
 - **v0.4.1 — Ask My Kitchen Reliability + Culinary Similarity Hardening** —
   interpretation reliability, AI availability/fallback distinction,
-  culinary-similarity rework. [CURRENT HARDENING — not yet released]
+  culinary-similarity rework. [SHIPPED — see RELEASE_NOTES_v0.4.1.md]
 - **v0.5.0 — Ask My Kitchen Intelligence + Discovery** — Ask My Kitchen
   becomes meaningfully more capable than Search and Filter; richer intent
   model, explicit web discovery, Grab Recipe handoff. [NEXT MAJOR OBJECTIVE]
@@ -270,7 +272,7 @@ qualify. The answer layer may reference only retrieved evidence. AI is never
 authoritative storage.
 
 ### v0.4.1 — Ask My Kitchen Reliability + Culinary Similarity Hardening
-[CURRENT HARDENING]
+[SHIPPED]
 
 This is **NOT** a new product direction. It hardens v0.4.0 before the next
 major feature push.

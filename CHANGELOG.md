@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.1] - 2026-09-04
+
+### 🧭 Ask My Kitchen Reliability
+
+- **Improved deterministic fallback interpretation** (`src/utils/kitchenQueryInterpreter.ts`): possession ("I have chicken and rice") and use/contain ("recipes using eggs", "what recipes contain garlic?") leads are context-sensitive — reference phrases ("recipes like this"), generic non-food nouns ("time", "ideas"), and meta-object nouns ("instructions", "notes", "steps", "photos") are never treated as ingredients.
+- **Conversational false positives fixed**: dangling conjunctions ("tomatoes and") are stripped; possession leads never swallow deictic phrases; unsupported dish-family subjects ("salad recipes", "soup recipes") now fail safely instead of silently degrading to a time-only query that would match everything.
+- **Compound intent preserved**: "What chicken recipes can I make in under 30 minutes?" keeps BOTH the ingredient and the time bound; "beef recipes under 1 hour" correctly parses hours as 60 minutes and "half an hour" as 30.
+- **Distinct failure signalling**: interpretation results now carry `aiAttempted`/`aiFailed`, so a genuine "could not understand" (HTTP 422) is distinguishable from an AI/service failure (HTTP 503). The deterministic parser remains a resilience fallback, not the primary intelligence.
+- **Safe fixed error messaging**: the UI maps 422/503/429 to fixed, user-appropriate messages; no raw provider/server error bodies, model IDs, or key/config details are ever surfaced.
+
+### 🍽️ Culinary Similarity Relevance
+
+- **Dish-family-first ranking** (`src/utils/recipeRelationships.ts`): Similar Recipes is now driven by a conservative dish-family ontology (inferred only from trusted title/tag/course metadata) — salads recommend salads; tacos favor tacos/burritos/enchiladas/quesadillas/fajitas.
+- **Known-family mismatch gate**: when both recipes have recognized dish families that are neither equal nor related, the pair is excluded — shared cuisine, course, tags, or ingredients can never override a culinary-type mismatch.
+- **Related families**: explicit related groups (Tex-Mex, soup/stew/chili, bread/pizza, burger/sandwich, cake/cookie/pie/dessert) recommend one another symmetrically.
+- **Ingredient overlap demoted to a bonus/fallback**: raw Jaccard is a capped secondary signal; generic pantry noise (garlic powder, olive oil, kosher salt, …) and generic tags (easy, quick, dinner, …) can no longer establish similarity on their own.
+- **One similarity authority**: the same deterministic `findSimilarRecipes` engine powers both the Similar Recipes panel and Ask My Kitchen's `similarToRecipeId` retrieval, with human-readable culinary reasons replacing raw overlap numbers.
+
+### 🧪 Testing & Verification
+
+- **675 / 675 Vitest tests passing** across **34 test files**.
+- TypeScript typecheck (`tsc --noEmit`) clean; production build clean.
+- Privacy/security invariants preserved: SSRF guard, AI key containment, endpoint auth, rate limiting, security headers; no breaking vault-format changes. No web discovery, no new import paths, no silent writes; AI/model output never controls recipe membership or the trusted similar-recipe identity.
+
+---
+
 ## [0.4.0] - 2026-09-04
 
 ### 🧭 Ask My Kitchen — Flagship Kitchen Intelligence

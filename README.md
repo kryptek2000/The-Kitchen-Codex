@@ -1,6 +1,6 @@
-# 🍳 The Kitchen Codex `v0.4.0`
+# 🍳 The Kitchen Codex `v0.4.1`
 
-[![Version](https://img.shields.io/badge/version-0.4.0-amber.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.4.1-amber.svg)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A markdown-native recipe manager, meal planner, culinary knowledge base, and interactive cooking companion built specifically for **Obsidian** vaults. Read, edit, sync, and cook directly from your Obsidian `.md` recipe collection with YAML frontmatter, Dataview tags, wikilinks (`[[Ingredient]]`, `[[Target|Alias]]`), AI nutrition estimation, dynamic portion scaling, multi-step cooking timers, and AI-powered web recipe scraping.
@@ -32,7 +32,7 @@ A markdown-native recipe manager, meal planner, culinary knowledge base, and int
 
 ### 🔗 Recipe Relationships & Similar Recipes
 - **Recipes Using This Ingredient**: Tap any ingredient on a recipe to see the other recipes that use the exact same ingredient (derived locally, no network/AI).
-- **Similar Recipes**: A compact panel ranks recipes by shared-ingredient similarity (deterministic Jaccard over unique ingredients), excluding the current recipe.
+- **Similar Recipes**: A compact panel ranks recipes by culinary relevance — dish family/type first, related dish families second, with cuisine/course/tag signals; shared-ingredient overlap remains only a secondary bonus signal (deterministic, local, no network/AI). A known-family mismatch (e.g. a salad vs a pasta) is never overridden by shared cuisine, course, tags, or ingredients.
 - **Conservative, exact ingredient identity**: no substring/fuzzy matching, so `egg` never matches `eggplant`, `butter` ≠ `peanut butter`, `cream` ≠ `cream cheese`, `chicken breast` ≠ `chicken thigh`, and `all-purpose flour` ≠ `almond flour`.
 - **Wikilink target authority**: an ingredient link's identity derives from its target (`[[Chicken Breast|chicken]]` ≠ `[[Chicken Thigh|chicken]]`) while alias/display text is preserved for display.
 - **No auto-generated wikilinks**: relationship derivation never creates, edits, or rewrites wikilinks, aliases, ingredient text, or Markdown.
@@ -244,7 +244,13 @@ favorite: true
 
 ## 📌 Changelog
 
-### `v0.4.0` (Current Release)
+### `v0.4.1` (Current Release)
+- **Ask My Kitchen Reliability**: hardened the deterministic fallback interpretation — conversational false positives fixed (reference phrases, generic/meta nouns, and dangling conjunctions are no longer mistaken for ingredients), compound ingredient+time intent preserved ("chicken recipes under 30 minutes" keeps both), hour parsing fixed ("under 1 hour" = 60 minutes), and unsupported dish-family subjects ("salad recipes under 30 minutes") now fail safely instead of silently returning a time-only query.
+- **Distinct failure signalling**: genuine "could not understand" (HTTP 422) is now separated from AI/service failure (HTTP 503), with safe fixed UI error messages and no raw provider/server error leakage.
+- **Culinary Similar Recipes**: Similar Recipes and Ask My Kitchen "similar to this" now share one deterministic culinary-relevance authority — dish-family/type-first ranking, related-family support, cuisine/course/tag signals, and ingredient overlap reduced to a capped secondary signal; generic pantry ingredients and generic tags can no longer establish similarity on their own.
+- **Testing**: 675/675 Vitest tests across 34 files; typecheck and production build clean.
+
+### `v0.4.0` (Previous Release)
 - **Ask My Kitchen**: ask natural-language questions about the recipes already in your Obsidian vault. Deterministic, vault-only retrieval via `searchKitchenRecipes`; natural-language interpretation into a structured `KitchenQuery`; a grounded conversational answer layer; a minimal Ask My Kitchen UI; trusted "similar to this recipe" context; and local recipe-membership authority.
 - **Privacy-first evidence flow**: only compact retrieved evidence is sent to the server; no vault data, raw Markdown, notes, or unrelated recipes ever leave the client. Read-only; no web search; no recipe fabrication; grounded no-match/fallback behavior.
 - **Testing**: 593/593 Vitest tests across 33 files; typecheck and production build clean.
