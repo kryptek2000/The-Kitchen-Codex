@@ -430,6 +430,16 @@ export function createApp(opts: CreateAppOptions): express.Express {
 
       const result = await interpretKitchenQuestionOnServer(question);
       if (!result.ok) {
+        // If the AI interpreter was present but failed to produce a usable query,
+        // the problem is an upstream/model failure, not the user's wording — so
+        // surface an unavailable-service status instead of "could not understand".
+        if (result.aiAttempted && result.aiFailed) {
+          return res.status(503).json({
+            ok: false,
+            source: result.source,
+            error: "The interpretation service is temporarily unavailable. Please try again.",
+          });
+        }
         return res.status(422).json({
           ok: false,
           source: result.source,

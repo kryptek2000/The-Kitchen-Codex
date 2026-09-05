@@ -419,3 +419,323 @@ describe('kitchenQueryInterpreter: bounded similarToRecipeId & source labeling',
     expect(result.query?.includeIngredients).toEqual(['chicken', 'rice']);
   });
 });
+
+describe('kitchenQueryInterpreter: natural-language fallback coverage (v0.4.1)', () => {
+  it('parses "I have chicken and rice" into includes', () => {
+    expect(deterministicInterpret('I have chicken and rice, what can I cook?').includeIngredients).toEqual(['chicken', 'rice']);
+  });
+
+  it('parses "using eggs" into includes', () => {
+    expect(deterministicInterpret('Show me recipes using eggs.').includeIngredients).toEqual(['eggs']);
+  });
+
+  it('parses "contain tomatoes" into includes', () => {
+    expect(deterministicInterpret('What recipes contain tomatoes?').includeIngredients).toEqual(['tomatoes']);
+  });
+
+  it('does not let a possession lead swallow a cuisine intent ("any Mexican recipes")', () => {
+    const q = deterministicInterpret('Do I have any Mexican recipes?');
+    expect(q.includeIngredients).toBeUndefined();
+    expect(q.cuisines).toEqual(['Mexican']);
+  });
+
+  it('stops an ingredient clause at "that"/"takes" (no over-capture)', () => {
+    const q = deterministicInterpret('Find a dessert with chocolate that takes under an hour.');
+    expect(q.includeIngredients).toEqual(['chocolate']);
+    expect(q.maxTotalMinutes).toBe(60);
+    expect(q.courses).toEqual(['Dessert']);
+  });
+
+  it('parses "less than an hour" into 60 minutes', () => {
+    expect(deterministicInterpret('What takes less than an hour?').maxTotalMinutes).toBe(60);
+  });
+
+  it('parses "in half an hour" into 30 minutes', () => {
+    expect(deterministicInterpret('I need this in half an hour.').maxTotalMinutes).toBe(30);
+  });
+
+  it('parses plural course words ("quick dinners")', () => {
+    expect(deterministicInterpret('Show me quick dinners.').courses).toEqual(['Dinner']);
+  });
+
+  it('parses a combined Italian dinner with garlic', () => {
+    const q = deterministicInterpret('Show me Italian dinners with garlic.');
+    expect(q.cuisines).toEqual(['Italian']);
+    expect(q.courses).toEqual(['Dinner']);
+    expect(q.includeIngredients).toEqual(['garlic']);
+  });
+
+  it('parses "favorite recipes use chicken"', () => {
+    const q = deterministicInterpret('What favorite recipes use chicken?');
+    expect(q.includeIngredients).toContain('chicken');
+    expect(q.favoritesOnly).toBe(true);
+  });
+
+  it('does not treat a topic noun as an ingredient ("with some recipes")', () => {
+    expect(deterministicInterpret('with some recipes').includeIngredients).toBeUndefined();
+  });
+
+  it('is still conservative: vague conversational questions yield no filters', () => {
+    for (const q of ["I'm hungry. What can I make quickly?", 'What should I cook tonight?', 'What could I make right now?']) {
+      expect(isMeaningfulQuery(deterministicInterpret(q))).toBe(false);
+    }
+  });
+
+  it('remains conservative about an unnumbered "highest rated"', () => {
+    expect(deterministicInterpret('What are my highest rated recipes?').minRating).toBeUndefined();
+  });
+});
+
+describe('kitchenQueryInterpreter: AI availability & failure signalling (v0.4.1)', () => {
+  it('signals aiAttempted=true and aiFailed=false on a successful AI interpretation', async () => {
+    const deps: InterpretDeps = { aiInterpret: async () => ({ includeIngredients: ['eggs'] }) };
+    const r = await interpretKitchenQuery('using eggs', deps);
+    expect(r.ok).toBe(true);
+    expect(r.source).toBe('ai');
+    expect(r.aiAttempted).toBe(true);
+    expect(r.aiFailed).toBe(false);
+  });
+
+  it('signals aiFailed when the AI adapter throws and the fallback rescues', async () => {
+    const deps: InterpretDeps = { aiInterpret: async () => { throw new Error('timeout'); } };
+    const r = await interpretKitchenQuery('under 30 minutes', deps);
+    expect(r.ok).toBe(true);
+    expect(r.source).toBe('deterministic');
+    expect(r.aiAttempted).toBe(true);
+    expect(r.aiFailed).toBe(true);
+  });
+
+  it('signals aiFailed when AI returns an unusable query and the fallback rescues', async () => {
+    const deps: InterpretDeps = { aiInterpret: async () => ({}) };
+    const r = await interpretKitchenQuery('under 30 minutes', deps);
+    expect(r.ok).toBe(true);
+    expect(r.source).toBe('deterministic');
+    expect(r.aiAttempted).toBe(true);
+    expect(r.aiFailed).toBe(true);
+  });
+
+  it('signals an upstream AI failure (not a wording problem) when AI fails and no fallback parse', async () => {
+    const deps: InterpretDeps = { aiInterpret: async () => { throw new Error('boom'); } };
+    const r = await interpretKitchenQuery("I'm hungry. What can I make quickly?", deps);
+    expect(r.ok).toBe(false);
+    expect(r.aiAttempted).toBe(true);
+    expect(r.aiFailed).toBe(true);
+  });
+
+  it('does NOT signal an AI failure when no AI adapter is supplied (deterministic-only)', async () => {
+    const r = await interpretKitchenQuery('What should I cook tonight?');
+    expect(r.ok).toBe(false);
+    expect(r.aiAttempted).toBe(false);
+    expect(r.aiFailed).toBe(false);
+  });
+});
+
+describe('kitchenQueryInterpreter: representative interpretation matrix (v0.4.1)', () => {
+  const cases: Array<{ q: string; ok: boolean; check: (query: KitchenQuery) => void }> = [
+    {
+      q: 'What can I make with garlic?',
+      ok: true,
+      check: (query) => expect(query.includeIngredients).toEqual(['garlic']),
+    },
+    {
+      q: 'I have chicken and rice, what can I cook?',
+      ok: true,
+      check: (query) => expect(query.includeIngredients).toEqual(['chicken', 'rice']),
+    },
+    {
+      q: 'Show me recipes using eggs.',
+      ok: true,
+      check: (query) => expect(query.includeIngredients).toEqual(['eggs']),
+    },
+    {
+      q: 'What desserts do I have?',
+      ok: true,
+      check: (query) => expect(query.courses).toEqual(['Dessert']),
+    },
+    {
+      q: 'What can I make for dinner?',
+      ok: true,
+      check: (query) => expect(query.courses).toEqual(['Dinner']),
+    },
+    {
+      q: 'What can I make in under 30 minutes?',
+      ok: true,
+      check: (query) => expect(query.maxTotalMinutes).toBe(30),
+    },
+    {
+      q: 'What chicken recipes can I make in under 30 minutes?',
+      ok: true,
+      check: (query) => expect(query.maxTotalMinutes).toBe(30),
+    },
+    {
+      q: 'Show me Italian dinners with garlic.',
+      ok: true,
+      check: (query) => {
+        expect(query.cuisines).toEqual(['Italian']);
+        expect(query.includeIngredients).toEqual(['garlic']);
+      },
+    },
+    {
+      q: 'Find something with potatoes but no cheese.',
+      ok: true,
+      check: (query) => {
+        expect(query.includeIngredients).toEqual(['potatoes']);
+        expect(query.excludeIngredients).toEqual(['cheese']);
+      },
+    },
+    {
+      q: 'What should I cook tonight?',
+      ok: false,
+      check: () => undefined,
+    },
+  ];
+
+  it.each(cases)('interprets $q (ok=$ok)', async ({ q, ok, check }) => {
+    const result = await interpretKitchenQuery(q);
+    expect(result.ok).toBe(ok);
+    if (ok && result.query) check(result.query);
+  });
+});
+
+describe('kitchenQueryInterpreter: interpretation-reliability regression (v0.4.1)', () => {
+  it('A: "Do I have recipes like this?" yields no bogus ingredient and no similarToRecipeId', () => {
+    const q = deterministicInterpret('Do I have recipes like this?');
+    expect(q.includeIngredients).toBeUndefined();
+    expect(q.similarToRecipeId).toBeUndefined();
+  });
+
+  it('A2: possession leads never swallow deictic reference phrases', () => {
+    for (const q of ['Do I have anything like this?', 'Do I have something similar?', 'I have a recipe like this.']) {
+      expect(deterministicInterpret(q).includeIngredients).toBeUndefined();
+    }
+  });
+
+  it('B: "I have time for dinner." yields no bogus ingredient', () => {
+    expect(deterministicInterpret('I have time for dinner.').includeIngredients).toBeUndefined();
+    expect(deterministicInterpret('I have an idea for dinner.').includeIngredients).toBeUndefined();
+  });
+
+  it('C: "I use this recipe often" yields no bogus ingredient', () => {
+    expect(deterministicInterpret('I use this recipe often').includeIngredients).toBeUndefined();
+  });
+
+  it('D: object/meta nouns after a verb lead are not ingredients', () => {
+    for (const q of [
+      'This recipe contains instructions',
+      'This recipe contains notes',
+      'This recipe contains steps',
+      'This recipe contains photos',
+    ]) {
+      expect(deterministicInterpret(q).includeIngredients).toBeUndefined();
+    }
+  });
+
+  it('E: "recipes using eggs" -> eggs', () => {
+    expect(deterministicInterpret('recipes using eggs').includeIngredients).toEqual(['eggs']);
+  });
+
+  it('F: "recipes contain tomatoes" -> tomatoes', () => {
+    expect(deterministicInterpret('recipes contain tomatoes').includeIngredients).toEqual(['tomatoes']);
+  });
+
+  it('G: "contains tomatoes and takes 30 minutes" -> tomatoes + maxTotalMinutes=30 (no dangling "and")', () => {
+    const q = deterministicInterpret('contains tomatoes and takes 30 minutes');
+    expect(q.includeIngredients).toEqual(['tomatoes']);
+    expect(q.maxTotalMinutes).toBe(30);
+  });
+
+  it('H: "Do I have recipes with chicken?" -> chicken', () => {
+    expect(deterministicInterpret('Do I have recipes with chicken?').includeIngredients).toEqual(['chicken']);
+    expect(deterministicInterpret('I have recipes with chicken.').includeIngredients).toEqual(['chicken']);
+  });
+
+  it('I: "What chicken recipes can I make in under 30 minutes?" preserves BOTH chicken and the time bound', () => {
+    const q = deterministicInterpret('What chicken recipes can I make in under 30 minutes?');
+    expect(q.includeIngredients).toEqual(['chicken']);
+    expect(q.maxTotalMinutes).toBe(30);
+    // Never silently time-only broadening:
+    expect(q.includeIngredients).toBeDefined();
+  });
+
+  it('J: similar-context phrases never produce an ingredient hallucination', () => {
+    for (const q of ['Do I have recipes like this?', 'Anything similar to this?', 'Find something similar to this?', 'Show me recipes like this.']) {
+      const r = deterministicInterpret(q);
+      expect(r.includeIngredients).toBeUndefined();
+      expect(r.similarToRecipeId).toBeUndefined();
+    }
+  });
+
+  it('J2: no similarToRecipeId is ever emitted without trusted current-recipe context', async () => {
+    // The deterministic fallback cannot invent a similarToRecipeId; a bare
+    // similar-note phrase is simply not a meaningful retrieval query, so it
+    // fails safely rather than hallucinating an id or an ingredient.
+    const result = await interpretKitchenQuery('Anything similar to this?');
+    expect(result.ok).toBe(false);
+    expect(result.query?.similarToRecipeId).toBeUndefined();
+    const r = deterministicInterpret('Anything similar to this?');
+    expect(r.similarToRecipeId).toBeUndefined();
+    expect(r.includeIngredients).toBeUndefined();
+  });
+});
+
+describe('kitchenQueryInterpreter: unsupported dish-family subject guard (v0.4.1)', () => {
+  it('A: "salad recipes under 30 minutes" never becomes a time-only query (fails safely)', () => {
+    const r = deterministicInterpret('salad recipes under 30 minutes');
+    // The unsupported salad subject must NOT silently degrade to "everything in 30 min".
+    expect(r.maxTotalMinutes).toBeUndefined();
+    expect(isEmptyInterpretedQuery(r)).toBe(true);
+  });
+
+  it('B: "soup recipes under 30 minutes" never becomes a time-only query (fails safely)', () => {
+    const r = deterministicInterpret('soup recipes under 30 minutes');
+    expect(r.maxTotalMinutes).toBeUndefined();
+    expect(isEmptyInterpretedQuery(r)).toBe(true);
+  });
+
+  it('C: "pizza recipes under 45 minutes" fails safely (pizza is not faithfully representable)', () => {
+    const r = deterministicInterpret('pizza recipes under 45 minutes');
+    expect(r.maxTotalMinutes).toBeUndefined();
+    expect(isEmptyInterpretedQuery(r)).toBe(true);
+  });
+
+  it('guard covers the whole unsupported dish-family subject list', () => {
+    const subjects = ['salad', 'soup', 'stew', 'chili', 'casserole', 'burger', 'sandwich', 'pizza', 'pasta', 'cake', 'cookie', 'pie'];
+    for (const s of subjects) {
+      const r = deterministicInterpret(`${s} recipes under 30 minutes`);
+      expect(r.maxTotalMinutes).toBeUndefined();
+      expect(isEmptyInterpretedQuery(r)).toBe(true);
+    }
+  });
+
+  it('D: supported ingredient subjects are preserved ("chicken recipes under 30 minutes" -> chicken + 30)', () => {
+    const r = deterministicInterpret('What chicken recipes can I make in under 30 minutes?');
+    expect(r.includeIngredients).toEqual(['chicken']);
+    expect(r.maxTotalMinutes).toBe(30);
+  });
+
+  it('supported ingredient subjects: beef/salmon/tofu recipes with time bounds are preserved', () => {
+    expect(deterministicInterpret('beef recipes under 1 hour')).toMatchObject({ includeIngredients: ['beef'], maxTotalMinutes: 60 });
+    expect(deterministicInterpret('salmon recipes under 45 minutes')).toMatchObject({ includeIngredients: ['salmon'], maxTotalMinutes: 45 });
+    expect(deterministicInterpret('tofu recipes in 20 minutes')).toMatchObject({ includeIngredients: ['tofu'], maxTotalMinutes: 20 });
+  });
+
+  it('E: "Show me salads." keeps the existing conservative behavior (no invented course/ingredient)', () => {
+    const r = deterministicInterpret('Show me salads.');
+    expect(r.includeIngredients).toBeUndefined();
+    expect(r.courses).toBeUndefined();
+    expect(isEmptyInterpretedQuery(r)).toBe(true);
+  });
+
+  it('F: "Show me dinner recipes." still maps to the Dinner course', () => {
+    expect(deterministicInterpret('Show me dinner recipes.').courses).toEqual(['Dinner']);
+    expect(deterministicInterpret('Show me breakfast recipes.').courses).toEqual(['Breakfast']);
+    expect(deterministicInterpret('Show me desserts.').courses).toEqual(['Dessert']);
+  });
+
+  it('the guard does not alter the 422/503 flow: unsupported subject -> not meaningful -> ok=false (no AI)', async () => {
+    const result = await interpretKitchenQuery('salad recipes under 30 minutes');
+    expect(result.ok).toBe(false);
+    expect(result.aiAttempted).toBe(false);
+    expect(result.aiFailed).toBe(false);
+  });
+});

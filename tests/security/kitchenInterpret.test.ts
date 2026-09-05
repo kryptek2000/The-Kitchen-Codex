@@ -1,8 +1,17 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 import http from "http";
 import type { AddressInfo } from "net";
+import type { GoogleGenAI } from "@google/genai";
 import { createApp } from "../../server/app.js";
 import { kitchenInterpretRateLimiter } from "../../server/rateLimiter.js";
+import { getGemini } from "../../server/geminiClient.js";
+
+// Mock the Gemini client so we can force the "AI attempted + failed" 503 path
+// WITHOUT any live network / API key. Return null (no AI) by default so the
+// deterministic interpretation tests behave exactly as before.
+vi.mock("../../server/geminiClient.js", () => ({
+  getGemini: vi.fn(() => null),
+}));
 
 describe("Ask My Kitchen /api/kitchen/interpret", () => {
   let server: http.Server;
@@ -87,6 +96,22 @@ describe("Ask My Kitchen /api/kitchen/interpret", () => {
     const body = await res.json();
     expect(body.ok).toBe(false);
     expect(body.error).toBeTruthy();
+  });
+
+  it("returns 503 (not 422) when the AI interpreter was attempted but failed (no live Gemini)", async () => {
+    // Force getGemini to return a truthy client (so the AI path is attempted);
+    // the stub has no .models, so aiInterpret throws -> aiFailed=true, and the
+    // question is not deterministically parseable -> upstream 503.
+    vi.mocked(getGemini).mockReturnValue({ models: undefined } as unknown as GoogleGenAI);
+    try {
+      const res = await interpret({ question: "what is the meaning of life" });
+      expect(res.status).toBe(503);
+      const body = await res.json();
+      expect(body.ok).toBe(false);
+      expect(body.error).toContain("unavailable");
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
   });
 
   it("ignores any extra payload and never accepts recipe data", async () => {

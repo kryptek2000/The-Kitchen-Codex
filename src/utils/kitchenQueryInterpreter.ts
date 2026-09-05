@@ -43,6 +43,18 @@ export interface KitchenQueryInterpretation {
   query?: KitchenQuery;
   error?: string;
   source: InterpretationSource;
+  /**
+   * True when an AI adapter was present for this question (the interpreter
+   * attempted the AI path rather than running deterministic-only), whether or
+   * not it succeeded.
+   */
+  aiAttempted?: boolean;
+  /**
+   * True when an AI adapter was present AND it did not yield a usable query (it
+   * threw, returned something unusable, or returned a non-meaningful query), so
+   * a downstream failure is an upstream/AI failure rather than the wording.
+   */
+  aiFailed?: boolean;
 }
 
 /** Injected dependencies so the orchestration can be tested without network. */
@@ -142,6 +154,19 @@ function toMinRating(value: unknown): number | undefined {
 }
 
 /**
+ * Converts a captured time number + optional unit word to whole minutes. A bare
+ * number ("under 30") defaults to minutes; an explicit hour unit ("under 1 hour")
+ * is scaled to 60 so hour-based questions are not silently treated as 1 minute.
+ */
+function minutesFromBound(numberStr: string, unit: string | undefined): number | undefined {
+  const num = Number(numberStr);
+  if (!Number.isFinite(num) || num < 0) return undefined;
+  const u = String(unit ?? '').trim().toLowerCase();
+  if (u.startsWith('hour') || u === 'hr' || u === 'hrs') return Math.round(num * 60);
+  return Math.round(num);
+}
+
+/**
  * Deterministically validates/sanitizes a raw model (or any) object into a
  * `KitchenQuery`. Only known fields are copied; every value is coerced and
  * constrained; unknown fields are ignored; the raw input is never mutated.
@@ -236,6 +261,26 @@ export function isEmptyInterpretedQuery(query: KitchenQuery): boolean {
 // fallback for when AI is unavailable; it is NOT a pseudo-NLP system and it is
 // intentionally conservative (it never invents thresholds such as "quick"->30
 // minutes or "healthy"->nutritional filters).
+//
+// RELIABILITY RULES (v0.4.1):
+//   - Possession and verb leads ("I have ...", "use(s)/using/contain(ing)") are
+//     context-sensitive: reference phrases ("recipes like this", "this recipe
+//     often"), generic non-food nouns ("time", "ideas"), and meta-object nouns
+//     ("instructions", "notes", "steps", "photos") are never ingredients.
+//   - Dangling conjunctions ("tomatoes and") are stripped.
+//   - "<food noun> recipes" plainly names the subject (chicken/beef/...), so it
+//     is kept together with any time bound rather than silently dropped.
+//   - An UNSUPPORTED dish-family subject ("salad recipes"/"soup recipes"/
+//     "pizza recipes"/...) that cannot be expressed as an ingredient is guarded:
+//     if no supported ingredient was captured, the query is forced non-meaningful
+//     so a surviving time/rating/favorites constraint never silently broadens the
+//     user's intent to "everything in N minutes".
+//
+// KNOWN LIMITATION (documented honestly): dish-family subjects that are NOT
+// ingredients — "salad recipes", "soup recipes" — have no dish-family filter in
+// KitchenQuery yet, so they cannot be faithfully retrieved; the parser fails
+// safely rather than silently broadening. Richer intent modelling is v0.5.0
+// territory (the AI-driven KitchenIntent model).
 
 const CUISINE_MAP: ReadonlyArray<readonly [string, string]> = [
   ['italian', 'Italian'],
@@ -260,14 +305,19 @@ const COURSE_MAP: ReadonlyArray<readonly [string, string]> = [
   ['dessert', 'Dessert'],
   ['desserts', 'Dessert'],
   ['breakfast', 'Breakfast'],
+  ['breakfasts', 'Breakfast'],
+  ['brunch', 'Breakfast'],
   ['lunch', 'Lunch'],
+  ['lunches', 'Lunch'],
   ['dinner', 'Dinner'],
+  ['dinners', 'Dinner'],
   ['appetizer', 'Appetizer'],
   ['appetizers', 'Appetizer'],
   ['snack', 'Snack'],
   ['snacks', 'Snack'],
   ['main course', 'Main Course'],
   ['entree', 'Main Course'],
+  ['entrees', 'Main Course'],
 ] as const;
 
 const DIFFICULTY_MAP: ReadonlyArray<readonly [string, string]> = [
@@ -305,6 +355,10 @@ function splitTerms(phrase: string): string[] {
     const term = raw
       .replace(/[.,;:!?]+$/g, '')
       .replace(/^\s*(?:with|without|no|excluding)\s+/i, '')
+      // Strip dangling conjunctions so "tomatoes and" -> "tomatoes" (not "and"),
+      // and never let a bare "and"/"or"/"&" survive as an ingredient term.
+      .replace(/\s*(?:and|or|&)$/i, '')
+      .replace(/^(?:and|or|&)\s*/i, '')
       .trim()
       .slice(0, MAX_STRING_LEN);
     if (!term) continue;
@@ -327,6 +381,102 @@ function findTerms(text: string, keywordPattern: RegExp, stop: string): string[]
   return splitTerms(match[1]);
 }
 
+// Clause boundaries for the "I have X" possession pattern. `and`/`or` stay OUT so
+// they only join ingredients ("chicken and rice"); everything else terminates the
+// ingredient clause so a trailing "what can I cook?" never pollutes the terms.
+const HAVE_STOP =
+  'with|but|without|excluding|for|in|under|less than|within|rated|rating|at least|minimum|favorite|similar|that|which|is|are|was|were|can|could|should|would|need|want|to|cook|make|left|ready|tonight|today|now|right|there|what|how|when|where|if|who';
+
+/**
+ * Captures the ingredient phrase after a possession lead ("I have X", "we have
+ * X") for the obvious "I have chicken and rice, what can I cook?" phrasing.
+ * The clause is bounded by a leading subject + `have` and by clause markers, so
+ * it stays conservative: "Do I have anything with beef?" stops at `with` and
+ * yields nothing here (the `with` extractor owns that one).
+ */
+function findHaveTerms(text: string): string[] {
+  const pattern = new RegExp(
+    `\\b(?:i|we|you|they)\\s+have\\s+([^.;!?]+?)(?=\\s+(?:${HAVE_STOP})\\b|\\s*,|\\s*\\.\\b|\\s*!|\\s*\\?|$)`,
+    'i'
+  );
+  const match = text.match(pattern);
+  if (!match || !match[1]) return [];
+  return splitTerms(match[1]);
+}
+
+// Words the conservative fallback never treats as a requested ingredient: they
+// are deictic/connective, generic-topic, or vague-qualifier words that slip in
+// around a captured clause and would otherwise become a bogus filter.
+const DISCARD_INGREDIENT_TERMS: ReadonlySet<string> = new Set([
+  'anything', 'something', 'nothing', 'everything', 'any', 'some', 'all', 'many',
+  'few', 'what', 'which', 'that', 'this', 'these', 'those', 'it', 'them',
+  'there', 'here', 'stuff', 'thing', 'things', 'food', 'foods', 'ingredient',
+  'ingredients', 'dish', 'dishes', 'recipe', 'recipes', 'meal', 'meals', 'left',
+  'ready', 'quick', 'easy', 'fast', 'healthy', 'good', 'great', 'delicious',
+  'nice', 'today', 'tonight', 'now', 'right', 'on', 'at', 'in', 'of', 'to',
+  'from', 'with', 'without', 'for', 'and', 'or', 'but', 'can', 'could',
+  'should', 'would', 'need', 'want', 'make', 'makes', 'cook', 'cooks', 'using',
+  'use', 'uses', 'have', 'has', 'got', 'dinner', 'lunch', 'breakfast',
+  'brunch', 'dessert', 'desserts', 'appetizer', 'snack', 'entree', 'main',
+  'course', 'side',
+  // Clearly NON-food generic/meta nouns: these are never an ingredient request
+  // ("I have time for dinner", "contains instructions/notes/steps/photos").
+  'time', 'idea', 'ideas', 'instruction', 'instructions', 'note', 'notes',
+  'step', 'steps', 'photo', 'photos',
+]);
+
+/**
+ * Reference/discourse words that mark a captured noun-phrase as NOT a food
+ * ingredient: "recipes like this", "anything similar", "this recipe often",
+ * "a few ideas". If ANY word of a captured term is in this set, the term is not
+ * an ingredient request. Deliberately excludes determiners that prefix real
+ * ingredients ("some chicken", "these beans") so they are never dropped.
+ */
+const DISCARD_REFERENCE_WORDS: ReadonlySet<string> = new Set([
+  'this', 'that', 'these', 'those', 'it', 'its',
+  'something', 'anything', 'nothing', 'everything',
+  'like', 'similar',
+  'recipe', 'recipes', 'dish', 'dishes', 'meal', 'meals',
+  'food', 'foods', 'stuff', 'thing', 'things', 'idea', 'ideas', 'time',
+]);
+
+function isDiscardIngredientTerm(term: string): boolean {
+  const t = term.trim().toLowerCase();
+  if (!t) return true;
+  if (DISCARD_INGREDIENT_TERMS.has(t)) return true;
+  // A term that ends in a generic topic noun ("chicken recipes", "any mexican
+  // recipes") is not a bare ingredient; that intent is handled by the
+  // cuisine/course logic, not an ingredient filter.
+  if (/\b(?:recipes?|dishes?|meals?|dinners?|desserts?|breakfasts?|lunches?|entrees?|appetizers?|snacks?|courses?)$/.test(t)) {
+    return true;
+  }
+  // A term whose whole words are cuisine/course words ("mexican dinner") is a
+  // topical phrase, not an ingredient.
+  const words = t.split(/\W+/).filter(Boolean);
+  const topicalWords = new Set<string>();
+  for (const [, canonical] of CUISINE_MAP) topicalWords.add(canonical.toLowerCase());
+  for (const [, canonical] of COURSE_MAP) topicalWords.add(canonical.toLowerCase());
+  if (words.length && words.every((w) => topicalWords.has(w))) return true;
+  // Reference/discourse markers ("this/that/it/similar/like/recipe/...") or
+  // clearly non-food generic nouns never denote an ingredient. This is a
+  // structural rule, not a fuzzy ingredient blacklist.
+  if (words.some((w) => DISCARD_REFERENCE_WORDS.has(w))) return true;
+  return false;
+}
+
+/**
+ * Dish-family recipe-subject phrases that KitchenQuery CANNOT faithfully
+ * represent (there is no dish-family field). A phrase like "salad recipes"
+ * names the recipe subject, but the only way the current query could express
+ * it would be a bogus ingredient ("salad"/"soup"), so the deterministic parser
+ * must NOT let a surviving secondary constraint (time/rating/favorites/excl./…)
+ * silently broaden the user's intent. Cake/breakfast-style words that already map
+ * to `courses` (e.g. "dessert", "breakfast", "dinner") are intentionally NOT in
+ * this set.
+ */
+const UNSUPPORTED_DISH_SUBJECT_PATTERN =
+  /\b(?:salad|soup|stew|chili|casserole|burger|sandwich|pizza|pasta|cake|cookie|pie)s?\s+recipes?\b/i;
+
 /**
  * Conservative deterministic parser for a small set of extremely obvious
  * question patterns. Returns a (possibly empty) `KitchenQuery`; callers should
@@ -341,12 +491,33 @@ export function deterministicInterpret(question: string): KitchenQuery {
   // --- Ingredient include / exclude (exact user terms only) ---
   // `for` and `in` are conservative clause boundaries
   // ("with chicken for dinner" -> "chicken"; "with rice in under 30" -> "rice").
+  // `that`/`which`/`takes`/etc. keep a clause from over-capturing ("with
+  // chocolate that takes under an hour" -> "chocolate", not "chocolate that
+  // takes"). The possession ("I have ...") and verb ("using"/"use(s)"/"contain")
+  // leads are the natural-language phrasings people actually use.
   const includeStop =
-    'but|without|excluding|no|for|in|under|less than|within|rated|rating|at least|minimum|favorite|similar';
+    'but|without|excluding|no|for|in|under|less than|within|rated|rating|at least|minimum|favorite|similar|that|which|is|are|was|were|takes|take|has|have|had|left|ready';
   const excludeStop =
     'but|with|for|in|under|less than|within|rated|rating|at least|minimum|favorite|similar';
 
-  const includes = findTerms(lower, /\bwith\b/, includeStop);
+  const includes = [
+    ...findTerms(lower, /\bwith\b/, includeStop),
+    ...findTerms(lower, /\busing\b/, includeStop),
+    ...findTerms(lower, /\buse\b/, includeStop),
+    ...findTerms(lower, /\buses\b/, includeStop),
+    ...findTerms(lower, /\bcontain(?:s|ing)?\b/, includeStop),
+    ...findHaveTerms(lower),
+  ];
+
+  // Recipe-SUBJECT food noun: "<protein> recipes" clearly names the recipe
+  // subject and thus implies that ingredient ("What chicken recipes can I make
+  // in under 30 minutes?" -> chicken). Only unambiguous INGREDIENT nouns are
+  // accepted; dish-type subjects ("salad recipes"/"soup recipes") are NOT
+  // ingredients and are deliberately left unhandled here (see the documented
+  // limitation in the module doc / v0.5.0 intent model).
+  const subjectFood = lower.match(/\b(chicken|beef|pork|turkey|steak|fish|shrimp|salmon|tofu|lamb)\s+recipes?\b/i);
+  if (subjectFood && subjectFood[1]) includes.push(subjectFood[1]);
+
   const exceptWithout = findTerms(lower, /\bwithout\b/, excludeStop);
   const exceptExcluding = findTerms(lower, /\bexcluding\b/, excludeStop);
 
@@ -372,7 +543,7 @@ export function deterministicInterpret(question: string): KitchenQuery {
   excludes = dedupeCaseInsensitive(excludes);
   const excludeSet = new Set(excludes.map((s) => s.toLowerCase()));
   const cleanedIncludes = dedupeCaseInsensitive(includes).filter(
-    (s) => !excludeSet.has(s.toLowerCase())
+    (s) => !excludeSet.has(s.toLowerCase()) && !isDiscardIngredientTerm(s)
   );
 
   if (cleanedIncludes.length) q['includeIngredients'] = cleanedIncludes;
@@ -393,13 +564,29 @@ export function deterministicInterpret(question: string): KitchenQuery {
     remainingTime = remainingTime.replace(cookMatch[0], '');
   }
   const totalMatch =
-    remainingTime.match(/\b(?:total\s*time|total)\s+(?:under|less than|within)\s+(\d+)/i) ||
-    remainingTime.match(/(?:under|less than|within)\s+(\d+)/i) ||
-    remainingTime.match(/(\d+)\s*(?:minutes?|mins?|min)?\s*(?:or less|or fewer)\b/i);
+    remainingTime.match(/\b(?:total\s+time\s+)?(?:under|less than|within|in)\s+(\d+(?:\.\d+)?)\s*(hours?|hrs?|minutes?|mins?|min)?\b/i) ||
+    remainingTime.match(/(\d+)\s*(?:hours?|hrs?|minutes?|mins?|min)\b/i) ||
+    remainingTime.match(/(\d+)\s*(?:or less|or fewer)\b/i);
   if (totalMatch) {
-    const v = toNonNegativeMinutes(totalMatch[1]);
+    const v = minutesFromBound(totalMatch[1], totalMatch[2]);
     if (v !== undefined && q.maxPrepMinutes === undefined && q.maxCookMinutes === undefined) {
       q.maxTotalMinutes = v;
+    }
+  }
+
+  // Unit-word time bounds ("less than an hour") mostly appear as the bare total
+  // bound and carry no prep/cook qualifier; map only the unambiguous hour unit.
+  if (
+    q.maxPrepMinutes === undefined &&
+    q.maxCookMinutes === undefined &&
+    q.maxTotalMinutes === undefined
+  ) {
+    const hourMatch = remainingTime.match(/\b(?:under|less than|within|in)\s+(?:an?\s+|one\s+)?hour\b/i);
+    if (hourMatch) {
+      q.maxTotalMinutes = 60;
+    } else {
+      const halfHour = remainingTime.match(/\b(?:under|less than|within|in)\s+(?:a\s+)?half(?:\s+an?)?\s+hour\b/i);
+      if (halfHour) q.maxTotalMinutes = 30;
     }
   }
 
@@ -455,6 +642,19 @@ export function deterministicInterpret(question: string): KitchenQuery {
   }
   if (difficulties.length) q.difficulties = Array.from(new Set(difficulties));
 
+  // --- Unsupported dish-family subject guard ---
+  // If the question explicitly names an unsupported dish-family subject
+  // ("salad recipes"/"soup recipes"/"pizza recipes"/…) AND we captured NO
+  // supported ingredient, then any surviving constraint (time/rating/favorites/
+  // excludes/…) would silently broaden the intent to "everything in 30 min".
+  // Fail safely by returning a non-meaningful query.
+  if (
+    UNSUPPORTED_DISH_SUBJECT_PATTERN.test(lower) &&
+    !(q.includeIngredients && q.includeIngredients.length > 0)
+  ) {
+    return {};
+  }
+
   return q;
 }
 
@@ -488,26 +688,36 @@ export async function interpretKitchenQuery(
     };
   }
 
+  let aiAttempted = false;
+  let aiFailed = false;
+
   if (deps.aiInterpret) {
+    aiAttempted = true;
     try {
       const raw = await deps.aiInterpret(text);
       const query = sanitizeInterpretedQuery(raw);
       if (isMeaningfulQuery(query)) {
-        return { ok: true, query, source: 'ai' };
+        return { ok: true, query, source: 'ai', aiAttempted, aiFailed: false };
       }
+      // AI responded but produced no usable constraint -> it is effectively a
+      // failed interpretation, not an unresolvable wording.
+      aiFailed = true;
     } catch {
       // AI failure -> fall through to the deterministic path.
+      aiFailed = true;
     }
   }
 
   const deterministic = deterministicInterpret(text);
   if (isMeaningfulQuery(deterministic)) {
-    return { ok: true, query: deterministic, source: 'deterministic' };
+    return { ok: true, query: deterministic, source: 'deterministic', aiAttempted, aiFailed };
   }
 
   return {
     ok: false,
     source: 'deterministic',
     error: 'Could not interpret the question into a structured recipe query.',
+    aiAttempted,
+    aiFailed,
   };
 }

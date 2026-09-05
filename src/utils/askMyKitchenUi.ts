@@ -138,6 +138,8 @@ export function httpErrorMessage(status: number): string {
       return 'I could not understand that question. Please try a different wording.';
     case 429:
       return 'Too many requests. Please wait a moment and try again.';
+    case 503:
+      return "Ask My Kitchen's AI interpreter is temporarily unavailable. Please try again.";
     default:
       return 'Something went wrong on the server. Please try again.';
   }

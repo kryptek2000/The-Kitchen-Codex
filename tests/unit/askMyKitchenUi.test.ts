@@ -163,9 +163,10 @@ describe('askMyKitchenUi: safe UI error messages', () => {
     expect(httpErrorMessage(401)).toBe('This action is not available with the current vault setup.');
     expect(httpErrorMessage(422)).toBe('I could not understand that question. Please try a different wording.');
     expect(httpErrorMessage(429)).toBe('Too many requests. Please wait a moment and try again.');
+    expect(httpErrorMessage(503)).toBe("Ask My Kitchen's AI interpreter is temporarily unavailable. Please try again.");
     expect(httpErrorMessage(500)).toBe('Something went wrong on the server. Please try again.');
     // Unknown/other statuses fall back to the generic server message.
-    expect(httpErrorMessage(503)).toBe('Something went wrong on the server. Please try again.');
+    expect(httpErrorMessage(502)).toBe('Something went wrong on the server. Please try again.');
   });
 
   it('provides fixed network and invalid-response messages', () => {
