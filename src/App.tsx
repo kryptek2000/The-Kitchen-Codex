@@ -118,6 +118,7 @@ export default function App() {
   const [vaultIntelligenceRecipeId, setVaultIntelligenceRecipeId] = useState<string | null>(null);
   const [editingRecipe, setEditingRecipe] = useState<ObsidianRecipe | null>(null);
   const [isWindowDragging, setIsWindowDragging] = useState(false);
+  const [grabberInitialUrl, setGrabberInitialUrl] = useState('');
 
   // Filters & Search
   const [searchQuery, setSearchQuery] = useState('');
@@ -1183,6 +1184,7 @@ export default function App() {
       <RecipeGrabberModal
         isOpen={isGrabberOpen}
         folderHandle={vaultStatus.folderHandle}
+        initialUrl={grabberInitialUrl}
         onClose={() => setIsGrabberOpen(false)}
         onSaveRecipe={async (savedRecipe) => {
           await handleSaveRecipe(savedRecipe);
@@ -1220,6 +1222,11 @@ export default function App() {
         onSelectRecipe={(recipe) => {
           setIsAskMyKitchenOpen(false);
           setSelectedRecipe(recipe);
+        }}
+        onWebImport={(handoff) => {
+          setGrabberInitialUrl(handoff.sourceUrl);
+          setIsAskMyKitchenOpen(false);
+          setIsGrabberOpen(true);
         }}
       />
     </div>

@@ -8,6 +8,8 @@ import {
   RefreshCw,
   ChevronRight,
   BookOpen,
+  ExternalLink,
+  ArrowRight,
 } from 'lucide-react';
 import { ObsidianRecipe } from '../types';
 import type { KitchenAnswer, KitchenAnswerItem } from '../utils/kitchenAnswer';
@@ -32,11 +34,13 @@ import {
 } from '../utils/askMyKitchenUi';
 import {
   buildKitchenDiscoveryRequest,
+  buildWebImportHandoff,
   canOfferWebDiscovery,
   getDiscoveryAuthorization,
   isKitchenDiscoveryResponse,
   sanitizeWebResults,
   MAX_WEB_RESULTS,
+  type KitchenWebImportHandoff,
   type KitchenWebResult,
 } from '../utils/kitchenDiscovery';
 import {
@@ -62,6 +66,8 @@ interface AskMyKitchenModalProps {
   /** Trusted context from the current Recipe Detail, if Ask My Kitchen was opened there. */
   currentRecipe?: ObsidianRecipe | null;
   onSelectRecipe: (recipe: ObsidianRecipe) => void;
+  /** User-selected web result handoff into the existing Grab Recipe workflow. */
+  onWebImport?: (handoff: KitchenWebImportHandoff) => void;
 }
 
 const MAX_QUESTION_LENGTH = 500;
@@ -89,7 +95,7 @@ function SectionHeading({ children }: { children: React.ReactNode }) {
   );
 }
 
-function renderWebResultCard(result: KitchenWebResult) {
+function renderWebResultCard(result: KitchenWebResult, onGrabRecipe?: (r: KitchenWebResult) => void) {
   return (
     <li
       key={result.id}
@@ -111,9 +117,22 @@ function renderWebResultCard(result: KitchenWebResult) {
           <span className="text-[11px] text-gray-400 block mt-0.5 truncate font-normal">{result.snippet}</span>
         )}
         <span className="text-[11px] text-amber-400 inline-flex items-center gap-1 mt-1">
+          <ExternalLink className="w-3 h-3" />
           View source
         </span>
       </a>
+      {onGrabRecipe && (
+        <div className="mt-1.5 pt-1.5 border-t border-white/5">
+          <button
+            id={`ask-grab-recipe-${result.id}`}
+            onClick={() => onGrabRecipe(result)}
+            className="flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1.5 rounded-lg bg-amber-500/15 text-amber-300 border border-amber-500/30 hover:bg-amber-500/25 transition-colors"
+          >
+            <ArrowRight className="w-3.5 h-3.5" />
+            <span>Grab Recipe</span>
+          </button>
+        </div>
+      )}
     </li>
   );
 }
@@ -170,6 +189,7 @@ export function AskMyKitchenModal({
   allRecipes,
   currentRecipe,
   onSelectRecipe,
+  onWebImport,
 }: AskMyKitchenModalProps) {
   const [question, setQuestion] = useState('');
   const [status, setStatus] = useState<AskStatus>('idle');
@@ -273,6 +293,13 @@ export function AskMyKitchenModal({
     setShowWebOffer(false);
     const token = (tokenRef.current += 1);
     await discoverWeb(activeQuestionRef.current, intent, token);
+  };
+
+  const handleWebImport = (result: KitchenWebResult) => {
+    if (!onWebImport) return;
+    const handoff = buildWebImportHandoff(result);
+    if (!handoff) return;
+    onWebImport(handoff);
   };
 
   const handleSubmit = async (e?: React.FormEvent) => {
@@ -530,7 +557,7 @@ export function AskMyKitchenModal({
             <div className="space-y-4">
               <SectionHeading>From The Web</SectionHeading>
               <ul className="space-y-2">
-                {webResults.map((item) => renderWebResultCard(item))}
+                {webResults.map((item) => renderWebResultCard(item, handleWebImport))}
               </ul>
             </div>
           )}

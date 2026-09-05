@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Globe,
   Download,
@@ -31,6 +31,8 @@ interface RecipeGrabberModalProps {
   onSaveRecipe: (recipe: ObsidianRecipe) => Promise<void> | void;
   onOpenInEditor?: (recipe: ObsidianRecipe) => void;
   folderHandle?: any;
+  /** Optional pre-filled URL (e.g. a handoff from Ask My Kitchen web discovery). */
+  initialUrl?: string;
 }
 
 interface GrabbedRecipeData {
@@ -85,6 +87,7 @@ export function RecipeGrabberModal({
   onSaveRecipe,
   onOpenInEditor,
   folderHandle,
+  initialUrl,
 }: RecipeGrabberModalProps) {
   const [inputMode, setInputMode] = useState<'url' | 'text'>('url');
   const [urlInput, setUrlInput] = useState('');
@@ -108,6 +111,20 @@ export function RecipeGrabberModal({
   const [editDifficulty, setEditDifficulty] = useState<'Easy' | 'Medium' | 'Hard'>('Medium');
   const [editImage, setEditImage] = useState('');
   const [saveImageToAssets, setSaveImageToAssets] = useState(true);
+
+  // Pre-fill a discovered URL (handoff from Ask My Kitchen) when provided; this
+  // reuses the existing Grab Recipe entry point and its full security/pipeline.
+  // Standalone usage (no initialUrl) is unchanged.
+  useEffect(() => {
+    if (isOpen && initialUrl) {
+      setInputMode('url');
+      setUrlInput(initialUrl);
+      setGrabbedData(null);
+      setTextInput('');
+      setErrorMsg(null);
+      setWafBlockedUrl(null);
+    }
+  }, [isOpen, initialUrl]);
 
   if (!isOpen) return null;
 

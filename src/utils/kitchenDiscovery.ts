@@ -68,6 +68,18 @@ export interface KitchenDiscoveryResponse {
   reason?: 'unavailable';
 }
 
+/**
+ * The MINIMAL handoff into the existing Grab Recipe importer. It carries ONLY
+ * the untrusted source URL (display/context title). A discovered URL stays
+ * untrusted until the existing importer re-validates it. No webResultId, snippet,
+ * imageUrl, sourceName-as-authority, recipeId, vault metadata, or parsed recipe
+ * content is transferred.
+ */
+export interface KitchenWebImportHandoff {
+  sourceUrl: string;
+  sourceTitle?: string;
+}
+
 /** Deterministic authorization verdict for executing web discovery. */
 export type DiscoveryAuthorization = 'forbidden' | 'requires_escalation' | 'enabled';
 
@@ -154,6 +166,20 @@ export function isKitchenDiscoveryResponse(
   if (!isPlainObject(payload)) return false;
   const p = payload as Record<string, unknown>;
   return p['ok'] === true && p['source'] === 'web' && Array.isArray(p['results']);
+}
+
+/**
+ * Builds the minimal Grab Recipe handoff from a discovery result. Only a
+ * sanitized (http/https) sourceUrl plus an optional bounded sourceTitle survive;
+ * everything else (snippet, image, sourceName, webResultId, local identity) is
+ * intentionally dropped. Returns undefined for a malformed/non-http result.
+ */
+export function buildWebImportHandoff(result: unknown): KitchenWebImportHandoff | undefined {
+  const web = sanitizeWebResult(result);
+  if (!web) return undefined;
+  const handoff: KitchenWebImportHandoff = { sourceUrl: web.url };
+  if (web.title) handoff.sourceTitle = web.title;
+  return handoff;
 }
 
 /** A safe, fixed, non-sensitive unavailable/failure discovery response. */

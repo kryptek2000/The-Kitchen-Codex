@@ -16,6 +16,7 @@ import {
   toWebDiscoveryIntent,
   buildKitchenDiscoveryRequest,
   extractWebResultsFromGrounding,
+  buildWebImportHandoff,
 } from '../../src/utils/kitchenDiscovery';
 
 function prep(raw: Record<string, unknown>, trusted: Record<string, unknown> = {}): PreparedKitchenExecution {
@@ -266,5 +267,64 @@ describe('V/W/X: source-separated UI behavior logic', () => {
         expect(keys).not.toContain(k);
       }
     }
+  });
+});
+
+describe('handoff: buildWebImportHandoff', () => {
+  it('A: valid result -> { sourceUrl, sourceTitle }', () => {
+    const h = buildWebImportHandoff({ url: 'https://example.com/recipe', title: 'Gumbo' });
+    expect(h).toEqual({ sourceUrl: 'https://example.com/recipe', sourceTitle: 'Gumbo' });
+  });
+
+  it('B: missing/invalid URL -> no handoff', () => {
+    expect(buildWebImportHandoff({ title: 'No url' })).toBeUndefined();
+    expect(buildWebImportHandoff(null)).toBeUndefined();
+    expect(buildWebImportHandoff('bad')).toBeUndefined();
+  });
+
+  it('C: javascript / data / file URLs -> no handoff', () => {
+    expect(buildWebImportHandoff({ url: 'javascript:alert(1)' })).toBeUndefined();
+    expect(buildWebImportHandoff({ url: 'data:text/html,x' })).toBeUndefined();
+    expect(buildWebImportHandoff({ url: 'file:///etc/passwd' })).toBeUndefined();
+  });
+
+  it('D/E: only sourceUrl + sourceTitle transfer; snippet/image/sourceName ignored', () => {
+    const h = buildWebImportHandoff({
+      url: 'https://example.com/recipe',
+      title: 'Gumbo',
+      snippet: 'a snippet',
+      imageUrl: 'https://example.com/img.jpg',
+      sourceName: 'Example',
+      zebra: 'ignored',
+    });
+    expect(h).toEqual({ sourceUrl: 'https://example.com/recipe', sourceTitle: 'Gumbo' });
+    expect(Object.keys(h as unknown as Record<string, unknown>)).toEqual(['sourceUrl', 'sourceTitle']);
+  });
+
+  it('F: webResultId / recipeId are never treated as recipe identity', () => {
+    const h = buildWebImportHandoff({
+      url: 'https://example.com/recipe',
+      id: 'web-abc',
+      recipeId: 'local-1',
+      localId: 'local-2',
+    });
+    const keys = Object.keys(h as unknown as Record<string, unknown>);
+    expect(keys).not.toContain('id');
+    expect(keys).not.toContain('recipeId');
+    expect(keys).not.toContain('localId');
+    expect(h!.sourceUrl).toBe('https://example.com/recipe');
+  });
+
+  it('G: sourceTitle is bounded', () => {
+    const h = buildWebImportHandoff({ url: 'https://example.com/recipe', title: 't'.repeat(500) });
+    expect(h!.sourceTitle!.length).toBeLessThanOrEqual(160);
+  });
+
+  it('is deterministic and pure (no mutation, stable)', () => {
+    const input = { url: 'https://example.com/recipe', title: 'Gumbo' };
+    const a = buildWebImportHandoff(input);
+    const b = buildWebImportHandoff(input);
+    expect(a).toEqual(b);
+    expect(JSON.stringify(input)).toBe('{"url":"https://example.com/recipe","title":"Gumbo"}');
   });
 });
