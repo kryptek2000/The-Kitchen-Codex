@@ -74,6 +74,7 @@ export interface SearchableRecipe {
   totalTime?: string | number;
   difficulty?: string;
   rating?: number;
+  servings?: number;
   isFavorite?: boolean;
   ingredients: IngredientLike[];
 }

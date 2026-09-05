@@ -13,6 +13,7 @@ import { recipeIdentity } from './recipeRelationships';
 import type { KitchenQuery } from './kitchenSearch';
 import type { KitchenAnswerItem } from './kitchenAnswer';
 import type { KitchenIntent } from './kitchenIntent';
+import type { KitchenCandidateEvidence } from './kitchenRanking';
 import type {
   KitchenIntentReadiness,
   ResolvedKitchenContext,
@@ -82,6 +83,32 @@ export function buildAnswerRequest(
   evidence: unknown
 ): { question: string; query: KitchenQuery; results: unknown } {
   return { question, query, results: evidence };
+}
+
+/**
+ * Builds the /api/kitchen/rank request body: question + sanitized intent + the
+ * COMPACT bounded candidate evidence. No raw recipe/vault data is sent; only the
+ * deterministic candidate evidence set leaves the client.
+ */
+export function buildRankRequest(
+  question: string,
+  intent: KitchenIntent,
+  candidates: KitchenCandidateEvidence[],
+  resultCount: number
+): { question: string; intent: KitchenIntent; candidates: KitchenCandidateEvidence[]; resultCount: number } {
+  return { question, intent, candidates, resultCount };
+}
+
+/**
+ * Validates an untrusted /api/kitchen/rank response payload (top-level shape).
+ * The `ranked` array is separately sanitized by `sanitizeAiRankedCandidates`.
+ */
+export function isRankResponse(
+  payload: unknown
+): payload is { ok: boolean; ranked?: unknown } {
+  if (!payload || typeof payload !== 'object') return false;
+  const p = payload as Record<string, unknown>;
+  return typeof p['ok'] === 'boolean';
 }
 
 /** Validates an untrusted /api/kitchen/interpret response payload. */

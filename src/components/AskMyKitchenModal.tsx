@@ -10,21 +10,21 @@ import {
   BookOpen,
 } from 'lucide-react';
 import { ObsidianRecipe } from '../types';
-import { searchKitchenRecipes, type KitchenQuery } from '../utils/kitchenSearch';
+import type { KitchenAnswer, KitchenAnswerItem } from '../utils/kitchenAnswer';
+import { buildRecipeRelationshipIndex } from '../utils/recipeRelationships';
 import {
-  buildAnswerEvidence,
-  type KitchenAnswer,
-  type KitchenAnswerItem,
-} from '../utils/kitchenAnswer';
+  buildGroundedKitchenAnswer,
+  buildKitchenCandidates,
+  rankKitchenCandidates,
+  sanitizeAiRankedCandidates,
+} from '../utils/kitchenRanking';
 import {
-  buildAnswerRequest,
   buildInterpretRequest,
+  buildRankRequest,
   canExecuteLocalRetrieval,
   httpErrorMessage,
   INVALID_RESPONSE_MESSAGE,
   intentBlockedMessage,
-  intentToQuery,
-  isAnswerResponse,
   isInterpretResponse,
   NETWORK_ERROR_MESSAGE,
   resolveAnswerRecipe,
@@ -225,43 +225,49 @@ export function AskMyKitchenModal({
         return;
       }
 
-      // B) Deterministic local retrieval via the bounded compatibility bridge.
-      const query: KitchenQuery = intentToQuery(prepared.intent, prepared.trustedContext);
+      // B) Deterministic Stage A: build the bounded candidate evidence set.
       setStatus('searching');
-      const results = searchKitchenRecipes(allRecipes, query);
+      const index = buildRecipeRelationshipIndex(allRecipes);
+      const candidates = buildKitchenCandidates(
+        prepared.intent,
+        allRecipes,
+        prepared.trustedContext,
+        { index }
+      );
+      const candidateIdSet = new Set(candidates.map((c) => c.recipeId));
 
-      // C) Build compact evidence (Step 3) — no vault data leaves the client.
+      // Stage B: optional AI ranking over the SAME candidate set, with a
+      // deterministic fallback. Ranking is advisory only — final membership and
+      // the visible per-recipe explanation remain deterministic and grounded.
       setStatus('answering');
-      const evidence = buildAnswerEvidence(results);
-
-      // D) Ask the server for a grounded answer.
-      const answerRes = await fetch('/api/kitchen/answer', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildAnswerRequest(trimmed, query, evidence)),
-      });
-      const answerData = await answerRes.json().catch(() => null);
+      const { selected, source } = await rankKitchenCandidates(
+        prepared.intent,
+        candidates,
+        prepared.trustedContext,
+        {
+          index,
+          question: trimmed,
+          aiRank: async (input) => {
+            const rankRes = await fetch('/api/kitchen/rank', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(buildRankRequest(input.question, input.intent, input.candidates, input.resultCount)),
+            });
+            const rankData = await rankRes.json().catch(() => null);
+            if (tokenRef.current !== token) return null;
+            if (!rankRes.ok || !rankData || rankData.ok !== true) return null;
+            return sanitizeAiRankedCandidates(rankData, candidateIdSet, {
+              maxResults: input.resultCount,
+            }) ?? null;
+          },
+        }
+      );
       if (tokenRef.current !== token) return;
-      if (!answerRes.ok) {
-        setStatus('error');
-        setErrorMsg(httpErrorMessage(answerRes.status));
-        return;
-      }
-      if (!isAnswerResponse(answerData)) {
-        setStatus('error');
-        setErrorMsg(INVALID_RESPONSE_MESSAGE);
-        return;
-      }
 
-      const grounded: KitchenAnswer = {
-        ok: true,
-        noMatches: answerData.noMatches,
-        summary: answerData.summary,
-        items: answerData.items,
-        source: answerData.source as KitchenAnswer['source'],
-      };
-      setAnswer(grounded);
-      setStatus(answerData.noMatches ? 'noMatches' : 'success');
+      // C) Build a grounded answer from the SELECTED candidates + evidence.
+      const answer = buildGroundedKitchenAnswer(selected, candidates, { source });
+      setAnswer(answer);
+      setStatus(answer.noMatches ? 'noMatches' : 'success');
     } catch {
       if (tokenRef.current !== token) return;
       setStatus('error');

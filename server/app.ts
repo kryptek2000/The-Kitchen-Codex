@@ -17,14 +17,22 @@ import {
   metadataRecoveryRateLimiter,
   kitchenInterpretRateLimiter,
   kitchenAnswerRateLimiter,
+  kitchenRankRateLimiter,
   getClientIp,
 } from "./rateLimiter.js";
 import { interpretKitchenQuestionOnServer } from "./kitchenInterpret.js";
 import { answerKitchenQuestionOnServer } from "./kitchenAnswer.js";
+import { rankKitchenCandidatesOnServer } from "./kitchenRank.js";
 import {
   sanitizeAnswerEvidenceList,
   MAX_ANSWER_RECIPES,
 } from "../src/utils/kitchenAnswer.js";
+import {
+  sanitizeCandidateEvidenceList,
+  MAX_KITCHEN_CANDIDATES,
+  MAX_RANKED_RESULTS,
+} from "../src/utils/kitchenRanking.js";
+import { sanitizeKitchenIntent } from "../src/utils/kitchenIntent.js";
 import { safeFetchImage, WafProtectionError } from "./ssrfGuard.js";
 import { createSecurityMiddleware } from "./securityHeaders.js";
 import { requireAiAccessToken } from "./aiEndpointAuth.js";
@@ -522,6 +530,84 @@ export function createApp(opts: CreateAppOptions): express.Express {
         ok: false,
         error: "An unexpected error occurred while answering the question. Please try again.",
       });
+    }
+  });
+
+  // Ask My Kitchen candidate ranking endpoint with rate limiting & input
+  // validation. The client already built the DETERMINISTIC candidate set locally;
+  // this endpoint only ranks that compact evidence (never sees the vault).
+  // Ranking is advisory: a provider failure must NOT fail the local request, so
+  // this route returns a safe non-sensitive failure for the client to degrade.
+  app.post("/api/kitchen/rank", requireAiAccessToken, kitchenRankRateLimiter, async (req, res) => {
+    const clientIp = getClientIp(req);
+
+    try {
+      if (!req.body || typeof req.body !== "object") {
+        return res.status(400).json({ ok: false, error: "Invalid request payload." });
+      }
+
+      const rawQuestion = req.body.question;
+      if (typeof rawQuestion !== "string") {
+        return res.status(400).json({ ok: false, error: '"question" must be a string.' });
+      }
+      const question = rawQuestion.trim();
+      if (!question) {
+        return res.status(400).json({ ok: false, error: '"question" is required.' });
+      }
+      if (question.length > 500) {
+        return res.status(400).json({ ok: false, error: '"question" exceeds maximum length (500 characters).' });
+      }
+
+      if (!Array.isArray(req.body.candidates)) {
+        return res.status(400).json({ ok: false, error: '"candidates" must be an array.' });
+      }
+      if (req.body.candidates.length > MAX_KITCHEN_CANDIDATES) {
+        return res.status(400).json({
+          ok: false,
+          error: `"candidates" exceeds maximum length (${MAX_KITCHEN_CANDIDATES}).`,
+        });
+      }
+
+      const candidates = sanitizeCandidateEvidenceList(req.body.candidates, {
+        maxCandidates: MAX_KITCHEN_CANDIDATES,
+      });
+      if (candidates.length === 0) {
+        return res.status(400).json({ ok: false, error: '"candidates" must contain at least one valid candidate.' });
+      }
+
+      // Re-sanitize the intent defensively (never trust client intent). If it is
+      // invalid, fall back to a minimal vault intent so ranking still runs.
+      const sanitizedIntent = sanitizeKitchenIntent(req.body.intent) ?? {
+        version: 1,
+        intent: "find_recipes",
+        source: "vault",
+        constraints: {},
+        preferences: {},
+        requiresClarification: false,
+      };
+
+      const rawResultCount = req.body.resultCount;
+      const resultCount =
+        typeof rawResultCount === "number" && Number.isFinite(rawResultCount)
+          ? Math.max(1, Math.min(MAX_RANKED_RESULTS, Math.round(rawResultCount)))
+          : MAX_RANKED_RESULTS;
+
+      const ranked = await rankKitchenCandidatesOnServer({
+        question,
+        intent: sanitizedIntent,
+        candidates,
+        resultCount,
+      });
+
+      if (!ranked) {
+        return res.json({ ok: false, source: "deterministic" });
+      }
+
+      return res.json({ ok: true, source: "ai", ranked });
+    } catch (error: any) {
+      const errorMsg = error?.message || "";
+      console.error(`[${new Date().toISOString()}] [Client: ${clientIp}] Kitchen Rank Error:`, errorMsg);
+      return res.json({ ok: false, source: "deterministic" });
     }
   });
 
