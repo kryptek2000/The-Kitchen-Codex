@@ -5,6 +5,7 @@ import type { GoogleGenAI } from "@google/genai";
 import { createApp } from "../../server/app.js";
 import { kitchenDiscoverRateLimiter } from "../../server/rateLimiter.js";
 import { getGemini } from "../../server/geminiClient.js";
+import { MODEL_CONFIG } from "../../server/modelConfig.js";
 
 vi.mock("../../server/geminiClient.js", () => ({
   getGemini: vi.fn(() => null),
@@ -183,6 +184,150 @@ describe("Ask My Kitchen /api/kitchen/discover", () => {
       const body = await res.json();
       expect(body.ok).toBe(true);
       expect(body.results.length).toBeLessThanOrEqual(8);
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  // --- v0.5.1: kitchen discovery model fallback chain (grounding-only) ---
+  const modelAwareGemini = (handler: (params: { model: string }) => unknown) => {
+    vi.mocked(getGemini).mockReturnValue({
+      models: {
+        generateContent: async (params: any) => handler(params),
+      },
+    } as unknown as GoogleGenAI);
+  };
+  const grounding = (urls: string[]) => ({
+    groundingMetadata: {
+      groundingChunks: urls.map((url) => ({ web: { uri: url, title: "R", domain: "example.com" } })),
+    },
+  });
+
+  it("M: discovery primary produces grounding -> success", async () => {
+    modelAwareGemini(() => grounding(["https://example.com/a", "https://example.com/b"]));
+    try {
+      const res = await discover({ question: "q", intent: validIntent });
+      const body = await res.json();
+      expect(body.ok).toBe(true);
+      expect(body.source).toBe("web");
+      expect(body.results.map((r: { url: string }) => r.url)).toEqual(["https://example.com/a", "https://example.com/b"]);
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  it("N: primary throws -> fallback grounding succeeds", async () => {
+    modelAwareGemini((p) => {
+      if (p.model === MODEL_CONFIG.kitchenDiscoveryPrimary) throw new Error("primary down");
+      return grounding(["https://example.com/fallback"]);
+    });
+    try {
+      const res = await discover({ question: "q", intent: validIntent });
+      const body = await res.json();
+      expect(body.ok).toBe(true);
+      expect(body.results.map((r: { url: string }) => r.url)).toEqual(["https://example.com/fallback"]);
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  it("O: primary returns zero grounding -> fallback grounding succeeds", async () => {
+    modelAwareGemini((p) => {
+      if (p.model === MODEL_CONFIG.kitchenDiscoveryPrimary) return { text: "just prose, no grounding" };
+      return grounding(["https://example.com/fallback-ok"]);
+    });
+    try {
+      const res = await discover({ question: "q", intent: validIntent });
+      const body = await res.json();
+      expect(body.ok).toBe(true);
+      expect(body.results.map((r: { url: string }) => r.url)).toEqual(["https://example.com/fallback-ok"]);
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  it("P: primary + fallback fail -> unavailable (no fake results)", async () => {
+    modelAwareGemini(() => {
+      throw new Error("all discovery models down");
+    });
+    try {
+      const res = await discover({ question: "q", intent: validIntent });
+      const body = await res.json();
+      expect(body.ok).toBe(false);
+      expect(body.reason).toBe("unavailable");
+      expect(body.results).toEqual([]);
+      expect(JSON.stringify(body)).not.toContain("all discovery models down");
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  it("Q/R: model-prose URLs with no grounding are NEVER accepted (all models -> zero results)", async () => {
+    modelAwareGemini((p) => {
+      if (p.model === MODEL_CONFIG.kitchenDiscoveryPrimary) {
+        return { text: "try https://foodblog.example/fake-gumbo for the recipe" };
+      }
+      return { text: "also https://other.example/fake" };
+    });
+    try {
+      const res = await discover({ question: "q", intent: validIntent });
+      const body = await res.json();
+      // No grounding in either model -> must NOT surface any URL.
+      expect(body.ok).toBe(false);
+      expect(body.reason).toBe("unavailable");
+      expect(body.results).toEqual([]);
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  it("S: fallback grounding URLs still pass the sanitizer (http/https only)", async () => {
+    modelAwareGemini((p) => {
+      if (p.model === MODEL_CONFIG.kitchenDiscoveryPrimary) throw new Error("primary down");
+      return grounding(["https://example.com/ok", "javascript:alert(1)", "http://example.com/http"]);
+    });
+    try {
+      const res = await discover({ question: "q", intent: validIntent });
+      const body = await res.json();
+      expect(body.ok).toBe(true);
+      const urls = body.results.map((r: { url: string }) => r.url);
+      expect(urls).toContain("https://example.com/ok");
+      expect(urls).toContain("http://example.com/http");
+      expect(urls).not.toContain("javascript:alert(1)");
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  it("T: model cannot return arbitrary local IDs", async () => {
+    modelAwareGemini((p) => {
+      if (p.model === MODEL_CONFIG.kitchenDiscoveryPrimary) throw new Error("primary down");
+      return {
+        ...grounding(["https://example.com/ok"]),
+        recipeIds: ["local-1"],
+        filePath: "/x.md",
+      };
+    });
+    try {
+      const res = await discover({ question: "q", intent: validIntent });
+      const body = await res.json();
+      const serialized = JSON.stringify(body);
+      expect(serialized).not.toContain("local-1");
+      expect(serialized).not.toContain("/x.md");
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  it("U: provider diagnostics do not alter the client response", async () => {
+    modelAwareGemini(() => {
+      throw new Error("secret internal message");
+    });
+    try {
+      const res = await discover({ question: "q", intent: validIntent });
+      const body = await res.json();
+      expect(body).toEqual({ ok: false, source: "web", results: [], reason: "unavailable" });
+      expect(JSON.stringify(body)).not.toContain("secret internal message");
     } finally {
       vi.mocked(getGemini).mockReturnValue(null);
     }

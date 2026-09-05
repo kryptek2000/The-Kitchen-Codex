@@ -5,6 +5,7 @@ import type { GoogleGenAI } from "@google/genai";
 import { createApp } from "../../server/app.js";
 import { kitchenInterpretRateLimiter } from "../../server/rateLimiter.js";
 import { getGemini } from "../../server/geminiClient.js";
+import { MODEL_CONFIG } from "../../server/modelConfig.js";
 
 // Mock the Gemini client so we can force the "AI attempted + failed" 503 path
 // WITHOUT any live network / API key. Return null (no AI) by default so the
@@ -129,6 +130,137 @@ describe("Ask My Kitchen /api/kitchen/interpret", () => {
     expect("recipes" in body.intent).toBe(false);
     expect("ingredients" in body.intent).toBe(false);
     expect(body.intent.constraints.similarToRecipeId).toBeUndefined();
+  });
+
+  // --- v0.5.1: kitchen model fallback chain ---
+  const modelAwareGemini = (handler: (params: { model: string }) => { text?: string } | never) => {
+    vi.mocked(getGemini).mockReturnValue({
+      models: {
+        generateContent: async (params: any) => handler(params),
+      },
+    } as unknown as GoogleGenAI);
+  };
+
+  it("A: primary AI succeeds -> sanitized AI intent used", async () => {
+    modelAwareGemini(() => ({ text: JSON.stringify({ version: 1, intent: "meal_suggestion", source: "vault", constraints: {}, preferences: {}, requiresClarification: false }) }));
+    try {
+      const res = await interpret({ question: "What should I make tonight?" });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.ok).toBe(true);
+      expect(body.source).toBe("ai");
+      expect(body.intent.intent).toBe("meal_suggestion");
+      expect(body.aiAttempted).toBe(true);
+      expect(body.aiFailed).toBe(false);
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  it("B: primary AI throws, fallback AI succeeds -> fallback result used", async () => {
+    modelAwareGemini((p) => {
+      if (p.model === MODEL_CONFIG.kitchenPrimary) throw new Error("primary down");
+      return { text: JSON.stringify({ version: 1, intent: "meal_suggestion", source: "vault", constraints: { maxTotalMinutes: 30 }, preferences: {}, requiresClarification: false }) };
+    });
+    try {
+      const res = await interpret({ question: "What should I make tonight?" });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.ok).toBe(true);
+      expect(body.source).toBe("ai");
+      expect(body.intent.constraints.maxTotalMinutes).toBe(30);
+      // primary failed, but fallback produced a usable intent -> not a hard failure
+      expect(body.aiFailed).toBe(false);
+      expect(body.error).toBeUndefined();
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  it("C: primary + fallback throw -> deterministic parser succeeds (no hard 503)", async () => {
+    modelAwareGemini(() => {
+      throw new Error("all kitchen models down");
+    });
+    try {
+      const res = await interpret({ question: "Find something similar to this." });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.ok).toBe(true);
+      expect(body.source).toBe("deterministic");
+      expect(body.intent.intent).toBe("similar_recipe");
+      expect(body.aiAttempted).toBe(true);
+      expect(body.aiFailed).toBe(true);
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  it("C2: all AI fail + deterministic cannot understand -> safe failure (not a leak)", async () => {
+    modelAwareGemini(() => {
+      throw new Error("boom secret-detail");
+    });
+    try {
+      const res = await interpret({ question: "zzz qqq xxx" });
+      // Neither AI nor deterministic can interpret it; with the AI attempted and
+      // failed this is an upstream failure, so the established contract is 503
+      // (distinct from a pure "could not understand" 422). Either way it must be a
+      // safe, non-leaking failure.
+      expect([422, 503]).toContain(res.status);
+      const body = await res.json();
+      expect(body.ok).toBe(false);
+      expect(JSON.stringify(body)).not.toContain("secret-detail");
+      expect(JSON.stringify(body)).not.toContain("boom");
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  it("E: fallback cannot inject trusted recipe IDs", async () => {
+    modelAwareGemini((p) => {
+      if (p.model === MODEL_CONFIG.kitchenPrimary) throw new Error("primary down");
+      return { text: JSON.stringify({ version: 1, intent: "similar_recipe", source: "vault", constraints: { similarToRecipeId: "hacked", includeIngredients: ["rice"] }, targetRecipeId: "t", recipeIds: ["a", "b"], references: { currentRecipe: true }, requiresClarification: false }) };
+    });
+    try {
+      const res = await interpret({ question: "similar to this" });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.intent.constraints.similarToRecipeId).toBeUndefined();
+      expect((body.intent as Record<string, unknown>)["targetRecipeId"]).toBeUndefined();
+      expect((body.intent as Record<string, unknown>)["recipeIds"]).toBeUndefined();
+      expect(body.intent.intent).toBe("similar_recipe");
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  it("F: fallback cannot silently broaden source policy", async () => {
+    modelAwareGemini((p) => {
+      if (p.model === MODEL_CONFIG.kitchenPrimary) throw new Error("primary down");
+      return { text: JSON.stringify({ version: 1, intent: "find_recipes", source: "vault", constraints: { includeIngredients: ["chicken"] }, preferences: {}, requiresClarification: false }) };
+    });
+    try {
+      const res = await interpret({ question: "chicken recipes" });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.intent.source).toBe("vault");
+      expect(body.intent.constraints.includeIngredients).toEqual(["chicken"]);
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  it("G: no provider error text leaks to the client when AI fails", async () => {
+    modelAwareGemini(() => {
+      throw new Error("RESOURCE_EXHAUSTED secret-detail");
+    });
+    try {
+      const res = await interpret({ question: "Find something new online." });
+      const body = await res.json();
+      expect(JSON.stringify(body)).not.toContain("RESOURCE_EXHAUSTED");
+      expect(JSON.stringify(body)).not.toContain("secret-detail");
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
   });
 });
 

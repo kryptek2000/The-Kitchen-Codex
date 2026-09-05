@@ -30,6 +30,29 @@ export const MODEL_CONFIG = {
   /** Vault metadata intelligence recovery fallback model. */
   metadataRecoveryFallback: "gemini-3.1-flash-lite",
   /**
+   * Kitchen AI (Ask My Kitchen) intent interpretation primary model. Used by
+   * `/api/kitchen/interpret`. When it fails, `kitchenFallback` is attempted
+   * before the deterministic interpreter takes over.
+   */
+  kitchenPrimary: "gemini-3.7-flash",
+  /**
+   * Kitchen AI (Ask My Kitchen) attempt fallback model. Used when the primary
+   * model is unavailable/unsupported. On GitHub-Query-style failures this keeps
+   * Ask My Kitchen usable instead of hard-failing.
+   */
+  kitchenFallback: "gemini-3.1-flash-lite",
+  /**
+   * Kitchen web-discovery primary model. Google Search grounding is required;
+   * a result is only accepted when the model returns real grounding URLs.
+   */
+  kitchenDiscoveryPrimary: "gemini-3.7-flash",
+  /**
+   * Kitchen web-discovery fallback model. Tried only when the primary throws or
+   * returns no provider-grounded URLs. Still requires grounding — no grounding,
+   * no web result.
+   */
+  kitchenDiscoveryFallback: "gemini-3.1-flash-lite",
+  /**
    * Hard ceiling for a single Gemini HTTP request (milliseconds).
    *
    * Without this, a hung connection or stalled generation pends the endpoint

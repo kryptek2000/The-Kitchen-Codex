@@ -19,6 +19,7 @@ import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
 import dotenv from "dotenv";
 import { getGemini } from "./geminiClient.js";
 import { MODEL_CONFIG } from "./modelConfig.js";
+import { logModelAttempt } from "./providerDiagnostics.js";
 import {
   interpretKitchenIntent,
   type KitchenIntentInterpretation,
@@ -26,7 +27,8 @@ import {
 
 dotenv.config();
 
-const INTERPRET_MODEL = MODEL_CONFIG.nutritionPrimary;
+/** Kitchen intent-interpretation model attempt chain (primary -> fallback). */
+const KITCHEN_MODELS = [MODEL_CONFIG.kitchenPrimary, MODEL_CONFIG.kitchenFallback];
 
 /** Instructions embedded in the prompt. The user question is appended as DATA. */
 const KITCHEN_INTERPRET_INSTRUCTIONS = [
@@ -127,14 +129,14 @@ function buildResponseSchema() {
   };
 }
 
-/** AI structured-output adapter: question -> raw unknown (validated later). */
-async function aiInterpret(question: string): Promise<unknown> {
+/** Attempts a single model; throws on API/provider failure or empty output. */
+async function aiInterpretWithModel(question: string, model: string): Promise<unknown> {
   const gemini = getGemini();
   if (!gemini) {
     throw new Error("Gemini is not configured.");
   }
   const response = await gemini.models.generateContent({
-    model: INTERPRET_MODEL,
+    model,
     contents: buildPrompt(question),
     config: {
       temperature: 0,
@@ -149,6 +151,26 @@ async function aiInterpret(question: string): Promise<unknown> {
     throw new Error("Empty response returned from AI model.");
   }
   return JSON.parse(responseText);
+}
+
+/**
+ * AI structured-output adapter: question -> raw unknown (validated later). Tries
+ * the primary Kitchen model, then the Kitchen fallback model; the first model
+ * that returns a parseable result wins. Logs a bounded, redacted diagnostic per
+ * failed attempt. If every model fails it throws so the deterministic
+ * interpreter can take over.
+ */
+async function aiInterpret(question: string): Promise<unknown> {
+  let lastError: unknown = new Error("All Kitchen models failed.");
+  for (const model of KITCHEN_MODELS) {
+    try {
+      return await aiInterpretWithModel(question, model);
+    } catch (err) {
+      logModelAttempt("interpret", model, err);
+      lastError = err;
+    }
+  }
+  throw lastError;
 }
 
 /**

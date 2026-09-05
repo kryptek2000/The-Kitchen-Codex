@@ -16,6 +16,7 @@ import { Type, ThinkingLevel } from "@google/genai";
 import dotenv from "dotenv";
 import { getGemini } from "./geminiClient.js";
 import { MODEL_CONFIG } from "./modelConfig.js";
+import { logModelAttempt } from "./providerDiagnostics.js";
 import { sanitizeKitchenIntent, type KitchenIntent } from "../src/utils/kitchenIntent.js";
 import {
   buildRankPrompt,
@@ -26,7 +27,8 @@ import {
 
 dotenv.config();
 
-const RANK_MODEL = MODEL_CONFIG.nutritionPrimary;
+/** Kitchen ranking model attempt chain (primary -> fallback). */
+const RANK_MODELS = [MODEL_CONFIG.kitchenPrimary, MODEL_CONFIG.kitchenFallback];
 
 function buildResponseSchema() {
   return {
@@ -50,32 +52,36 @@ function buildResponseSchema() {
 }
 
 /** AI structured-output adapter: compact evidence -> raw unknown (sanitized later). */
-async function aiRank(input: {
+async function aiRankWithFallback(input: {
   question: string;
   intent: KitchenIntent;
   candidates: KitchenCandidateEvidence[];
   resultCount: number;
 }): Promise<unknown> {
-  const gemini = getGemini();
-  if (!gemini) {
-    throw new Error("Gemini is not configured.");
+  let lastError: unknown = new Error("All Kitchen ranking models failed.");
+  for (const model of RANK_MODELS) {
+    try {
+      const gemini = getGemini();
+      if (!gemini) throw new Error("Gemini is not configured.");
+      const response = await gemini.models.generateContent({
+        model,
+        contents: buildRankPrompt(input),
+        config: {
+          temperature: 0,
+          thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+          responseMimeType: "application/json",
+          responseSchema: buildResponseSchema(),
+        },
+      });
+      const responseText = response.text?.trim();
+      if (!responseText) throw new Error("Empty response returned from AI model.");
+      return JSON.parse(responseText);
+    } catch (err) {
+      logModelAttempt("rank", model, err);
+      lastError = err;
+    }
   }
-  const response = await gemini.models.generateContent({
-    model: RANK_MODEL,
-    contents: buildRankPrompt(input),
-    config: {
-      temperature: 0,
-      thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
-      responseMimeType: "application/json",
-      responseSchema: buildResponseSchema(),
-    },
-  });
-
-  const responseText = response.text?.trim();
-  if (!responseText) {
-    throw new Error("Empty response returned from AI model.");
-  }
-  return JSON.parse(responseText);
+  throw lastError;
 }
 
 /**
@@ -94,7 +100,7 @@ export async function rankKitchenCandidatesOnServer(input: {
   if (!gemini) return null;
 
   try {
-    const raw = await aiRank(input);
+    const raw = await aiRankWithFallback(input);
     const allowlist = new Set(input.candidates.map((c) => c.recipeId));
     const sanitized = sanitizeAiRankedCandidates(raw, allowlist, {
       maxResults: input.resultCount,

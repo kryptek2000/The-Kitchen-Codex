@@ -5,6 +5,7 @@ import type { GoogleGenAI } from "@google/genai";
 import { createApp } from "../../server/app.js";
 import { kitchenRankRateLimiter } from "../../server/rateLimiter.js";
 import { getGemini } from "../../server/geminiClient.js";
+import { MODEL_CONFIG } from "../../server/modelConfig.js";
 
 // Mock the Gemini client so we can force the AI/no-AI paths WITHOUT any live
 // network or API key. Returns null (no AI) by default, so the degraded path is
@@ -163,6 +164,48 @@ describe("Ask My Kitchen /api/kitchen/rank", () => {
       const body = await res.json();
       expect(body.ok).toBe(true);
       expect(body.ranked.map((x: { recipeId: string }) => x.recipeId)).toEqual(["a"]);
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  // --- v0.5.1: kitchen rank model fallback chain ---
+  const modelAwareGemini = (handler: (params: { model: string }) => { text?: string } | never) => {
+    vi.mocked(getGemini).mockReturnValue({
+      models: {
+        generateContent: async (params: any) => handler(params),
+      },
+    } as unknown as GoogleGenAI);
+  };
+
+  it("I: primary rank fails, fallback succeeds -> fallback ranking used", async () => {
+    modelAwareGemini((p) => {
+      if (p.model === MODEL_CONFIG.kitchenPrimary) throw new Error("primary down");
+      return { text: JSON.stringify({ ranked: [{ recipeId: "b", score: 0.9 }, { recipeId: "a", score: 0.4 }] }) };
+    });
+    try {
+      const res = await rank({ question: "q", intent: validIntent, candidates: validCandidates });
+      const body = await res.json();
+      expect(body.ok).toBe(true);
+      expect(body.source).toBe("ai");
+      expect(body.ranked.map((x: { recipeId: string }) => x.recipeId)).toEqual(["b", "a"]);
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  it("J: all AI rank attempts fail -> deterministic fallback (ok:false, client ranks locally)", async () => {
+    modelAwareGemini(() => {
+      throw new Error("all rank models down");
+    });
+    try {
+      const res = await rank({ question: "q", intent: validIntent, candidates: validCandidates });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.ok).toBe(false);
+      expect(body.source).toBe("deterministic");
+      expect(JSON.stringify(body)).not.toContain("all rank models down");
+      expect(JSON.stringify(body)).not.toContain("down");
     } finally {
       vi.mocked(getGemini).mockReturnValue(null);
     }

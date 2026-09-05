@@ -38,4 +38,31 @@ describe("MODEL_CONFIG", () => {
     const serialized = JSON.stringify(MODEL_CONFIG);
     expect(serialized).not.toContain("gemini-3.6-flash");
   });
+
+  it("exposes explicit Kitchen AI (interpret/rank) cascade identifiers", () => {
+    expect(MODEL_CONFIG.kitchenPrimary).toBe("gemini-3.7-flash");
+    expect(MODEL_CONFIG.kitchenFallback).toBe("gemini-3.1-flash-lite");
+    expect(MODEL_CONFIG.kitchenPrimary).not.toBe(MODEL_CONFIG.kitchenFallback);
+  });
+
+  it("exposes explicit Kitchen web-discovery cascade identifiers", () => {
+    expect(MODEL_CONFIG.kitchenDiscoveryPrimary).toBe("gemini-3.7-flash");
+    expect(MODEL_CONFIG.kitchenDiscoveryFallback).toBe("gemini-3.1-flash-lite");
+    expect(MODEL_CONFIG.kitchenDiscoveryPrimary).not.toBe(MODEL_CONFIG.kitchenDiscoveryFallback);
+  });
+
+  it("keeps Kitchen, nutrition, and Grab Recipe cascades as distinct config keys", () => {
+    // These are independent keys: overriding a kitchen alias must not silently
+    // change nutrition or grabber behavior (they read their own keys).
+    const kitchenKeys = ["kitchenPrimary", "kitchenFallback", "kitchenDiscoveryPrimary", "kitchenDiscoveryFallback"];
+    const config = MODEL_CONFIG as unknown as Record<string, unknown>;
+    for (const key of kitchenKeys) {
+      expect(config[key]).toBeTruthy();
+    }
+    expect(MODEL_CONFIG.nutritionPrimary).toBe("gemini-3.7-flash");
+    expect(MODEL_CONFIG.nutritionFallback).toBe("gemini-3.1-flash-lite");
+    expect(MODEL_CONFIG.recipeGrabberPrimary).toBe("gemini-3.7-flash");
+    // The kitchen intent config is a distinct property, not an alias of nutrition.
+    expect(MODEL_CONFIG.kitchenPrimary).toBeDefined();
+  });
 });
