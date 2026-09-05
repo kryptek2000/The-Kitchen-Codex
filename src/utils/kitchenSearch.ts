@@ -24,10 +24,10 @@
  *     collapse through a shared alias (`[[Chicken Breast|chicken]]` ≠
  *     `[[Chicken Thigh|chicken]]`).
  *   - IMMUTABILITY: input recipes and the query object are never mutated.
- *   - SIMILARITY REUSE: `similarToRecipeId` reuses the existing Jaccard
- *     relationship index (`buildRecipeRelationshipIndex` + `findSimilarRecipes`).
- *     No new similarity math, no embeddings, no AI. The target recipe is always
- *     excluded from its own similar-results.
+ *   - SIMILARITY REUSE: `similarToRecipeId` reuses the single deterministic
+ *     culinary-similarity authority (`buildRecipeRelationshipIndex` +
+ *     `findSimilarRecipes`). No new similarity math, no embeddings, no AI. The
+ *     target recipe is always excluded from its own similar-results.
  *
  * MULTI-VALUED vs SINGLE-VALUED FILTER SEMANTICS (deterministic, documented):
  *   - Multi-valued dimensions (includeIngredients, tags) require ALL provided
@@ -131,8 +131,8 @@ export interface KitchenSearchResult {
  * Optional runtime options for a single retrieval call.
  *
  * CALLER CONTRACT FOR `index`: when supplied, it is reused for the
- * `similarToRecipeId` path to avoid rebuilding the Jaccard index per call. It
- * MUST have been built from the SAME recipe collection passed to
+ * `similarToRecipeId` path to avoid rebuilding the culinary similarity index per
+ * call. It MUST have been built from the SAME recipe collection passed to
  * `searchKitchenRecipes` (i.e. `buildRecipeRelationshipIndex(recipes)` over the
  * identical array). This is purely a performance reuse contract: no identity
  * comparison or validation is performed, because the caller is the authority.
@@ -309,7 +309,7 @@ export function searchKitchenRecipes(
   const minRating = query.minRating;
   const favoritesOnly = Boolean(query.favoritesOnly);
 
-  // Similarity data: reuse the existing Jaccard relationship index.
+  // Similarity data: reuse the single culinary-similarity authority.
   let similarityById: Map<string, SimilarRecipeResult> | null = null;
   if (query.similarToRecipeId) {
     const similarityTarget = query.similarToRecipeId;
@@ -455,7 +455,9 @@ export function searchKitchenRecipes(
     }
 
     if (similarity) {
-      reasons.push(`similarity: ${similarity.score.toFixed(2)}`);
+      // Use the culinary justification (e.g. "Same type · Taco") rather than a
+      // raw Jaccard number; the numeric relevance stays on `similarity.score`.
+      reasons.push(similarity.reason);
     }
 
     // --- Score (deterministic, documented weights) ---

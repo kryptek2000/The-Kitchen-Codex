@@ -330,9 +330,9 @@ describe('kitchenQueryInterpreter: orchestration', () => {
 
 describe('kitchenQueryInterpreter: Step 1 integration (grounding)', () => {
   const recipes = [
-    r({ id: 'chicken-rice', ingredients: [ing('chicken'), ing('rice')] }),
-    r({ id: 'rice-only', ingredients: [ing('rice')] }),
-    r({ id: 'tofu', ingredients: [ing('tofu'), ing('soy sauce')] }),
+    r({ id: 'chicken-rice', category: 'Main Course', cuisine: 'American', ingredients: [ing('chicken'), ing('rice')] }),
+    r({ id: 'rice-only', category: 'Main Course', cuisine: 'American', ingredients: [ing('rice')] }),
+    r({ id: 'tofu', category: 'Main Course', cuisine: 'American', ingredients: [ing('tofu'), ing('soy sauce')] }),
   ];
 
   it('passes the interpreted query directly to the deterministic retrieval engine', async () => {

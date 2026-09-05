@@ -250,31 +250,30 @@ describe('recipeRelationships: Jaccard similarity', () => {
   });
 });
 
-describe('recipeRelationships: similar recipes', () => {
-  it('excludes the source recipe, sorts by score desc, and omits zero-overlap', () => {
+describe('recipeRelationships: similar recipes (culinary relevance)', () => {
+  it('excludes the source recipe and hard-gates unrelated known families', () => {
     const idx = buildRecipeRelationshipIndex(buildVaultRecipes());
-    const results = findSimilarRecipes(idx, 'chicken-alfredo');
 
-    // Never includes itself.
-    expect(results.some((r) => r.recipeId === 'chicken-alfredo')).toBe(false);
-
-    // Creamy Garlic Chicken (0.6) ranks above Garlic Bread (1/6); Pancakes (0) omitted.
-    expect(results[0].recipeId).toBe('creamy-garlic-chicken');
-    expect(results[0].score).toBeCloseTo(3 / 5, 10);
-    expect(results[1].recipeId).toBe('garlic-bread');
-    expect(results[1].score).toBeCloseTo(1 / 6, 10);
-    expect(results.some((r) => r.recipeId === 'pancakes')).toBe(false);
+    // Chicken Alfredo is a PASTA. The mini-vault has no other pasta/related dish,
+    // so despite Garlic Bread sharing "garlic" and Creamy Garlic Chicken sharing
+    // chicken + cream, those are KNOWN and UNRELATED families (pasta vs bread,
+    // pasta vs chicken) and must be gated out. The source itself is also never
+    // returned.
+    expect(findSimilarRecipes(idx, 'chicken-alfredo')).toEqual([]);
+    expect(findSimilarRecipes(idx, 'chicken-alfredo').some((r) => r.recipeId === 'chicken-alfredo')).toBe(false);
   });
 
   it('sorts deterministically with a stable tie-breaker and supports limit', () => {
     const idx = buildRecipeRelationshipIndex([
-      { id: 'target', ingredients: [ing('garlic'), ing('butter')] },
-      { id: 'x', ingredients: [ing('garlic'), ing('bread')] },
-      { id: 'y', ingredients: [ing('butter'), ing('cheese')] },
+      { id: 'target', title: 'Beef Tacos', cuisine: 'Mexican', category: 'Main Course', ingredients: [ing('beef'), ing('tortilla'), ing('lettuce')] },
+      { id: 'a-burrito', title: 'Bean Burrito', cuisine: 'Mexican', category: 'Main Course', ingredients: [ing('beans'), ing('tortilla'), ing('rice')] },
+      { id: 'b-burrito', title: 'Cheese Burrito', cuisine: 'Mexican', category: 'Main Course', ingredients: [ing('beans'), ing('tortilla'), ing('rice')] },
     ]);
     const all = findSimilarRecipes(idx, 'target');
-    // x and y both share 1/3; tie broken by recipeId asc -> x before y.
-    expect(all.map((r) => r.recipeId)).toEqual(['x', 'y']);
+    // Both burritos are related (taco~burrito) and have identical ingredient
+    // signals -> identical score, broken deterministically by identity asc.
+    expect(all.map((r) => r.recipeId)).toEqual(['a-burrito', 'b-burrito']);
+    expect(all[0].reason).toContain('Related');
     expect(findSimilarRecipes(idx, 'target', { limit: 1 }).length).toBe(1);
   });
 });

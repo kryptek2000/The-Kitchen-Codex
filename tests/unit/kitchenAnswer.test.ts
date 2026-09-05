@@ -101,8 +101,8 @@ describe('kitchenAnswer: evidence builder', () => {
 
   it('preserves similarity when present and caps the evidence list', () => {
     const recipes = [
-      r({ id: 'a', ingredients: [ing('flour'), ing('salt')] }),
-      r({ id: 'b', ingredients: [ing('flour')] }),
+      r({ id: 'a', category: 'Main Course', cuisine: 'American', ingredients: [ing('chicken'), ing('rice'), ing('salt')] }),
+      r({ id: 'b', category: 'Main Course', cuisine: 'American', ingredients: [ing('chicken'), ing('rice')] }),
     ];
     const results = searchKitchenRecipes(recipes, { similarToRecipeId: 'a', limit: 1 });
     const evidence = buildAnswerEvidence(results);

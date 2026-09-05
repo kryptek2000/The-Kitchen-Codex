@@ -70,6 +70,21 @@ function miniVault(): ObsidianRecipe[] {
   ];
 }
 
+// A coherent Tex-Mex culinary vault for the "Similar Recipes" surface. Unlike
+// `miniVault` (which deliberately mixes unrelated dish families to exercise the
+// ingredient index), this group is one culinary neighborhood, so the panel can
+// demonstrably rank same-family > related-family and gate out the unrelated beef
+// stew even though it shares "beef" with the source.
+function culinaryVault(): ObsidianRecipe[] {
+  return [
+    mkRecipe('beef-tacos', 'Beef Tacos', ['beef', 'tortilla', 'cheese', 'lettuce', 'tomato'], { cuisine: 'Mexican' }),
+    mkRecipe('chicken-tacos', 'Chicken Tacos', ['chicken', 'tortilla', 'cheese', 'lettuce'], { cuisine: 'Mexican' }),
+    mkRecipe('bean-burrito', 'Bean Burrito', ['beans', 'tortilla', 'rice', 'cheese'], { cuisine: 'Mexican' }),
+    mkRecipe('cheese-enchiladas', 'Cheese Enchiladas', ['corn tortilla', 'cheese', 'salsa', 'onion'], { cuisine: 'Mexican' }),
+    mkRecipe('beef-stew', 'Beef Stew', ['beef', 'potato', 'carrot', 'onion'], { cuisine: 'American' }),
+  ];
+}
+
 describe('relationship UI: index lifecycle', () => {
   it('builds a relationship index from the loaded recipe collection', () => {
     const recipes = miniVault();
@@ -100,32 +115,36 @@ describe('relationship UI: index lifecycle', () => {
 });
 
 describe('relationship UI: similar recipes', () => {
-  it('excludes the current recipe, omits zero overlap, and follows Step 6 order', () => {
-    const recipes = miniVault();
+  it('ranks same-family first, then related-family, and gates out an unrelated known family', () => {
+    const recipes = culinaryVault();
     const index = buildRecipeRelationshipIndex(recipes);
     const map = mapByIdentity(recipes);
 
-    const relations = selectSimilarRelations('chicken-alfredo', index, map);
+    const relations = selectSimilarRelations('beef-tacos', index, map);
 
     expect(relations.map((r) => r.recipe.title)).toEqual([
-      'Creamy Garlic Chicken',
-      'Garlic Bread',
+      'Chicken Tacos',
+      'Bean Burrito',
+      'Cheese Enchiladas',
     ]);
-    // Pancakes (no shared ingredients) is omitted.
-    expect(relations.some((r) => r.recipe.title === 'Pancakes')).toBe(false);
+    // Same-family taco edges out the related Mexican dishes.
+    expect(relations[0].sim.reason).toContain('Same type · Taco');
     expect(relations[0].sim.sharedCount).toBe(3);
-    expect(relations[0].sim.score).toBeCloseTo(3 / 5, 10);
+    expect(relations[1].sim.reason).toContain('Mexican');
+    // Beef Stew is a known-and-unrelated family (stew vs taco) and is gated out
+    // even though it shares "beef" with the source.
+    expect(relations.some((r) => r.recipe.title === 'Beef Stew')).toBe(false);
   });
 
   it('resolves each similar recipe title from the stable recipe identity', () => {
-    const recipes = miniVault();
+    const recipes = culinaryVault();
     const index = buildRecipeRelationshipIndex(recipes);
     const map = mapByIdentity(recipes);
 
-    const relations = selectSimilarRelations('chicken-alfredo', index, map);
+    const relations = selectSimilarRelations('beef-tacos', index, map);
     // The recipe objects come from the live collection (identity-resolved).
-    expect(relations.some((r) => r.recipe.id === 'creamy-garlic-chicken')).toBe(true);
-    expect(relations.some((r) => r.recipe.id === 'garlic-bread')).toBe(true);
+    expect(relations.some((r) => r.recipe.id === 'chicken-tacos')).toBe(true);
+    expect(relations.some((r) => r.recipe.id === 'bean-burrito')).toBe(true);
   });
 
   it('returns an empty array when there are no similar recipes', () => {
@@ -203,12 +222,12 @@ describe('relationship UI: nav + immutability', () => {
     // verifies the DATA the panel would pass to onSelectRecipe (identity
     // resolution), not the click wiring itself. Interaction coverage is via the
     // pure selectors, not a browser harness.
-    const recipes = miniVault();
+    const recipes = culinaryVault();
     const index = buildRecipeRelationshipIndex(recipes);
     const map = mapByIdentity(recipes);
 
-    const relations = selectSimilarRelations('chicken-alfredo', index, map);
-    const chickenId = 'creamy-garlic-chicken';
+    const relations = selectSimilarRelations('beef-tacos', index, map);
+    const chickenId = 'chicken-tacos';
     const resolved = relations.find((r) => r.recipe.id === chickenId);
 
     // The selector hands back the LIVE recipe object from the loaded collection,
@@ -216,7 +235,7 @@ describe('relationship UI: nav + immutability', () => {
     expect(resolved?.recipe).toBeDefined();
     expect(resolved?.recipe.id).toBe(chickenId);
     // And the identity used to resolve is the stable Step 6 identity.
-    expect(map.get(chickenId)?.title).toBe('Creamy Garlic Chicken');
+    expect(map.get(chickenId)?.title).toBe('Chicken Tacos');
   });
 
   it('does not mutate the input recipe ingredient data', () => {
@@ -230,8 +249,8 @@ describe('relationship UI: nav + immutability', () => {
 });
 
 describe('relationship UI: static render smoke tests (no AI / no server)', () => {
-  it('renders the similar recipes list and omits zero-overlap recipes', () => {
-    const recipes = miniVault();
+  it('renders the similar recipes list with culinary reasons', () => {
+    const recipes = culinaryVault();
     const index = buildRecipeRelationshipIndex(recipes);
     const map = mapByIdentity(recipes);
 
@@ -243,11 +262,15 @@ describe('relationship UI: static render smoke tests (no AI / no server)', () =>
         onSelectRecipe: () => {},
       })
     );
-    expect(html).toContain('Creamy Garlic Chicken');
-    expect(html).toContain('Garlic Bread');
+    expect(html).toContain('Chicken Tacos');
+    expect(html).toContain('Bean Burrito');
     expect(html).toContain('3 shared ingredients');
-    expect(html).toContain('60%');
-    expect(html).not.toContain('Pancakes');
+    expect(html).toContain('Same type · Taco');
+    // The displayed value is now the CULINARY relevance score (0.75), not raw
+    // ingredient Jaccard.
+    expect(html).toContain('75%');
+    // Beef Stew is a known-and-unrelated family (stew) and is hard-gated out.
+    expect(html).not.toContain('Beef Stew');
   });
 
   it('renders a restrained empty state for no similar recipes', () => {
@@ -260,7 +283,7 @@ describe('relationship UI: static render smoke tests (no AI / no server)', () =>
         onSelectRecipe: () => {},
       })
     );
-    expect(html).toContain('No similar recipes found yet.');
+    expect(html).toContain('No strongly similar recipes found.');
   });
 
   it('renders recipes using a tapped ingredient (current omitted)', () => {

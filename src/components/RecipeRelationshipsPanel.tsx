@@ -9,7 +9,7 @@ import {
 } from '../utils/recipeRelationships';
 
 /**
- * Formats a Jaccard similarity score (0..1) as a restrained percentage. A tiny
+ * Formats a culinary relevance score (0..1) as a restrained percentage. A tiny
  * positive score that rounds to 0% is shown as "<1%" rather than a misleading
  * "0%", so a genuine (if weak) relationship is never presented as absent.
  */
@@ -25,12 +25,12 @@ export interface RelatedRecipeEntry {
 }
 
 /**
- * Pure selector: returns the recipes similar to the recipe identified by
- * `currentIdentity`, resolved against `recipeByIdentity` (a map keyed by the
+ * Pure selector: returns the recipes CULINARILY similar to the recipe identified
+ * by `currentIdentity`, resolved against `recipeByIdentity` (a map keyed by the
  * Step 6 stable recipe identity). Unresolvable references are skipped safely.
  *
  * The current recipe is already excluded by `findSimilarRecipes`. The order is
- * the deterministic Step 6 order (score desc, then recipe-identity asc).
+ * the deterministic culinary order (relevance score desc, then identity asc).
  */
 export function selectSimilarRelations(
   currentIdentity: string,
@@ -52,9 +52,11 @@ interface RecipeRelationshipsPanelProps {
 /**
  * A compact "Similar Recipes" surface on the recipe detail.
  *
- * It reuses the deterministic Step 6 relationship index only — no AI, no
- * embeddings, no new similarity math, no persistent/graph data, and it never
- * writes anything back to a recipe or its Markdown.
+ * It communicates CULINARY relevance: the subtitle explains WHY a dish is
+ * similar (same type / related family / cuisine / course / shared tags), with
+ * shared-ingredient overlap shown only as a secondary detail. It reuses a single
+ * deterministic relationship authority — no AI, no embeddings, no new dependency,
+ * and it never writes anything back to a recipe or its Markdown.
  */
 export function RecipeRelationshipsPanel({
   recipe,
@@ -81,12 +83,14 @@ export function RecipeRelationshipsPanel({
         <Layers className="w-4 h-4 text-amber-400" />
         <span>Similar Recipes</span>
         <span className="ml-auto text-[11px] font-normal text-gray-500">
-          Shared-ingredient similarity
+          Culinary similarity
         </span>
       </h3>
 
       {relations.length === 0 ? (
-        <p className="text-xs text-gray-500 py-2">No similar recipes found yet.</p>
+        <p className="text-xs text-gray-500 py-2">
+          No strongly similar recipes found.
+        </p>
       ) : (
         <ul className="space-y-2">
           {relations.map(({ recipe: related, sim }) => (
@@ -101,16 +105,21 @@ export function RecipeRelationshipsPanel({
                     {related.title}
                   </span>
                   <span className="text-[11px] text-gray-500 flex items-center gap-1.5">
-                    <Utensils className="w-3 h-3 text-amber-400/70" />
-                    {sim.sharedCount} shared ingredient{sim.sharedCount === 1 ? '' : 's'}
+                    <Utensils className="w-3 h-3 text-amber-400/70 shrink-0" />
+                    <span className="truncate">{sim.reason}</span>
                   </span>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex flex-col items-end gap-0.5 shrink-0">
+                  <span className="text-[11px] text-gray-600">
+                    {sim.sharedCount > 0
+                      ? `${sim.sharedCount} shared ingredient${sim.sharedCount === 1 ? '' : 's'}`
+                      : ''}
+                  </span>
                   <span className="text-[11px] font-mono text-amber-400">
                     {formatSimilarityPercent(sim.score)}
                   </span>
-                  <ChevronRight className="w-4 h-4 text-gray-500 group-hover:text-amber-400 transition-colors" />
                 </div>
+                <ChevronRight className="w-4 h-4 text-gray-500 group-hover:text-amber-400 transition-colors shrink-0" />
               </button>
             </li>
           ))}
