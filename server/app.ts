@@ -18,11 +18,13 @@ import {
   kitchenInterpretRateLimiter,
   kitchenAnswerRateLimiter,
   kitchenRankRateLimiter,
+  kitchenDiscoverRateLimiter,
   getClientIp,
 } from "./rateLimiter.js";
 import { interpretKitchenQuestionOnServer } from "./kitchenInterpret.js";
 import { answerKitchenQuestionOnServer } from "./kitchenAnswer.js";
 import { rankKitchenCandidatesOnServer } from "./kitchenRank.js";
+import { discoverKitchenRecipesOnServer } from "./kitchenDiscover.js";
 import {
   sanitizeAnswerEvidenceList,
   MAX_ANSWER_RECIPES,
@@ -32,6 +34,10 @@ import {
   MAX_KITCHEN_CANDIDATES,
   MAX_RANKED_RESULTS,
 } from "../src/utils/kitchenRanking.js";
+import {
+  MAX_DISCOVERY_QUESTION_LENGTH,
+  MAX_WEB_RESULTS,
+} from "../src/utils/kitchenDiscovery.js";
 import { sanitizeKitchenIntent } from "../src/utils/kitchenIntent.js";
 import { safeFetchImage, WafProtectionError } from "./ssrfGuard.js";
 import { createSecurityMiddleware } from "./securityHeaders.js";
@@ -608,6 +614,60 @@ export function createApp(opts: CreateAppOptions): express.Express {
       const errorMsg = error?.message || "";
       console.error(`[${new Date().toISOString()}] [Client: ${clientIp}] Kitchen Rank Error:`, errorMsg);
       return res.json({ ok: false, source: "deterministic" });
+    }
+  });
+
+  // Ask My Kitchen web discovery endpoint with rate limiting & input validation.
+  // Discovery is QUERY-ONLY: it never accepts or fetches an arbitrary URL target,
+  // never accesses the vault/filesystem, and never turns a web result into a
+  // Recipe. Result URLs come only from provider grounding (no hallucinated URLs).
+  app.post("/api/kitchen/discover", requireAiAccessToken, kitchenDiscoverRateLimiter, async (req, res) => {
+    const clientIp = getClientIp(req);
+
+    try {
+      if (!req.body || typeof req.body !== "object") {
+        return res.status(400).json({ ok: false, source: "web", reason: "unavailable", results: [] });
+      }
+
+      const rawQuestion = req.body.question;
+      if (typeof rawQuestion !== "string") {
+        return res.status(400).json({ ok: false, source: "web", reason: "unavailable", results: [] });
+      }
+      const question = rawQuestion.trim();
+      if (!question) {
+        return res.status(400).json({ ok: false, source: "web", reason: "unavailable", results: [] });
+      }
+      if (question.length > MAX_DISCOVERY_QUESTION_LENGTH) {
+        return res.status(400).json({
+          ok: false,
+          source: "web",
+          reason: "unavailable",
+          results: [],
+        });
+      }
+
+      const sanitizedIntent = sanitizeKitchenIntent(req.body.intent);
+      if (!sanitizedIntent) {
+        return res.status(400).json({ ok: false, source: "web", reason: "unavailable", results: [] });
+      }
+
+      const rawMax = req.body.maxResults;
+      const maxResults =
+        typeof rawMax === "number" && Number.isFinite(rawMax)
+          ? Math.max(1, Math.min(MAX_WEB_RESULTS, Math.round(rawMax)))
+          : MAX_WEB_RESULTS;
+
+      const response = await discoverKitchenRecipesOnServer({
+        question,
+        intent: sanitizedIntent,
+        maxResults,
+      });
+
+      return res.json(response);
+    } catch (error: any) {
+      const errorMsg = error?.message || "";
+      console.error(`[${new Date().toISOString()}] [Client: ${clientIp}] Kitchen Discovery Error:`, errorMsg);
+      return res.json({ ok: false, source: "web", reason: "unavailable", results: [] });
     }
   });
 

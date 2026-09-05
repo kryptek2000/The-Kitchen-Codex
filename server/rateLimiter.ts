@@ -289,3 +289,46 @@ export function kitchenRankRateLimiter(req: Request, res: Response, next: NextFu
 
   next();
 }
+
+/**
+ * Express middleware for rate limiting on the Ask My Kitchen web discovery
+ * endpoint. Configurable via `KITCHEN_DISCOVER_RATE_LIMIT` (default 10 requests
+ * per minute).
+ */
+export function kitchenDiscoverRateLimiter(req: Request, res: Response, next: NextFunction) {
+  const parsedLimit = parseInt(process.env.KITCHEN_DISCOVER_RATE_LIMIT || "10", 10);
+  const maxRequestsPerWindow = isNaN(parsedLimit) || parsedLimit <= 0 ? 10 : parsedLimit;
+  const windowMs = 60 * 1000; // 1 minute window
+
+  const clientIp = getClientIp(req);
+  const now = Date.now();
+
+  let entry = clientIpStore.get(`kitchendiscover_${clientIp}`);
+
+  if (!entry || entry.resetTime <= now) {
+    entry = {
+      count: 1,
+      resetTime: now + windowMs,
+    };
+    clientIpStore.set(`kitchendiscover_${clientIp}`, entry);
+  } else {
+    entry.count += 1;
+  }
+
+  const remaining = Math.max(0, maxRequestsPerWindow - entry.count);
+  const resetSeconds = Math.ceil((entry.resetTime - now) / 1000);
+
+  res.setHeader("RateLimit-Limit", maxRequestsPerWindow);
+  res.setHeader("RateLimit-Remaining", remaining);
+  res.setHeader("RateLimit-Reset", resetSeconds);
+
+  if (entry.count > maxRequestsPerWindow) {
+    res.setHeader("Retry-After", resetSeconds);
+    return res.status(429).json({
+      error: "Too many discovery requests. Please wait a moment before trying again.",
+      retryAfterSeconds: resetSeconds,
+    });
+  }
+
+  next();
+}
