@@ -29,6 +29,14 @@
  */
 
 import type { KitchenQuery } from './kitchenSearch';
+import type {
+  KitchenIntent,
+  KitchenIntentPreferences,
+  KitchenIntentReference,
+  KitchenIntentType,
+  KitchenSource,
+} from './kitchenIntent';
+import { sanitizeKitchenIntent, isMeaningfulKitchenIntent } from './kitchenIntent';
 
 export type InterpretationSource = 'ai' | 'deterministic';
 
@@ -461,6 +469,10 @@ function isDiscardIngredientTerm(term: string): boolean {
   // clearly non-food generic nouns never denote an ingredient. This is a
   // structural rule, not a fuzzy ingredient blacklist.
   if (words.some((w) => DISCARD_REFERENCE_WORDS.has(w))) return true;
+  // A predicative/descriptive remark ("too heavy", "another taco") is not an
+  // ingredient to exclude; it is a qualitative or dish-reference phrase.
+  if (/^too\s+\w+\s*$/i.test(t)) return true;
+  if (/^another\s+\w+\s*$/i.test(t)) return true;
   return false;
 }
 
@@ -540,14 +552,14 @@ export function deterministicInterpret(question: string): KitchenQuery {
     }
     return out;
   };
-  excludes = dedupeCaseInsensitive(excludes);
-  const excludeSet = new Set(excludes.map((s) => s.toLowerCase()));
+  const cleanedExcludes = dedupeCaseInsensitive(excludes).filter((s) => !isDiscardIngredientTerm(s));
+  const excludeSet = new Set(cleanedExcludes.map((s) => s.toLowerCase()));
   const cleanedIncludes = dedupeCaseInsensitive(includes).filter(
     (s) => !excludeSet.has(s.toLowerCase()) && !isDiscardIngredientTerm(s)
   );
 
   if (cleanedIncludes.length) q['includeIngredients'] = cleanedIncludes;
-  if (excludes.length) q['excludeIngredients'] = excludes;
+  if (cleanedExcludes.length) q['excludeIngredients'] = cleanedExcludes;
 
   // --- Time bounds ---
   let remainingTime = lower;
@@ -717,6 +729,137 @@ export async function interpretKitchenQuery(
     ok: false,
     source: 'deterministic',
     error: 'Could not interpret the question into a structured recipe query.',
+    aiAttempted,
+    aiFailed,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// v0.5.0 — Semantic (KitchenIntent) interpretation
+// ---------------------------------------------------------------------------
+// This is the migration layer that produces a `KitchenIntent` instead of a raw
+// `KitchenQuery`. It reuses the existing, conservative deterministic parser for
+// the HARD constraints (never turning the fallback into a fuzzy NLP system) and
+// adds a thin semantic label (intent type / source / references). The AI adapter
+// is injected and its output is always wrapped by `sanitizeKitchenIntent`.
+//
+// TRUST: the interpretation result is SANITIZED semantic intent only. It contains
+// no trusted recipe identities (targetRecipeId / similarToRecipeId / ... are
+// stripped by `sanitizeKitchenIntent`). Trusted-context resolution + execution
+// readiness happen on the CLIENT via `prepareKitchenIntentForExecution`.
+
+/** A semantic (KitchenIntent) interpretation result. */
+export interface KitchenIntentInterpretation {
+  ok: boolean;
+  intent?: KitchenIntent;
+  error?: string;
+  source: InterpretationSource;
+  aiAttempted?: boolean;
+  aiFailed?: boolean;
+}
+
+/** Injected dependencies for the semantic interpreter. */
+export type InterpretIntentDeps = InterpretDeps;
+
+// Small, conservative semantic cue sets — NOT a general NLP grammar.
+const SIMILAR_CUE = /\b(similar to|like this|something like this|recipes? like this|resembling this)\b/i;
+const ONLINE_CUE = /\b(online|on the web|from the web|on the internet|internet)\b/i;
+const WEB_VERB_CUE = /\b(find|look|search|get|pick|show|browse|discover)\b/i;
+const MEAL_SUGGESTION_CUE = /\b(today|tonight|what should i (make|cook|eat|have)|what can i (make|cook|eat|have)|i'?m hungry|im hungry|for (dinner|lunch|breakfast|dessert|brunch)|this week|tonight)\b/i;
+
+/**
+ * Produces a `KitchenIntent` from the existing deterministic fallback. Hard
+ * constraints come from `deterministicInterpret`; a thin semantic label is added
+ * conservatively (never inventing fuzzy preferences, never escalating to web
+ * unless an explicit online cue is present).
+ */
+export function deterministicKitchenIntent(question: string): KitchenIntent {
+  const text = String(question ?? '').trim();
+  const lower = text.toLowerCase();
+  const constraints = deterministicInterpret(text);
+
+  let intent: KitchenIntentType = 'find_recipes';
+  let source: KitchenSource = 'vault';
+  let references: KitchenIntentReference | undefined;
+  const preferences: KitchenIntentPreferences = {};
+
+  if (SIMILAR_CUE.test(lower)) {
+    intent = 'similar_recipe';
+    references = { currentRecipe: true };
+    source = 'vault';
+  } else if (ONLINE_CUE.test(lower) && WEB_VERB_CUE.test(lower)) {
+    intent = 'discover_online';
+    source = 'web';
+  } else if (MEAL_SUGGESTION_CUE.test(lower) && !isMeaningfulQuery(constraints)) {
+    intent = 'meal_suggestion';
+    source = 'vault';
+  } else {
+    // Default: a find-recipes request stays vault-local.
+    intent = 'find_recipes';
+    source = 'vault';
+  }
+
+  return {
+    version: 1,
+    intent,
+    source,
+    constraints,
+    preferences,
+    ...(references ? { references } : {}),
+    requiresClarification: false,
+  };
+}
+
+/**
+ * Interprets a question into a SANITIZED `KitchenIntent`.
+ *
+ * Precedence is identical to the v0.4.1 query interpreter: if an AI adapter is
+ * supplied and yields a usable (sanitized, meaningful) intent it wins; otherwise
+ * (or on AI failure) the conservative deterministic semantic fallback runs; if
+ * neither is meaningful the request fails safely. `aiAttempted` / `aiFailed`
+ * preserve the existing reliability contract.
+ */
+export async function interpretKitchenIntent(
+  question: string,
+  deps: InterpretIntentDeps = {}
+): Promise<KitchenIntentInterpretation> {
+  const text = String(question ?? '').trim();
+
+  if (!text) return { ok: false, source: 'deterministic', error: 'Question is empty.' };
+  if (text.length > MAX_QUESTION_LENGTH) {
+    return {
+      ok: false,
+      source: 'deterministic',
+      error: `Question exceeds maximum length of ${MAX_QUESTION_LENGTH} characters.`,
+    };
+  }
+
+  let aiAttempted = false;
+  let aiFailed = false;
+
+  if (deps.aiInterpret) {
+    aiAttempted = true;
+    try {
+      const raw = await deps.aiInterpret(text);
+      const intent = sanitizeKitchenIntent(raw);
+      if (intent && isMeaningfulKitchenIntent(intent)) {
+        return { ok: true, intent, source: 'ai', aiAttempted, aiFailed: false };
+      }
+      aiFailed = true;
+    } catch {
+      aiFailed = true;
+    }
+  }
+
+  const deterministic = deterministicKitchenIntent(text);
+  if (isMeaningfulKitchenIntent(deterministic)) {
+    return { ok: true, intent: deterministic, source: 'deterministic', aiAttempted, aiFailed };
+  }
+
+  return {
+    ok: false,
+    source: 'deterministic',
+    error: 'Could not interpret the question into a structured kitchen intent.',
     aiAttempted,
     aiFailed,
   };

@@ -81,13 +81,19 @@ describe("Ask My Kitchen /api/kitchen/interpret", () => {
     expect(body.code).toBe("UNAUTHORIZED");
   });
 
-  it("interprets a clear question deterministically", async () => {
+  it("interprets a clear question deterministically as a KitchenIntent", async () => {
     const res = await interpret({ question: "under 30 minutes" });
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.ok).toBe(true);
     expect(body.source).toBe("deterministic");
-    expect(body.query.maxTotalMinutes).toBe(30);
+    // The response is a SANITIZED KitchenIntent, not a raw KitchenQuery.
+    expect(body.intent.version).toBe(1);
+    expect(body.intent.intent).toBe("find_recipes");
+    expect(body.intent.source).toBe("vault");
+    expect(body.intent.constraints.maxTotalMinutes).toBe(30);
+    expect(body.intent.preferences).toEqual({});
+    expect(body.intent.requiresClarification).toBe(false);
   });
 
   it("returns a safe 422 for an uninterpretable question", async () => {
@@ -119,9 +125,10 @@ describe("Ask My Kitchen /api/kitchen/interpret", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.ok).toBe(true);
-    expect(body.query.includeIngredients).toEqual(["eggs"]);
-    expect("recipes" in body.query).toBe(false);
-    expect("ingredients" in body.query).toBe(false);
+    expect(body.intent.constraints.includeIngredients).toEqual(["eggs"]);
+    expect("recipes" in body.intent).toBe(false);
+    expect("ingredients" in body.intent).toBe(false);
+    expect(body.intent.constraints.similarToRecipeId).toBeUndefined();
   });
 });
 

@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import type { ObsidianRecipe } from '../../src/types';
 import type { KitchenQuery, SearchableRecipe } from '../../src/utils/kitchenSearch';
+import type { KitchenIntent } from '../../src/utils/kitchenIntent';
+import type { ResolvedKitchenContext } from '../../src/utils/kitchenIntentPolicy';
+import { sanitizeKitchenIntent } from '../../src/utils/kitchenIntent';
+import { prepareKitchenIntentForExecution } from '../../src/utils/kitchenIntentPolicy';
 import { buildAnswerEvidence } from '../../src/utils/kitchenAnswer';
 import { searchKitchenRecipes } from '../../src/utils/kitchenSearch';
 import {
@@ -13,6 +17,11 @@ import {
   httpErrorMessage,
   NETWORK_ERROR_MESSAGE,
   INVALID_RESPONSE_MESSAGE,
+  intentBlockedMessage,
+  intentToQuery,
+  isIntentRuntimeSupported,
+  canExecuteLocalRetrieval,
+  RUNTIME_NOT_SUPPORTED_MESSAGE,
 } from '../../src/utils/askMyKitchenUi';
 
 function asRecipe(partial: Record<string, unknown>): ObsidianRecipe {
@@ -113,14 +122,28 @@ describe('askMyKitchenUi: privacy request builders', () => {
 });
 
 describe('askMyKitchenUi: response shape validation', () => {
-  it('accepts a valid interpret response', () => {
-    expect(isInterpretResponse({ ok: true, source: 'deterministic', query: { maxTotalMinutes: 30 } })).toBe(true);
+  it('accepts a valid interpret response (sanitized KitchenIntent)', () => {
+    expect(
+      isInterpretResponse({
+        ok: true,
+        source: 'deterministic',
+        intent: {
+          version: 1,
+          intent: 'find_recipes',
+          source: 'vault',
+          constraints: { maxTotalMinutes: 30 },
+          preferences: {},
+          requiresClarification: false,
+        },
+      })
+    ).toBe(true);
   });
 
   it('rejects malformed interpret responses', () => {
     expect(isInterpretResponse({ ok: false, error: 'x' })).toBe(false);
     expect(isInterpretResponse({ ok: true })).toBe(false);
-    expect(isInterpretResponse({ ok: true, query: [] as unknown })).toBe(false);
+    expect(isInterpretResponse({ ok: true, intent: [] as unknown })).toBe(false);
+    expect(isInterpretResponse({ ok: true, query: { maxTotalMinutes: 30 } as unknown })).toBe(false);
     expect(isInterpretResponse(null)).toBe(false);
     expect(isInterpretResponse('nope')).toBe(false);
   });
@@ -205,5 +228,153 @@ describe('askMyKitchenUi: strict similar-to cues (audit fix B)', () => {
   it('still always strips a model-inferred similarToRecipeId (trusted source wins)', () => {
     expect(applyTrustedSimilarContext({ similarToRecipeId: 'guess' }, undefined, 'similar to this').similarToRecipeId).toBeUndefined();
     expect(applyTrustedSimilarContext({ similarToRecipeId: 'guess' }, trusted, 'what desserts are there?').similarToRecipeId).toBeUndefined();
+  });
+});
+
+describe('askMyKitchenUi: v0.5.0 intent consumption helpers', () => {
+  const mkIntent = (o: Partial<KitchenIntent>): KitchenIntent =>
+    ({
+      version: 1,
+      intent: 'find_recipes',
+      source: 'vault',
+      constraints: {},
+      preferences: {},
+      requiresClarification: false,
+      ...o,
+    } as KitchenIntent);
+
+  it('isIntentRuntimeSupported: only phase-supported intents, never pairing/compare/discover_online', () => {
+    expect(isIntentRuntimeSupported(mkIntent({ intent: 'find_recipes' }))).toBe(true);
+    expect(isIntentRuntimeSupported(mkIntent({ intent: 'ingredient_use' }))).toBe(true);
+    expect(isIntentRuntimeSupported(mkIntent({ intent: 'browse_category' }))).toBe(true);
+    expect(isIntentRuntimeSupported(mkIntent({ intent: 'meal_suggestion' }))).toBe(true);
+    expect(isIntentRuntimeSupported(mkIntent({ intent: 'similar_recipe' }))).toBe(true);
+    expect(isIntentRuntimeSupported(mkIntent({ intent: 'pairing' }))).toBe(false);
+    expect(isIntentRuntimeSupported(mkIntent({ intent: 'compare' }))).toBe(false);
+    expect(isIntentRuntimeSupported(mkIntent({ intent: 'discover_online' }))).toBe(false);
+  });
+
+  it('intentToQuery: carries sanitized constraints and never invents ids', () => {
+    const intent = mkIntent({ intent: 'find_recipes', constraints: { includeIngredients: ['rice'], maxTotalMinutes: 30 } });
+    const q = intentToQuery(intent, {});
+    expect(q).toEqual({ includeIngredients: ['rice'], maxTotalMinutes: 30 });
+    expect(q.similarToRecipeId).toBeUndefined();
+  });
+
+  it('intentToQuery: similar_recipe attaches only the TRUSTED currentRecipeId', () => {
+    const intent = mkIntent({ intent: 'similar_recipe', constraints: { includeIngredients: ['chicken'] } });
+    const resolved: ResolvedKitchenContext = { currentRecipeId: 'trusted-recipe' };
+    const q = intentToQuery(intent, resolved);
+    expect(q).toEqual({ includeIngredients: ['chicken'], similarToRecipeId: 'trusted-recipe' });
+    // Without a trusted id, nothing is fabricated.
+    const noId = intentToQuery(intent, {});
+    expect(noId.similarToRecipeId).toBeUndefined();
+  });
+
+  it('intentBlockedMessage: executable -> empty; non-executable -> safe fixed message', () => {
+    expect(intentBlockedMessage({ executable: true })).toBe('');
+    expect(intentBlockedMessage({ executable: false, reason: 'requires_clarification' })).toContain('information');
+    expect(intentBlockedMessage({ executable: false, reason: 'not_meaningful' })).toContain('understand');
+    expect(intentBlockedMessage({ executable: false, reason: 'missing_current_recipe' })).toContain('which recipe');
+    expect(intentBlockedMessage({ executable: false, reason: 'insufficient_comparison_context' })).toContain('at least two');
+    expect(intentBlockedMessage({ executable: false, reason: 'source_conflict' })).toContain('source');
+    expect(RUNTIME_NOT_SUPPORTED_MESSAGE.length).toBeGreaterThan(10);
+  });
+});
+
+describe('askMyKitchenUi: Step 3 hardening — explicit-web is NOT locally executable', () => {
+  const expectOk = (p: ReturnType<typeof prepareKitchenIntentForExecution>) => {
+    if (!p.ok) throw new Error('expected an ok preparation');
+    return p;
+  };
+
+  const prep = (raw: Record<string, unknown>, trusted: unknown = {}) =>
+    prepareKitchenIntentForExecution(sanitizeKitchenIntent(raw), trusted);
+
+  it('A: find_recipes + source=web is execution-blocked (no local vault search)', () => {
+    const p = expectOk(prep({ version: 1, intent: 'find_recipes', source: 'web', constraints: { includeIngredients: ['chicken'] } }));
+    expect(p.readiness.executable).toBe(true);
+    expect(p.sourcePolicy.initialSource).toBe('web');
+    expect(canExecuteLocalRetrieval(p)).toBe(false);
+  });
+
+  it('B: meal_suggestion + source=web is blocked', () => {
+    expect(canExecuteLocalRetrieval(prep({ version: 1, intent: 'meal_suggestion', source: 'web' }))).toBe(false);
+  });
+
+  it('C: ingredient_use + source=web is blocked', () => {
+    expect(canExecuteLocalRetrieval(prep({ version: 1, intent: 'ingredient_use', source: 'web', constraints: { includeIngredients: ['chicken'] } }))).toBe(false);
+  });
+
+  it('D: browse_category + source=web is blocked', () => {
+    expect(canExecuteLocalRetrieval(prep({ version: 1, intent: 'browse_category', source: 'web', constraints: { courses: ['Dessert'] } }))).toBe(false);
+  });
+
+  it('E: similar_recipe + source=web with trusted currentRecipeId is blocked', () => {
+    const p = expectOk(
+      prep(
+        { version: 1, intent: 'similar_recipe', source: 'web', references: { currentRecipe: true } },
+        { currentRecipeId: 'recipe-1' }
+      )
+    );
+    expect(p.readiness.executable).toBe(true);
+    expect(canExecuteLocalRetrieval(p)).toBe(false);
+  });
+
+  it('F: discover_online + source=web remains blocked in Step 3', () => {
+    expect(canExecuteLocalRetrieval(prep({ version: 1, intent: 'discover_online', source: 'web' }))).toBe(false);
+  });
+
+  it('GATE: a vault-scoped supported intent IS executable', () => {
+    const p = prep({ version: 1, intent: 'find_recipes', source: 'vault', constraints: { includeIngredients: ['rice'] } });
+    expect(canExecuteLocalRetrieval(p)).toBe(true);
+  });
+});
+
+describe('askMyKitchenUi: Step 3 hardening — meal_suggestion is bounded', () => {
+  const meal = (opts: { constraints?: KitchenQuery; requestedResultCount?: number }): KitchenIntent => ({
+    version: 1,
+    intent: 'meal_suggestion',
+    source: 'vault',
+    constraints: opts.constraints ?? {},
+    preferences: {},
+    requiresClarification: false,
+    ...(opts.requestedResultCount !== undefined ? { requestedResultCount: opts.requestedResultCount } : {}),
+  });
+
+  it('G: meal_suggestion + requestedResultCount=4 -> query.limit=4', () => {
+    expect(intentToQuery(meal({ requestedResultCount: 4 }), {}).limit).toBe(4);
+  });
+
+  it('H: meal_suggestion with no requestedResultCount -> query.limit=6', () => {
+    expect(intentToQuery(meal({}), {}).limit).toBe(6);
+  });
+
+  it('I: meal_suggestion + constraints.limit=3 + requestedResultCount=8 -> limit stays 3', () => {
+    expect(intentToQuery(meal({ constraints: { limit: 3 }, requestedResultCount: 8 }), {}).limit).toBe(3);
+  });
+
+  it('J: meal_suggestion + constraints.limit=10 + requestedResultCount=4 -> limit becomes 4', () => {
+    expect(intentToQuery(meal({ constraints: { limit: 10 }, requestedResultCount: 4 }), {}).limit).toBe(4);
+  });
+
+  it('K: meal_suggestion NEVER returns an unbounded query', () => {
+    for (const o of [{}, { requestedResultCount: 1 }, { constraints: { limit: 5 } }]) {
+      const limit = intentToQuery(meal(o), {}).limit;
+      expect(typeof limit).toBe('number');
+      expect((limit as number) >= 1).toBe(true);
+    }
+  });
+
+  it('L: find_recipes behavior is unchanged (no limit injected)', () => {
+    const intent: KitchenIntent = {
+      version: 1,
+      intent: 'find_recipes',
+      source: 'vault',
+      constraints: { includeIngredients: ['rice'] },
+      preferences: {},
+      requiresClarification: false,
+    };
+    expect(intentToQuery(intent, {}).limit).toBeUndefined();
   });
 });

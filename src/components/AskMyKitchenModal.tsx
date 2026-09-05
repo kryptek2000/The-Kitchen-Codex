@@ -17,16 +17,23 @@ import {
   type KitchenAnswerItem,
 } from '../utils/kitchenAnswer';
 import {
-  applyTrustedSimilarContext,
   buildAnswerRequest,
   buildInterpretRequest,
+  canExecuteLocalRetrieval,
   httpErrorMessage,
   INVALID_RESPONSE_MESSAGE,
+  intentBlockedMessage,
+  intentToQuery,
   isAnswerResponse,
   isInterpretResponse,
   NETWORK_ERROR_MESSAGE,
   resolveAnswerRecipe,
+  RUNTIME_NOT_SUPPORTED_MESSAGE,
 } from '../utils/askMyKitchenUi';
+import {
+  prepareKitchenIntentForExecution,
+} from '../utils/kitchenIntentPolicy';
+import type { KitchenIntent, TrustedKitchenContext } from '../utils/kitchenIntent';
 
 type AskStatus =
   | 'idle'
@@ -196,10 +203,30 @@ export function AskMyKitchenModal({
         return;
       }
 
-      // Apply trusted similar-to context AFTER interpretation (never the model's).
-      const query = applyTrustedSimilarContext(interpretData.query, trustedIdentity, trimmed);
+      // Prepare the sanitized intent with CLIENT-Owned trusted context. The model
+      // never supplies recipe IDs; only the trusted current recipe does.
+      const trustedContext: TrustedKitchenContext = { currentRecipeId: trustedIdentity };
+      const prepared = prepareKitchenIntentForExecution(interpretData.intent, trustedContext);
+      if (!prepared.ok) {
+        setStatus('error');
+        setErrorMsg(INVALID_RESPONSE_MESSAGE);
+        return;
+      }
+      // Single execution gate (readiness + vault-only source policy + runtime
+      // support) checked BEFORE any local retrieval. Web-scoped requests are
+      // never executed against the local vault in Step 3.
+      if (!canExecuteLocalRetrieval(prepared)) {
+        setStatus('error');
+        setErrorMsg(
+          prepared.readiness.executable
+            ? RUNTIME_NOT_SUPPORTED_MESSAGE
+            : intentBlockedMessage(prepared.readiness)
+        );
+        return;
+      }
 
-      // B) Deterministic local retrieval (Step 1).
+      // B) Deterministic local retrieval via the bounded compatibility bridge.
+      const query: KitchenQuery = intentToQuery(prepared.intent, prepared.trustedContext);
       setStatus('searching');
       const results = searchKitchenRecipes(allRecipes, query);
 

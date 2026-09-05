@@ -450,7 +450,9 @@ export function createApp(opts: CreateAppOptions): express.Express {
       return res.json({
         ok: true,
         source: result.source,
-        query: result.query,
+        intent: result.intent,
+        aiAttempted: result.aiAttempted === true,
+        aiFailed: result.aiFailed === true,
       });
     } catch (error: any) {
       const errorMsg = error?.message || "";

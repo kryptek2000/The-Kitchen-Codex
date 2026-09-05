@@ -3,6 +3,8 @@ import {
   sanitizeInterpretedQuery,
   deterministicInterpret,
   interpretKitchenQuery,
+  interpretKitchenIntent,
+  deterministicKitchenIntent,
   isMeaningfulQuery,
   isEmptyInterpretedQuery,
   MAX_QUESTION_LENGTH,
@@ -737,5 +739,131 @@ describe('kitchenQueryInterpreter: unsupported dish-family subject guard (v0.4.1
     expect(result.ok).toBe(false);
     expect(result.aiAttempted).toBe(false);
     expect(result.aiFailed).toBe(false);
+  });
+});
+
+describe('kitchenQueryInterpreter: semantic intent migration (v0.5.0 Step 3)', () => {
+  it('A: deterministic "What should I make tonight?" -> meal_suggestion, NOT web', () => {
+    const r = deterministicKitchenIntent('What should I make tonight?');
+    expect(r.intent).toBe('meal_suggestion');
+    expect(r.source).toBe('vault');
+    expect(r.source).not.toBe('web');
+  });
+
+  it('G/H: deterministic online vs vault-only cue handling', () => {
+    const online = deterministicKitchenIntent('Find me a gumbo recipe online.');
+    expect(online.intent).toBe('discover_online');
+    expect(online.source).toBe('web');
+
+    const mexican = deterministicKitchenIntent('What recipes am I missing from my Mexican collection?');
+    expect(mexican.source).toBe('vault');
+    expect(mexican.source).not.toBe('web');
+    expect(mexican.constraints.cuisines).toEqual(['Mexican']);
+  });
+
+  it('deterministic fallback keeps hard constraints in KitchenIntent.constraints', () => {
+    expect(deterministicKitchenIntent('Do I have chicken recipes?').constraints.includeIngredients).toEqual(['chicken']);
+    expect(deterministicKitchenIntent('What can I cook in 30 minutes?').constraints.maxTotalMinutes).toBe(30);
+    expect(deterministicKitchenIntent('Show me desserts.').constraints.courses).toEqual(['Dessert']);
+  });
+
+  it('O: AI valid intent -> aiAttempted=true, aiFailed=false, source=ai', async () => {
+    const deps: InterpretDeps = { aiInterpret: async () => ({ version: 1, intent: 'meal_suggestion', source: 'vault' }) };
+    const r = await interpretKitchenIntent('anything', deps);
+    expect(r.ok).toBe(true);
+    expect(r.source).toBe('ai');
+    expect(r.aiAttempted).toBe(true);
+    expect(r.aiFailed).toBe(false);
+  });
+
+  it('B: AI meal_suggestion preferences are preserved conservatively; NOT web', async () => {
+    const deps: InterpretDeps = { aiInterpret: async () => ({ version: 1, intent: 'meal_suggestion', source: 'vault', preferences: { mood: ['comforting'], effort: 'low' } }) };
+    const r = await interpretKitchenIntent('I want something easy and comforting, but not too heavy.', deps);
+    expect(r.ok).toBe(true);
+    expect(r.intent!.preferences.mood).toEqual(['comforting']);
+    expect(r.intent!.preferences.effort).toBe('low');
+    expect(r.intent!.source).toBe('vault');
+  });
+
+  it('C: AI pairing with currentRecipe reference; no recipe ID', async () => {
+    const deps: InterpretDeps = { aiInterpret: async () => ({ version: 1, intent: 'pairing', source: 'vault', references: { currentRecipe: true } }) };
+    const r = await interpretKitchenIntent('What would go well with this taco recipe?', deps);
+    expect(r.intent!.references).toEqual({ currentRecipe: true });
+    // No trusted id leaks into the returned intent:
+    expect((r.intent as unknown as Record<string, unknown>)['currentRecipeId']).toBeUndefined();
+  });
+
+  it('D: AI similar_recipe with avoidRepetition; no trusted id', async () => {
+    const deps: InterpretDeps = { aiInterpret: async () => ({ version: 1, intent: 'similar_recipe', source: 'vault', references: { currentRecipe: true }, preferences: { avoidRepetition: true } }) };
+    const r = await interpretKitchenIntent('Find something similar to this but not another taco.', deps);
+    expect(r.intent!.references).toEqual({ currentRecipe: true });
+    expect(r.intent!.preferences.avoidRepetition).toBe(true);
+    expect((r.intent!.constraints as Record<string, unknown>)['similarToRecipeId']).toBeUndefined();
+  });
+
+  it('E: AI dinner request keeps constraints; no fabricated serving/time', async () => {
+    const deps: InterpretDeps = { aiInterpret: async () => ({ version: 1, intent: 'meal_suggestion', source: 'vault', constraints: { courses: ['Dinner'] }, requestedResultCount: 6 }) };
+    const r = await interpretKitchenIntent('I need a dinner for six that won\'t take all night.', deps);
+    expect(r.intent!.constraints.courses).toEqual(['Dinner']);
+    expect(r.intent!.requestedResultCount).toBe(6);
+    expect(r.intent!.constraints.maxTotalMinutes).toBeUndefined();
+  });
+
+  it('F: AI ingredient_use chicken constraint; no invented ids', async () => {
+    const deps: InterpretDeps = { aiInterpret: async () => ({ version: 1, intent: 'ingredient_use', source: 'vault', constraints: { includeIngredients: ['chicken'] }, preferences: { avoidRepetition: true } }) };
+    const r = await interpretKitchenIntent("What can I make with chicken that isn't another pasta dish?", deps);
+    expect(r.intent!.constraints.includeIngredients).toEqual(['chicken']);
+    expect(r.intent!.preferences.avoidRepetition).toBe(true);
+    expect((r.intent!.constraints as Record<string, unknown>)['recipeIds']).toBeUndefined();
+  });
+
+  it('I: model-invented targetRecipeId is stripped', async () => {
+    const deps: InterpretDeps = { aiInterpret: async () => ({ version: 1, intent: 'meal_suggestion', source: 'vault', targetRecipeId: 'x' }) };
+    const r = await interpretKitchenIntent('anything', deps);
+    expect((r.intent as unknown as Record<string, unknown>)['targetRecipeId']).toBeUndefined();
+  });
+
+  it('J: model-invented similarToRecipeId in constraints is stripped', async () => {
+    const deps: InterpretDeps = { aiInterpret: async () => ({ version: 1, intent: 'similar_recipe', source: 'vault', references: { currentRecipe: true }, constraints: { similarToRecipeId: 'model-id' } }) };
+    const r = await interpretKitchenIntent('Find something similar to this.', deps);
+    expect(r.intent!.constraints.similarToRecipeId).toBeUndefined();
+  });
+
+  it('N: AI unusable result + deterministic fallback rescue', async () => {
+    const deps: InterpretDeps = { aiInterpret: async () => ({}) };
+    const r = await interpretKitchenIntent('under 30 minutes', deps);
+    expect(r.ok).toBe(true);
+    expect(r.source).toBe('deterministic');
+    expect(r.aiAttempted).toBe(true);
+    expect(r.aiFailed).toBe(true);
+    expect(r.intent!.constraints.maxTotalMinutes).toBe(30);
+  });
+
+  it('Q: AI throws + fallback fails -> ok=false, aiAttempted=true, aiFailed=true', async () => {
+    const deps: InterpretDeps = { aiInterpret: async () => { throw new Error('boom'); } };
+    const r = await interpretKitchenIntent('what is the meaning of life', deps);
+    expect(r.ok).toBe(false);
+    expect(r.aiAttempted).toBe(true);
+    expect(r.aiFailed).toBe(true);
+  });
+
+  it('R: no AI + fallback fails -> ok=false, aiAttempted=false, aiFailed=false', async () => {
+    const r = await interpretKitchenIntent('what is the meaning of life');
+    expect(r.ok).toBe(false);
+    expect(r.aiAttempted).toBe(false);
+    expect(r.aiFailed).toBe(false);
+  });
+});
+
+describe('kitchenQueryInterpreter: Step 3 hardening — bogus descriptive negations', () => {
+  it('drops "too heavy" / "another taco" style descriptive negations from excludes', () => {
+    expect(deterministicInterpret('something light but not too heavy').excludeIngredients).toBeUndefined();
+    expect(deterministicInterpret('find a recipe but not another taco').excludeIngredients).toBeUndefined();
+  });
+
+  it('preserves real ingredient exclusions', () => {
+    expect(deterministicInterpret('without onions').excludeIngredients).toEqual(['onions']);
+    expect(deterministicInterpret('with eggs but without milk').excludeIngredients).toEqual(['milk']);
+    expect(deterministicInterpret('find something with potatoes but no cheese').excludeIngredients).toEqual(['cheese']);
   });
 });
