@@ -19,7 +19,7 @@ markdown/vault sync.
 bun install --frozen-lockfile   # dry check that lockfile matches package.json
 bun run dev                     # tsx server.ts (Vite dev middleware, port 3000)
 bun run lint                    # tsc --noEmit  (this is the "typecheck" step)
-bun run test                    # vitest run — expect 675/675 (34 files)
+bun run test                    # vitest run — expect 851/851 (40 files)
 bun run build                   # vite build && esbuild server.ts -> dist/server.cjs
 bun run test:prod               # needs server running on :3000 (see note)
 bun x tsx scripts/security_verification.ts   # needs server running on :3000
@@ -105,12 +105,20 @@ in dev (Vite HMR). `frame-ancestors` is configurable via `CSP_FRAME_ANCESTORS`.
 
 ## Current state / open items
 
-- **v0.4.1 is the current release** ("The Kitchen Codex v0.4.1 — Ask My
-  Kitchen Reliability & Culinary Relevance"). `RELEASE_VERSION` in
+- **v0.5.0 is the current release** ("The Kitchen Codex v0.5.0 — Ask My Kitchen
+  Intelligence & Web Discovery"). `RELEASE_VERSION` in
   `src/appVersion.ts` is the single runtime source of truth for BOTH the
   client (`src/version.ts`) and the server (`/api/health`). `package.json`/
   `README.md` reference the same release. To bump, run
   `bun x tsx scripts/bump_version.ts vX.Y.Z`.
+- **v0.5.0 implementation is complete and shipped in six steps**: KitchenIntent
+  foundation (`kitchenIntent`), trusted context + source policy
+  (`kitchenIntentPolicy`), interpreter migration + execution gates
+  (`kitchenQueryInterpreter`), grounded candidate evidence + AI ranking
+  (`kitchenRanking`, `server/kitchenRank`), explicit web discovery + source
+  separation (`kitchenDiscovery`, `server/kitchenDiscover`), and web-result →
+  Grab Recipe handoff. Verification baseline: **851/851 tests across 40 files**.
+  Release notes: `RELEASE_NOTES_v0.5.0.md`.
 - **v0.4.1 hardening landed in two commits**: culinary-similarity relevance
   (`72c9704` — dish-family-first Similar Recipes with a hard known-family
   mismatch gate, one authority shared with Ask My Kitchen's
@@ -152,7 +160,7 @@ in dev (Vite HMR). `frame-ancestors` is configurable via `CSP_FRAME_ANCESTORS`.
   `server/metadataRecovery.ts` only emits `cookTime`/`totalTime`/`servings` when
   there is real evidence; otherwise those fields are absent (prefer absence over
   a baked-in "20 mins"/"4 servings").
-- Tests: v0.4.1 baseline **675/675 (34 files)**. `bun audit`: clean.
+- Tests: v0.5.0 baseline **851/851 (40 files)**. `bun audit`: clean.
   `security_verification.ts`: 33/33.
 
 ## Notes
@@ -237,7 +245,9 @@ own Markdown knowledge base.
   culinary-similarity rework. [SHIPPED — see RELEASE_NOTES_v0.4.1.md]
 - **v0.5.0 — Ask My Kitchen Intelligence + Discovery** — Ask My Kitchen
   becomes meaningfully more capable than Search and Filter; richer intent
-  model, explicit web discovery, Grab Recipe handoff. [NEXT MAJOR OBJECTIVE]
+  model, grounded candidate reasoning, explicit web discovery, strict source
+  separation, and a trusted Grab Recipe handoff. [SHIPPED — see
+  RELEASE_NOTES_v0.5.0.md]
 - **v0.6.0 and later** — resume other roadmap work: intelligent meal planning,
   smart shopping/pantry, cooking history, Cooking Mode 2.0/voice, recipe
   intelligence (OCR/PDF/image import), Recipe Card Studio 3.0/cookbook,
@@ -305,7 +315,7 @@ sandwiches should not become "similar" merely because they share garlic,
 onion, etc.
 
 ### v0.5.0 — Ask My Kitchen Intelligence + Discovery
-[NEXT MAJOR OBJECTIVE]
+[SHIPPED — see RELEASE_NOTES_v0.5.0.md]
 
 Theme:
 
@@ -453,17 +463,19 @@ well — this is the core reason Ask My Kitchen exists:
 
 ### Immediate next steps
 
-1. **Finish v0.4.1 hardening** — parser false-positive fixes; culinary-
-   similarity gate hardening; verify AI interpreter model/key; full audit;
-   release if appropriate.
-2. **Design v0.5.0 contracts before implementation** — KitchenIntent; source
-   policy; web discovery result schema; vault/web result labeling; Grab Recipe
-   handoff contract; security/privacy boundaries.
-3. **Implement v0.5.0 in small audited steps** — AI intent layer; richer vault
-   recommendations; explicit web discovery; Grab Recipe handoff; UI
-   refinement; regression/security tests.
-4. **Independent audit.**
-5. **Release.**
+v0.5.0 implementation, hardening, and release prep are complete. The remaining
+roadmap is future/optional and NOT required for v0.5.0:
+
+1. **Design later phases** — intelligent meal planning, smart shopping/pantry,
+   cooking history, Cooking Mode 2.0/voice, recipe intelligence (OCR/PDF/image
+   import), Recipe Card Studio 3.0/cookbook, mobile/PWA.
+2. **Optional follow-up polish** (known non-blocking, from release hardening):
+   dedicated ranking/discovery model aliases; web URL dedupe normalization;
+   clear stale Grabber prefill; DOM/component tests for the handoff seam;
+   wire the discovery sourceTitle display; retire the legacy
+   `/api/kitchen/answer` utilities as a cleanup candidate; expand the
+   conservative deterministic interpretation cues.
+3. **Independent audit / release.**
 
 ### Product rules
 

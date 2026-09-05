@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.0] - 2026-09-05
+
+### 🧠 Ask My Kitchen Intelligence
+
+- **Richer semantic intent** (`src/utils/kitchenIntent.ts`): a versioned `KitchenIntent` model describes what the user is asking (find recipes, meal suggestion, similar recipe, ingredient use, browse category, or explicit web discovery) plus soft preferences (effort, mood, style, meal context, dietary, novelty, avoid repetition), with the existing `KitchenQuery` staying authoritative for hard filters.
+- **Trusted context & source policy** (`src/utils/kitchenIntentPolicy.ts`): trusted recipe context (current-recipe/compare identities) is resolved solely from the UI — never from the model — and execution readiness plus a pure web-discovery source policy gate the runtime.
+- **Interpreter migration** (`src/utils/kitchenQueryInterpreter.ts`): the AI interpreter now produces a sanitized `KitchenIntent`; the conservative deterministic parser remains the resilience fallback, and `aiAttempted`/`aiFailed` keep the reliable 422-vs-503 distinction.
+- **Grounded candidate reasoning** (`src/utils/kitchenRanking.ts`): a deterministic builder produces a bounded, compact evidence set for eligible vault recipes; a transparent scorer ranks by supported preference signals (effort/time, meal context, exact tags/ingredients, dish-family repetition) with grounded reasons. Optional AI ranking only re-orders that same trusted candidate-set evidence and degrades deterministically if unavailable.
+
+### 🌐 Explicit Web Discovery & Source Separation
+
+- **Explicit web discovery** (`src/utils/kitchenDiscovery.ts`, `server/kitchenDiscover.ts`): Ask My Kitchen may search the web only when explicitly requested (source `web`) or after a user-triggered escalation from a `vault_then_web` intent. Discovery is query-only and never fetches an arbitrary URL.
+- **Provider-grounded URLs only**: result URLs come only from Google-Search grounding metadata — never from model-generated text — so hallucinated URLs cannot survive. A strict sanitizer keeps only http/https, dedupes, strips unknown fields, and caps results (`MAX_WEB_RESULTS`).
+- **Strict source separation**: results are rendered under explicit "FROM MY VAULT" and "FROM THE WEB" headings with separate state; web cards are discovery cards, never local recipes, with no favorite/edit/delete/local-metadata controls. Vault-to-web escalation is offer-only (deterministic weak-result threshold, user click required).
+- **Web Result → Grab Recipe handoff** (`src/components/AskMyKitchenModal.tsx`, `RecipeGrabberModal.tsx`): a selected web result is handed to the existing Web Recipe Grabber (`sourceUrl` + optional `sourceTitle`), which re-validates the URL through its full hardened pipeline, shows a preview, and requires explicit user confirmation before saving.
+
+### 🔒 Trust, Privacy & Security
+
+- Deterministic code owns local vault membership; the model never invents recipe IDs, never adds candidates, and never decides what is in the vault.
+- AI ranking operates only on trusted candidate evidence; ranking failure degrades gracefully and never fails the request.
+- No vault dump/raw Markdown/notes/frontmatter is sent to ranking or discovery AI; interpretation sends only the question.
+- Discovered URLs are not fetched by Ask My Kitchen and go through the existing hardened importer (SSRF, private/metadata-IP, redirect, content-type protections remain authoritative).
+- No auto-import, no silent web escalation, no direct save from Ask My Kitchen — imports always require preview + explicit confirmation.
+
+### 🧪 Testing & Verification
+
+- **851 / 851 Vitest tests passing** across **40 test files**.
+- TypeScript typecheck (`tsc --noEmit`) clean; production build clean; `bun install --frozen-lockfile` clean; `git diff --check` clean.
+- Release hardening: 0 BLOCKING, 0 IMPORTANT findings (see `RELEASE_NOTES_v0.5.0.md` for known non-blocking follow-ups).
+
+---
+
 ## [0.4.1] - 2026-09-04
 
 ### 🧭 Ask My Kitchen Reliability

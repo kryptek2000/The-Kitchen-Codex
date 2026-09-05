@@ -1,6 +1,6 @@
-# 🍳 The Kitchen Codex `v0.4.1`
+# 🍳 The Kitchen Codex `v0.5.0`
 
-[![Version](https://img.shields.io/badge/version-0.4.1-amber.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.5.0-amber.svg)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A markdown-native recipe manager, meal planner, culinary knowledge base, and interactive cooking companion built specifically for **Obsidian** vaults. Read, edit, sync, and cook directly from your Obsidian `.md` recipe collection with YAML frontmatter, Dataview tags, wikilinks (`[[Ingredient]]`, `[[Target|Alias]]`), AI nutrition estimation, dynamic portion scaling, multi-step cooking timers, and AI-powered web recipe scraping.
@@ -42,12 +42,13 @@ A markdown-native recipe manager, meal planner, culinary knowledge base, and int
 - **Structured Schema & AI Parsing**: Extracts recipe metadata, ingredient amounts, wikilink entities, cooking step durations, and tips using Gemini AI and Schema.org JSON-LD extraction.
 
 ### 🧭 Ask My Kitchen
-- **Natural-language questions, vault-only answers**: ask "What can I make with chicken and rice?", "Which recipes use black beans?", or "Show me my favorite Italian recipes" — and get answers grounded only in the recipes already in your Obsidian vault. No web search, no external recipe discovery.
-- **Deterministic local retrieval**: your question is interpreted into a structured `KitchenQuery`, then a deterministic engine (`searchKitchenRecipes`) decides exactly which recipes match — the model never chooses recipes or widens filters.
-- **Grounded conversational answers**: a compact evidence set (retrieved recipes + deterministic reasons) feeds a grounded answer layer that explains the results without inventing recipes, metadata, times, or ratings.
-- **Privacy-first evidence flow**: only the compact retrieved evidence is sent to the server; the full vault, raw Markdown, notes, and unrelated recipes never leave the client.
-- **Read-only & safe**: Ask My Kitchen only answers questions — it never edits recipes or Markdown, never writes, and clearly reports when no recipe matches ("I couldn't find a matching recipe in your vault.").
-- **Trusted similar-recipe context**: opened from a Recipe Detail, ask "what is similar to this?" to find recipes similar to the current one, using trusted local context (never a model-invented identity).
+- **Richer natural-language cooking intent**: your question is interpreted into a structured `KitchenIntent` — find recipes, meal suggestion, similar recipe, ingredient use, browse category, or explicit web discovery — with hard filters (ingredients, courses, cuisines, time, ratings) and soft preferences (effort, mood, style, dietary, variety).
+- **Deterministic, vault-first membership**: a deterministic engine decides which of *your* recipes actually match the hard filters. The model never chooses recipes, never invents recipe IDs, and never decides vault membership.
+- **Grounded, preference-aware recommendations**: local candidates are ranked with transparent, evidence-backed reasons ("Easy difficulty", "Under 30 minutes", "Dinner recipe"). An optional AI layer may re-rank the same trusted candidate evidence and degrades to a deterministic fallback when unavailable.
+- **Optional, explicit web discovery**: when you ask to find something online (or the vault results are weak and you tap "Search the web"), Ask My Kitchen runs explicit, provider-grounded web discovery. Discovered result URLs come only from real search grounding — never invented.
+- **Strictly separated results**: "FROM MY VAULT" and "FROM THE WEB" results are kept fully separate. Web results are discovery cards, never local recipes, with no favorite/edit/local-metadata controls.
+- **Web result → Grab Recipe handoff**: select a web result and send it to the existing Web Recipe Grabber for a preview before you save it. Imports always require preview + explicit user confirmation, and the hardened importer re-validates the URL (SSRF/private-IP/redirect/content-type protections).
+- **Privacy-first & read-only by default**: the full vault, raw Markdown, notes, and unrelated recipes never leave the client; discovery is query-only; no auto-import, no silent web escalation, and no vault writes unless you explicitly save from the Grabber.
 
 ### 🍳 Distraction-Free Interactive Cooking Mode & Recipe Cards
 - **Step-by-Step Focus**: Fullscreen hands-free cooking assistant with high-contrast typography.
@@ -244,7 +245,14 @@ favorite: true
 
 ## 📌 Changelog
 
-### `v0.4.1` (Current Release)
+### `v0.5.0` (Current Release)
+- **Ask My Kitchen Intelligence & Web Discovery**: Ask My Kitchen now understands richer cooking intent (a structured `KitchenIntent`) and gives grounded, preference-aware recommendations over the recipes already in your vault. It can do explicit web discovery when you ask (or when vault-first results are weak and you tap "Search the web"), keeps "FROM MY VAULT" and "FROM THE WEB" results strictly separate, and sends a selected web result into the existing Web Recipe Grabber for a preview before saving.
+- **Grounded candidate reasoning & ranking**: a deterministic engine stays authoritative for vault membership; an optional AI layer re-ranks only trusted candidate evidence and degrades gracefully when unavailable. AI never invents recipe IDs, never decides vault membership, and never creates candidates.
+- **Explicit, provider-grounded web discovery**: result URLs come only from real search grounding, never from model-generated text. Discovered URLs are not fetched by Ask My Kitchen and go through the hardened importer (SSRF/private-IP/redirect/content-type protections), with preview + explicit confirmation before any save.
+- **Trust, privacy & security**: no auto-import, no silent web escalation, no vault dump/raw Markdown to ranking or discovery AI, no direct save from Ask My Kitchen.
+- **Testing**: 851/851 Vitest tests across 40 files; typecheck and production build clean; release hardening complete (0 blocking, 0 important findings).
+
+### `v0.4.1` (Previous Release)
 - **Ask My Kitchen Reliability**: hardened the deterministic fallback interpretation — conversational false positives fixed (reference phrases, generic/meta nouns, and dangling conjunctions are no longer mistaken for ingredients), compound ingredient+time intent preserved ("chicken recipes under 30 minutes" keeps both), hour parsing fixed ("under 1 hour" = 60 minutes), and unsupported dish-family subjects ("salad recipes under 30 minutes") now fail safely instead of silently returning a time-only query.
 - **Distinct failure signalling**: genuine "could not understand" (HTTP 422) is now separated from AI/service failure (HTTP 503), with safe fixed UI error messages and no raw provider/server error leakage.
 - **Culinary Similar Recipes**: Similar Recipes and Ask My Kitchen "similar to this" now share one deterministic culinary-relevance authority — dish-family/type-first ranking, related-family support, cuisine/course/tag signals, and ingredient overlap reduced to a capped secondary signal; generic pantry ingredients and generic tags can no longer establish similarity on their own.
