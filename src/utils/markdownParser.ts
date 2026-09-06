@@ -9,7 +9,6 @@ import {
   RecipeNutrition,
   VaultNote,
 } from '../types';
-import { getRecipeImage } from './imageHelper';
 import { obsidianToCanonicalRecipe, canonicalToObsidianRecipe } from '../schema/legacyAdapter';
 import { parseFraction } from '../schema/recipeValidator';
 import type { NutritionSource, NutritionConfidence } from '../schema/recipeSchema';
