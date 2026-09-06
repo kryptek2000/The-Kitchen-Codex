@@ -75,6 +75,7 @@ const FORBIDDEN_PATH_SEGMENTS = [
   '/server/',
   '/hooks/',
   '/application/', // core must never depend on the application layer
+  '/platform/', // core must never depend on concrete platform implementations
   'main.tsx',
   'App.tsx',
 ];

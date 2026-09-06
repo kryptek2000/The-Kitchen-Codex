@@ -74,6 +74,7 @@ const FORBIDDEN_PATH_SEGMENTS = [
   '/components/',
   '/server/',
   '/hooks/',
+  '/platform/', // application must never depend on concrete platform implementations
   'main.tsx',
   'App.tsx',
 ];
@@ -234,6 +235,7 @@ describe('application layer / adapter contracts (Phase 4C1)', () => {
           'cardExportColors',
           '/server/',
           '/components/',
+          '/platform/',
         ].some((b) => rel.includes(b))
       ).toBe(false);
     }
