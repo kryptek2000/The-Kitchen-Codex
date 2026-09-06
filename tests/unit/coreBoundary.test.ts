@@ -23,6 +23,9 @@ const ROOT = resolve(__dirname, '../..');
 const CORE_ENTRY = resolve(ROOT, 'src/core/index.ts');
 
 // Import specifiers that must NEVER appear (directly or transitively) in core.
+// `/^node:/` covers every `node:<builtin>` import; the bare-name entries below
+// cover the CommonJS-style builtin names. Node-only builtins must not leak into
+// platform-neutral core.
 const FORBIDDEN_SPECIFIER = [
   /^react$/,
   /^react-dom(\/|$)/,
@@ -39,6 +42,24 @@ const FORBIDDEN_SPECIFIER = [
   /^http$/,
   /^https$/,
   /^stream$/,
+  /^child_process$/,
+  /^worker_threads$/,
+  /^zlib$/,
+  /^http2$/,
+  /^perf_hooks$/,
+  /^events$/,
+  /^readline$/,
+  /^timers$/,
+  /^url$/,
+  /^util$/,
+  /^string_decoder$/,
+  /^tty$/,
+  /^async_hooks$/,
+  /^cluster$/,
+  /^vm$/,
+  /^v8$/,
+  /^trace_events$/,
+  /^querystring$/,
   /^@google\/genai$/,
 ].map((re) => (raw: string) => re.test(raw));
 
@@ -87,10 +108,24 @@ function stripComments(src: string): string {
     .replace(/(^|[^:])\/\/[^\n]*/g, '$1'); // line comments (avoid http://)
 }
 
-/** Resolves a possibly-extensionless / directory import specifier to a file. */
-function resolveSpecifier(fromFile: string, specifier: string): string | null {
-  if (!specifier.startsWith('.')) return null; // external or alias -> skip for graph
-  const base = resolve(dirname(fromFile), specifier);
+/**
+ * Resolves a project import specifier to an absolute file path, following BOTH:
+ *   - relative specifiers (`./x`, `../x`) resolved against the importing file, and
+ *   - the project alias `@/*` -> `<repoRoot>/*` (checked against tsconfig.json
+ *     `paths: { "@/*": ["./*"] }` and the identical `@` -> root alias in
+ *     vite.config.ts / vitest.config.ts).
+ * External (npm) specifiers and unknown paths return null (not traversed).
+ */
+function resolveProjectSpecifier(fromFile: string, specifier: string): string | null {
+  const ALIAS = '@/';
+  let base: string | null = null;
+  if (specifier.startsWith(ALIAS)) {
+    base = resolve(ROOT, specifier.slice(ALIAS.length));
+  } else if (specifier.startsWith('.')) {
+    base = resolve(dirname(fromFile), specifier);
+  } else {
+    return null; // external / non-project scope -> not traversed
+  }
   const candidates = [
     base,
     `${base}.ts`,
@@ -132,9 +167,9 @@ function collectGraph(entry: string): Set<string> {
       const specifier = match[1];
       // Forbidden external module (react / express / node: / @google/genai ...)
       if (FORBIDDEN_SPECIFIER.some((pred) => pred(specifier))) {
-        // Handled per-file below; here only recurse into project-relative.
+        // Handled per-file below; here only recurse into project-relative/alias.
       }
-      const resolved = resolveSpecifier(file, specifier);
+      const resolved = resolveProjectSpecifier(file, specifier);
       if (resolved) queue.push(resolved);
     }
   }
@@ -161,7 +196,8 @@ function auditCore(): string[] {
         }
       }
 
-      // 2. Forbidden external import specifiers (react/express/node:/@google/genai).
+      // 2. Forbidden external import specifiers (react/express/node:/@google/genai),
+      //    plus alias imports that resolve into a forbidden platform/UI/server path.
       const importRe = /(?:from|import)\s*(?:\(\s*)?\s*['"]([^'"]+)['"]/g;
       let im: RegExpExecArray | null;
       importRe.lastIndex = 0;
@@ -170,8 +206,9 @@ function auditCore(): string[] {
         if (FORBIDDEN_SPECIFIER.some((pred) => pred(spec))) {
           failures.push(`${rel}: forbidden import specifier "${spec}"`);
         }
-        // Also forbid any resolved path that lands in components/hooks/App/main.
-        const resolved = resolveSpecifier(file, spec);
+        // Also forbid any resolved path (relative or `@/` alias) that lands in
+        // components/hooks/App/main/server or a vault/asset module.
+        const resolved = resolveProjectSpecifier(file, spec);
         if (resolved) {
           const resolvedRel = resolved.slice(ROOT.length + 1).replace(/\\/g, '/');
           for (const segment of FORBIDDEN_PATH_SEGMENTS) {
@@ -237,5 +274,63 @@ describe('shared core purity / conformance boundary', () => {
     // Sanity: the canonical schema modules are reachable.
     expect(graph.has(resolve(ROOT, 'src/schema/recipeSchema.ts'))).toBe(true);
     expect(graph.has(resolve(ROOT, 'src/utils/kitchenSearch.ts'))).toBe(true);
+    // Phase 4B: the moved pure modules are now reachable from the core barrel.
+    expect(graph.has(resolve(ROOT, 'src/core/deterministicNutrition.ts'))).toBe(true);
+    expect(graph.has(resolve(ROOT, 'src/core/ai/types.ts'))).toBe(true);
+  });
+
+  it('follows @/ alias imports to their repo-root targets (positive control)', () => {
+    // Alias `@/` -> `<repoRoot>/` (matches tsconfig, vite, and vitest configs).
+    expect(resolveProjectSpecifier(__filename, '@/src/core/index.ts')).toBe(CORE_ENTRY);
+    expect(resolveProjectSpecifier(__filename, '@/src/utils/kitchenSearch.ts')).toBe(
+      resolve(ROOT, 'src/utils/kitchenSearch.ts')
+    );
+    // An alias import into server/ or UI/ resolves to a path that MUST be flagged.
+    expect(
+      resolveProjectSpecifier(__filename, '@/server/app.ts')
+    ).toBe(resolve(ROOT, 'server/app.ts'));
+    expect(
+      resolveProjectSpecifier(__filename, '@/src/components/RecipeCard.tsx')
+    ).toBe(resolve(ROOT, 'src/components/RecipeCard.tsx'));
+    expect(
+      resolveProjectSpecifier(__filename, '@/src/utils/vaultFileSystem.ts')
+    ).toBe(resolve(ROOT, 'src/utils/vaultFileSystem.ts'));
+    // Non-project / unknown specifiers resolve to null and are not traversed.
+    expect(resolveProjectSpecifier(__filename, 'js-yaml')).toBeNull();
+    expect(resolveProjectSpecifier(__filename, '@/not/a/real/module')).toBeNull();
+  });
+
+  it('flags forbidden Node builtins and @/ alias targets via the path rule', () => {
+    // Forbidden external specifiers (incl. the newly hardened Node builtins).
+    for (const spec of ['node:fs', 'fs', 'child_process', 'worker_threads', 'zlib', 'http2']) {
+      expect(FORBIDDEN_SPECIFIER.some((pred) => pred(spec))).toBe(true);
+    }
+    // Allowed: js-yaml and relative/alias core imports must NOT be flagged.
+    for (const spec of ['js-yaml', '@/src/core/ai/types', './index.js']) {
+      expect(FORBIDDEN_SPECIFIER.some((pred) => pred(spec))).toBe(false);
+    }
+    // A resolved alias path into a forbidden segment is caught by the path rule.
+    const serverRel = resolveProjectSpecifier(__filename, '@/server/app.ts');
+    expect(serverRel).not.toBeNull();
+    const serverRelStr = (serverRel as string).slice(ROOT.length + 1).replace(/\\/g, '/');
+    // auditCore matches segments over the slash-wrapped rel (`/${rel}/`).
+    expect(FORBIDDEN_PATH_SEGMENTS.some((s) => `/${serverRelStr}/`.includes(s))).toBe(true);
+  });
+
+  it('old and new paths resolve to ONE implementation (compat shim, no duplicate logic)', async () => {
+    // Phase 4B compatibility: the old server path is a re-export shim of the
+    // moved shared-core implementation. Both must resolve to the same function
+    // object, proving ONE implementation and no duplicated algorithm.
+    const oldPath = await import('../../server/deterministicNutrition');
+    const newPath = await import('../../src/core/deterministicNutrition');
+    expect(typeof oldPath.estimateDeterministicNutrition).toBe('function');
+    expect(oldPath.estimateDeterministicNutrition).toBe(newPath.estimateDeterministicNutrition);
+
+    // Provider-neutral AI contracts: the server shim re-exports the core types.
+    // (Contracts are type-only, so export-surface equality is checked; full
+    // type-level equivalence is enforced by tsc.)
+    const typesOld = await import('../../server/ai/types');
+    const typesNew = await import('../../src/core/ai/types');
+    expect(Object.keys(typesOld).sort()).toEqual(Object.keys(typesNew).sort());
   });
 });

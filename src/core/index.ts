@@ -41,6 +41,13 @@ export type { RecipeMetadata } from '../schema/recipeSchema';
 export * from '../utils/measurements';
 export * from '../utils/nutrition';
 
+// Deterministic food-aware whole-recipe nutrition engine (was server-owned).
+export * from './deterministicNutrition';
+
+// Provider-neutral AI contracts (AiProvider, AiCapabilities, AiJsonSchema, ...).
+// These are pure contracts only; provider SDKs/registries stay server-side.
+export * from './ai/types';
+
 // Markdown parsing/serialization + Obsidian note/meal-plan/shopping codecs.
 export * from '../utils/markdownParser';
 
