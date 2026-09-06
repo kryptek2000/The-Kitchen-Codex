@@ -13,7 +13,6 @@
  * no provider-backed URLs, this returns a safe, non-sensitive
  * `{ ok:false, source:'web', reason:'unavailable' }` — never fabricated results.
  */
-import { ThinkingLevel } from "@google/genai";
 import dotenv from "dotenv";
 import { getGemini } from "./geminiClient.js";
 import { MODEL_CONFIG } from "./modelConfig.js";
@@ -80,7 +79,6 @@ async function aiDiscoverWithModel(
     contents: buildPrompt(request),
     config: {
       temperature: 0,
-      thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
       tools: [{ googleSearch: {} }],
     },
   });

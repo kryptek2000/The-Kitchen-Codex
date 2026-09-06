@@ -332,6 +332,34 @@ describe("Ask My Kitchen /api/kitchen/discover", () => {
       vi.mocked(getGemini).mockReturnValue(null);
     }
   });
+
+  it("V: discovery primary config keeps googleSearch tool and does NOT force MINIMAL thinking", async () => {
+    let seenConfig: any;
+    vi.mocked(getGemini).mockReturnValue({
+      models: {
+        generateContent: async (params: any) => {
+          if (params.model === MODEL_CONFIG.kitchenDiscoveryPrimary) {
+            seenConfig = params.config;
+            return grounding(["https://example.com/verified"]);
+          }
+          throw new Error("should not be reached");
+        },
+      },
+    } as unknown as GoogleGenAI);
+    try {
+      const res = await discover({ question: "q", intent: validIntent });
+      const body = await res.json();
+      expect(body.ok).toBe(true);
+      // googleSearch tool is preserved.
+      expect(seenConfig.tools).toEqual([{ googleSearch: {} }]);
+      // The unsupported forced MINIMAL thinking level must NOT be sent.
+      expect(seenConfig.thinkingConfig).toBeUndefined();
+      // temperature retained.
+      expect(seenConfig.temperature).toBe(0);
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
 });
 
 describe("kitchenDiscoverRateLimiter", () => {
