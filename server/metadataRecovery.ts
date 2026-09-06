@@ -3,6 +3,7 @@ import { getDefaultAiProvider } from "./ai/provider.js";
 import type { AiJsonSchema, AiProvider } from "./ai/types.js";
 import { estimateAlgorithmicNutrition } from "./nutritionEstimator.js";
 import { MODEL_CONFIG } from "./modelConfig.js";
+import { logModelAttempt } from "./providerDiagnostics.js";
 
 dotenv.config();
 
@@ -433,13 +434,13 @@ export async function recoverRecipeMetadata(
   try {
     return await aiRecoverMetadata(provider, PRIMARY_MODEL, req);
   } catch (primaryErr: any) {
-    console.warn(`[MetadataRecovery] Primary model (${PRIMARY_MODEL}) failed: ${primaryErr?.message || primaryErr}. Attempting fallback (${FALLBACK_MODEL})...`);
+    logModelAttempt("metadataRecovery", PRIMARY_MODEL, primaryErr);
 
     // Attempt 2: Fallback Model (gemini-3.1-flash-lite)
     try {
       return await aiRecoverMetadata(provider, FALLBACK_MODEL, req);
     } catch (fallbackErr: any) {
-      console.warn(`[MetadataRecovery] Fallback model (${FALLBACK_MODEL}) failed: ${fallbackErr?.message || fallbackErr}. Engaging algorithmic fallback...`);
+      logModelAttempt("metadataRecovery", FALLBACK_MODEL, fallbackErr);
 
       // Attempt 3: Algorithmic Recovery
       return recoverMetadataAlgorithmically(req);

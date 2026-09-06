@@ -4,6 +4,7 @@ import { renderIngredientLine, parseIngredientLine } from "../src/utils/markdown
 import { MODEL_CONFIG } from "./modelConfig.js";
 import { getDefaultAiProvider } from "./ai/provider.js";
 import type { AiJsonSchema } from "./ai/types.js";
+import { logModelAttempt } from "./providerDiagnostics.js";
 
 dotenv.config();
 
@@ -694,8 +695,11 @@ REQUIREMENTS:
             errMsg.includes("429") ||
             errMsg.includes("RESOURCE_EXHAUSTED");
 
+          // `errMsg` is retained ONLY for retry classification above; the actual
+          // diagnostic line is emitted through the redacted helper (never the raw
+          // provider message) to avoid leaking secrets.
           if (!isEmpty) {
-            console.warn(`[RecipeGrabber] Gemini model '${modelName}' attempt ${attempts} failed:`, errMsg);
+            logModelAttempt("grab", modelName, aiErr);
           }
 
           if (isRetryable && attempts < maxAttempts) {

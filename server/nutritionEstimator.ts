@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 import { getDefaultAiProvider } from "./ai/provider.js";
 import type { AiJsonSchema, AiProvider } from "./ai/types.js";
 import { MODEL_CONFIG } from "./modelConfig.js";
+import { logModelAttempt } from "./providerDiagnostics.js";
 import { estimateDeterministicNutrition, type DeterministicNutritionResult } from "./deterministicNutrition.js";
 import {
   buildDeterministicCacheKey,
@@ -257,14 +258,24 @@ function buildSchema(): AiJsonSchema {
 }
 
 /**
+ * Coerces a provider value to a finite number, defaulting non-finite / NaN /
+ * invalid values to 0. This closes the `Number(Infinity) || 0` -> Infinity gap
+ * while preserving every finite value and the existing rounding/clamping.
+ */
+function toFiniteNumber(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
  * AI structured-output adapter: recipe -> bounded nutrition result. Routes
  * through the provider abstraction (`getDefaultAiProvider().generateStructured`)
  * with the same explicit primary -> fallback model chain, same temperature
  * (0.1), and the same MINIMAL thinking config. The provider's parsed JSON is
  * ALWAYS re-bounded here (never trusted raw): every numeric field clamps negative
- * values to 0, coerces non-numeric to 0, and rounds; the confidence note falls
- * back to a neutral message when absent. Provenance (`ai_estimate`/`medium`) is
- * application-assigned, never model-self-rated.
+ * values to 0, coerces non-finite/non-numeric to 0, and rounds; the confidence
+ * note falls back to a neutral message when absent. Provenance
+ * (`ai_estimate`/`medium`) is application-assigned, never model-self-rated.
  */
 async function aiEstimateNutrition(
   provider: AiProvider,
@@ -302,12 +313,12 @@ Guidelines:
     providerOptions: { thinkingConfig: { thinkingLevel: "MINIMAL" } },
   });
 
-  const calories = Math.max(0, Math.round(Number(parsed.calories) || 0));
-  const protein = Math.max(0, Math.round((Number(parsed.protein) || 0) * 10) / 10);
-  const carbohydrates = Math.max(0, Math.round((Number(parsed.carbohydrates) || 0) * 10) / 10);
-  const fat = Math.max(0, Math.round((Number(parsed.fat) || 0) * 10) / 10);
-  const fiber = Math.max(0, Math.round((Number(parsed.fiber) || 0) * 10) / 10);
-  const sodium = Math.max(0, Math.round(Number(parsed.sodium) || 0));
+  const calories = Math.max(0, Math.round(toFiniteNumber(parsed.calories)));
+  const protein = Math.max(0, Math.round(toFiniteNumber(parsed.protein) * 10) / 10);
+  const carbohydrates = Math.max(0, Math.round(toFiniteNumber(parsed.carbohydrates) * 10) / 10);
+  const fat = Math.max(0, Math.round(toFiniteNumber(parsed.fat) * 10) / 10);
+  const fiber = Math.max(0, Math.round(toFiniteNumber(parsed.fiber) * 10) / 10);
+  const sodium = Math.max(0, Math.round(toFiniteNumber(parsed.sodium)));
   const confidenceNote =
     typeof parsed.confidenceNote === "string" && parsed.confidenceNote.trim()
       ? parsed.confidenceNote.trim()
@@ -409,13 +420,13 @@ export async function estimateRecipeNutrition(
   try {
     return await aiEstimateNutrition(provider, PRIMARY_MODEL, recipeTitle, servings, cleanedIngredientLines);
   } catch (primaryErr: any) {
-    console.warn(`[NutritionEstimator] Primary model (${PRIMARY_MODEL}) failed: ${primaryErr?.message || primaryErr}. Attempting fallback (${FALLBACK_MODEL})...`);
+    logModelAttempt("nutrition", PRIMARY_MODEL, primaryErr);
 
     // Attempt 2: Fallback Model (gemini-3.1-flash-lite)
     try {
       return await aiEstimateNutrition(provider, FALLBACK_MODEL, recipeTitle, servings, cleanedIngredientLines);
     } catch (fallbackErr: any) {
-      console.warn(`[NutritionEstimator] Fallback model (${FALLBACK_MODEL}) failed: ${fallbackErr?.message || fallbackErr}. Engaging algorithmic fallback...`);
+      logModelAttempt("nutrition", FALLBACK_MODEL, fallbackErr);
 
       // Attempt 3: Algorithmic Culinary Estimator
       return estimateAlgorithmicNutrition(recipeTitle, servings, rawIngredientLines);

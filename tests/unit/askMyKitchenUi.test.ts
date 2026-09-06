@@ -1,19 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import type { ObsidianRecipe } from '../../src/types';
-import type { KitchenQuery, SearchableRecipe } from '../../src/utils/kitchenSearch';
+import type { KitchenQuery } from '../../src/utils/kitchenSearch';
 import type { KitchenIntent } from '../../src/utils/kitchenIntent';
 import type { ResolvedKitchenContext } from '../../src/utils/kitchenIntentPolicy';
 import { sanitizeKitchenIntent } from '../../src/utils/kitchenIntent';
 import { prepareKitchenIntentForExecution } from '../../src/utils/kitchenIntentPolicy';
-import { buildAnswerEvidence } from '../../src/utils/kitchenAnswer';
-import { searchKitchenRecipes } from '../../src/utils/kitchenSearch';
 import {
   resolveAnswerRecipe,
   applyTrustedSimilarContext,
   buildInterpretRequest,
-  buildAnswerRequest,
   isInterpretResponse,
-  isAnswerResponse,
   httpErrorMessage,
   NETWORK_ERROR_MESSAGE,
   INVALID_RESPONSE_MESSAGE,
@@ -26,21 +22,6 @@ import {
 
 function asRecipe(partial: Record<string, unknown>): ObsidianRecipe {
   return partial as unknown as ObsidianRecipe;
-}
-
-const ing = (original: string) => ({ original });
-function r(overrides: Partial<SearchableRecipe> & { id: string }): SearchableRecipe {
-  return {
-    title: overrides.id,
-    tags: [],
-    category: '',
-    cuisine: '',
-    difficulty: '',
-    rating: 0,
-    isFavorite: false,
-    ingredients: [],
-    ...overrides,
-  };
 }
 
 describe('askMyKitchenUi: resolveAnswerRecipe', () => {
@@ -100,25 +81,6 @@ describe('askMyKitchenUi: privacy request builders', () => {
     const body = buildInterpretRequest('What can I make with chicken and rice?');
     expect(body).toEqual({ question: 'What can I make with chicken and rice?' });
   });
-
-  it('buildAnswerRequest contains only compact evidence (no vault data)', () => {
-    const recipes = [r({ id: 'chicken-rice', title: 'Chicken Rice', ingredients: [ing('chicken'), ing('rice')] })];
-    const query: KitchenQuery = { includeIngredients: ['chicken', 'rice'] };
-    const results = searchKitchenRecipes(recipes, query);
-    const evidence = buildAnswerEvidence(results);
-    const body = buildAnswerRequest('question', query, evidence);
-
-    expect(body.question).toBe('question');
-    expect(body.query).toBe(query);
-    expect(body.results).toBe(evidence);
-    // No unrelated/vault keys leak.
-    expect(Object.keys(body)).toEqual(['question', 'query', 'results']);
-    for (const e of body.results as Array<Record<string, unknown>>) {
-      expect((e as Record<string, unknown>)['ingredients']).toBeUndefined();
-      expect((e as Record<string, unknown>)['rawMarkdown']).toBeUndefined();
-      expect((e as Record<string, unknown>)['notes']).toBeUndefined();
-    }
-  });
 });
 
 describe('askMyKitchenUi: response shape validation', () => {
@@ -146,37 +108,6 @@ describe('askMyKitchenUi: response shape validation', () => {
     expect(isInterpretResponse({ ok: true, query: { maxTotalMinutes: 30 } as unknown })).toBe(false);
     expect(isInterpretResponse(null)).toBe(false);
     expect(isInterpretResponse('nope')).toBe(false);
-  });
-
-  it('accepts a valid answer response', () => {
-    const payload = {
-      ok: true,
-      source: 'deterministic',
-      summary: 'I found 1 matching recipe in your vault.',
-      noMatches: false,
-      items: [{ recipeIdentity: 'a', explanation: 'contains "rice"' }],
-    };
-    expect(isAnswerResponse(payload)).toBe(true);
-  });
-
-  it('rejects malformed answer responses', () => {
-    expect(isAnswerResponse({ ok: false, error: 'x' })).toBe(false);
-    expect(isAnswerResponse({ ok: true, summary: '', noMatches: false, items: 'x' })).toBe(false);
-    expect(isAnswerResponse({ ok: true, summary: '', noMatches: false, items: [{ recipeIdentity: 5 }] })).toBe(false);
-    expect(isAnswerResponse({ ok: true, summary: '', noMatches: false, items: [{ recipeIdentity: 'a' }] })).toBe(false);
-    expect(isAnswerResponse(null)).toBe(false);
-  });
-
-  it('validates item title strictly (audit fix A)', () => {
-    const ok = (items: unknown[]) => ({ ok: true, source: 'deterministic', summary: 'x', noMatches: false, items });
-    // string title accepted
-    expect(isAnswerResponse(ok([{ recipeIdentity: 'a', explanation: 'e', title: 'Alpha' }]))).toBe(true);
-    // title absent accepted (UI falls back to identity)
-    expect(isAnswerResponse(ok([{ recipeIdentity: 'a', explanation: 'e' }]))).toBe(true);
-    // non-string title rejected (object/array/number must never reach React)
-    expect(isAnswerResponse(ok([{ recipeIdentity: 'a', explanation: 'e', title: { x: 1 } }]))).toBe(false);
-    expect(isAnswerResponse(ok([{ recipeIdentity: 'a', explanation: 'e', title: ['x'] }]))).toBe(false);
-    expect(isAnswerResponse(ok([{ recipeIdentity: 'a', explanation: 'e', title: 5 }]))).toBe(false);
   });
 });
 

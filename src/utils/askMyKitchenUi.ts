@@ -11,7 +11,6 @@
 import type { ObsidianRecipe } from '../types';
 import { recipeIdentity } from './recipeRelationships';
 import type { KitchenQuery } from './kitchenSearch';
-import type { KitchenAnswerItem } from './kitchenAnswer';
 import type { KitchenIntent } from './kitchenIntent';
 import type { KitchenCandidateEvidence } from './kitchenRanking';
 import type {
@@ -76,15 +75,6 @@ export function buildInterpretRequest(question: string): { question: string } {
   return { question };
 }
 
-/** Builds the /api/kitchen/answer request body: question + query + compact evidence. */
-export function buildAnswerRequest(
-  question: string,
-  query: KitchenQuery,
-  evidence: unknown
-): { question: string; query: KitchenQuery; results: unknown } {
-  return { question, query, results: evidence };
-}
-
 /**
  * Builds the /api/kitchen/rank request body: question + sanitized intent + the
  * COMPACT bounded candidate evidence. No raw recipe/vault data is sent; only the
@@ -129,39 +119,6 @@ export function isInterpretResponse(
     typeof (intent as Record<string, unknown>)['source'] === 'string' &&
     typeof (intent as Record<string, unknown>)['requiresClarification'] === 'boolean'
   );
-}
-
-/** Validates an untrusted /api/kitchen/answer response payload. */
-export function isAnswerResponse(
-  payload: unknown
-): payload is {
-  ok: true;
-  source: string;
-  summary: string;
-  noMatches: boolean;
-  items: KitchenAnswerItem[];
-} {
-  if (!payload || typeof payload !== 'object') return false;
-  const p = payload as Record<string, unknown>;
-  if (
-    p['ok'] !== true ||
-    typeof p['source'] !== 'string' ||
-    typeof p['summary'] !== 'string' ||
-    typeof p['noMatches'] !== 'boolean' ||
-    !Array.isArray(p['items'])
-  ) {
-    return false;
-  }
-  return (p['items'] as unknown[]).every((item) => {
-    if (!item || typeof item !== 'object') return false;
-    const rec = item as Record<string, unknown>;
-    if (typeof rec['recipeIdentity'] !== 'string') return false;
-    if (typeof rec['explanation'] !== 'string') return false;
-    // A title is okay to be absent (the UI falls back to the identity), but if
-    // present it MUST be a string so an object/array/number never reaches React.
-    if (rec['title'] !== undefined && typeof rec['title'] !== 'string') return false;
-    return true;
-  });
 }
 
 /** Fixed, non-technical message for a known HTTP status from Ask My Kitchen maps. */

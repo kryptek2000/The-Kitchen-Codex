@@ -655,6 +655,36 @@ describe('nutritionEstimator — provider abstraction parity (direct gemini remo
       mockGetGemini.mockReturnValue(null);
     }
   });
+
+  it('P8: non-finite nutrition values are coerced to 0; finite rounding unchanged', async () => {
+    // Literal JSON cannot carry Infinity/NaN (they serialize to null), so the
+    // realistic injection vector is the STRING forms below, which reach the SAME
+    // Number(value) -> Number.isFinite branch as a numeric Infinity/NaN.
+    modelAwareGemini(() => ({
+      text: JSON.stringify({
+        calories: 'Infinity',   // Number('Infinity') -> Infinity -> 0
+        protein: '-Infinity',   // Number('-Infinity') -> -Infinity -> 0
+        carbohydrates: 'NaN',   // Number('NaN') -> NaN -> 0
+        fat: 'abc',             // Number('abc') -> NaN -> 0
+        fiber: '500',           // valid numeric string -> 500 (finite preserved)
+        sodium: -50,            // negative finite -> clamped to 0
+        confidenceNote: 'non-finite check',
+      }),
+    }));
+    try {
+      const result = await estimateRecipeNutrition({ title: 'X', servings: 4, ingredients: INSUFFICIENT });
+      expect(result.source).toBe('ai_estimate');
+      expect(result.calories).toBe(0);
+      expect(result.protein).toBe(0);
+      expect(result.carbohydrates).toBe(0);
+      expect(result.fat).toBe(0);
+      expect(result.fiber).toBe(500);
+      expect(result.sodium).toBe(0);
+      expect(result.confidenceNote).toBe('non-finite check');
+    } finally {
+      mockGetGemini.mockReturnValue(null);
+    }
+  });
 });
 
 describe('normalizeRawIngredientLine (production tokenizer)', () => {
