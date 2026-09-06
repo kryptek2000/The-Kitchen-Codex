@@ -262,6 +262,114 @@ describe("Ask My Kitchen /api/kitchen/interpret", () => {
       vi.mocked(getGemini).mockReturnValue(null);
     }
   });
+
+  // --- v0.6.0 Phase 2C: provider-abstraction parity (direct gemini removed) ---
+  it("P1: interpret routes through the provider (primary model explicit, temp 0, MINIMAL thinking, structured schema)", async () => {
+    const seen: any[] = [];
+    modelAwareGemini((p) => {
+      seen.push(p);
+      return { text: JSON.stringify({ version: 1, intent: "meal_suggestion", source: "vault", constraints: {}, preferences: {}, requiresClarification: false }) };
+    });
+    try {
+      const res = await interpret({ question: "What should I make tonight?" });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.source).toBe("ai");
+      // primary model issued FIRST and explicitly (no silent role-model default).
+      expect(seen[0].model).toBe(MODEL_CONFIG.kitchenPrimary);
+      expect(seen[0].config.temperature).toBe(0);
+      expect(seen[0].config.thinkingConfig).toEqual({ thinkingLevel: "MINIMAL" });
+      expect(seen[0].config.responseMimeType).toBe("application/json");
+      // Structured schema preserved: enums + nested object fields.
+      expect(seen[0].config.responseSchema.type).toBe("OBJECT");
+      expect(seen[0].config.responseSchema.properties.intent.enum).toContain("meal_suggestion");
+      expect(seen[0].config.responseSchema.properties.source.enum).toContain("vault_then_web");
+      expect(seen[0].config.responseSchema.properties.constraints.properties.maxTotalMinutes.type).toBe("NUMBER");
+      // Only the primary model was needed; fallback not called.
+      expect(seen.length).toBe(1);
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  it("P2: provider primary throws -> explicit fallback model attempted (order preserved)", async () => {
+    const seenModels: string[] = [];
+    modelAwareGemini((p) => {
+      seenModels.push(p.model);
+      if (p.model === MODEL_CONFIG.kitchenPrimary) throw new Error("primary down");
+      return { text: JSON.stringify({ version: 1, intent: "find_recipes", source: "vault", constraints: { includeIngredients: ["chicken"] }, preferences: {}, requiresClarification: false }) };
+    });
+    try {
+      const res = await interpret({ question: "chicken recipes" });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.source).toBe("ai");
+      expect(body.intent.constraints.includeIngredients).toEqual(["chicken"]);
+      expect(seenModels).toEqual([MODEL_CONFIG.kitchenPrimary, MODEL_CONFIG.kitchenFallback]);
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  it("P3: provider yields invalid structured output -> deterministic fallback", async () => {
+    modelAwareGemini(() => ({ text: "{ not valid json" }));
+    try {
+      const res = await interpret({ question: "under 30 minutes" });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.source).toBe("deterministic");
+      expect(body.intent.constraints.maxTotalMinutes).toBe(30);
+      expect(body.aiAttempted).toBe(true);
+      expect(body.aiFailed).toBe(true);
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  it("P4: provider unavailable (no key) -> deterministic fallback with no AI attempt", async () => {
+    vi.mocked(getGemini).mockReturnValue(null);
+    const res = await interpret({ question: "under 30 minutes" });
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.source).toBe("deterministic");
+    expect(body.intent.constraints.maxTotalMinutes).toBe(30);
+    expect(body.aiAttempted).toBe(false);
+    expect(body.aiFailed).toBe(false);
+  });
+
+  it("P5: sanitizer still strips/trust-bounds local identity fields through the provider path", async () => {
+    modelAwareGemini((p) => {
+      if (p.model === MODEL_CONFIG.kitchenPrimary) throw new Error("primary down");
+      return { text: JSON.stringify({ version: 1, intent: "similar_recipe", source: "vault", constraints: { similarToRecipeId: "sneaky", includeIngredients: ["rice"] }, targetRecipeId: "t", recipeIds: ["a"], references: { currentRecipe: true }, requiresClarification: false }) };
+    });
+    try {
+      const res = await interpret({ question: "similar to this" });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.intent.constraints.similarToRecipeId).toBeUndefined();
+      expect((body.intent as Record<string, unknown>)["targetRecipeId"]).toBeUndefined();
+      expect((body.intent as Record<string, unknown>)["recipeIds"]).toBeUndefined();
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  it("P6: both provider models fail -> deterministic fallback (no 503 for a parseable question)", async () => {
+    modelAwareGemini(() => {
+      throw new Error("all models down");
+    });
+    try {
+      const res = await interpret({ question: "Find something similar to this." });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.source).toBe("deterministic");
+      expect(body.intent.intent).toBe("similar_recipe");
+      expect(body.aiAttempted).toBe(true);
+      expect(body.aiFailed).toBe(true);
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
 });
 
 describe("kitchenInterpretRateLimiter", () => {
