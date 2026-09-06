@@ -210,6 +210,125 @@ describe("Ask My Kitchen /api/kitchen/rank", () => {
       vi.mocked(getGemini).mockReturnValue(null);
     }
   });
+
+  // --- v0.6.0 Phase 2D: provider-abstraction parity (direct gemini removed) ---
+  it("P1: rank routes through the provider (primary model explicit, temp 0, MINIMAL thinking, structured schema)", async () => {
+    const seen: any[] = [];
+    modelAwareGemini((p) => {
+      seen.push(p);
+      return { text: JSON.stringify({ ranked: [{ recipeId: "b", score: 0.9, reason: "quick" }] }) };
+    });
+    try {
+      const res = await rank({ question: "q", intent: validIntent, candidates: validCandidates });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.source).toBe("ai");
+      // Primary model issued FIRST and explicitly (no silent role-model default).
+      expect(seen[0].model).toBe(MODEL_CONFIG.kitchenPrimary);
+      expect(seen[0].config.temperature).toBe(0);
+      expect(seen[0].config.thinkingConfig).toEqual({ thinkingLevel: "MINIMAL" });
+      expect(seen[0].config.responseMimeType).toBe("application/json");
+      // Structured schema preserved: ranked array, item shape, required fields.
+      expect(seen[0].config.responseSchema.type).toBe("OBJECT");
+      expect(seen[0].config.responseSchema.required).toEqual(["ranked"]);
+      const rankedItem = seen[0].config.responseSchema.properties.ranked.items;
+      expect(rankedItem.type).toBe("OBJECT");
+      expect(rankedItem.required).toEqual(["recipeId"]);
+      expect(rankedItem.properties.recipeId.type).toBe("STRING");
+      expect(rankedItem.properties.score.type).toBe("NUMBER");
+      expect(rankedItem.properties.reason.type).toBe("STRING");
+      // Only the primary model was needed; fallback not called.
+      expect(seen.length).toBe(1);
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  it("P2: provider primary throws -> explicit fallback model attempted (order preserved)", async () => {
+    const seenModels: string[] = [];
+    modelAwareGemini((p) => {
+      seenModels.push(p.model);
+      if (p.model === MODEL_CONFIG.kitchenPrimary) throw new Error("primary down");
+      return { text: JSON.stringify({ ranked: [{ recipeId: "b", score: 0.9 }, { recipeId: "a", score: 0.4 }] }) };
+    });
+    try {
+      const res = await rank({ question: "q", intent: validIntent, candidates: validCandidates });
+      const body = await res.json();
+      expect(body.ok).toBe(true);
+      expect(body.source).toBe("ai");
+      expect(body.ranked.map((x: { recipeId: string }) => x.recipeId)).toEqual(["b", "a"]);
+      expect(seenModels).toEqual([MODEL_CONFIG.kitchenPrimary, MODEL_CONFIG.kitchenFallback]);
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  it("P3: provider yields invalid structured output -> deterministic fallback (ok:false)", async () => {
+    modelAwareGemini(() => ({ text: "{ not valid json" }));
+    try {
+      const res = await rank({ question: "q", intent: validIntent, candidates: validCandidates });
+      const body = await res.json();
+      expect(res.status).toBe(200);
+      expect(body.ok).toBe(false);
+      expect(body.source).toBe("deterministic");
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  it("P4: provider unavailable (no key) -> deterministic fallback with no AI attempt", async () => {
+    const seen: any[] = [];
+    modelAwareGemini((p) => {
+      seen.push(p);
+      return { text: JSON.stringify({ ranked: [] }) };
+    });
+    try {
+      vi.mocked(getGemini).mockReturnValue(null);
+      const res = await rank({ question: "q", intent: validIntent, candidates: validCandidates });
+      const body = await res.json();
+      expect(res.status).toBe(200);
+      expect(body.ok).toBe(false);
+      expect(body.source).toBe("deterministic");
+      expect(seen.length).toBe(0);
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  it("P5: duplicate model-produced ids are deduped (no duplicate trusted recipes)", async () => {
+    modelAwareGemini(() => ({
+      text: JSON.stringify({ ranked: [{ recipeId: "a", score: 0.9 }, { recipeId: "a", score: 0.8 }, { recipeId: "b", score: 0.7 }] }),
+    }));
+    try {
+      const res = await rank({ question: "q", intent: validIntent, candidates: validCandidates });
+      const body = await res.json();
+      expect(body.ok).toBe(true);
+      expect(body.source).toBe("ai");
+      const ids = body.ranked.map((x: { recipeId: string }) => x.recipeId);
+      expect(ids).toEqual(["a", "b"]);
+      expect(new Set(ids).size).toBe(ids.length);
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  it("P6: both provider models fail -> deterministic fallback (exact order preserved)", async () => {
+    const seenModels: string[] = [];
+    modelAwareGemini((p) => {
+      seenModels.push(p.model);
+      throw new Error("all rank models down");
+    });
+    try {
+      const res = await rank({ question: "q", intent: validIntent, candidates: validCandidates });
+      const body = await res.json();
+      expect(res.status).toBe(200);
+      expect(body.ok).toBe(false);
+      expect(body.source).toBe("deterministic");
+      expect(seenModels).toEqual([MODEL_CONFIG.kitchenPrimary, MODEL_CONFIG.kitchenFallback]);
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
 });
 
 describe("kitchenRankRateLimiter", () => {

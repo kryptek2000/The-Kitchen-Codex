@@ -4,17 +4,18 @@
  * Stage B: an OPTIONAL AI reasoning layer over the CLIENT-supplied compact
  * candidate evidence. The server receives ONLY the bounded candidate evidence
  * (never the vault, raw Markdown, instructions, notes, frontmatter, or file
- * paths), ranks it with Gemini, and returns a sanitized ranked id list.
+ * paths), ranks it via the AI provider abstraction, and returns a sanitized
+ * ranked id list.
  *
- * FAILURE CONTRACT: ranking is an advisory enhancement. If Gemini is
+ * FAILURE CONTRACT: ranking is an advisory enhancement. If the AI provider is
  * unconfigured, unavailable, throws, or produces malformed/all-invalid output,
  * this returns `null` so the client falls back to deterministic ranking. A
  * ranking failure never converts an otherwise valid local Ask My Kitchen query
  * into a total failure.
  */
-import { Type, ThinkingLevel } from "@google/genai";
 import dotenv from "dotenv";
-import { getGemini } from "./geminiClient.js";
+import { getDefaultAiProvider } from "./ai/provider.js";
+import type { AiJsonSchema } from "./ai/types.js";
 import { MODEL_CONFIG } from "./modelConfig.js";
 import { logModelAttempt } from "./providerDiagnostics.js";
 import { sanitizeKitchenIntent, type KitchenIntent } from "../src/utils/kitchenIntent.js";
@@ -30,18 +31,18 @@ dotenv.config();
 /** Kitchen ranking model attempt chain (primary -> fallback). */
 const RANK_MODELS = [MODEL_CONFIG.kitchenPrimary, MODEL_CONFIG.kitchenFallback];
 
-function buildResponseSchema() {
+function buildSchema(): AiJsonSchema {
   return {
-    type: Type.OBJECT,
+    type: "object",
     properties: {
       ranked: {
-        type: Type.ARRAY,
+        type: "array",
         items: {
-          type: Type.OBJECT,
+          type: "object",
           properties: {
-            recipeId: { type: Type.STRING },
-            score: { type: Type.NUMBER },
-            reason: { type: Type.STRING },
+            recipeId: { type: "string" },
+            score: { type: "number" },
+            reason: { type: "string" },
           },
           required: ["recipeId"],
         },
@@ -51,31 +52,31 @@ function buildResponseSchema() {
   };
 }
 
-/** AI structured-output adapter: compact evidence -> raw unknown (sanitized later). */
+/**
+ * AI structured-output adapter: compact evidence -> raw unknown (sanitized
+ * later). Routes through the provider abstraction (`getDefaultAiProvider()
+ * .generateStructured`) with the same explicit primary -> fallback model chain,
+ * same temperature (0), and the same MINIMAL thinking config. A model that
+ * throws or returns empty/unparseable output is logged (redacted) and skipped;
+ * the first model that produces a result wins. If every model fails it throws so
+ * the caller can return null (deterministic ranking takes over).
+ */
 async function aiRankWithFallback(input: {
   question: string;
   intent: KitchenIntent;
   candidates: KitchenCandidateEvidence[];
   resultCount: number;
 }): Promise<unknown> {
+  const provider = getDefaultAiProvider();
+  const schema = buildSchema();
   let lastError: unknown = new Error("All Kitchen ranking models failed.");
   for (const model of RANK_MODELS) {
     try {
-      const gemini = getGemini();
-      if (!gemini) throw new Error("Gemini is not configured.");
-      const response = await gemini.models.generateContent({
+      return await provider.generateStructured(buildRankPrompt(input), schema, {
         model,
-        contents: buildRankPrompt(input),
-        config: {
-          temperature: 0,
-          thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
-          responseMimeType: "application/json",
-          responseSchema: buildResponseSchema(),
-        },
+        temperature: 0,
+        providerOptions: { thinkingConfig: { thinkingLevel: "MINIMAL" } },
       });
-      const responseText = response.text?.trim();
-      if (!responseText) throw new Error("Empty response returned from AI model.");
-      return JSON.parse(responseText);
     } catch (err) {
       logModelAttempt("rank", model, err);
       lastError = err;
@@ -85,7 +86,7 @@ async function aiRankWithFallback(input: {
 }
 
 /**
- * Ranks the supplied candidate evidence with Gemini when a key is configured.
+ * Ranks the supplied candidate evidence with the AI provider when available.
  * The AI may ONLY rank the supplied candidate ids; its output is always wrapped
  * by `sanitizeAiRankedCandidates` against that id allowlist. Returns `null` on
  * any failure/unavailability so the client can use its deterministic fallback.
@@ -96,8 +97,8 @@ export async function rankKitchenCandidatesOnServer(input: {
   candidates: KitchenCandidateEvidence[];
   resultCount: number;
 }): Promise<RankedKitchenCandidate[] | null> {
-  const gemini = getGemini();
-  if (!gemini) return null;
+  const provider = getDefaultAiProvider();
+  if (!provider.isAvailable()) return null;
 
   try {
     const raw = await aiRankWithFallback(input);
