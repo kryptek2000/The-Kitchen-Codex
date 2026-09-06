@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, vi, beforeEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { getGemini } from "../../server/geminiClient.js";
 import {
   GeminiProvider,
@@ -47,9 +47,9 @@ describe("AiProvider foundation", () => {
     expect(getGemini()).toBeNull();
     expect(provider.isAvailable()).toBe(false);
     expect(provider.testConnection()).resolves.toBe(false);
-    expect(provider.generate("hi")).rejects.toThrow();
+    expect(provider.generate("hi", { model: "m" })).rejects.toThrow();
     expect(
-      provider.generateStructured("hi", { type: "object", properties: {} })
+      provider.generateStructured("hi", { type: "object", properties: {} }, { model: "m" })
     ).rejects.toThrow();
   });
 
@@ -120,7 +120,11 @@ describe("AiProvider foundation", () => {
       },
     });
     const provider = new GeminiProvider();
-    await provider.generateStructured("search", { type: "object", properties: {} }, { webSearch: true });
+    await provider.generateStructured(
+      "search",
+      { type: "object", properties: {} },
+      { model: "model-ws", webSearch: true }
+    );
     expect(seen.config.tools).toEqual([{ googleSearch: {} }]);
   });
 
@@ -133,7 +137,7 @@ describe("AiProvider foundation", () => {
       },
     });
     const provider = new GeminiProvider();
-    await provider.generateStructured("x", { type: "object", properties: {} });
+    await provider.generateStructured("x", { type: "object", properties: {} }, { model: "model-xs" });
     expect(seen.config.tools).toBeUndefined();
   });
 
@@ -149,10 +153,216 @@ describe("AiProvider foundation", () => {
     await provider.generateStructured(
       "x",
       { type: "object", properties: { tags: { type: "array", items: { type: "string" } } } },
-      {}
+      { model: "model-ar" }
     );
     const tags = seen.config.responseSchema.properties.tags;
     expect(tags.type).toBe("ARRAY");
     expect(tags.items).toEqual({ type: "STRING" });
+  });
+
+  describe("AiJsonSchema description (Gate A)", () => {
+    it("maps a string description to the Gemini schema description", async () => {
+      let seen: any;
+      mockGemini({
+        generateContent: async (params: any) => {
+          seen = params;
+          return { text: "{}" };
+        },
+      });
+      const provider = new GeminiProvider();
+      await provider.generateStructured(
+        "x",
+        {
+          type: "object",
+          properties: { value: { type: "string", description: "A normalized time string" } },
+        },
+        { model: "m" }
+      );
+      expect(seen.config.responseSchema.properties.value).toEqual({
+        type: "STRING",
+        description: "A normalized time string",
+      });
+    });
+
+    it("preserves nested descriptions recursively", async () => {
+      let seen: any;
+      mockGemini({
+        generateContent: async (params: any) => {
+          seen = params;
+          return { text: "{}" };
+        },
+      });
+      const provider = new GeminiProvider();
+      await provider.generateStructured(
+        "x",
+        {
+          type: "object",
+          properties: {
+            meta: {
+              type: "object",
+              description: "nested object",
+              properties: { note: { type: "string", description: "inner note" } },
+            },
+          },
+        },
+        { model: "m" }
+      );
+      const meta = seen.config.responseSchema.properties.meta;
+      expect(meta.description).toBe("nested object");
+      expect(meta.properties.note).toEqual({ type: "STRING", description: "inner note" });
+    });
+
+    it("does not mutate the caller's schema", async () => {
+      let seen: any;
+      mockGemini({
+        generateContent: async (params: any) => {
+          seen = params;
+          return { text: "{}" };
+        },
+      });
+      const schema = Object.freeze({
+        type: "object",
+        properties: Object.freeze({ value: { type: "string", description: "d" } }),
+      });
+      const provider = new GeminiProvider();
+      await provider.generateStructured("x", schema as any, { model: "m" });
+      // Input unchanged; the mapped node is a separate object.
+      expect(seen.config.responseSchema).not.toBe(schema);
+      expect((schema as any).properties.value).toEqual({ type: "string", description: "d" });
+    });
+
+    it("maps a string enum with description", async () => {
+      let seen: any;
+      mockGemini({
+        generateContent: async (params: any) => {
+          seen = params;
+          return { text: "{}" };
+        },
+      });
+      const provider = new GeminiProvider();
+      await provider.generateStructured(
+        "x",
+        {
+          type: "object",
+          properties: { confidence: { type: "string", enum: ["high", "low"], description: "level" } },
+        },
+        { model: "m" }
+      );
+      expect(seen.config.responseSchema.properties.confidence).toEqual({
+        type: "STRING",
+        enum: ["high", "low"],
+        description: "level",
+      });
+    });
+  });
+
+  describe("provider-specific options (Gate B)", () => {
+    it("maps a supported Gemini thinking level", async () => {
+      let seen: any;
+      mockGemini({
+        generateContent: async (params: any) => {
+          seen = params;
+          return { text: "ok" };
+        },
+      });
+      const provider = new GeminiProvider();
+      await provider.generate("x", {
+        model: "m",
+        providerOptions: { thinkingConfig: { thinkingLevel: "MINIMAL" } },
+      });
+      expect(seen.config.thinkingConfig).toBeDefined();
+      expect(seen.config.thinkingConfig.thinkingLevel).toBe("MINIMAL");
+    });
+
+    it("no provider options => no thinkingConfig", async () => {
+      let seen: any;
+      mockGemini({
+        generateContent: async (params: any) => {
+          seen = params;
+          return { text: "{}" };
+        },
+      });
+      const provider = new GeminiProvider();
+      await provider.generateStructured("x", { type: "object", properties: {} }, { model: "m" });
+      expect(seen.config.thinkingConfig).toBeUndefined();
+    });
+
+    it("does not blindly spread unknown provider options", async () => {
+      let seen: any;
+      mockGemini({
+        generateContent: async (params: any) => {
+          seen = params;
+          return { text: "{}" };
+        },
+      });
+      const provider = new GeminiProvider();
+      await provider.generateStructured("x", { type: "object", properties: {} }, {
+        model: "m",
+        providerOptions: {
+          thinkingConfig: { thinkingLevel: "MINIMAL" },
+          temperature: 99,
+          responseMimeType: "text/plain",
+          systemInstruction: "evil",
+          apiKey: "secret",
+        },
+      });
+      // Only the allowlisted thinking key survives; nothing else is spread in.
+      expect(seen.config.responseMimeType).toBe("application/json");
+      expect(seen.config.systemInstruction).toBeUndefined();
+      expect(seen.config.temperature).toBeUndefined();
+      expect(seen.config.thinkingConfig.thinkingLevel).toBe("MINIMAL");
+      expect(JSON.stringify(seen)).not.toContain("secret");
+    });
+
+    it("webSearch behavior remains independent of provider options", async () => {
+      let seen: any;
+      mockGemini({
+        generateContent: async (params: any) => {
+          seen = params;
+          return { text: "{}" };
+        },
+      });
+      const provider = new GeminiProvider();
+      await provider.generateStructured(
+        "x",
+        { type: "object", properties: {} },
+        { model: "m", webSearch: true, providerOptions: { thinkingConfig: { thinkingLevel: "LOW" } } }
+      );
+      expect(seen.config.tools).toEqual([{ googleSearch: {} }]);
+      expect(seen.config.thinkingConfig.thinkingLevel).toBe("LOW");
+    });
+  });
+
+  describe("model routing safety (Gate C)", () => {
+    it("uses the caller-provided model with no silent default fallback", async () => {
+      let seen: any;
+      mockGemini({
+        generateContent: async (params: any) => {
+          seen = params;
+          return { text: "{}" };
+        },
+      });
+      const provider = new GeminiProvider();
+      // The provider no longer carries a `defaultModel` routed to nutritionPrimary.
+      expect((provider as any).defaultModel).toBeUndefined();
+      await provider.generateStructured(
+        "x",
+        { type: "object", properties: {} },
+        { model: "role-model-abc" }
+      );
+      expect(seen.model).toBe("role-model-abc");
+      // No reference to the nutrition role model enters a call that did not ask for it.
+      expect(JSON.stringify(seen)).not.toContain("nutritionPrimary");
+    });
+  });
+
+  it("generateStructured throws safely on invalid provider JSON", async () => {
+    mockGemini({
+      generateContent: async () => ({ text: "{ not json" }),
+    });
+    const provider = new GeminiProvider();
+    await expect(
+      provider.generateStructured("x", { type: "object", properties: {} }, { model: "m" })
+    ).rejects.toThrow();
   });
 });

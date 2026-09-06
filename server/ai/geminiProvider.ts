@@ -9,9 +9,8 @@
  * any model ID, thinking level, or the grounding-only URL contract.
  */
 
-import { Type } from "@google/genai";
+import { ThinkingLevel, Type } from "@google/genai";
 import { getGemini } from "../geminiClient.js";
-import { MODEL_CONFIG } from "../modelConfig.js";
 import type {
   AiCapabilities,
   AiGenerateOptions,
@@ -22,17 +21,49 @@ import type {
 
 const UNAVAILABLE_MSG = "AI provider is not available.";
 
+/** Safe, allowlisted Gemini provider-option keys (never a blind pass-through). */
+const GEMINI_THINKING_LEVELS: Record<string, ThinkingLevel> = {
+  MINIMAL: ThinkingLevel.MINIMAL,
+  LOW: ThinkingLevel.LOW,
+  MEDIUM: ThinkingLevel.MEDIUM,
+  HIGH: ThinkingLevel.HIGH,
+};
+
+/** Extracts ONLY the allowlisted Gemini provider options into a request fragment. */
+function geminiProviderOptions(options: { providerOptions?: Record<string, unknown> }): Record<string, unknown> {
+  const po = options.providerOptions;
+  if (!po || typeof po !== "object" || Array.isArray(po)) return {};
+  const out: Record<string, unknown> = {};
+  const thinkingConfig = (po as Record<string, unknown>)["thinkingConfig"];
+  if (thinkingConfig && typeof thinkingConfig === "object" && !Array.isArray(thinkingConfig)) {
+    const level = (thinkingConfig as Record<string, unknown>)["thinkingLevel"];
+    if (typeof level === "string" && GEMINI_THINKING_LEVELS[level]) {
+      out["thinkingConfig"] = { thinkingLevel: GEMINI_THINKING_LEVELS[level] };
+    }
+  }
+  return out;
+}
+
 /** Maps a provider-agnostic JSON-Schema-lite node onto a Gemini schema node. */
 function toGeminiSchema(schema: AiJsonSchema): Record<string, unknown> {
+  const withDescription = (node: Record<string, unknown>): Record<string, unknown> =>
+    typeof schema.description === "string" && schema.description.trim()
+      ? { ...node, description: schema.description.trim() }
+      : node;
+
   switch (schema.type) {
-    case "string":
-      return schema.enum ? { type: Type.STRING, enum: schema.enum } : { type: Type.STRING };
+    case "string": {
+      const node = schema.enum
+        ? { type: Type.STRING, enum: schema.enum }
+        : { type: Type.STRING };
+      return withDescription(node);
+    }
     case "boolean":
-      return { type: Type.BOOLEAN };
+      return withDescription({ type: Type.BOOLEAN });
     case "number":
-      return { type: Type.NUMBER };
+      return withDescription({ type: Type.NUMBER });
     case "array":
-      return { type: Type.ARRAY, items: toGeminiSchema(schema.items) };
+      return withDescription({ type: Type.ARRAY, items: toGeminiSchema(schema.items) });
     case "object": {
       const properties: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(schema.properties)) {
@@ -42,7 +73,7 @@ function toGeminiSchema(schema: AiJsonSchema): Record<string, unknown> {
       if (Array.isArray(schema.required) && schema.required.length) {
         node["required"] = schema.required;
       }
-      return node;
+      return withDescription(node);
     }
     default:
       return { type: Type.STRING };
@@ -60,13 +91,6 @@ export class GeminiProvider implements AiProvider {
     webSearch: true,
   };
 
-  /** Provider-wide default used when a caller does not pick a role model. */
-  readonly defaultModel: string;
-
-  constructor(options: { defaultModel?: string } = {}) {
-    this.defaultModel = options.defaultModel ?? MODEL_CONFIG.nutritionPrimary;
-  }
-
   isAvailable(): boolean {
     return getGemini() !== null;
   }
@@ -81,13 +105,14 @@ export class GeminiProvider implements AiProvider {
     return gemini;
   }
 
-  async generate(prompt: string, options: AiGenerateOptions = {}): Promise<string> {
+  async generate(prompt: string, options: AiGenerateOptions): Promise<string> {
     const gemini = this.client();
     const response = await gemini.models.generateContent({
-      model: options.model ?? this.defaultModel,
+      model: options.model,
       contents: prompt,
       config: {
         ...(typeof options.temperature === "number" ? { temperature: options.temperature } : {}),
+        ...geminiProviderOptions(options),
       },
     });
     const text = response.text?.trim();
@@ -98,17 +123,18 @@ export class GeminiProvider implements AiProvider {
   async generateStructured<T = unknown>(
     prompt: string,
     schema: AiJsonSchema,
-    options: AiStructuredOptions = {}
+    options: AiStructuredOptions
   ): Promise<T> {
     const gemini = this.client();
     const response = await gemini.models.generateContent({
-      model: options.model ?? this.defaultModel,
+      model: options.model,
       contents: prompt,
       config: {
         ...(typeof options.temperature === "number" ? { temperature: options.temperature } : {}),
         responseMimeType: "application/json",
         responseSchema: toGeminiSchema(schema),
         ...(options.webSearch === true ? { tools: [{ googleSearch: {} }] } : {}),
+        ...geminiProviderOptions(options),
       },
     });
     const text = response.text?.trim();

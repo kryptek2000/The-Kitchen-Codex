@@ -25,23 +25,36 @@ export interface AiCapabilities {
   webSearch: boolean;
 }
 
+/** Optional provider-neutral hint shared by every schema node. */
+export interface AiSchemaBase {
+  /** Human-readable description carried through to the provider schema. */
+  description?: string;
+}
+
 /**
  * A provider-agnostic, JSON-Schema-lite structure that maps onto a provider's
  * structured-output schema. Guarded recursion keeps it bounded and avoids
  * serializing arbitrary provider schema objects.
  */
 export type AiJsonSchema =
-  | { type: "string"; enum?: string[] }
-  | { type: "number" }
-  | { type: "boolean" }
-  | { type: "array"; items: AiJsonSchema }
-  | { type: "object"; properties: Record<string, AiJsonSchema>; required?: string[] };
+  | (AiSchemaBase & { type: "string"; enum?: string[] })
+  | (AiSchemaBase & { type: "number" })
+  | (AiSchemaBase & { type: "boolean" })
+  | (AiSchemaBase & { type: "array"; items: AiJsonSchema })
+  | (AiSchemaBase & { type: "object"; properties: Record<string, AiJsonSchema>; required?: string[] });
 
 /** Options for a plain text generation call. */
 export interface AiGenerateOptions {
-  /** Provider model id (role-specific selection belongs to the caller). */
-  model?: string;
+  /** Provider model id. REQUIRED so an omitted model never silently routes to an
+   * unrelated semantic role (e.g. nutrition). Role-model selection is explicit. */
+  model: string;
   temperature?: number;
+  /**
+   * Provider-specific options, allowlisted by each adapter. Adapters must only
+   * read a FIXED set of safe keys and must NEVER blindly spread this object into
+   * a request config. No secret-bearing fields are allowed.
+   */
+  providerOptions?: Record<string, unknown>;
 }
 
 /** Options for a structured generation call. */
