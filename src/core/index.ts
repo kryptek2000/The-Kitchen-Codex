@@ -55,6 +55,9 @@ export * from '../utils/markdownParser';
 export * from '../utils/recipeRelationships';
 
 // Ask My Kitchen deterministic stack.
+// NOTE: `askMyKitchenUi` was reclassified as APPLICATION / UI-WIRING in Phase 4C1
+// and moved to `src/application/askMyKitchenUi`; it is intentionally NOT exported
+// from the deep-core barrel.
 export * from '../utils/kitchenSearch';
 export * from '../utils/kitchenIntent';
 export * from '../utils/kitchenIntentPolicy';
@@ -62,7 +65,6 @@ export * from '../utils/kitchenQueryInterpreter';
 export * from '../utils/kitchenAnswer';
 export * from '../utils/kitchenRanking';
 export * from '../utils/kitchenDiscovery';
-export * from '../utils/askMyKitchenUi';
 
 // Vault Intelligence deterministic logic (health assessment / metadata merge).
 export * from '../utils/vaultIntelligence';

@@ -74,6 +74,7 @@ const FORBIDDEN_PATH_SEGMENTS = [
   'components',
   '/server/',
   '/hooks/',
+  '/application/', // core must never depend on the application layer
   'main.tsx',
   'App.tsx',
 ];
@@ -260,12 +261,27 @@ describe('shared core purity / conformance boundary', () => {
         false
       );
       expect(rel.includes('/server/')).toBe(false);
+      // Core must never depend on the application layer (see Phase 4C1).
+      expect(rel.includes('/application/')).toBe(false);
+      // askMyKitchenUi was re-classified as APPLICATION/UI-WIRING in Phase 4C1.
+      expect(rel.includes('askMyKitchenUi')).toBe(false);
       expect(
         ['vaultFileSystem', 'vaultAssets', 'imageHelper', 'audioAlert', 'cardExportColors'].some(
           (b) => rel.includes(b)
         )
       ).toBe(false);
     }
+  });
+
+  it('enforces the core -> application dependency prohibition', () => {
+    const coreRels = Array.from(collectGraph(CORE_ENTRY)).map((f) =>
+      f.slice(ROOT.length + 1).replace(/\\/g, '/')
+    );
+    // Core must never reach the application layer.
+    expect(coreRels.some((r) => r.startsWith('src/application'))).toBe(false);
+    // Positive control: core remains rooted in the platform-neutral domain.
+    expect(coreRels.some((r) => r.startsWith('src/schema/'))).toBe(true);
+    expect(coreRels.some((r) => r.startsWith('src/core/deterministicNutrition.ts'))).toBe(true);
   });
 
   it('reachable core graph is non-empty and rooted at the candidate modules', () => {
@@ -277,6 +293,8 @@ describe('shared core purity / conformance boundary', () => {
     // Phase 4B: the moved pure modules are now reachable from the core barrel.
     expect(graph.has(resolve(ROOT, 'src/core/deterministicNutrition.ts'))).toBe(true);
     expect(graph.has(resolve(ROOT, 'src/core/ai/types.ts'))).toBe(true);
+    // Phase 4C1: the re-classified UI-wiring helper is NOT deep core.
+    expect(graph.has(resolve(ROOT, 'src/utils/askMyKitchenUi.ts'))).toBe(false);
   });
 
   it('follows @/ alias imports to their repo-root targets (positive control)', () => {
