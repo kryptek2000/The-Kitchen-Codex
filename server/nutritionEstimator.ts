@@ -1,7 +1,7 @@
-import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
 import dotenv from "dotenv";
+import { getDefaultAiProvider } from "./ai/provider.js";
+import type { AiJsonSchema, AiProvider } from "./ai/types.js";
 import { MODEL_CONFIG } from "./modelConfig.js";
-import { getGemini } from "./geminiClient.js";
 import { estimateDeterministicNutrition, type DeterministicNutritionResult } from "./deterministicNutrition.js";
 import {
   buildDeterministicCacheKey,
@@ -234,8 +234,40 @@ export function estimateAlgorithmicNutrition(
   };
 }
 
-async function callGeminiForNutrition(
-  gemini: GoogleGenAI,
+/**
+ * Provider-neutral structured schema for nutrition estimation. Mirrors the prior
+ * Gemini-native schema exactly, including every model-guidance description hint
+ * and the `required` constraints (calories/protein/carbohydrates/fat/fiber/sodium).
+ * `confidenceNote` remains optional, matching the previous schema.
+ */
+function buildSchema(): AiJsonSchema {
+  return {
+    type: "object",
+    properties: {
+      calories: { type: "number", description: "Estimated total calories for the entire recipe batch in kcal" },
+      protein: { type: "number", description: "Estimated total protein for the entire recipe batch in grams" },
+      carbohydrates: { type: "number", description: "Estimated total carbohydrates for the entire recipe batch in grams" },
+      fat: { type: "number", description: "Estimated total fat for the entire recipe batch in grams" },
+      fiber: { type: "number", description: "Estimated total dietary fiber for the entire recipe batch in grams" },
+      sodium: { type: "number", description: "Estimated total sodium for the entire recipe batch in milligrams" },
+      confidenceNote: { type: "string", description: "A short qualification message regarding the estimation" },
+    },
+    required: ["calories", "protein", "carbohydrates", "fat", "fiber", "sodium"],
+  };
+}
+
+/**
+ * AI structured-output adapter: recipe -> bounded nutrition result. Routes
+ * through the provider abstraction (`getDefaultAiProvider().generateStructured`)
+ * with the same explicit primary -> fallback model chain, same temperature
+ * (0.1), and the same MINIMAL thinking config. The provider's parsed JSON is
+ * ALWAYS re-bounded here (never trusted raw): every numeric field clamps negative
+ * values to 0, coerces non-numeric to 0, and rounds; the confidence note falls
+ * back to a neutral message when absent. Provenance (`ai_estimate`/`medium`) is
+ * application-assigned, never model-self-rated.
+ */
+async function aiEstimateNutrition(
+  provider: AiProvider,
   modelName: string,
   recipeTitle: string,
   servings: number,
@@ -256,63 +288,20 @@ Guidelines:
 4. Output strictly the requested JSON structure with integers/decimals rounded to 1 decimal place (calories as whole integer).
 5. Provide a brief, factual confidence note.`;
 
-  const response = await gemini.models.generateContent({
+  const parsed = await provider.generateStructured<{
+    calories?: number;
+    protein?: number;
+    carbohydrates?: number;
+    fat?: number;
+    fiber?: number;
+    sodium?: number;
+    confidenceNote?: string;
+  }>(prompt, buildSchema(), {
     model: modelName,
-    contents: prompt,
-    config: {
-      temperature: 0.1,
-      thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          calories: {
-            type: Type.NUMBER,
-            description: "Estimated total calories for the entire recipe batch in kcal",
-          },
-          protein: {
-            type: Type.NUMBER,
-            description: "Estimated total protein for the entire recipe batch in grams",
-          },
-          carbohydrates: {
-            type: Type.NUMBER,
-            description: "Estimated total carbohydrates for the entire recipe batch in grams",
-          },
-          fat: {
-            type: Type.NUMBER,
-            description: "Estimated total fat for the entire recipe batch in grams",
-          },
-          fiber: {
-            type: Type.NUMBER,
-            description: "Estimated total dietary fiber for the entire recipe batch in grams",
-          },
-          sodium: {
-            type: Type.NUMBER,
-            description: "Estimated total sodium for the entire recipe batch in milligrams",
-          },
-          confidenceNote: {
-            type: Type.STRING,
-            description: "A short qualification message regarding the estimation",
-          },
-        },
-        required: [
-          "calories",
-          "protein",
-          "carbohydrates",
-          "fat",
-          "fiber",
-          "sodium",
-        ],
-      },
-    },
+    temperature: 0.1,
+    providerOptions: { thinkingConfig: { thinkingLevel: "MINIMAL" } },
   });
 
-  const responseText = response.text?.trim();
-  if (!responseText) {
-    throw new Error("Empty response returned from AI model.");
-  }
-
-  const parsed = JSON.parse(responseText);
   const calories = Math.max(0, Math.round(Number(parsed.calories) || 0));
   const protein = Math.max(0, Math.round((Number(parsed.protein) || 0) * 10) / 10);
   const carbohydrates = Math.max(0, Math.round((Number(parsed.carbohydrates) || 0) * 10) / 10);
@@ -393,8 +382,6 @@ export async function estimateRecipeNutrition(
     return cached;
   }
 
-  const gemini = getGemini();
-
   // Attempt 0: deterministic curated estimation. This is the FIRST preference.
   // The engine computes whole-recipe totals and returns an explicit eligibility
   // flag; it is selected as the final estimate ONLY when coverage is sufficient
@@ -411,23 +398,25 @@ export async function estimateRecipeNutrition(
     return result;
   }
 
-  if (!gemini) {
-    console.info("[NutritionEstimator] No Gemini client configured. Using algorithmic nutrition estimation.");
+  const provider = getDefaultAiProvider();
+
+  if (!provider.isAvailable()) {
+    console.info("[NutritionEstimator] No AI provider configured. Using algorithmic nutrition estimation.");
     return estimateAlgorithmicNutrition(recipeTitle, servings, rawIngredientLines);
   }
 
   // Attempt 1: Primary Model (gemini-3.7-flash)
   try {
-    return await callGeminiForNutrition(gemini, PRIMARY_MODEL, recipeTitle, servings, cleanedIngredientLines);
+    return await aiEstimateNutrition(provider, PRIMARY_MODEL, recipeTitle, servings, cleanedIngredientLines);
   } catch (primaryErr: any) {
     console.warn(`[NutritionEstimator] Primary model (${PRIMARY_MODEL}) failed: ${primaryErr?.message || primaryErr}. Attempting fallback (${FALLBACK_MODEL})...`);
-    
+
     // Attempt 2: Fallback Model (gemini-3.1-flash-lite)
     try {
-      return await callGeminiForNutrition(gemini, FALLBACK_MODEL, recipeTitle, servings, cleanedIngredientLines);
+      return await aiEstimateNutrition(provider, FALLBACK_MODEL, recipeTitle, servings, cleanedIngredientLines);
     } catch (fallbackErr: any) {
       console.warn(`[NutritionEstimator] Fallback model (${FALLBACK_MODEL}) failed: ${fallbackErr?.message || fallbackErr}. Engaging algorithmic fallback...`);
-      
+
       // Attempt 3: Algorithmic Culinary Estimator
       return estimateAlgorithmicNutrition(recipeTitle, servings, rawIngredientLines);
     }

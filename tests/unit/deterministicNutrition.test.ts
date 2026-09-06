@@ -10,6 +10,7 @@ import {
   estimateAlgorithmicNutrition,
 } from '../../server/nutritionEstimator';
 import { getGemini } from '../../server/geminiClient';
+import { MODEL_CONFIG } from '../../server/modelConfig';
 
 vi.mock('../../server/geminiClient.js', () => ({ getGemini: vi.fn() }));
 const mockGetGemini = getGemini as unknown as ReturnType<typeof vi.fn>;
@@ -513,6 +514,146 @@ describe('deterministicNutrition: estimator fallback preservation', () => {
     const ai = await estimateRecipeNutrition({ title: 'X', servings: 4, ingredients });
     expect(ai.source).toBe('ai_estimate');
     expect(ai.calories).toBe(640);
+  });
+});
+
+describe('nutritionEstimator — provider abstraction parity (direct gemini removed)', () => {
+  const INSUFFICIENT = ['1 cup All-Purpose Flour', '1 cup mystery sauce'];
+
+  const modelAwareGemini = (handler: (params: { model: string; config?: any }) => { text?: string } | never) => {
+    const fakeGemini: any = {
+      models: { generateContent: vi.fn().mockImplementation(async (params: any) => handler(params)) },
+    };
+    mockGetGemini.mockReturnValue(fakeGemini);
+    return fakeGemini.models.generateContent;
+  };
+
+  afterEach(() => {
+    mockGetGemini.mockReturnValue(null);
+  });
+
+  it('P1: routes through the provider (primary explicit, temp 0.1, MINIMAL thinking, schema descriptions + required preserved)', async () => {
+    const seen: any[] = [];
+    modelAwareGemini((p) => {
+      seen.push(p);
+      return { text: JSON.stringify({ calories: 250, protein: 12, carbohydrates: 30, fat: 8, fiber: 4, sodium: 500, confidenceNote: 'from model' }) };
+    });
+    try {
+      const result = await estimateRecipeNutrition({ title: 'X', servings: 4, ingredients: INSUFFICIENT });
+      expect(result.source).toBe('ai_estimate');
+      expect(result.calories).toBe(250);
+      // Primary model issued FIRST and explicitly (no silent role-model default).
+      expect(seen[0].model).toBe(MODEL_CONFIG.nutritionPrimary);
+      expect(seen[0].config.temperature).toBe(0.1);
+      expect(seen[0].config.thinkingConfig).toEqual({ thinkingLevel: 'MINIMAL' });
+      expect(seen[0].config.responseMimeType).toBe('application/json');
+      const rs = seen[0].config.responseSchema;
+      expect(rs.type).toBe('OBJECT');
+      expect(rs.required).toEqual(['calories', 'protein', 'carbohydrates', 'fat', 'fiber', 'sodium']);
+      // Schema descriptions preserved.
+      expect(rs.properties.calories.description).toContain('entire recipe batch');
+      expect(rs.properties.sodium.description).toContain('milligrams');
+      expect(rs.properties.confidenceNote.description).toContain('qualification');
+      // Only the primary model was needed; fallback not called.
+      expect(seen.length).toBe(1);
+    } finally {
+      mockGetGemini.mockReturnValue(null);
+    }
+  });
+
+  it('P2: provider primary throws -> explicit fallback model attempted (order preserved)', async () => {
+    const seenModels: string[] = [];
+    modelAwareGemini((p) => {
+      seenModels.push(p.model);
+      if (p.model === MODEL_CONFIG.nutritionPrimary) throw new Error('primary down');
+      return { text: JSON.stringify({ calories: 640, protein: 20, carbohydrates: 12, fat: 55, fiber: 2, sodium: 800 }) };
+    });
+    try {
+      const result = await estimateRecipeNutrition({ title: 'X', servings: 4, ingredients: INSUFFICIENT });
+      expect(result.source).toBe('ai_estimate');
+      expect(result.calories).toBe(640);
+      expect(seenModels).toEqual([MODEL_CONFIG.nutritionPrimary, MODEL_CONFIG.nutritionFallback]);
+    } finally {
+      mockGetGemini.mockReturnValue(null);
+    }
+  });
+
+  it('P3: provider yields invalid structured output -> offline heuristic fallback', async () => {
+    modelAwareGemini(() => ({ text: '{ not valid json' }));
+    try {
+      const result = await estimateRecipeNutrition({ title: 'X', servings: 4, ingredients: INSUFFICIENT });
+      const algorithm = estimateAlgorithmicNutrition('X', 4, INSUFFICIENT);
+      expect(result.source).toBe('offline_heuristic');
+      expect(result).toEqual(algorithm);
+    } finally {
+      mockGetGemini.mockReturnValue(null);
+    }
+  });
+
+  it('P4: provider unavailable (no key) -> offline heuristic fallback with no AI attempt', async () => {
+    let aiCalls = 0;
+    const gc = modelAwareGemini(() => {
+      aiCalls++;
+      return { text: '{}' };
+    });
+    mockGetGemini.mockReturnValue(null);
+    const result = await estimateRecipeNutrition({ title: 'X', servings: 4, ingredients: INSUFFICIENT });
+    const algorithm = estimateAlgorithmicNutrition('X', 4, INSUFFICIENT);
+    expect(result.source).toBe('offline_heuristic');
+    expect(result).toEqual(algorithm);
+    expect(aiCalls).toBe(0);
+  });
+
+  it('P5: both provider models fail -> offline heuristic fallback', async () => {
+    const seenModels: string[] = [];
+    modelAwareGemini((p) => {
+      seenModels.push(p.model);
+      throw new Error('all nutrition models down');
+    });
+    try {
+      const result = await estimateRecipeNutrition({ title: 'X', servings: 4, ingredients: INSUFFICIENT });
+      expect(result.source).toBe('offline_heuristic');
+      expect(seenModels).toEqual([MODEL_CONFIG.nutritionPrimary, MODEL_CONFIG.nutritionFallback]);
+    } finally {
+      mockGetGemini.mockReturnValue(null);
+    }
+  });
+
+  it('P6: malformed/negative nutrition values are bounded exactly as before (never trusted raw)', async () => {
+    modelAwareGemini(() => ({
+      text: JSON.stringify({ calories: -500, protein: 'abc', carbohydrates: 12.567, fat: 3, fiber: null, sodium: null, confidenceNote: '' }),
+    }));
+    try {
+      const result = await estimateRecipeNutrition({ title: 'X', servings: 4, ingredients: INSUFFICIENT });
+      expect(result.source).toBe('ai_estimate');
+      expect(result.calories).toBe(0); // -500 clamped to 0
+      expect(result.protein).toBe(0); // 'abc' -> NaN -> 0
+      expect(result.carbohydrates).toBe(12.6); // 12.567 rounded to 1 decimal
+      expect(result.fat).toBe(3);
+      expect(result.fiber).toBe(0); // null -> 0
+      expect(result.sodium).toBe(0); // null -> 0
+      expect(result.confidenceNote).toContain('estimates for the entire recipe'); // empty -> default
+    } finally {
+      mockGetGemini.mockReturnValue(null);
+    }
+  });
+
+  it('P7: partial provider result (missing fields) is bounded to 0, provenance unchanged', async () => {
+    modelAwareGemini(() => ({ text: JSON.stringify({ calories: 200 }) }));
+    try {
+      const result = await estimateRecipeNutrition({ title: 'X', servings: 4, ingredients: INSUFFICIENT });
+      expect(result.source).toBe('ai_estimate');
+      expect(result.confidence).toBe('medium');
+      expect(result.calories).toBe(200);
+      expect(result.protein).toBe(0);
+      expect(result.carbohydrates).toBe(0);
+      expect(result.fat).toBe(0);
+      expect(result.fiber).toBe(0);
+      expect(result.sodium).toBe(0);
+      expect(result.confidenceNote).toContain('estimates for the entire recipe');
+    } finally {
+      mockGetGemini.mockReturnValue(null);
+    }
   });
 });
 
