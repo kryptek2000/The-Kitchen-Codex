@@ -105,13 +105,28 @@ in dev (Vite HMR). `frame-ancestors` is configurable via `CSP_FRAME_ANCESTORS`.
 
 ## Current state / open items
 
-- **v0.5.1 is the current release** ("The Kitchen Codex v0.5.1 — Kitchen AI
-  Reliability Hotfix"). `RELEASE_VERSION` in
+- **v0.6.0 is the current release** ("The Kitchen Codex v0.6.0 — AI Provider
+  Abstraction"). `RELEASE_VERSION` in
   `src/appVersion.ts` is the single runtime source of truth for BOTH the
   client (`src/version.ts`) and the server (`/api/health`). `package.json`/
   `README.md` reference the same release. To bump, run
   `bun x tsx scripts/bump_version.ts vX.Y.Z`.
-- **v0.5.1 landed a kitchen AI provider-resilience hotfix** (commit `6da612b`):
+- **v0.6.0 delivers a provider-neutral AI layer**: every live AI consumer
+  (kitchen interpret, rank, discover, metadata recovery, nutrition, Grab Recipe)
+  is migrated onto the `server/ai/*` provider abstraction; the Gemini SDK is
+  confined to infrastructure (`server/geminiClient.ts` + `server/ai/geminiProvider.ts`),
+  so there is NO application-level direct-Gemini consumer. Provider diagnostics
+  are redacted via the shared `logModelAttempt`/`extractProviderError` helper.
+  Nutrition AI values are hardened against non-finite numbers. The dead legacy
+  answer path (`server/kitchenAnswer.ts`, `POST /api/kitchen/answer`, its rate
+  limiter + tests, and the `buildAnswerRequest`/`isAnswerResponse` helpers) was
+  removed.
+- **Verified baseline**: 926/926 tests across 41 files; 84/84 security tests
+  across 8 files; typecheck and production build clean. Release notes:
+  `RELEASE_NOTES_v0.6.0.md`. Next architectural direction: a multi-surface
+  audit and the v0.7 AI product layer.
+- **v0.5.1 was the previous release** — a kitchen AI provider-resilience hotfix
+  (commit `6da612b`):
   dedicated Kitchen model aliases plus a primary -> fallback model chain for
   interpret/rank/discover, deterministic interpreter recovery after AI failure,
   grounding-only discovery fallback, and safe redacted server-side provider
@@ -256,11 +271,18 @@ own Markdown knowledge base.
   model, grounded candidate reasoning, explicit web discovery, strict source
   separation, and a trusted Grab Recipe handoff. [SHIPPED — see
   RELEASE_NOTES_v0.5.0.md]
-- **v0.6.0 and later** — resume other roadmap work: intelligent meal planning,
-  smart shopping/pantry, cooking history, Cooking Mode 2.0/voice, recipe
-  intelligence (OCR/PDF/image import), Recipe Card Studio 3.0/cookbook,
-  mobile/PWA. [FUTURE — reprioritized after the Ask My Kitchen intelligence
-  leap; none of these ideas are dropped]
+- **v0.6.0 — AI Provider Abstraction** — provider-neutral AI layer across all
+  live AI consumers, Gemini SDK isolated to infrastructure, redacted provider
+  diagnostics, nutrition non-finite hardening, and legacy answer-path cleanup.
+  [PREPARING FOR RELEASE — see RELEASE_NOTES_v0.6.0.md]
+- **v0.7 and later** — multi-surface architecture audit, then resume the longer
+  roadmap: intelligent meal planning, smart shopping/pantry, cooking history,
+  Cooking Mode 2.0/voice, recipe intelligence (OCR/PDF/image import), Recipe
+  Card Studio 3.0/cookbook, mobile/PWA; long-term target is one shared Kitchen
+  Codex core powering a standalone desktop shell, an Obsidian plugin shell, a
+  mobile/PWA companion, and optionally a later native wrapper.
+  [FUTURE — reprioritized after the v0.6.0 provider/runtime decoupling; none of
+  these ideas are dropped]
 - **v3.0** — the intelligent cooking platform. [LONG-TERM VISION]
 
 Detailed sections for v0.4.0 / v0.4.1 / v0.5.0 follow.
@@ -471,19 +493,22 @@ well — this is the core reason Ask My Kitchen exists:
 
 ### Immediate next steps
 
-v0.5.0 implementation, hardening, and release prep are complete. The remaining
-roadmap is future/optional and NOT required for v0.5.0:
+v0.6.0 provider/runtime decoupling and hardening are complete. The remaining
+roadmap is future/optional and NOT required for v0.6.0:
 
-1. **Design later phases** — intelligent meal planning, smart shopping/pantry,
-   cooking history, Cooking Mode 2.0/voice, recipe intelligence (OCR/PDF/image
-   import), Recipe Card Studio 3.0/cookbook, mobile/PWA.
-2. **Optional follow-up polish** (known non-blocking, from release hardening):
-   dedicated ranking/discovery model aliases; web URL dedupe normalization;
-   clear stale Grabber prefill; DOM/component tests for the handoff seam;
-   wire the discovery sourceTitle display; retire the legacy
-   `/api/kitchen/answer` utilities as a cleanup candidate; expand the
-   conservative deterministic interpretation cues.
-3. **Independent audit / release.**
+1. **Multi-surface architecture audit (v0.7 prep)** — plan how the provider
+   abstraction and a shared Kitchen Codex core back more than one surface:
+   a standalone desktop shell, an Obsidian plugin shell, a mobile/PWA companion,
+   and optionally a later native wrapper. Keep this future/roadmap only.
+2. **v0.7 AI product layer** — resume the longer roadmap: intelligent meal
+   planning, smart shopping/pantry, cooking history, Cooking Mode 2.0/voice,
+   recipe intelligence (OCR/PDF/image import), Recipe Card Studio 3.0/cookbook,
+   mobile/PWA.
+3. **Optional follow-up polish** (known non-blocking): web URL dedupe
+   normalization; clear stale Grabber prefill; DOM/component tests for the
+   handoff seam; wire the discovery sourceTitle display; expand the conservative
+   deterministic interpretation cues.
+4. **Independent audit / release.**
 
 ### Product rules
 

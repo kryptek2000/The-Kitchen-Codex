@@ -1,6 +1,6 @@
-# 🍳 The Kitchen Codex `v0.5.1`
+# 🍳 The Kitchen Codex `v0.6.0`
 
-[![Version](https://img.shields.io/badge/version-0.5.1-amber.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.6.0-amber.svg)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A markdown-native recipe manager, meal planner, culinary knowledge base, and interactive cooking companion built specifically for **Obsidian** vaults. Read, edit, sync, and cook directly from your Obsidian `.md` recipe collection with YAML frontmatter, Dataview tags, wikilinks (`[[Ingredient]]`, `[[Target|Alias]]`), AI nutrition estimation, dynamic portion scaling, multi-step cooking timers, and AI-powered web recipe scraping.
@@ -39,7 +39,7 @@ A markdown-native recipe manager, meal planner, culinary knowledge base, and int
 
 ### 🌐 AI Web Recipe Grabber
 - **URL & Text Importer**: Paste any recipe website URL, raw HTML, or recipe text to convert it into a structured Obsidian markdown note.
-- **Structured Schema & AI Parsing**: Extracts recipe metadata, ingredient amounts, wikilink entities, cooking step durations, and tips using Gemini AI and Schema.org JSON-LD extraction.
+- **Structured Schema & AI Parsing**: Extracts recipe metadata, ingredient amounts, wikilink entities, cooking step durations, and tips using the AI provider and Schema.org JSON-LD extraction.
 
 ### 🧭 Ask My Kitchen
 - **Richer natural-language cooking intent**: your question is interpreted into a structured `KitchenIntent` — find recipes, meal suggestion, similar recipe, ingredient use, browse category, or explicit web discovery — with hard filters (ingredients, courses, cuisines, time, ratings) and soft preferences (effort, mood, style, dietary, variety).
@@ -245,7 +245,14 @@ favorite: true
 
 ## 📌 Changelog
 
-### `v0.5.1` (Current Release)
+### `v0.6.0` (Current Release)
+- **AI provider abstraction**: every live AI consumer (interpret, rank, discover, metadata recovery, nutrition, Grab Recipe) now routes through a provider-neutral `AiProvider` abstraction; the Gemini SDK is confined to infrastructure (`server/geminiClient.ts` + `server/ai/geminiProvider.ts`), with no application-level direct-Gemini consumer remaining.
+- **Redacted provider diagnostics**: all AI consumers log failed model attempts through a shared, bounded, secret-redacted helper — no raw provider errors reach clients.
+- **Nutrition hardening**: AI-estimated non-finite numbers (`Infinity`, `NaN`) now coerce to `0`; finite rounding/clamping and deterministic-first behavior unchanged.
+- **Legacy cleanup**: removed the dead `server/kitchenAnswer.ts` adapter, the orphaned `POST /api/kitchen/answer` route + rate limiter + tests, and the dead `buildAnswerRequest`/`isAnswerResponse` UI helpers.
+- **Testing**: 926/926 Vitest tests across 41 files; 84/84 security tests across 8 files; typecheck and production build clean.
+
+### `v0.5.1` (Previous Release)
 - **Ask My Kitchen reliability hotfix**: Ask My Kitchen no longer hard-fails when the primary Gemini model is unavailable — the interpreter falls back to another model and then to deterministic parsing, ranking falls back to deterministic ranking, and web discovery tries a fallback grounding-capable model before reporting unavailable. Provider failures now produce safe server-side diagnostics. No change to trust boundaries; web discovery still depends on at least one deployed model supporting Google Search grounding.
 - **Testing**: 877/877 Vitest tests across 41 files; typecheck and production build clean; no client secret exposure.
 

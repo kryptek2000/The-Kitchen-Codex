@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.6.0] - 2026-09-06
+
+### 🧩 AI Provider Abstraction
+
+- Introduced a provider-neutral AI abstraction (`server/ai/*`): a minimal
+  `AiProvider` contract (id, name, capabilities, availability, `generate`,
+  `generateStructured`, optional `searchWeb`) plus a registry.
+- Migrated every live AI consumer (interpret, rank, discover, metadata recovery,
+  nutrition, Grab Recipe) through the provider abstraction with explicit models.
+- Isolated Gemini SDK coupling to infrastructure (`server/geminiClient.ts` and
+  `server/ai/geminiProvider.ts`); no application-level direct-Gemini consumer
+  remains.
+- Added schema fidelity to the adapter: `description` hints and an `integer` type
+  (Grab Recipe `servings`/`stepNumber`).
+
+### 🛡️ Security, Trust & Diagnostics
+
+- Every AI consumer now logs failed model attempts through the shared, redacted
+  `logModelAttempt`/`extractProviderError` helper (no raw `err.message`, no
+  secrets); no raw provider errors reach clients.
+- Preserved all trust invariants: deterministic vault-membership authority,
+  source-policy, trusted-recipe-ID allowlists, SSRF/DNS/redirect protections, and
+  preview/save boundaries.
+
+### 🧹 Legacy Cleanup
+
+- Removed the dead legacy answer path: `server/kitchenAnswer.ts`, the orphaned
+  `POST /api/kitchen/answer` route, its rate limiter, and its dedicated security
+  tests. Removed the dead `buildAnswerRequest`/`isAnswerResponse` UI helpers.
+- Retained the shared deterministic `src/utils/kitchenAnswer.ts` types and the
+  live client-side `buildGroundedKitchenAnswer`.
+
+### 🥗 Nutrition Hardening
+
+- Coerced AI nutrition values through a finite-safe helper so non-finite numbers
+  (`Infinity`, `"Infinity"`, `NaN`) become `0` while finite rounding/clamping is
+  unchanged. Provenance remains application-assigned.
+
+### 🧪 Testing & Verification
+
+- 926/926 Vitest tests across 41 files; 84/84 security tests across 8 files.
+- TypeScript typecheck clean; production build clean; `git diff --check` clean.
+
 ## [0.5.1] - 2026-09-05
 
 ### 🔧 Kitchen AI Reliability Hotfix
