@@ -1,8 +1,8 @@
-import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
 import dotenv from "dotenv";
+import { getDefaultAiProvider } from "./ai/provider.js";
+import type { AiJsonSchema, AiProvider } from "./ai/types.js";
 import { estimateAlgorithmicNutrition } from "./nutritionEstimator.js";
 import { MODEL_CONFIG } from "./modelConfig.js";
-import { getGemini } from "./geminiClient.js";
 
 dotenv.config();
 
@@ -299,8 +299,71 @@ export function recoverMetadataAlgorithmically(
   return result;
 }
 
-async function callGeminiForRecovery(
-  gemini: GoogleGenAI,
+/** Builds the provider-neutral schema for a single recovered-field envelope. */
+function recoveredField(valueSchema: AiJsonSchema): AiJsonSchema {
+  return {
+    type: "object",
+    properties: {
+      value: valueSchema,
+      confidence: { type: "string", enum: ["high", "medium", "low"] },
+      source: { type: "string", enum: ["instructions_explicit", "body_parsed", "culinary_inference"] },
+      explanation: { type: "string" },
+    },
+    required: ["value", "confidence", "source", "explanation"],
+  };
+}
+
+/**
+ * Provider-neutral structured schema for metadata recovery. Mirrors the prior
+ * Gemini-native schema exactly, INCLUDING every model-guidance description hint
+ * (the Phase 2A `description` extension), field names, types, enums, nested
+ * object/array structure, and `required` constraints.
+ */
+function buildSchema(): AiJsonSchema {
+  return {
+    type: "object",
+    properties: {
+      prepTime: recoveredField({ type: "string", description: "Normalized prep time string, e.g., '15 mins'" }),
+      cookTime: recoveredField({ type: "string", description: "Normalized cook time string, e.g., '25 mins'" }),
+      totalTime: recoveredField({ type: "string", description: "Normalized total time string, e.g., '40 mins'" }),
+      servings: recoveredField({ type: "number", description: "Yield / number of servings as an integer" }),
+      calories: recoveredField({ type: "number", description: "Estimated total calories for the entire recipe batch" }),
+      nutrition: recoveredField({
+        type: "object",
+        properties: {
+          calories: { type: "number" },
+          protein: { type: "number" },
+          carbohydrates: { type: "number" },
+          fat: { type: "number" },
+          fiber: { type: "number" },
+          sodium: { type: "number" },
+          servings: { type: "number" },
+          confidenceNote: { type: "string" },
+        },
+        required: ["calories", "protein", "carbohydrates", "fat", "fiber", "sodium"],
+      }),
+      category: recoveredField({ type: "string" }),
+      cuisine: recoveredField({ type: "string" }),
+      difficulty: recoveredField({ type: "string", enum: ["Easy", "Medium", "Hard"] }),
+      suggestedTags: recoveredField({
+        type: "array",
+        items: { type: "string" },
+        description: "Array of Obsidian tags, e.g., ['food/recipes', 'hawaiian', 'bbq']",
+      }),
+    },
+  };
+}
+
+/**
+ * AI structured-output adapter: recipe -> recovered metadata (validated/merged
+ * downstream). Routes through the provider abstraction
+ * (`getDefaultAiProvider().generateStructured`) with the same explicit
+ * primary -> fallback model chain, same temperature (0.1), and the same MINIMAL
+ * thinking config. A model that throws, or returns empty/unparseable output, is
+ * logged and skipped so the caller can keep the algorithmic fallback.
+ */
+async function aiRecoverMetadata(
+  provider: AiProvider,
   modelName: string,
   req: MetadataRecoveryRequest
 ): Promise<MetadataRecoveryResult> {
@@ -345,145 +408,11 @@ Guidelines:
    - explanation (a brief, clear sentence justifying why this value was determined).
 7. Return strictly valid JSON adhering to the schema.`;
 
-  const response = await gemini.models.generateContent({
+  return await provider.generateStructured<MetadataRecoveryResult>(prompt, buildSchema(), {
     model: modelName,
-    contents: prompt,
-    config: {
-      temperature: 0.1,
-      thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          prepTime: {
-            type: Type.OBJECT,
-            properties: {
-              value: { type: Type.STRING, description: "Normalized prep time string, e.g., '15 mins'" },
-              confidence: { type: Type.STRING, enum: ["high", "medium", "low"] },
-              source: { type: Type.STRING, enum: ["instructions_explicit", "body_parsed", "culinary_inference"] },
-              explanation: { type: Type.STRING },
-            },
-            required: ["value", "confidence", "source", "explanation"],
-          },
-          cookTime: {
-            type: Type.OBJECT,
-            properties: {
-              value: { type: Type.STRING, description: "Normalized cook time string, e.g., '25 mins'" },
-              confidence: { type: Type.STRING, enum: ["high", "medium", "low"] },
-              source: { type: Type.STRING, enum: ["instructions_explicit", "body_parsed", "culinary_inference"] },
-              explanation: { type: Type.STRING },
-            },
-            required: ["value", "confidence", "source", "explanation"],
-          },
-          totalTime: {
-            type: Type.OBJECT,
-            properties: {
-              value: { type: Type.STRING, description: "Normalized total time string, e.g., '40 mins'" },
-              confidence: { type: Type.STRING, enum: ["high", "medium", "low"] },
-              source: { type: Type.STRING, enum: ["instructions_explicit", "body_parsed", "culinary_inference"] },
-              explanation: { type: Type.STRING },
-            },
-            required: ["value", "confidence", "source", "explanation"],
-          },
-          servings: {
-            type: Type.OBJECT,
-            properties: {
-              value: { type: Type.NUMBER, description: "Yield / number of servings as an integer" },
-              confidence: { type: Type.STRING, enum: ["high", "medium", "low"] },
-              source: { type: Type.STRING, enum: ["instructions_explicit", "body_parsed", "culinary_inference"] },
-              explanation: { type: Type.STRING },
-            },
-            required: ["value", "confidence", "source", "explanation"],
-          },
-          calories: {
-            type: Type.OBJECT,
-            properties: {
-              value: { type: Type.NUMBER, description: "Estimated total calories for the entire recipe batch" },
-              confidence: { type: Type.STRING, enum: ["high", "medium", "low"] },
-              source: { type: Type.STRING, enum: ["instructions_explicit", "body_parsed", "culinary_inference"] },
-              explanation: { type: Type.STRING },
-            },
-            required: ["value", "confidence", "source", "explanation"],
-          },
-          nutrition: {
-            type: Type.OBJECT,
-            properties: {
-              value: {
-                type: Type.OBJECT,
-                properties: {
-                  calories: { type: Type.NUMBER },
-                  protein: { type: Type.NUMBER },
-                  carbohydrates: { type: Type.NUMBER },
-                  fat: { type: Type.NUMBER },
-                  fiber: { type: Type.NUMBER },
-                  sodium: { type: Type.NUMBER },
-                  servings: { type: Type.NUMBER },
-                  confidenceNote: { type: Type.STRING },
-                },
-                required: ["calories", "protein", "carbohydrates", "fat", "fiber", "sodium"],
-              },
-              confidence: { type: Type.STRING, enum: ["high", "medium", "low"] },
-              source: { type: Type.STRING, enum: ["instructions_explicit", "body_parsed", "culinary_inference"] },
-              explanation: { type: Type.STRING },
-            },
-            required: ["value", "confidence", "source", "explanation"],
-          },
-          category: {
-            type: Type.OBJECT,
-            properties: {
-              value: { type: Type.STRING },
-              confidence: { type: Type.STRING, enum: ["high", "medium", "low"] },
-              source: { type: Type.STRING, enum: ["instructions_explicit", "body_parsed", "culinary_inference"] },
-              explanation: { type: Type.STRING },
-            },
-            required: ["value", "confidence", "source", "explanation"],
-          },
-          cuisine: {
-            type: Type.OBJECT,
-            properties: {
-              value: { type: Type.STRING },
-              confidence: { type: Type.STRING, enum: ["high", "medium", "low"] },
-              source: { type: Type.STRING, enum: ["instructions_explicit", "body_parsed", "culinary_inference"] },
-              explanation: { type: Type.STRING },
-            },
-            required: ["value", "confidence", "source", "explanation"],
-          },
-          difficulty: {
-            type: Type.OBJECT,
-            properties: {
-              value: { type: Type.STRING, enum: ["Easy", "Medium", "Hard"] },
-              confidence: { type: Type.STRING, enum: ["high", "medium", "low"] },
-              source: { type: Type.STRING, enum: ["instructions_explicit", "body_parsed", "culinary_inference"] },
-              explanation: { type: Type.STRING },
-            },
-            required: ["value", "confidence", "source", "explanation"],
-          },
-          suggestedTags: {
-            type: Type.OBJECT,
-            properties: {
-              value: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
-                description: "Array of Obsidian tags, e.g., ['food/recipes', 'hawaiian', 'bbq']",
-              },
-              confidence: { type: Type.STRING, enum: ["high", "medium", "low"] },
-              source: { type: Type.STRING, enum: ["instructions_explicit", "body_parsed", "culinary_inference"] },
-              explanation: { type: Type.STRING },
-            },
-            required: ["value", "confidence", "source", "explanation"],
-          },
-        },
-      },
-    },
+    temperature: 0.1,
+    providerOptions: { thinkingConfig: { thinkingLevel: "MINIMAL" } },
   });
-
-  const responseText = response.text?.trim();
-  if (!responseText) {
-    throw new Error("Empty response returned from AI model.");
-  }
-
-  const parsed = JSON.parse(responseText);
-  return parsed as MetadataRecoveryResult;
 }
 
 /**
@@ -493,22 +422,22 @@ Guidelines:
 export async function recoverRecipeMetadata(
   req: MetadataRecoveryRequest
 ): Promise<MetadataRecoveryResult> {
-  const gemini = getGemini();
+  const provider = getDefaultAiProvider();
 
-  if (!gemini) {
-    console.info("[MetadataRecovery] No Gemini API key configured. Executing algorithmic metadata recovery.");
+  if (!provider.isAvailable()) {
+    console.info("[MetadataRecovery] No AI provider configured. Executing algorithmic metadata recovery.");
     return recoverMetadataAlgorithmically(req);
   }
 
   // Attempt 1: Primary Model (gemini-3.7-flash)
   try {
-    return await callGeminiForRecovery(gemini, PRIMARY_MODEL, req);
+    return await aiRecoverMetadata(provider, PRIMARY_MODEL, req);
   } catch (primaryErr: any) {
     console.warn(`[MetadataRecovery] Primary model (${PRIMARY_MODEL}) failed: ${primaryErr?.message || primaryErr}. Attempting fallback (${FALLBACK_MODEL})...`);
 
     // Attempt 2: Fallback Model (gemini-3.1-flash-lite)
     try {
-      return await callGeminiForRecovery(gemini, FALLBACK_MODEL, req);
+      return await aiRecoverMetadata(provider, FALLBACK_MODEL, req);
     } catch (fallbackErr: any) {
       console.warn(`[MetadataRecovery] Fallback model (${FALLBACK_MODEL}) failed: ${fallbackErr?.message || fallbackErr}. Engaging algorithmic fallback...`);
 

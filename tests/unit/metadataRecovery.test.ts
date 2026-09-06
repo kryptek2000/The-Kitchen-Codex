@@ -1,7 +1,13 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { recoverMetadataAlgorithmically, recoverRecipeMetadata } from "../../server/metadataRecovery.js";
 import { mergeRecoveredMetadata } from "../../src/utils/vaultIntelligence.js";
 import { ObsidianRecipe, RecoveredRecipeMetadata } from "../../src/types";
+import { getGemini } from "../../server/geminiClient.js";
+import { MODEL_CONFIG } from "../../server/modelConfig.js";
+
+vi.mock("../../server/geminiClient.js", () => ({
+  getGemini: vi.fn(() => null),
+}));
 
 describe("metadata recovery — zero-fabrication & inference labelling", () => {
   let originalKey: string | undefined;
@@ -123,5 +129,117 @@ describe("metadata recovery — zero-fabrication & inference labelling", () => {
     });
     expect(result.cookTime).toBeUndefined();
     expect(result.category?.value).toBeDefined();
+  });
+});
+
+describe("metadata recovery — provider abstraction parity (direct gemini removed)", () => {
+  const modelAwareGemini = (handler: (params: { model: string; config?: any }) => { text?: string } | never) => {
+    vi.mocked(getGemini).mockReturnValue({
+      models: { generateContent: async (params: any) => handler(params) },
+    } as any);
+  };
+
+  afterEach(() => {
+    vi.mocked(getGemini).mockReturnValue(null);
+  });
+
+  it("P1: routes through the provider (primary explicit, temp 0.1, MINIMAL thinking, schema descriptions + required preserved)", async () => {
+    const seen: any[] = [];
+    modelAwareGemini((p) => {
+      seen.push(p);
+      return { text: JSON.stringify({ prepTime: { value: "15 mins", confidence: "medium", source: "culinary_inference", explanation: "Estimated prep based on ingredients" } }) };
+    });
+    try {
+      const result = await recoverRecipeMetadata({ title: "T", ingredients: ["1 cup flour"] });
+      expect(result.prepTime?.value).toBe("15 mins");
+      expect(seen[0].model).toBe(MODEL_CONFIG.metadataRecoveryPrimary);
+      expect(seen[0].config.temperature).toBe(0.1);
+      expect(seen[0].config.thinkingConfig).toEqual({ thinkingLevel: "MINIMAL" });
+      expect(seen[0].config.responseMimeType).toBe("application/json");
+      const rs = seen[0].config.responseSchema;
+      expect(rs.type).toBe("OBJECT");
+      // required fields preserved.
+      expect(rs.properties.prepTime.required).toEqual(["value", "confidence", "source", "explanation"]);
+      expect(rs.properties.nutrition.properties.value.required).toEqual(["calories", "protein", "carbohydrates", "fat", "fiber", "sodium"]);
+      // schema descriptions preserved.
+      expect(rs.properties.prepTime.properties.value.description).toContain("Normalized prep time string");
+      expect(rs.properties.servings.properties.value.description).toContain("Yield / number of servings");
+      expect(rs.properties.suggestedTags.properties.value.description).toContain("Array of Obsidian tags");
+      // enums preserved.
+      expect(rs.properties.prepTime.properties.confidence.enum).toEqual(["high", "medium", "low"]);
+      expect(rs.properties.difficulty.properties.value.enum).toEqual(["Easy", "Medium", "Hard"]);
+      // Only the primary model was needed; fallback not called.
+      expect(seen.length).toBe(1);
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  it("P2: provider primary throws -> explicit fallback model attempted (order preserved)", async () => {
+    const seenModels: string[] = [];
+    modelAwareGemini((p) => {
+      seenModels.push(p.model);
+      if (p.model === MODEL_CONFIG.metadataRecoveryPrimary) throw new Error("primary down");
+      return { text: JSON.stringify({ category: { value: "Pasta", confidence: "medium", source: "culinary_inference", explanation: "Classified" } }) };
+    });
+    try {
+      const result = await recoverRecipeMetadata({ title: "T", ingredients: ["1 cup flour"] });
+      expect(result.category?.value).toBe("Pasta");
+      expect(seenModels).toEqual([MODEL_CONFIG.metadataRecoveryPrimary, MODEL_CONFIG.metadataRecoveryFallback]);
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  it("P3: provider yields invalid structured output -> algorithmic fallback", async () => {
+    modelAwareGemini(() => ({ text: "{ not valid json" }));
+    try {
+      const result = await recoverRecipeMetadata({ title: "Test Recipe", ingredients: ["1 cup flour"] });
+      expect(result.prepTime?.value).toBe("5 mins");
+      expect(result.category?.value).toBeDefined();
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  it("P4: provider unavailable (no key) -> algorithmic fallback with no AI attempt", async () => {
+    let aiCalls = 0;
+    modelAwareGemini(() => {
+      aiCalls++;
+      return { text: "{}" };
+    });
+    vi.mocked(getGemini).mockReturnValue(null);
+    const result = await recoverRecipeMetadata({ title: "Test Recipe", ingredients: ["1 cup flour"] });
+    expect(result.prepTime?.value).toBe("5 mins");
+    expect(aiCalls).toBe(0);
+  });
+
+  it("P5: both provider models fail -> algorithmic fallback", async () => {
+    const seenModels: string[] = [];
+    modelAwareGemini((p) => {
+      seenModels.push(p.model);
+      throw new Error("all metadata recovery models down");
+    });
+    try {
+      const result = await recoverRecipeMetadata({ title: "Test Recipe", ingredients: ["1 cup flour"] });
+      expect(result.prepTime?.value).toBe("5 mins");
+      expect(seenModels).toEqual([MODEL_CONFIG.metadataRecoveryPrimary, MODEL_CONFIG.metadataRecoveryFallback]);
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  it("P6: AI output that omits a field is returned zero-fabricated (omission preserved)", async () => {
+    modelAwareGemini(() => ({
+      text: JSON.stringify({ prepTime: { value: "15 mins", confidence: "medium", source: "culinary_inference", explanation: "est" } }),
+    }));
+    try {
+      const result = await recoverRecipeMetadata({ title: "T", ingredients: ["1 cup flour"] });
+      expect(result.prepTime?.value).toBe("15 mins");
+      expect(result.cookTime).toBeUndefined();
+      expect(result.servings).toBeUndefined();
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
   });
 });
