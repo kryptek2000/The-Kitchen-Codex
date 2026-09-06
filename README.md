@@ -1,6 +1,6 @@
-# 🍳 The Kitchen Codex `v0.5.0`
+# 🍳 The Kitchen Codex `v0.5.1`
 
-[![Version](https://img.shields.io/badge/version-0.5.0-amber.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.5.1-amber.svg)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A markdown-native recipe manager, meal planner, culinary knowledge base, and interactive cooking companion built specifically for **Obsidian** vaults. Read, edit, sync, and cook directly from your Obsidian `.md` recipe collection with YAML frontmatter, Dataview tags, wikilinks (`[[Ingredient]]`, `[[Target|Alias]]`), AI nutrition estimation, dynamic portion scaling, multi-step cooking timers, and AI-powered web recipe scraping.
@@ -245,7 +245,11 @@ favorite: true
 
 ## 📌 Changelog
 
-### `v0.5.0` (Current Release)
+### `v0.5.1` (Current Release)
+- **Ask My Kitchen reliability hotfix**: Ask My Kitchen no longer hard-fails when the primary Gemini model is unavailable — the interpreter falls back to another model and then to deterministic parsing, ranking falls back to deterministic ranking, and web discovery tries a fallback grounding-capable model before reporting unavailable. Provider failures now produce safe server-side diagnostics. No change to trust boundaries; web discovery still depends on at least one deployed model supporting Google Search grounding.
+- **Testing**: 877/877 Vitest tests across 41 files; typecheck and production build clean; no client secret exposure.
+
+### `v0.5.0` (Previous Release)
 - **Ask My Kitchen Intelligence & Web Discovery**: Ask My Kitchen now understands richer cooking intent (a structured `KitchenIntent`) and gives grounded, preference-aware recommendations over the recipes already in your vault. It can do explicit web discovery when you ask (or when vault-first results are weak and you tap "Search the web"), keeps "FROM MY VAULT" and "FROM THE WEB" results strictly separate, and sends a selected web result into the existing Web Recipe Grabber for a preview before saving.
 - **Grounded candidate reasoning & ranking**: a deterministic engine stays authoritative for vault membership; an optional AI layer re-ranks only trusted candidate evidence and degrades gracefully when unavailable. AI never invents recipe IDs, never decides vault membership, and never creates candidates.
 - **Explicit, provider-grounded web discovery**: result URLs come only from real search grounding, never from model-generated text. Discovered URLs are not fetched by Ask My Kitchen and go through the hardened importer (SSRF/private-IP/redirect/content-type protections), with preview + explicit confirmation before any save.

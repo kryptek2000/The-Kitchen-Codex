@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.1] - 2026-09-05
+
+### 🔧 Kitchen AI Reliability Hotfix
+
+- **Kitchen AI model fallback resilience**: the Ask My Kitchen AI endpoints
+  (interpret, rank, discover) now use dedicated model aliases with a
+  primary -> fallback model attempt chain instead of reusing the nutrition model
+  config with no fallback.
+- **Interpreter recovery**: if the primary Gemini model fails, the interpreter
+  tries a fallback model; if every AI model fails it falls back to the
+  deterministic KitchenIntent parser, so Ask My Kitchen keeps working rather than
+  hard-failing with "interpreter unavailable".
+- **Ranking fallback**: if all AI ranking attempts fail, Ask My Kitchen uses the
+  deterministic candidate ranking — the local request is never failed.
+- **Grounded web discovery fallback**: discovery tries a fallback model before
+  reporting unavailable, but only ever accepts provider-grounded URLs (no
+  ungrounded/parsed-from-prose URLs). Web discovery still depends on at least one
+  configured model supporting Google Search grounding.
+- **Safe provider diagnostics**: failed model attempts now produce concise,
+  redacted server-side log lines (component, model, error name/status/code/limited
+  message) with no secrets, headers, prompts, or vault data.
+
+### 🔒 Trust, Privacy & Security
+
+- No ungrounded web URLs accepted; no AI-defined vault membership.
+- No auth weakening; no client-side secret exposure (verified in the built bundle).
+- Existing Grab Recipe importer and SSRF/private-IP/redirect/content-type
+  protections are unchanged.
+
+### 🧪 Testing & Verification
+
+- **877 / 877 Vitest tests** across **41 test files**.
+- TypeScript typecheck (`tsc --noEmit`) clean; production build clean;
+  `bun install --frozen-lockfile` clean; `git diff --check` clean.
+- No client secret exposure (AI_ENDPOINT_TOKEN / GEMINI_API_KEY not present in the
+  browser bundle).
+
+---
+
 ## [0.5.0] - 2026-09-05
 
 ### 🧠 Ask My Kitchen Intelligence

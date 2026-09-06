@@ -19,7 +19,7 @@ markdown/vault sync.
 bun install --frozen-lockfile   # dry check that lockfile matches package.json
 bun run dev                     # tsx server.ts (Vite dev middleware, port 3000)
 bun run lint                    # tsc --noEmit  (this is the "typecheck" step)
-bun run test                    # vitest run — expect 851/851 (40 files)
+bun run test                    # vitest run — expect 877/877 (41 files)
 bun run build                   # vite build && esbuild server.ts -> dist/server.cjs
 bun run test:prod               # needs server running on :3000 (see note)
 bun x tsx scripts/security_verification.ts   # needs server running on :3000
@@ -105,12 +105,20 @@ in dev (Vite HMR). `frame-ancestors` is configurable via `CSP_FRAME_ANCESTORS`.
 
 ## Current state / open items
 
-- **v0.5.0 is the current release** ("The Kitchen Codex v0.5.0 — Ask My Kitchen
-  Intelligence & Web Discovery"). `RELEASE_VERSION` in
+- **v0.5.1 is the current release** ("The Kitchen Codex v0.5.1 — Kitchen AI
+  Reliability Hotfix"). `RELEASE_VERSION` in
   `src/appVersion.ts` is the single runtime source of truth for BOTH the
   client (`src/version.ts`) and the server (`/api/health`). `package.json`/
   `README.md` reference the same release. To bump, run
   `bun x tsx scripts/bump_version.ts vX.Y.Z`.
+- **v0.5.1 landed a kitchen AI provider-resilience hotfix** (commit `6da612b`):
+  dedicated Kitchen model aliases plus a primary -> fallback model chain for
+  interpret/rank/discover, deterministic interpreter recovery after AI failure,
+  grounding-only discovery fallback, and safe redacted server-side provider
+  diagnostics. No auth weakening, no client secret exposure. Verification
+  baseline: **877/877 tests across 41 files**. Release notes:
+  `RELEASE_NOTES_v0.5.1.md`. Known unresolved deployment item: AI_ENDPOINT_TOKEN
+  browser compatibility (separate).
 - **v0.5.0 implementation is complete and shipped in six steps**: KitchenIntent
   foundation (`kitchenIntent`), trusted context + source policy
   (`kitchenIntentPolicy`), interpreter migration + execution gates
@@ -160,7 +168,7 @@ in dev (Vite HMR). `frame-ancestors` is configurable via `CSP_FRAME_ANCESTORS`.
   `server/metadataRecovery.ts` only emits `cookTime`/`totalTime`/`servings` when
   there is real evidence; otherwise those fields are absent (prefer absence over
   a baked-in "20 mins"/"4 servings").
-- Tests: v0.5.0 baseline **851/851 (40 files)**. `bun audit`: clean.
+- Tests: v0.5.1 baseline **877/877 (41 files)**. `bun audit`: clean.
   `security_verification.ts`: 33/33.
 
 ## Notes
