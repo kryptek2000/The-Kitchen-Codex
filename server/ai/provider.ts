@@ -11,6 +11,8 @@ export type {
   AiGenerateOptions,
   AiJsonSchema,
   AiProvider,
+  AiSearchOptions,
+  AiSearchResult,
   AiStructuredOptions,
 } from "./types.js";
 export { GeminiProvider } from "./geminiProvider.js";

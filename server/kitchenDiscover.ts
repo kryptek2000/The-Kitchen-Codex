@@ -14,11 +14,10 @@
  * `{ ok:false, source:'web', reason:'unavailable' }` — never fabricated results.
  */
 import dotenv from "dotenv";
-import { getGemini } from "./geminiClient.js";
+import { getDefaultAiProvider } from "./ai/provider.js";
 import { MODEL_CONFIG } from "./modelConfig.js";
 import { logModelAttempt } from "./providerDiagnostics.js";
 import {
-  extractWebResultsFromGrounding,
   sanitizeWebResults,
   webDiscoveryUnavailable,
   type KitchenDiscoveryResponse,
@@ -62,34 +61,10 @@ function buildPrompt(request: { question: string; intent: KitchenIntent }): stri
 }
 
 /**
- * AI grounded-search adapter for a single model: question + compact
- * discovery-safe intent -> raw Gemini response (sanitized later). Reads
- * grounding metadata only; never drains URLs from model prose.
- */
-async function aiDiscoverWithModel(
-  request: { question: string; intent: KitchenIntent; maxResults: number },
-  model: string
-): Promise<unknown> {
-  const gemini = getGemini();
-  if (!gemini) {
-    throw new Error("Gemini is not configured.");
-  }
-  const response = await gemini.models.generateContent({
-    model,
-    contents: buildPrompt(request),
-    config: {
-      temperature: 0,
-      tools: [{ googleSearch: {} }],
-    },
-  });
-  return response as unknown;
-}
-
-/**
- * Runs explicit web discovery with a primary -> fallback model chain. A result
- * is accepted ONLY when a model returns real, sanitizable provider grounding
- * URLs; a model whose text lists URLs but has no grounding does NOT count (that
- * model is skipped, the next is attempted). If no model produces grounding, a
+ * Runs explicit web discovery through the provider abstraction with a
+ * primary -> fallback model chain. A result is accepted ONLY when a model
+ * returns real, sanitizable provider grounding sources; a model whose text lists
+ * URLs but has no grounding does NOT count. If no model produces grounding, a
  * safe unavailable response is returned. Never fabricates URLs; never throws.
  */
 export async function discoverKitchenRecipesOnServer(request: {
@@ -97,18 +72,23 @@ export async function discoverKitchenRecipesOnServer(request: {
   intent: KitchenIntent;
   maxResults: number;
 }): Promise<KitchenDiscoveryResponse> {
-  const gemini = getGemini();
-  if (!gemini) return webDiscoveryUnavailable();
+  const provider = getDefaultAiProvider();
+  if (!provider.isAvailable() || !provider.searchWeb) {
+    return webDiscoveryUnavailable();
+  }
+  const prompt = buildPrompt(request);
 
   for (const model of DISCOVERY_MODELS) {
     try {
-      const raw = await aiDiscoverWithModel(request, model);
-      const extracted = extractWebResultsFromGrounding(raw);
-      const results = sanitizeWebResults(extracted, { maxResults: request.maxResults });
+      const sources = await provider.searchWeb(prompt, { model, temperature: 0 });
+      const results = sanitizeWebResults(
+        sources.map((s) => ({ url: s.url, title: s.title, sourceName: s.sourceName })),
+        { maxResults: request.maxResults }
+      );
       if (results.length > 0) {
         return { ok: true, source: "web", results };
       }
-      // No provider-grounded URLs from this model: do NOT fall back to its
+      // No provider-grounded sources from this model: do NOT fall back to its
       // prose, but try the next configured model.
       logModelAttempt("discover", model, new Error("No provider grounding URLs returned"));
     } catch (err) {
@@ -119,4 +99,4 @@ export async function discoverKitchenRecipesOnServer(request: {
   return webDiscoveryUnavailable();
 }
 
-export { extractWebResultsFromGrounding, sanitizeWebResults, webDiscoveryUnavailable };
+export { sanitizeWebResults, webDiscoveryUnavailable };

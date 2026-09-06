@@ -64,6 +64,24 @@ export interface AiStructuredOptions extends AiGenerateOptions {
 }
 
 /**
+ * A provider-neutral, trusted web-source result. Only populated from provider
+ * search evidence (e.g. Gemini grounding metadata) — NEVER from model prose.
+ * `url` is the provider-backed source URL; `title`/`sourceName` are display.
+ */
+export interface AiSearchResult {
+  title?: string;
+  url: string;
+  sourceName?: string;
+}
+
+/** Options for a provider-backed web search call. */
+export interface AiSearchOptions {
+  /** Provider model id. REQUIRED (no silent role-model default). */
+  model: string;
+  temperature?: number;
+}
+
+/**
  * The minimal provider contract. Implementations MUST be idempotent and safe to
  * call with no key (degrading to `isAvailable() === false` and throwing on
  * generate when unavailable) — never hanging or leaking credentials.
@@ -91,4 +109,12 @@ export interface AiProvider {
     schema: AiJsonSchema,
     options?: AiStructuredOptions
   ): Promise<T>;
+
+  /**
+   * Optional provider-backed web search. Only present when the provider
+   * advertises the `webSearch` capability (e.g. Gemini Google-Search grounding).
+   * Returns provider-trusted sources; NEVER model-prose URLs. A provider that
+   * does not support web search omits this and discovery reports unavailable.
+   */
+  searchWeb?(prompt: string, options: AiSearchOptions): Promise<AiSearchResult[]>;
 }

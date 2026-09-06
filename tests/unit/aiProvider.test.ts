@@ -365,4 +365,72 @@ describe("AiProvider foundation", () => {
       provider.generateStructured("x", { type: "object", properties: {} }, { model: "m" })
     ).rejects.toThrow();
   });
+
+  describe("searchWeb (grounded, provider neutral)", () => {
+    it("Gemini advertises the webSearch capability and implements searchWeb", () => {
+      const provider = getDefaultAiProvider();
+      expect(provider.capabilities.webSearch).toBe(true);
+      expect(typeof (provider as any).searchWeb).toBe("function");
+    });
+
+    it("translates provider grounding chunks into neutral AiSearchResult[]", async () => {
+      const seen: any[] = [];
+      mockGemini({
+        generateContent: async (params: any) => {
+          seen.push(params);
+          return {
+            groundingMetadata: {
+              groundingChunks: [
+                { web: { uri: "https://example.com/gumbo", title: "Real Gumbo", domain: "example.com" } },
+                { web: { uri: "https://example.com/other" } },
+              ],
+            },
+          };
+        },
+      });
+      const provider = new GeminiProvider();
+      const results = await provider.searchWeb("find gumbo", { model: "m", temperature: 0 });
+      expect(seen[0].model).toBe("m");
+      expect(seen[0].config.temperature).toBe(0);
+      expect(seen[0].config.tools).toEqual([{ googleSearch: {} }]);
+      expect(seen[0].config.thinkingConfig).toBeUndefined();
+      expect(results).toEqual([
+        { url: "https://example.com/gumbo", title: "Real Gumbo", sourceName: "example.com" },
+        { url: "https://example.com/other" },
+      ]);
+    });
+
+    it("returns [] when the provider yields no grounding (prose-only) — never parses prose URLs", async () => {
+      mockGemini({
+        generateContent: async () => ({ text: "try https://foodblog.example/fake for details" }),
+      });
+      const provider = new GeminiProvider();
+      const results = await provider.searchWeb("q", { model: "m" });
+      expect(results).toEqual([]);
+    });
+
+    it("returns only provider-backed sources verbatim (sanitizer applies http/https downstream)", async () => {
+      mockGemini({
+        generateContent: async () => ({
+          groundingMetadata: {
+            groundingChunks: [
+              { web: { uri: "javascript:alert(1)" } },
+              { web: { uri: "" } }, // dropped: empty uri is not a source
+            ],
+          },
+        }),
+      });
+      const provider = new GeminiProvider();
+      const results = await provider.searchWeb("q", { model: "m" });
+      // searchWeb extracts provider-backed sources verbatim; the http/https
+      // safety filter is the sanitizer's job in the discovery layer.
+      expect(results).toEqual([{ url: "javascript:alert(1)" }]);
+    });
+
+    it("throws when unavailable (no key)", async () => {
+      vi.mocked(getGemini).mockReturnValue(null);
+      const provider = new GeminiProvider();
+      await expect(provider.searchWeb("q", { model: "m" })).rejects.toThrow();
+    });
+  });
 });
