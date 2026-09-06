@@ -160,6 +160,27 @@ describe("AiProvider foundation", () => {
     expect(tags.items).toEqual({ type: "STRING" });
   });
 
+  it("maps an integer schema node to a Gemini INTEGER type", async () => {
+    let seen: any;
+    mockGemini({
+      generateContent: async (params: any) => {
+        seen = params;
+        return { text: "{}" };
+      },
+    });
+    const provider = new GeminiProvider();
+    await provider.generateStructured(
+      "x",
+      {
+        type: "object",
+        properties: { servings: { type: "integer" }, stepNumber: { type: "integer" } },
+      },
+      { model: "model-int" }
+    );
+    expect(seen.config.responseSchema.properties.servings).toEqual({ type: "INTEGER" });
+    expect(seen.config.responseSchema.properties.stepNumber).toEqual({ type: "INTEGER" });
+  });
+
   describe("AiJsonSchema description (Gate A)", () => {
     it("maps a string description to the Gemini schema description", async () => {
       let seen: any;

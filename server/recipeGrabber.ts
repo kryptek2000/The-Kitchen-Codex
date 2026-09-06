@@ -1,9 +1,9 @@
-import { Type, ThinkingLevel } from "@google/genai";
 import dotenv from "dotenv";
 import { safeFetchHtml } from "./ssrfGuard.js";
 import { renderIngredientLine, parseIngredientLine } from "../src/utils/markdownParser.js";
 import { MODEL_CONFIG } from "./modelConfig.js";
-import { getGemini } from "./geminiClient.js";
+import { getDefaultAiProvider } from "./ai/provider.js";
+import type { AiJsonSchema } from "./ai/types.js";
 
 dotenv.config();
 
@@ -482,6 +482,74 @@ rating: ${recipe.rating !== undefined ? recipe.rating : 5}
 }
 
 /**
+ * Provider-neutral structured schema for web recipe extraction. Mirrors the prior
+ * Gemini-native schema exactly: field names, types (including INTEGER for
+ * `servings` and `stepNumber`), nested arrays/objects, enum constraints, and the
+ * root + nested `required` sets.
+ */
+function buildSchema(): AiJsonSchema {
+  return {
+    type: "object",
+    properties: {
+      title: { type: "string" },
+      description: { type: "string" },
+      cuisine: { type: "string" },
+      category: { type: "string" },
+      difficulty: { type: "string", enum: ["Easy", "Medium", "Hard"] },
+      prepTime: { type: "string" },
+      cookTime: { type: "string" },
+      totalTime: { type: "string" },
+      servings: { type: "integer" },
+      calories: { type: "string" },
+      rating: { type: "number" },
+      source: { type: "string" },
+      image: { type: "string" },
+      tags: { type: "array", items: { type: "string" } },
+      ingredients: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            original: { type: "string" },
+            amount: { type: "number" },
+            unit: { type: "string" },
+            name: { type: "string" },
+            note: { type: "string" },
+          },
+          required: ["original", "name"],
+        },
+      },
+      instructions: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            stepNumber: { type: "integer" },
+            text: { type: "string" },
+            timerMinutes: { type: "number" },
+          },
+          required: ["stepNumber", "text"],
+        },
+      },
+      callouts: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            type: { type: "string", enum: ["tip", "warning", "info", "note", "important"] },
+            title: { type: "string" },
+            content: { type: "string" },
+          },
+          required: ["type", "content"],
+        },
+      },
+      notes: { type: "string" },
+    },
+    required: ["title", "cuisine", "category", "ingredients", "instructions"],
+  };
+}
+
+/**
  * Main grabber engine supporting { url, html, rawText } inputs.
  * Priority: JSON-LD -> Gemini (LLM) -> Heuristic Text Parsing
  */
@@ -527,10 +595,10 @@ export async function grabRecipeFromWeb(params: {
 
   const cleanedText = htmlContent ? cleanHtmlToText(htmlContent) : rawText || "";
 
-  // Pipeline Priority 2: Gemini structured extraction with model fallback & retry
-  const ai = getGemini();
+  // Pipeline Priority 2: AI structured extraction with model fallback & retry
+  const provider = getDefaultAiProvider();
 
-  if (ai && (cleanedText.length > 0 || Object.keys(metaTags).length > 0)) {
+  if (provider.isAvailable() && (cleanedText.length > 0 || Object.keys(metaTags).length > 0)) {
     const prompt = `You are an expert culinary chef and Obsidian Markdown archivist.
 Extract this recipe into an accurate, structured JSON recipe object tailored for an Obsidian culinary vault.
 
@@ -568,124 +636,67 @@ REQUIREMENTS:
       while (attempts < maxAttempts) {
         attempts++;
         try {
-          const response = await ai.models.generateContent({
-            model: modelName,
-            contents: prompt,
-            config: {
+          const parsed = await provider.generateStructured<Record<string, any>>(
+            prompt,
+            buildSchema(),
+            {
+              model: modelName,
               temperature: 0.1,
-              thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
-              responseMimeType: "application/json",
-              responseSchema: {
-                type: Type.OBJECT,
-                properties: {
-                  title: { type: Type.STRING },
-                  description: { type: Type.STRING },
-                  cuisine: { type: Type.STRING },
-                  category: { type: Type.STRING },
-                  difficulty: { type: Type.STRING, enum: ["Easy", "Medium", "Hard"] },
-                  prepTime: { type: Type.STRING },
-                  cookTime: { type: Type.STRING },
-                  totalTime: { type: Type.STRING },
-                  servings: { type: Type.INTEGER },
-                  calories: { type: Type.STRING },
-                  rating: { type: Type.NUMBER },
-                  source: { type: Type.STRING },
-                  image: { type: Type.STRING },
-                  tags: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  ingredients: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        original: { type: Type.STRING },
-                        amount: { type: Type.NUMBER },
-                        unit: { type: Type.STRING },
-                        name: { type: Type.STRING },
-                        note: { type: Type.STRING },
-                      },
-                      required: ["original", "name"],
-                    },
-                  },
-                  instructions: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        stepNumber: { type: Type.INTEGER },
-                        text: { type: Type.STRING },
-                        timerMinutes: { type: Type.NUMBER },
-                      },
-                      required: ["stepNumber", "text"],
-                    },
-                  },
-                  callouts: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        type: { type: Type.STRING, enum: ["tip", "warning", "info", "note", "important"] },
-                        title: { type: Type.STRING },
-                        content: { type: Type.STRING },
-                      },
-                      required: ["type", "content"],
-                    },
-                  },
-                  notes: { type: Type.STRING },
-                },
-                required: ["title", "cuisine", "category", "ingredients", "instructions"],
-              },
-            },
+              providerOptions: { thinkingConfig: { thinkingLevel: "MINIMAL" } },
+            }
+          );
+
+          // Ensure image fallback if empty
+          const image = parsed.image || metaTags.image || "";
+          const source = parsed.source || metaTags.siteName || siteName || "Web Grabber";
+          const tags = Array.isArray(parsed.tags) && parsed.tags.length > 0 ? parsed.tags : ["food/recipes"];
+
+          const rawMarkdown = generateMarkdown({
+            ...parsed,
+            image,
+            source,
+            tags,
           });
 
-          const responseText = response.text;
-          if (responseText) {
-            const parsed = JSON.parse(responseText);
-
-            // Ensure image fallback if empty
-            const image = parsed.image || metaTags.image || "";
-            const source = parsed.source || metaTags.siteName || siteName || "Web Grabber";
-            const tags = Array.isArray(parsed.tags) && parsed.tags.length > 0 ? parsed.tags : ["food/recipes"];
-
-            const rawMarkdown = generateMarkdown({
-              ...parsed,
-              image,
-              source,
-              tags,
-            });
-
-            return {
-              title: parsed.title || metaTags.title || "Imported Recipe",
-              description: parsed.description || metaTags.description || "",
-              cuisine: parsed.cuisine || "General",
-              category: parsed.category || "Main Course",
-              difficulty: parsed.difficulty || "Medium",
-              prepTime: parsed.prepTime || "",
-              cookTime: parsed.cookTime || "",
-              totalTime: parsed.totalTime || "",
-              servings: typeof parsed.servings === "number" && parsed.servings > 0 ? parsed.servings : undefined,
-              calories: parsed.calories || "",
-              rating: parsed.rating || 5,
-              source,
-              sourceUrl: url,
-              image,
-              tags,
-              ingredients: parsed.ingredients || [],
-              instructions: parsed.instructions || [],
-              callouts: parsed.callouts || [],
-              notes: parsed.notes || "",
-              rawMarkdown,
-            };
-          }
+          return {
+            title: parsed.title || metaTags.title || "Imported Recipe",
+            description: parsed.description || metaTags.description || "",
+            cuisine: parsed.cuisine || "General",
+            category: parsed.category || "Main Course",
+            difficulty: parsed.difficulty || "Medium",
+            prepTime: parsed.prepTime || "",
+            cookTime: parsed.cookTime || "",
+            totalTime: parsed.totalTime || "",
+            servings: typeof parsed.servings === "number" && parsed.servings > 0 ? parsed.servings : undefined,
+            calories: parsed.calories || "",
+            rating: parsed.rating || 5,
+            source,
+            sourceUrl: url,
+            image,
+            tags,
+            ingredients: parsed.ingredients || [],
+            instructions: parsed.instructions || [],
+            callouts: parsed.callouts || [],
+            notes: parsed.notes || "",
+            rawMarkdown,
+          };
         } catch (aiErr: any) {
           const errMsg = aiErr?.message || String(aiErr);
+          // An empty/provider-unavailable response previously fell through to a
+          // silent retry; keep that by treating "Empty response" as retryable
+          // WITHOUT the noisy warn, matching the prior no-return behaviour.
+          const isEmpty = errMsg.includes("Empty response");
           const isRetryable =
+            isEmpty ||
             errMsg.includes("503") ||
             errMsg.includes("UNAVAILABLE") ||
             errMsg.includes("high demand") ||
             errMsg.includes("429") ||
             errMsg.includes("RESOURCE_EXHAUSTED");
 
-          console.warn(`[RecipeGrabber] Gemini model '${modelName}' attempt ${attempts} failed:`, errMsg);
+          if (!isEmpty) {
+            console.warn(`[RecipeGrabber] Gemini model '${modelName}' attempt ${attempts} failed:`, errMsg);
+          }
 
           if (isRetryable && attempts < maxAttempts) {
             await new Promise((r) => setTimeout(r, 600 * attempts));

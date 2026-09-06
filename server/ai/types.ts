@@ -39,6 +39,7 @@ export interface AiSchemaBase {
 export type AiJsonSchema =
   | (AiSchemaBase & { type: "string"; enum?: string[] })
   | (AiSchemaBase & { type: "number" })
+  | (AiSchemaBase & { type: "integer" })
   | (AiSchemaBase & { type: "boolean" })
   | (AiSchemaBase & { type: "array"; items: AiJsonSchema })
   | (AiSchemaBase & { type: "object"; properties: Record<string, AiJsonSchema>; required?: string[] });

@@ -65,6 +65,8 @@ function toGeminiSchema(schema: AiJsonSchema): Record<string, unknown> {
       return withDescription({ type: Type.BOOLEAN });
     case "number":
       return withDescription({ type: Type.NUMBER });
+    case "integer":
+      return withDescription({ type: Type.INTEGER });
     case "array":
       return withDescription({ type: Type.ARRAY, items: toGeminiSchema(schema.items) });
     case "object": {
