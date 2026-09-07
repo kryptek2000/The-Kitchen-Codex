@@ -1,13 +1,18 @@
 /**
- * The Kitchen Codex — Browser Platform (Phase 4C2).
+ * The Kitchen Codex — Browser Platform (Phase 4C2 / 4D2A).
  *
  * Concrete browser/platform integrations implementing the application adapter
- * contracts. Contains ONLY browser File System Access implementation detail.
+ * contracts. Contains browser File System Access implementation detail, the
+ * localStorage-backed settings store, and the app-backend fetch transport.
  *
  * Dependency direction: platform/browser -> application/adapters (contracts).
  * The application and core layers must never import this platform module.
  */
 export { BrowserFsaVaultAdapter } from './BrowserFsaVaultAdapter';
+export { BrowserSettingsAdapter } from './BrowserSettingsAdapter';
+export type { StorageLike } from './BrowserSettingsAdapter';
+export { BrowserNetworkAdapter, NetworkRequestError } from './BrowserNetworkAdapter';
+export type { FetcherLike } from './BrowserNetworkAdapter';
 export type {
   FsaEntryLike,
   FsaFileHandleLike,

@@ -26,12 +26,17 @@ import {
 } from '../utils/markdownParser';
 import { saveImageToVaultAssets, vaultAssets } from '../utils/vaultAssets';
 import { resolveNewRecipeVaultPath } from '../core/vaultPath';
+import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
+import { BrowserNetworkAdapter } from '../platform/browser';
 import { useVaultImage } from '../hooks/useVaultImage';
 
 interface RecipeEditorModalProps {
   initialRecipe?: ObsidianRecipe | null;
-  folderHandle?: any;  onSave: (recipe: ObsidianRecipe) => Promise<void> | void;
-   onClose: () => void;
+  folderHandle?: any;
+  onSave: (recipe: ObsidianRecipe) => Promise<void> | void;
+  /** App-backend API transport (injected by the bootstrap; defaults to the browser adapter). */
+  network?: NetworkAdapter;
+  onClose: () => void;
 }
 
 /**
@@ -61,6 +66,7 @@ export function deriveNutritionProvenance(
 export function RecipeEditorModal({
   initialRecipe,
   folderHandle,
+  network,
   onSave,
   onClose,
 }: RecipeEditorModalProps) {
@@ -240,19 +246,19 @@ export function RecipeEditorModal({
 
       const numServings = typeof servings === 'number' ? servings : parseInt(String(servings), 10) || 4;
 
-      const res = await fetch('/api/estimate-nutrition', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const net = network ?? new BrowserNetworkAdapter();
+      const res = await net.post<{ success: boolean; nutrition?: any; error?: string }>(
+        '/api/estimate-nutrition',
+        {
           title: title || 'Recipe',
           servings: numServings,
           ingredients: lines,
-        }),
-      });
+        }
+      );
 
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Failed to estimate nutrition.');
+      const data = res.data;
+      if (!res.ok || !data?.success) {
+        throw new Error(data?.error || 'Failed to estimate nutrition.');
       }
 
       if (data.nutrition) {

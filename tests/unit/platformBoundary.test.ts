@@ -106,13 +106,17 @@ describe('platform boundary / dependency direction (Phase 4C2)', () => {
     }
   });
 
-  it('the browser platform code contains no Node/server/UI runtime leakage', () => {
+  it('the browser platform code contains no Node/server leakage', () => {
+    // Browser-platform adapters legitimately use BROWSER runtime globals: the
+    // network adapter wraps `fetch`, and the settings adapter wraps
+    // `window.localStorage`. Those are intentional browser transports, NOT
+    // Node/server leakage. We forbid only Node/server-only symbols here.
     const forbidden = [
-      /\bfetch\s*\(/,
       /\bprocess\s*[.\[]/,
       /\bBuffer\b/,
       /node:/,
       /\brequire\s*\(/,
+      /\bchild_process\s*\(/,
     ];
     for (const file of PLATFORM_FILES) {
       const source = readFileSync(resolve(PLATFORM_DIR, file), 'utf8');

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   ObsidianRecipe,
   VaultSyncStatus,
@@ -32,8 +32,9 @@ import {
   saveMealPlanWithVaultAdapter,
   saveShoppingListWithVaultAdapter,
   vaultErrorMessage,
+  mergeHydratedSetting,
 } from './application';
-import { BrowserFsaVaultAdapter } from './platform/browser';
+import { BrowserFsaVaultAdapter, BrowserSettingsAdapter, BrowserNetworkAdapter } from './platform/browser';
 import { playTimerChime } from './utils/audioAlert';
 import { APP_VERSION } from './version';
 
@@ -126,15 +127,20 @@ export default function App() {
     accessType: 'starter_vault',
   });
 
-  // Application service composition (Phase 4C3B). Constructed from the SAME
+  // Non-vault browser adapters (always available, independent of vault connection).
+  // Created once per App mount (local composition, NOT module-global/singleton).
+  const settingsAdapter = useMemo(() => new BrowserSettingsAdapter(), []);
+  const networkAdapter = useMemo(() => new BrowserNetworkAdapter(), []);
+
+  // Application service composition (Phase 4C3B/4D2A). Constructed from the SAME
   // authoritative FSA handle stored in vaultStatus — no second picker, no extra
   // IndexedDB record, no module-global singleton. Memoized per-handle so it is
   // recreated only when the vault handle actually changes.
   const vaultServices = useMemo(() => {
     if (!vaultStatus.folderHandle) return null;
     const vault = new BrowserFsaVaultAdapter(vaultStatus.folderHandle);
-    return createAppServices({ vault });
-  }, [vaultStatus.folderHandle]);
+    return createAppServices({ vault, settings: settingsAdapter, network: networkAdapter });
+  }, [vaultStatus.folderHandle, settingsAdapter, networkAdapter]);
   const vaultAdapter = vaultServices?.adapters.vault ?? null;
 
   // Lightweight user-facing error surface for adapter save/delete failures
@@ -146,23 +152,11 @@ export default function App() {
   };
   const clearVaultError = () => setVaultError(null);
 
-  // Theme State (LocalStorage for UI Preference)
-  const [theme, setTheme] = useState<ThemeId>(() => {
-    try {
-      const saved = localStorage.getItem('obsidian_vault_theme') as ThemeId;
-      if (saved === 'obsidian' || saved === 'parchment' || saved === 'nordic') return saved;
-    } catch (e) {}
-    return 'obsidian';
-  });
+  // Theme State (persisted via SettingsAdapter; hydrated on mount)
+  const [theme, setTheme] = useState<ThemeId>('obsidian');
 
-  // Navigation & View State (LocalStorage for Ephemeral UI State)
-  const [activeTab, setActiveTab] = useState<'grid' | 'dataview' | 'mealplan' | 'shopping' | 'themes'>(() => {
-    try {
-      const saved = localStorage.getItem('obsidian_active_tab') as any;
-      if (['grid', 'dataview', 'mealplan', 'shopping', 'themes'].includes(saved)) return saved;
-    } catch (e) {}
-    return 'grid';
-  });
+  // Navigation & View State (persisted via SettingsAdapter; hydrated on mount)
+  const [activeTab, setActiveTab] = useState<'grid' | 'dataview' | 'mealplan' | 'shopping' | 'themes'>('grid');
 
   const [selectedRecipe, setSelectedRecipe] = useState<ObsidianRecipe | null>(null);
   const [cookingRecipe, setCookingRecipe] = useState<{ recipe: ObsidianRecipe; servings: number } | null>(null);
@@ -183,14 +177,8 @@ export default function App() {
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [filters, setFilters] = useState<FilterState>(INITIAL_FILTERS);
 
-  // Active Timers (LocalStorage for active cooking timer timestamps)
-  const [activeTimers, setActiveTimers] = useState<ActiveTimer[]>(() => {
-    try {
-      const saved = localStorage.getItem('obsidian_active_cooking_timers');
-      if (saved) return JSON.parse(saved);
-    } catch (e) {}
-    return [];
-  });
+  // Active Timers (persisted via SettingsAdapter; hydrated on mount)
+  const [activeTimers, setActiveTimers] = useState<ActiveTimer[]>([]);
 
   // Meal Plan & Shopping List (Canonical Source: Vault Notes `Meal Plan.md` & `Shopping List.md`)
   const [mealPlan, setMealPlan] = useState<MealPlanDay[]>(STARTER_MEAL_PLAN);
@@ -262,25 +250,76 @@ export default function App() {
     return () => window.removeEventListener('focus', handleWindowFocus);
   }, [vaultStatus]);
 
-  // 3. UI Preferences to LocalStorage
+  // Hydrate persisted UI preferences from the SettingsAdapter once after mount.
+  // The adapter is async, so stored values are applied asynchronously. To avoid
+  // a startup race (user changes a value BEFORE hydration completes), hydration
+  // NEVER overwrites a value the user already changed away from its default;
+  // and persist effects are gated on `settingsHydrated` so defaults are never
+  // written over stored preferences before hydration. `settingsHydrated` is a
+  // STATE so persist effects re-run (and flush any pending user change) when it
+  // flips to true.
+  const [settingsHydrated, setSettingsHydrated] = useState(false);
   useEffect(() => {
-    try {
-      localStorage.setItem('obsidian_vault_theme', theme);
-      document.documentElement.setAttribute('data-theme', theme);
-    } catch (e) {}
-  }, [theme]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const [savedTheme, savedTab, savedTimers] = await Promise.all([
+          settingsAdapter.get<ThemeId>('obsidian_vault_theme'),
+          settingsAdapter.get<'grid' | 'dataview' | 'mealplan' | 'shopping' | 'themes'>('obsidian_active_tab'),
+          settingsAdapter.get<ActiveTimer[]>('obsidian_active_cooking_timers'),
+        ]);
+        if (cancelled) return;
+        setTheme((cur) =>
+          mergeHydratedSetting(
+            cur,
+            savedTheme,
+            (t) => t === 'obsidian',
+            (t) => t === 'obsidian' || t === 'parchment' || t === 'nordic'
+          )
+        );
+        setActiveTab((cur) =>
+          mergeHydratedSetting(
+            cur,
+            savedTab,
+            (t) => t === 'grid',
+            (t) => t === 'grid' || t === 'dataview' || t === 'mealplan' || t === 'shopping' || t === 'themes'
+          )
+        );
+        // Timers: default is an empty list. Only apply a persisted timer list if
+        // the user has not already started a timer (which would make it non-empty).
+        setActiveTimers((cur) =>
+          mergeHydratedSetting(cur, savedTimers, (t) => Array.isArray(t) && t.length === 0, (t) => Array.isArray(t))
+        );
+      } catch (err) {
+        console.warn('Failed to hydrate persisted settings:', err);
+      } finally {
+        if (!cancelled) setSettingsHydrated(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [settingsAdapter]);
+
+  // 3. UI Preferences to the SettingsAdapter (localStorage-backed)
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    if (settingsHydrated) {
+      settingsAdapter.set('obsidian_vault_theme', theme).catch(() => {});
+    }
+  }, [theme, settingsAdapter, settingsHydrated]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem('obsidian_active_tab', activeTab);
-    } catch (e) {}
-  }, [activeTab]);
+    if (settingsHydrated) {
+      settingsAdapter.set('obsidian_active_tab', activeTab).catch(() => {});
+    }
+  }, [activeTab, settingsAdapter, settingsHydrated]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem('obsidian_active_cooking_timers', JSON.stringify(activeTimers));
-    } catch (e) {}
-  }, [activeTimers]);
+    if (settingsHydrated) {
+      settingsAdapter.set('obsidian_active_cooking_timers', activeTimers).catch(() => {});
+    }
+  }, [activeTimers, settingsAdapter, settingsHydrated]);
 
   // 4. Auto-save Meal Plan note to the vault through the adapter if connected
   useEffect(() => {
@@ -1262,6 +1301,7 @@ export default function App() {
           <RecipeEditorModal
             initialRecipe={editingRecipe}
             folderHandle={vaultStatus.folderHandle}
+            network={networkAdapter}
             onSave={handleSaveRecipe}
             onClose={() => {
               setIsEditorOpen(false);

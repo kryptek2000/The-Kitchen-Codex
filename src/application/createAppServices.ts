@@ -1,24 +1,31 @@
 /**
- * The Kitchen Codex — Application Composition Root (Phase 4C2).
+ * The Kitchen Codex — Application Composition Root (Phase 4C2 / 4D2A).
  *
  * A SMALL, implementation-agnostic seam that receives adapter instances and hands
  * them to the application layer. It proves the dependency-injection boundary
  * exists WITHOUT rewiring App.tsx or any UI yet.
  *
- * Deliberately minimal: in Phase 4C2 the only concrete adapter is the browser
- * vault adapter, so `AppAdapters` requires only `vault`. Settings / Network /
- * Secret adapters have no concrete implementation yet and are intentionally left
- * OUT until they do (no optional-method soup, no speculative surface).
+ * In Phase 4D2A `settings` and `network` become OPTIONAL concrete adapters
+ * (browser localStorage + app-backend fetch). `vault` stays REQUIRED (it is the
+ * one port the browser boundary depends on). Secrets/assets remain intentionally
+ * absent (no speculative surface, no optional-method soup).
  *
  * This module imports ONLY the adapter CONTRACT types (application -> contracts).
  * It must NOT import `src/platform/*` (application must remain independent of any
  * concrete platform implementation), and it must not import `src/core`.
  */
 import type { VaultAdapter } from './adapters/VaultAdapter';
+import type { SettingsAdapter } from './adapters/SettingsAdapter';
+import type { NetworkAdapter } from './adapters/NetworkAdapter';
 
 /** The set of adapter instances the application can be composed with. */
 export interface AppAdapters {
+  /** Required: vault/recipe read-write access. */
   vault: VaultAdapter;
+  /** Optional: keyed device/user settings persistence (never secrets). */
+  settings?: SettingsAdapter;
+  /** Optional: app-backend API transport (no arbitrary remote fetch). */
+  network?: NetworkAdapter;
 }
 
 /** The composed application services handed to orchestration/UI. */
