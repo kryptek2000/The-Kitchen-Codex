@@ -98,8 +98,9 @@ describe('scanVaultDirectory (refactored, Phase 4C3A)', () => {
     const result = await scanVaultDirectory(root);
 
     expect(result.recipes).toHaveLength(1);
-    // Legacy behavior retained: filePath is root-handle-name-prefixed.
-    expect(result.recipes[0].filePath).toBe('Vault Root/Recipes/Italian/Lasagna.md');
+    // Phase 4C3B: filePath is now canonicalized to a vault-root-relative path
+    // (no longer prefixed with the directory-handle name).
+    expect(result.recipes[0].filePath).toBe('Recipes/Italian/Lasagna.md');
     expect(result.recipes[0].fileName).toBe('Lasagna.md');
     // Browser decoration is still attached AFTER classification (logical identity
     // is filePath; fileHandle is the platform optimization).

@@ -9,7 +9,7 @@
 
 import { describe, it, expect } from 'vitest';
 import type { ObsidianRecipe } from '../../src/types';
-import { resolveRecipeVaultPath } from '../../src/core/vaultPath';
+import { resolveRecipeVaultPath, toVaultRelativePath } from '../../src/core/vaultPath';
 
 function recipe(partial: Partial<ObsidianRecipe>): ObsidianRecipe {
   return {
@@ -74,5 +74,88 @@ describe('resolveRecipeVaultPath (Phase 4C3A)', () => {
     expect(resolveRecipeVaultPath(r)).toBe('Recipes/Japanese/Ramen.md');
     const abs = recipe({ filePath: '/Recipes/Pizza.md', fileName: 'Pizza.md', title: 'Pizza' });
     expect(resolveRecipeVaultPath(abs)).toBe('Recipes/Pizza.md');
+  });
+});
+
+describe('toVaultRelativePath (Phase 4C3B — canonical vault-root-relative convention)', () => {
+  it('REGRESSION: upload path with root prefix strips exactly one known root segment', () => {
+    expect(toVaultRelativePath('MyVault/Recipes/Italian/Lasagna.md', 'MyVault')).toBe(
+      'Recipes/Italian/Lasagna.md'
+    );
+  });
+
+  it('scan-style already-relative path passes through unchanged', () => {
+    expect(toVaultRelativePath('Recipes/Italian/Lasagna.md', 'MyVault')).toBe(
+      'Recipes/Italian/Lasagna.md'
+    );
+  });
+
+  it('dropped-folder path with root prefix normalizes to the inner path', () => {
+    expect(toVaultRelativePath('DroppedFolder/Recipes/Pasta.md', 'DroppedFolder')).toBe(
+      'Recipes/Pasta.md'
+    );
+  });
+
+  it('dropped top-level file stays root-relative', () => {
+    expect(toVaultRelativePath('DroppedFolder/Quick Recipe.md', 'DroppedFolder')).toBe(
+      'Quick Recipe.md'
+    );
+  });
+
+  it('is idempotent: applying twice yields the same result', () => {
+    const once = toVaultRelativePath('MyVault/Recipes/Italian/Lasagna.md', 'MyVault');
+    expect(once).toBe('Recipes/Italian/Lasagna.md');
+    expect(toVaultRelativePath(once, 'MyVault')).toBe(once);
+  });
+
+  it('same root name appearing twice strips only ONE known root segment', () => {
+    expect(toVaultRelativePath('MyVault/MyVault/Recipe.md', 'MyVault')).toBe(
+      'MyVault/Recipe.md'
+    );
+  });
+
+  it('supports a Unicode root name', () => {
+    expect(toVaultRelativePath('Répertoire/Recipes/Curry.md', 'Répertoire')).toBe(
+      'Recipes/Curry.md'
+    );
+  });
+
+  it('supports a Unicode nested path with spaces preserved', () => {
+    expect(toVaultRelativePath('MyVault/Recipes/Ünïçødé/Lasăgna.md', 'MyVault')).toBe(
+      'Recipes/Ünïçødé/Lasăgna.md'
+    );
+  });
+
+  it('preserves root-level files', () => {
+    expect(toVaultRelativePath('Recipe.md', undefined)).toBe('Recipe.md');
+    expect(toVaultRelativePath('MyVault/Recipe.md', 'MyVault')).toBe('Recipe.md');
+  });
+
+  it('rejects unsafe traversal segments by returning an empty string (no escape)', () => {
+    expect(toVaultRelativePath('../etc/passwd')).toBe('');
+    expect(toVaultRelativePath('Recipes/../Lasagna.md')).toBe('');
+    expect(toVaultRelativePath('Recipes//Italian/Lasagna.md')).toBe('');
+    expect(toVaultRelativePath('.')).toBe('');
+    expect(toVaultRelativePath('')).toBe('');
+  });
+
+  it('normalizes backslashes and leading slashes', () => {
+    expect(toVaultRelativePath('\\MyVault\\Recipes\\Ramen.md', 'MyVault')).toBe(
+      'Recipes/Ramen.md'
+    );
+    expect(toVaultRelativePath('/MyVault/Recipes/Ramen.md', 'MyVault')).toBe(
+      'Recipes/Ramen.md'
+    );
+  });
+
+  it('does NOT strip when the first segment is not the rootName', () => {
+    expect(toVaultRelativePath('OtherVault/Recipes/Ramen.md', 'MyVault')).toBe(
+      'OtherVault/Recipes/Ramen.md'
+    );
+    // A legitimate first-level `Recipes` folder is preserved when the rootName
+    // is NOT `Recipes`.
+    expect(toVaultRelativePath('Recipes/Italian/Ramen.md', 'Italian')).toBe(
+      'Recipes/Italian/Ramen.md'
+    );
   });
 });

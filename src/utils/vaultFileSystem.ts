@@ -11,6 +11,7 @@ import {
   scanVaultAssetsFromHandle,
 } from './vaultAssets';
 import { classifyVaultMarkdown } from '../core/vaultClassification';
+import { toVaultRelativePath } from '../core/vaultPath';
 
 export { saveImageToVaultAssets, scanVaultAssetsFromHandle };
 
@@ -159,7 +160,7 @@ export async function scanVaultDirectory(dirHandle: any): Promise<VaultScanResul
     }
   }
 
-  await scanDirectory(dirHandle, dirHandle.name);
+  await scanDirectory(dirHandle, '');
 
   return {
     recipes,
@@ -332,8 +333,14 @@ export async function parseUploadedFileList(fileList: FileList | File[]): Promis
   const count = 'length' in fileList ? fileList.length : 0;
   for (let i = 0; i < count; i++) {
     const file = fileList[i];
-    const relativePath = (file as any).webkitRelativePath || file.name;
+    const rawPath = (file as any).webkitRelativePath || file.name;
+    // Normalize every ingested path to ONE vault-root-relative convention. The
+    // selected folder name (first segment of `webkitRelativePath`) is the known
+    // ingestion root and is stripped exactly once; a bare file name stays root-relative.
+    const rootName = rawPath.includes('/') ? rawPath.split('/')[0] : undefined;
+    const relativePath = toVaultRelativePath(rawPath, rootName);
     if (file.name.endsWith('.md') || file.name.endsWith('.markdown')) {
+      if (!relativePath) continue;
       const text = await file.text();
       const parsed = classifyVaultMarkdown({
         path: relativePath,
@@ -350,6 +357,7 @@ export async function parseUploadedFileList(fileList: FileList | File[]): Promis
         foundShoppingList = parsed.shoppingList;
       }
     } else if (isImageFile(file.name)) {
+      if (!relativePath) continue;
       try {
         const blobUrl = URL.createObjectURL(file);
         vaultAssets.registerAsset(relativePath, file, blobUrl);
@@ -376,11 +384,24 @@ export async function parseDroppedFilesAndFolders(dataTransfer: DataTransfer): P
   let foundShoppingList: ShoppingCategoryGroup[] | undefined = undefined;
 
   // Helper to read FileEntry
-  async function readFileEntry(fileEntry: any, path: string = ''): Promise<void> {
+  async function readFileEntry(
+    fileEntry: any,
+    path: string = '',
+    rootName?: string
+  ): Promise<void> {
     return new Promise((resolve) => {
       fileEntry.file(
         async (file: File) => {
-          const filePath = path ? `${path}/${file.name}` : file.name;
+          const rawPath = path ? `${path}/${file.name}` : file.name;
+          // Normalize to ONE vault-root-relative convention. The known dropped
+          // folder root is passed explicitly so a legitimate first-level recipe
+          // directory (e.g. `Recipes/Italian/...`) is never accidentally stripped
+          // unless it IS the ingestion root.
+          const filePath = toVaultRelativePath(rawPath, rootName);
+          if (!filePath) {
+            resolve();
+            return;
+          }
           if (file.name.endsWith('.md') || file.name.endsWith('.markdown')) {
             try {
               const text = await file.text();
@@ -417,9 +438,14 @@ export async function parseDroppedFilesAndFolders(dataTransfer: DataTransfer): P
   }
 
   // Helper to read DirectoryEntry
-  async function readDirectoryEntry(dirEntry: any, path: string = ''): Promise<void> {
+  async function readDirectoryEntry(
+    dirEntry: any,
+    path: string = '',
+    rootName?: string
+  ): Promise<void> {
     const dirReader = dirEntry.createReader();
     const currentPath = path ? `${path}/${dirEntry.name}` : dirEntry.name;
+    const effectiveRoot = rootName ?? (path ? (path as string).split('/')[0] || dirEntry.name : dirEntry.name);
 
     return new Promise((resolve) => {
       const readEntries = () => {
@@ -430,9 +456,9 @@ export async function parseDroppedFilesAndFolders(dataTransfer: DataTransfer): P
           }
           for (const entry of entries) {
             if (entry.isFile) {
-              await readFileEntry(entry, currentPath);
+              await readFileEntry(entry, currentPath, effectiveRoot);
             } else if (entry.isDirectory && !entry.name.startsWith('.')) {
-              await readDirectoryEntry(entry, currentPath);
+              await readDirectoryEntry(entry, currentPath, effectiveRoot);
             }
           }
           readEntries();

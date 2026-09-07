@@ -19,3 +19,4 @@
 export * from './adapters';
 export * from './askMyKitchenUi';
 export * from './createAppServices';
+export * from './vaultRecipe';

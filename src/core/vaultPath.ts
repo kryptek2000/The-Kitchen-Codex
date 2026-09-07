@@ -31,6 +31,45 @@ function isSafeRelativePath(path: string): boolean {
 }
 
 /**
+ * Canonicalizes an arbitrary vault path into ONE vault-root-relative form.
+ *
+ * This is the SINGLE ingestion/path helper for the entire product. Every path
+ * that enters the app (directory scans, upload/drop ingestion) is normalized to
+ * the same convention the `VaultAdapter` contract expects:
+ *
+ *   - backslashes -> '/'
+ *   - leading '/' stripped
+ *   - `''` / `.` / `..` segments rejected (returns `''`, the caller decides how
+ *     to treat an unsafe path — typically by skipping the file)
+ *   - UNREPEATED root prefix stripping: when `rootName` is supplied and it equals
+ *     the FIRST segment, EXACTLY ONE leading root segment is removed. A root name
+ *     appearing more than once is only stripped once.
+ *   - already-relative paths (no matching root prefix) pass through unchanged
+ *   - Unicode, internal spaces, root-level files, and non-`.md` extensions are
+ *     preserved; no URL decoding, no basename collapse.
+ *
+ * It is PURE (no filesystem/handle/window/browser API) so it is usable from the
+ * browser scans, upload/drop ingestion, and any future surface. Callers NEVER
+ * duplicate this policy (no hand-rolled string slicing in App.tsx / the adapter /
+ * resolveRecipeVaultPath).
+ */
+export function toVaultRelativePath(raw: string, rootName?: string): string {
+  if (typeof raw !== 'string') return '';
+  const normalized = normalizeVaultPath(raw);
+  if (!isSafeRelativePath(normalized)) return '';
+
+  let segments = normalized.split('/');
+  const root = typeof rootName === 'string' ? normalizeVaultPath(rootName) : '';
+  // Strip at most ONE leading root segment, and only when there is more than one
+  // segment remaining (otherwise we would collapse a legitimate 1-segment path).
+  if (root && segments.length > 1 && segments[0] === root) {
+    segments = segments.slice(1);
+  }
+
+  return segments.join('/');
+}
+
+/**
  * Resolves the canonical vault-relative persistence path for a recipe.
  *
  * Precedence (matches current new-recipe semantics but protects existing paths):

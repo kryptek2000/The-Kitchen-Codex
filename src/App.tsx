@@ -17,16 +17,17 @@ import { cleanRecipeTitle, parseObsidianRecipeMarkdown, serializeRecipeToObsidia
 import {
   pickVaultDirectory,
   saveRecipeToVaultFile,
-  deleteRecipeFromVault,
   saveMealPlanToVault,
   saveShoppingListToVault,
   parseUploadedFileList,
   parseDroppedFilesAndFolders,
-  scanVaultDirectory,
   getDirectoryHandleFromIDB,
   clearDirectoryHandleFromIDB,
   isFileSystemAccessSupported,
+  scanVaultAssetsFromHandle,
 } from './utils/vaultFileSystem';
+import { createAppServices, scanVaultMarkdown, saveRecipeWithVaultAdapter, deleteRecipeWithVaultAdapter } from './application';
+import { BrowserFsaVaultAdapter } from './platform/browser';
 import { playTimerChime } from './utils/audioAlert';
 import { APP_VERSION } from './version';
 
@@ -69,6 +70,38 @@ const INITIAL_FILTERS: FilterState = {
   sortOrder: 'asc',
 };
 
+interface LoadedVaultData {
+  recipes: ObsidianRecipe[];
+  notes: VaultNote[];
+  mealPlan?: MealPlanDay[];
+  shoppingList?: ShoppingCategoryGroup[];
+  folderName: string;
+}
+
+/**
+ * Reads a connected vault handle through the application VaultAdapter
+ * orchestration, then runs the legacy ASSET-ONLY pass (images) as a second,
+ * separate pass. This is the bootstrap-edge composition: Markdown data comes
+ * from the adapter; images/assets stay on the legacy `scanVaultAssetsFromHandle`
+ * path. Exactly ONE Markdown scan per load (no `scanVaultDirectory` double scan).
+ */
+async function loadVaultFromHandle(handle: any): Promise<LoadedVaultData> {
+  const vault = new BrowserFsaVaultAdapter(handle);
+  const scan = await scanVaultMarkdown(vault);
+  try {
+    await scanVaultAssetsFromHandle(handle);
+  } catch (err) {
+    console.warn('Background vault asset scan failed:', err);
+  }
+  return {
+    recipes: scan.recipes,
+    notes: scan.notes,
+    mealPlan: scan.mealPlan,
+    shoppingList: scan.shoppingList,
+    folderName: (handle && typeof handle.name === 'string') ? handle.name : '',
+  };
+}
+
 export default function App() {
   // 1. Vault Recipes State (Canonical Source: In-Memory working state hydrated from Obsidian vault files)
   const [recipes, setRecipes] = useState<ObsidianRecipe[]>(() => {
@@ -87,6 +120,17 @@ export default function App() {
     fileCount: 8,
     accessType: 'starter_vault',
   });
+
+  // Application service composition (Phase 4C3B). Constructed from the SAME
+  // authoritative FSA handle stored in vaultStatus — no second picker, no extra
+  // IndexedDB record, no module-global singleton. Memoized per-handle so it is
+  // recreated only when the vault handle actually changes.
+  const vaultServices = useMemo(() => {
+    if (!vaultStatus.folderHandle) return null;
+    const vault = new BrowserFsaVaultAdapter(vaultStatus.folderHandle);
+    return createAppServices({ vault });
+  }, [vaultStatus.folderHandle]);
+  const vaultAdapter = vaultServices?.adapters.vault ?? null;
 
   // Theme State (LocalStorage for UI Preference)
   const [theme, setTheme] = useState<ThemeId>(() => {
@@ -152,17 +196,17 @@ export default function App() {
         if (handle && typeof handle.queryPermission === 'function') {
           const status = await handle.queryPermission({ mode: 'readwrite' });
           if (status === 'granted') {
-            const scan = await scanVaultDirectory(handle);
+            const result = await loadVaultFromHandle(handle);
             if (isMounted) {
-              if (scan.recipes.length > 0) setRecipes(scan.recipes);
-              if (scan.notes.length > 0) setNotes(scan.notes);
-              if (scan.mealPlan) setMealPlan(scan.mealPlan);
-              if (scan.shoppingList) setShoppingCategories(scan.shoppingList);
+              if (result.recipes.length > 0) setRecipes(result.recipes);
+              if (result.notes.length > 0) setNotes(result.notes);
+              if (result.mealPlan) setMealPlan(result.mealPlan);
+              if (result.shoppingList) setShoppingCategories(result.shoppingList);
 
               setVaultStatus({
                 isConnected: true,
-                vaultPath: scan.folderName ? `Vault / ${scan.folderName}` : 'Obsidian Vault',
-                fileCount: scan.recipes.length + scan.notes.length,
+                vaultPath: result.folderName ? `Vault / ${result.folderName}` : 'Obsidian Vault',
+                fileCount: result.recipes.length + result.notes.length,
                 accessType: 'filesystem_api',
                 folderHandle: handle,
               });
@@ -184,16 +228,16 @@ export default function App() {
     const handleWindowFocus = async () => {
       if (vaultStatus.isConnected && vaultStatus.folderHandle && vaultStatus.accessType === 'filesystem_api') {
         try {
-          const scan = await scanVaultDirectory(vaultStatus.folderHandle);
-          if (scan.recipes.length > 0) {
-            setRecipes(scan.recipes);
+          const result = await loadVaultFromHandle(vaultStatus.folderHandle);
+          if (result.recipes.length > 0) {
+            setRecipes(result.recipes);
           }
-          if (scan.notes.length > 0) {
-            setNotes(scan.notes);
+          if (result.notes.length > 0) {
+            setNotes(result.notes);
           }
-          setVaultStatus((prev) => ({ ...prev, fileCount: scan.recipes.length + scan.notes.length }));
-          if (scan.mealPlan) setMealPlan(scan.mealPlan);
-          if (scan.shoppingList) setShoppingCategories(scan.shoppingList);
+          setVaultStatus((prev) => ({ ...prev, fileCount: result.recipes.length + result.notes.length }));
+          if (result.mealPlan) setMealPlan(result.mealPlan);
+          if (result.shoppingList) setShoppingCategories(result.shoppingList);
         } catch (err) {
           console.warn('Background vault scan on focus failed:', err);
         }
@@ -340,7 +384,12 @@ export default function App() {
     }
 
     // Save directly to Obsidian vault disk note
-    await saveRecipeToVaultFile(savedRecipe, vaultStatus.folderHandle);
+    if (vaultAdapter) {
+      await saveRecipeWithVaultAdapter(vaultAdapter, savedRecipe);
+    } else {
+      // Disconnected workflow: preserve the existing download-to-disk fallback.
+      await saveRecipeToVaultFile(savedRecipe, undefined);
+    }
     setIsEditorOpen(false);
     setEditingRecipe(null);
   };
@@ -359,8 +408,8 @@ export default function App() {
       setSelectedRecipe(updatedRecipe);
     }
 
-    if (vaultStatus.folderHandle) {
-      await saveRecipeToVaultFile(updatedRecipe, vaultStatus.folderHandle);
+    if (vaultAdapter) {
+      await saveRecipeWithVaultAdapter(vaultAdapter, updatedRecipe);
     }
   };
 
@@ -401,8 +450,8 @@ export default function App() {
     if (selectedRecipe && (selectedRecipe.id === recipeToDelete.id || selectedRecipe.fileName === recipeToDelete.fileName)) {
       setSelectedRecipe(null);
     }
-    if (vaultStatus.folderHandle) {
-      await deleteRecipeFromVault(recipeToDelete, vaultStatus.folderHandle);
+    if (vaultAdapter) {
+      await deleteRecipeWithVaultAdapter(vaultAdapter, recipeToDelete);
     }
   };
 
@@ -951,11 +1000,11 @@ export default function App() {
         onRefreshVault={async () => {
           if (vaultStatus.isConnected && vaultStatus.folderHandle) {
             try {
-              const scan = await scanVaultDirectory(vaultStatus.folderHandle);
-              if (scan.recipes.length > 0) setRecipes(scan.recipes);
-              if (scan.mealPlan) setMealPlan(scan.mealPlan);
-              if (scan.shoppingList) setShoppingCategories(scan.shoppingList);
-              setVaultStatus((prev) => ({ ...prev, fileCount: scan.recipes.length }));
+              const result = await loadVaultFromHandle(vaultStatus.folderHandle);
+              if (result.recipes.length > 0) setRecipes(result.recipes);
+              if (result.mealPlan) setMealPlan(result.mealPlan);
+              if (result.shoppingList) setShoppingCategories(result.shoppingList);
+              setVaultStatus((prev) => ({ ...prev, fileCount: result.recipes.length }));
             } catch (err) {
               console.warn('Re-scan failed:', err);
             }
