@@ -72,10 +72,12 @@ export function toVaultRelativePath(raw: string, rootName?: string): string {
 /**
  * Resolves the canonical vault-relative persistence path for a recipe.
  *
- * Precedence (matches current new-recipe semantics but protects existing paths):
+ * Precedence (protects existing paths; drives new-recipe placement at the
+ * connected vault root):
  *  1. an existing `filePath` (vault-relative) is authoritative and returned as-is;
  *  2. otherwise the `fileName` basename is used if present;
- *  3. otherwise a fresh `Recipes/<SafeTitle>.md` path is derived.
+ *  3. otherwise a root-relative `<SafeTitle>.md` path is derived (a genuinely
+ *     pathless recipe is a NEW recipe, so it belongs at the connected root).
  *
  * The return is always a clean vault-relative path ending in `.md`. It never turns
  * an existing nested `filePath` into a root basename.
@@ -94,5 +96,24 @@ export function resolveRecipeVaultPath(recipe: ObsidianRecipe): string {
     .replace(/[\/\\?%*:|"<>]/g, '-')
     .trim();
   const name = `${safeTitle || 'recipe'}.md`;
-  return `Recipes/${name}`;
+  return name;
+}
+
+/**
+ * Resolves the default filePath for a BRAND-NEW recipe (grabbed, pasted, or
+ * created in the editor) to a single root-relative file within the connected
+ * vault root: `<SafeFileName>.md`.
+ *
+ * The concrete VaultAdapter root already represents the directory the user chose.
+ * A new recipe must therefore default to that root — NEVER a nested folder. This
+ * replaces the former per-producer hardcoded paths (`Food/Recipes/…`,
+ * `Recipes/…`, `6 - Full Notes/Food/Recipes/…`) which, now that the adapter
+ * honors full filePath, were silently creating nested directories in the vault.
+ *
+ * Pure, no filesystem/handle/window dependency.
+ */
+export function resolveNewRecipeVaultPath(nameOrTitle: string): string {
+  const leaf = String(nameOrTitle ?? '').trim().split(/[\/\\]/).pop() || '';
+  const safe = leaf.replace(/\.md$/i, '').replace(/[\/\\?%*:|"<>]/g, '-').trim();
+  return `${safe || 'recipe'}.md`;
 }

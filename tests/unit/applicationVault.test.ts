@@ -274,3 +274,38 @@ describe('application vault orchestration (Phase 4C3B)', () => {
     expect(await vault.exists('Recipes/Italian/Lasagna.md')).toBe(false);
   });
 });
+
+describe('new vs existing recipe persistence path (Phase 4C3C)', () => {
+  it('G: a NEW root-relative recipe saves exactly at the connected root (no nested dir)', async () => {
+    const { vault, writes } = fakeVault({});
+    // `resolveNewRecipeVaultPath('Lasagna.md')` => 'Lasagna.md'
+    const r = recipe({ filePath: 'Lasagna.md', fileName: 'Lasagna.md', title: 'Lasagna' });
+    await saveRecipeWithVaultAdapter(vault, r);
+    expect(writes[0].path).toBe('Lasagna.md');
+    expect(writes[0].path).not.toBe('Food/Recipes/Lasagna.md');
+    expect(writes[0].path).not.toBe('Recipes/Lasagna.md');
+    expect(writes[0].path).not.toBe('6 - Full Notes/Food/Recipes/Lasagna.md');
+  });
+
+  it('E: an existing nested recipe saves back to its nested filePath', async () => {
+    const { vault, writes } = fakeVault({});
+    const r = recipe({ filePath: 'Italian/Lasagna.md', fileName: 'Lasagna.md', title: 'Lasagna' });
+    await saveRecipeWithVaultAdapter(vault, r);
+    expect(writes[0].path).toBe('Italian/Lasagna.md');
+  });
+
+  it('F: an existing deeply nested recipe saves back unchanged', async () => {
+    const { vault, writes } = fakeVault({});
+    const r = recipe({ filePath: 'Regional/Italian/Pasta/Lasagna.md', fileName: 'Lasagna.md', title: 'Lasagna' });
+    await saveRecipeWithVaultAdapter(vault, r);
+    expect(writes[0].path).toBe('Regional/Italian/Pasta/Lasagna.md');
+  });
+
+  it('H: saving produces no Food/Recipes path', async () => {
+    const { vault, writes } = fakeVault({});
+    const r = recipe({ filePath: 'Lasagna.md', fileName: 'Lasagna.md', title: 'Lasagna' });
+    await saveRecipeWithVaultAdapter(vault, r);
+    expect(writes[0].path.startsWith('Food/Recipes/')).toBe(false);
+    expect(writes[0].path.startsWith('6 - Full Notes/Food/Recipes/')).toBe(false);
+  });
+});

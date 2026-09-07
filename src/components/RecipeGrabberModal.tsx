@@ -24,6 +24,7 @@ import {
 import { ObsidianRecipe, ParsedIngredient, RecipeStep, ObsidianCallout } from '../types';
 import { serializeRecipeToObsidianMarkdown, parseObsidianRecipeMarkdown } from '../utils/markdownParser';
 import { saveImageToVaultAssets, syncResolveVaultAssetUrl } from '../utils/vaultAssets';
+import { resolveNewRecipeVaultPath } from '../core/vaultPath';
 
 interface RecipeGrabberModalProps {
   isOpen: boolean;
@@ -224,7 +225,8 @@ export function RecipeGrabberModal({
     const updatedRecipeData: Partial<ObsidianRecipe> = {
       title: cleanTitle,
       fileName,
-      filePath: `Food/Recipes/${fileName}`,
+      // NEW recipe: default to the connected vault root (no nested Food/Recipes/).
+      filePath: resolveNewRecipeVaultPath(fileName),
       cuisine: editCuisine.trim() || 'General',
       category: editCategory.trim() || 'Main Course',
       difficulty: editDifficulty,

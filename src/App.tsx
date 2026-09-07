@@ -17,8 +17,6 @@ import { cleanRecipeTitle, parseObsidianRecipeMarkdown, serializeRecipeToObsidia
 import {
   pickVaultDirectory,
   saveRecipeToVaultFile,
-  saveMealPlanToVault,
-  saveShoppingListToVault,
   parseUploadedFileList,
   parseDroppedFilesAndFolders,
   getDirectoryHandleFromIDB,
@@ -26,7 +24,15 @@ import {
   isFileSystemAccessSupported,
   scanVaultAssetsFromHandle,
 } from './utils/vaultFileSystem';
-import { createAppServices, scanVaultMarkdown, saveRecipeWithVaultAdapter, deleteRecipeWithVaultAdapter } from './application';
+import {
+  createAppServices,
+  loadVaultContent,
+  saveRecipeWithVaultAdapter,
+  deleteRecipeWithVaultAdapter,
+  saveMealPlanWithVaultAdapter,
+  saveShoppingListWithVaultAdapter,
+  vaultErrorMessage,
+} from './application';
 import { BrowserFsaVaultAdapter } from './platform/browser';
 import { playTimerChime } from './utils/audioAlert';
 import { APP_VERSION } from './version';
@@ -87,12 +93,11 @@ interface LoadedVaultData {
  */
 async function loadVaultFromHandle(handle: any): Promise<LoadedVaultData> {
   const vault = new BrowserFsaVaultAdapter(handle);
-  const scan = await scanVaultMarkdown(vault);
-  try {
-    await scanVaultAssetsFromHandle(handle);
-  } catch (err) {
-    console.warn('Background vault asset scan failed:', err);
-  }
+  const scan = await loadVaultContent(vault, () =>
+    scanVaultAssetsFromHandle(handle).catch((err) =>
+      console.warn('Background vault asset scan failed:', err)
+    )
+  );
   return {
     recipes: scan.recipes,
     notes: scan.notes,
@@ -131,6 +136,15 @@ export default function App() {
     return createAppServices({ vault });
   }, [vaultStatus.folderHandle]);
   const vaultAdapter = vaultServices?.adapters.vault ?? null;
+
+  // Lightweight user-facing error surface for adapter save/delete failures
+  // (no new notification framework — reuses the inline-alert UX pattern).
+  const [vaultError, setVaultError] = useState<string | null>(null);
+  const reportVaultError = (operation: 'save' | 'delete', label: string, err: unknown) => {
+    console.warn(`Vault ${operation} "${label}" failed:`, err);
+    setVaultError(vaultErrorMessage(operation, label, err));
+  };
+  const clearVaultError = () => setVaultError(null);
 
   // Theme State (LocalStorage for UI Preference)
   const [theme, setTheme] = useState<ThemeId>(() => {
@@ -268,23 +282,23 @@ export default function App() {
     } catch (e) {}
   }, [activeTimers]);
 
-  // 4. Auto-save Meal Plan note directly to disk in the Obsidian vault if connected
+  // 4. Auto-save Meal Plan note to the vault through the adapter if connected
   useEffect(() => {
-    if (vaultStatus.isConnected && vaultStatus.folderHandle) {
-      saveMealPlanToVault(mealPlan, vaultStatus.folderHandle).catch((e) =>
-        console.warn('Auto-saving Meal Plan.md to vault failed:', e)
+    if (vaultAdapter) {
+      saveMealPlanWithVaultAdapter(vaultAdapter, mealPlan).catch((e) =>
+        reportVaultError('save', 'Meal Plan', e)
       );
     }
-  }, [mealPlan, vaultStatus]);
+  }, [mealPlan, vaultAdapter]);
 
-  // 5. Auto-save Shopping List note directly to disk in the Obsidian vault if connected
+  // 5. Auto-save Shopping List note to the vault through the adapter if connected
   useEffect(() => {
-    if (vaultStatus.isConnected && vaultStatus.folderHandle) {
-      saveShoppingListToVault(shoppingCategories, vaultStatus.folderHandle).catch((e) =>
-        console.warn('Auto-saving Shopping List.md to vault failed:', e)
+    if (vaultAdapter) {
+      saveShoppingListWithVaultAdapter(vaultAdapter, shoppingCategories).catch((e) =>
+        reportVaultError('save', 'Shopping List', e)
       );
     }
-  }, [shoppingCategories, vaultStatus]);
+  }, [shoppingCategories, vaultAdapter]);
 
   // Timers Background Interval Engine
   useEffect(() => {
@@ -319,20 +333,27 @@ export default function App() {
   }, []);
 
   // Connect local folder via File System Access API
+  const handleDirectVaultConnected = async (folderHandle: any): Promise<{ recipeCount: number; noteCount: number }> => {
+    const result = await loadVaultFromHandle(folderHandle);
+    if (result.recipes.length > 0) setRecipes(result.recipes);
+    if (result.notes.length > 0) setNotes(result.notes);
+    if (result.mealPlan) setMealPlan(result.mealPlan);
+    if (result.shoppingList) setShoppingCategories(result.shoppingList);
+    setVaultStatus({
+      isConnected: true,
+      vaultPath: result.folderName ? `Vault / ${result.folderName}` : 'Obsidian Vault',
+      fileCount: result.recipes.length + result.notes.length,
+      accessType: 'filesystem_api',
+      folderHandle,
+    });
+    return { recipeCount: result.recipes.length, noteCount: result.notes.length };
+  };
+
+  // Legacy dead-code connect entrypoint, kept consistent with the adapter flow.
   const handleConnectVault = async () => {
     try {
-      const { recipes: loadedRecipes, notes: loadedNotes, folderHandle, folderName } = await pickVaultDirectory();
-      if (loadedRecipes.length > 0 || loadedNotes.length > 0) {
-        if (loadedRecipes.length > 0) setRecipes(loadedRecipes);
-        if (loadedNotes.length > 0) setNotes(loadedNotes);
-        setVaultStatus({
-          isConnected: true,
-          vaultPath: folderName ? `Vault / ${folderName}` : 'Obsidian Vault',
-          fileCount: loadedRecipes.length + loadedNotes.length,
-          accessType: 'filesystem_api',
-          folderHandle,
-        });
-      }
+      const { folderHandle } = await pickVaultDirectory();
+      if (folderHandle) await handleDirectVaultConnected(folderHandle);
     } catch (err: any) {
       if (err.name !== 'AbortError') {
         alert(err.message || 'Could not connect to Obsidian vault folder.');
@@ -384,11 +405,17 @@ export default function App() {
     }
 
     // Save directly to Obsidian vault disk note
-    if (vaultAdapter) {
-      await saveRecipeWithVaultAdapter(vaultAdapter, savedRecipe);
-    } else {
-      // Disconnected workflow: preserve the existing download-to-disk fallback.
-      await saveRecipeToVaultFile(savedRecipe, undefined);
+    try {
+      if (vaultAdapter) {
+        await saveRecipeWithVaultAdapter(vaultAdapter, savedRecipe);
+      } else {
+        // Disconnected workflow: preserve the existing download-to-disk fallback.
+        await saveRecipeToVaultFile(savedRecipe, undefined);
+      }
+    } catch (err) {
+      // Surface the failure; do NOT claim persistence succeeded (editor stays open).
+      reportVaultError('save', savedRecipe.title || 'recipe', err);
+      throw err;
     }
     setIsEditorOpen(false);
     setEditingRecipe(null);
@@ -409,7 +436,11 @@ export default function App() {
     }
 
     if (vaultAdapter) {
-      await saveRecipeWithVaultAdapter(vaultAdapter, updatedRecipe);
+      try {
+        await saveRecipeWithVaultAdapter(vaultAdapter, updatedRecipe);
+      } catch (err) {
+        reportVaultError('save', updatedRecipe.title || 'recipe', err);
+      }
     }
   };
 
@@ -451,7 +482,15 @@ export default function App() {
       setSelectedRecipe(null);
     }
     if (vaultAdapter) {
-      await deleteRecipeWithVaultAdapter(vaultAdapter, recipeToDelete);
+      try {
+        await deleteRecipeWithVaultAdapter(vaultAdapter, recipeToDelete);
+      } catch (err) {
+        // Simple rollback: the disk delete failed, so restore the recipe in state
+        // and inform the user (do not claim it was deleted from the vault).
+        reportVaultError('delete', recipeToDelete.title || 'recipe', err);
+        setRecipes((prev) => [recipeToDelete, ...prev.filter((r) => r.id !== recipeToDelete.id)]);
+        setSelectedRecipe(recipeToDelete);
+      }
     }
   };
 
@@ -972,6 +1011,22 @@ export default function App() {
         </div>
       )}
 
+      {/* Lightweight adapter save/delete error surface (inline alert, no new framework) */}
+      {vaultError && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[60] w-[calc(100%-2rem)] max-w-xl">
+          <div className="bg-rose-950/90 border border-rose-500/40 rounded-xl px-4 py-3 shadow-2xl flex items-start gap-3 text-rose-100">
+            <span className="text-base">⚠️</span>
+            <p className="flex-1 text-xs leading-relaxed text-rose-200">{vaultError}</p>
+            <button
+              onClick={clearVaultError}
+              className="px-2 py-0.5 rounded-md text-rose-300 hover:text-white hover:bg-white/10 text-xs transition-colors shrink-0"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Top Header */}
       <VaultHeader
         vaultStatus={vaultStatus}
@@ -1227,6 +1282,7 @@ export default function App() {
         setMealPlan={setMealPlan}
         setShoppingCategories={setShoppingCategories}
         onOpenWebGrabber={() => setIsGrabberOpen(true)}
+        onDirectVaultConnected={handleDirectVaultConnected}
       />
 
       {/* Web Recipe Grabber Modal */}

@@ -173,9 +173,15 @@ export async function scanVaultDirectory(dirHandle: any): Promise<VaultScanResul
 }
 
 /**
- * Prompts user to pick their Obsidian Vault directory
+ * Prompts user to pick their Obsidian Vault directory and persists the handle.
+ *
+ * Phase 4C3C: this returns ONLY the authoritative directory handle. Markdown
+ * hydration is no longer performed here — the connect-time Markdown scan (and
+ * the separate asset pass) is owned by the adapter-backed bootstrap edge
+ * (`loadVaultFromHandle` in App.tsx), so the connected runtime has a single
+ * Markdown scanner and no second non-adapter scanner on initial connect.
  */
-export async function pickVaultDirectory(): Promise<VaultScanResult> {
+export async function pickVaultDirectory(): Promise<{ folderHandle: any }> {
   if (!isFileSystemAccessSupported()) {
     throw new Error('File System Access API is not supported in this browser. Please use the Folder Upload button instead.');
   }
@@ -187,7 +193,7 @@ export async function pickVaultDirectory(): Promise<VaultScanResult> {
   });
 
   await saveDirectoryHandleToIDB(dirHandle);
-  return await scanVaultDirectory(dirHandle);
+  return { folderHandle: dirHandle };
 }
 
 /**

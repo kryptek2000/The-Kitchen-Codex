@@ -28,6 +28,7 @@ import {
 } from '../utils/vaultFileSystem';
 import { parseObsidianRecipeMarkdown } from '../utils/markdownParser';
 import { getStarterVaultRecipes, DEFAULT_VAULT_PATH } from '../data/starterVault';
+import { resolveNewRecipeVaultPath } from '../core/vaultPath';
 
 interface ConnectVaultModalProps {
   isOpen: boolean;
@@ -39,6 +40,12 @@ interface ConnectVaultModalProps {
   setMealPlan?: React.Dispatch<React.SetStateAction<MealPlanDay[]>>;
   setShoppingCategories?: React.Dispatch<React.SetStateAction<ShoppingCategoryGroup[]>>;
   onOpenWebGrabber?: () => void;
+  /**
+   * Receives the authoritative handle from the picker and performs the
+   * adapter-backed Markdown load + separate asset pass (owned by App.tsx,
+   * the bootstrap edge). Returns counts so this modal can report the outcome.
+   */
+  onDirectVaultConnected?: (handle: any) => Promise<{ recipeCount: number; noteCount: number }>;
 }
 
 export function ConnectVaultModal({
@@ -51,6 +58,7 @@ export function ConnectVaultModal({
   setMealPlan,
   setShoppingCategories,
   onOpenWebGrabber,
+  onDirectVaultConnected,
 }: ConnectVaultModalProps) {
   const [activeTab, setActiveTab] = useState<'upload' | 'direct' | 'paste' | 'manage'>('upload');
   const [dragOver, setDragOver] = useState(false);
@@ -209,27 +217,21 @@ export function ConnectVaultModal({
     setIsProcessing(true);
     setStatusMessage(null);
     try {
-      const { recipes: loadedRecipes, mealPlan: loadedMealPlan, shoppingList: loadedShoppingList, folderHandle, folderName } = await pickVaultDirectory();
-      if (loadedRecipes.length > 0 || loadedMealPlan || loadedShoppingList) {
-        if (loadedRecipes.length > 0) setRecipes(loadedRecipes);
-        if (loadedMealPlan && setMealPlan) setMealPlan(loadedMealPlan);
-        if (loadedShoppingList && setShoppingCategories) setShoppingCategories(loadedShoppingList);
-
-        setVaultStatus({
-          isConnected: true,
-          vaultPath: folderName ? `Vault / ${folderName}` : 'Obsidian Vault',
-          fileCount: loadedRecipes.length,
-          accessType: 'filesystem_api',
-          folderHandle,
-        });
+      const { folderHandle } = await pickVaultDirectory();
+      if (!folderHandle) return;
+      // The picker only returns the handle. Markdown hydration + asset pass are
+      // performed by the App bootstrap edge (adapter-backed, single Markdown scan).
+      const counts = await onDirectVaultConnected?.(folderHandle);
+      const label = folderHandle.name || 'Obsidian Vault';
+      if (counts && counts.recipeCount > 0) {
         setStatusMessage({
           type: 'success',
-          text: `Connected live to Obsidian folder "${folderName}" (${loadedRecipes.length} notes synced)!`,
+          text: `Connected live to Obsidian folder "${label}" (${counts.recipeCount} notes synced)!`,
         });
       } else {
         setStatusMessage({
           type: 'info',
-          text: `Connected to "${folderName}", but no .md recipe notes were found yet.`,
+          text: `Connected to "${label}", but no .md recipe notes were found yet.`,
         });
       }
     } catch (err: any) {
@@ -263,7 +265,7 @@ export function ConnectVaultModal({
     }
     try {
       const fileName = pasteTitle.trim() ? `${pasteTitle.trim().replace(/\.md$/, '')}.md` : 'Pasted Recipe.md';
-      const parsed = parseObsidianRecipeMarkdown(pasteContent, fileName, `Recipes/${fileName}`);
+      const parsed = parseObsidianRecipeMarkdown(pasteContent, fileName, resolveNewRecipeVaultPath(fileName));
       setRecipes((prev) => [parsed, ...prev.filter((r) => r.id !== parsed.id)]);
       setStatusMessage({
         type: 'success',

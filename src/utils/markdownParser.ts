@@ -516,7 +516,7 @@ export function extractTimerMinutes(text: string): number | null {
 export function parseObsidianRecipeMarkdown(
   rawMarkdown: string,
   fileName: string = 'Untitled Recipe.md',
-  filePath: string = '6 - Full Notes/Food/Recipes/Untitled Recipe.md',
+  filePath: string = 'Untitled Recipe.md',
   fileHandle?: any
 ): ObsidianRecipe {
   let frontmatter: Record<string, any> = {};

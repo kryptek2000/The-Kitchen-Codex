@@ -1,5 +1,6 @@
 import { ObsidianRecipe, VaultNote, MealPlanDay, ShoppingCategoryGroup } from '../types';
 import { parseObsidianRecipeMarkdown, parseVaultNoteMarkdown } from '../utils/markdownParser';
+import { resolveNewRecipeVaultPath } from '../core/vaultPath';
 
 export const DEFAULT_VAULT_PATH = 'Obsidian Vault / Kitchen Codex';
 
@@ -507,7 +508,9 @@ created: 2026-08-01
 
 export function getStarterVaultRecipes(): ObsidianRecipe[] {
   return STARTER_RECIPE_MARKDOWNS.map((item) => {
-    const filePath = `Recipes/${item.fileName}`;
+    // Starter recipes are synthetic/new (never persisted as files), so they
+    // default to the connected vault root — not a nested Recipes/ folder.
+    const filePath = resolveNewRecipeVaultPath(item.fileName);
     return parseObsidianRecipeMarkdown(item.markdown, item.fileName, filePath);
   });
 }

@@ -9,7 +9,7 @@
 
 import { describe, it, expect } from 'vitest';
 import type { ObsidianRecipe } from '../../src/types';
-import { resolveRecipeVaultPath, toVaultRelativePath } from '../../src/core/vaultPath';
+import { resolveRecipeVaultPath, resolveNewRecipeVaultPath, toVaultRelativePath } from '../../src/core/vaultPath';
 
 function recipe(partial: Partial<ObsidianRecipe>): ObsidianRecipe {
   return {
@@ -54,9 +54,9 @@ describe('resolveRecipeVaultPath (Phase 4C3A)', () => {
     expect(resolveRecipeVaultPath(r)).toBe('Recipes/Brownies.md');
   });
 
-  it('derives a fresh Recipes/<SafeTitle>.md path when filePath is unsafe (traversal)', () => {
+  it('derives a fresh root-relative path when filePath is unsafe (traversal)', () => {
     const r = recipe({ filePath: 'Recipes/../evil.md', fileName: 'evil.md', title: 'Cake' });
-    expect(resolveRecipeVaultPath(r)).toBe('Recipes/Cake.md');
+    expect(resolveRecipeVaultPath(r)).toBe('Cake.md');
   });
 
   it('derives from the basename when filePath is absent but fileName exists', () => {
@@ -64,9 +64,9 @@ describe('resolveRecipeVaultPath (Phase 4C3A)', () => {
     expect(resolveRecipeVaultPath(r)).toBe('Cupcakes.md');
   });
 
-  it('derives from the title when neither filePath nor fileName is usable', () => {
+  it('derives a root-relative path from the title when neither filePath nor fileName is usable', () => {
     const r = recipe({ title: 'Sourdough Bread', fileName: '' });
-    expect(resolveRecipeVaultPath(r)).toBe('Recipes/Sourdough Bread.md');
+    expect(resolveRecipeVaultPath(r)).toBe('Sourdough Bread.md');
   });
 
   it('normalizes backslashes and leading slashes to a clean vault-relative path', () => {
@@ -74,6 +74,31 @@ describe('resolveRecipeVaultPath (Phase 4C3A)', () => {
     expect(resolveRecipeVaultPath(r)).toBe('Recipes/Japanese/Ramen.md');
     const abs = recipe({ filePath: '/Recipes/Pizza.md', fileName: 'Pizza.md', title: 'Pizza' });
     expect(resolveRecipeVaultPath(abs)).toBe('Recipes/Pizza.md');
+  });
+});
+
+describe('resolveNewRecipeVaultPath (Phase 4C3C — new recipes land at the connected root)', () => {
+  it('A: a grabbed/new recipe fileName yields a root-relative filePath', () => {
+    expect(resolveNewRecipeVaultPath('Lasagna.md')).toBe('Lasagna.md');
+  });
+
+  it('keeps a clean title as a single root-relative file', () => {
+    expect(resolveNewRecipeVaultPath('Chicken Parmesan')).toBe('Chicken Parmesan.md');
+  });
+
+  it('flattens an accidentally nested producer path to the root basename', () => {
+    expect(resolveNewRecipeVaultPath('Recipes/Italian/Lasagna.md')).toBe('Lasagna.md');
+    expect(resolveNewRecipeVaultPath('Food/Recipes/Lasagna.md')).toBe('Lasagna.md');
+    expect(resolveNewRecipeVaultPath('6 - Full Notes/Food/Recipes/Lasagna.md')).toBe('Lasagna.md');
+  });
+
+  it('appends .md and sanitizes unsafe filename characters', () => {
+    expect(resolveNewRecipeVaultPath('Sauce: Type|Extra')).toBe('Sauce- Type-Extra.md');
+  });
+
+  it('falls back to recipe.md for an empty/unsafe name', () => {
+    expect(resolveNewRecipeVaultPath('')).toBe('recipe.md');
+    expect(resolveNewRecipeVaultPath('Recipes/')).toBe('recipe.md');
   });
 });
 

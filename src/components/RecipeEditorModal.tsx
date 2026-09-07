@@ -25,11 +25,12 @@ import {
   serializeRecipeToObsidianMarkdown,
 } from '../utils/markdownParser';
 import { saveImageToVaultAssets, vaultAssets } from '../utils/vaultAssets';
+import { resolveNewRecipeVaultPath } from '../core/vaultPath';
 import { useVaultImage } from '../hooks/useVaultImage';
 
 interface RecipeEditorModalProps {
   initialRecipe?: ObsidianRecipe | null;
-  folderHandle?: any;  onSave: (recipe: ObsidianRecipe) => void;
+  folderHandle?: any;  onSave: (recipe: ObsidianRecipe) => Promise<void> | void;
    onClose: () => void;
 }
 
@@ -101,6 +102,7 @@ export function RecipeEditorModal({
   }));
   const [isSavingImageAsset, setIsSavingImageAsset] = useState(false);
   const [isAssetPickerOpen, setIsAssetPickerOpen] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const previewImageUrl = useVaultImage(image, folderHandle);
@@ -393,14 +395,15 @@ export function RecipeEditorModal({
     }
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     let finalRecipe: ObsidianRecipe;
 
     if (activeTab === 'markdown') {
       finalRecipe = parseObsidianRecipeMarkdown(
         rawMarkdown,
         fileName.endsWith('.md') ? fileName : `${fileName}.md`,
-        initialRecipe?.filePath || `6 - Full Notes/Food/Recipes/${fileName}`
+        // Existing recipe: keep authoritative filePath. New recipe: connected root.
+        initialRecipe?.filePath || resolveNewRecipeVaultPath(fileName)
       );
     } else {
       const md = generateCurrentMarkdown();
@@ -408,7 +411,8 @@ export function RecipeEditorModal({
       finalRecipe = parseObsidianRecipeMarkdown(
         md,
         safeName,
-        initialRecipe?.filePath || `Recipes/${safeName}`
+        // Existing recipe: keep authoritative filePath. New recipe: connected root.
+        initialRecipe?.filePath || resolveNewRecipeVaultPath(safeName)
       );
     }
 
@@ -419,7 +423,12 @@ export function RecipeEditorModal({
       finalRecipe.fileHandle = initialRecipe.fileHandle;
     }
 
-    onSave(finalRecipe);
+    setSaveError(null);
+    try {
+      await onSave(finalRecipe);
+    } catch (err: any) {
+      setSaveError(err?.message || 'Failed to save recipe to the vault.');
+    }
   };
 
   return (
@@ -436,7 +445,7 @@ export function RecipeEditorModal({
                 {initialRecipe ? `Edit: ${initialRecipe.title}` : 'Create New Obsidian Recipe Note'}
               </h2>
               <span className="text-xs text-gray-500 font-mono">
-                Recipes/{fileName}
+                {initialRecipe ? initialRecipe.filePath : fileName}
               </span>
             </div>
           </div>
@@ -962,6 +971,19 @@ export function RecipeEditorModal({
         </div>
 
         {/* Footer Actions */}
+        {saveError && (
+          <div className="mx-4 px-3 py-2 rounded-xl bg-rose-950/40 border border-rose-500/40 text-rose-200 text-xs flex items-center gap-2">
+            <span>⚠️</span>
+            <span className="flex-1">{saveError}</span>
+            <button
+              type="button"
+              onClick={() => setSaveError(null)}
+              className="text-rose-300 hover:text-white text-[11px] underline"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
         <div className="pt-3 border-t border-white/5 flex items-center justify-between gap-2">
           <button
             onClick={onClose}
