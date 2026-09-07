@@ -39,6 +39,8 @@ export type FsaEntryLike = FsaFileHandleLike | FsaDirectoryHandleLike;
 export interface FsaWritableLike {
   write(data: string): Promise<void>;
   close(): Promise<void>;
+  /** Optional best-effort abort (FSA `FileSystemWritableFileStream.abort()`). */
+  abort?(): Promise<void>;
 }
 
 /** Minimal file handle shape (only what read/write need). */
@@ -157,8 +159,21 @@ export class BrowserFsaVaultAdapter implements VaultAdapter {
     const { parent, fileName } = await resolveFileTarget(this.root, path, true);
     const fileHandle = await parent.getFileHandle(fileName, { create: true });
     const writable = await fileHandle.createWritable();
-    await writable.write(content);
-    await writable.close();
+    try {
+      await writable.write(content);
+      await writable.close();
+    } catch (error) {
+      // Best-effort abort of the writable stream so it is not left open, but NEVER
+      // swallow the original error.
+      if (typeof writable.abort === 'function') {
+        try {
+          await writable.abort();
+        } catch {
+          // ignore secondary abort failure
+        }
+      }
+      throw error;
+    }
   }
 
   async delete(path: string): Promise<void> {

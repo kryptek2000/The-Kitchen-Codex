@@ -16,16 +16,32 @@
  * compile time (`implements VaultAdapter`).
  */
 
-import { readFileSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { resolve, dirname, join } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '../..');
 
-const PLATFORM_DIR = resolve(ROOT, 'src/platform/browser');
-const PLATFORM_FILES = ['BrowserFsaVaultAdapter.ts', 'index.ts'];
+const PLATFORM_DIR = resolve(ROOT, 'src/platform');
+
+/** Recursively discovers TypeScript sources under `src/platform` (no AST tooling). */
+function discoverTsFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    const stat = statSync(full);
+    if (stat.isDirectory()) {
+      out.push(...discoverTsFiles(full));
+    } else if (entry.endsWith('.ts')) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+const PLATFORM_FILES = discoverTsFiles(PLATFORM_DIR);
 
 const FORBIDDEN_EXTERNAL = [
   /^react$/,

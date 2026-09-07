@@ -63,7 +63,7 @@ class MockDir implements FsaDirectoryHandleLike {
       }
       throw { name: 'NotFoundError' };
     }
-    throw new Error('TypeMismatchError: expected a file.');
+    throw { name: 'TypeMismatchError' };
   }
 
   async getDirectoryHandle(
@@ -84,7 +84,14 @@ class MockDir implements FsaDirectoryHandleLike {
   }
 
   async removeEntry(name: string): Promise<void> {
-    if (!this.children.delete(name)) throw { name: 'NotFoundError' };
+    const child = this.children.get(name);
+    if (!child) throw { name: 'NotFoundError' };
+    // File System Access API: removeEntry on a NON-EMPTY directory throws; the
+    // VaultAdapter contract is file-deletion only, so a directory target errors.
+    if (child instanceof MockDir && child.children.size > 0) {
+      throw { name: 'InvalidModificationError' };
+    }
+    this.children.delete(name);
   }
 }
 
@@ -229,5 +236,85 @@ describe('BrowserFsaVaultAdapter (Phase 4C2)', () => {
     const error = await adapter.readText('Recipes/Missing.md').catch((e) => e);
     expect(error).toMatchObject({ name: 'NotFoundError' });
     expect(error.message).toMatch(/not found/i);
+  });
+
+  it('supports Unicode file and directory names', async () => {
+    const root = buildVault({ 'Recipes/Ünïçødé/Lasăgna.md': '# lasagna', 'Recipes/카레.md': 'x' });
+    const adapter = new BrowserFsaVaultAdapter(root);
+    const files = await adapter.listMarkdownFiles();
+    expect(files.map((f) => f.path)).toEqual(
+      expect.arrayContaining(['Recipes/Ünïçødé/Lasăgna.md', 'Recipes/카레.md'])
+    );
+    await expect(adapter.readText('Recipes/Ünïçødé/Lasăgna.md')).resolves.toBe('# lasagna');
+  });
+
+  it('readText on a directory target surfaces a TypeMismatchError', async () => {
+    const adapter = new BrowserFsaVaultAdapter(buildVault(VAULT));
+    const error = await adapter.readText('Recipes').catch((e) => e);
+    expect(error).toMatchObject({ name: 'TypeMismatchError' });
+  });
+
+  it('delete on a non-empty directory is rejected (file-deletion-only semantics)', async () => {
+    const adapter = new BrowserFsaVaultAdapter(buildVault(VAULT));
+    const error = await adapter.delete('Recipes/Italian').catch((e) => e);
+    expect(error).toMatchObject({ name: 'InvalidModificationError' });
+    // The directory and its contents remain intact.
+    expect(await adapter.exists('Recipes/Italian/Lasagna.md')).toBe(true);
+  });
+
+  it('writeText aborts the writable and rethrows when write() fails', async () => {
+    const aborted: string[] = [];
+    const badWritable = {
+      write: async () => {
+        throw new Error('disk full');
+      },
+      close: async () => {},
+      abort: async () => {
+        aborted.push('abort');
+      },
+    };
+    const root: FsaDirectoryHandleLike = {
+      name: 'Root',
+      kind: 'directory',
+      values: async function* () {},
+      getFileHandle: async () =>
+        ({ name: 'A.md', kind: 'file', getFile: async () => ({ text: async () => '' }), createWritable: async () => badWritable }) as FsaFileHandleLike,
+      getDirectoryHandle: async () => {
+        throw { name: 'NotFoundError' };
+      },
+      removeEntry: async () => {},
+    };
+    const adapter = new BrowserFsaVaultAdapter(root);
+    await expect(adapter.writeText('A.md', 'content')).rejects.toThrow('disk full');
+    // The original error is not swallowed, and abort() was attempted.
+    expect(aborted).toEqual(['abort']);
+  });
+
+  it('writeText surfaces the original error when close() fails', async () => {
+    const aborted: string[] = [];
+    const badWritable = {
+      write: async () => {},
+      close: async () => {
+        throw new Error('close failed');
+      },
+      abort: async () => {
+        aborted.push('abort');
+      },
+    };
+    const root: FsaDirectoryHandleLike = {
+      name: 'Root',
+      kind: 'directory',
+      values: async function* () {},
+      getFileHandle: async () =>
+        ({ name: 'B.md', kind: 'file', getFile: async () => ({ text: async () => '' }), createWritable: async () => badWritable }) as FsaFileHandleLike,
+      getDirectoryHandle: async () => {
+        throw { name: 'NotFoundError' };
+      },
+      removeEntry: async () => {},
+    };
+    const adapter = new BrowserFsaVaultAdapter(root);
+    await expect(adapter.writeText('B.md', 'content')).rejects.toThrow('close failed');
+    // On any write/close failure we best-effort abort then rethrow the original.
+    expect(aborted).toEqual(['abort']);
   });
 });

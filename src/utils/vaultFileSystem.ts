@@ -1,12 +1,8 @@
 import { ObsidianRecipe, MealPlanDay, ShoppingCategoryGroup, VaultNote } from '../types';
 import {
-  parseObsidianRecipeMarkdown,
   serializeRecipeToObsidianMarkdown,
-  parseMealPlanFromMarkdown,
   serializeMealPlanToMarkdown,
-  parseShoppingListFromMarkdown,
   serializeShoppingListToMarkdown,
-  parseVaultNoteMarkdown,
 } from './markdownParser';
 import {
   vaultAssets,
@@ -14,6 +10,7 @@ import {
   saveImageToVaultAssets,
   scanVaultAssetsFromHandle,
 } from './vaultAssets';
+import { classifyVaultMarkdown } from '../core/vaultClassification';
 
 export { saveImageToVaultAssets, scanVaultAssetsFromHandle };
 
@@ -128,27 +125,21 @@ export async function scanVaultDirectory(dirHandle: any): Promise<VaultScanResul
             const file = await entry.getFile();
             const text = await file.text();
 
-            const lowerName = entry.name.toLowerCase();
-            if (lowerName === 'meal plan.md' || lowerName === 'meal-plan.md' || lowerName === 'mealplan.md') {
-              foundMealPlan = parseMealPlanFromMarkdown(text);
-            } else if (
-              lowerName === 'shopping list.md' ||
-              lowerName === 'shopping-list.md' ||
-              lowerName === 'grocery list.md' ||
-              lowerName === 'shoppinglist.md'
-            ) {
-              foundShoppingList = parseShoppingListFromMarkdown(text);
-            } else {
-              const parsed = parseObsidianRecipeMarkdown(text, entry.name, entryPath);
-              parsed.fileHandle = entry;
-              // Check if it's a recipe or general reference note
-              if (parsed.ingredients.length > 0 || parsed.instructions.length > 0 || parsed.tags.some(t => t.toLowerCase().includes('recipe') || t.toLowerCase().includes('food'))) {
-                recipes.push(parsed);
-              } else {
-                const genericNote = parseVaultNoteMarkdown(text, entry.name, entryPath);
-                genericNote.fileHandle = entry;
-                notes.push(genericNote);
-              }
+            const parsed = classifyVaultMarkdown({
+              path: entryPath,
+              name: entry.name,
+              markdown: text,
+            });
+            if (parsed.kind === 'recipe') {
+              parsed.recipe.fileHandle = entry;
+              recipes.push(parsed.recipe);
+            } else if (parsed.kind === 'note') {
+              parsed.note.fileHandle = entry;
+              notes.push(parsed.note);
+            } else if (parsed.kind === 'mealPlan') {
+              foundMealPlan = parsed.mealPlan;
+            } else if (parsed.kind === 'shoppingList') {
+              foundShoppingList = parsed.shoppingList;
             }
           } catch (e) {
             console.warn('Failed to parse file:', entry.name, e);
@@ -344,24 +335,19 @@ export async function parseUploadedFileList(fileList: FileList | File[]): Promis
     const relativePath = (file as any).webkitRelativePath || file.name;
     if (file.name.endsWith('.md') || file.name.endsWith('.markdown')) {
       const text = await file.text();
-      const lowerName = file.name.toLowerCase();
-
-      if (lowerName === 'meal plan.md' || lowerName === 'meal-plan.md' || lowerName === 'mealplan.md') {
-        foundMealPlan = parseMealPlanFromMarkdown(text);
-      } else if (
-        lowerName === 'shopping list.md' ||
-        lowerName === 'shopping-list.md' ||
-        lowerName === 'grocery list.md' ||
-        lowerName === 'shoppinglist.md'
-      ) {
-        foundShoppingList = parseShoppingListFromMarkdown(text);
-      } else {
-        const parsed = parseObsidianRecipeMarkdown(text, file.name, relativePath);
-        if (parsed.ingredients.length > 0 || parsed.instructions.length > 0 || parsed.tags.some(t => t.toLowerCase().includes('recipe') || t.toLowerCase().includes('food'))) {
-          recipes.push(parsed);
-        } else {
-          notes.push(parseVaultNoteMarkdown(text, file.name, relativePath));
-        }
+      const parsed = classifyVaultMarkdown({
+        path: relativePath,
+        name: file.name,
+        markdown: text,
+      });
+      if (parsed.kind === 'recipe') {
+        recipes.push(parsed.recipe);
+      } else if (parsed.kind === 'note') {
+        notes.push(parsed.note);
+      } else if (parsed.kind === 'mealPlan') {
+        foundMealPlan = parsed.mealPlan;
+      } else if (parsed.kind === 'shoppingList') {
+        foundShoppingList = parsed.shoppingList;
       }
     } else if (isImageFile(file.name)) {
       try {
@@ -398,18 +384,19 @@ export async function parseDroppedFilesAndFolders(dataTransfer: DataTransfer): P
           if (file.name.endsWith('.md') || file.name.endsWith('.markdown')) {
             try {
               const text = await file.text();
-              const lowerName = file.name.toLowerCase();
-              if (lowerName === 'meal plan.md' || lowerName === 'meal-plan.md') {
-                foundMealPlan = parseMealPlanFromMarkdown(text);
-              } else if (lowerName === 'shopping list.md' || lowerName === 'shopping-list.md' || lowerName === 'grocery list.md') {
-                foundShoppingList = parseShoppingListFromMarkdown(text);
-              } else {
-                const parsed = parseObsidianRecipeMarkdown(text, file.name, filePath);
-                if (parsed.ingredients.length > 0 || parsed.instructions.length > 0 || parsed.tags.some(t => t.toLowerCase().includes('recipe') || t.toLowerCase().includes('food'))) {
-                  recipes.push(parsed);
-                } else {
-                  notes.push(parseVaultNoteMarkdown(text, file.name, filePath));
-                }
+              const parsed = classifyVaultMarkdown({
+                path: filePath,
+                name: file.name,
+                markdown: text,
+              });
+              if (parsed.kind === 'recipe') {
+                recipes.push(parsed.recipe);
+              } else if (parsed.kind === 'note') {
+                notes.push(parsed.note);
+              } else if (parsed.kind === 'mealPlan') {
+                foundMealPlan = parsed.mealPlan;
+              } else if (parsed.kind === 'shoppingList') {
+                foundShoppingList = parsed.shoppingList;
               }
             } catch (err) {
               console.warn('Failed to parse dropped file:', file.name, err);

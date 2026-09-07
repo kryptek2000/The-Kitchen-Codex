@@ -69,5 +69,11 @@ export * from '../utils/kitchenDiscovery';
 // Vault Intelligence deterministic logic (health assessment / metadata merge).
 export * from '../utils/vaultIntelligence';
 
+// Vault Markdown classification + canonical recipe location (Phase 4C3A).
+// Pure, platform-neutral helpers: the single source of Markdown classification
+// and the invariant that an existing recipe's location is owned by its filePath.
+export * from './vaultClassification';
+export * from './vaultPath';
+
 // Curated food reference.
 export * from '../data/foodReference';
