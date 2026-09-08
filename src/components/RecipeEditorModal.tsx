@@ -27,15 +27,14 @@ import {
 import { saveImageToVaultAssets, vaultAssets } from '../utils/vaultAssets';
 import { resolveNewRecipeVaultPath } from '../core/vaultPath';
 import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
-import { BrowserNetworkAdapter } from '../platform/browser';
 import { useVaultImage } from '../hooks/useVaultImage';
 
 interface RecipeEditorModalProps {
   initialRecipe?: ObsidianRecipe | null;
   folderHandle?: any;
   onSave: (recipe: ObsidianRecipe) => Promise<void> | void;
-  /** App-backend API transport (injected by the bootstrap; defaults to the browser adapter). */
-  network?: NetworkAdapter;
+  /** App-backend API transport (injected by the bootstrap). */
+  network: NetworkAdapter;
   onClose: () => void;
 }
 
@@ -246,8 +245,7 @@ export function RecipeEditorModal({
 
       const numServings = typeof servings === 'number' ? servings : parseInt(String(servings), 10) || 4;
 
-      const net = network ?? new BrowserNetworkAdapter();
-      const res = await net.post<{ success: boolean; nutrition?: any; error?: string }>(
+      const res = await network.post<{ success: boolean; nutrition?: any; error?: string }>(
         '/api/estimate-nutrition',
         {
           title: title || 'Recipe',
@@ -330,19 +328,15 @@ export function RecipeEditorModal({
         },
       };
 
-      const res = await fetch('/api/recover-metadata', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
+      const res = await network.post<{ recovered?: any; error?: string }>('/api/recover-metadata', payload);
 
       if (!res.ok) {
-        const d = await res.json().catch(() => ({}));
-        throw new Error(d.error || `Server error (${res.status})`);
+        const d = res.data as { error?: string } | undefined;
+        throw new Error(d?.error || `Server error (${res.status})`);
       }
 
-      const data = await res.json();
-      if (data.recovered) {
+      const data = res.data;
+      if (data?.recovered) {
         const rec = data.recovered;
         let recoveredCount = 0;
 

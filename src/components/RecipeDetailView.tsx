@@ -31,6 +31,7 @@ import {
   Search,
 } from 'lucide-react';
 import { ObsidianRecipe, ParsedIngredient, VaultNote, RecipeNutrition } from '../types';
+import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
 import { scaleIngredientText } from '../utils/markdownParser';
 import { downloadMarkdownFile } from '../utils/vaultFileSystem';
 import { getRecipeImage, DEFAULT_FOOD_IMAGES } from '../utils/imageHelper';
@@ -67,6 +68,7 @@ interface RecipeDetailViewProps {
   onSelectRecipe?: (recipe: ObsidianRecipe) => void;
   onSaveNoteToVault?: (note: VaultNote) => Promise<boolean | void>;
   onOpenVaultIntelligence?: (recipeId?: string) => void;
+  network: NetworkAdapter;
 }
 
 export function RecipeDetailView({
@@ -85,6 +87,7 @@ export function RecipeDetailView({
   onSelectRecipe,
   onSaveNoteToVault,
   onOpenVaultIntelligence,
+  network,
 }: RecipeDetailViewProps) {
   const [currentServings, setCurrentServings] = useState<number>(recipe.servings || 4);
   const [activeViewMode, setActiveViewMode] = useState<'visual' | 'markdown'>('visual');
@@ -591,6 +594,7 @@ export function RecipeDetailView({
                 <RecipeNutritionCard
                   recipe={recipe}
                   servings={currentServings}
+                  network={network}
                   onUpdateNutrition={(nut) => onUpdateNutrition(recipe, nut)}
                 />
               )}

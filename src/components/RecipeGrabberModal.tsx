@@ -25,6 +25,7 @@ import { ObsidianRecipe, ParsedIngredient, RecipeStep, ObsidianCallout } from '.
 import { serializeRecipeToObsidianMarkdown, parseObsidianRecipeMarkdown } from '../utils/markdownParser';
 import { saveImageToVaultAssets, syncResolveVaultAssetUrl } from '../utils/vaultAssets';
 import { resolveNewRecipeVaultPath } from '../core/vaultPath';
+import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
 
 interface RecipeGrabberModalProps {
   isOpen: boolean;
@@ -34,6 +35,7 @@ interface RecipeGrabberModalProps {
   folderHandle?: any;
   /** Optional pre-filled URL (e.g. a handoff from Ask My Kitchen web discovery). */
   initialUrl?: string;
+  network: NetworkAdapter;
 }
 
 interface GrabbedRecipeData {
@@ -89,6 +91,7 @@ export function RecipeGrabberModal({
   onOpenInEditor,
   folderHandle,
   initialUrl,
+  network,
 }: RecipeGrabberModalProps) {
   const [inputMode, setInputMode] = useState<'url' | 'text'>('url');
   const [urlInput, setUrlInput] = useState('');
@@ -152,24 +155,20 @@ export function RecipeGrabberModal({
 
     try {
       const isHtmlText = trimmedText.includes('<') && (trimmedText.includes('</') || trimmedText.includes('/>') || trimmedText.includes('<html') || trimmedText.includes('<body') || trimmedText.includes('<div') || trimmedText.includes('<script'));
-      const response = await fetch('/api/grab-recipe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          url: inputMode === 'url' ? trimmedUrl : undefined,
-          rawText: inputMode === 'text' && !isHtmlText ? trimmedText : undefined,
-          html: inputMode === 'text' && isHtmlText ? trimmedText : undefined,
-        }),
+      const response = await network.post<{ success: boolean; code?: string; error?: string; message?: string; recipe: GrabbedRecipeData }>('/api/grab-recipe', {
+        url: inputMode === 'url' ? trimmedUrl : undefined,
+        rawText: inputMode === 'text' && !isHtmlText ? trimmedText : undefined,
+        html: inputMode === 'text' && isHtmlText ? trimmedText : undefined,
       });
 
-      const data = await response.json();
+      const data = response.data;
 
-      if (!response.ok || !data.success) {
-        if (data.code === 'WAF_PROTECTION_BLOCKED' || data.error === 'WAF_PROTECTION_BLOCKED' || response.status === 403) {
+      if (!response.ok || !data?.success) {
+        if (data?.code === 'WAF_PROTECTION_BLOCKED' || data?.error === 'WAF_PROTECTION_BLOCKED' || response.status === 403) {
           setWafBlockedUrl(trimmedUrl);
-          throw new Error(data.message || 'This recipe website is protected by automated bot protection (Cloudflare / Akamai).');
+          throw new Error(data?.message || 'This recipe website is protected by automated bot protection (Cloudflare / Akamai).');
         }
-        throw new Error(data.error || 'Failed to extract recipe from website.');
+        throw new Error(data?.error || 'Failed to extract recipe from website.');
       }
 
       const recipe: GrabbedRecipeData = data.recipe;

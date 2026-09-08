@@ -71,12 +71,22 @@ export function createTimer(
  */
 export function reconcileTimer(timer: ActiveTimer, now: number): { timer: ActiveTimer; justCompleted: boolean } {
   if (!timer.isRunning) {
-    return { timer: { ...timer, remainingSeconds: clampSeconds(safeNum(timer.remainingSeconds, 0)) }, justCompleted: false };
+    const clamped = clampSeconds(safeNum(timer.remainingSeconds, 0));
+    if (clamped === timer.remainingSeconds) {
+      // Already paused/completed and normalized -> preserve identity (avoid
+      // needless 1 Hz re-render churn for unchanged paused/completed timers).
+      return { timer, justCompleted: false };
+    }
+    return { timer: { ...timer, remainingSeconds: clamped }, justCompleted: false };
   }
 
   if (typeof timer.endsAt === 'number' && Number.isFinite(timer.endsAt)) {
     const remaining = Math.max(0, Math.ceil((timer.endsAt - now) / 1000));
     const justCompleted = timer.remainingSeconds > 0 && remaining <= 0;
+    if (!justCompleted && remaining === timer.remainingSeconds) {
+      // No state change this tick (bounds the same second) -> keep identity.
+      return { timer, justCompleted: false };
+    }
     return {
       timer: { ...timer, remainingSeconds: remaining, isRunning: remaining <= 0 ? false : true },
       justCompleted,

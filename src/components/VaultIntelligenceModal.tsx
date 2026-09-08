@@ -34,6 +34,7 @@ import {
   MetadataHealthStatus,
   RecoveryConfidence,
 } from '../types';
+import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
 import {
   assessRecipeHealth,
   summarizeVaultHealth,
@@ -48,6 +49,7 @@ interface VaultIntelligenceModalProps {
   onSaveRecipe: (updated: ObsidianRecipe) => Promise<void> | void;
   onBatchSaveRecipes?: (updatedList: ObsidianRecipe[]) => Promise<void> | void;
   initialSelectedRecipeId?: string | null;
+  network: NetworkAdapter;
 }
 
 export function VaultIntelligenceModal({
@@ -57,6 +59,7 @@ export function VaultIntelligenceModal({
   onSaveRecipe,
   onBatchSaveRecipes,
   initialSelectedRecipeId,
+  network,
 }: VaultIntelligenceModalProps) {
   const [activeTab, setActiveTab] = useState<'overview' | 'queue'>('overview');
   const [healthFilter, setHealthFilter] = useState<'all' | 'legacy' | 'incomplete' | 'mostly_complete' | 'complete'>('all');
@@ -161,19 +164,14 @@ export function VaultIntelligenceModal({
         },
       };
 
-      const res = await fetch('/api/recover-metadata', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
+        const res = await network.post<{ recovered?: any; error?: string }>('/api/recover-metadata', payload);
 
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || `Server returned error (${res.status})`);
+        throw new Error((res.data as { error?: string } | undefined)?.error || `Server returned error (${res.status})`);
       }
 
-      const data = await res.json();
-      if (data.recovered) {
+      const data = res.data;
+      if (data?.recovered) {
         setRecoveredData(data.recovered);
         // Default only missing fields to true, present fields to false to avoid overwriting unless user opts in
         const newAccepted: Record<string, boolean> = {};
@@ -259,15 +257,11 @@ export function VaultIntelligenceModal({
           },
         };
 
-        const res = await fetch('/api/recover-metadata', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
+      const res = await network.post<{ recovered?: any; error?: string }>('/api/recover-metadata', payload);
 
         if (res.ok) {
-          const data = await res.json();
-          if (data.recovered) {
+          const data = res.data;
+          if (data?.recovered) {
             const missing = assessRecipeHealth(rec).missingFields;
             const fieldsToAccept = (Object.keys(data.recovered) as (keyof RecoveredRecipeMetadata)[]).filter(
               (f) => missing.includes(f) || f === 'suggestedTags'

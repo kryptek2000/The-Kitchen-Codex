@@ -84,6 +84,12 @@ const INITIAL_FILTERS: FilterState = {
   sortOrder: 'asc',
 };
 
+/** Logs a redacted SettingsAdapter write failure (never logs payload/secrets). */
+function warnPersist(label: string, err: unknown): void {
+  const detail = err instanceof Error ? err.message : typeof err === 'string' ? err : 'unknown error';
+  console.warn(`Failed to persist ${label}:`, detail);
+}
+
 interface LoadedVaultData {
   recipes: ObsidianRecipe[];
   notes: VaultNote[];
@@ -318,19 +324,19 @@ export default function App() {
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
     if (settingsHydrated) {
-      settingsAdapter.set('obsidian_vault_theme', theme).catch(() => {});
+      settingsAdapter.set('obsidian_vault_theme', theme).catch((err) => warnPersist('theme', err));
     }
   }, [theme, settingsAdapter, settingsHydrated]);
 
   useEffect(() => {
     if (settingsHydrated) {
-      settingsAdapter.set('obsidian_active_tab', activeTab).catch(() => {});
+      settingsAdapter.set('obsidian_active_tab', activeTab).catch((err) => warnPersist('active tab', err));
     }
   }, [activeTab, settingsAdapter, settingsHydrated]);
 
   useEffect(() => {
     if (settingsHydrated) {
-      settingsAdapter.set('obsidian_active_cooking_timers', activeTimers).catch(() => {});
+      settingsAdapter.set('obsidian_active_cooking_timers', activeTimers).catch((err) => warnPersist('active cooking timers', err));
     }
   }, [activeTimers, settingsAdapter, settingsHydrated]);
 
@@ -1154,6 +1160,7 @@ export default function App() {
               setVaultIntelligenceRecipeId(recipeId || null);
               setIsVaultIntelligenceOpen(true);
             }}
+            network={networkAdapter}
           />
         ) : activeTab === 'grid' ? (
           /* Recipe Gallery View */
@@ -1345,6 +1352,7 @@ export default function App() {
           setEditingRecipe(recipe);
           setIsEditorOpen(true);
         }}
+        network={networkAdapter}
       />
 
       {/* Vault Intelligence & Legacy Recovery Modal */}
@@ -1356,6 +1364,7 @@ export default function App() {
         }}
         recipes={recipes}
         initialSelectedRecipeId={vaultIntelligenceRecipeId}
+        network={networkAdapter}
         onSaveRecipe={async (updatedRecipe) => {
           await handleSaveRecipe(updatedRecipe);
           if (selectedRecipe && selectedRecipe.id === updatedRecipe.id) {
@@ -1370,6 +1379,7 @@ export default function App() {
         onClose={() => setIsAskMyKitchenOpen(false)}
         allRecipes={recipes}
         currentRecipe={selectedRecipe}
+        network={networkAdapter}
         onSelectRecipe={(recipe) => {
           setIsAskMyKitchenOpen(false);
           setSelectedRecipe(recipe);

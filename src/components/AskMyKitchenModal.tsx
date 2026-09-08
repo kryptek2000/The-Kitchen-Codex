@@ -12,6 +12,7 @@ import {
   ArrowRight,
 } from 'lucide-react';
 import { ObsidianRecipe } from '../types';
+import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
 import type { KitchenAnswer, KitchenAnswerItem } from '../utils/kitchenAnswer';
 import { buildRecipeRelationshipIndex } from '../utils/recipeRelationships';
 import {
@@ -68,6 +69,7 @@ interface AskMyKitchenModalProps {
   onSelectRecipe: (recipe: ObsidianRecipe) => void;
   /** User-selected web result handoff into the existing Grab Recipe workflow. */
   onWebImport?: (handoff: KitchenWebImportHandoff) => void;
+  network: NetworkAdapter;
 }
 
 const MAX_QUESTION_LENGTH = 500;
@@ -190,6 +192,7 @@ export function AskMyKitchenModal({
   currentRecipe,
   onSelectRecipe,
   onWebImport,
+  network,
 }: AskMyKitchenModalProps) {
   const [question, setQuestion] = useState('');
   const [status, setStatus] = useState<AskStatus>('idle');
@@ -265,12 +268,8 @@ export function AskMyKitchenModal({
     setWebStatus('discovering');
     try {
       const request = buildKitchenDiscoveryRequest(question, intent, MAX_WEB_RESULTS);
-      const res = await fetch('/api/kitchen/discover', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(request),
-      });
-      const data = await res.json().catch(() => null);
+      const res = await network.post<{ results?: KitchenWebResult[] }>('/api/kitchen/discover', request);
+      const data = res.data;
       if (tokenRef.current !== token) return;
       if (res.ok && isKitchenDiscoveryResponse(data)) {
         const results = sanitizeWebResults(data.results, { maxResults: MAX_WEB_RESULTS });
@@ -318,12 +317,8 @@ export function AskMyKitchenModal({
 
     try {
       // A) Interpret the question.
-      const interpretRes = await fetch('/api/kitchen/interpret', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildInterpretRequest(trimmed)),
-      });
-      const interpretData = await interpretRes.json().catch(() => null);
+      const interpretRes = await network.post<{ intent: any }>('/api/kitchen/interpret', buildInterpretRequest(trimmed));
+      const interpretData = interpretRes.data;
       if (tokenRef.current !== token) return;
       if (!interpretRes.ok) {
         setStatus('error');
@@ -386,14 +381,10 @@ export function AskMyKitchenModal({
         index,
         question: trimmed,
         aiRank: async (input) => {
-          const rankRes = await fetch('/api/kitchen/rank', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(buildRankRequest(input.question, input.intent, input.candidates, input.resultCount)),
-          });
-          const rankData = await rankRes.json().catch(() => null);
+          const rankRes = await network.post('/api/kitchen/rank', buildRankRequest(input.question, input.intent, input.candidates, input.resultCount));
+          const rankData = rankRes.data;
           if (tokenRef.current !== token) return null;
-          if (!rankRes.ok || !rankData || rankData.ok !== true) return null;
+          if (!rankRes.ok || !rankData || (rankData as { ok?: boolean }).ok !== true) return null;
           return sanitizeAiRankedCandidates(rankData, candidateIdSet, {
             maxResults: input.resultCount,
           }) ?? null;

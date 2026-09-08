@@ -81,6 +81,20 @@ describe('reconcileTimer', () => {
     const r2 = reconcileTimer(r1, NOW + 10_000).timer;
     expect(r1).toEqual(r2);
   });
+
+  it('16: an unchanged paused timer preserves object identity across ticks', () => {
+    const paused = runningTimer({ isRunning: false, endsAt: undefined, remainingSeconds: 30 });
+    const r1 = reconcileTimer(paused, NOW);
+    const r2 = reconcileTimer(r1.timer, NOW + 1000);
+    expect(r1.timer).toBe(paused); // same reference, no churn
+    expect(r2.timer).toBe(paused);
+  });
+
+  it('16: an unchanged completed timer preserves object identity across ticks', () => {
+    const completed = runningTimer({ isRunning: false, endsAt: undefined, remainingSeconds: 0 });
+    const r = reconcileTimer(completed, NOW);
+    expect(r.timer).toBe(completed);
+  });
 });
 
 describe('reconcileTimers', () => {

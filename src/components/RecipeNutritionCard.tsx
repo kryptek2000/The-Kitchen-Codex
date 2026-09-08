@@ -11,6 +11,7 @@ import {
   ChevronUp,
 } from 'lucide-react';
 import { ObsidianRecipe, RecipeNutrition } from '../types';
+import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
 import {
   normalizeServings,
   nutritionForServings,
@@ -23,6 +24,7 @@ interface RecipeNutritionCardProps {
   recipe: ObsidianRecipe;
   onUpdateNutrition: (nutrition: RecipeNutrition) => Promise<boolean | void> | void;
   servings?: number;
+  network: NetworkAdapter;
 }
 
 /** Human-readable provenance label; null when provenance is absent. */
@@ -52,6 +54,7 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
   recipe,
   onUpdateNutrition,
   servings,
+  network,
 }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -105,24 +108,20 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
     try {
       const ingredientList = recipe.ingredients.map((ing) => ing.original || ing.name);
 
-      const res = await fetch('/api/estimate-nutrition', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: recipe.title,
-          // The estimator is called against the recipe AS WRITTEN (unscaled base
-          // ingredient batch). `servings` is accepted for API compatibility and is
-          // never used as a nutrition denominator; we send the recipe's original
-          // serving count for clarity.
-          servings: recipeBaseServings,
-          ingredients: ingredientList,
-        }),
+      const res = await network.post<{ success: boolean; error?: string; nutrition?: any }>('/api/estimate-nutrition', {
+        title: recipe.title,
+        // The estimator is called against the recipe AS WRITTEN (unscaled base
+        // ingredient batch). `servings` is accepted for API compatibility and is
+        // never used as a nutrition denominator; we send the recipe's original
+        // serving count for clarity.
+        servings: recipeBaseServings,
+        ingredients: ingredientList,
       });
 
-      const data = await res.json();
+      const data = res.data;
 
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Failed to estimate nutrition.');
+      if (!res.ok || !data?.success) {
+        throw new Error(data?.error || 'Failed to estimate nutrition.');
       }
 
       setPendingEstimate(data.nutrition);
