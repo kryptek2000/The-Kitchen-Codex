@@ -2,8 +2,11 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import { getGemini } from "../../server/geminiClient.js";
 import {
   GeminiProvider,
+  OpenRouterProvider,
   getAiProvider,
   getDefaultAiProvider,
+  getRegisteredProviders,
+  findRegisteredProvider,
 } from "../../server/ai/provider.js";
 
 vi.mock("../../server/geminiClient.js", () => ({
@@ -28,10 +31,16 @@ describe("AiProvider foundation", () => {
     expect(getAiProvider("gemini")).toBeInstanceOf(GeminiProvider);
   });
 
-  it("registry returns undefined for unknown/empty provider ids", () => {
-    expect(getAiProvider("openrouter")).toBeUndefined();
-    expect(getAiProvider("deepseek")).toBeUndefined();
+  it("registry resolves the second registered provider (openrouter) but not unknown ids", () => {
+    expect(getAiProvider("openrouter")).toBeInstanceOf(OpenRouterProvider);
+    expect(getAiProvider("deepseek")).toBeUndefined(); // 1C, not yet registered
     expect(getAiProvider("")).toBeUndefined();
+  });
+
+  it("openrouter is inert (disabled) when no key is configured", () => {
+    const orDesc = findRegisteredProvider(getRegisteredProviders(), "openrouter");
+    expect(orDesc?.provider).toBeInstanceOf(OpenRouterProvider);
+    expect(orDesc?.enabled).toBe(false); // inert without a key (zero-config Gemini preserved)
   });
 
   it("declares capability metadata (Gemini has structuredOutput + webSearch)", () => {

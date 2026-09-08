@@ -17,10 +17,9 @@
  * construction.
  */
 import dotenv from "dotenv";
-import { getDefaultAiProvider, runWithAiFallback } from "./ai/provider.js";
+import { getDefaultAiProvider, runWithAiFallback, resolveRoleCandidates } from "./ai/provider.js";
 import { normalizeProviderError } from "./ai/providerErrors.js";
 import type { AiJsonSchema } from "./ai/types.js";
-import { MODEL_CONFIG } from "./modelConfig.js";
 import { logModelAttempt } from "./providerDiagnostics.js";
 import {
   interpretKitchenIntent,
@@ -28,9 +27,6 @@ import {
 } from "../src/utils/kitchenQueryInterpreter.js";
 
 dotenv.config();
-
-/** Kitchen intent-interpretation model attempt chain (primary -> fallback). */
-const KITCHEN_MODELS = [MODEL_CONFIG.kitchenPrimary, MODEL_CONFIG.kitchenFallback];
 
 /** Instructions embedded in the prompt. The user question is appended as DATA. */
 const KITCHEN_INTERPRET_INSTRUCTIONS = [
@@ -139,15 +135,16 @@ async function aiInterpret(question: string): Promise<unknown> {
   const provider = getDefaultAiProvider();
   const schema = buildSchema();
 
-  // Interpret requires a structured-output-capable provider. Only Gemini is
-  // registered today (WebSearch-capable, structured-output-capable) so this is a
-  // no-op in zero-config mode; the capability gate protects future providers.
+  // Interpret requires a structured-output-capable provider. Candidates are
+  // resolved per operation across configured providers (Gemini first) and
+  // capability-filtered by the selector; failures fall back across providers only
+  // when fallback-eligible, then the deterministic interpreter takes over.
   try {
     const { result } = await runWithAiFallback<unknown>({
-      candidates: KITCHEN_MODELS.map((model) => ({ provider, model })),
+      candidates: resolveRoleCandidates("kitchenInterpret"),
       requiredCapabilities: ["structuredOutput"],
       run: (candidate) =>
-        provider.generateStructured(
+        candidate.provider.generateStructured(
           buildPrompt(question),
           schema,
           {
@@ -160,7 +157,7 @@ async function aiInterpret(question: string): Promise<unknown> {
     return result;
   } catch (err) {
     const normalized = normalizeProviderError(err, { providerId: provider.id });
-    logModelAttempt("interpret", normalized.model ?? KITCHEN_MODELS[0], normalized);
+    logModelAttempt("interpret", normalized.model ?? "", normalized);
     throw normalized;
   }
 }

@@ -21,6 +21,7 @@
  */
 
 import { GeminiProvider } from "./geminiProvider.js";
+import { OpenRouterProvider, OPENROUTER_MODEL_CAPABILITIES } from "./openRouterProvider.js";
 import type { AiCapabilities, AiProvider } from "./types.js";
 import {
   normalizeProviderError,
@@ -36,9 +37,14 @@ export type AiCapabilityKey = keyof AiCapabilities;
 /** A registered provider with its authoritative capability description. */
 export interface RegisteredProvider {
   provider: AiProvider;
-  /** Authoritative provider-level capability truth (e.g. provider.capabilities). */
+  /** Authoritative provider-level capability baseline (registry-owned truth). */
   defaultCapabilities: AiCapabilities;
-  /** Optional per-MODEL capability refinement/narrowing. Never widens a model. */
+  /**
+   * Optional per-MODEL capability override. It may NARROW or WIDEN a capability
+   * for a specific model (the registry owns the truth; user/provider *config*
+   * never controls capability truth). An unknown model falls back to
+   * `defaultCapabilities` and never magically gains a capability.
+   */
   modelCapabilities?: Record<string, Partial<AiCapabilities>>;
   /** When false, the provider is skipped by selection. Defaults to true. */
   enabled?: boolean;
@@ -66,15 +72,35 @@ function ensureDefault(): AiProvider {
   return defaultProvider;
 }
 
-/** The built-in registry: Gemini only (Phase 1A). Built lazily (no import side effects). */
+/** True when an OpenRouter key is present (server env only). */
+function openRouterConfigured(): boolean {
+  return (process.env.OPENROUTER_API_KEY || "").trim().length > 0;
+}
+
+/**
+ * The built-in registry. Built lazily (no import side effects). Provider ORDER
+ * is the selection order: Gemini first (preserves zero-config behavior), OpenRouter
+ * second. OpenRouter is INERT (descriptor `enabled` false) unless an
+ * `OPENROUTER_API_KEY` is configured, so existing zero-config Gemini users are
+ * untouched.
+ */
 export function getRegisteredProviders(): RegisteredProvider[] {
   if (!registry) {
     const gemini = ensureDefault();
+    const openRouter = new OpenRouterProvider();
     registry = [
       {
         provider: gemini,
         defaultCapabilities: { ...gemini.capabilities },
         enabled: true,
+      },
+      {
+        provider: openRouter,
+        defaultCapabilities: { ...openRouter.capabilities },
+        modelCapabilities: OPENROUTER_MODEL_CAPABILITIES,
+        // Config-driven in the sense that it reflects whether a key is configured;
+        // it is NOT user-set capability truth, and it is never a raw secret.
+        enabled: openRouterConfigured(),
       },
     ];
   }

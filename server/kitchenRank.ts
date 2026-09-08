@@ -14,10 +14,8 @@
  * into a total failure.
  */
 import dotenv from "dotenv";
-import { getDefaultAiProvider } from "./ai/provider.js";
+import { resolveRoleCandidates, runWithAiFallback } from "./ai/provider.js";
 import type { AiJsonSchema } from "./ai/types.js";
-import { MODEL_CONFIG } from "./modelConfig.js";
-import { logModelAttempt } from "./providerDiagnostics.js";
 import { sanitizeKitchenIntent, type KitchenIntent } from "../src/utils/kitchenIntent.js";
 import {
   buildRankPrompt,
@@ -27,9 +25,6 @@ import {
 } from "../src/utils/kitchenRanking.js";
 
 dotenv.config();
-
-/** Kitchen ranking model attempt chain (primary -> fallback). */
-const RANK_MODELS = [MODEL_CONFIG.kitchenPrimary, MODEL_CONFIG.kitchenFallback];
 
 function buildSchema(): AiJsonSchema {
   return {
@@ -67,22 +62,18 @@ async function aiRankWithFallback(input: {
   candidates: KitchenCandidateEvidence[];
   resultCount: number;
 }): Promise<unknown> {
-  const provider = getDefaultAiProvider();
   const schema = buildSchema();
-  let lastError: unknown = new Error("All Kitchen ranking models failed.");
-  for (const model of RANK_MODELS) {
-    try {
-      return await provider.generateStructured(buildRankPrompt(input), schema, {
-        model,
+  const { result } = await runWithAiFallback<unknown>({
+    candidates: resolveRoleCandidates("kitchenRank"),
+    requiredCapabilities: ["structuredOutput"],
+    run: (candidate) =>
+      candidate.provider.generateStructured(buildRankPrompt(input), schema, {
+        model: candidate.model,
         temperature: 0,
         providerOptions: { thinkingConfig: { thinkingLevel: "MINIMAL" } },
-      });
-    } catch (err) {
-      logModelAttempt("rank", model, err);
-      lastError = err;
-    }
-  }
-  throw lastError;
+      }),
+  });
+  return result;
 }
 
 /**
@@ -97,9 +88,6 @@ export async function rankKitchenCandidatesOnServer(input: {
   candidates: KitchenCandidateEvidence[];
   resultCount: number;
 }): Promise<RankedKitchenCandidate[] | null> {
-  const provider = getDefaultAiProvider();
-  if (!provider.isAvailable()) return null;
-
   try {
     const raw = await aiRankWithFallback(input);
     const allowlist = new Set(input.candidates.map((c) => c.recipeId));

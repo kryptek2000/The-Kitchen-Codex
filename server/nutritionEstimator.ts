@@ -1,7 +1,6 @@
 import dotenv from "dotenv";
-import { getDefaultAiProvider } from "./ai/provider.js";
+import { resolveRoleCandidates, runWithAiFallback } from "./ai/provider.js";
 import type { AiJsonSchema, AiProvider } from "./ai/types.js";
-import { MODEL_CONFIG } from "./modelConfig.js";
 import { logModelAttempt } from "./providerDiagnostics.js";
 import { estimateDeterministicNutrition, type DeterministicNutritionResult } from "./deterministicNutrition.js";
 import {
@@ -33,8 +32,7 @@ export interface NutritionEstimateResult {
   confidence: NutritionConfidence;
 }
 
-const PRIMARY_MODEL = MODEL_CONFIG.nutritionPrimary;
-const FALLBACK_MODEL = MODEL_CONFIG.nutritionFallback;
+
 
 /**
  * Builds the estimator result shape from a deterministic curated estimate,
@@ -409,28 +407,23 @@ export async function estimateRecipeNutrition(
     return result;
   }
 
-  const provider = getDefaultAiProvider();
-
-  if (!provider.isAvailable()) {
-    console.info("[NutritionEstimator] No AI provider configured. Using algorithmic nutrition estimation.");
-    return estimateAlgorithmicNutrition(recipeTitle, servings, rawIngredientLines);
-  }
-
-  // Attempt 1: Primary Model (gemini-3.7-flash)
+  // AI provider chain (structured-output capable, across configured providers),
+  // then the deterministic algorithmic estimator as the final fallback. Provider
+  // fallback (capability-gated) runs BEFORE the deterministic estimator only here;
+  // the deterministic estimator is NEVER replaced by provider fallback.
   try {
-    return await aiEstimateNutrition(provider, PRIMARY_MODEL, recipeTitle, servings, cleanedIngredientLines);
-  } catch (primaryErr: any) {
-    logModelAttempt("nutrition", PRIMARY_MODEL, primaryErr);
-
-    // Attempt 2: Fallback Model (gemini-3.1-flash-lite)
-    try {
-      return await aiEstimateNutrition(provider, FALLBACK_MODEL, recipeTitle, servings, cleanedIngredientLines);
-    } catch (fallbackErr: any) {
-      logModelAttempt("nutrition", FALLBACK_MODEL, fallbackErr);
-
-      // Attempt 3: Algorithmic Culinary Estimator
-      return estimateAlgorithmicNutrition(recipeTitle, servings, rawIngredientLines);
-    }
+    const { result } = await runWithAiFallback<NutritionEstimateResult>({
+      candidates: resolveRoleCandidates("nutrition"),
+      requiredCapabilities: ["structuredOutput"],
+      run: (candidate) =>
+        aiEstimateNutrition(candidate.provider, candidate.model, recipeTitle, servings, cleanedIngredientLines),
+    });
+    return result;
+  } catch (err: any) {
+    const model = typeof err?.model === "string" ? err.model : "<unknown>";
+    logModelAttempt("nutrition", model, err);
   }
+
+  return estimateAlgorithmicNutrition(recipeTitle, servings, rawIngredientLines);
 }
 

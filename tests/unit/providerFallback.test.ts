@@ -128,3 +128,79 @@ describe("provider fallback policy (v0.7 1A)", () => {
     ).rejects.toMatchObject({ name: "ProviderOperationError", code: "PROVIDER_ERROR" });
   });
 });
+
+describe("cross-provider fallback (Gemini -> OpenRouter), v0.7 1B", () => {
+  const gem = () => fakeProvider("gemini");
+  const or = () => fakeProvider("openrouter");
+
+  it("falls back Gemini -> OpenRouter on a fallback-eligible error", async () => {
+    const g = gem();
+    const o = or();
+    const called: string[] = [];
+    const r = await runWithAiFallback({
+      candidates: [{ provider: g, model: "g-m" }, { provider: o, model: "or-m" }],
+      requiredCapabilities: ["structuredOutput"],
+      registry: regs({ provider: g }, { provider: o }),
+      run: async (c) => {
+        called.push(c.provider.id);
+        if (c.provider.id === "gemini") throw new ProviderOperationError("QUOTA", "quota", { providerId: "gemini", model: "g-m" });
+        return `ok:${c.provider.id}`;
+      },
+    });
+    expect(called).toEqual(["gemini", "openrouter"]);
+    expect(r.result).toBe("ok:openrouter");
+    expect(r.providerId).toBe("openrouter");
+    expect(r.diagnostics[0].code).toBe("QUOTA");
+  });
+
+  it("AUTH does NOT fall back by default (a bad primary key is not silently masked)", async () => {
+    const g = gem();
+    const o = or();
+    const run = vi.fn(async (c: AiCandidate) => {
+      if (c.provider.id === "gemini") throw new ProviderOperationError("AUTH", "unauthorized", { providerId: "gemini", model: "g-m" });
+      return `ok:${c.provider.id}`;
+    });
+    await expect(
+      runWithAiFallback({ candidates: [{ provider: g, model: "g-m" }, { provider: o, model: "or-m" }], requiredCapabilities: ["structuredOutput"], registry: regs({ provider: g }, { provider: o }), run })
+    ).rejects.toMatchObject({ code: "AUTH", providerId: "gemini" });
+    expect(run).toHaveBeenCalledTimes(1); // openrouter never ran
+  });
+
+  it("AUTH fallback Gemini -> OpenRouter is permitted explicitly and the primary AUTH stays in diagnostics", async () => {
+    const g = gem();
+    const o = or();
+    const r = await runWithAiFallback({
+      candidates: [{ provider: g, model: "g-m" }, { provider: o, model: "or-m" }],
+      requiredCapabilities: ["structuredOutput"],
+      registry: regs({ provider: g }, { provider: o }),
+      allowAuthFallback: true,
+      run: async (c) => {
+        if (c.provider.id === "gemini") throw new ProviderOperationError("AUTH", "unauthorized", { providerId: "gemini", model: "g-m" });
+        return `ok:${c.provider.id}`;
+      },
+    });
+    expect(r.providerId).toBe("openrouter");
+    // The primary Gemini AUTH failure MUST remain visible in diagnostics.
+    expect(r.diagnostics).toEqual([expect.objectContaining({ code: "AUTH", providerId: "gemini" })]);
+  });
+
+  it("skips an OpenRouter model that lacks the required capability (never executed)", async () => {
+    const g = gem();
+    const weak = fakeProvider("openrouter", { structuredOutput: false });
+    const run = vi.fn(async (c: AiCandidate) => {
+      if (c.provider.id === "gemini") throw new ProviderOperationError("QUOTA", "q", { providerId: "gemini", model: "g-m" });
+      return `ok:${c.provider.id}`;
+    });
+    await expect(
+      runWithAiFallback({
+        candidates: [{ provider: g, model: "g-m" }, { provider: weak, model: "weak-m" }],
+        requiredCapabilities: ["structuredOutput"],
+        registry: regs({ provider: g }, { provider: weak }),
+        run,
+      })
+    ).rejects.toMatchObject({ code: "QUOTA" });
+    // Weak openrouter (no structuredOutput) filtered out; only gemini ran.
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0][0].provider.id).toBe("gemini");
+  });
+});

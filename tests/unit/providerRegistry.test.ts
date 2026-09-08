@@ -2,6 +2,9 @@ import { describe, it, expect, vi } from "vitest";
 import type { AiCapabilities, AiProvider } from "../../server/ai/types.js";
 import {
   GeminiProvider,
+  OpenRouterProvider,
+  OPENROUTER_MODEL_CAPABILITIES,
+  OPENROUTER_STRUCTURED_MODEL,
   getRegisteredProviders,
   getAiProvider,
   getDefaultAiProvider,
@@ -42,11 +45,19 @@ const candidate = (provider: AiProvider, model = "m"): AiCandidate => ({ provide
 describe("provider registry + capability selection (v0.7 1A)", () => {
   it("registers Gemini as the default provider (zero-config compatibility)", () => {
     const reg = getRegisteredProviders();
-    expect(reg).toHaveLength(1);
+    // Gemini + OpenRouter are registered; provider ORDER is the selection order.
+    expect(reg).toHaveLength(2);
     expect(reg[0].provider).toBeInstanceOf(GeminiProvider);
+    expect(reg[1].provider.id).toBe("openrouter");
     expect(getDefaultAiProvider()).toBe(reg[0].provider);
     expect(getAiProvider("gemini")).toBeInstanceOf(GeminiProvider);
-    expect(getAiProvider("openrouter")).toBeUndefined();
+    expect(getAiProvider("openrouter")).toBeDefined();
+  });
+
+  it("a per-model override can WIDEN a capability for a specific model", () => {
+    const reg = { provider: fakeProvider("or", caps({ structuredOutput: false })), defaultCapabilities: caps({ structuredOutput: false }), modelCapabilities: { "or/strong": { structuredOutput: true } } };
+    expect(effectiveCapabilities(reg, "or/strong").structuredOutput).toBe(true); // widened
+    expect(effectiveCapabilities(reg, "or/unknown").structuredOutput).toBe(false); // baseline (not overclaimed)
   });
 
   it("provider levels default capability from truth are authoritative", () => {
@@ -130,7 +141,29 @@ describe("provider registry + capability selection (v0.7 1A)", () => {
   it("provider descriptors carry NO raw secrets or baseUrl (server config is capability-only)", () => {
     const regs = getRegisteredProviders();
     for (const r of regs) {
-      expect(JSON.stringify(r)).not.toMatch(/GEMINI_API_KEY|AIza[0-9A-Za-z_-]{10,}|sk-[A-Za-z0-9_-]{6,}|baseUrl|apiKey|apikey|secret|Bearer/);
+      expect(JSON.stringify(r)).not.toMatch(/GEMINI_API_KEY|OPENROUTER_API_KEY|AIza[0-9A-Za-z_-]{10,}|sk-[A-Za-z0-9_-]{6,}|baseUrl|apiKey|apikey|secret|Bearer|http:\/\/|https:\/\//);
     }
+  });
+
+  it("OpenRouter baseline is conservative (unknown models claim nothing)", () => {
+    const or = new OpenRouterProvider();
+    expect(or.capabilities).toEqual({ reasoning: false, structuredOutput: false, recipeGeneration: false, webSearch: false });
+  });
+
+  it("OpenRouter curated structured-capable model is selected for structuredOutput; unknown model is not", () => {
+    const or = new OpenRouterProvider();
+    const reg = { provider: or, defaultCapabilities: { ...or.capabilities }, modelCapabilities: OPENROUTER_MODEL_CAPABILITIES };
+    // curated model: structuredOutput true
+    expect(hasAllCapabilities(effectiveCapabilities(reg, OPENROUTER_STRUCTURED_MODEL), ["structuredOutput"])).toBe(true);
+    // unknown model: baseline (false) -> cannot overclaim
+    expect(hasAllCapabilities(effectiveCapabilities(reg, "unknown/unknown-model"), ["structuredOutput"])).toBe(false);
+  });
+
+  it("webSearch selection NEVER admits an OpenRouter candidate (any model)", () => {
+    const or = new OpenRouterProvider();
+    const regs = [{ provider: or, defaultCapabilities: { ...or.capabilities }, modelCapabilities: OPENROUTER_MODEL_CAPABILITIES }];
+    // Even the curated structured model has webSearch:false.
+    const out = selectCandidates(regs, [{ provider: or, model: OPENROUTER_STRUCTURED_MODEL }], ["webSearch"]);
+    expect(out).toHaveLength(0);
   });
 });

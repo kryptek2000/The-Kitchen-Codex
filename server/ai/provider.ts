@@ -16,6 +16,7 @@ export type {
   AiStructuredOptions,
 } from "./types.js";
 export { GeminiProvider } from "./geminiProvider.js";
+export { OpenRouterProvider, OPENROUTER_MODEL_CAPABILITIES, OPENROUTER_STRUCTURED_MODEL } from "./openRouterProvider.js";
 export {
   getAiProvider,
   getDefaultAiProvider,
@@ -45,3 +46,4 @@ export {
 export type { ProviderErrorCode, ProviderErrorContext, ProviderDiagnostic } from "./providerErrors.js";
 export { OPERATION_REQUIRED_CAPABILITIES, operationRequiredCapabilities } from "./operations.js";
 export type { AiOperation } from "./operations.js";
+export { resolveRoleCandidates, roleModelsForProvider } from "./roleCandidates.js";
