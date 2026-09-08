@@ -10,3 +10,4 @@ export * from './VaultAdapter';
 export * from './SettingsAdapter';
 export * from './SecretAdapter';
 export * from './NetworkAdapter';
+export * from './AssetAdapter';

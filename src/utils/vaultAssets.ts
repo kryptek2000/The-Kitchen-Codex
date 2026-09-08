@@ -4,12 +4,14 @@
  * [[Assets/Breakfast Burritos.jpg]], attachments/, etc.) and supports downloading web images
  * directly into the Obsidian vault's Assets/ folder.
  *
- * SECURITY (Phase 4D3C): remote image download goes ONLY through the server-side
- * SSRF-protected proxy (`/api/download-image`). This module performs NO direct
- * arbitrary remote fetch and NO direct CORS fallback to the remote host.
+ * SECURITY (Phase 4D3C/4D3D): remote image download goes ONLY through the
+ * server-side SSRF-protected proxy (`/api/download-image`). This shared module
+ * performs NO direct arbitrary remote fetch and NO direct CORS fallback — the
+ * binary downloader is INJECTED from the shell (never imported from a platform
+ * module), keeping shared code free of platform imports.
  */
 
-import { downloadImageViaBackend } from '../platform/browser/downloadImageViaBackend';
+import type { AssetAdapter, RemoteImageDownloader } from '../application/adapters/AssetAdapter';
 
 const IMAGE_EXTENSIONS = new Set([
   'jpg',
@@ -351,132 +353,133 @@ export async function scanVaultAssetsFromHandle(
 }
 
 /**
- * Deterministically decodes a `data:` URL into a `Blob` (no network fetch).
- * Handles both base64 and percent-encoded payloads. Never touches the network.
+ * Deterministically decodes a `data:` URL into raw bytes (no network fetch).
+ * `;base64` detection is case-insensitive; intra-base64 whitespace is stripped;
+ * percent-encoded UTF-8 payloads are decoded. Malformed input throws.
  */
-export function dataUrlToBlob(dataUrl: string): { blob: Blob; dataUrl: string } {
+export function dataUrlToBytes(dataUrl: string): { bytes: Uint8Array; dataUrl: string; contentType: string } {
   const trimmed = String(dataUrl ?? '').trim();
-  const match = /^data:([^,;]*)(;base64)?,([\s\S]*)$/.exec(trimmed);
-  if (!match) throw new Error('Invalid data: URL.');
+  if (!/^data:/i.test(trimmed)) throw new Error('Invalid data: URL.');
 
-  const mime = match[1] || 'text/plain';
-  const isBase64 = Boolean(match[2]);
-  const payload = match[3];
+  const comma = trimmed.indexOf(',');
+  if (comma < 0) throw new Error('Invalid data: URL.');
+  const meta = trimmed.slice(5, comma).trim();
+  const payload = trimmed.slice(comma + 1);
+
+  // `;base64` detection is case-insensitive and tolerant of trailing whitespace.
+  const base64Match = /;base64\s*$/i.exec(meta);
+  const isBase64 = Boolean(base64Match);
+  const mime = isBase64 ? meta.slice(0, base64Match!.index).trim() : meta;
+  const contentType = mime || 'text/plain';
 
   let bytes: Uint8Array;
   if (isBase64) {
-    const binary = atob(payload);
+    // Strip intra-base64 whitespace (browsers reject it) then validate the charset.
+    const clean = payload.replace(/\s+/g, '');
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(clean)) throw new Error('Invalid base64 in data: URL.');
+    const binary = atob(clean);
     bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   } else {
     bytes = new TextEncoder().encode(decodeURIComponent(payload));
   }
 
-  return { blob: new Blob([bytes as unknown as BlobPart], { type: mime }), dataUrl: trimmed };
+  return { bytes, dataUrl: trimmed, contentType };
+}
+
+/** Converts raw bytes to a browser `Blob` (rendering/object-URL scope only). */
+export function bytesToBlob(bytes: Uint8Array, contentType: string): Blob {
+  return new Blob([bytes as unknown as BlobPart], { type: contentType || 'image/jpeg' });
+}
+
+/** Injected dependencies for the asset save flow (supplied by the browser shell). */
+export interface SaveImageDeps {
+  /** Optional binary storage boundary (BrowserAssetAdapter) — preferred write path. */
+  asset?: AssetAdapter;
+  /** Legacy browser vault handle fallback. */
+  folderHandle?: any;
+  /** Injected fixed-purpose remote image downloader (browser shell implementation). */
+  downloadRemoteImage?: RemoteImageDownloader;
+}
+
+/** Derives the extension from content-type, honoring an explicit preferredExtension. */
+function imageExtension(preferredExtension: string | undefined, contentType: string): string {
+  if (preferredExtension) return preferredExtension.replace(/^\./, '').toLowerCase();
+  if (contentType.includes('png')) return 'png';
+  if (contentType.includes('webp')) return 'webp';
+  if (contentType.includes('gif')) return 'gif';
+  if (contentType.includes('svg')) return 'svg';
+  if (contentType.includes('avif')) return 'avif';
+  return 'jpg';
 }
 
 /**
- * Downloads an external image safely via our server-side SSRF-protected proxy.
- * A `data:` URL is decoded locally (never a network fetch); any remote URL is
- * sent to the fixed backend proxy. There is NO direct arbitrary remote fetch and
- * NO CORS fallback — a proxy failure is surfaced to the caller.
+ * Resolves a `Blob` source or a string (`data:`/remote URL) into raw image bytes
+ * + contentType. Remote URLs require an injected downloader (never imported from
+ * a platform module); there is NO direct arbitrary remote fetch.
  */
-export async function downloadImageViaProxy(
-  imageUrl: string,
-  options?: { signal?: AbortSignal }
-): Promise<{ blob: Blob; contentType: string }> {
-  const trimmed = imageUrl.trim();
-
-  // data: URLs are decoded locally — no network, no SSRF surface.
-  if (trimmed.startsWith('data:')) {
-    const { blob } = dataUrlToBlob(trimmed);
-    return { blob, contentType: blob.type || 'image/jpeg' };
+async function resolveImageBytes(
+  source: string | Blob,
+  deps: SaveImageDeps
+): Promise<{ bytes: Uint8Array; contentType: string }> {
+  if (typeof source === 'string') {
+    const trimmed = source.trim();
+    if (trimmed.startsWith('data:')) {
+      const { bytes, contentType } = dataUrlToBytes(trimmed);
+      return { bytes, contentType };
+    }
+    if (!deps.downloadRemoteImage) {
+      throw new Error('Remote image download requires a configured downloader.');
+    }
+    const result = await deps.downloadRemoteImage.downloadRemoteImage(trimmed);
+    return { bytes: result.bytes, contentType: result.contentType };
   }
-
-  // Remote URLs go ONLY through the backend SSRF proxy.
-  const result = await downloadImageViaBackend(trimmed, options);
-  return { blob: result.blob, contentType: result.contentType };
+  const bytes = new Uint8Array(await source.arrayBuffer());
+  return { bytes, contentType: source.type || 'image/jpeg' };
 }
 
 /**
- * Saves an image blob directly into the Obsidian vault's Assets/ folder
- * and registers it in the local asset cache.
+ * Saves an image into the connected vault's Assets folder through the injected
+ * AssetAdapter (preferred) or the legacy folderHandle path (fallback), then
+ * registers it in the local object-URL cache. The binary downloader is injected,
+ * so this shared module NEVER imports a browser/platform module.
  */
 export async function saveImageToVaultAssets(
-  folderHandle: any,
+  deps: SaveImageDeps,
   recipeTitle: string,
   source: string | Blob,
   preferredExtension?: string
 ): Promise<{ success: boolean; relativePath: string; blobUrl?: string; error?: string }> {
   try {
-    let blob: Blob;
-    let contentType = 'image/jpeg';
-
-    if (typeof source === 'string') {
-      const downloaded = await downloadImageViaProxy(source);
-      blob = downloaded.blob;
-      contentType = downloaded.contentType;
-    } else {
-      blob = source;
-      contentType = blob.type || 'image/jpeg';
-    }
-
-    // Determine extension from content-type or preferredExtension
-    let ext = 'jpg';
-    if (preferredExtension) {
-      ext = preferredExtension.replace(/^\./, '').toLowerCase();
-    } else if (contentType.includes('png')) {
-      ext = 'png';
-    } else if (contentType.includes('webp')) {
-      ext = 'webp';
-    } else if (contentType.includes('gif')) {
-      ext = 'gif';
-    } else if (contentType.includes('svg')) {
-      ext = 'svg';
-    } else if (contentType.includes('avif')) {
-      ext = 'avif';
-    }
+    const { bytes, contentType } = await resolveImageBytes(source, deps);
+    const ext = imageExtension(preferredExtension, contentType);
 
     const safeTitle = recipeTitle.replace(/[\/\\?%*:|"<>]/g, '-').trim() || 'Recipe Photo';
     const fileName = `${safeTitle}.${ext}`;
+    const relativePath = `Assets/${fileName}`;
 
-    if (folderHandle && typeof folderHandle.getDirectoryHandle === 'function') {
-      // Find or create Assets folder (preserve existing 'assets' or 'Assets')
+    // Preferred: the application binary storage boundary.
+    if (deps.asset) {
+      await deps.asset.write(relativePath, bytes, contentType);
+    } else if (deps.folderHandle && typeof deps.folderHandle.getDirectoryHandle === 'function') {
+      // Legacy browser FSA write (preserve existing 'Assets'/'assets' preference).
       let assetsDir: any;
       try {
-        assetsDir = await folderHandle.getDirectoryHandle('Assets', { create: true });
+        assetsDir = await deps.folderHandle.getDirectoryHandle('Assets', { create: true });
       } catch (e) {
-        assetsDir = await folderHandle.getDirectoryHandle('assets', { create: true });
+        assetsDir = await deps.folderHandle.getDirectoryHandle('assets', { create: true });
       }
-
       const fileHandle = await assetsDir.getFileHandle(fileName, { create: true });
       const writable = await fileHandle.createWritable();
-      await writable.write(blob);
+      await writable.write(bytesToBlob(bytes, contentType));
       await writable.close();
-
-      const blobUrl = URL.createObjectURL(blob);
-      const relativePath = `Assets/${fileName}`;
-
-      // Register immediately in our cache
-      vaultAssets.registerAsset(relativePath, fileHandle, blobUrl);
-
-      return {
-        success: true,
-        relativePath,
-        blobUrl,
-      };
     }
 
-    // Fallback: create Blob URL and register even if direct directory handle is unavailable
-    const blobUrl = URL.createObjectURL(blob);
-    const relativePath = `Assets/${fileName}`;
-    vaultAssets.registerAsset(relativePath, blob, blobUrl);
+    // Browser rendering cache: bytes -> Blob -> object URL.
+    const blobUrl = URL.createObjectURL(bytesToBlob(bytes, contentType));
+    vaultAssets.registerAsset(relativePath, bytesToBlob(bytes, contentType), blobUrl);
 
-    return {
-      success: true,
-      relativePath,
-      blobUrl,
-    };
+    return { success: true, relativePath, blobUrl };
   } catch (err: any) {
     console.error('Failed to save image to vault Assets folder:', err);
     return {

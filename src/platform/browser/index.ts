@@ -13,9 +13,10 @@ export { BrowserSettingsAdapter } from './BrowserSettingsAdapter';
 export type { StorageLike } from './BrowserSettingsAdapter';
 export { BrowserNetworkAdapter, NetworkRequestError } from './BrowserNetworkAdapter';
 export type { FetcherLike } from './BrowserNetworkAdapter';
-export { createBrowserSettingsAdapter, createBrowserNetworkAdapter, createBrowserVaultAdapter } from './createBrowserAppServices';
-export { downloadImageViaBackend, BackendImageDownloadError, BACKEND_IMAGE_DOWNLOAD_ENDPOINT } from './downloadImageViaBackend';
-export type { BackendImageResult, DownloadImageOptions, BackendFetchLike, BackendResponseLike } from './downloadImageViaBackend';
+export { BrowserAssetAdapter } from './BrowserAssetAdapter';
+export { createBrowserSettingsAdapter, createBrowserNetworkAdapter, createBrowserVaultAdapter, createBrowserAssetAdapter } from './createBrowserAppServices';
+export { downloadImageViaBackend, browserRemoteImageDownloader, BackendImageDownloadError, BACKEND_IMAGE_DOWNLOAD_ENDPOINT } from './downloadImageViaBackend';
+export type { DownloadImageOptions, BackendFetchLike, BackendResponseLike } from './downloadImageViaBackend';
 export type {
   FsaEntryLike,
   FsaFileHandleLike,

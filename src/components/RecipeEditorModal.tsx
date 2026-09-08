@@ -24,7 +24,7 @@ import {
   parseObsidianRecipeMarkdown,
   serializeRecipeToObsidianMarkdown,
 } from '../utils/markdownParser';
-import { saveImageToVaultAssets, vaultAssets } from '../utils/vaultAssets';
+import { saveImageToVaultAssets, vaultAssets, type SaveImageDeps } from '../utils/vaultAssets';
 import { resolveNewRecipeVaultPath } from '../core/vaultPath';
 import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
 import { useVaultImage } from '../hooks/useVaultImage';
@@ -32,6 +32,8 @@ import { useVaultImage } from '../hooks/useVaultImage';
 interface RecipeEditorModalProps {
   initialRecipe?: ObsidianRecipe | null;
   folderHandle?: any;
+  /** Injected asset save dependencies (asset boundary + binary downloader) from the shell. */
+  imageService?: SaveImageDeps;
   onSave: (recipe: ObsidianRecipe) => Promise<void> | void;
   /** App-backend API transport (injected by the bootstrap). */
   network: NetworkAdapter;
@@ -65,6 +67,7 @@ export function deriveNutritionProvenance(
 export function RecipeEditorModal({
   initialRecipe,
   folderHandle,
+  imageService,
   network,
   onSave,
   onClose,
@@ -787,7 +790,7 @@ export function RecipeEditorModal({
                         if (file) {
                           try {
                             setIsSavingImageAsset(true);
-                            const saved = await saveImageToVaultAssets(folderHandle, title || 'Recipe', file);
+                            const saved = await saveImageToVaultAssets(imageService ?? { folderHandle }, title || 'Recipe', file);
                             setImage(saved.relativePath);
                           } catch (err: any) {
                             console.error('Failed to upload image to vault Assets/:', err);
@@ -863,7 +866,7 @@ export function RecipeEditorModal({
                       onClick={async () => {
                         try {
                           setIsSavingImageAsset(true);
-                          const saved = await saveImageToVaultAssets(folderHandle, title || 'Recipe', image);
+                          const saved = await saveImageToVaultAssets(imageService ?? { folderHandle }, title || 'Recipe', image);
                           setImage(saved.relativePath);
                         } catch (err: any) {
                           console.error('Failed to download image to Assets/:', err);

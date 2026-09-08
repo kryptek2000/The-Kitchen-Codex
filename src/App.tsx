@@ -45,6 +45,8 @@ import {
   createBrowserSettingsAdapter,
   createBrowserNetworkAdapter,
   createBrowserVaultAdapter,
+  createBrowserAssetAdapter,
+  browserRemoteImageDownloader,
 } from './platform/browser';
 import { playTimerChime } from './utils/audioAlert';
 import { APP_VERSION } from './version';
@@ -163,6 +165,19 @@ export default function App() {
     return createAppServices({ vault, settings: settingsAdapter, network: networkAdapter });
   }, [vaultStatus.folderHandle, settingsAdapter, networkAdapter]);
   const vaultAdapter = vaultServices?.adapters.vault ?? null;
+
+  // Asset save dependencies, supplied BY the browser shell: the binary storage
+  // boundary (BrowserAssetAdapter) + the fixed-purpose remote image downloader.
+  // The components receive this as a plain dependency object (they never import a
+  // platform/browser module); shared vaultAssets code no longer imports platform.
+  const imageService = useMemo(() => {
+    const folderHandle = vaultStatus.folderHandle;
+    return {
+      folderHandle,
+      asset: folderHandle ? createBrowserAssetAdapter(folderHandle) : undefined,
+      downloadRemoteImage: browserRemoteImageDownloader,
+    };
+  }, [vaultStatus.folderHandle]);
 
   // Lightweight user-facing error surface for adapter save/delete failures
   // (no new notification framework — reuses the inline-alert UX pattern).
@@ -1322,6 +1337,7 @@ export default function App() {
           <RecipeEditorModal
             initialRecipe={editingRecipe}
             folderHandle={vaultStatus.folderHandle}
+            imageService={imageService}
             network={networkAdapter}
             onSave={handleSaveRecipe}
             onClose={() => {
@@ -1350,6 +1366,7 @@ export default function App() {
       <RecipeGrabberModal
         isOpen={isGrabberOpen}
         folderHandle={vaultStatus.folderHandle}
+        imageService={imageService}
         initialUrl={grabberInitialUrl}
         onClose={() => setIsGrabberOpen(false)}
         onSaveRecipe={async (savedRecipe) => {

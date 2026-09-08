@@ -37,7 +37,7 @@ export type FsaEntryLike = FsaFileHandleLike | FsaDirectoryHandleLike;
 
 /** Minimal writable stream returned by `createWritable()`. */
 export interface FsaWritableLike {
-  write(data: string): Promise<void>;
+  write(data: string | Uint8Array): Promise<void>;
   close(): Promise<void>;
   /** Optional best-effort abort (FSA `FileSystemWritableFileStream.abort()`). */
   abort?(): Promise<void>;
@@ -47,7 +47,7 @@ export interface FsaWritableLike {
 export interface FsaFileHandleLike {
   readonly name: string;
   readonly kind: 'file';
-  getFile(): Promise<{ text(): Promise<string> }>;
+  getFile(): Promise<{ text(): Promise<string>; arrayBuffer?(): Promise<ArrayBuffer> }>;
   createWritable(): Promise<FsaWritableLike>;
 }
 

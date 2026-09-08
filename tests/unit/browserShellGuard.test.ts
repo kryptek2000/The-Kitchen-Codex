@@ -120,4 +120,21 @@ describe('browser shell boundary guard (Phase 4D3C)', () => {
       }
     }
   });
+
+  it('src/utils/vaultAssets.ts does NOT import the browser platform (shared code has no platform import)', () => {
+    const file = resolve(ROOT, 'src/utils/vaultAssets.ts');
+    const src = readFileSync(file, 'utf8');
+    for (const spec of importSpecs(src)) {
+      expect(spec, 'vaultAssets must not import a browser platform module').not.toMatch(/platform\/browser/);
+    }
+  });
+
+  it('the AssetAdapter contract has no platform/network/blob surface (Uint8Array-only, no Blob/File/URL/fetch)', () => {
+    const file = resolve(ROOT, 'src/application/adapters/AssetAdapter.ts');
+    const src = stripComments(readFileSync(file, 'utf8'));
+    const forbidden = [/\bBlob\b/, /\bFile\b/, /\bFileSystemHandle\b/, /createObjectURL/, /\bfetch\s*\(/, /showDirectoryPicker/];
+    for (const re of forbidden) {
+      expect(re.test(src), `AssetAdapter contract must not contain ${re}`).toBe(false);
+    }
+  });
 });

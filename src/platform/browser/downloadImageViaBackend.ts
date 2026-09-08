@@ -1,24 +1,26 @@
 /**
  * The Kitchen Codex — Browser scoped image download via the backend proxy
- * (Phase 4D3C).
+ * (Phase 4D3C, refined 4D3D).
  *
  * A NARROW, shell-scoped binary helper for downloading a remote image through the
- * server-side SSRF-protected proxy. It is deliberately NOT part of the
- * `NetworkAdapter` contract (which stays JSON-only) and is NOT a general
- * arbitrary-URL fetch primitive.
+ * server-side SSRF-protected proxy, returned as platform-neutral bytes. It is the
+ * concrete browser implementation of the application `RemoteImageDownloader` port
+ * and is NOT part of the `NetworkAdapter` contract (which stays JSON-only).
  *
  * SECURITY / SCOPE (must never be weakened):
  *   - The endpoint is HARDCODED to the application backend proxy
  *     (`/api/download-image`). It is NEVER caller-controlled.
  *   - The remote image URL is request BODY data, never the request URL.
- *   - There is NO direct fetch to the remote image URL and NO CORS fallback.
- *     If the server-side proxy rejects/errors, that failure is surfaced — the
- *     client does NOT retry the remote host directly.
+ *   - No direct fetch to the remote image URL and no CORS fallback. A proxy
+ *     failure is surfaced; the client does NOT retry the remote host directly.
  *   - SSRF ownership stays server-side (DNS/IP/private/metadata/redirect/rate
- *     limiting/content-type checks are all server responsibility).
+ *     limiting/content-type checks are server responsibility).
  *
- * Transports the binary reply as a `Blob` for the existing asset-save flow.
+ * Returns `Uint8Array` (platform-neutral); the browser render layer converts bytes
+ * to Blob/object-URL as needed.
  */
+
+import type { AssetBytes, RemoteImageDownloader } from '../../application/adapters/AssetAdapter';
 
 /** The fixed backend proxy endpoint this helper may target. */
 export const BACKEND_IMAGE_DOWNLOAD_ENDPOINT = '/api/download-image';
@@ -44,15 +46,8 @@ export class BackendImageDownloadError extends Error {
 }
 
 export interface DownloadImageOptions {
-  /** Cross-runtime cancellation signal. */
   signal?: AbortSignal;
-  /** Injectable fetch for tests; defaults to the global fetch. */
   fetchFn?: BackendFetchLike;
-}
-
-export interface BackendImageResult {
-  blob: Blob;
-  contentType: string;
 }
 
 function defaultFetch(): BackendFetchLike {
@@ -60,14 +55,14 @@ function defaultFetch(): BackendFetchLike {
 }
 
 /**
- * POSTs `{ imageUrl }` to the fixed backend proxy endpoint and returns the
- * binary result as a Blob. Throws `BackendImageDownloadError` on a non-2xx
- * response; it NEVER falls back to fetching the remote URL directly.
+ * POSTs `{ imageUrl }` to the fixed backend proxy endpoint and returns the binary
+ * result as platform-neutral bytes. Throws `BackendImageDownloadError` on a
+ * non-2xx response; it NEVER falls back to fetching the remote URL directly.
  */
 export async function downloadImageViaBackend(
   imageUrl: string,
   options: DownloadImageOptions = {}
-): Promise<BackendImageResult> {
+): Promise<AssetBytes> {
   const fetchFn = options.fetchFn ?? defaultFetch();
   const res = await fetchFn(BACKEND_IMAGE_DOWNLOAD_ENDPOINT, {
     method: 'POST',
@@ -82,5 +77,13 @@ export async function downloadImageViaBackend(
 
   const contentType = res.headers.get('content-type') || 'image/jpeg';
   const blob = await res.blob();
-  return { blob, contentType };
+  const buffer = await blob.arrayBuffer();
+  return { bytes: new Uint8Array(buffer), contentType };
 }
+
+/** The browser-shell concrete implementation of the application download port. */
+export const browserRemoteImageDownloader: RemoteImageDownloader = {
+  downloadRemoteImage(imageUrl: string, options?: { signal?: AbortSignal }): Promise<AssetBytes> {
+    return downloadImageViaBackend(imageUrl, { signal: options?.signal });
+  },
+};

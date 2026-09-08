@@ -60,13 +60,12 @@ describe('downloadImageViaBackend (Phase 4D3C)', () => {
     expect(headers?.['Content-Type']).toBe('application/json');
   });
 
-  it('returns the binary Blob and content type on success', async () => {
+  it('returns the binary bytes and content type on success', async () => {
     const fetchFn: BackendFetchLike = (url, init) =>
       Promise.resolve(fakeResponse({ ok: true, status: 200, contentType: 'image/png', blobText: 'PNG' }));
     const result = await downloadImageViaBackend('https://r.example/a.png', { fetchFn });
     expect(result.contentType).toBe('image/png');
-    const text = await result.blob.text();
-    expect(text).toBe('PNG');
+    expect(new TextDecoder().decode(result.bytes)).toBe('PNG');
   });
 
   it('throws a normalized error on non-2xx (no direct remote fallback)', async () => {

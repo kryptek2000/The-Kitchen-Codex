@@ -23,7 +23,7 @@ import {
 } from 'lucide-react';
 import { ObsidianRecipe, ParsedIngredient, RecipeStep, ObsidianCallout } from '../types';
 import { serializeRecipeToObsidianMarkdown, parseObsidianRecipeMarkdown } from '../utils/markdownParser';
-import { saveImageToVaultAssets, syncResolveVaultAssetUrl } from '../utils/vaultAssets';
+import { saveImageToVaultAssets, syncResolveVaultAssetUrl, type SaveImageDeps } from '../utils/vaultAssets';
 import { resolveNewRecipeVaultPath } from '../core/vaultPath';
 import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
 
@@ -33,6 +33,8 @@ interface RecipeGrabberModalProps {
   onSaveRecipe: (recipe: ObsidianRecipe) => Promise<void> | void;
   onOpenInEditor?: (recipe: ObsidianRecipe) => void;
   folderHandle?: any;
+  /** Injected asset save dependencies (asset boundary + binary downloader) from the shell. */
+  imageService?: SaveImageDeps;
   /** Optional pre-filled URL (e.g. a handoff from Ask My Kitchen web discovery). */
   initialUrl?: string;
   network: NetworkAdapter;
@@ -90,6 +92,7 @@ export function RecipeGrabberModal({
   onSaveRecipe,
   onOpenInEditor,
   folderHandle,
+  imageService,
   initialUrl,
   network,
 }: RecipeGrabberModalProps) {
@@ -206,7 +209,7 @@ export function RecipeGrabberModal({
     }
     try {
       setLoadingStep('Saving food image to Assets/ folder in Obsidian vault...');
-      const saved = await saveImageToVaultAssets(folderHandle, titleToUse, imageSrc);
+      const saved = await saveImageToVaultAssets(imageService ?? { folderHandle }, titleToUse, imageSrc);
       return saved.relativePath;
     } catch (err) {
       console.warn('Failed to save image to Assets/ folder, falling back to original URL:', err);

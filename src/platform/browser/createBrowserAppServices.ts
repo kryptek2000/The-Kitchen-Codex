@@ -24,6 +24,7 @@ import { BrowserFsaVaultAdapter } from './BrowserFsaVaultAdapter';
 import type { FsaDirectoryHandleLike } from './BrowserFsaVaultAdapter';
 import { BrowserSettingsAdapter } from './BrowserSettingsAdapter';
 import { BrowserNetworkAdapter } from './BrowserNetworkAdapter';
+import { BrowserAssetAdapter } from './BrowserAssetAdapter';
 
 /** Builds a browser localStorage-backed settings adapter. */
 export function createBrowserSettingsAdapter(): BrowserSettingsAdapter {
@@ -38,4 +39,9 @@ export function createBrowserNetworkAdapter(): BrowserNetworkAdapter {
 /** Builds a browser File System Access vault adapter from a connected directory handle. */
 export function createBrowserVaultAdapter(folderHandle: unknown): BrowserFsaVaultAdapter {
   return new BrowserFsaVaultAdapter(folderHandle as FsaDirectoryHandleLike);
+}
+
+/** Builds a browser File System Access asset adapter from a connected directory handle. */
+export function createBrowserAssetAdapter(folderHandle: unknown): BrowserAssetAdapter {
+  return new BrowserAssetAdapter(folderHandle as FsaDirectoryHandleLike);
 }
