@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   extractJsonLd,
   extractMetaTags,
@@ -390,9 +390,21 @@ describe("RecipeGrabber - provider abstraction parity (direct gemini removed)", 
     return fakeGemini.models.generateContent;
   };
 
+  beforeEach(() => {
+    // recipeGrabber opts into a bounded same-model retry (backoff 600ms). Resolve
+    // those sleeps on a microtask so unit tests never actually wait.
+    vi.stubGlobal("setTimeout", ((cb: () => void) => {
+      Promise.resolve().then(() => {
+        (cb as () => void)();
+      });
+      return 0;
+    }) as unknown as typeof setTimeout);
+  });
+
   afterEach(() => {
     vi.mocked(getGemini).mockReturnValue(null);
     delete process.env.GEMINI_API_KEY;
+    vi.unstubAllGlobals();
   });
 
   it("P1: AI extraction routes through the provider (primary explicit, temp 0.1, MINIMAL thinking, schema parity)", async () => {
@@ -433,7 +445,7 @@ describe("RecipeGrabber - provider abstraction parity (direct gemini removed)", 
     }
   });
 
-  it("P2: provider primary throws -> fallback model attempted (order primary,fallback preserved)", async () => {
+  it("P2: provider primary throws (transient) -> same-model retry -> fallback model attempted (order primary,fallback preserved)", async () => {
     const seenModels: string[] = [];
     modelAwareGemini((p) => {
       seenModels.push(p.model);
@@ -443,8 +455,13 @@ describe("RecipeGrabber - provider abstraction parity (direct gemini removed)", 
     try {
       const result = await grabRecipeFromWeb({ rawText: SAMPLE_TEXT });
       expect(result.title).toBe("Pasta");
-      expect(seenModels[0]).toBe(MODEL_CONFIG.recipeGrabberPrimary);
-      expect(seenModels[1]).toBe(MODEL_CONFIG.recipeGrabberFallback);
+      // "primary down" classifies as UNAVAILABLE -> the restored retry runs the
+      // SAME primary model twice before falling back to the fallback model.
+      expect(seenModels).toEqual([
+        MODEL_CONFIG.recipeGrabberPrimary,
+        MODEL_CONFIG.recipeGrabberPrimary,
+        MODEL_CONFIG.recipeGrabberFallback,
+      ]);
     } finally {
       vi.mocked(getGemini).mockReturnValue(null);
     }
@@ -528,6 +545,53 @@ describe("RecipeGrabber - provider abstraction parity (direct gemini removed)", 
       // instructions present -> retained, stepNumber preserved (integer).
       expect(result.instructions[0].text).toBe("Do a thing.");
     } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  it("P8: transient retryable failure (429) on the primary model is retried and the SAME model then succeeds", async () => {
+    let gCalls = 0;
+    const seenModels: string[] = [];
+    modelAwareGemini((p) => {
+      seenModels.push(p.model);
+      gCalls++;
+      if (gCalls === 1) throw Object.assign(new Error("rate limit exceeded"), { status: 429 });
+      return { text: JSON.stringify({ title: "Recovered", cuisine: "Italian", category: "Dinner", ingredients: [], instructions: [] }) };
+    });
+    try {
+      const result = await grabRecipeFromWeb({ rawText: SAMPLE_TEXT });
+      // The AI result is used — the deterministic heuristic is NOT reached.
+      expect(result.title).toBe("Recovered");
+      // Same primary model executed twice (transient retry restored), then success.
+      expect(seenModels).toEqual([MODEL_CONFIG.recipeGrabberPrimary, MODEL_CONFIG.recipeGrabberPrimary]);
+    } finally {
+      vi.mocked(getGemini).mockReturnValue(null);
+    }
+  });
+
+  it("P9: all candidates+retries fail -> deterministic heuristic fallback with sanitized terminal diagnostics", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    let gCalls = 0;
+    modelAwareGemini((p) => {
+      gCalls++;
+      if (gCalls % 2 === 1) throw Object.assign(new Error("rate limit exceeded"), { status: 429 });
+      throw new Error("model down");
+    });
+    try {
+      const result = await grabRecipeFromWeb({ rawText: SAMPLE_TEXT });
+      expect(result.title).toBeTruthy();
+      expect(result.ingredients.length).toBeGreaterThan(0); // heuristic fallback recovered
+      const logged = warnSpy.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(logged).toContain("[AI fallback][attempt]");
+      expect(logged).toContain("[Kitchen grab]");
+      expect(logged).toContain("code=");
+      // No prompt / recipe content / key / request-body leakage in diagnostics.
+      expect(logged).not.toContain("Creamy Garlic Pasta");
+      expect(logged).not.toContain("DEEPSEEK_API_KEY");
+      expect(logged).not.toContain("OPENROUTER_API_KEY");
+      expect(logged).not.toContain("Reasoning content");
+    } finally {
+      warnSpy.mockRestore();
       vi.mocked(getGemini).mockReturnValue(null);
     }
   });

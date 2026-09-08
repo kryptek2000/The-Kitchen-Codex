@@ -1,10 +1,10 @@
 import dotenv from "dotenv";
 import { safeFetchHtml } from "./ssrfGuard.js";
 import { renderIngredientLine, parseIngredientLine } from "../src/utils/markdownParser.js";
-import { MODEL_CONFIG } from "./modelConfig.js";
-import { getDefaultAiProvider } from "./ai/provider.js";
+import { runWithAiFallback, resolveRoleCandidates } from "./ai/provider.js";
+import type { ProviderDiagnostic } from "./ai/providerErrors.js";
 import type { AiJsonSchema } from "./ai/types.js";
-import { logModelAttempt } from "./providerDiagnostics.js";
+import { logFallbackAttempt, logModelAttempt } from "./providerDiagnostics.js";
 
 dotenv.config();
 
@@ -551,8 +551,58 @@ function buildSchema(): AiJsonSchema {
 }
 
 /**
+ * Normalizes a provider-structured recipe object into a `GrabbedRecipeResult`,
+ * applying the same zero-fabrication defaults the previous direct-Gemini path
+ * used (image/source/tag fallback, empty-String for absent fields, `undefined`
+ * for an invalid/absent servings yield, and the YAML Markdown generation).
+ * This runs downstream of the (already validated) provider output; it never
+ * invents source URLs or fabricates missing metadata.
+ */
+function buildAiRecipeResult(
+  parsed: Record<string, any>,
+  metaTags: Record<string, string>,
+  siteName: string,
+  url?: string,
+  sourceUrl?: string
+): GrabbedRecipeResult {
+  const image = parsed.image || metaTags.image || "";
+  const source = parsed.source || metaTags.siteName || siteName || "Web Grabber";
+  const tags = Array.isArray(parsed.tags) && parsed.tags.length > 0 ? parsed.tags : ["food/recipes"];
+
+  const rawMarkdown = generateMarkdown({
+    ...parsed,
+    image,
+    source,
+    tags,
+  });
+
+  return {
+    title: parsed.title || metaTags.title || "Imported Recipe",
+    description: parsed.description || metaTags.description || "",
+    cuisine: parsed.cuisine || "General",
+    category: parsed.category || "Main Course",
+    difficulty: parsed.difficulty || "Medium",
+    prepTime: parsed.prepTime || "",
+    cookTime: parsed.cookTime || "",
+    totalTime: parsed.totalTime || "",
+    servings: typeof parsed.servings === "number" && parsed.servings > 0 ? parsed.servings : undefined,
+    calories: parsed.calories || "",
+    rating: parsed.rating || 5,
+    source,
+    sourceUrl: sourceUrl ?? url,
+    image,
+    tags,
+    ingredients: parsed.ingredients || [],
+    instructions: parsed.instructions || [],
+    callouts: parsed.callouts || [],
+    notes: parsed.notes || "",
+    rawMarkdown,
+  };
+}
+
+/**
  * Main grabber engine supporting { url, html, rawText } inputs.
- * Priority: JSON-LD -> Gemini (LLM) -> Heuristic Text Parsing
+ * Priority: JSON-LD -> AI Provider Roles -> Heuristic Text Parsing
  */
 export async function grabRecipeFromWeb(params: {
   url?: string;
@@ -596,10 +646,12 @@ export async function grabRecipeFromWeb(params: {
 
   const cleanedText = htmlContent ? cleanHtmlToText(htmlContent) : rawText || "";
 
-  // Pipeline Priority 2: AI structured extraction with model fallback & retry
-  const provider = getDefaultAiProvider();
-
-  if (provider.isAvailable() && (cleanedText.length > 0 || Object.keys(metaTags).length > 0)) {
+  // Pipeline Priority 2: AI structured extraction across capable provider roles.
+  // Candidates are resolved per role and capability-filtered (structuredOutput only)
+  // by the selector/fallback engine; failures fall back to the next capable
+  // candidate and then to the deterministic JSON-LD / heuristic pipelines below.
+  // The AI only NORMALIZES trusted fetched/extracted text — it never fetches a URL.
+  if (cleanedText.length > 0 || Object.keys(metaTags).length > 0) {
     const prompt = `You are an expert culinary chef and Obsidian Markdown archivist.
 Extract this recipe into an accurate, structured JSON recipe object tailored for an Obsidian culinary vault.
 
@@ -624,90 +676,40 @@ REQUIREMENTS:
 9. Extract high-quality food image URL if present in meta or schema.
 10. Generate Obsidian tags like "food/recipes", "cuisine/italian", "dinner", etc.`;
 
-    const modelsToTry = [
-      MODEL_CONFIG.recipeGrabberPrimary,
-      MODEL_CONFIG.recipeGrabberFallback,
-      MODEL_CONFIG.recipeGrabberAlias,
-    ];
-
-    for (const modelName of modelsToTry) {
-      let attempts = 0;
-      const maxAttempts = 2;
-
-      while (attempts < maxAttempts) {
-        attempts++;
-        try {
-          const parsed = await provider.generateStructured<Record<string, any>>(
-            prompt,
-            buildSchema(),
-            {
-              model: modelName,
+    try {
+      const { result } = await runWithAiFallback<GrabbedRecipeResult>({
+        candidates: resolveRoleCandidates("recipeGrabber"),
+        requiredCapabilities: ["structuredOutput"],
+        // Bounded same-model transient retry, restoring the prior per-model
+        // resilience (RATE_LIMIT/UNAVAILABLE/TIMEOUT/INVALID_RESPONSE). AUTH and
+        // UNSUPPORTED_CAPABILITY are never retried; hard QUOTA is not retried
+        // same-model (insufficient credits is not transient within seconds), and
+        // generic PROVIDER_ERROR is not retried same-model but still falls back.
+        retry: {
+          maxAttemptsPerCandidate: 2,
+          backoffMs: 600,
+          retryableCodes: ["RATE_LIMIT", "UNAVAILABLE", "TIMEOUT", "INVALID_RESPONSE"],
+        },
+        run: (candidate) =>
+          candidate.provider
+            .generateStructured<Record<string, any>>(prompt, buildSchema(), {
+              model: candidate.model,
               temperature: 0.1,
               providerOptions: { thinkingConfig: { thinkingLevel: "MINIMAL" } },
-            }
-          );
-
-          // Ensure image fallback if empty
-          const image = parsed.image || metaTags.image || "";
-          const source = parsed.source || metaTags.siteName || siteName || "Web Grabber";
-          const tags = Array.isArray(parsed.tags) && parsed.tags.length > 0 ? parsed.tags : ["food/recipes"];
-
-          const rawMarkdown = generateMarkdown({
-            ...parsed,
-            image,
-            source,
-            tags,
-          });
-
-          return {
-            title: parsed.title || metaTags.title || "Imported Recipe",
-            description: parsed.description || metaTags.description || "",
-            cuisine: parsed.cuisine || "General",
-            category: parsed.category || "Main Course",
-            difficulty: parsed.difficulty || "Medium",
-            prepTime: parsed.prepTime || "",
-            cookTime: parsed.cookTime || "",
-            totalTime: parsed.totalTime || "",
-            servings: typeof parsed.servings === "number" && parsed.servings > 0 ? parsed.servings : undefined,
-            calories: parsed.calories || "",
-            rating: parsed.rating || 5,
-            source,
-            sourceUrl: url,
-            image,
-            tags,
-            ingredients: parsed.ingredients || [],
-            instructions: parsed.instructions || [],
-            callouts: parsed.callouts || [],
-            notes: parsed.notes || "",
-            rawMarkdown,
-          };
-        } catch (aiErr: any) {
-          const errMsg = aiErr?.message || String(aiErr);
-          // An empty/provider-unavailable response previously fell through to a
-          // silent retry; keep that by treating "Empty response" as retryable
-          // WITHOUT the noisy warn, matching the prior no-return behaviour.
-          const isEmpty = errMsg.includes("Empty response");
-          const isRetryable =
-            isEmpty ||
-            errMsg.includes("503") ||
-            errMsg.includes("UNAVAILABLE") ||
-            errMsg.includes("high demand") ||
-            errMsg.includes("429") ||
-            errMsg.includes("RESOURCE_EXHAUSTED");
-
-          // `errMsg` is retained ONLY for retry classification above; the actual
-          // diagnostic line is emitted through the redacted helper (never the raw
-          // provider message) to avoid leaking secrets.
-          if (!isEmpty) {
-            logModelAttempt("grab", modelName, aiErr);
-          }
-
-          if (isRetryable && attempts < maxAttempts) {
-            await new Promise((r) => setTimeout(r, 600 * attempts));
-            continue;
-          }
-          break;
-        }
+            })
+            .then((parsed) => buildAiRecipeResult(parsed, metaTags, siteName, url)),
+      });
+      return result;
+    } catch (err: any) {
+      // Total AI-chain failure. Emit sanitized per-attempt diagnostics + terminal
+      // (never the raw provider exception / key / prompt / body), then fall through
+      // to the deterministic JSON-LD / heuristic pipelines (zero-fabrication).
+      // A "no capable provider" (UNSUPPORTED_CAPABILITY, e.g. offline/no-key) is
+      // NOT a transient chain failure — keep that path silent.
+      if (err?.code !== "UNSUPPORTED_CAPABILITY") {
+        const diags: ProviderDiagnostic[] = Array.isArray(err?.diagnostics) ? err.diagnostics : [];
+        for (const d of diags) logFallbackAttempt(d);
+        logModelAttempt("grab", typeof err?.model === "string" ? err.model : "<unknown>", err);
       }
     }
   }

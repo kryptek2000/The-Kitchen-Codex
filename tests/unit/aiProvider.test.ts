@@ -3,6 +3,7 @@ import { getGemini } from "../../server/geminiClient.js";
 import {
   GeminiProvider,
   OpenRouterProvider,
+  DeepSeekProvider,
   getAiProvider,
   getDefaultAiProvider,
   getRegisteredProviders,
@@ -31,10 +32,11 @@ describe("AiProvider foundation", () => {
     expect(getAiProvider("gemini")).toBeInstanceOf(GeminiProvider);
   });
 
-  it("registry resolves the second registered provider (openrouter) but not unknown ids", () => {
+  it("registry resolves the registered providers (openrouter, deepseek) but not unknown ids", () => {
     expect(getAiProvider("openrouter")).toBeInstanceOf(OpenRouterProvider);
-    expect(getAiProvider("deepseek")).toBeUndefined(); // 1C, not yet registered
+    expect(getAiProvider("deepseek")).toBeInstanceOf(DeepSeekProvider); // 1C registered
     expect(getAiProvider("")).toBeUndefined();
+    expect(getAiProvider("ghost")).toBeUndefined();
   });
 
   it("openrouter is inert (disabled) when no key is configured", () => {

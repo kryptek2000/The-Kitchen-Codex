@@ -1,14 +1,10 @@
 import dotenv from "dotenv";
-import { getDefaultAiProvider } from "./ai/provider.js";
+import { runWithAiFallback, resolveRoleCandidates } from "./ai/provider.js";
 import type { AiJsonSchema, AiProvider } from "./ai/types.js";
 import { estimateAlgorithmicNutrition } from "./nutritionEstimator.js";
-import { MODEL_CONFIG } from "./modelConfig.js";
 import { logModelAttempt } from "./providerDiagnostics.js";
 
 dotenv.config();
-
-const PRIMARY_MODEL = MODEL_CONFIG.metadataRecoveryPrimary;
-const FALLBACK_MODEL = MODEL_CONFIG.metadataRecoveryFallback;
 
 export interface MetadataRecoveryRequest {
   title?: string;
@@ -357,11 +353,12 @@ function buildSchema(): AiJsonSchema {
 
 /**
  * AI structured-output adapter: recipe -> recovered metadata (validated/merged
- * downstream). Routes through the provider abstraction
- * (`getDefaultAiProvider().generateStructured`) with the same explicit
- * primary -> fallback model chain, same temperature (0.1), and the same MINIMAL
- * thinking config. A model that throws, or returns empty/unparseable output, is
- * logged and skipped so the caller can keep the algorithmic fallback.
+ * downstream). Routes through the provider abstraction for a single resolved
+ * (provider, model) candidate (`provider.generateStructured`) with the same
+ * temperature (0.1) and the same MINIMAL thinking config. Candidate resolution
+ * and cross-provider fallback are handled by `runWithAiFallback`; a model that
+ * throws or returns empty/unparseable output is skipped so the caller can keep
+ * the algorithmic fallback.
  */
 async function aiRecoverMetadata(
   provider: AiProvider,
@@ -417,33 +414,28 @@ Guidelines:
 }
 
 /**
- * Recovers missing metadata for a recipe using a resilient fallback chain:
- * Primary (gemini-3.7-flash) -> Fallback (gemini-3.1-flash-lite) -> Algorithmic Fallback
+ * Recovers missing metadata for a recipe using a resilient, provider-neutral
+ * fallback chain resolved per role: Gemini (primary -> fallback) -> OpenRouter
+ * (when configured) -> DeepSeek (when configured) -> Algorithmic Fallback. The
+ * capability selector only admits structured-output-capable candidates, so a
+ * provider that cannot honor the `AiJsonSchema` contract is never executed.
+ * Zero-fabrication and evidence-labelling are preserved by the algorithmic
+ * fallback on total provider failure.
  */
 export async function recoverRecipeMetadata(
   req: MetadataRecoveryRequest
 ): Promise<MetadataRecoveryResult> {
-  const provider = getDefaultAiProvider();
-
-  if (!provider.isAvailable()) {
-    console.info("[MetadataRecovery] No AI provider configured. Executing algorithmic metadata recovery.");
-    return recoverMetadataAlgorithmically(req);
-  }
-
-  // Attempt 1: Primary Model (gemini-3.7-flash)
   try {
-    return await aiRecoverMetadata(provider, PRIMARY_MODEL, req);
-  } catch (primaryErr: any) {
-    logModelAttempt("metadataRecovery", PRIMARY_MODEL, primaryErr);
-
-    // Attempt 2: Fallback Model (gemini-3.1-flash-lite)
-    try {
-      return await aiRecoverMetadata(provider, FALLBACK_MODEL, req);
-    } catch (fallbackErr: any) {
-      logModelAttempt("metadataRecovery", FALLBACK_MODEL, fallbackErr);
-
-      // Attempt 3: Algorithmic Recovery
-      return recoverMetadataAlgorithmically(req);
-    }
+    const { result } = await runWithAiFallback<MetadataRecoveryResult>({
+      candidates: resolveRoleCandidates("metadataRecovery"),
+      requiredCapabilities: ["structuredOutput"],
+      run: (candidate) => aiRecoverMetadata(candidate.provider, candidate.model, req),
+    });
+    return result;
+  } catch (err: any) {
+    const model = typeof err?.model === "string" ? err.model : "<unknown>";
+    logModelAttempt("metadataRecovery", model, err);
+    console.info("[MetadataRecovery] No capable AI provider succeeded. Executing algorithmic metadata recovery.");
+    return recoverMetadataAlgorithmically(req);
   }
 }

@@ -102,6 +102,9 @@ export function classifyProviderError(error: unknown): ProviderErrorCode {
     return "AUTH";
   }
 
+  // Insufficient balance / credit exhaustion (DeepSeek 402, OpenAI-style 402).
+  if (status === 402) return "QUOTA";
+
   // Quota / rate limiting.
   if (status === 429) return "RATE_LIMIT";
   if (/quota|rate.?limit|too many requests|429|exhausted|billing|capacity/i.test(message)) {

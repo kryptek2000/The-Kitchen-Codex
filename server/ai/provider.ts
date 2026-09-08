@@ -18,6 +18,12 @@ export type {
 export { GeminiProvider } from "./geminiProvider.js";
 export { OpenRouterProvider, OPENROUTER_MODEL_CAPABILITIES, OPENROUTER_STRUCTURED_MODEL } from "./openRouterProvider.js";
 export {
+  DeepSeekProvider,
+  DEEPSEEK_MODEL_CAPABILITIES,
+  DEEPSEEK_FLASH_MODEL,
+  DEEPSEEK_PRO_MODEL,
+} from "./deepSeekProvider.js";
+export {
   getAiProvider,
   getDefaultAiProvider,
   getRegisteredProviders,
@@ -34,6 +40,7 @@ export type {
   AiCapabilityKey,
   FallbackResult,
   FallbackRunOptions,
+  FallbackRetryPolicy,
 } from "./providerRegistry.js";
 export {
   ProviderOperationError,

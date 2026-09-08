@@ -22,6 +22,7 @@
 
 import { GeminiProvider } from "./geminiProvider.js";
 import { OpenRouterProvider, OPENROUTER_MODEL_CAPABILITIES } from "./openRouterProvider.js";
+import { DeepSeekProvider, DEEPSEEK_MODEL_CAPABILITIES } from "./deepSeekProvider.js";
 import type { AiCapabilities, AiProvider } from "./types.js";
 import {
   normalizeProviderError,
@@ -29,7 +30,9 @@ import {
   isFallbackEligible,
   toProviderDiagnostic,
   type ProviderDiagnostic,
+  type ProviderErrorCode,
 } from "./providerErrors.js";
+import { logFallbackAttempt } from "../providerDiagnostics.js";
 
 /** A single capability key (the shape of `AiCapabilities`). */
 export type AiCapabilityKey = keyof AiCapabilities;
@@ -77,17 +80,24 @@ function openRouterConfigured(): boolean {
   return (process.env.OPENROUTER_API_KEY || "").trim().length > 0;
 }
 
+/** True when a DeepSeek key is present (server env only). */
+function deepSeekConfigured(): boolean {
+  return (process.env.DEEPSEEK_API_KEY || "").trim().length > 0;
+}
+
 /**
  * The built-in registry. Built lazily (no import side effects). Provider ORDER
- * is the selection order: Gemini first (preserves zero-config behavior), OpenRouter
- * second. OpenRouter is INERT (descriptor `enabled` false) unless an
- * `OPENROUTER_API_KEY` is configured, so existing zero-config Gemini users are
- * untouched.
+ * is the selection order: Gemini first (preserves zero-config behavior),
+ * OpenRouter second, DeepSeek third. Both OpenRouter and DeepSeek are INERT
+ * (descriptor `enabled` false) unless their respective `*_API_KEY` is
+ * configured, so existing zero-config Gemini users are untouched and the order
+ * stays deterministic (Gemini -> OpenRouter -> DeepSeek).
  */
 export function getRegisteredProviders(): RegisteredProvider[] {
   if (!registry) {
     const gemini = ensureDefault();
     const openRouter = new OpenRouterProvider();
+    const deepSeek = new DeepSeekProvider();
     registry = [
       {
         provider: gemini,
@@ -101,6 +111,13 @@ export function getRegisteredProviders(): RegisteredProvider[] {
         // Config-driven in the sense that it reflects whether a key is configured;
         // it is NOT user-set capability truth, and it is never a raw secret.
         enabled: openRouterConfigured(),
+      },
+      {
+        provider: deepSeek,
+        defaultCapabilities: { ...deepSeek.capabilities },
+        modelCapabilities: DEEPSEEK_MODEL_CAPABILITIES,
+        // Same rule as OpenRouter: enabled only when its key is configured.
+        enabled: deepSeekConfigured(),
       },
     ];
   }
@@ -177,6 +194,27 @@ export function selectAiCandidates(
   return selectCandidates(getRegisteredProviders(), candidates, requiredCapabilities);
 }
 
+/** Bounded, opt-in same-model transient retry policy. */
+export interface FallbackRetryPolicy {
+  /**
+   * Maximum execution attempts for a SINGLE (provider, model) candidate.
+   * `1` (or omitted) = no same-model retry (the default).
+   */
+  maxAttemptsPerCandidate: number;
+  /** Bounded deterministic backoff between attempts of the same candidate (ms). */
+  backoffMs?: number;
+  /**
+   * Error codes eligible for same-model retry. Defaults to `[]` (no same-model
+   * retry). AUTH and UNSUPPORTED_CAPABILITY are NEVER retried, regardless.
+   */
+  retryableCodes?: ProviderErrorCode[];
+  /**
+   * Test seam for the delay function; defaults to a bounded `setTimeout`
+   * promise. Present only to keep unit tests fast (no real sleeps).
+   */
+  sleep?: (ms: number) => Promise<void>;
+}
+
 export interface FallbackRunOptions<T> {
   /** Ordered (provider, model) candidates. */
   candidates: AiCandidate[];
@@ -191,14 +229,41 @@ export interface FallbackRunOptions<T> {
    * provider if one remains. The primary AUTH failure stays in `diagnostics`.
    */
   allowAuthFallback?: boolean;
+  /**
+   * OPT-IN bounded same-model retry. When omitted, behavior is EXACTLY one
+   * attempt per candidate (no retry, no delay) — the default for every consumer.
+   */
+  retry?: FallbackRetryPolicy;
+}
+
+/**
+ * Maps an already-normalized error into a typed terminal error carrying the full
+ * sanitized attempt trail (non-enumerable so it never serializes into logs, UI,
+ * or settings). Returns the error (adding the trail) or a default.
+ */
+function terminalError(
+  last: ProviderOperationError | undefined,
+  diagnostics: ProviderDiagnostic[]
+): ProviderOperationError {
+  const terminal = last ?? new ProviderOperationError("PROVIDER_ERROR", "All AI candidates failed.", {});
+  if (diagnostics.length > 0) {
+    Object.defineProperty(terminal, "diagnostics", {
+      value: diagnostics.slice(),
+      enumerable: false,
+      writable: false,
+      configurable: false,
+    });
+  }
+  return terminal;
 }
 
 /**
  * Explicit fallback policy: executes capable candidates in order, falling back
  * only on fallback-eligible errors; AUTH falls back only when a different
  * provider remains AND allowAuthFallback is set; never falls back on a capability
- * mismatch. Returns the winning result + diagnostics, or throws a normalized
- * terminal error.
+ * mismatch. Same-model retry is OPT-IN via `options.retry` (default: exactly one
+ * attempt per candidate). Returns the winning result + diagnostics, or throws a
+ * normalized terminal error carrying the sanitized attempt trail.
  */
 export async function runWithAiFallback<T>(
   options: FallbackRunOptions<T>
@@ -216,37 +281,63 @@ export async function runWithAiFallback<T>(
     );
   }
 
+  const retry = options.retry;
+  const maxAttempts =
+    retry && Number.isInteger(retry.maxAttemptsPerCandidate) && retry.maxAttemptsPerCandidate > 0
+      ? retry.maxAttemptsPerCandidate
+      : 1;
+  const retryableCodes = retry?.retryableCodes ?? [];
+  const backoffMs = retry?.backoffMs ?? 600;
+  const sleep = retry?.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+
   for (let i = 0; i < capable.length; i++) {
     const candidate = capable[i];
-    try {
-      const result = await options.run(candidate);
-      return { result, providerId: candidate.provider.id, model: candidate.model, diagnostics };
-    } catch (err) {
-      const normalized = normalizeProviderError(err, {
-        providerId: candidate.provider.id,
-        model: candidate.model,
-      });
-      diagnostics.push(toProviderDiagnostic(normalized));
-      last = normalized;
+    // Retries stay LOCAL to this candidate (A1, A2, ...) before the next candidate.
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const result = await options.run(candidate);
+        // Successful fallback: surface intermediate attempt failures (sanitized)
+        // so visibility is not discarded when a later provider/model recovers.
+        for (const diag of diagnostics) logFallbackAttempt(diag);
+        return { result, providerId: candidate.provider.id, model: candidate.model, diagnostics };
+      } catch (err) {
+        const normalized = normalizeProviderError(err, {
+          providerId: candidate.provider.id,
+          model: candidate.model,
+        });
+        diagnostics.push(toProviderDiagnostic(normalized));
+        last = normalized;
 
-      // Capability mismatch must never be treated as an ordinary runtime fallback.
-      if (normalized.code === "UNSUPPORTED_CAPABILITY") throw normalized;
+        // Capability mismatch must never be treated as an ordinary runtime fallback.
+        if (normalized.code === "UNSUPPORTED_CAPABILITY") throw normalized;
 
-      if (normalized.code === "AUTH") {
-        const differentProviderRemains = capable
-          .slice(i + 1)
-          .some((x) => x.provider.id !== candidate.provider.id);
-        if (!differentProviderRemains || !options.allowAuthFallback) {
-          // The primary auth failure stays visible (no silent key swap).
-          throw normalized;
+        if (normalized.code === "AUTH") {
+          // AUTH is NEVER retried (same-model). Fallback to a DIFFERENT provider
+          // is allowed only when explicitly permitted and one remains.
+          const differentProviderRemains = capable
+            .slice(i + 1)
+            .some((x) => x.provider.id !== candidate.provider.id);
+          if (!differentProviderRemains || !options.allowAuthFallback) {
+            // The primary auth failure stays visible (no silent key swap).
+            throw normalized;
+          }
+          break; // move to the next candidate (no same-model auth retry).
         }
-        continue;
-      }
 
-      if (!isFallbackEligible(normalized.code)) throw normalized;
-      // fallback-eligible -> try the next capable candidate.
+        if (!isFallbackEligible(normalized.code)) throw normalized;
+
+        // Same-model transient retry: bounded, only when opted in + code matches,
+        // and only while more attempts remain for THIS candidate.
+        const canRetry =
+          maxAttempts > 1 && attempt < maxAttempts && retryableCodes.includes(normalized.code);
+        if (canRetry) {
+          await sleep(backoffMs);
+          continue; // retry the SAME provider/model candidate.
+        }
+        break; // fallback-eligible but not same-model-retryable -> next candidate.
+      }
     }
   }
 
-  throw last ?? new ProviderOperationError("PROVIDER_ERROR", "All AI candidates failed.", {});
+  throw terminalError(last, diagnostics);
 }

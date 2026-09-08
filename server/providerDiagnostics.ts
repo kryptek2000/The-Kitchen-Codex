@@ -64,3 +64,26 @@ export function logModelAttempt(
   if (d.message) parts.push(`message=${d.message}`);
   console.warn(parts.join(" "));
 }
+
+/** The minimal, sanitized shape of a logged per-attempt fallback diagnostic. */
+export interface FallbackAttemptDiagnostic {
+  code?: string;
+  providerId?: string;
+  model?: string;
+  status?: number;
+  message?: string;
+}
+
+/**
+ * Logs one sanitized per-attempt failure that occurred while a provider fallback
+ * later recovered (so intermediate visibility is preserved on success). Expects a
+ * normalized diagnostic (code/providerId/model/status/message, secrets already
+ * redacted). Never logs the raw exception, key, prompt, or request body.
+ */
+export function logFallbackAttempt(diag: FallbackAttemptDiagnostic): void {
+  const parts = ["[AI fallback][attempt]", `provider=${diag.providerId ?? "?"}`, `model=${diag.model ?? "?"}`];
+  if (diag.code) parts.push(`code=${diag.code}`);
+  if (typeof diag.status === "number") parts.push(`status=${diag.status}`);
+  if (diag.message) parts.push(`message=${redactSecrets(diag.message)}`);
+  console.warn(parts.join(" "));
+}

@@ -3,8 +3,11 @@ import type { AiCapabilities, AiProvider } from "../../server/ai/types.js";
 import {
   GeminiProvider,
   OpenRouterProvider,
+  DeepSeekProvider,
   OPENROUTER_MODEL_CAPABILITIES,
   OPENROUTER_STRUCTURED_MODEL,
+  DEEPSEEK_MODEL_CAPABILITIES,
+  DEEPSEEK_FLASH_MODEL,
   getRegisteredProviders,
   getAiProvider,
   getDefaultAiProvider,
@@ -45,13 +48,16 @@ const candidate = (provider: AiProvider, model = "m"): AiCandidate => ({ provide
 describe("provider registry + capability selection (v0.7 1A)", () => {
   it("registers Gemini as the default provider (zero-config compatibility)", () => {
     const reg = getRegisteredProviders();
-    // Gemini + OpenRouter are registered; provider ORDER is the selection order.
-    expect(reg).toHaveLength(2);
+    // Gemini + OpenRouter + DeepSeek are registered; provider ORDER is the
+    // selection order (Gemini -> OpenRouter -> DeepSeek).
+    expect(reg).toHaveLength(3);
     expect(reg[0].provider).toBeInstanceOf(GeminiProvider);
     expect(reg[1].provider.id).toBe("openrouter");
+    expect(reg[2].provider.id).toBe("deepseek");
     expect(getDefaultAiProvider()).toBe(reg[0].provider);
     expect(getAiProvider("gemini")).toBeInstanceOf(GeminiProvider);
     expect(getAiProvider("openrouter")).toBeDefined();
+    expect(getAiProvider("deepseek")).toBeInstanceOf(DeepSeekProvider);
   });
 
   it("a per-model override can WIDEN a capability for a specific model", () => {
@@ -164,6 +170,37 @@ describe("provider registry + capability selection (v0.7 1A)", () => {
     const regs = [{ provider: or, defaultCapabilities: { ...or.capabilities }, modelCapabilities: OPENROUTER_MODEL_CAPABILITIES }];
     // Even the curated structured model has webSearch:false.
     const out = selectCandidates(regs, [{ provider: or, model: OPENROUTER_STRUCTURED_MODEL }], ["webSearch"]);
+    expect(out).toHaveLength(0);
+  });
+
+  it("DeepSeek baseline is conservative (unknown models claim nothing)", () => {
+    const ds = new DeepSeekProvider();
+    expect(ds.capabilities).toEqual({ reasoning: false, structuredOutput: false, recipeGeneration: false, webSearch: false });
+  });
+
+  it("DeepSeek curated models only gain verified reasoning — never structuredOutput or webSearch", () => {
+    const ds = new DeepSeekProvider();
+    const reg = { provider: ds, defaultCapabilities: { ...ds.capabilities }, modelCapabilities: DEEPSEEK_MODEL_CAPABILITIES };
+    // Flash: reasoning widened, but structuredOutput stays false (no schema-constrained mode).
+    expect(hasAllCapabilities(effectiveCapabilities(reg, DEEPSEEK_FLASH_MODEL), ["reasoning"])).toBe(true);
+    expect(hasAllCapabilities(effectiveCapabilities(reg, DEEPSEEK_FLASH_MODEL), ["structuredOutput"])).toBe(false);
+    expect(hasAllCapabilities(effectiveCapabilities(reg, DEEPSEEK_FLASH_MODEL), ["webSearch"])).toBe(false);
+    // Unknown model: full conservative baseline (nothing claimed).
+    expect(hasAllCapabilities(effectiveCapabilities(reg, "deepseek-v4-unknown"), ["reasoning"])).toBe(false);
+    expect(hasAllCapabilities(effectiveCapabilities(reg, "deepseek-v4-unknown"), ["structuredOutput"])).toBe(false);
+  });
+
+  it("structured-output selection NEVER admits a DeepSeek candidate (any model)", () => {
+    const ds = new DeepSeekProvider();
+    const regs = [{ provider: ds, defaultCapabilities: { ...ds.capabilities }, modelCapabilities: DEEPSEEK_MODEL_CAPABILITIES }];
+    const out = selectCandidates(regs, [{ provider: ds, model: DEEPSEEK_FLASH_MODEL }], ["structuredOutput"]);
+    expect(out).toHaveLength(0);
+  });
+
+  it("webSearch selection NEVER admits a DeepSeek candidate (any model)", () => {
+    const ds = new DeepSeekProvider();
+    const regs = [{ provider: ds, defaultCapabilities: { ...ds.capabilities }, modelCapabilities: DEEPSEEK_MODEL_CAPABILITIES }];
+    const out = selectCandidates(regs, [{ provider: ds, model: DEEPSEEK_FLASH_MODEL }], ["webSearch"]);
     expect(out).toHaveLength(0);
   });
 });

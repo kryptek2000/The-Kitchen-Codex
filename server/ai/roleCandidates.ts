@@ -24,6 +24,7 @@ import {
   type RegisteredProvider,
 } from "./providerRegistry.js";
 import { OPENROUTER_STRUCTURED_MODEL } from "./openRouterProvider.js";
+import { DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL } from "./deepSeekProvider.js";
 
 /** Gemini role models per operation (unchanged v0.6 behavior). */
 const GEMINI_ROLE_MODELS: Record<AiOperation, string[]> = {
@@ -46,6 +47,24 @@ const OPENROUTER_ROLE_MODELS: Record<AiOperation, string[]> = {
   recipeGrabber: [OPENROUTER_STRUCTURED_MODEL],
 };
 
+/**
+ * DeepSeek role models per operation (curated, cost-conscious). DeepSeek has NO
+ * schema-constrained structured output and NO webSearch, so these candidates are
+ * resolved but capability-filtered OUT of every structured operation and out of
+ * `kitchenDiscover`. The flash model is preferred (cheaper/faster); pro is the
+ * stronger fallback. Mapping is provider-neutral (like OpenRouter) — the
+ * selector owns the real capability gate.
+ */
+const DEEPSEEK_ROLE_MODELS: Record<AiOperation, string[]> = {
+  kitchenInterpret: [DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL],
+  kitchenRank: [DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL],
+  // Discovery candidates are resolved but capability-filtered out (webSearch:false).
+  kitchenDiscover: [DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL],
+  nutrition: [DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL],
+  metadataRecovery: [DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL],
+  recipeGrabber: [DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL],
+};
+
 function geminiModels(operation: AiOperation): string[] {
   return GEMINI_ROLE_MODELS[operation] ?? [];
 }
@@ -54,10 +73,15 @@ function openRouterModels(operation: AiOperation): string[] {
   return OPENROUTER_ROLE_MODELS[operation] ?? [];
 }
 
+function deepSeekModels(operation: AiOperation): string[] {
+  return DEEPSEEK_ROLE_MODELS[operation] ?? [];
+}
+
 /** Resolves the model list for a provider + operation (empty for unknown provider). */
 export function roleModelsForProvider(providerId: string, operation: AiOperation): string[] {
   if (providerId === "gemini") return geminiModels(operation);
   if (providerId === "openrouter") return openRouterModels(operation);
+  if (providerId === "deepseek") return deepSeekModels(operation);
   return [];
 }
 
