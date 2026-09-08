@@ -3,7 +3,13 @@
  * Provides comprehensive handling for local vault images (e.g. Assets/Breakfast Burritos.jpg,
  * [[Assets/Breakfast Burritos.jpg]], attachments/, etc.) and supports downloading web images
  * directly into the Obsidian vault's Assets/ folder.
+ *
+ * SECURITY (Phase 4D3C): remote image download goes ONLY through the server-side
+ * SSRF-protected proxy (`/api/download-image`). This module performs NO direct
+ * arbitrary remote fetch and NO direct CORS fallback to the remote host.
  */
+
+import { downloadImageViaBackend } from '../platform/browser/downloadImageViaBackend';
 
 const IMAGE_EXTENSIONS = new Set([
   'jpg',
@@ -345,45 +351,51 @@ export async function scanVaultAssetsFromHandle(
 }
 
 /**
- * Downloads an external image safely via our server-side SSRF-protected proxy
+ * Deterministically decodes a `data:` URL into a `Blob` (no network fetch).
+ * Handles both base64 and percent-encoded payloads. Never touches the network.
+ */
+export function dataUrlToBlob(dataUrl: string): { blob: Blob; dataUrl: string } {
+  const trimmed = String(dataUrl ?? '').trim();
+  const match = /^data:([^,;]*)(;base64)?,([\s\S]*)$/.exec(trimmed);
+  if (!match) throw new Error('Invalid data: URL.');
+
+  const mime = match[1] || 'text/plain';
+  const isBase64 = Boolean(match[2]);
+  const payload = match[3];
+
+  let bytes: Uint8Array;
+  if (isBase64) {
+    const binary = atob(payload);
+    bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  } else {
+    bytes = new TextEncoder().encode(decodeURIComponent(payload));
+  }
+
+  return { blob: new Blob([bytes as unknown as BlobPart], { type: mime }), dataUrl: trimmed };
+}
+
+/**
+ * Downloads an external image safely via our server-side SSRF-protected proxy.
+ * A `data:` URL is decoded locally (never a network fetch); any remote URL is
+ * sent to the fixed backend proxy. There is NO direct arbitrary remote fetch and
+ * NO CORS fallback — a proxy failure is surfaced to the caller.
  */
 export async function downloadImageViaProxy(
-  imageUrl: string
+  imageUrl: string,
+  options?: { signal?: AbortSignal }
 ): Promise<{ blob: Blob; contentType: string }> {
   const trimmed = imageUrl.trim();
 
-  // If it's a data URL, convert to Blob directly
+  // data: URLs are decoded locally — no network, no SSRF surface.
   if (trimmed.startsWith('data:')) {
-    const res = await fetch(trimmed);
-    const blob = await res.blob();
+    const { blob } = dataUrlToBlob(trimmed);
     return { blob, contentType: blob.type || 'image/jpeg' };
   }
 
-  // Try server proxy download first to bypass CORS and ensure safety
-  try {
-    const res = await fetch('/api/download-image', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ imageUrl: trimmed }),
-    });
-
-    if (res.ok) {
-      const contentType = res.headers.get('content-type') || 'image/jpeg';
-      const blob = await res.blob();
-      return { blob, contentType };
-    }
-  } catch (proxyErr) {
-    console.warn('Server image download proxy error, attempting direct fetch:', proxyErr);
-  }
-
-  // Fallback to direct fetch (works if remote server has CORS open)
-  const directRes = await fetch(trimmed, { mode: 'cors' });
-  if (!directRes.ok) {
-    throw new Error(`Failed to fetch image: HTTP ${directRes.status}`);
-  }
-  const contentType = directRes.headers.get('content-type') || 'image/jpeg';
-  const blob = await directRes.blob();
-  return { blob, contentType };
+  // Remote URLs go ONLY through the backend SSRF proxy.
+  const result = await downloadImageViaBackend(trimmed, options);
+  return { blob: result.blob, contentType: result.contentType };
 }
 
 /**

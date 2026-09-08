@@ -13,6 +13,9 @@ export { BrowserSettingsAdapter } from './BrowserSettingsAdapter';
 export type { StorageLike } from './BrowserSettingsAdapter';
 export { BrowserNetworkAdapter, NetworkRequestError } from './BrowserNetworkAdapter';
 export type { FetcherLike } from './BrowserNetworkAdapter';
+export { createBrowserSettingsAdapter, createBrowserNetworkAdapter, createBrowserVaultAdapter } from './createBrowserAppServices';
+export { downloadImageViaBackend, BackendImageDownloadError, BACKEND_IMAGE_DOWNLOAD_ENDPOINT } from './downloadImageViaBackend';
+export type { BackendImageResult, DownloadImageOptions, BackendFetchLike, BackendResponseLike } from './downloadImageViaBackend';
 export type {
   FsaEntryLike,
   FsaFileHandleLike,

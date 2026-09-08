@@ -41,7 +41,11 @@ import {
   migrateLegacyTimer,
   upsertTimer,
 } from './application';
-import { BrowserFsaVaultAdapter, BrowserSettingsAdapter, BrowserNetworkAdapter } from './platform/browser';
+import {
+  createBrowserSettingsAdapter,
+  createBrowserNetworkAdapter,
+  createBrowserVaultAdapter,
+} from './platform/browser';
 import { playTimerChime } from './utils/audioAlert';
 import { APP_VERSION } from './version';
 
@@ -106,7 +110,7 @@ interface LoadedVaultData {
  * path. Exactly ONE Markdown scan per load (no `scanVaultDirectory` double scan).
  */
 async function loadVaultFromHandle(handle: any): Promise<LoadedVaultData> {
-  const vault = new BrowserFsaVaultAdapter(handle);
+  const vault = createBrowserVaultAdapter(handle);
   const scan = await loadVaultContent(vault, () =>
     scanVaultAssetsFromHandle(handle).catch((err) =>
       console.warn('Background vault asset scan failed:', err)
@@ -142,8 +146,12 @@ export default function App() {
 
   // Non-vault browser adapters (always available, independent of vault connection).
   // Created once per App mount (local composition, NOT module-global/singleton).
-  const settingsAdapter = useMemo(() => new BrowserSettingsAdapter(), []);
-  const networkAdapter = useMemo(() => new BrowserNetworkAdapter(), []);
+  // Browser adapters are constructed through the platform/browser composition
+  // module (the single place that news up concrete browser adapters; Phase 4D3C).
+  // Settings/network are independent of a vault connection (built once); the
+  // vault adapter is only constructible once a directory handle is connected.
+  const settingsAdapter = useMemo(() => createBrowserSettingsAdapter(), []);
+  const networkAdapter = useMemo(() => createBrowserNetworkAdapter(), []);
 
   // Application service composition (Phase 4C3B/4D2A). Constructed from the SAME
   // authoritative FSA handle stored in vaultStatus — no second picker, no extra
@@ -151,7 +159,7 @@ export default function App() {
   // recreated only when the vault handle actually changes.
   const vaultServices = useMemo(() => {
     if (!vaultStatus.folderHandle) return null;
-    const vault = new BrowserFsaVaultAdapter(vaultStatus.folderHandle);
+    const vault = createBrowserVaultAdapter(vaultStatus.folderHandle);
     return createAppServices({ vault, settings: settingsAdapter, network: networkAdapter });
   }, [vaultStatus.folderHandle, settingsAdapter, networkAdapter]);
   const vaultAdapter = vaultServices?.adapters.vault ?? null;
