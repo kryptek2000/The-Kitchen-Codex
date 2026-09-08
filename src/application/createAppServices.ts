@@ -17,6 +17,7 @@
 import type { VaultAdapter } from './adapters/VaultAdapter';
 import type { SettingsAdapter } from './adapters/SettingsAdapter';
 import type { NetworkAdapter } from './adapters/NetworkAdapter';
+import type { SecretAdapter } from './adapters/SecretAdapter';
 
 /** The set of adapter instances the application can be composed with. */
 export interface AppAdapters {
@@ -26,6 +27,8 @@ export interface AppAdapters {
   settings?: SettingsAdapter;
   /** Optional: app-backend API transport (no arbitrary remote fetch). */
   network?: NetworkAdapter;
+  /** Optional: secret-storage boundary. Truthful scope semantics per implementation. */
+  secret?: SecretAdapter;
 }
 
 /** The composed application services handed to orchestration/UI. */

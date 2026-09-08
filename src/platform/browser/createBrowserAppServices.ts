@@ -25,6 +25,7 @@ import type { FsaDirectoryHandleLike } from './BrowserFsaVaultAdapter';
 import { BrowserSettingsAdapter } from './BrowserSettingsAdapter';
 import { BrowserNetworkAdapter } from './BrowserNetworkAdapter';
 import { BrowserAssetAdapter } from './BrowserAssetAdapter';
+import { BrowserSecretAdapter } from './BrowserSecretAdapter';
 
 /** Builds a browser localStorage-backed settings adapter. */
 export function createBrowserSettingsAdapter(): BrowserSettingsAdapter {
@@ -34,6 +35,11 @@ export function createBrowserSettingsAdapter(): BrowserSettingsAdapter {
 /** Builds a browser app-backend JSON transport adapter. */
 export function createBrowserNetworkAdapter(): BrowserNetworkAdapter {
   return new BrowserNetworkAdapter();
+}
+
+/** Builds the truthful browser "no provider secret storage" adapter (unavailable). */
+export function createBrowserSecretAdapter(): BrowserSecretAdapter {
+  return new BrowserSecretAdapter();
 }
 
 /** Builds a browser File System Access vault adapter from a connected directory handle. */

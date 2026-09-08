@@ -87,4 +87,40 @@ describe("Express server wiring", () => {
     const body = await res.json();
     expect(body.error).toContain("provide a list of ingredients");
   });
+
+  it("returns a read-only provider status surface with booleans and NO secrets", async () => {
+    delete process.env.AI_ENDPOINT_TOKEN;
+    const res = await fetch(`${baseUrl}/api/providers`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.providers)).toBe(true);
+    expect(body.providers.length).toBeGreaterThan(0);
+    for (const p of body.providers) {
+      expect(typeof p.providerId).toBe("string");
+      expect(typeof p.name).toBe("string");
+      expect(typeof p.configured).toBe("boolean");
+      expect(typeof p.enabled).toBe("boolean");
+      expect(typeof p.available).toBe("boolean");
+      expect(typeof p.supportsSecretWrites).toBe("boolean");
+      expect(p.storageScope).toBe("server_environment");
+      // No secret-shaped fields may appear in the status object.
+      expect(p).not.toHaveProperty("key");
+      expect(p).not.toHaveProperty("token");
+      expect(p).not.toHaveProperty("secret");
+      expect(p).not.toHaveProperty("apiKey");
+      expect(p).not.toHaveProperty("value");
+    }
+    const json = JSON.stringify(body);
+    expect(json).not.toContain("sk-");
+    expect(json).not.toContain("OPENROUTER_API_KEY");
+    expect(json).not.toContain("DEEPSEEK_API_KEY");
+  });
+
+  it("gates /api/providers behind the AI endpoint token when one is configured", async () => {
+    process.env.AI_ENDPOINT_TOKEN = "super-secret";
+    const res = await fetch(`${baseUrl}/api/providers`);
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(body.code).toBe("UNAUTHORIZED");
+  });
 });

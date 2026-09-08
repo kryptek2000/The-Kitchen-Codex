@@ -7,9 +7,10 @@
  * SECURITY / SCOPE (must never be weakened):
  *   - The endpoint is FIXED to OpenRouter's official base URL. No caller-controlled
  *     baseUrl/endpoint/host is accepted (no arbitrary endpoint capability).
- *   - The key comes ONLY from `process.env.OPENROUTER_API_KEY` (server-side).
- *     It is never in VITE_*, browser, settings, Markdown, logs, diagnostics, or
- *     returned to the UI.
+ *   - The key comes ONLY from the server-side operator environment via
+ *     `getServerSecretSync("openrouter_api_key")` (the allowlisted
+ *     `OPENROUTER_API_KEY`). It is never in VITE_*, browser, settings, Markdown,
+ *     logs, diagnostics, or returned to the UI.
  *   - No SSRF surface: only the fixed OpenRouter host is reached.
  *   - The `NetworkAdapter` is NOT involved (this is an AI-provider transport, not
  *     the app-backend API transport).
@@ -21,6 +22,7 @@
  */
 
 import { MODEL_CONFIG } from "../modelConfig.js";
+import { getServerSecretSync } from "../platform/ServerEnvironmentSecretAdapter.js";
 import { ProviderOperationError, classifyProviderError } from "./providerErrors.js";
 import type {
   AiCapabilities,
@@ -123,8 +125,7 @@ export class OpenRouterProvider implements AiProvider {
   }
 
   isAvailable(): boolean {
-    const key = (process.env.OPENROUTER_API_KEY || "").trim();
-    return key.length > 0;
+    return Boolean(getServerSecretSync("openrouter_api_key"));
   }
 
   async testConnection(): Promise<boolean> {
@@ -133,7 +134,7 @@ export class OpenRouterProvider implements AiProvider {
   }
 
   private requireKey(): string {
-    const key = (process.env.OPENROUTER_API_KEY || "").trim();
+    const key = getServerSecretSync("openrouter_api_key");
     if (!key) throw new ProviderOperationError("UNAVAILABLE", "OpenRouter is not available (no API key).", {});
     return key;
   }

@@ -46,6 +46,7 @@ import {
   createBrowserNetworkAdapter,
   createBrowserVaultAdapter,
   createBrowserAssetAdapter,
+  createBrowserSecretAdapter,
   browserRemoteImageDownloader,
 } from './platform/browser';
 import { playTimerChime } from './utils/audioAlert';
@@ -154,6 +155,9 @@ export default function App() {
   // vault adapter is only constructible once a directory handle is connected.
   const settingsAdapter = useMemo(() => createBrowserSettingsAdapter(), []);
   const networkAdapter = useMemo(() => createBrowserNetworkAdapter(), []);
+  // The browser shell truthfully exposes NO provider-secret storage (read-only,
+  // `supportsWrites() === false`). No provider key is ever persisted client-side.
+  const secretAdapter = useMemo(() => createBrowserSecretAdapter(), []);
 
   // Application service composition (Phase 4C3B/4D2A). Constructed from the SAME
   // authoritative FSA handle stored in vaultStatus — no second picker, no extra
@@ -162,8 +166,8 @@ export default function App() {
   const vaultServices = useMemo(() => {
     if (!vaultStatus.folderHandle) return null;
     const vault = createBrowserVaultAdapter(vaultStatus.folderHandle);
-    return createAppServices({ vault, settings: settingsAdapter, network: networkAdapter });
-  }, [vaultStatus.folderHandle, settingsAdapter, networkAdapter]);
+    return createAppServices({ vault, settings: settingsAdapter, network: networkAdapter, secret: secretAdapter });
+  }, [vaultStatus.folderHandle, settingsAdapter, networkAdapter, secretAdapter]);
   const vaultAdapter = vaultServices?.adapters.vault ?? null;
 
   // Asset save dependencies, supplied BY the browser shell: the binary storage

@@ -1,31 +1,65 @@
 /**
- * The Kitchen Codex — SecretAdapter contract (Phase 4C1).
+ * The Kitchen Codex — SecretAdapter contract (Phase 4C1 / v0.7 Phase 1D).
  *
  * HIGH-SENSITIVITY port for provider/service credentials (e.g. Gemini API key,
- * future BYOK / OpenRouter / DeepSeek keys). This is a CONTRACT ONLY — it reads
- * and writes NO actual key in this phase.
+ * future BYOK / OpenRouter / DeepSeek keys). This is a CONTRACT ONLY — no
+ * concrete key is read or written by this module.
  *
- * SECURITY INVARIANTS (must be preserved by every implementation):
+ * SECURITY / TRUTHFULNESS INVARIANTS (must be preserved by every implementation):
+ *   - The storage scope an adapter claims MUST be truthful. `secure_platform`
+ *     means genuinely protected storage (OS keychain / secure enclave /
+ *     protected credential store / comparable encrypted platform-backed
+ *     facility). It must NEVER be used to describe environment variables,
+ *     plaintext plugin data.json, browser localStorage/IndexedDB, Markdown, or
+ *     ordinary settings files.
+ *   - Plaintext-local storage is called `local_plaintext` and is reserved for a
+ *     future Obsidian plaintext BYOK adapter. No current adapter may claim it
+ *     unless it actually persists there today.
+ *   - Server environment keys (`GEMINI_API_KEY`, `OPENROUTER_API_KEY`,
+ *     `DEEPSEEK_API_KEY`) are OPERATOR CONFIGURATION of the running server, NOT
+ *     per-user BYOK. They are read-only through this boundary (no mutation).
  *   - Provider keys must NEVER enter shared UI/browser state or be exposed
  *     through a frontend env var (no `VITE_*` key) or localStorage.
- *   - A browser/PWA concrete implementation is EXPECTED to reject writes
- *     (`supportsWrites() === false`) and to expose no key to the page; such an
- *     adapter may only report availability from a hosted/session context.
- *   - Server-side implementations read from process env / a secure store.
- *   - Obsidian plugin implementations use Obsidian's secure/plugin settings.
- *   - Future hosted per-user keys require auth/session and server-managed
- *     secret storage, NOT a browser-held value.
+ *   - Browser/PWA concrete implementations MUST reject writes
+ *     (`supportsWrites() === false`) and expose no key to the page.
+ *   - Hosted per-user BYOK remains BLOCKED and is NOT represented by a scope in
+ *     this phase (it requires auth/session identity, per-user secret isolation,
+ *     protected/encrypted storage, and lifecycle/revocation semantics).
+ *   - Adapters MUST NOT read arbitrary secret names: server implementations use
+ *     an explicit allowlist of provider secret ids (see `ProviderSecretId`).
  *
  * The contract intentionally carries the storage scope so callers can steer
- * behavior (and so a browser/PWA target is visibly unsupported for writes).
+ * behavior (and so browser/PWA targets are visibly unsupported for writes).
  */
 
-/** Where a secret is (or would be) held. */
+/**
+ * Where a secret is (or would be) held. Exactly one of:
+ *   - `unavailable`      — no secret storage exists (browser/PWA). Writes must
+ *                          be rejected (`supportsWrites() === false`).
+ *   - `local_plaintext`  — plaintext local persistence (e.g. a future Obsidian
+ *                          plugin `data.json`). RESERVED; not used yet.
+ *   - `server_environment` — the running server/operator's process environment
+ *                          (read-only operator configuration, NOT per-user BYOK).
+ *   - `secure_platform`  — genuinely protected platform storage (OS keychain,
+ *                          secure enclave, encrypted credential store).
+ */
 export type SecretStorageScope =
-  | 'server_env' // server process environment / server-managed store
-  | 'secure_platform' // desktop/plugin secure settings, OS keychain
-  | 'hosted_session' // authenticated, session/server-backed secret storage
-  | 'unsupported'; // no safe storage (e.g. plain browser/PWA) -> writes must be rejected
+  | 'unavailable'
+  | 'local_plaintext'
+  | 'server_environment'
+  | 'secure_platform';
+
+/**
+ * Provider-neutral secret identifiers used at the application boundary. These are
+ * NEVER raw environment-variable names: the mapping to concrete env variables
+ * (GEMINI_API_KEY / OPENROUTER_API_KEY / DEEPSEEK_API_KEY) belongs SERVER-SIDE,
+ * inside the server secret adapter. No env-variable name leaks into browser/UI
+ * contracts except where shown solely as operator documentation.
+ */
+export type ProviderSecretId =
+  | 'gemini_api_key'
+  | 'openrouter_api_key'
+  | 'deepseek_api_key';
 
 export interface SecretAdapter {
   /** Reads a secret value (or `undefined` when absent). */
@@ -36,7 +70,7 @@ export interface SecretAdapter {
   remove(name: string): Promise<void>;
   /** True when this adapter is reachable/usable in the current environment. */
   isAvailable(): boolean;
-  /** True when writes are permitted. MUST be false for browser/PWA targets. */
+  /** True when writes are permitted. MUST be false for read-only/unsupported targets. */
   supportsWrites(): boolean;
   /** The storage scope this adapter represents. */
   readonly storageScope: SecretStorageScope;

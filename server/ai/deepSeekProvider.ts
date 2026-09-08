@@ -8,9 +8,10 @@
  *   - The endpoint is FIXED to DeepSeek's official base URL
  *     (`https://api.deepseek.com`). No caller-controlled baseUrl/endpoint/host is
  *     accepted (no arbitrary endpoint capability).
- *   - The key comes ONLY from `process.env.DEEPSEEK_API_KEY` (server-side). It is
- *     never in VITE_*, browser, settings, Markdown, logs, diagnostics, or
- *     returned to the UI.
+ *   - The key comes ONLY from the server-side operator environment via
+ *     `getServerSecretSync("deepseek_api_key")` (the allowlisted
+ *     `DEEPSEEK_API_KEY`). It is never in VITE_*, browser, settings, Markdown,
+ *     logs, diagnostics, or returned to the UI.
  *   - No SSRF surface: only the fixed DeepSeek host is reached.
  *   - The `NetworkAdapter` is NOT involved (this is an AI-provider transport, not
  *     the app-backend API transport).
@@ -22,9 +23,24 @@
  * caller's schema is NOT the `AiJsonSchema` contract. `webSearch` is always
  * false (no provider-backed grounded search), so `searchWeb` is omitted.
  * Plain `generate()` (text) and `reasoning` are supported by the curated models.
+ *
+ * THINKING / REASONING POLICY (v0.7 Phase 1D):
+ *   - DeepSeek's `thinking` mode is ENABLED BY DEFAULT with a default effort of
+ *     `high`, and is returned as `reasoning_content` alongside `content`.
+ *   - `thinking` mode does NOT support `temperature`/`top_p`/`presence_penalty`/
+ *     `frequency_penalty` (they silently have no effect).
+ *   - A provider-neutral plain `generate()` call MUST NOT silently inherit that
+ *     upstream default (extra latency/cost, ignored temperature). Therefore an
+ *     ordinary `generate()` explicitly disables thinking with
+ *     `{"thinking": {"type": "disabled"}}`, keeping the request deterministic and
+ *     letting `temperature` map normally. No reasoning mode is executed until a
+ *     future provider-neutral option/operation explicitly requests it.
+ *   - `reasoning_content` is NEVER returned, serialized, logged, persisted, or
+ *     surfaced; only final `message.content` is provider-neutral output.
  */
 
 import { MODEL_CONFIG } from "../modelConfig.js";
+import { getServerSecretSync } from "../platform/ServerEnvironmentSecretAdapter.js";
 import { ProviderOperationError, classifyProviderError } from "./providerErrors.js";
 import type {
   AiCapabilities,
@@ -96,8 +112,7 @@ export class DeepSeekProvider implements AiProvider {
   }
 
   isAvailable(): boolean {
-    const key = (process.env.DEEPSEEK_API_KEY || "").trim();
-    return key.length > 0;
+    return Boolean(getServerSecretSync("deepseek_api_key"));
   }
 
   async testConnection(): Promise<boolean> {
@@ -106,7 +121,7 @@ export class DeepSeekProvider implements AiProvider {
   }
 
   private requireKey(): string {
-    const key = (process.env.DEEPSEEK_API_KEY || "").trim();
+    const key = getServerSecretSync("deepseek_api_key");
     if (!key) throw new ProviderOperationError("UNAVAILABLE", "DeepSeek is not available (no API key).", {});
     return key;
   }
@@ -116,6 +131,10 @@ export class DeepSeekProvider implements AiProvider {
       model: options.model,
       messages: [{ role: "user", content: prompt }],
     };
+    // Explicitly disable DeepSeek's default-on thinking so an ordinary provider-
+    // neutral generate() call is deterministic (no inherited high-effort CoT) and
+    // temperature maps normally.
+    body["thinking"] = { type: "disabled" };
     if (typeof options.temperature === "number") body["temperature"] = options.temperature;
     return body;
   }

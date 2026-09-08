@@ -23,6 +23,7 @@ import {
 import { interpretKitchenQuestionOnServer } from "./kitchenInterpret.js";
 import { rankKitchenCandidatesOnServer } from "./kitchenRank.js";
 import { discoverKitchenRecipesOnServer } from "./kitchenDiscover.js";
+import { getAiProviderStatus } from "./ai/providerStatus.js";
 import {
   sanitizeCandidateEvidenceList,
   MAX_KITCHEN_CANDIDATES,
@@ -602,6 +603,14 @@ export function createApp(opts: CreateAppOptions): express.Express {
       console.error(`[${new Date().toISOString()}] [Client: ${clientIp}] Kitchen Discovery Error:`, errorMsg);
       return res.json({ ok: false, source: "web", reason: "unavailable", results: [] });
     }
+  });
+
+  // Read-only AI provider status/config surface (boolean/capability metadata
+  // ONLY — never secrets, token values, or masked substrings). No network probe
+  // is performed. Gated like the other AI endpoints so a public host requires a
+  // bearer token; when unset (local) it is open.
+  app.get("/api/providers", requireAiAccessToken, (_req, res) => {
+    res.json({ providers: getAiProviderStatus() });
   });
 
   // JSON 404 for unknown API routes so the client always gets JSON, never an

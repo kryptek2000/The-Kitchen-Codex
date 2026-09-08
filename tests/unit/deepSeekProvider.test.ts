@@ -188,6 +188,55 @@ describe("DeepSeekProvider (v0.7 1C) — adapter", () => {
   });
 });
 
+describe("DeepSeekProvider (v0.7 1D) — deterministic reasoning/thinking policy", () => {
+  function captureBody() {
+    let seenInit: RequestInit | undefined;
+    const fetchFn: DeepSeekFetchLike = (_url, init) => {
+      seenInit = init;
+      return Promise.resolve(okResponse({ choices: [{ message: { content: "final" } }] }));
+    };
+    return { fetchFn, body: () => JSON.parse(String(seenInit?.body)) as Record<string, unknown> };
+  }
+
+  it("ordinary generate() explicitly disables DeepSeek thinking (type: disabled)", async () => {
+    vi.stubEnv("DEEPSEEK_API_KEY", "sk-ds-test");
+    const { fetchFn, body } = captureBody();
+    const provider = new DeepSeekProvider({ fetchFn });
+    await provider.generate("hello", { model: DEEPSEEK_FLASH_MODEL, temperature: 0 });
+    expect(body().thinking).toEqual({ type: "disabled" });
+  });
+
+  it("temperature is still sent (it maps normally in non-thinking mode)", async () => {
+    vi.stubEnv("DEEPSEEK_API_KEY", "sk-ds-test");
+    const { fetchFn, body } = captureBody();
+    const provider = new DeepSeekProvider({ fetchFn });
+    await provider.generate("hello", { model: DEEPSEEK_PRO_MODEL, temperature: 0.7 });
+    expect(body().temperature).toBe(0.7);
+    expect(body().thinking).toEqual({ type: "disabled" });
+  });
+
+  it("does NOT inherit an upstream reasoning_effort / enabled default for plain generate", async () => {
+    vi.stubEnv("DEEPSEEK_API_KEY", "sk-ds-test");
+    const { fetchFn, body } = captureBody();
+    const provider = new DeepSeekProvider({ fetchFn });
+    // No reasoning option exists in AiGenerateOptions; no effort is ever sent and
+    // thinking is explicitly disabled rather than left to a provider default.
+    await provider.generate("hello", { model: DEEPSEEK_FLASH_MODEL });
+    expect(body().reasoning_effort).toBeUndefined();
+    expect(body().thinking).toEqual({ type: "disabled" });
+  });
+
+  it("returns ONLY final content even when reasoning_content is present (privacy)", async () => {
+    vi.stubEnv("DEEPSEEK_API_KEY", "sk-ds-test");
+    const fetchFn: DeepSeekFetchLike = () =>
+      Promise.resolve(okResponse({ choices: [{ message: { reasoning_content: "SUPER_SECRET_PHASE1D_SENTINEL reasoning", content: "visible answer" } }] }));
+    const provider = new DeepSeekProvider({ fetchFn });
+    const out = await provider.generate("x", { model: DEEPSEEK_FLASH_MODEL });
+    expect(out).toBe("visible answer");
+    expect(out).not.toContain("SUPER_SECRET_PHASE1D_SENTINEL");
+  });
+});
+
 describe("DeepSeekProvider (v0.7 1C) — capability truth", () => {
   const FULL: AiCapabilities = { reasoning: true, structuredOutput: true, recipeGeneration: true, webSearch: true };
   const caps = (o: Partial<AiCapabilities> = {}): AiCapabilities => ({ ...FULL, ...o });

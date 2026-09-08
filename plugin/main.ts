@@ -16,7 +16,7 @@
 import { Plugin, ItemView, WorkspaceLeaf } from 'obsidian';
 import React from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { ObsidianVaultAdapter, ObsidianSettingsAdapter, ObsidianNetworkAdapter } from '../src/platform/obsidian';
+import { ObsidianVaultAdapter, ObsidianSettingsAdapter, ObsidianNetworkAdapter, ObsidianSecretAdapter } from '../src/platform/obsidian';
 import { createAppServices } from '../src/application/createAppServices';
 import type { AppServices } from '../src/application/createAppServices';
 import { RecipeWorkspace } from '../src/application-ui/RecipeWorkspace';
@@ -58,6 +58,7 @@ class KitchenCodexView extends ItemView {
       vault: new ObsidianVaultAdapter(this.app.vault),
       settings: new ObsidianSettingsAdapter(this.plugin),
       network: this.plugin.networkAdapter,
+      secret: new ObsidianSecretAdapter(),
     });
 
     this.root = createRoot(container);

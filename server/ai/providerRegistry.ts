@@ -23,6 +23,7 @@
 import { GeminiProvider } from "./geminiProvider.js";
 import { OpenRouterProvider, OPENROUTER_MODEL_CAPABILITIES } from "./openRouterProvider.js";
 import { DeepSeekProvider, DEEPSEEK_MODEL_CAPABILITIES } from "./deepSeekProvider.js";
+import { getServerSecretSync } from "../platform/ServerEnvironmentSecretAdapter.js";
 import type { AiCapabilities, AiProvider } from "./types.js";
 import {
   normalizeProviderError,
@@ -75,14 +76,14 @@ function ensureDefault(): AiProvider {
   return defaultProvider;
 }
 
-/** True when an OpenRouter key is present (server env only). */
+/** True when an OpenRouter key is present (server operator env via allowlisted source). */
 function openRouterConfigured(): boolean {
-  return (process.env.OPENROUTER_API_KEY || "").trim().length > 0;
+  return Boolean(getServerSecretSync("openrouter_api_key"));
 }
 
-/** True when a DeepSeek key is present (server env only). */
+/** True when a DeepSeek key is present (server operator env via allowlisted source). */
 function deepSeekConfigured(): boolean {
-  return (process.env.DEEPSEEK_API_KEY || "").trim().length > 0;
+  return Boolean(getServerSecretSync("deepseek_api_key"));
 }
 
 /**

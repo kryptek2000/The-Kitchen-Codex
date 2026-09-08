@@ -11,5 +11,6 @@
 export { ObsidianVaultAdapter } from './ObsidianVaultAdapter';
 export { ObsidianSettingsAdapter } from './ObsidianSettingsAdapter';
 export type { SettingsStore } from './ObsidianSettingsAdapter';
+export { ObsidianSecretAdapter } from './ObsidianSecretAdapter';
 export { ObsidianNetworkAdapter, ObsidianNetworkError } from './ObsidianNetworkAdapter';
 export type { ObsidianNetworkOptions, ObsidianFetchLike, ObsidianResponseLike } from './ObsidianNetworkAdapter';
