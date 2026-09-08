@@ -1,0 +1,9 @@
+{
+  "id": "the-kitchen-codex",
+  "name": "The Kitchen Codex",
+  "version": "0.0.1",
+  "minAppVersion": "1.0.0",
+  "description": "Browse, read, and edit your recipe vault through the platform-neutral Kitchen Codex engine (proves one core, multiple shells).",
+  "author": "The Kitchen Codex",
+  "isDesktopOnly": true
+}

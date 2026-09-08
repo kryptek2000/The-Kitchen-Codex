@@ -1,0 +1,8 @@
+/* The Kitchen Codex — Obsidian plugin styles (Phase 4D3B). */
+.kitchen-codex-view {
+  padding: 0;
+}
+
+.kitchen-codex-view textarea {
+  resize: vertical;
+}
