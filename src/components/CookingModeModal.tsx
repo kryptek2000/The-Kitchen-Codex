@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   ChevronLeft,
@@ -21,19 +21,26 @@ import confetti from 'canvas-confetti';
 import { ObsidianRecipe, ActiveTimer } from '../types';
 import { scaleIngredientText } from '../utils/markdownParser';
 import { playTimerChime } from '../utils/audioAlert';
+import { stepTimerKey, findTimerByKey } from '../application/timers';
 
 interface CookingModeModalProps {
   recipe: ObsidianRecipe;
   servings: number;
+  activeTimers: ActiveTimer[];
+  onStartTimer: (recipeTitle: string, minutes: number, label: string, semanticKey?: string) => void;
+  onToggleTimer: (id: string) => void;
+  onDeleteTimer: (id: string) => void;
   onClose: () => void;
-  onStartTimer: (recipeTitle: string, minutes: number, label: string) => void;
 }
 
 export function CookingModeModal({
   recipe,
   servings,
-  onClose,
+  activeTimers,
   onStartTimer,
+  onToggleTimer,
+  onDeleteTimer,
+  onClose,
 }: CookingModeModalProps) {
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [isSpeaking, setIsSpeaking] = useState(false);
@@ -42,14 +49,12 @@ export function CookingModeModal({
   const [isFinished, setIsFinished] = useState(false);
   const [wakeLockActive, setWakeLockActive] = useState(false);
 
-  // Local step timer
-  const [stepTimerSeconds, setStepTimerSeconds] = useState<number | null>(null);
-  const [isStepTimerRunning, setIsStepTimerRunning] = useState(false);
-  const stepTimerRef = useRef<any>(null);
-
   const totalSteps = recipe.instructions.length;
   const currentStep = recipe.instructions[currentStepIndex] || { text: 'Enjoy your meal!', stepNumber: 1 };
   const baseServings = recipe.servings || 4;
+  const stepNumber = currentStep.stepNumber || currentStepIndex + 1;
+  const stepKey = stepTimerKey(recipe.id, stepNumber);
+  const stepTimer = stepTimerKey(recipe.id, stepNumber) ? findTimerByKey(activeTimers, stepKey) : undefined;
 
   // Request Screen Wake Lock to prevent screen from sleeping while cooking
   useEffect(() => {
@@ -73,9 +78,6 @@ export function CookingModeModal({
       if (window.speechSynthesis) {
         window.speechSynthesis.cancel();
       }
-      if (stepTimerRef.current) {
-        clearInterval(stepTimerRef.current);
-      }
     };
   }, []);
 
@@ -95,39 +97,6 @@ export function CookingModeModal({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [currentStepIndex, totalSteps]);
-
-  // Setup timer when step has detected duration
-  useEffect(() => {
-    if (currentStep.timerMinutes) {
-      setStepTimerSeconds(currentStep.timerMinutes * 60);
-      setIsStepTimerRunning(false);
-    } else {
-      setStepTimerSeconds(null);
-      setIsStepTimerRunning(false);
-    }
-  }, [currentStepIndex]);
-
-  // Timer countdown loop
-  useEffect(() => {
-    if (isStepTimerRunning && stepTimerSeconds !== null && stepTimerSeconds > 0) {
-      stepTimerRef.current = setInterval(() => {
-        setStepTimerSeconds((prev) => {
-          if (prev === null || prev <= 1) {
-            clearInterval(stepTimerRef.current);
-            setIsStepTimerRunning(false);
-            playTimerChime();
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-    } else {
-      if (stepTimerRef.current) clearInterval(stepTimerRef.current);
-    }
-    return () => {
-      if (stepTimerRef.current) clearInterval(stepTimerRef.current);
-    };
-  }, [isStepTimerRunning, stepTimerSeconds]);
 
   const handleNextStep = () => {
     setCompletedSteps((prev) => ({ ...prev, [currentStepIndex]: true }));
@@ -288,32 +257,51 @@ export function CookingModeModal({
               </p>
             </div>
 
-            {/* Step Timer Control */}
-            {stepTimerSeconds !== null && (
+            {/* Step Timer Control — driven by the GLOBAL timer engine (App.activeTimers). */}
+            {stepTimer ? (
               <div className="inline-flex items-center gap-3 bg-[#141414] border border-white/10 px-5 py-2.5 rounded-2xl shadow-xl">
                 <Timer className="w-5 h-5 text-amber-400" />
                 <span className="font-mono text-2xl font-bold text-amber-300">
-                  {formatTimerDisplay(stepTimerSeconds)}
+                  {formatTimerDisplay(stepTimer.remainingSeconds)}
                 </span>
                 <button
-                  onClick={() => setIsStepTimerRunning((prev) => !prev)}
+                  onClick={() => onToggleTimer(stepTimer.id)}
                   className={`p-2 rounded-xl text-black font-bold transition-colors ${
-                    isStepTimerRunning ? 'bg-amber-400 hover:bg-amber-300' : 'bg-amber-500 hover:bg-amber-400'
+                    stepTimer.isRunning ? 'bg-amber-400 hover:bg-amber-300' : 'bg-amber-500 hover:bg-amber-400'
                   }`}
+                  title={stepTimer.isRunning ? 'Pause timer' : 'Resume timer'}
                 >
-                  {isStepTimerRunning ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 fill-current" />}
+                  {stepTimer.isRunning ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 fill-current" />}
                 </button>
                 <button
-                  onClick={() => {
-                    setIsStepTimerRunning(false);
-                    setStepTimerSeconds(currentStep.timerMinutes! * 60);
-                  }}
+                  onClick={() =>
+                    onStartTimer(recipe.title, currentStep.timerMinutes!, `Step ${stepNumber}: ${currentStep.timerMinutes}m`, stepKey)
+                  }
                   className="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white border border-white/10 transition-colors"
-                  title="Reset Timer"
+                  title="Restart step timer"
                 >
                   <RotateCcw className="w-4 h-4" />
                 </button>
+                <button
+                  onClick={() => onDeleteTimer(stepTimer.id)}
+                  className="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white border border-white/10 transition-colors"
+                  title="Dismiss timer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
               </div>
+            ) : (
+              currentStep.timerMinutes && (
+                <button
+                  onClick={() =>
+                    onStartTimer(recipe.title, currentStep.timerMinutes, `Step ${stepNumber}: ${currentStep.timerMinutes}m`, stepKey)
+                  }
+                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-black text-sm font-bold shadow-lg shadow-amber-500/20 transition-colors"
+                >
+                  <Timer className="w-4 h-4" />
+                  <span>Start {currentStep.timerMinutes} min Timer</span>
+                </button>
+              )
             )}
           </div>
         )}

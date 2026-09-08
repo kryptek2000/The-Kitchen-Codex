@@ -60,7 +60,7 @@ interface RecipeDetailViewProps {
   onEditRecipe: (recipe: ObsidianRecipe) => void;
   onAddToMealPlan: (recipe: ObsidianRecipe) => void;
   onAddToShoppingList: (recipe: ObsidianRecipe, ingredients: string[]) => void;
-  onStartTimer: (recipeTitle: string, minutes: number, label: string) => void;
+  onStartTimer: (recipeTitle: string, minutes: number, label: string, semanticKey?: string) => void;
   onFilterByWikilink?: (wikilink: string) => void;
   onDeleteRecipe?: (recipe: ObsidianRecipe) => void;
   onUpdateNutrition?: (recipe: ObsidianRecipe, nutrition: RecipeNutrition) => Promise<boolean | void> | void;

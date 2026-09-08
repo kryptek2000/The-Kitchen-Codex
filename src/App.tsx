@@ -33,6 +33,13 @@ import {
   saveShoppingListWithVaultAdapter,
   vaultErrorMessage,
   mergeHydratedSetting,
+  createTimer,
+  reconcileTimer,
+  reconcileTimers,
+  pauseTimer,
+  resumeTimer,
+  migrateLegacyTimer,
+  upsertTimer,
 } from './application';
 import { BrowserFsaVaultAdapter, BrowserSettingsAdapter, BrowserNetworkAdapter } from './platform/browser';
 import { playTimerChime } from './utils/audioAlert';
@@ -287,9 +294,15 @@ export default function App() {
         );
         // Timers: default is an empty list. Only apply a persisted timer list if
         // the user has not already started a timer (which would make it non-empty).
-        setActiveTimers((cur) =>
-          mergeHydratedSetting(cur, savedTimers, (t) => Array.isArray(t) && t.length === 0, (t) => Array.isArray(t))
-        );
+        // Persisted timers are migrated (legacy -> endsAt) and reconciled against
+        // the wall clock so elapsed time while the app was closed is accounted for.
+        setActiveTimers((cur) => {
+          const now = Date.now();
+          const migrated = (Array.isArray(savedTimers) ? savedTimers : [])
+            .map((t) => migrateLegacyTimer(t, now))
+            .map((t) => reconcileTimer(t, now).timer);
+          return mergeHydratedSetting(cur, migrated, (t) => Array.isArray(t) && t.length === 0, (t) => Array.isArray(t));
+        });
       } catch (err) {
         console.warn('Failed to hydrate persisted settings:', err);
       } finally {
@@ -339,31 +352,17 @@ export default function App() {
     }
   }, [shoppingCategories, vaultAdapter]);
 
-  // Timers Background Interval Engine
+  // Timers Background Interval Engine — refreshes display state once per second.
+  // The authoritative clock is `endsAt`; reconciliation (not blind decrement)
+  // accounts for browser throttling, suspended tabs, sleep, and time while closed.
   useEffect(() => {
     const timerInterval = setInterval(() => {
       setActiveTimers((prevTimers) => {
         if (prevTimers.length === 0) return prevTimers;
-
-        // Track every timer that reaches zero in this tick so each gets its
-        // own completion notification (previously a single batch-wide flag
-        // meant multiple simultaneous timers fired only one chime).
-        let completedCount = 0;
-        const updated = prevTimers.map((t) => {
-          if (!t.isRunning || t.remainingSeconds <= 0) return t;
-          const nextSec = t.remainingSeconds - 1;
-          if (nextSec === 0) {
-            completedCount += 1;
-          }
-          return { ...t, remainingSeconds: nextSec };
-        });
-
-        // A timer already at <= 0 is left unchanged on later ticks, so it will
-        // never double-fire — we only chime for timers completed this tick.
-        for (let i = 0; i < completedCount; i += 1) {
+        const { timers: updated, completed } = reconcileTimers(prevTimers, Date.now());
+        for (let i = 0; i < completed; i += 1) {
           playTimerChime();
         }
-
         return updated;
       });
     }, 1000);
@@ -541,25 +540,29 @@ export default function App() {
     });
   };
 
-  // Add Timer
-  const handleStartTimer = (recipeTitle: string, minutes: number, label: string) => {
+  // Add Timer — single global entry point used by Recipe Detail, Cooking Mode,
+  // and the custom timer UI. `semanticKey` (from Cooking Mode) makes a repeat
+  // start RESTART/REPLACE the same step timer instead of duplicating it.
+  const handleStartTimer = (recipeTitle: string, minutes: number, label: string, semanticKey?: string) => {
+    const now = Date.now();
     const totalSecs = Math.round(minutes * 60);
-    const newTimer: ActiveTimer = {
-      id: `${Date.now()}-${Math.random()}`,
-      recipeTitle,
-      label,
-      totalSeconds: totalSecs,
-      remainingSeconds: totalSecs,
-      isRunning: true,
-      createdAt: Date.now(),
-    };
-
-    setActiveTimers((prev) => [newTimer, ...prev]);
+    const newTimer = createTimer(
+      {
+        id: `${now}-${Math.random()}`,
+        recipeTitle,
+        label,
+        totalSeconds: totalSecs,
+        createdAt: now,
+        semanticKey,
+      },
+      now
+    );
+    setActiveTimers((prev) => upsertTimer(prev, newTimer, semanticKey));
   };
 
   const handleToggleTimer = (id: string) => {
     setActiveTimers((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, isRunning: !t.isRunning } : t))
+      prev.map((t) => (t.id === id ? (t.isRunning ? pauseTimer(t, Date.now()) : resumeTimer(t, Date.now())) : t))
     );
   };
 
@@ -1289,8 +1292,11 @@ export default function App() {
           <CookingModeModal
             recipe={cookingRecipe.recipe}
             servings={cookingRecipe.servings}
-            onClose={() => setCookingRecipe(null)}
+            activeTimers={activeTimers}
             onStartTimer={handleStartTimer}
+            onToggleTimer={handleToggleTimer}
+            onDeleteTimer={handleDeleteTimer}
+            onClose={() => setCookingRecipe(null)}
           />
         </React.Suspense>
       )}

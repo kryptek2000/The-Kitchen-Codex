@@ -140,6 +140,21 @@ export interface ActiveTimer {
   remainingSeconds: number;
   isRunning: boolean;
   createdAt: number;
+  /**
+   * Epoch milliseconds when a RUNNING timer should complete. When present, the
+   * countdown is derived from this absolute target (wall-clock correct), so time
+   * that passes while the app/browser is closed (or a tab is throttled/suspended)
+   * is correctly deducted. Absent/undefined for a paused timer (frozen) and for
+   * legacy persisted timers until migrated on first hydration.
+   */
+  endsAt?: number;
+  /**
+   * Stable semantic identity used to dedupe/replace a timer for the SAME surface
+   * (e.g. a Cooking Mode step timer keyed by recipe + step number), so starting
+   * it again restarts it rather than creating a duplicate. Absent for one-shot
+   * Recipe Detail / custom timers.
+   */
+  semanticKey?: string;
 }
 
 export interface ShoppingCategoryGroup {

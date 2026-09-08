@@ -132,4 +132,16 @@ describe('BrowserSettingsAdapter', () => {
     expect(loaded).toHaveLength(1);
     expect(loaded?.[0].remainingSeconds).toBe(400);
   });
+
+  it('persists the wall-clock endsAt field (upgraded timer schema)', async () => {
+    const { storage } = fakeStorage();
+    const a = new BrowserSettingsAdapter(storage);
+    const timers = [
+      { id: 't1', recipeTitle: 'Lasagna', label: 'Step 1: Bake', totalSeconds: 60, remainingSeconds: 45, isRunning: true, createdAt: 1700000000000, endsAt: 1700000000000 + 45 * 1000, semanticKey: 'rid::step:1' },
+    ];
+    await a.set('obsidian_active_cooking_timers', timers);
+    const loaded = await a.get<Array<{ endsAt?: number; semanticKey?: string }>>('obsidian_active_cooking_timers');
+    expect(loaded?.[0].endsAt).toBe(1700000000000 + 45 * 1000);
+    expect(loaded?.[0].semanticKey).toBe('rid::step:1');
+  });
 });
