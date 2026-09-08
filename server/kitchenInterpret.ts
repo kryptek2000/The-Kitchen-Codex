@@ -17,7 +17,8 @@
  * construction.
  */
 import dotenv from "dotenv";
-import { getDefaultAiProvider } from "./ai/provider.js";
+import { getDefaultAiProvider, runWithAiFallback } from "./ai/provider.js";
+import { normalizeProviderError } from "./ai/providerErrors.js";
 import type { AiJsonSchema } from "./ai/types.js";
 import { MODEL_CONFIG } from "./modelConfig.js";
 import { logModelAttempt } from "./providerDiagnostics.js";
@@ -137,24 +138,31 @@ function buildSchema(): AiJsonSchema {
 async function aiInterpret(question: string): Promise<unknown> {
   const provider = getDefaultAiProvider();
   const schema = buildSchema();
-  let lastError: unknown = new Error("All Kitchen models failed.");
-  for (const model of KITCHEN_MODELS) {
-    try {
-      return await provider.generateStructured(
-        buildPrompt(question),
-        schema,
-        {
-          model,
-          temperature: 0,
-          providerOptions: { thinkingConfig: { thinkingLevel: "MINIMAL" } },
-        }
-      );
-    } catch (err) {
-      logModelAttempt("interpret", model, err);
-      lastError = err;
-    }
+
+  // Interpret requires a structured-output-capable provider. Only Gemini is
+  // registered today (WebSearch-capable, structured-output-capable) so this is a
+  // no-op in zero-config mode; the capability gate protects future providers.
+  try {
+    const { result } = await runWithAiFallback<unknown>({
+      candidates: KITCHEN_MODELS.map((model) => ({ provider, model })),
+      requiredCapabilities: ["structuredOutput"],
+      run: (candidate) =>
+        provider.generateStructured(
+          buildPrompt(question),
+          schema,
+          {
+            model: candidate.model,
+            temperature: 0,
+            providerOptions: { thinkingConfig: { thinkingLevel: "MINIMAL" } },
+          }
+        ),
+    });
+    return result;
+  } catch (err) {
+    const normalized = normalizeProviderError(err, { providerId: provider.id });
+    logModelAttempt("interpret", normalized.model ?? KITCHEN_MODELS[0], normalized);
+    throw normalized;
   }
-  throw lastError;
 }
 
 /**

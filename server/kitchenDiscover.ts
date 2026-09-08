@@ -14,7 +14,8 @@
  * `{ ok:false, source:'web', reason:'unavailable' }` — never fabricated results.
  */
 import dotenv from "dotenv";
-import { getDefaultAiProvider } from "./ai/provider.js";
+import { getDefaultAiProvider, selectAiCandidates } from "./ai/provider.js";
+import { normalizeProviderError } from "./ai/providerErrors.js";
 import { MODEL_CONFIG } from "./modelConfig.js";
 import { logModelAttempt } from "./providerDiagnostics.js";
 import {
@@ -76,9 +77,19 @@ export async function discoverKitchenRecipesOnServer(request: {
   if (!provider.isAvailable() || !provider.searchWeb) {
     return webDiscoveryUnavailable();
   }
+  // Discovery REQUIRES a webSearch-capable provider — an ordinary text generator
+  // must never run. This is a no-op for Gemini today but protects future providers.
+  const capable = selectAiCandidates(
+    DISCOVERY_MODELS.map((model) => ({ provider, model })),
+    ["webSearch"]
+  );
+  if (capable.length === 0) {
+    return webDiscoveryUnavailable();
+  }
   const prompt = buildPrompt(request);
 
-  for (const model of DISCOVERY_MODELS) {
+  for (const candidate of capable) {
+    const { model } = candidate;
     try {
       const sources = await provider.searchWeb(prompt, { model, temperature: 0 });
       const results = sanitizeWebResults(
@@ -92,7 +103,7 @@ export async function discoverKitchenRecipesOnServer(request: {
       // prose, but try the next configured model.
       logModelAttempt("discover", model, new Error("No provider grounding URLs returned"));
     } catch (err) {
-      logModelAttempt("discover", model, err);
+      logModelAttempt("discover", model, normalizeProviderError(err, { providerId: provider.id, model }));
     }
   }
 

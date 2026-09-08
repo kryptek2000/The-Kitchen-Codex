@@ -13,7 +13,7 @@ function bounded(value: unknown, max: number): string | undefined {
   return s || undefined;
 }
 
-function redactSecrets(message: string): string {
+export function redactSecrets(message: string): string {
   return message
     .replace(/sk-[A-Za-z0-9_-]{6,}/g, "<redacted-key>")
     .replace(/AIza[0-9A-Za-z_-]{10,}/g, "<redacted-key>")
