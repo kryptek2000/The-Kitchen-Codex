@@ -16,12 +16,15 @@ export type AiOperation =
   | "kitchenDiscover"
   | "nutrition"
   | "metadataRecovery"
-  | "recipeGrabber";
+  | "recipeGrabber"
+  | "createRecipe";
 
 /**
  * Required capabilities per operation. `structuredOutput` operations retain their
  * existing deterministic fallback; `kitchenDiscover` ONLY runs a webSearch-capable
- * provider (never an ordinary text generator).
+ * provider (never an ordinary text generator). `createRecipe` (Create for Me) is
+ * explicit invention and requires BOTH schema-constrained output AND recipe
+ * generation — it never degrades to plain-text/json_object/regex extraction.
  */
 export const OPERATION_REQUIRED_CAPABILITIES: Record<AiOperation, AiCapabilityKey[]> = {
   kitchenInterpret: ["structuredOutput"],
@@ -30,6 +33,7 @@ export const OPERATION_REQUIRED_CAPABILITIES: Record<AiOperation, AiCapabilityKe
   nutrition: ["structuredOutput"],
   metadataRecovery: ["structuredOutput"],
   recipeGrabber: ["structuredOutput"],
+  createRecipe: ["structuredOutput", "recipeGeneration"],
 };
 
 /** Returns the required capabilities for an operation (empty for unknown ops). */

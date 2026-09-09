@@ -173,7 +173,9 @@ export async function scanVaultDirectory(dirHandle: any): Promise<VaultScanResul
 }
 
 /**
- * Prompts user to pick their Obsidian Vault directory and persists the handle.
+ * Prompts user to pick their Obsidian Vault directory. It returns ONLY the picked
+ * handle; it does NOT persist it as the active vault. Persisting the handle as the
+ * active vault is the application's job AFTER a successful accepted scan.
  *
  * Phase 4C3C: this returns ONLY the authoritative directory handle. Markdown
  * hydration is no longer performed here — the connect-time Markdown scan (and
@@ -192,7 +194,6 @@ export async function pickVaultDirectory(): Promise<{ folderHandle: any }> {
     startIn: 'documents',
   });
 
-  await saveDirectoryHandleToIDB(dirHandle);
   return { folderHandle: dirHandle };
 }
 

@@ -289,3 +289,46 @@ export function kitchenDiscoverRateLimiter(req: Request, res: Response, next: Ne
 
   next();
 }
+
+/**
+ * Express middleware for rate limiting on the Create for Me recipe generation
+ * endpoint. Configurable via `CREATE_RECIPE_RATE_LIMIT` (default 10 requests per
+ * minute) — this is an interactive, potentially costly AI generation request.
+ */
+export function createRecipeRateLimiter(req: Request, res: Response, next: NextFunction) {
+  const parsedLimit = parseInt(process.env.CREATE_RECIPE_RATE_LIMIT || "10", 10);
+  const maxRequestsPerWindow = isNaN(parsedLimit) || parsedLimit <= 0 ? 10 : parsedLimit;
+  const windowMs = 60 * 1000; // 1 minute window
+
+  const clientIp = getClientIp(req);
+  const now = Date.now();
+
+  let entry = clientIpStore.get(`createrecipe_${clientIp}`);
+
+  if (!entry || entry.resetTime <= now) {
+    entry = {
+      count: 1,
+      resetTime: now + windowMs,
+    };
+    clientIpStore.set(`createrecipe_${clientIp}`, entry);
+  } else {
+    entry.count += 1;
+  }
+
+  const remaining = Math.max(0, maxRequestsPerWindow - entry.count);
+  const resetSeconds = Math.ceil((entry.resetTime - now) / 1000);
+
+  res.setHeader("RateLimit-Limit", maxRequestsPerWindow);
+  res.setHeader("RateLimit-Remaining", remaining);
+  res.setHeader("RateLimit-Reset", resetSeconds);
+
+  if (entry.count > maxRequestsPerWindow) {
+    res.setHeader("Retry-After", resetSeconds);
+    return res.status(429).json({
+      error: "Too many recipe generation requests. Please wait a moment before trying again.",
+      retryAfterSeconds: resetSeconds,
+    });
+  }
+
+  next();
+}

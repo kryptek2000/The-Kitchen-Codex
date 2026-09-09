@@ -18,6 +18,7 @@ import {
   Globe,
   BrainCircuit,
   Sparkles,
+  Wand2,
 } from 'lucide-react';
 import { VaultSyncStatus } from '../types';
 import { APP_VERSION } from '../version';
@@ -36,6 +37,7 @@ interface VaultHeaderProps {
   onOpenRecipeGrabber: () => void;
   onOpenVaultIntelligence: () => void;
   onOpenAskMyKitchen: () => void;
+  onOpenCreateForMe: () => void;
   legacyRecipeCount?: number;
   onRefreshVault: () => void;
 }
@@ -54,6 +56,7 @@ export function VaultHeader({
   onOpenRecipeGrabber,
   onOpenVaultIntelligence,
   onOpenAskMyKitchen,
+  onOpenCreateForMe,
   legacyRecipeCount = 0,
   onRefreshVault,
 }: VaultHeaderProps) {
@@ -135,6 +138,17 @@ export function VaultHeader({
 
         {/* Action Buttons */}
         <div className="flex flex-wrap items-center gap-2">
+          {/* Create for Me Button */}
+          <button
+            id="create-for-me-header-btn"
+            onClick={onOpenCreateForMe}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-violet-500/10 hover:bg-violet-500/20 text-violet-300 border border-violet-500/30 transition-colors shadow-xs"
+            title="Invent a recipe from a prompt (AI-generated draft, saved only when you say so)"
+          >
+            <Wand2 className="w-4 h-4 text-violet-400" />
+            <span>Create for Me</span>
+          </button>
+
           {/* Ask My Kitchen Button */}
           <button
             id="ask-my-kitchen-header-btn"

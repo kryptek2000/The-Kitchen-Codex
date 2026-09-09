@@ -34,6 +34,8 @@ const GEMINI_ROLE_MODELS: Record<AiOperation, string[]> = {
   nutrition: [MODEL_CONFIG.nutritionPrimary, MODEL_CONFIG.nutritionFallback],
   metadataRecovery: [MODEL_CONFIG.metadataRecoveryPrimary, MODEL_CONFIG.metadataRecoveryFallback],
   recipeGrabber: [MODEL_CONFIG.recipeGrabberPrimary, MODEL_CONFIG.recipeGrabberFallback, MODEL_CONFIG.recipeGrabberAlias],
+  // Create for Me is recipe generation: reuse the recipe-oriented Gemini models.
+  createRecipe: [MODEL_CONFIG.recipeGrabberPrimary, MODEL_CONFIG.recipeGrabberFallback],
 };
 
 /** OpenRouter role models per operation (curated, cost-conscious structured-capable set). */
@@ -45,6 +47,8 @@ const OPENROUTER_ROLE_MODELS: Record<AiOperation, string[]> = {
   nutrition: [OPENROUTER_STRUCTURED_MODEL],
   metadataRecovery: [OPENROUTER_STRUCTURED_MODEL],
   recipeGrabber: [OPENROUTER_STRUCTURED_MODEL],
+  // Create for Me: only the curated structured+recipe-capable model is a candidate.
+  createRecipe: [OPENROUTER_STRUCTURED_MODEL],
 };
 
 /**
@@ -63,6 +67,9 @@ const DEEPSEEK_ROLE_MODELS: Record<AiOperation, string[]> = {
   nutrition: [DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL],
   metadataRecovery: [DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL],
   recipeGrabber: [DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL],
+  // Create for Me: candidates are resolved but filtered out (no schema-constrained
+  // structured output and no recipe-generation capability).
+  createRecipe: [DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL],
 };
 
 function geminiModels(operation: AiOperation): string[] {

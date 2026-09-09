@@ -123,4 +123,47 @@ describe("Express server wiring", () => {
     const body = await res.json();
     expect(body.code).toBe("UNAUTHORIZED");
   });
+
+  it("POST /api/recipes/generate requires the AI endpoint token when configured", async () => {
+    process.env.AI_ENDPOINT_TOKEN = "super-secret";
+    const res = await fetch(`${baseUrl}/api/recipes/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "a dinner" }),
+    });
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(body.code).toBe("UNAUTHORIZED");
+  });
+
+  it("POST /api/recipes/generate rejects an empty prompt with INVALID_REQUEST (400)", async () => {
+    delete process.env.AI_ENDPOINT_TOKEN;
+    const res = await fetch(`${baseUrl}/api/recipes/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "  " }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_REQUEST");
+  });
+
+  it("POST /api/recipes/generate returns truthful unsupported-capability (no provider) and never saves", async () => {
+    delete process.env.AI_ENDPOINT_TOKEN;
+    // Force NO configured/usable provider so no network/AI call is attempted.
+    process.env.GEMINI_API_KEY = "MY_GEMINI_API_KEY";
+    delete process.env.OPENROUTER_API_KEY;
+    delete process.env.DEEPSEEK_API_KEY;
+    const res = await fetch(`${baseUrl}/api/recipes/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "a SUPER_SECRET_CREATE_PROMPT_SENTINEL dinner" }),
+    });
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.code).toBe("UNSUPPORTED_CAPABILITY");
+    // No fabricated draft and never a saved recipe / prompt leak.
+    expect(body.draft).toBeUndefined();
+    expect(JSON.stringify(body)).not.toContain("SUPER_SECRET_CREATE_PROMPT_SENTINEL");
+  });
 });

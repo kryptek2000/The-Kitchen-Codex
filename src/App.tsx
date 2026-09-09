@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   ObsidianRecipe,
   VaultSyncStatus,
@@ -20,6 +20,7 @@ import {
   parseUploadedFileList,
   parseDroppedFilesAndFolders,
   getDirectoryHandleFromIDB,
+  saveDirectoryHandleToIDB,
   clearDirectoryHandleFromIDB,
   isFileSystemAccessSupported,
   scanVaultAssetsFromHandle,
@@ -52,6 +53,17 @@ import {
 import { playTimerChime } from './utils/audioAlert';
 import { APP_VERSION } from './version';
 import ProviderSettings from './application-ui/ProviderSettings';
+import { CreateForMeModal } from './components/CreateForMeModal';
+import { saveGeneratedRecipeToVault, GeneratedRecipePathCollisionError } from './application/createForMe';
+import {
+  sameCanonicalRecipeIdentity,
+  reconcileActiveRecipe,
+  upsertCanonicalRecipe,
+  removeCanonicalRecipe,
+  deriveVaultSnapshotState,
+  createScanGenerationGuard,
+  applyAcceptedVaultSnapshot,
+} from './core/recipeIdentity';
 
 import { VaultHeader } from './components/VaultHeader';
 import { RecipeFilterBar } from './components/RecipeFilterBar';
@@ -205,6 +217,7 @@ export default function App() {
   // Modals
   const [isConnectVaultOpen, setIsConnectVaultOpen] = useState(false);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
+  const [isCreateForMeOpen, setIsCreateForMeOpen] = useState(false);
   const [isGrabberOpen, setIsGrabberOpen] = useState(false);
   const [isVaultIntelligenceOpen, setIsVaultIntelligenceOpen] = useState(false);
   const [isAskMyKitchenOpen, setIsAskMyKitchenOpen] = useState(false);
@@ -225,6 +238,50 @@ export default function App() {
   const [mealPlan, setMealPlan] = useState<MealPlanDay[]>(STARTER_MEAL_PLAN);
   const [shoppingCategories, setShoppingCategories] = useState<ShoppingCategoryGroup[]>(STARTER_SHOPPING_CATEGORIES);
 
+  // Canonical vault integrity (Phase 2A prerequisite).
+  //  - `vaultScanGeneration` is a monotonic counter: each canonical scan snapshot
+  //    is tagged with the generation active when it STARTED; a scan only applies its
+  //    result if its generation is STILL current, so a slow old scan can never
+  //    overwrite a newer vault connection/scan (defect E).
+  //  - `vaultHydrated` gates the meal-plan/shopping autosave effects so they never
+  //    write the PREVIOUS vault's state into a newly connected vault (defect F).
+  const vaultScanGeneration = useRef(createScanGenerationGuard());
+  const [vaultHydrated, setVaultHydrated] = useState(true);
+  // Tracks the CURRENT active canonical references so a snapshot commit reconciles
+  // them against the latest committed state (avoids closing over stale values).
+  const activeRefs = useRef({ selectedRecipe: null as ObsidianRecipe | null, cookingRecipe: null as { recipe: ObsidianRecipe; servings: number } | null, editingRecipe: null as ObsidianRecipe | null });
+  useEffect(() => {
+    activeRefs.current = { selectedRecipe, cookingRecipe, editingRecipe };
+  }, [selectedRecipe, cookingRecipe, editingRecipe]);
+
+  // Applies a SUCCESSFUL canonical vault snapshot. It is authoritative: a successful
+  // empty scan replaces recipes/notes with [] (defect A), absence of Meal Plan.md /
+  // Shopping List.md means empty state (defect F/V), and active canonical references
+  // (selected/cooking/editing) are reconciled against the fresh snapshot (defect D).
+  // A stale (older-generation) result is ignored (defect E). Returns true only when
+  // the snapshot was actually accepted as the current generation.
+  const commitVaultSnapshot = useCallback((result: LoadedVaultData, generation: number, folderHandle?: any) => {
+    if (!vaultScanGeneration.current.isCurrent(generation)) return false;
+    const next = deriveVaultSnapshotState(result, activeRefs.current);
+    setRecipes(next.recipes);
+    setNotes(next.notes);
+    setMealPlan(next.mealPlan);
+    setShoppingCategories(next.shoppingList);
+    setSelectedRecipe(next.selectedRecipe);
+    setCookingRecipe(next.cookingRecipe);
+    setEditingRecipe(next.editingRecipe);
+    setVaultStatus((s) => ({
+      ...s,
+      isConnected: true,
+      accessType: 'filesystem_api',
+      vaultPath: result.folderName ? `Vault / ${result.folderName}` : s.vaultPath,
+      fileCount: result.recipes.length + result.notes.length,
+      folderHandle: folderHandle ?? s.folderHandle,
+    }));
+    setVaultHydrated(true);
+    return true;
+  }, []);
+
   // Update document title with version
   useEffect(() => {
     document.title = `The Kitchen Codex ${APP_VERSION} — Obsidian Culinary Vault`;
@@ -239,20 +296,10 @@ export default function App() {
         if (handle && typeof handle.queryPermission === 'function') {
           const status = await handle.queryPermission({ mode: 'readwrite' });
           if (status === 'granted') {
+            const generation = vaultScanGeneration.current.begin();
             const result = await loadVaultFromHandle(handle);
             if (isMounted) {
-              if (result.recipes.length > 0) setRecipes(result.recipes);
-              if (result.notes.length > 0) setNotes(result.notes);
-              if (result.mealPlan) setMealPlan(result.mealPlan);
-              if (result.shoppingList) setShoppingCategories(result.shoppingList);
-
-              setVaultStatus({
-                isConnected: true,
-                vaultPath: result.folderName ? `Vault / ${result.folderName}` : 'Obsidian Vault',
-                fileCount: result.recipes.length + result.notes.length,
-                accessType: 'filesystem_api',
-                folderHandle: handle,
-              });
+              commitVaultSnapshot(result, generation, handle);
             }
           }
         }
@@ -271,16 +318,9 @@ export default function App() {
     const handleWindowFocus = async () => {
       if (vaultStatus.isConnected && vaultStatus.folderHandle && vaultStatus.accessType === 'filesystem_api') {
         try {
+          const generation = vaultScanGeneration.current.begin();
           const result = await loadVaultFromHandle(vaultStatus.folderHandle);
-          if (result.recipes.length > 0) {
-            setRecipes(result.recipes);
-          }
-          if (result.notes.length > 0) {
-            setNotes(result.notes);
-          }
-          setVaultStatus((prev) => ({ ...prev, fileCount: result.recipes.length + result.notes.length }));
-          if (result.mealPlan) setMealPlan(result.mealPlan);
-          if (result.shoppingList) setShoppingCategories(result.shoppingList);
+          commitVaultSnapshot(result, generation, vaultStatus.folderHandle);
         } catch (err) {
           console.warn('Background vault scan on focus failed:', err);
         }
@@ -368,23 +408,25 @@ export default function App() {
     }
   }, [activeTimers, settingsAdapter, settingsHydrated]);
 
-  // 4. Auto-save Meal Plan note to the vault through the adapter if connected
+  // 4. Auto-save Meal Plan note to the vault through the adapter if connected.
+  //    Gated on `vaultHydrated` so a newly connected vault only receives its OWN
+  //    (already-scanned) plan, never the previous vault's plan (defect F).
   useEffect(() => {
-    if (vaultAdapter) {
+    if (vaultAdapter && vaultHydrated) {
       saveMealPlanWithVaultAdapter(vaultAdapter, mealPlan).catch((e) =>
         reportVaultError('save', 'Meal Plan', e)
       );
     }
-  }, [mealPlan, vaultAdapter]);
+  }, [mealPlan, vaultAdapter, vaultHydrated]);
 
-  // 5. Auto-save Shopping List note to the vault through the adapter if connected
+  // 5. Auto-save Shopping List note to the vault through the adapter if connected.
   useEffect(() => {
-    if (vaultAdapter) {
+    if (vaultAdapter && vaultHydrated) {
       saveShoppingListWithVaultAdapter(vaultAdapter, shoppingCategories).catch((e) =>
         reportVaultError('save', 'Shopping List', e)
       );
     }
-  }, [shoppingCategories, vaultAdapter]);
+  }, [shoppingCategories, vaultAdapter, vaultHydrated]);
 
   // Timers Background Interval Engine — refreshes display state once per second.
   // The authoritative clock is `endsAt`; reconciliation (not blind decrement)
@@ -406,18 +448,21 @@ export default function App() {
 
   // Connect local folder via File System Access API
   const handleDirectVaultConnected = async (folderHandle: any): Promise<{ recipeCount: number; noteCount: number }> => {
+    // Invalidate prior in-flight scans and gate autosave (defect E + F): old-vault
+    // meal-plan/shopping state must not be written into the newly connected vault.
+    const generation = vaultScanGeneration.current.begin();
+    setVaultHydrated(false);
     const result = await loadVaultFromHandle(folderHandle);
-    if (result.recipes.length > 0) setRecipes(result.recipes);
-    if (result.notes.length > 0) setNotes(result.notes);
-    if (result.mealPlan) setMealPlan(result.mealPlan);
-    if (result.shoppingList) setShoppingCategories(result.shoppingList);
-    setVaultStatus({
-      isConnected: true,
-      vaultPath: result.folderName ? `Vault / ${result.folderName}` : 'Obsidian Vault',
-      fileCount: result.recipes.length + result.notes.length,
-      accessType: 'filesystem_api',
-      folderHandle,
-    });
+    // Persist the handle as the active vault ONLY after it was successfully scanned
+    // and accepted as the current-generation canonical snapshot; a stale/superseded
+    // (or failed) scan is never persisted. saveDirectoryHandleToIDB is best-effort
+    // (IDB failures log a warning and do not fail the connection).
+    await applyAcceptedVaultSnapshot(
+      vaultScanGeneration.current,
+      generation,
+      () => commitVaultSnapshot(result, generation, folderHandle),
+      () => saveDirectoryHandleToIDB(folderHandle)
+    );
     return { recipeCount: result.recipes.length, noteCount: result.notes.length };
   };
 
@@ -462,21 +507,9 @@ export default function App() {
 
   // Save / Update Recipe
   const handleSaveRecipe = async (savedRecipe: ObsidianRecipe) => {
-    setRecipes((prev) => {
-      const index = prev.findIndex((r) => r.id === savedRecipe.id || r.fileName === savedRecipe.fileName);
-      if (index >= 0) {
-        const next = [...prev];
-        next[index] = savedRecipe;
-        return next;
-      }
-      return [savedRecipe, ...prev];
-    });
-
-    if (selectedRecipe && (selectedRecipe.id === savedRecipe.id || selectedRecipe.fileName === savedRecipe.fileName)) {
-      setSelectedRecipe(savedRecipe);
-    }
-
-    // Save directly to Obsidian vault disk note
+    // Write FIRST: Obsidian Markdown is the canonical source of truth. React state is
+    // only updated AFTER the canonical write succeeds, so a failed write leaves the
+    // prior canonical state (and the open editor) intact (defect C).
     try {
       if (vaultAdapter) {
         await saveRecipeWithVaultAdapter(vaultAdapter, savedRecipe);
@@ -489,8 +522,37 @@ export default function App() {
       reportVaultError('save', savedRecipe.title || 'recipe', err);
       throw err;
     }
+    // Commit state from the successfully written/serialized canonical object, matched
+    // by canonical vault-path identity (never basename) (defect B).
+    setRecipes((prev) => upsertCanonicalRecipe(prev, savedRecipe));
+    setSelectedRecipe((prev) => (prev && sameCanonicalRecipeIdentity(prev, savedRecipe) ? savedRecipe : prev));
     setIsEditorOpen(false);
     setEditingRecipe(null);
+  };
+
+  // Create for Me save (generated-save scoped). A same-title file is NEVER
+  // overwritten: on a collision this throws GeneratedRecipePathCollisionError
+  // before any write, so the modal keeps the draft open with a bounded message.
+  const handleSaveGeneratedRecipe = async (recipe: ObsidianRecipe) => {
+    try {
+      if (vaultAdapter) {
+        await saveGeneratedRecipeToVault(vaultAdapter, recipe);
+      } else {
+        // Disconnected: no vault exists()-check support; preserve the download-to-disk
+        // fallback for this generated draft (out of collision-safety scope).
+        await saveRecipeToVaultFile(recipe, undefined);
+      }
+    } catch (err) {
+      if (err instanceof GeneratedRecipePathCollisionError) {
+        throw err; // let the modal surface the collision message and keep edits
+      }
+      reportVaultError('save', recipe.title || 'recipe', err);
+      throw err;
+    }
+    // Insert/update by canonical vault-path identity (never basename), so a root
+    // `Dish.md` can never replace `B/Dish.md` on a basename match.
+    setRecipes((prev) => upsertCanonicalRecipe(prev, recipe));
+    setIsCreateForMeOpen(false);
   };
 
   // Update Nutrition on a recipe and save to Obsidian Markdown frontmatter
@@ -502,18 +564,18 @@ export default function App() {
     };
     updatedRecipe.rawMarkdown = serializeRecipeToObsidianMarkdown(updatedRecipe);
 
-    setRecipes((prev) => prev.map((r) => (r.id === updatedRecipe.id ? updatedRecipe : r)));
-    if (selectedRecipe && selectedRecipe.id === updatedRecipe.id) {
-      setSelectedRecipe(updatedRecipe);
-    }
-
+    // Write FIRST then commit state (defect C): a failed canonical write must not
+    // mutate the displayed canonical recipe.
     if (vaultAdapter) {
       try {
         await saveRecipeWithVaultAdapter(vaultAdapter, updatedRecipe);
       } catch (err) {
         reportVaultError('save', updatedRecipe.title || 'recipe', err);
+        return;
       }
     }
+    setRecipes((prev) => upsertCanonicalRecipe(prev, updatedRecipe));
+    setSelectedRecipe((prev) => (prev && sameCanonicalRecipeIdentity(prev, updatedRecipe) ? updatedRecipe : prev));
   };
 
   // Save or Create a Vault Note (e.g. ingredient or technique created from wikilink modal)
@@ -549,21 +611,20 @@ export default function App() {
 
   // Delete Recipe
   const handleDeleteRecipe = async (recipeToDelete: ObsidianRecipe) => {
-    setRecipes((prev) => prev.filter((r) => r.id !== recipeToDelete.id && r.fileName !== recipeToDelete.fileName));
-    if (selectedRecipe && (selectedRecipe.id === recipeToDelete.id || selectedRecipe.fileName === recipeToDelete.fileName)) {
-      setSelectedRecipe(null);
-    }
+    // Write FIRST: only remove from state after the vault delete succeeds (defect C).
     if (vaultAdapter) {
       try {
         await deleteRecipeWithVaultAdapter(vaultAdapter, recipeToDelete);
       } catch (err) {
-        // Simple rollback: the disk delete failed, so restore the recipe in state
-        // and inform the user (do not claim it was deleted from the vault).
+        // The disk delete failed: do NOT claim it was deleted. Keep prior state.
         reportVaultError('delete', recipeToDelete.title || 'recipe', err);
-        setRecipes((prev) => [recipeToDelete, ...prev.filter((r) => r.id !== recipeToDelete.id)]);
-        setSelectedRecipe(recipeToDelete);
+        return;
       }
     }
+    // Remove by canonical vault-path identity, never basename (defect B).
+    setRecipes((prev) => removeCanonicalRecipe(prev, recipeToDelete));
+    setSelectedRecipe((prev) => (prev && sameCanonicalRecipeIdentity(prev, recipeToDelete) ? null : prev));
+    setCookingRecipe((prev) => (prev && sameCanonicalRecipeIdentity(prev.recipe, recipeToDelete) ? null : prev));
   };
 
   // Start Cooking Mode
@@ -1127,15 +1188,14 @@ export default function App() {
           setIsVaultIntelligenceOpen(true);
         }}
         onOpenAskMyKitchen={() => setIsAskMyKitchenOpen(true)}
+        onOpenCreateForMe={() => setIsCreateForMeOpen(true)}
         legacyRecipeCount={vaultHealthSummary.legacyCount + vaultHealthSummary.incompleteCount}
         onRefreshVault={async () => {
           if (vaultStatus.isConnected && vaultStatus.folderHandle) {
             try {
+              const generation = vaultScanGeneration.current.begin();
               const result = await loadVaultFromHandle(vaultStatus.folderHandle);
-              if (result.recipes.length > 0) setRecipes(result.recipes);
-              if (result.mealPlan) setMealPlan(result.mealPlan);
-              if (result.shoppingList) setShoppingCategories(result.shoppingList);
-              setVaultStatus((prev) => ({ ...prev, fileCount: result.recipes.length }));
+              commitVaultSnapshot(result, generation, vaultStatus.folderHandle);
             } catch (err) {
               console.warn('Re-scan failed:', err);
             }
@@ -1143,6 +1203,7 @@ export default function App() {
             setRecipes(getStarterVaultRecipes());
             setMealPlan(STARTER_MEAL_PLAN);
             setShoppingCategories(STARTER_SHOPPING_CATEGORIES);
+            setVaultHydrated(true);
           }
         }}
       />
@@ -1422,6 +1483,14 @@ export default function App() {
           setIsAskMyKitchenOpen(false);
           setIsGrabberOpen(true);
         }}
+      />
+
+      {/* Create for Me Modal */}
+      <CreateForMeModal
+        isOpen={isCreateForMeOpen}
+        onClose={() => setIsCreateForMeOpen(false)}
+        network={networkAdapter}
+        onSaveRecipe={handleSaveGeneratedRecipe}
       />
     </div>
   );

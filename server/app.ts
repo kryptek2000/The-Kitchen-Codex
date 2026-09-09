@@ -18,12 +18,14 @@ import {
   kitchenInterpretRateLimiter,
   kitchenRankRateLimiter,
   kitchenDiscoverRateLimiter,
+  createRecipeRateLimiter,
   getClientIp,
 } from "./rateLimiter.js";
 import { interpretKitchenQuestionOnServer } from "./kitchenInterpret.js";
 import { rankKitchenCandidatesOnServer } from "./kitchenRank.js";
 import { discoverKitchenRecipesOnServer } from "./kitchenDiscover.js";
 import { getAiProviderStatus } from "./ai/providerStatus.js";
+import { generateRecipeDraftOnServer, CreateRecipeValidationError } from "./createRecipe.js";
 import {
   sanitizeCandidateEvidenceList,
   MAX_KITCHEN_CANDIDATES,
@@ -611,6 +613,33 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // bearer token; when unset (local) it is open.
   app.get("/api/providers", requireAiAccessToken, (_req, res) => {
     res.json({ providers: getAiProviderStatus() });
+  });
+
+  // Create for Me — explicit recipe invention. Generates a schema-constrained
+  // DRAFT and returns it (the client previews/edits and saves via the existing
+  // vault write path). NEVER saves, NEVER mutates the vault, NEVER returns a
+  // prompt, secret, or raw provider response. Gated + rate-limited like other AI
+  // endpoints; no semantic downgrade (unsupported capability -> explicit 503).
+  app.post("/api/recipes/generate", requireAiAccessToken, createRecipeRateLimiter, async (req, res) => {
+    try {
+      if (!req.body || typeof req.body !== "object") {
+        return res.status(400).json({ error: "Invalid request payload.", code: "INVALID_REQUEST" });
+      }
+      const result = await generateRecipeDraftOnServer(req.body as any);
+      return res.json(result);
+    } catch (error: any) {
+      if (error instanceof CreateRecipeValidationError || error?.name === "CreateRecipeValidationError") {
+        return res.status(400).json({ error: error?.message || "Invalid generation request.", code: "INVALID_REQUEST" });
+      }
+      if (error?.code === "UNSUPPORTED_CAPABILITY") {
+        return res.status(503).json({
+          error: "No configured AI provider supports recipe generation.",
+          code: "UNSUPPORTED_CAPABILITY",
+        });
+      }
+      // Generic, secret-safe error. Never leak provider secrets / raw errors.
+      return res.status(502).json({ error: "Couldn't generate a recipe right now." });
+    }
   });
 
   // JSON 404 for unknown API routes so the client always gets JSON, never an
