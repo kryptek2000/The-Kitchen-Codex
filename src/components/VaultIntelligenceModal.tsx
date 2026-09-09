@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   BrainCircuit,
   X,
@@ -25,6 +25,8 @@ import {
   CheckSquare,
   Square,
   Search,
+  Image,
+  ImageOff,
 } from 'lucide-react';
 import {
   ObsidianRecipe,
@@ -41,6 +43,17 @@ import {
   mergeRecoveredMetadata,
   normalizeTimeString,
 } from '../utils/vaultIntelligence';
+import {
+  assessRecipeImageHealth,
+  type RecipeImageHealth,
+} from '../core/recipeImage';
+import {
+  RecipeImageRecoveryController,
+  recipeImagePreviewPath,
+  isImageRecoverySupported,
+  type RecipeImageRecoverySupport,
+  type RecipeImageRecoveryState,
+} from '../application/recipeImageRecovery';
 
 interface VaultIntelligenceModalProps {
   isOpen: boolean;
@@ -50,6 +63,233 @@ interface VaultIntelligenceModalProps {
   onBatchSaveRecipes?: (updatedList: ObsidianRecipe[]) => Promise<void> | void;
   initialSelectedRecipeId?: string | null;
   network: NetworkAdapter;
+  /**
+   * Vault Intelligence Image Recovery (v0.7 2B): shell-provided support object.
+   * PRESENT only when every capability is real (writable vault + AssetAdapter +
+   * generation wiring + vault session id). Never fake support.
+   */
+  imageRecovery?: RecipeImageRecoverySupport;
+  /** Truthful reason shown when image recovery is unavailable on this surface. */
+  imageRecoveryUnavailableReason?: string;
+  /** In-memory canonical update after a successful image save (no re-write). */
+  onRecipeImageSaved?: (recipeId: string, imagePath: string) => void;
+}
+
+export interface RecipeImageFindingViewProps {
+  /** Live image-health finding (null = still checking). */
+  health: RecipeImageHealth | null;
+  /** True only when every image-recovery capability is present on this surface. */
+  canGenerate: boolean;
+  /** Truthful unavailability reason (shown instead of any Generate action). */
+  unavailableReason?: string;
+  /** Controller state (phases: idle/generating/preview/saving/saved). */
+  recoveryState: RecipeImageRecoveryState;
+  busy: boolean;
+  onGenerate: () => void;
+  onSave: () => void;
+  onRegenerate: () => void;
+  onCancel: () => void;
+}
+
+/**
+ * Per-recipe image-issue surface (presentational; exported for tests).
+ * Uses `assessRecipeImageHealth` findings DIRECTLY — never `getRecipeImage()`.
+ * Recovery actions are offered ONLY for `missing` / `broken_local`, and the
+ * Generate action ONLY when the surface truly supports it. `valid_local` and
+ * `remote_present` get NO recovery action (never replace a valid image);
+ * `invalid_remote` / `unverifiable_local` are informational only.
+ */
+export function RecipeImageFindingView({
+  health,
+  canGenerate,
+  unavailableReason,
+  recoveryState,
+  busy,
+  onGenerate,
+  onSave,
+  onRegenerate,
+  onCancel,
+}: RecipeImageFindingViewProps) {
+  const { phase, preview, message, messageKind } = recoveryState;
+
+  const finding = (() => {
+    if (!health) {
+      return (
+        <div className="text-[11px] text-gray-500 flex items-center gap-2">
+          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+          <span>Checking image status...</span>
+        </div>
+      );
+    }
+    switch (health.kind) {
+      case 'missing':
+        return (
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-2.5 min-w-0">
+              <ImageOff className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <div className="min-w-0">
+                <div className="text-xs font-bold text-amber-300">No image</div>
+                <p className="text-[11px] text-gray-400 mt-0.5">{health.reason}</p>
+              </div>
+            </div>
+            {canGenerate ? (
+              <button
+                onClick={onGenerate}
+                disabled={busy}
+                data-testid="generate-image"
+                className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg bg-purple-500 hover:bg-purple-400 text-black disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              >
+                <Sparkles className={`w-3.5 h-3.5 ${phase === 'generating' ? 'animate-spin' : ''}`} />
+                <span>{phase === 'generating' ? 'Generating...' : 'Generate Image'}</span>
+              </button>
+            ) : (
+              unavailableReason && (
+                <span className="shrink-0 text-[10px] text-gray-500 italic max-w-[220px] text-right">{unavailableReason}</span>
+              )
+            )}
+          </div>
+        );
+      case 'broken_local':
+        return (
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-2.5 min-w-0">
+              <ImageOff className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              <div className="min-w-0">
+                <div className="text-xs font-bold text-rose-300">Broken local image</div>
+                <p className="text-[11px] text-gray-400 mt-0.5 break-all">{health.reason}</p>
+                <p className="text-[10px] text-gray-500 mt-1 font-mono break-all">{health.imageRef}</p>
+                {canGenerate && (
+                  <p className="text-[10px] text-gray-500 mt-1">A generated replacement can repair the image field. The old broken file is not deleted.</p>
+                )}
+              </div>
+            </div>
+            {canGenerate ? (
+              <button
+                onClick={onGenerate}
+                disabled={busy}
+                data-testid="generate-image"
+                className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg bg-purple-500 hover:bg-purple-400 text-black disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              >
+                <Sparkles className={`w-3.5 h-3.5 ${phase === 'generating' ? 'animate-spin' : ''}`} />
+                <span>{phase === 'generating' ? 'Generating...' : 'Generate Image'}</span>
+              </button>
+            ) : (
+              unavailableReason && (
+                <span className="shrink-0 text-[10px] text-gray-500 italic max-w-[220px] text-right">{unavailableReason}</span>
+              )
+            )}
+          </div>
+        );
+      case 'invalid_remote':
+        return (
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <div className="min-w-0">
+              <div className="text-xs font-bold text-amber-300">Invalid remote image reference</div>
+              <p className="text-[11px] text-gray-400 mt-0.5">{health.reason}</p>
+              <p className="text-[10px] text-gray-500 mt-1 font-mono break-all">{health.imageRef}</p>
+            </div>
+          </div>
+        );
+      case 'unverifiable_local':
+        return (
+          <div className="flex items-start gap-2.5">
+            <Info className="w-4 h-4 text-gray-400 shrink-0 mt-0.5" />
+            <div className="min-w-0">
+              <div className="text-xs font-bold text-gray-300">Local image could not be verified</div>
+              <p className="text-[11px] text-gray-400 mt-0.5">{health.reason}</p>
+            </div>
+          </div>
+        );
+      case 'valid_local':
+      case 'remote_present':
+      default:
+        return (
+          <div className="flex items-start gap-2.5">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+            <div className="min-w-0">
+              <div className="text-xs font-bold text-emerald-300">Image looks healthy</div>
+              <p className="text-[11px] text-gray-400 mt-0.5">{health.reason}</p>
+            </div>
+          </div>
+        );
+    }
+  })();
+
+  return (
+    <div className="p-4 rounded-2xl bg-[#141414] border border-white/10 space-y-3" data-testid="recipe-image-section">
+      <div className="flex items-center gap-2 pb-2 border-b border-white/5">
+        <Image className="w-4 h-4 text-purple-400" />
+        <span className="text-xs font-bold text-white">Recipe Image</span>
+        <span className="text-[10px] text-gray-500 uppercase tracking-wider ml-auto">Image Recovery</span>
+      </div>
+
+      {finding}
+
+      {/* Message banner (bounded, user-facing only) */}
+      {message && (
+        <div
+          className={`p-2.5 rounded-xl text-xs flex items-start gap-2 ${
+            messageKind === 'success'
+              ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-300'
+              : messageKind === 'error'
+                ? 'bg-rose-500/10 border border-rose-500/30 text-rose-300'
+                : 'bg-blue-500/10 border border-blue-500/30 text-blue-300'
+          }`}
+        >
+          {messageKind === 'success' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertTriangle className="w-4 h-4 shrink-0" />}
+          <span>{message}</span>
+        </div>
+      )}
+
+      {/* Preview: AI-generated, transient, nothing saved yet. Renders via the
+          authenticated preview endpoint — never base64/data URL. */}
+      {preview && (
+        <div className="space-y-2.5 p-3 rounded-xl bg-[#0C0C0C] border border-purple-500/20">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-purple-300">AI-generated preview</span>
+            <span className="text-[10px] text-gray-500">nothing saved yet</span>
+          </div>
+          <img
+            src={recipeImagePreviewPath(preview.token)}
+            alt="AI-generated recipe preview"
+            data-testid="recipe-image-preview"
+            className="max-h-56 rounded-lg border border-white/10 w-full object-contain bg-black/40"
+          />
+          <div className="text-[10px] text-gray-500 font-mono">
+            {preview.provider} · {preview.model}
+          </div>
+          <div className="flex items-center justify-end gap-2 pt-1">
+            <button
+              onClick={onCancel}
+              disabled={busy}
+              className="px-3 py-1.5 text-xs text-gray-400 hover:text-white rounded-lg disabled:opacity-40"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={onRegenerate}
+              disabled={busy}
+              data-testid="regenerate-image"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg bg-white/10 hover:bg-white/15 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${phase === 'generating' ? 'animate-spin' : ''}`} />
+              <span>{phase === 'generating' ? 'Generating...' : 'Regenerate'}</span>
+            </button>
+            <button
+              onClick={onSave}
+              disabled={busy}
+              data-testid="save-image"
+              className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-md shadow-emerald-500/20"
+            >
+              <Check className="w-4 h-4" />
+              <span>{phase === 'saving' ? 'Saving...' : 'Save Image'}</span>
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function VaultIntelligenceModal({
@@ -60,6 +300,9 @@ export function VaultIntelligenceModal({
   onBatchSaveRecipes,
   initialSelectedRecipeId,
   network,
+  imageRecovery,
+  imageRecoveryUnavailableReason,
+  onRecipeImageSaved,
 }: VaultIntelligenceModalProps) {
   const [activeTab, setActiveTab] = useState<'overview' | 'queue'>('overview');
   const [healthFilter, setHealthFilter] = useState<'all' | 'legacy' | 'incomplete' | 'mostly_complete' | 'complete'>('all');
@@ -121,6 +364,75 @@ export function VaultIntelligenceModal({
     setRecoveryError(null);
     setSaveSuccessNotice(null);
   }, [selectedRecipeId]);
+
+  // ---- Vault Intelligence Image Recovery (v0.7 2B) -------------------------
+  // Controller lifecycle: a fresh session per open/support change. close() on
+  // unmount/close advances the epoch so late generation/save results can never
+  // repopulate the UI (same liveness pattern as Create for Me).
+  const [imageRecoveryState, setImageRecoveryState] = useState<RecipeImageRecoveryState>({ phase: 'idle' });
+  const imageControllerRef = useRef<RecipeImageRecoveryController | null>(null);
+  const selectedRecipeIdRef = useRef<string | null>(selectedRecipeId);
+  useEffect(() => {
+    selectedRecipeIdRef.current = selectedRecipeId;
+  }, [selectedRecipeId]);
+
+  useEffect(() => {
+    if (!isOpen || !imageRecovery || !isImageRecoverySupported(imageRecovery)) {
+      imageControllerRef.current?.close();
+      imageControllerRef.current = null;
+      setImageRecoveryState({ phase: 'idle' });
+      return;
+    }
+    const controller = new RecipeImageRecoveryController({
+      network,
+      support: imageRecovery,
+      onState: setImageRecoveryState,
+      onSaved: (result) => {
+        const recipeId = selectedRecipeIdRef.current;
+        if (recipeId) onRecipeImageSaved?.(recipeId, result.imagePath);
+      },
+    });
+    imageControllerRef.current = controller;
+    setImageRecoveryState(controller.getState());
+    return () => {
+      controller.close();
+      imageControllerRef.current = null;
+    };
+  }, [isOpen, network, imageRecovery, onRecipeImageSaved]);
+
+  // Live image-health finding via assessRecipeImageHealth (canonical truth is
+  // the recipe.image field + the asset boundary — NEVER getRecipeImage()).
+  const [imageHealth, setImageHealth] = useState<RecipeImageHealth | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setImageHealth(null);
+    if (!selectedRecipe) return;
+    assessRecipeImageHealth({ image: selectedRecipe.image }, { asset: imageRecovery?.asset }).then((h) => {
+      if (!cancelled) setImageHealth(h);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedRecipe, imageRecovery]);
+
+  const canGenerateImage = isImageRecoverySupported(imageRecovery);
+  const handleImageGenerate = useCallback(() => {
+    if (selectedRecipe && imageControllerRef.current) void imageControllerRef.current.generate(selectedRecipe);
+  }, [selectedRecipe]);
+  const handleImageSave = useCallback(() => {
+    if (selectedRecipe && imageControllerRef.current) void imageControllerRef.current.save(selectedRecipe);
+  }, [selectedRecipe]);
+  const handleImageRegenerate = useCallback(() => {
+    if (selectedRecipe && imageControllerRef.current) void imageControllerRef.current.regenerate(selectedRecipe);
+  }, [selectedRecipe]);
+  const handleImageCancel = useCallback(() => {
+    void imageControllerRef.current?.cancel();
+  }, []);
+  const handleCloseModal = useCallback(() => {
+    imageControllerRef.current?.close();
+    onClose();
+  }, [onClose]);
+  // -------------------------------------------------------------------------
 
   // Filtered reports for queue
   const filteredReports = useMemo(() => {
@@ -361,7 +673,7 @@ export function VaultIntelligenceModal({
           </div>
 
           <button
-            onClick={onClose}
+            onClick={handleCloseModal}
             className="p-1.5 text-gray-400 hover:text-white rounded-lg hover:bg-white/5 transition-colors"
             title="Close Vault Intelligence"
           >
@@ -893,6 +1205,19 @@ export function VaultIntelligenceModal({
                         </button>
                       </div>
                     )}
+
+                    {/* Image Recovery: finding + Generate/preview/Save flow (2B) */}
+                    <RecipeImageFindingView
+                      health={imageHealth}
+                      canGenerate={canGenerateImage}
+                      unavailableReason={imageRecoveryUnavailableReason}
+                      recoveryState={imageRecoveryState}
+                      busy={imageRecoveryState.phase === 'generating' || imageRecoveryState.phase === 'saving'}
+                      onGenerate={handleImageGenerate}
+                      onSave={handleImageSave}
+                      onRegenerate={handleImageRegenerate}
+                      onCancel={handleImageCancel}
+                    />
                   </div>
                 ) : (
                   <div className="text-center py-16 text-gray-500 text-xs">

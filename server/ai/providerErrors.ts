@@ -21,7 +21,9 @@ export type ProviderErrorCode =
   | "TIMEOUT"
   | "UNSUPPORTED_CAPABILITY"
   | "INVALID_RESPONSE"
-  | "PROVIDER_ERROR";
+  | "PROVIDER_ERROR"
+  | "NO_IMAGE"
+  | "BLOCKED";
 
 /** Errors that are eligible for automatic fallback to the next capable candidate. */
 export const FALLBACK_ELIGIBLE_ERROR_CODES: ReadonlySet<ProviderErrorCode> = new Set([
@@ -119,6 +121,12 @@ export function classifyProviderError(error: unknown): ProviderErrorCode {
   // Invalid response (malformed/empty parse).
   if (/empty response|invalid json|malformed|could not parse|not valid json/i.test(message)) {
     return "INVALID_RESPONSE";
+  }
+
+  // Safety/blocked signals (conservative safety net for provider-exception text;
+  // the Gemini image provider also inspects the RESPONSE itself for these).
+  if (/\bblocked\b|blockreason|safety|prohibited content|cannot help with that|cannot generate|not able to (help|generate)|filtered|recitation/i.test(message)) {
+    return "BLOCKED";
   }
 
   return "PROVIDER_ERROR";

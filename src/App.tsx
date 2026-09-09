@@ -49,7 +49,13 @@ import {
   createBrowserAssetAdapter,
   createBrowserSecretAdapter,
   browserRemoteImageDownloader,
+  fetchRecipeImagePreviewBytes,
 } from './platform/browser';
+import {
+  createVaultSessionId,
+  type RecipeImageRecoverySupport,
+} from './application/recipeImageRecovery';
+import { saveGeneratedRecipeImageToVault, hashCanonicalMarkdown, type GeneratedImageSaveResult } from './application/recipeImageSave';
 import { playTimerChime } from './utils/audioAlert';
 import { APP_VERSION } from './version';
 import ProviderSettings from './application-ui/ProviderSettings';
@@ -196,6 +202,57 @@ export default function App() {
     };
   }, [vaultStatus.folderHandle]);
 
+  // Vault Intelligence Image Recovery support (v0.7 Phase 2B). Built ONLY for a
+  // connected, WRITABLE (File System Access) vault with an AssetAdapter and an
+  // explicit vault session id — the capability gate for the Generate Image
+  // action. Surfaces without full support (Obsidian plugin, starter vault,
+  // uploaded folder) get a truthful unavailable reason instead of fake support.
+  const vaultSessionId = useMemo(() => {
+    return vaultStatus.folderHandle ? createVaultSessionId() : '';
+  }, [vaultStatus.folderHandle]);
+
+  const recipeImageRecoverySupport = useMemo((): RecipeImageRecoverySupport | undefined => {
+    const folderHandle = vaultStatus.folderHandle;
+    if (!folderHandle || vaultStatus.accessType !== 'filesystem_api' || !vaultSessionId) return undefined;
+    const asset = createBrowserAssetAdapter(folderHandle);
+    const vault = createBrowserVaultAdapter(folderHandle);
+    return {
+      vaultSessionId,
+      asset,
+      computeContentHash: (recipe) => hashCanonicalMarkdown(recipe.rawMarkdown || ''),
+      saveImage: async ({ recipePath, recipeTitle, token, activeVaultSessionId, preview }) => {
+        // Trusted preview source: bytes via the authenticated preview endpoint,
+        // metadata from the server-originated generation response (UI state).
+        const previewSource = {
+          resolvePreview: async (resolvedToken: string) => {
+            if (resolvedToken !== token) return undefined;
+            const bytes = await fetchRecipeImagePreviewBytes(token);
+            if (!bytes) return undefined;
+            return {
+              token,
+              bytes,
+              contentType: preview.contentType,
+              provider: preview.provider,
+              model: preview.model,
+              recipeContentHash: preview.recipeContentHash,
+              vaultSessionId: preview.vaultSessionId,
+            };
+          },
+        };
+        return saveGeneratedRecipeImageToVault(
+          { vault, asset, previewSource },
+          { recipePath, recipeTitle, token, activeVaultSessionId, approved: true }
+        );
+      },
+    };
+  }, [vaultStatus.folderHandle, vaultStatus.accessType, vaultSessionId]);
+
+  const imageRecoveryUnavailableReason = recipeImageRecoverySupport
+    ? undefined
+    : vaultStatus.isConnected && vaultStatus.accessType === 'filesystem_api'
+      ? 'Image recovery needs a writable vault connection.'
+      : 'Image recovery is available in the browser app with a writable connected vault.';
+
   // Lightweight user-facing error surface for adapter save/delete failures
   // (no new notification framework — reuses the inline-alert UX pattern).
   const [vaultError, setVaultError] = useState<string | null>(null);
@@ -280,6 +337,15 @@ export default function App() {
     }));
     setVaultHydrated(true);
     return true;
+  }, []);
+
+  // In-memory canonical state update AFTER a successful image save (the vault
+  // write itself already happened inside the save flow — never re-written here).
+  const handleRecipeImageSaved = useCallback((recipeId: string, imagePath: string) => {
+    setRecipes((prev) =>
+      prev.map((r) => (r.id === recipeId ? { ...r, image: imagePath } : r))
+    );
+    setSelectedRecipe((prev) => (prev && prev.id === recipeId ? { ...prev, image: imagePath } : prev));
   }, []);
 
   // Update document title with version
@@ -1459,6 +1525,9 @@ export default function App() {
         recipes={recipes}
         initialSelectedRecipeId={vaultIntelligenceRecipeId}
         network={networkAdapter}
+        imageRecovery={recipeImageRecoverySupport}
+        imageRecoveryUnavailableReason={imageRecoveryUnavailableReason}
+        onRecipeImageSaved={handleRecipeImageSaved}
         onSaveRecipe={async (updatedRecipe) => {
           await handleSaveRecipe(updatedRecipe);
           if (selectedRecipe && selectedRecipe.id === updatedRecipe.id) {

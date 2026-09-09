@@ -15,7 +15,7 @@ export { BrowserNetworkAdapter, NetworkRequestError } from './BrowserNetworkAdap
 export type { FetcherLike } from './BrowserNetworkAdapter';
 export { BrowserAssetAdapter } from './BrowserAssetAdapter';
 export { BrowserSecretAdapter } from './BrowserSecretAdapter';
-export { createBrowserSettingsAdapter, createBrowserNetworkAdapter, createBrowserVaultAdapter, createBrowserAssetAdapter, createBrowserSecretAdapter } from './createBrowserAppServices';
+export { createBrowserSettingsAdapter, createBrowserNetworkAdapter, createBrowserVaultAdapter, createBrowserAssetAdapter, createBrowserSecretAdapter, fetchRecipeImagePreviewBytes } from './createBrowserAppServices';
 export { downloadImageViaBackend, browserRemoteImageDownloader, BackendImageDownloadError, BACKEND_IMAGE_DOWNLOAD_ENDPOINT } from './downloadImageViaBackend';
 export type { DownloadImageOptions, BackendFetchLike, BackendResponseLike } from './downloadImageViaBackend';
 export type {

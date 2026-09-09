@@ -2,10 +2,16 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import http from "http";
 import type { AddressInfo } from "net";
 import { createApp } from "../../server/app.js";
+import { DeterministicImageProvider } from "../../server/ai/imageProvider.js";
 
 describe("Express server wiring", () => {
   let server: http.Server;
   let baseUrl: string;
+  // Separate instance with the explicit DeterministicImageProvider TEST SEAM so
+  // the image-generation endpoint flow is exercisable hermetically while the
+  // default (production) app keeps the real Gemini provider.
+  let seamServer: http.Server;
+  let seamBaseUrl: string;
 
   beforeAll(async () => {
     const app = createApp({ isProduction: false });
@@ -13,13 +19,21 @@ describe("Express server wiring", () => {
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const addr = server.address() as AddressInfo;
     baseUrl = `http://127.0.0.1:${addr.port}`;
+
+    const seamApp = createApp({ isProduction: false, imageProvider: new DeterministicImageProvider() });
+    seamServer = http.createServer(seamApp);
+    await new Promise<void>((resolve) => seamServer.listen(0, "127.0.0.1", resolve));
+    const seamAddr = seamServer.address() as AddressInfo;
+    seamBaseUrl = `http://127.0.0.1:${seamAddr.port}`;
   });
 
   afterAll(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => seamServer.close(() => resolve()));
   });
 
   let originalToken: string | undefined;
+  let lastImageToken = "";
   beforeEach(() => {
     originalToken = process.env.AI_ENDPOINT_TOKEN;
   });
@@ -165,5 +179,144 @@ describe("Express server wiring", () => {
     // No fabricated draft and never a saved recipe / prompt leak.
     expect(body.draft).toBeUndefined();
     expect(JSON.stringify(body)).not.toContain("SUPER_SECRET_CREATE_PROMPT_SENTINEL");
+  });
+
+  // ---- Vault Intelligence Image Recovery foundation (2B) -------------------
+
+  it("POST /api/recipes/image/generate requires the AI endpoint token when configured", async () => {
+    process.env.AI_ENDPOINT_TOKEN = "super-secret";
+    const res = await fetch(`${baseUrl}/api/recipes/image/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Soup" }),
+    });
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(body.code).toBe("UNAUTHORIZED");
+  });
+
+  it("POST /api/recipes/image/generate rejects a request with no title", async () => {
+    delete process.env.AI_ENDPOINT_TOKEN;
+    const res = await fetch(`${seamBaseUrl}/api/recipes/image/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_REQUEST");
+  });
+
+  it("POST /api/recipes/image/generate (production default) is 503 IMAGE_PROVIDER_NOT_CONFIGURED without a real GEMINI_API_KEY and never falls back to the deterministic seam", async () => {
+    delete process.env.AI_ENDPOINT_TOKEN;
+    // Placeholder key: getGemini() returns null, exactly like an unset key.
+    const original = process.env.GEMINI_API_KEY;
+    process.env.GEMINI_API_KEY = "MY_GEMINI_API_KEY";
+    try {
+      const res = await fetch(`${baseUrl}/api/recipes/image/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "Hearty Soup" }),
+      });
+      expect(res.status).toBe(503);
+      const body = await res.json();
+      expect(body.code).toBe("IMAGE_PROVIDER_NOT_CONFIGURED");
+      // No fabricated preview, no deterministic fallback leak.
+      expect(body.token).toBeUndefined();
+      expect(body.provider).toBeUndefined();
+    } finally {
+      if (original === undefined) delete process.env.GEMINI_API_KEY;
+      else process.env.GEMINI_API_KEY = original;
+    }
+  });
+
+  it("POST /api/recipes/image/generate (test seam) returns token metadata only (never base64 bytes)", async () => {
+    delete process.env.AI_ENDPOINT_TOKEN;
+    const res = await fetch(`${seamBaseUrl}/api/recipes/image/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Hearty Soup", ingredients: ["potato", "leek"], cuisine: "French", recipeContentHash: "a".repeat(64) }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(typeof body.token).toBe("string");
+    expect(body.token.length).toBeGreaterThan(0);
+    expect(body.contentType).toBe("image/png");
+    expect(typeof body.bytes).toBe("number");
+    expect(body.provider).toBe("deterministic-image");
+    expect(body.model).toBe("deterministic-2b1");
+    expect(typeof body.expiresAt).toBe("number");
+    expect(body.recipeContentHash).toBe("a".repeat(64));
+    // Data minimization + privacy: no raw bytes, no data URL, no prompt echo.
+    expect(JSON.stringify(body)).not.toContain("data:image");
+    expect(JSON.stringify(body)).not.toContain("Hearty Soup");
+    expect(JSON.stringify(body)).not.toContain("SUPER_SECRET_");
+    lastImageToken = body.token as string;
+  });
+
+  it("GET /api/recipes/image/preview/:token streams exact bytes with safe headers", async () => {
+    delete process.env.AI_ENDPOINT_TOKEN;
+    expect(lastImageToken).toBeTruthy();
+    const res = await fetch(`${seamBaseUrl}/api/recipes/image/preview/${lastImageToken}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/png");
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    const length = Number(res.headers.get("content-length"));
+    expect(length).toBeGreaterThan(0);
+    const buffer = new Uint8Array(await res.arrayBuffer());
+    expect(buffer.length).toBe(length);
+    // Real PNG container (multi-read allowed).
+    expect([...buffer.slice(0, 8)]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const second = await fetch(`${seamBaseUrl}/api/recipes/image/preview/${lastImageToken}`);
+    expect(second.status).toBe(200);
+  });
+
+  it("GET /api/recipes/image/preview rejects unknown tokens and never treats the token as a path", async () => {
+    delete process.env.AI_ENDPOINT_TOKEN;
+    const unknown = await fetch(`${baseUrl}/api/recipes/image/preview/${"z".repeat(64)}`);
+    expect(unknown.status).toBe(404);
+    // Traversal-shaped tokens are just opaque lookups: no path access.
+    const traversal = await fetch(`${baseUrl}/api/recipes/image/preview/..%2F..%2Fetc%2Fpasswd`);
+    expect(traversal.status).toBe(404);
+    expect(await traversal.text()).not.toContain("root:");
+  });
+
+  it("GET /api/recipes/image/preview is gated by the AI endpoint token when configured", async () => {
+    process.env.AI_ENDPOINT_TOKEN = "super-secret";
+    const res = await fetch(`${baseUrl}/api/recipes/image/preview/${"z".repeat(64)}`);
+    expect(res.status).toBe(401);
+  });
+
+  it("DELETE /api/recipes/image/preview/:token is gated by the AI endpoint token when configured", async () => {
+    process.env.AI_ENDPOINT_TOKEN = "super-secret";
+    const res = await fetch(`${seamBaseUrl}/api/recipes/image/preview/${"z".repeat(64)}`, { method: "DELETE" });
+    expect(res.status).toBe(401);
+  });
+
+  it("DELETE /api/recipes/image/preview/:token invalidates the token (preview lifecycle after save) and is oracle-free for unknown tokens", async () => {
+    delete process.env.AI_ENDPOINT_TOKEN;
+    const gen = await fetch(`${seamBaseUrl}/api/recipes/image/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Hearty Soup" }),
+    });
+    expect(gen.status).toBe(200);
+    const genBody = await gen.json();
+    const token = genBody.token as string;
+
+    const first = await fetch(`${seamBaseUrl}/api/recipes/image/preview/${token}`);
+    expect(first.status).toBe(200);
+
+    const del = await fetch(`${seamBaseUrl}/api/recipes/image/preview/${token}`, { method: "DELETE" });
+    expect(del.status).toBe(200);
+
+    const afterDelete = await fetch(`${seamBaseUrl}/api/recipes/image/preview/${token}`);
+    expect(afterDelete.status).toBe(404);
+
+    // Unknown/expired tokens: same safe response, no existence oracle.
+    const unknownDel = await fetch(`${seamBaseUrl}/api/recipes/image/preview/${"z".repeat(64)}`, { method: "DELETE" });
+    expect(unknownDel.status).toBe(200);
+    expect(await unknownDel.json()).toEqual({ ok: true });
   });
 });

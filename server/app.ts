@@ -19,6 +19,8 @@ import {
   kitchenRankRateLimiter,
   kitchenDiscoverRateLimiter,
   createRecipeRateLimiter,
+  imageGenerateRateLimiter,
+  imagePreviewRateLimiter,
   getClientIp,
 } from "./rateLimiter.js";
 import { interpretKitchenQuestionOnServer } from "./kitchenInterpret.js";
@@ -26,6 +28,14 @@ import { rankKitchenCandidatesOnServer } from "./kitchenRank.js";
 import { discoverKitchenRecipesOnServer } from "./kitchenDiscover.js";
 import { getAiProviderStatus } from "./ai/providerStatus.js";
 import { generateRecipeDraftOnServer, CreateRecipeValidationError } from "./createRecipe.js";
+import {
+  generateRecipeImagePreview,
+  GenerateRecipeImageValidationError,
+} from "./recipeImage.js";
+import { DeterministicImageProvider, type ImageProvider } from "./ai/imageProvider.js";
+import { GeminiImageProvider, DEFAULT_GEMINI_IMAGE_MODEL } from "./ai/geminiImageProvider.js";
+import { ImagePreviewStore, PreviewStoreCapacityError } from "./imagePreviewStore.js";
+import { sniffGeneratedImageMime } from "../src/core/recipeImage.js";
 import {
   sanitizeCandidateEvidenceList,
   MAX_KITCHEN_CANDIDATES,
@@ -44,6 +54,78 @@ import { RELEASE_VERSION } from "../src/appVersion.js";
 
 export interface CreateAppOptions {
   isProduction: boolean;
+  /**
+   * TEST SEAM ONLY: overrides the image provider (and its model default).
+   * Production default is ALWAYS the real GeminiImageProvider (availability
+   * reflects the real GEMINI_API_KEY); the DeterministicImageProvider must never
+   * be wired as a production default.
+   */
+  imageProvider?: ImageProvider;
+}
+
+/**
+ * Resolves the production image provider + model override for the generate-image
+ * route. The DEFAULT (no `imageProvider` option) is ALWAYS the real
+ * GeminiImageProvider — the DeterministicImageProvider is a thin test seam and is
+ * selected ONLY when explicitly injected via the createApp test option. Being a
+ * pure exported helper (exposed independently of `createApp`) makes the default
+ * production wiring directly regression-testable without booting a server.
+ */
+export function resolveImageProvider(opts: Pick<CreateAppOptions, 'imageProvider'>): {
+  provider: ImageProvider;
+  modelOverride: { model?: string };
+} {
+  if (opts.imageProvider) {
+    // Explicit test seam (DeterministicImageProvider in tests): keep the caller's
+    // model default (the seam's own default), only signal a production model is
+    // NOT in use.
+    return { provider: opts.imageProvider, modelOverride: {} };
+  }
+  // Production default: real Gemini provider + its proven default model.
+  return { provider: new GeminiImageProvider(), modelOverride: { model: DEFAULT_GEMINI_IMAGE_MODEL } };
+}
+
+/**
+ * Maps a normalized image-provider error to a distinct HTTP response shape.
+ * Registered provider normalizations (classifyProviderError / ProviderOperationError
+ * subclasses) are NOT collapsed: QUOTA / RATE_LIMIT / TIMEOUT / UNAVAILABLE /
+ * BLOCKED / NO_IMAGE / AUTH each yield their own code + bounded message. Returns
+ * undefined for anything the generic path should handle. Never leaks raw provider
+ * text, prompts, keys, or image bytes.
+ */
+export function mapImageProviderErrorToHttp(error: unknown): {
+  status: number;
+  error: string;
+  code: string;
+  retryAfter?: string;
+} | undefined {
+  const code = typeof (error as { code?: unknown })?.code === "string"
+    ? ((error as { code: string }).code as string)
+    : "";
+  switch (code) {
+    case "QUOTA":
+      return { status: 503, error: "Image generation quota has been reached. Please try again later.", code: "IMAGE_PROVIDER_QUOTA" };
+    case "RATE_LIMIT":
+      return {
+        status: 503,
+        error: "Image generation is being rate limited. Please wait a moment and try again.",
+        code: "IMAGE_PROVIDER_RATE_LIMIT",
+        // Preserve the upstream Retry-After when the provider reported a 429.
+        ...(typeof (error as { status?: unknown })?.status === "number" && (error as { status: number }).status === 429 ? { retryAfter: "60" } : {}),
+      };
+    case "TIMEOUT":
+      return { status: 503, error: "Image generation timed out. Please try again.", code: "IMAGE_PROVIDER_TIMEOUT" };
+    case "UNAVAILABLE":
+      return { status: 503, error: "Gemini image generation is temporarily unavailable. Please try again shortly.", code: "IMAGE_PROVIDER_TEMPORARILY_UNAVAILABLE" };
+    case "BLOCKED":
+      return { status: 502, error: "Gemini could not generate an image for this recipe. Try adjusting the recipe description or generating again.", code: "IMAGE_PROVIDER_BLOCKED" };
+    case "NO_IMAGE":
+      return { status: 502, error: "Gemini did not return an image for this recipe. Try generating again.", code: "IMAGE_PROVIDER_NO_IMAGE" };
+    case "AUTH":
+      return { status: 502, error: "Image generation could not be authorized. Please check the server configuration.", code: "IMAGE_PROVIDER_AUTH" };
+    default:
+      return undefined;
+  }
 }
 
 /**
@@ -615,6 +697,11 @@ export function createApp(opts: CreateAppOptions): express.Express {
     res.json({ providers: getAiProviderStatus() });
   });
 
+  // Transient generated-image preview store (bounded, TTL 5min, 50MB cap).
+  // Foundation for Vault Intelligence Image Recovery: generation ONLY — the
+  // canonical asset write + Markdown `image` update belong to the later Save pass.
+  const imagePreviewStore = new ImagePreviewStore();
+
   // Create for Me — explicit recipe invention. Generates a schema-constrained
   // DRAFT and returns it (the client previews/edits and saves via the existing
   // vault write path). NEVER saves, NEVER mutates the vault, NEVER returns a
@@ -640,6 +727,96 @@ export function createApp(opts: CreateAppOptions): express.Express {
       // Generic, secret-safe error. Never leak provider secrets / raw errors.
       return res.status(502).json({ error: "Couldn't generate a recipe right now." });
     }
+  });
+
+  // Vault Intelligence Image Recovery (Phase 2B): generate a TRANSIENT validated
+  // image preview from MINIMUM grounded recipe fields. No canonical save, no
+  // Markdown mutation, no prompt persisted/logged. Returns tiny token metadata
+  // only (never base64/data-URL bytes). Gated + rate-limited like other AI
+  // endpoints.
+  //
+  // PROVIDER SELECTION (truthful): production default is the real
+  // GeminiImageProvider; availability reflects the actual GEMINI_API_KEY and an
+  // unavailable provider is an explicit 503 with a DISTINCT not-configured code
+  // (never a silent deterministic fallback). The DeterministicImageProvider is
+  // reachable ONLY through the createApp test seam.
+  const { provider: imageProvider, modelOverride: imageModelOverride } = resolveImageProvider(opts);
+
+  app.post("/api/recipes/image/generate", requireAiAccessToken, imageGenerateRateLimiter, async (req, res) => {
+    try {
+      if (!req.body || typeof req.body !== "object") {
+        return res.status(400).json({ error: "Invalid request payload.", code: "INVALID_REQUEST" });
+      }
+      if (!imageProvider.isAvailable()) {
+        // Distinct code from the transient-upstream failure below: the client can
+        // truthfully tell "provider not configured" from "provider temporarily
+        // unavailable" (a real Gemini key may be configured but the upstream call
+        // hit a QUOTA/RATE_LIMIT/TIMEOUT/UNAVAILABLE condition).
+        return res.status(503).json({
+          error: "No image generation provider is configured on the server.",
+          code: "IMAGE_PROVIDER_NOT_CONFIGURED",
+        });
+      }
+      const result = await generateRecipeImagePreview(req.body, imageProvider, imagePreviewStore, imageModelOverride);
+      return res.json(result);
+    } catch (error: any) {
+      if (error instanceof GenerateRecipeImageValidationError || error?.name === "GenerateRecipeImageValidationError") {
+        return res.status(400).json({ error: error?.message || "Invalid image generation request.", code: "INVALID_REQUEST" });
+      }
+      if (error instanceof PreviewStoreCapacityError || error?.name === "PreviewStoreCapacityError") {
+        return res.status(503).json({ error: "Image preview store is at capacity. Try again shortly.", code: "PREVIEW_CAPACITY" });
+      }
+      if (error?.name === "ImageValidationError" || error?.code === "INVALID_RESPONSE") {
+        return res.status(502).json({ error: "Generated image was not usable.", code: "INVALID_IMAGE" });
+      }
+      // Distinct normalized outcomes are mapped to DISTINCT codes (never collapsed
+      // into one broad "temporarily unavailable"), so the client can tell quota vs
+      // rate-limit vs timeout vs unavailable vs blocked/no-image apart.
+      // All provider error subclasses carry a normalized code in `error.code`.
+      const mapped = mapImageProviderErrorToHttp(error);
+      if (mapped) {
+        if (mapped.retryAfter) res.setHeader("Retry-After", mapped.retryAfter);
+        return res.status(mapped.status).json({ error: mapped.error, code: mapped.code });
+      }
+      // Generic, secret-safe error. Never leak provider secrets / raw errors / prompt.
+      return res.status(502).json({ error: "Couldn't generate an image right now." });
+    }
+  });
+
+  // Streams a transient generated-image preview by opaque token. Multi-read until
+  // the token expires; exact safe Content-Type (never caller-supplied MIME);
+  // Cache-Control: no-store + nosniff; unknown/expired tokens are 404/410.
+  app.get("/api/recipes/image/preview/:token", requireAiAccessToken, imagePreviewRateLimiter, (req, res) => {
+    const token = String(req.params?.token ?? "");
+    if (!token || token.length > 512) {
+      return res.status(404).json({ error: "Preview not found." });
+    }
+    const record = imagePreviewStore.get(token);
+    if (!record) {
+      // Unknown and expired tokens are both inaccessible; no state oracle is
+      // exposed, so inaccessible previews always return 404.
+      return res.status(404).json({ error: "Preview not found or expired." });
+    }
+    const detected = sniffGeneratedImageMime(record.bytes);
+    const contentType = detected ?? record.contentType;
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Content-Length", String(record.bytes.length));
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    return res.status(200).end(Buffer.from(record.bytes));
+  });
+
+  // Invalidates a transient generated-image preview token (preview lifecycle
+  // after a successful canonical save). Token-shaped lookups only; the response
+  // never distinguishes unknown vs removed vs expired (no existence oracle).
+  // Gated + rate-limited like the other preview operations.
+  app.delete("/api/recipes/image/preview/:token", requireAiAccessToken, imagePreviewRateLimiter, (req, res) => {
+    const token = String(req.params?.token ?? "");
+    if (!token || token.length > 512) {
+      return res.status(404).json({ error: "Preview not found." });
+    }
+    imagePreviewStore.remove(token);
+    return res.status(200).json({ ok: true });
   });
 
   // JSON 404 for unknown API routes so the client always gets JSON, never an

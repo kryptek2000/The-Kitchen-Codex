@@ -51,3 +51,21 @@ export function createBrowserVaultAdapter(folderHandle: unknown): BrowserFsaVaul
 export function createBrowserAssetAdapter(folderHandle: unknown): BrowserAssetAdapter {
   return new BrowserAssetAdapter(folderHandle as FsaDirectoryHandleLike);
 }
+
+/**
+ * Fetches transient generated-image preview BYTES for a token via the
+ * authenticated preview endpoint. Binary-only transport: no base64/data-URL
+ * channel, no arbitrary URL (fixed application API path). Returns undefined for
+ * unknown/expired tokens or transport failure.
+ */
+export async function fetchRecipeImagePreviewBytes(token: string): Promise<Uint8Array | undefined> {
+  if (typeof token !== 'string' || !token || token.length > 512) return undefined;
+  try {
+    const res = await fetch(`/api/recipes/image/preview/${encodeURIComponent(token)}`);
+    if (!res.ok) return undefined;
+    const buffer = await res.arrayBuffer();
+    return new Uint8Array(buffer);
+  } catch {
+    return undefined;
+  }
+}

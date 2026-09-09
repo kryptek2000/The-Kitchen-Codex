@@ -20,7 +20,7 @@ import type { VaultAdapter } from './adapters/VaultAdapter';
 import type { GeneratedRecipeDraft, GeneratedRecipeProvenance } from '../schema/generatedRecipe';
 import { normalizeCanonicalRecipe } from '../schema/recipeValidator';
 import { canonicalToObsidianRecipe } from '../schema/legacyAdapter';
-import { resolveNewRecipeVaultPath, resolveRecipeVaultPath } from '../core/vaultPath';
+import { resolveNewRecipeVaultPath, resolveRecipeVaultPath, toVaultRelativePath } from '../core/vaultPath';
 import { serializeRecipeToObsidianMarkdown } from '../utils/markdownParser';
 import { saveRecipeWithVaultAdapter } from './vaultRecipe';
 
@@ -150,30 +150,62 @@ export function resolveGeneratedRecipeSavePath(recipe: ObsidianRecipe): string {
 const generatedSaveLocks = new Map<string, Promise<void>>();
 
 /**
+ * Resolves the LOCK KEY for a vault-relative save path. REUSES the canonical
+ * vault-path normalization policy from `vaultPath.ts` (`toVaultRelativePath`:
+ * trim, backslashes -> '/', leading '/' stripped, `''`/`.`/`..` segments
+ * REJECTED) plus the `resolveRecipeVaultPath` `.md` convention, so equivalent
+ * spellings of the SAME canonical file share ONE lock:
+ *
+ *   Recipes/Foo.md  |  /Recipes/Foo.md  |  Recipes\Foo.md  ->  Recipes/Foo.md
+ *
+ * UNSAFE paths (`./x`, `..`, empty segments) are NOT silently converted into a
+ * valid lock key: they keep their RAW string as a distinct key (never sharing
+ * the canonical key), matching vaultPath semantics exactly. Read/write targets
+ * are untouched — this key is used ONLY for lock bookkeeping.
+ */
+function normalizedSaveLockKey(path: string): string {
+  const normalized = toVaultRelativePath(path);
+  if (!normalized) return path;
+  const MD_EXTENSION = /\.md$/i;
+  return MD_EXTENSION.test(normalized) ? normalized : `${normalized}.md`;
+}
+
+/**
  * Runs `operation` while holding a per-path lock (FIFO). Concurrent calls for the
- * SAME path serialize; different paths do not block each other.
+ * SAME canonical path serialize; different paths do not block each other. The
+ * lock key is NORMALIZED INSIDE this function (never trusted from the caller).
  */
 export function withGeneratedSaveLock<T>(path: string, operation: () => Promise<T>): Promise<T> {
-  const previous = generatedSaveLocks.get(path) ?? Promise.resolve();
+  const lockKey = normalizedSaveLockKey(path);
+  const previous = generatedSaveLocks.get(lockKey) ?? Promise.resolve();
   let release!: () => void;
   const held = new Promise<void>((resolve) => {
     release = resolve;
   });
   const tail = previous.then(() => held);
-  generatedSaveLocks.set(path, tail);
-  return previous
-    .then(() => operation())
-    .finally(() => {
-      release();
-      if (generatedSaveLocks.get(path) === tail) {
-        generatedSaveLocks.delete(path);
-      }
-    });
+  generatedSaveLocks.set(lockKey, tail);
+  const result = previous.then(() => operation());
+  // The rejection is intentionally observed through the returned `guarded`
+  // promise; the inner chain must not ALSO surface as an unhandled rejection
+  // when the caller attaches its handler later (e.g. after awaiting something).
+  const guarded = result.finally(() => {
+    release();
+    if (generatedSaveLocks.get(lockKey) === tail) {
+      generatedSaveLocks.delete(lockKey);
+    }
+  });
+  result.catch(() => {});
+  return guarded;
 }
 
 /** Test-only: clears the in-process per-path lock map between tests. */
 export function resetGeneratedSaveLocks(): void {
   generatedSaveLocks.clear();
+}
+
+/** Test-only: whether a pending lock exists for the (normalized) key. */
+export function hasPendingGeneratedSaveLock(path: string): boolean {
+  return generatedSaveLocks.has(normalizedSaveLockKey(path));
 }
 
 /**
