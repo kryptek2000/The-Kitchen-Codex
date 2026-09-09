@@ -8,15 +8,17 @@
  *   - reports `storageScope === 'unavailable'` (no genuinely protected or even
  *     plaintext provider store is available to the page),
  *   - returns `undefined` from `get()`,
- *   - no-ops `set()`/`remove()` and never uses localStorage / sessionStorage /
- *     IndexedDB / settings / vault Markdown for any provider key.
+ *   - throws `SecretUnavailableError` on `set()`/`remove()` so a write can NEVER
+ *     be treated as silently successful (v0.7 Phase 1E hardening), and never uses
+ *     localStorage / sessionStorage / IndexedDB / settings / vault Markdown for
+ *     any provider key.
  *
- * Browser provider-key entry is out of scope (v0.7 Phase 1D); this adapter only
+ * Browser provider-key entry is out of scope (v0.7 Phase 1E); this adapter only
  * provides a truthful, composition-ready unavailable boundary so a future surface
  * can read `supportsWrites() === false` rather than silently persisting a key.
  */
 
-import type { SecretAdapter } from '../../application/adapters/SecretAdapter';
+import { SecretUnavailableError, type SecretAdapter } from '../../application/adapters/SecretAdapter';
 
 export class BrowserSecretAdapter implements SecretAdapter {
   readonly storageScope = 'unavailable' as const;
@@ -27,11 +29,14 @@ export class BrowserSecretAdapter implements SecretAdapter {
   }
 
   async set(_name: string, _value: string): Promise<void> {
-    // No-op: the browser shell must never persist provider keys.
+    // Writes are unsupported on the browser shell; fail loudly instead of
+    // silently pretending a provider key was persisted.
+    throw new SecretUnavailableError();
   }
 
   async remove(_name: string): Promise<void> {
-    // No-op: nothing was ever persisted.
+    // Nothing was ever persisted, but a remove is still an unsupported write.
+    throw new SecretUnavailableError();
   }
 
   isAvailable(): boolean {

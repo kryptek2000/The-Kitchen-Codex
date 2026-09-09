@@ -66,18 +66,44 @@ describe("provider status (v0.7 1D) — boolean/capability metadata only", () =>
     }
   });
 
-  it("capabilities are registry-owned defaults (never user-editable; correct truth)", async () => {
-    const status = await freshStatus({ GEMINI_API_KEY: SENTINEL });
+  it("capabilities are the registry-owned UNION (baseline + curated model overrides)", async () => {
+    const status = await freshStatus({ GEMINI_API_KEY: SENTINEL, OPENROUTER_API_KEY: SENTINEL, DEEPSEEK_API_KEY: SENTINEL });
     const byId = Object.fromEntries(status.map((s) => [s.providerId, s]));
+    // Gemini: full baseline (unchanged).
     expect(byId["gemini"].capabilities).toEqual({
       reasoning: true,
       structuredOutput: true,
       recipeGeneration: true,
       webSearch: true,
     });
-    // OpenRouter and DeepSeek default baselines claim nothing without curated models.
-    expect(Object.values(byId["openrouter"].capabilities).every((v) => v === false)).toBe(true);
-    expect(Object.values(byId["deepseek"].capabilities).every((v) => v === false)).toBe(true);
+    // OpenRouter: the curated GPT-4o-mini grants structured output + recipe
+    // generation; webSearch stays false (never invented).
+    expect(byId["openrouter"].capabilities).toEqual({
+      reasoning: false,
+      structuredOutput: true,
+      recipeGeneration: true,
+      webSearch: false,
+    });
+    // DeepSeek: curated models grant reasoning; structured output / recipe
+    // generation / webSearch stay false (no json_object-as-structured hack).
+    expect(byId["deepseek"].capabilities).toEqual({
+      reasoning: true,
+      structuredOutput: false,
+      recipeGeneration: false,
+      webSearch: false,
+    });
+  });
+
+  it("capability union never fabricates support for an uncapable provider", async () => {
+    const status = await freshStatus({ GEMINI_API_KEY: SENTINEL });
+    const ds = status.find((s) => s.providerId === "deepseek")!;
+    expect(ds.capabilities.reasoning).toBe(true);
+    expect(ds.capabilities.structuredOutput).toBe(false);
+    expect(ds.capabilities.webSearch).toBe(false);
+    const or = status.find((s) => s.providerId === "openrouter")!;
+    expect(or.capabilities.structuredOutput).toBe(true);
+    expect(or.capabilities.recipeGeneration).toBe(true);
+    expect(or.capabilities.webSearch).toBe(false);
   });
 
   it("NEVER leaks a secret value or a masked substring in the status object", async () => {

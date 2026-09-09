@@ -75,3 +75,18 @@ export interface SecretAdapter {
   /** The storage scope this adapter represents. */
   readonly storageScope: SecretStorageScope;
 }
+
+/**
+ * Thrown by a `SecretAdapter` when a write is attempted on a supply that does not
+ * support writes (e.g. browser/PWA or Obsidian shells before a real store exists).
+ *
+ * It is a deterministic, platform-neutral error so a caller can never treat a
+ * write as silently successful. The message deliberately carries NO secret value
+ * and NO caller-supplied value.
+ */
+export class SecretUnavailableError extends Error {
+  constructor() {
+    super("Secret storage is unavailable on this platform; provider secret writes are not supported.");
+    this.name = "SecretUnavailableError";
+  }
+}

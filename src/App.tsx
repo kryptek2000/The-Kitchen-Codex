@@ -51,6 +51,7 @@ import {
 } from './platform/browser';
 import { playTimerChime } from './utils/audioAlert';
 import { APP_VERSION } from './version';
+import ProviderSettings from './application-ui/ProviderSettings';
 
 import { VaultHeader } from './components/VaultHeader';
 import { RecipeFilterBar } from './components/RecipeFilterBar';
@@ -196,7 +197,7 @@ export default function App() {
   const [theme, setTheme] = useState<ThemeId>('obsidian');
 
   // Navigation & View State (persisted via SettingsAdapter; hydrated on mount)
-  const [activeTab, setActiveTab] = useState<'grid' | 'dataview' | 'mealplan' | 'shopping' | 'themes'>('grid');
+  const [activeTab, setActiveTab] = useState<'grid' | 'dataview' | 'mealplan' | 'shopping' | 'themes' | 'providers'>('grid');
 
   const [selectedRecipe, setSelectedRecipe] = useState<ObsidianRecipe | null>(null);
   const [cookingRecipe, setCookingRecipe] = useState<{ recipe: ObsidianRecipe; servings: number } | null>(null);
@@ -305,7 +306,7 @@ export default function App() {
       try {
         const [savedTheme, savedTab, savedTimers] = await Promise.all([
           settingsAdapter.get<ThemeId>('obsidian_vault_theme'),
-          settingsAdapter.get<'grid' | 'dataview' | 'mealplan' | 'shopping' | 'themes'>('obsidian_active_tab'),
+          settingsAdapter.get<'grid' | 'dataview' | 'mealplan' | 'shopping' | 'themes' | 'providers'>('obsidian_active_tab'),
           settingsAdapter.get<ActiveTimer[]>('obsidian_active_cooking_timers'),
         ]);
         if (cancelled) return;
@@ -322,7 +323,7 @@ export default function App() {
             cur,
             savedTab,
             (t) => t === 'grid',
-            (t) => t === 'grid' || t === 'dataview' || t === 'mealplan' || t === 'shopping' || t === 'themes'
+            (t) => t === 'grid' || t === 'dataview' || t === 'mealplan' || t === 'shopping' || t === 'themes' || t === 'providers'
           )
         );
         // Timers: default is an empty list. Only apply a persisted timer list if
@@ -1282,6 +1283,9 @@ export default function App() {
             onClearChecked={handleClearDoneShopping}
             onNavigateToMealPlan={() => setActiveTab('mealplan')}
           />
+        ) : activeTab === 'providers' ? (
+          /* Read-only AI Provider Status / Settings View (no key entry) */
+          <ProviderSettings network={networkAdapter} />
         ) : (
           /* Themes View */
           <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">

@@ -24,8 +24,8 @@ import { APP_VERSION } from '../version';
 
 interface VaultHeaderProps {
   vaultStatus: VaultSyncStatus;
-  activeTab: 'grid' | 'dataview' | 'mealplan' | 'shopping' | 'themes';
-  setActiveTab: (tab: 'grid' | 'dataview' | 'mealplan' | 'shopping' | 'themes') => void;
+  activeTab: 'grid' | 'dataview' | 'mealplan' | 'shopping' | 'themes' | 'providers';
+  setActiveTab: (tab: 'grid' | 'dataview' | 'mealplan' | 'shopping' | 'themes' | 'providers') => void;
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   isFilterOpen: boolean;
@@ -263,6 +263,19 @@ export function VaultHeader({
           >
             <Palette className="w-3.5 h-3.5" />
             <span>Themes</span>
+          </button>
+
+          <button
+            id="tab-providers"
+            onClick={() => setActiveTab('providers')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+              activeTab === 'providers'
+                ? 'bg-white/10 text-amber-400 font-semibold border border-white/10'
+                : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
+            }`}
+          >
+            <BrainCircuit className="w-3.5 h-3.5" />
+            <span>AI Settings</span>
           </button>
         </nav>
 

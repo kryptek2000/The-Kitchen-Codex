@@ -4,9 +4,11 @@
  * Static guards proving Phase 1D imposes NO provider-key persistencence on any
  * client/platform surface:
  *   - the browser shell NEVER writes a provider key to localStorage /
- *     sessionStorage / IndexedDB (BrowserSecretAdapter is unavailable, no-op);
+ *     sessionStorage / IndexedDB (BrowserSecretAdapter is unavailable and its
+ *     set/remove throw — no silent write);
  *   - the Obsidian shell NEVER writes a provider key to plugin data.json /
- *     settings / vault Markdown (ObsidianSecretAdapter is unavailable, no-op);
+ *     settings / vault Markdown (ObsidianSecretAdapter is unavailable and its
+ *     set/remove throw — no silent write);
  *   - the raw provider env-variable names (which belong SERVER-SIDE) do not leak
  *     into browser/obsidian platform code or the Obsidian plugin;
  *   - there is no key-entry plumbing in this phase.

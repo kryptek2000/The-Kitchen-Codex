@@ -2,13 +2,14 @@
  * The Kitchen Codex — Obsidian Secret Adapter (v0.7 Phase 1D).
  *
  * A TRUTHFUL, read-only/non-persistent `SecretAdapter` for the Obsidian plugin
- * shell. In v0.7 Phase 1D no provider key is persisted (NOT to plugin
+ * shell. In v0.7 Phase 1E no provider key is persisted (NOT to plugin
  * `data.json`, NOT to vault Markdown, NOT to settings JSON, NOT to workspace
  * state), so this adapter:
  *   - reports `supportsWrites() === false`,
  *   - reports `storageScope === 'unavailable'` (no provider store is used yet),
  *   - returns `undefined` from `get()`,
- *   - no-ops `set()`/`remove()`.
+ *   - throws `SecretUnavailableError` on `set()`/`remove()` so a write can NEVER
+ *     be treated as silently successful (v0.7 Phase 1E hardening).
  *
  * A FUTURE Obsidian plaintext BYOK adapter may truthfully report
  * `storageScope === 'local_plaintext'` once it actually persists provider keys in
@@ -16,7 +17,7 @@
  * reserved and must not be claimed until such an adapter exists.
  */
 
-import type { SecretAdapter } from '../../application/adapters/SecretAdapter';
+import { SecretUnavailableError, type SecretAdapter } from '../../application/adapters/SecretAdapter';
 
 export class ObsidianSecretAdapter implements SecretAdapter {
   readonly storageScope = 'unavailable' as const;
@@ -27,11 +28,13 @@ export class ObsidianSecretAdapter implements SecretAdapter {
   }
 
   async set(_name: string, _value: string): Promise<void> {
-    // No-op: the Obsidian shell must not persist provider keys in this phase.
+    // Writes are unsupported in the Obsidian shell in this phase; fail loudly.
+    throw new SecretUnavailableError();
   }
 
   async remove(_name: string): Promise<void> {
-    // No-op: nothing was ever persisted.
+    // Nothing was ever persisted, but a remove is still an unsupported write.
+    throw new SecretUnavailableError();
   }
 
   isAvailable(): boolean {
