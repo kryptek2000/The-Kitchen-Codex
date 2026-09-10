@@ -345,11 +345,16 @@ describe("saveGeneratedRecipeImageToVault — canonical save (v0.7 2B)", () => {
     const hash = await hashCanonicalMarkdown(INITIAL_MD);
     const deps = await makeDeps(fixture, { "tok-1": previewRecord(hash), "tok-2": previewRecord(hash, "tok-2") });
 
+    // Deterministic lock-order setup: start save #1 and wait until it OWNS the
+    // per-recipe lock at its gated asset write, THEN start save #2. Both saves
+    // still overlap (save #2 starts while #1 is mid-write), but the lock owner is
+    // no longer decided by nondeterministic WebCrypto/pre-lock scheduling order.
     const p1 = saveGeneratedRecipeImageToVault(deps, saveInput({ token: "tok-1" }));
-    const p2 = saveGeneratedRecipeImageToVault(deps, saveInput({ token: "tok-2" }));
+    await until(() => fixture.events.some((e) => e.startsWith("asset:write")));
+
     // While save #1 holds the lock at its gated asset write, save #2 must NOT
     // have started any write (serialized, not racing).
-    await until(() => fixture.events.some((e) => e.startsWith("asset:write")));
+    const p2 = saveGeneratedRecipeImageToVault(deps, saveInput({ token: "tok-2" }));
     await new Promise((r) => setTimeout(r, 25));
     expect(fixture.events.filter((e) => e.startsWith("asset:write"))).toEqual(["asset:write:Assets/Test Soup.png"]);
     expect(fixture.events.filter((e) => e.startsWith("vault:write"))).toEqual([]);
