@@ -52,6 +52,7 @@ import { getRegisteredImageProviders, findRegisteredImageProvider } from "./imag
 import type { GeneratedImageMime } from "../../src/core/recipeImage.js";
 import { connectionTestKindForProvider, type ConnectionTestKind } from "./connectionTest.js";
 import { findRegisteredProvider } from "./providerRegistry.js";
+import { isSessionByokSupportedDeployment } from "./sessionByokDeployment.js";
 
 /** A single curated text model row in the catalog. */
 export interface ProviderCatalogTextModel {
@@ -154,6 +155,12 @@ export interface ProviderCatalog {
      */
     executable: { text: boolean; image: boolean };
   };
+  /**
+   * BYOK-5E: server-reported DEPLOYMENT capability for session-only BYOK (local/
+   * single-user only). Non-secret; drives the UI's enable/disable of session-key
+   * controls. The UI MUST NOT infer this from the browser hostname.
+   */
+  sessionByokSupported: boolean;
 }
 
 /**
@@ -310,5 +317,6 @@ export function buildProviderCatalog(): ProviderCatalog {
         image: imageSelectionExecutable(imageSelection),
       },
     },
+    sessionByokSupported: isSessionByokSupportedDeployment(),
   };
 }

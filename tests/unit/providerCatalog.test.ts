@@ -64,6 +64,21 @@ describe("provider catalog (BYOK-1) — shape and ordering", () => {
     }
   });
 
+  it("BYOK-5E: reports the session-BYOK deployment capability (server-reported, non-secret)", async () => {
+    const local = await freshCatalog({});
+    expect(typeof local.catalog.sessionByokSupported).toBe("boolean");
+    // Default local/loopback test environment supports session-only BYOK.
+    expect(local.catalog.sessionByokSupported).toBe(true);
+
+    process.env.K_SERVICE = "hosted-service";
+    try {
+      const hosted = await freshCatalog({ K_SERVICE: "hosted-service" });
+      expect(hosted.catalog.sessionByokSupported).toBe(false);
+    } finally {
+      delete process.env.K_SERVICE;
+    }
+  });
+
   it("image providers are truthful (formats + byte cap + curated default models)", async () => {
     const { catalog } = await freshCatalog({});
     const gemini = catalog.imageProviders.find((p) => p.providerId === "gemini-image")!;

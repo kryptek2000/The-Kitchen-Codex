@@ -118,6 +118,11 @@ export interface ProviderCatalogView {
      */
     executable: { text: boolean; image: boolean };
   };
+  /**
+   * BYOK-5E: server-reported deployment capability for session-only BYOK.
+   * Optional; treat `true` as supported and anything else as fail-closed.
+   */
+  sessionByokSupported?: boolean;
 }
 
 /** The raw response shape from `GET /api/providers/catalog`. */
@@ -365,7 +370,14 @@ export function normalizeProviderCatalog(payload: unknown): ProviderCatalogView 
   if (textProviders.length === 0 && imageProviders.length === 0) {
     throw new Error('Provider catalog response contained no valid providers.');
   }
-  return { textProviders, imageProviders, selection: { text, image, userSelectionAllowed, executable } };
+  // Deployment capability: fail closed (false) unless the server explicitly says true.
+  const sessionByokSupported = catalogRow['sessionByokSupported'] === true;
+  return {
+    textProviders,
+    imageProviders,
+    selection: { text, image, userSelectionAllowed, executable },
+    sessionByokSupported,
+  };
 }
 
 /**

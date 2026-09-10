@@ -51,10 +51,12 @@ import {
   isSelectionValidAgainstCatalog,
   resetAiSelection,
   saveAiSelection,
+  type SavedCredentialSource,
   type SavedSelection,
   type SavedSelectionMode,
   type SavedAiSelections,
 } from '../application/aiSelection';
+import { SessionKeyPanel, type SessionKeyProviderOption } from './SessionKeyPanel';
 
 /** The app-scoped server endpoint for a bounded provider connection test. */
 export const PROVIDER_TEST_CONNECTION_API_PATH = '/api/providers/test-connection';
@@ -73,6 +75,8 @@ export interface ProviderSelectionDraft {
   mode: SavedSelectionMode;
   providerId?: string;
   modelId?: string;
+  /** BYOK-5E: non-secret credential-source preference (text surface). */
+  credentialSource?: SavedCredentialSource;
 }
 
 /** Label for the server's connection-test surface kind (truthful, non-secret). */
@@ -98,6 +102,17 @@ export function connectionTestSuccessLabel(
 ): string {
   if (kind === 'credential_check') return 'Credential check passed';
   return model ? `Connected · ${model}` : 'Connected';
+}
+
+/**
+ * BYOK-5E: true when a TEXT credential-source transition (or a reset to
+ * server_default, represented by `undefined`) must clear any typed session key.
+ * Only `session_only` keeps the session-key panel's typed state.
+ */
+export function shouldClearSessionKeyOnCredentialSource(
+  source: SavedCredentialSource | undefined
+): boolean {
+  return source !== 'session_only';
 }
 
 /**
@@ -473,6 +488,7 @@ function SelectionControlCard({
   invalid,
   draft,
   providers,
+  allowSessionCredential,
   onChangeDraft,
   onApply,
   onReset,
@@ -485,6 +501,8 @@ function SelectionControlCard({
   invalid?: boolean;
   draft: ProviderSelectionDraft;
   providers: { providerId: string; name: string; models: { id: string; default: boolean }[] }[];
+  /** Text surfaces may select session_only; image session generation is deferred. */
+  allowSessionCredential?: boolean;
   onChangeDraft: (patch: Partial<ProviderSelectionDraft>) => void;
   onApply: () => void;
   onReset: () => void;
@@ -577,6 +595,38 @@ function SelectionControlCard({
                   </select>
                 </label>
               )}
+
+              {allowSessionCredential ? (
+                <label className="block space-y-1">
+                  <span className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">
+                    Credential source
+                  </span>
+                  <select
+                    data-selection-credential-source-select={kind}
+                    value={draft.credentialSource ?? 'server_environment'}
+                    onChange={(e) =>
+                      onChangeDraft({
+                        credentialSource:
+                          e.target.value === 'session_only' ? 'session_only' : 'server_environment',
+                      })
+                    }
+                    className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[12px] text-gray-200"
+                  >
+                    <option value="server_environment">Server environment</option>
+                    <option value="session_only">Session only</option>
+                  </select>
+                  <span className="block text-[10px] text-gray-500">
+                    {draft.credentialSource === 'session_only'
+                      ? 'Uses a key stored only in this server process memory. It expires automatically and is lost when the server restarts.'
+                      : 'Uses the API key configured on the Kitchen Codex server.'}
+                  </span>
+                </label>
+              ) : (
+                <div className="text-[10px] text-gray-500">
+                  Session-key image generation is not enabled yet. Use server environment credentials
+                  for image generation; session keys can still be validated below.
+                </div>
+              )}
             </>
           )}
 
@@ -614,15 +664,28 @@ export function ProviderSelectionPanel({
   catalog,
   settings,
   network,
+  onCredentialSourceChange,
 }: {
   catalog: ProviderCatalogView;
   settings: SettingsAdapter;
   network: NetworkAdapter;
+  /** BYOK-5E: notified when the TEXT credential source changes (to clear typed keys). */
+  onCredentialSourceChange?: (source: SavedCredentialSource | undefined) => void;
 }) {
   const [saved, setSaved] = useState<SavedAiSelections>(getCachedAiSelections());
   const [drafts, setDrafts] = useState<{ text: ProviderSelectionDraft; image: ProviderSelectionDraft }>(() => ({
-    text: { mode: getCachedAiSelections().textAi.mode, providerId: getCachedAiSelections().textAi.providerId, modelId: getCachedAiSelections().textAi.modelId },
-    image: { mode: getCachedAiSelections().imageAi.mode, providerId: getCachedAiSelections().imageAi.providerId, modelId: getCachedAiSelections().imageAi.modelId },
+    text: {
+      mode: getCachedAiSelections().textAi.mode,
+      providerId: getCachedAiSelections().textAi.providerId,
+      modelId: getCachedAiSelections().textAi.modelId,
+      credentialSource: getCachedAiSelections().textAi.credentialSource,
+    },
+    image: {
+      mode: getCachedAiSelections().imageAi.mode,
+      providerId: getCachedAiSelections().imageAi.providerId,
+      modelId: getCachedAiSelections().imageAi.modelId,
+      credentialSource: getCachedAiSelections().imageAi.credentialSource,
+    },
   }));
   const [tests, setTests] = useState<Record<string, ConnectionTestView>>({});
   const [hydrationError, setHydrationError] = useState(false);
@@ -639,8 +702,18 @@ export function ProviderSelectionPanel({
         setHydrationError(false);
         setSaved(effective);
         setDrafts({
-          text: { mode: effective.textAi.mode, providerId: effective.textAi.providerId, modelId: effective.textAi.modelId },
-          image: { mode: effective.imageAi.mode, providerId: effective.imageAi.providerId, modelId: effective.imageAi.modelId },
+          text: {
+            mode: effective.textAi.mode,
+            providerId: effective.textAi.providerId,
+            modelId: effective.textAi.modelId,
+            credentialSource: effective.textAi.credentialSource,
+          },
+          image: {
+            mode: effective.imageAi.mode,
+            providerId: effective.imageAi.providerId,
+            modelId: effective.imageAi.modelId,
+            credentialSource: effective.imageAi.credentialSource,
+          },
         });
       })
       .catch(() => {
@@ -661,14 +734,30 @@ export function ProviderSelectionPanel({
   const imageSelectionInvalid =
     saved.imageAi.mode === 'user_selected' && !isSelectionValidAgainstCatalog(saved.imageAi, catalog, 'image');
 
-  const changeDraft = useCallback((kind: 'text' | 'image', patch: Partial<ProviderSelectionDraft>) => {
-    setDrafts((prev) => ({ ...prev, [kind]: { ...prev[kind], ...patch } }));
-  }, []);
+  const changeDraft = useCallback(
+    (kind: 'text' | 'image', patch: Partial<ProviderSelectionDraft>) => {
+      setDrafts((prev) => ({ ...prev, [kind]: { ...prev[kind], ...patch } }));
+      // BYOK-5E: tell the session panel to clear any typed session key whenever the
+      // TEXT credential source changes away from session_only (or the mode resets).
+      if (kind === 'text') {
+        if (patch.mode === 'server_default') onCredentialSourceChange?.(undefined);
+        else if (patch.credentialSource !== undefined) onCredentialSourceChange?.(patch.credentialSource);
+      }
+    },
+    [onCredentialSourceChange]
+  );
 
   const applySelection = useCallback(
     async (kind: 'text' | 'image') => {
       const draft = drafts[kind];
-      const next = await saveAiSelection(settings, kind, draft.mode, draft.providerId, draft.modelId);
+      const next = await saveAiSelection(
+        settings,
+        kind,
+        draft.mode,
+        draft.providerId,
+        draft.modelId,
+        draft.mode === 'user_selected' ? draft.credentialSource : undefined
+      );
       setSaved(next);
     },
     [settings, catalog, drafts]
@@ -678,22 +767,33 @@ export function ProviderSelectionPanel({
     async (kind: 'text' | 'image') => {
       const next = await resetAiSelection(settings, kind);
       setSaved(next);
+      // BYOK-5E: resetting the TEXT selection to server_default must clear any
+      // typed session key (same signal as switching away from session_only). The
+      // server-side session key is NOT revoked and no provider traffic occurs.
+      if (kind === 'text') onCredentialSourceChange?.(undefined);
     },
-    [settings]
+    [settings, onCredentialSourceChange]
   );
 
   const testConnection = useCallback(
-    async (kind: 'text' | 'image', providerId: string) => {
+    async (kind: 'text' | 'image', providerId: string, modelId?: string) => {
       const key = `${kind}:${providerId}`;
       setTests((prev) => ({ ...prev, [key]: { state: 'testing' } }));
       try {
+        // BYOK-5E: the explicit per-provider test uses the operator environment
+        // credential source; session-only testing is owned by SessionKeyPanel.
         const res = await network.post<{
           ok?: boolean;
           model?: string;
           latencyMs?: number;
           code?: string;
           message?: string;
-        }>(PROVIDER_TEST_CONNECTION_API_PATH, { providerId, kind });
+        }>(PROVIDER_TEST_CONNECTION_API_PATH, {
+          providerId,
+          kind,
+          ...(modelId ? { modelId } : {}),
+          credentialSource: 'server_environment',
+        });
         const data = res.data ?? {};
         if (res.ok && data.ok === true) {
           setTests((prev) => ({
@@ -725,18 +825,21 @@ export function ProviderSelectionPanel({
     providerId: string;
     name: string;
     connectionTest: ProviderCatalogTextProviderView['connectionTest'];
+    defaultModelId?: string;
   }[] = [
     ...catalog.textProviders.map((p) => ({
       kind: 'text' as const,
       providerId: p.providerId,
       name: p.name,
       connectionTest: p.connectionTest,
+      defaultModelId: p.models.find((m) => m.default)?.id ?? p.models[0]?.id,
     })),
     ...catalog.imageProviders.map((p) => ({
       kind: 'image' as const,
       providerId: p.providerId,
       name: p.name,
       connectionTest: p.connectionTest,
+      defaultModelId: p.models.find((m) => m.default)?.id ?? p.models[0]?.id,
     })),
   ];
 
@@ -780,6 +883,7 @@ export function ProviderSelectionPanel({
             invalid={textSelectionInvalid}
             draft={drafts.text}
             providers={selectedTextProviders}
+            allowSessionCredential
             onChangeDraft={(patch) => changeDraft('text', patch)}
             onApply={() => applySelection('text')}
             onReset={() => resetSelection('text')}
@@ -793,6 +897,7 @@ export function ProviderSelectionPanel({
             invalid={imageSelectionInvalid}
             draft={drafts.image}
             providers={selectedImageProviders}
+            allowSessionCredential={false}
             onChangeDraft={(patch) => changeDraft('image', patch)}
             onApply={() => applySelection('image')}
             onReset={() => resetSelection('image')}
@@ -828,7 +933,7 @@ export function ProviderSelectionPanel({
                   <button
                     type="button"
                     data-connection-test-run={key}
-                    onClick={() => testConnection(p.kind, p.providerId)}
+                    onClick={() => testConnection(p.kind, p.providerId, p.defaultModelId)}
                     disabled={result?.state === 'testing' || unavailable}
                     title={unavailable ? 'No server operator key is configured for this provider.' : undefined}
                     className="px-2.5 py-1 rounded-lg text-[11px] font-medium bg-white/10 text-gray-200 hover:bg-white/15 border border-white/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
@@ -878,6 +983,9 @@ export function ProviderSettings({
   const [statuses, setStatuses] = useState<ProviderStatusView[]>([]);
   const [catalog, setCatalog] = useState<ProviderCatalogView | null>(null);
   const sequencerRef = useRef(createRequestSequencer());
+  // BYOK-5E: incremented when the TEXT credential source switches away from
+  // session_only, so the session panel clears any typed (in-memory) key.
+  const [sessionClearSignal, setSessionClearSignal] = useState(0);
 
   const load = useCallback(() => {
     const requestId = sequencerRef.current.begin();
@@ -924,11 +1032,43 @@ export function ProviderSettings({
     );
   }
 
+  const sessionKeyProviders: SessionKeyProviderOption[] = catalog
+    ? [
+        ...catalog.textProviders.map((p) => ({
+          providerId: p.providerId,
+          name: p.name,
+          kind: 'text' as const,
+          models: p.models.map((m) => ({ id: m.id, default: m.default })),
+        })),
+        ...catalog.imageProviders.map((p) => ({
+          providerId: p.providerId,
+          name: p.name,
+          kind: 'image' as const,
+          models: p.models.map((m) => ({ id: m.id, default: m.default })),
+        })),
+      ]
+    : [];
+
   return (
     <>
       <ProviderStatusPanel statuses={statuses} catalog={catalog ?? undefined} onRefresh={load} />
       {catalog && (
-        <ProviderSelectionPanel catalog={catalog} settings={settings} network={network} />
+        <ProviderSelectionPanel
+          catalog={catalog}
+          settings={settings}
+          network={network}
+          onCredentialSourceChange={(source) => {
+            if (shouldClearSessionKeyOnCredentialSource(source)) setSessionClearSignal((n) => n + 1);
+          }}
+        />
+      )}
+      {catalog && (
+        <SessionKeyPanel
+          network={network}
+          sessionByokSupported={catalog.sessionByokSupported === true}
+          providers={sessionKeyProviders}
+          clearKeySignal={sessionClearSignal}
+        />
       )}
     </>
   );
