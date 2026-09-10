@@ -7,10 +7,15 @@
 # Kept deliberately simple: weekly checks, no aggressive update policies.
 version: 2
 updates:
-  - package-ecosystem: "bun"
-    directory: "/"
-    schedule:
-      interval: "weekly"
+  # DISABLED: Dependabot's Bun updater does not yet support this repository's
+  # bun.lock (`lockfileVersion: 2`). It fails with:
+  #   "Unsupported bun.lock 'lockfileVersion' 2 ... supports up to 1".
+  # Bun remains the repository's package manager; re-enable this entry once
+  # Dependabot ships lockfileVersion 2 support.
+  # - package-ecosystem: "bun"
+  #   directory: "/"
+  #   schedule:
+  #     interval: "weekly"
 
   - package-ecosystem: "github-actions"
     directory: "/"
