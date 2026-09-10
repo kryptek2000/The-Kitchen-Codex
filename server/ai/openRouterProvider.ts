@@ -91,6 +91,12 @@ export type OpenRouterFetchLike = (url: string, init: RequestInit) => Promise<Op
 export interface OpenRouterProviderOptions {
   /** Test-only seam; defaults to the global fetch. Never a config surface. */
   fetchFn?: OpenRouterFetchLike;
+  /**
+   * BYOK-5C: an EXPLICIT session credential. When present it is used INSTEAD of
+   * the operator env key (never a fallback). The provider instance is
+   * request-scoped; no global cache retains the credential.
+   */
+  credential?: string;
 }
 
 function defaultFetch(): OpenRouterFetchLike {
@@ -119,12 +125,15 @@ export class OpenRouterProvider implements AiProvider {
   readonly name = "OpenRouter";
   readonly capabilities: AiCapabilities = { ...OPENROUTER_BASELINE_CAPABILITIES };
   private readonly fetchFn: OpenRouterFetchLike;
+  private readonly credential?: string;
 
   constructor(options: OpenRouterProviderOptions = {}) {
     this.fetchFn = options.fetchFn ?? defaultFetch();
+    this.credential = options.credential;
   }
 
   isAvailable(): boolean {
+    if (this.credential) return true;
     return Boolean(getServerSecretSync("openrouter_api_key"));
   }
 
@@ -134,7 +143,8 @@ export class OpenRouterProvider implements AiProvider {
   }
 
   private requireKey(): string {
-    const key = getServerSecretSync("openrouter_api_key");
+    // A session credential is used EXCLUSIVELY when supplied — never env fallback.
+    const key = this.credential ?? getServerSecretSync("openrouter_api_key");
     if (!key) throw new ProviderOperationError("UNAVAILABLE", "OpenRouter is not available (no API key).", {});
     return key;
   }

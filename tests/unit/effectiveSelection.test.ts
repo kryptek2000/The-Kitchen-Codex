@@ -299,6 +299,17 @@ describe("BYOK-4 — resolveEffectiveImageSelection fail-closed", () => {
     expect(result.source).toBe("server_default");
     expect(result.provider?.id).toBe("gemini-image");
   });
+
+  it("BYOK-5C: an explicit session_only image intent fails closed (image wiring deferred)", async () => {
+    const { effectiveSelection } = await freshModule({ GEMINI_API_KEY: SENTINEL });
+    const result = effectiveSelection.resolveEffectiveImageSelection({
+      kind: "EXPLICIT_SELECTED",
+      providerId: "gemini-image",
+      credentialSource: "session_only",
+    });
+    // Never silently falls back to the operator environment credential.
+    expect(result.provider).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -418,5 +429,65 @@ describe("BYOK-4 STRICT — INVALID selection intent fails closed (zero provider
     const result = effectiveSelection.resolveEffectiveImageSelection({ kind: "INVALID", reason: "empty_payload" });
     expect(result.provider).toBeNull();
     expect(result.invalidIntent).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BYOK-5C: the LEGACY raw metadata path must FAIL CLOSED on a malformed
+// present credentialSource (never silently dropped into server_environment).
+// ---------------------------------------------------------------------------
+
+describe("BYOK-5C — legacy credentialSource fails closed", () => {
+  it("preserves valid credentialSource and keeps legacy semantics when absent", async () => {
+    const { effectiveSelection } = await freshModule({ GEMINI_API_KEY: SENTINEL });
+    expect(
+      effectiveSelection.coerceLegacyOperationSelection({
+        mode: "user_selected",
+        providerId: "openrouter",
+        credentialSource: "session_only",
+      })
+    ).toEqual({
+      invalid: false,
+      metadata: { mode: "user_selected", providerId: "openrouter", credentialSource: "session_only" },
+    });
+    expect(
+      effectiveSelection.coerceLegacyOperationSelection({
+        mode: "user_selected",
+        providerId: "gemini",
+        credentialSource: "server_environment",
+      })
+    ).toEqual({
+      invalid: false,
+      metadata: { mode: "user_selected", providerId: "gemini", credentialSource: "server_environment" },
+    });
+    // Absent credentialSource keeps the intended legacy semantics.
+    expect(effectiveSelection.coerceLegacyOperationSelection({ providerId: "gemini" })).toEqual({
+      invalid: false,
+      metadata: { providerId: "gemini" },
+    });
+  });
+
+  it("marks a PRESENT but invalid credentialSource as invalid (never silently omitted)", async () => {
+    const { effectiveSelection } = await freshModule({ GEMINI_API_KEY: SENTINEL });
+    for (const bad of ["bogus", "", 7, {}, [], true, null]) {
+      const coerced = effectiveSelection.coerceLegacyOperationSelection({
+        mode: "user_selected",
+        providerId: "openrouter",
+        credentialSource: bad,
+      });
+      expect(coerced.invalid, JSON.stringify(bad)).toBe(true);
+    }
+  });
+
+  it("zero provider execution from malformed legacy metadata", async () => {
+    const { effectiveSelection } = await freshModule({ GEMINI_API_KEY: SENTINEL, OPENROUTER_API_KEY: SENTINEL });
+    const regs = (await import("../../server/ai/providerRegistry.js")).getRegisteredProviders();
+    const result = effectiveSelection.resolveTextCandidateContext("kitchenInterpret", regs, {
+      mode: "user_selected",
+      providerId: "openrouter",
+      credentialSource: "bogus" as unknown as "server_environment",
+    });
+    expect(result.candidates).toHaveLength(0);
+    expect(result.source).toBe("user_selected");
   });
 });

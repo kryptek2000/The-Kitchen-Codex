@@ -10,7 +10,8 @@
  */
 
 import { ThinkingLevel, Type } from "@google/genai";
-import { getGemini } from "../geminiClient.js";
+import type { GoogleGenAI } from "@google/genai";
+import { createGeminiClientWithKey, getGemini } from "../geminiClient.js";
 import { extractWebResultsFromGrounding } from "../../src/utils/kitchenDiscovery.js";
 import type {
   AiCapabilities,
@@ -85,6 +86,16 @@ function toGeminiSchema(schema: AiJsonSchema): Record<string, unknown> {
   }
 }
 
+/** BYOK-5C: request-scoped credential injection (session-only BYOK). */
+export interface GeminiProviderOptions {
+  /**
+   * An EXPLICIT session credential. When present, the provider builds a
+   * REQUEST-SCOPED client from it and NEVER falls back to the operator env key.
+   * The instance is owned by one request; no global cache retains it.
+   */
+  credential?: string;
+}
+
 /** The one implemented provider: Google Gemini. */
 export class GeminiProvider implements AiProvider {
   readonly id = "gemini";
@@ -95,8 +106,16 @@ export class GeminiProvider implements AiProvider {
     recipeGeneration: true,
     webSearch: true,
   };
+  private readonly credential?: string;
+  private sessionClient: GoogleGenAI | null = null;
+
+  constructor(options: GeminiProviderOptions = {}) {
+    this.credential = options.credential;
+  }
 
   isAvailable(): boolean {
+    // A session credential is availability by presence (never env fallback).
+    if (this.credential) return true;
     return getGemini() !== null;
   }
 
@@ -104,7 +123,13 @@ export class GeminiProvider implements AiProvider {
     return this.isAvailable();
   }
 
-  private client() {
+  private client(): GoogleGenAI {
+    if (this.credential) {
+      if (!this.sessionClient) {
+        this.sessionClient = createGeminiClientWithKey(this.credential);
+      }
+      return this.sessionClient;
+    }
     const gemini = getGemini();
     if (!gemini) throw new Error(UNAVAILABLE_MSG);
     return gemini;

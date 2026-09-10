@@ -17,7 +17,7 @@ interface AiSelectionModule {
   getAiSelectionSurfaceStatus: (kind: Surface) => SurfaceStatus;
   isAiSelectionReady: (kind?: Surface) => boolean;
   getCachedAiSelections: () => SavedAiSelections;
-  saveAiSelection: (settings: { set: (k: string, v: unknown) => Promise<void> }, k: Surface, mode: "server_default" | "user_selected", providerId?: string, modelId?: string) => Promise<SavedAiSelections>;
+  saveAiSelection: (settings: { set: (k: string, v: unknown) => Promise<void> }, k: Surface, mode: "server_default" | "user_selected", providerId?: string, modelId?: string, credentialSource?: "server_environment" | "session_only") => Promise<SavedAiSelections>;
   resetAiSelection: (settings: { set: (k: string, v: unknown) => Promise<void> }, k: Surface) => Promise<SavedAiSelections>;
   buildAiSelectionHeaders: (s?: SavedAiSelections) => Record<string, string>;
   buildAiSelectionRequestOptions: (existing?: { headers?: Record<string, string> }, s?: SavedAiSelections, surface?: Surface) => Promise<{ headers?: Record<string, string> }>;
@@ -381,5 +381,114 @@ describe("BYOK-4 — header building + persistence", () => {
     const next = await mod.resetAiSelection(settings(async () => undefined, async (_k, v) => { persisted = v; }), "text");
     expect(next.textAi).toEqual({ mode: "server_default" });
     expect(persisted).toEqual({ textAi: { mode: "server_default" }, imageAi: { mode: "server_default" } });
+  });
+});
+
+describe("BYOK-5C — client credentialSource metadata (non-secret)", () => {
+  it("carries credentialSource in the selection header (never a key)", async () => {
+    const mod = await fresh();
+    const headers = mod.buildAiSelectionHeaders({
+      textAi: { mode: "user_selected", providerId: "openrouter", credentialSource: "session_only" },
+      imageAi: { mode: "server_default" },
+    });
+    expect(headers[mod.TEXT_SELECTION_HEADER]).toBe(
+      JSON.stringify({ mode: "user_selected", providerId: "openrouter", credentialSource: "session_only" })
+    );
+    expect(JSON.stringify(headers)).not.toContain("apiKey");
+  });
+
+  it("persists credentialSource with the non-secret preference", async () => {
+    const mod = await fresh();
+    let persisted: unknown;
+    const next = await mod.saveAiSelection(
+      settings(async () => undefined, async (_k, v) => { persisted = v; }),
+      "text",
+      "user_selected",
+      "openrouter",
+      "openai/gpt-4o-mini",
+      "session_only"
+    );
+    expect(next.textAi).toEqual({
+      mode: "user_selected",
+      providerId: "openrouter",
+      modelId: "openai/gpt-4o-mini",
+      credentialSource: "session_only",
+    });
+    expect(persisted).toEqual({ textAi: next.textAi, imageAi: { mode: "server_default" } });
+  });
+
+  it("rejects a malformed stored credentialSource (fail closed, not default)", async () => {
+    const mod = await fresh();
+    expect(
+      mod.parseStoredSelection({ mode: "user_selected", providerId: "openrouter", credentialSource: "bogus" })
+    ).toEqual({ status: "invalid", selection: { mode: "server_default" } });
+    expect(
+      mod.parseStoredSelection({ mode: "server_default", credentialSource: "session_only" })
+    ).toEqual({ status: "invalid", selection: { mode: "server_default" } });
+  });
+
+  it("preserves a valid stored credentialSource", async () => {
+    const mod = await fresh();
+    expect(
+      mod.parseStoredSelection({ mode: "user_selected", providerId: "openrouter", credentialSource: "session_only" })
+    ).toEqual({
+      status: "selected",
+      selection: { mode: "user_selected", providerId: "openrouter", credentialSource: "session_only" },
+    });
+  });
+});
+
+describe("BYOK-5C — malformed stored preference blocks the request", () => {
+  it("malformed stored TEXT preference -> request blocked (no header, no network)", async () => {
+    const mod = await fresh();
+    await mod
+      .hydrateAiSelections(
+        settings(async () => ({
+          textAi: { mode: "user_selected", providerId: "" }, // malformed present intent
+          imageAi: { mode: "server_default" },
+        }))
+      )
+      .catch(() => {});
+    expect(mod.getAiSelectionSurfaceStatus("text")).toBe("invalid-stored-intent");
+    // The request path refuses to build options -> no header, no network call.
+    await expect(mod.buildAiSelectionRequestOptions(undefined, undefined, "text")).rejects.toBeInstanceOf(
+      mod.AiSelectionNotReadyError
+    );
+    // The stored preference is NOT silently rewritten; the user must reset.
+    expect(mod.getAiSelectionSurfaceStatus("text")).toBe("invalid-stored-intent");
+  });
+
+  it("malformed stored IMAGE preference -> image request blocked", async () => {
+    const mod = await fresh();
+    await mod
+      .hydrateAiSelections(
+        settings(async () => ({
+          textAi: { mode: "server_default" },
+          imageAi: { mode: "user_selected", providerId: 42 }, // malformed present intent
+        }))
+      )
+      .catch(() => {});
+    expect(mod.getAiSelectionSurfaceStatus("image")).toBe("invalid-stored-intent");
+    await expect(mod.buildAiSelectionRequestOptions(undefined, undefined, "image")).rejects.toBeInstanceOf(
+      mod.AiSelectionNotReadyError
+    );
+  });
+
+  it("an explicit reset restores server_default behavior", async () => {
+    const mod = await fresh();
+    await mod
+      .hydrateAiSelections(
+        settings(async () => ({
+          textAi: { mode: "user_selected", providerId: "" },
+          imageAi: { mode: "server_default" },
+        }))
+      )
+      .catch(() => {});
+    expect(mod.getAiSelectionSurfaceStatus("text")).toBe("invalid-stored-intent");
+    await mod.resetAiSelection(settings(async () => undefined), "text");
+    expect(mod.getAiSelectionSurfaceStatus("text")).toBe("loaded");
+    const options = await mod.buildAiSelectionRequestOptions(undefined, undefined, "text");
+    // Intentional server_default -> no header, request allowed.
+    expect(options.headers).toBeUndefined();
   });
 });

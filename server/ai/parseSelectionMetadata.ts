@@ -52,13 +52,21 @@ export type SelectionInvalidReason =
   | "empty_provider"
   | "empty_model"
   | "default_with_ids"
-  | "malformed_field";
+  | "malformed_field"
+  | "invalid_credential_source"
+  | "default_with_credential_source";
 
 /** The strict, discriminated selection intent. */
 export type SelectionIntent =
   | { kind: "ABSENT" }
   | { kind: "EXPLICIT_DEFAULT" }
-  | { kind: "EXPLICIT_SELECTED"; providerId: string; modelId?: string }
+  | {
+      kind: "EXPLICIT_SELECTED";
+      providerId: string;
+      modelId?: string;
+      /** BYOK-5C non-secret credential source (never a secret). */
+      credentialSource?: "server_environment" | "session_only";
+    }
   | { kind: "INVALID"; reason: SelectionInvalidReason };
 
 /**
@@ -120,9 +128,26 @@ function parseSelectionHeader(raw: string | string[] | undefined): SelectionInte
   const providerId = typeof row["providerId"] === "string" ? row["providerId"].trim() : "";
   const modelId = typeof row["modelId"] === "string" ? row["modelId"].trim() : "";
 
-  // Explicit server_default MUST NOT carry provider/model ids — even empty ones.
+  // BYOK-5C credentialSource: optional, string, one of the two non-secret
+  // sources. Present-but-malformed/unknown/empty is INVALID (fail closed).
+  const credentialPresent = Object.prototype.hasOwnProperty.call(row, "credentialSource");
+  if (credentialPresent && typeof row["credentialSource"] !== "string") {
+    return { kind: "INVALID", reason: "malformed_field" };
+  }
+  const rawCredentialSource = row["credentialSource"];
+  let credentialSource: "server_environment" | "session_only" | undefined;
+  if (credentialPresent) {
+    if (rawCredentialSource !== "server_environment" && rawCredentialSource !== "session_only") {
+      return { kind: "INVALID", reason: "invalid_credential_source" };
+    }
+    credentialSource = rawCredentialSource;
+  }
+
+  // Explicit server_default MUST NOT carry provider/model ids or a credential
+  // source (server_default never consumes a session key).
   if (mode === "server_default") {
     if (providerPresent || modelPresent) return { kind: "INVALID", reason: "default_with_ids" };
+    if (credentialPresent) return { kind: "INVALID", reason: "default_with_credential_source" };
     return { kind: "EXPLICIT_DEFAULT" };
   }
 
@@ -147,8 +172,8 @@ function parseSelectionHeader(raw: string | string[] | undefined): SelectionInte
   if (modelPresent && !modelId) return { kind: "INVALID", reason: "empty_model" };
 
   return modelId
-    ? { kind: "EXPLICIT_SELECTED", providerId, modelId }
-    : { kind: "EXPLICIT_SELECTED", providerId };
+    ? { kind: "EXPLICIT_SELECTED", providerId, modelId, ...(credentialSource ? { credentialSource } : {}) }
+    : { kind: "EXPLICIT_SELECTED", providerId, ...(credentialSource ? { credentialSource } : {}) };
 }
 
 function headerValue(headers: SelectionHeaderSource, name: string): string | string[] | undefined {
@@ -175,6 +200,7 @@ export function selectionIntentToMetadata(intent: SelectionIntent): SelectedOper
   if (intent.kind !== "EXPLICIT_SELECTED") return undefined;
   const out: SelectedOperationMetadata = { mode: "user_selected", providerId: intent.providerId };
   if (intent.modelId) out.modelId = intent.modelId;
+  if (intent.credentialSource) out.credentialSource = intent.credentialSource;
   return out;
 }
 

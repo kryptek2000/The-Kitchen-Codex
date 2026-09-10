@@ -208,3 +208,58 @@ describe("BYOK-4 — parseImageSelectionHeader + intent helpers", () => {
     ).toEqual({ mode: "user_selected", providerId: "gemini", modelId: "gemini-3.7-flash" });
   });
 });
+
+describe("BYOK-5C — credentialSource intent", () => {
+  it("accepts the two allowed credential sources on an explicit selection", () => {
+    expect(
+      parseTextSelectionHeader(
+        textHeader(JSON.stringify({ mode: "user_selected", providerId: "openrouter", credentialSource: "session_only" }))
+      )
+    ).toEqual({ kind: "EXPLICIT_SELECTED", providerId: "openrouter", credentialSource: "session_only" });
+    expect(
+      parseTextSelectionHeader(
+        textHeader(JSON.stringify({ providerId: "gemini", credentialSource: "server_environment" }))
+      )
+    ).toEqual({ kind: "EXPLICIT_SELECTED", providerId: "gemini", credentialSource: "server_environment" });
+  });
+
+  it("rejects unknown / wrong-type / empty credentialSource", () => {
+    expect(
+      parseTextSelectionHeader(textHeader(JSON.stringify({ providerId: "gemini", credentialSource: "bogus" })))
+    ).toEqual({ kind: "INVALID", reason: "invalid_credential_source" });
+    expect(
+      parseTextSelectionHeader(textHeader(JSON.stringify({ providerId: "gemini", credentialSource: "" })))
+    ).toEqual({ kind: "INVALID", reason: "invalid_credential_source" });
+    expect(
+      parseTextSelectionHeader(textHeader(JSON.stringify({ providerId: "gemini", credentialSource: 7 })))
+    ).toEqual({ kind: "INVALID", reason: "malformed_field" });
+  });
+
+  it("rejects session_only combined with server_default", () => {
+    expect(
+      parseTextSelectionHeader(textHeader(JSON.stringify({ mode: "server_default", credentialSource: "session_only" })))
+    ).toEqual({ kind: "INVALID", reason: "default_with_credential_source" });
+    // Even a valid source with server_default is invalid (never consumes a session key).
+    expect(
+      parseTextSelectionHeader(
+        textHeader(JSON.stringify({ mode: "server_default", credentialSource: "server_environment" }))
+      )
+    ).toEqual({ kind: "INVALID", reason: "default_with_credential_source" });
+  });
+
+  it("selectionIntentToMetadata carries credentialSource", () => {
+    expect(
+      selectionIntentToMetadata({
+        kind: "EXPLICIT_SELECTED",
+        providerId: "openrouter",
+        modelId: "openai/gpt-4o-mini",
+        credentialSource: "session_only",
+      })
+    ).toEqual({
+      mode: "user_selected",
+      providerId: "openrouter",
+      modelId: "openai/gpt-4o-mini",
+      credentialSource: "session_only",
+    });
+  });
+});

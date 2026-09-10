@@ -34,6 +34,7 @@ import {
   type ProviderErrorCode,
 } from "./providerErrors.js";
 import { logFallbackAttempt } from "../providerDiagnostics.js";
+import type { CredentialSource } from "./credentialResolver.js";
 
 /** A single capability key (the shape of `AiCapabilities`). */
 export type AiCapabilityKey = keyof AiCapabilities;
@@ -58,6 +59,13 @@ export interface RegisteredProvider {
 export interface AiCandidate {
   provider: AiProvider;
   model: string;
+  /**
+   * BYOK-5C: the credential source this candidate must execute with. A
+   * `session_only` candidate is selectable even when its provider is not enabled
+   * by an operator env key, because availability is governed by the session
+   * store instead (exact-provider scoped; never an env fallback).
+   */
+  credentialSource?: CredentialSource;
 }
 
 /** Result of a successful fallback run. */
@@ -177,7 +185,10 @@ export function selectCandidates(
   for (const candidate of candidates) {
     const registered = findRegisteredProvider(regs, candidate.provider.id);
     if (!registered) continue; // unknown provider -> skip
-    if (registered.enabled === false) continue; // disabled -> skip
+    // A session_only candidate's availability is governed by the SESSION store,
+    // not by the operator env-key enablement; it still must satisfy capabilities
+    // and its own runtime availability check below.
+    if (registered.enabled === false && candidate.credentialSource !== "session_only") continue;
     if (!hasAllCapabilities(effectiveCapabilities(registered, candidate.model), requiredCapabilities)) {
       continue; // capability mismatch -> skip (never execute)
     }

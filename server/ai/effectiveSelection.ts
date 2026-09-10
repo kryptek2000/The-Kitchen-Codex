@@ -46,6 +46,12 @@ import { operationRequiredCapabilities } from "./operations.js";
 import type { AiProvider } from "./types.js";
 import type { ImageProvider } from "./imageProvider.js";
 import type { SelectionIntent } from "./parseSelectionMetadata.js";
+import {
+  createSessionBoundTextProvider,
+  isCredentialSource,
+  supportsSessionBoundTextProvider,
+  type CredentialSource,
+} from "./credentialResolver.js";
 
 /** The per-request, NON-SECRET selection metadata supplied by the client. */
 export interface SelectedOperationMetadata {
@@ -58,6 +64,12 @@ export interface SelectedOperationMetadata {
   mode?: "user_selected" | "server_default";
   providerId?: string;
   modelId?: string;
+  /**
+   * BYOK-5C: WHOSE credential authorizes the selected provider/model. Non-secret
+   * metadata; NEVER inferred from the provider/model. Omitted -> the default
+   * `server_environment`.
+   */
+  credentialSource?: CredentialSource;
 }
 
 /**
@@ -102,6 +114,7 @@ export function coerceSelectionInput(input: SelectionInput): CoercedSelectionInp
       case "EXPLICIT_SELECTED": {
         const metadata: SelectedOperationMetadata = { mode: "user_selected", providerId: input.providerId };
         if (input.modelId) metadata.modelId = input.modelId;
+        if (input.credentialSource) metadata.credentialSource = input.credentialSource;
         return { invalid: false, explicit: true, metadata };
       }
       case "INVALID":
@@ -109,11 +122,42 @@ export function coerceSelectionInput(input: SelectionInput): CoercedSelectionInp
         return { invalid: true, explicit: true };
     }
   }
-  const metadata = normalizeOperationSelection(input);
-  return { invalid: false, explicit: hasExplicitUserSelection(metadata), metadata };
+  const legacy = coerceLegacyOperationSelection(input);
+  if (legacy.invalid) return { invalid: true, explicit: true };
+  return { invalid: false, explicit: hasExplicitUserSelection(legacy.metadata), metadata: legacy.metadata };
 }
 
-/** Bounds + normalizes one operation's selection metadata into string IDs. */
+/**
+ * STRICT coercion of the legacy raw metadata shape. Unlike the bounded ID
+ * normalizer, a PRESENT but invalid `credentialSource` (unknown value, wrong
+ * type, or empty) FAILS CLOSED (`invalid:true`) instead of being silently
+ * dropped into the implicit `server_environment` path.
+ */
+export function coerceLegacyOperationSelection(raw: unknown): {
+  invalid: boolean;
+  metadata: SelectedOperationMetadata;
+} {
+  if (typeof raw !== "object" || raw === null) return { invalid: false, metadata: {} };
+  const row = raw as Record<string, unknown>;
+  if (
+    Object.prototype.hasOwnProperty.call(row, "credentialSource") &&
+    !isCredentialSource(row["credentialSource"])
+  ) {
+    return { invalid: true, metadata: {} };
+  }
+  const metadata = normalizeOperationSelection(raw);
+  if (isCredentialSource(row["credentialSource"])) {
+    metadata.credentialSource = row["credentialSource"];
+  }
+  return { invalid: false, metadata };
+}
+
+/**
+ * Bounds + normalizes one operation's selection metadata into string IDs. This
+ * is a bounded ID normalizer ONLY (provider/model/mode); credentialSource is
+ * handled by `coerceLegacyOperationSelection` so a malformed present value can
+ * never be silently omitted.
+ */
 export function normalizeOperationSelection(raw: unknown): SelectedOperationMetadata {
   if (typeof raw !== "object" || raw === null) return {};
   const row = raw as Record<string, unknown>;
@@ -133,12 +177,21 @@ export function normalizeOperationSelection(raw: unknown): SelectedOperationMeta
  */
 export function validateUserTextSelection(
   requested: SelectedOperationMetadata | undefined,
-  regs: RegisteredProvider[]
+  regs: RegisteredProvider[],
+  credentialSource: CredentialSource = "server_environment"
 ): { providerId: string; modelId?: string } | null {
   if (!requested?.providerId) return null;
   const registered = findRegisteredProvider(regs, requested.providerId);
-  if (!registered || registered.enabled === false) return null;
-  if (!registered.provider.isAvailable()) return null;
+  if (!registered) return null;
+  if (credentialSource === "session_only") {
+    // Session availability is governed by the SESSION store, NOT the operator
+    // env key. The provider must be structurally session-bindable; a missing
+    // session key is handled later (fail closed, never env fallback).
+    if (!supportsSessionBoundTextProvider(registered.provider.id)) return null;
+  } else {
+    if (registered.enabled === false) return null;
+    if (!registered.provider.isAvailable()) return null;
+  }
   const modelId = requested.modelId;
   if (modelId) {
     // Model must be in the provider's CURATED role-model set (never invented).
@@ -180,7 +233,11 @@ export function resolveTextCandidateContext(
   operation: AiOperation,
   regs: RegisteredProvider[],
   userSelection?: SelectionInput
-): { candidates: AiCandidate[]; source: "server_managed" | "user_selected" | "server_default" } {
+): {
+  candidates: AiCandidate[];
+  source: "server_managed" | "user_selected" | "server_default";
+  credentialSource: CredentialSource;
+} {
   const coerced = coerceSelectionInput(userSelection);
 
   // A PRESENT but malformed selection payload FAILS CLOSED FIRST — BEFORE any
@@ -188,32 +245,41 @@ export function resolveTextCandidateContext(
   // intent cannot override the pin; it does NOT permit malformed client intent
   // to execute paid provider work. INVALID -> ZERO provider execution.
   if (coerced.invalid) {
-    return { candidates: [], source: "user_selected" };
+    return { candidates: [], source: "user_selected", credentialSource: "server_environment" };
   }
 
   const serverSelection = getTextSelection();
 
   // A VALID server-managed pin is authoritative and wins over any VALID client
-  // intent: the request does not depend on the client pick.
+  // intent. The pin FORCES server_environment credentials and ignores any user
+  // session key entirely.
   if (serverSelection.selectionMode === "server_managed") {
     if (!serverSelection.valid || !serverSelection.selectedProviderId) {
       // Explicit invalid server pin -> no candidates (deterministic fallback arms).
-      return { candidates: [], source: "server_managed" };
+      return { candidates: [], source: "server_managed", credentialSource: "server_environment" };
     }
     const registered = findRegisteredProvider(regs, serverSelection.selectedProviderId);
     if (!registered || registered.enabled === false) {
-      return { candidates: [], source: "server_managed" };
+      return { candidates: [], source: "server_managed", credentialSource: "server_environment" };
     }
     const models = serverSelection.selectedModelId
       ? [serverSelection.selectedModelId]
       : roleModelsForProvider(registered.provider.id, operation);
     return {
-      candidates: models.map((model) => ({ provider: registered.provider, model })),
+      candidates: models.map((model) => ({
+        provider: registered.provider,
+        model,
+        credentialSource: "server_environment" as const,
+      })),
       source: "server_managed",
+      credentialSource: "server_environment",
     };
   }
 
-  const userSel = validateUserTextSelection(coerced.metadata, regs);
+  // WHOSE credential authorizes the user's selected provider. Never inferred
+  // from the provider/model; defaults to the operator environment.
+  const userCredentialSource: CredentialSource = coerced.metadata?.credentialSource ?? "server_environment";
+  const userSel = validateUserTextSelection(coerced.metadata, regs, userCredentialSource);
   if (userSel) {
     const registered = findRegisteredProvider(regs, userSel.providerId)!;
     if (userTextSelectionMatchesOperation(registered, userSel.modelId, operation)) {
@@ -221,12 +287,13 @@ export function resolveTextCandidateContext(
         ? [userSel.modelId]
         : roleModelsForProvider(registered.provider.id, operation);
       return {
-        candidates: models.map((model) => ({ provider: registered.provider, model })),
+        candidates: buildTextCandidates(registered, models, userCredentialSource),
         source: "user_selected",
+        credentialSource: userCredentialSource,
       };
     }
     // Capability mismatch -> NO cross-provider fallback: empty -> deterministic path.
-    return { candidates: [], source: "user_selected" };
+    return { candidates: [], source: "user_selected", credentialSource: userCredentialSource };
   }
 
   // EXPLICIT user_selected that is stale/invalid/unavailable FAILS CLOSED: never
@@ -234,18 +301,41 @@ export function resolveTextCandidateContext(
   // empty candidate list arms the operation's own deterministic fallback (or a
   // bounded provider-unavailable result) instead of silently executing Gemini.
   if (coerced.explicit) {
-    return { candidates: [], source: "user_selected" };
+    return { candidates: [], source: "user_selected", credentialSource: userCredentialSource };
   }
 
-  // server_default: all enabled providers in registry order.
+  // server_default: all enabled providers in registry order, operator
+  // environment credentials ONLY — a session key is NEVER consumed implicitly.
   const candidates: AiCandidate[] = [];
   for (const registered of regs) {
     if (registered.enabled === false) continue;
     for (const model of roleModelsForProvider(registered.provider.id, operation)) {
-      candidates.push({ provider: registered.provider, model });
+      candidates.push({ provider: registered.provider, model, credentialSource: "server_environment" });
     }
   }
-  return { candidates, source: "server_default" };
+  return { candidates, source: "server_default", credentialSource: "server_environment" };
+}
+
+/**
+ * Builds (provider, model) candidates bound to the exact credential source.
+ * `session_only` resolves a REQUEST-SCOPED provider from the session store and
+ * returns `[]` when no live session key exists (fail closed, NEVER env fallback).
+ */
+function buildTextCandidates(
+  registered: RegisteredProvider,
+  models: string[],
+  credentialSource: CredentialSource
+): AiCandidate[] {
+  if (credentialSource === "session_only") {
+    const bound = createSessionBoundTextProvider(registered.provider.id);
+    if (!bound) return [];
+    return models.map((model) => ({ provider: bound, model, credentialSource: "session_only" as const }));
+  }
+  return models.map((model) => ({
+    provider: registered.provider,
+    model,
+    credentialSource: "server_environment" as const,
+  }));
 }
 
 /**
@@ -336,6 +426,14 @@ export function resolveEffectiveImageSelection(requested?: SelectionInput): Effe
       };
     }
     return { provider: null, model: undefined, source: "server_managed", invalidIntent: false };
+  }
+
+  // BYOK-5C: IMAGE session-credential execution is a SEPARATE required substep
+  // (the image providers are not yet request-scoped/credential-injectable). An
+  // explicit `session_only` image intent therefore FAILS CLOSED here rather than
+  // silently falling back to the operator environment credential.
+  if (coerced.metadata?.credentialSource === "session_only") {
+    return { provider: null, model: undefined, source: "user_selected", invalidIntent: false };
   }
 
   const userSel = validateUserImageSelection(coerced.metadata, regs);

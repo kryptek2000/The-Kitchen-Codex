@@ -73,6 +73,12 @@ export type DeepSeekFetchLike = (url: string, init: RequestInit) => Promise<Deep
 export interface DeepSeekProviderOptions {
   /** Test-only seam; defaults to the global fetch. Never a config surface. */
   fetchFn?: DeepSeekFetchLike;
+  /**
+   * BYOK-5C: an EXPLICIT session credential. When present it is used INSTEAD of
+   * the operator env key (never a fallback). The provider instance is
+   * request-scoped; no global cache retains the credential.
+   */
+  credential?: string;
 }
 
 function defaultFetch(): DeepSeekFetchLike {
@@ -106,12 +112,15 @@ export class DeepSeekProvider implements AiProvider {
   readonly name = "DeepSeek";
   readonly capabilities: AiCapabilities = { ...DEEPSEEK_BASELINE_CAPABILITIES };
   private readonly fetchFn: DeepSeekFetchLike;
+  private readonly credential?: string;
 
   constructor(options: DeepSeekProviderOptions = {}) {
     this.fetchFn = options.fetchFn ?? defaultFetch();
+    this.credential = options.credential;
   }
 
   isAvailable(): boolean {
+    if (this.credential) return true;
     return Boolean(getServerSecretSync("deepseek_api_key"));
   }
 
@@ -121,7 +130,8 @@ export class DeepSeekProvider implements AiProvider {
   }
 
   private requireKey(): string {
-    const key = getServerSecretSync("deepseek_api_key");
+    // A session credential is used EXCLUSIVELY when supplied — never env fallback.
+    const key = this.credential ?? getServerSecretSync("deepseek_api_key");
     if (!key) throw new ProviderOperationError("UNAVAILABLE", "DeepSeek is not available (no API key).", {});
     return key;
   }

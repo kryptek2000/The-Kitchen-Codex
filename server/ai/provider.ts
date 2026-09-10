@@ -56,7 +56,7 @@ export type { AiOperation } from "./operations.js";
 export { resolveRoleCandidates } from "./roleCandidates.js";
 export { roleModelsForProvider, curatedTextModels } from "./roleModels.js";
 export {
-  normalizeOperationSelection,
+  coerceLegacyOperationSelection,
   coerceSelectionInput,
   hasExplicitUserSelection,
   validateUserTextSelection,
@@ -85,3 +85,16 @@ export type {
   SelectionIntent,
   SelectionInvalidReason,
 } from "./parseSelectionMetadata.js";
+export {
+  resolveCredential,
+  isCredentialSource,
+  createCredentialBoundTextProvider,
+  createSessionBoundTextProvider,
+  supportsSessionBoundTextProvider,
+} from "./credentialResolver.js";
+export type {
+  CredentialSource,
+  CredentialLease,
+  CredentialResolution,
+  CredentialErrorCode,
+} from "./credentialResolver.js";

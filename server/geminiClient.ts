@@ -44,6 +44,19 @@ function buildClient(apiKey: string, timeoutMs: number): GoogleGenAI {
 }
 
 /**
+ * BYOK-5C: builds a REQUEST-SCOPED Gemini client for an EXPLICIT credential
+ * (a session-only user key). This client is NEVER cached in the module-level
+ * env-key rotation cache, so a revoked/expired session secret cannot be retained
+ * by a long-lived singleton. The caller owns the instance for one request.
+ */
+export function createGeminiClientWithKey(
+  apiKey: string,
+  timeoutMs: number = MODEL_CONFIG.requestTimeoutMs
+): GoogleGenAI {
+  return buildClient(apiKey, timeoutMs);
+}
+
+/**
  * Returns a configured Gemini client for the current `GEMINI_API_KEY` (read ONLY
  * through the approved server-side secret accessor / allowlist seam — the same
  * seam OpenRouter and DeepSeek use), or `null` when the key is unset / still the

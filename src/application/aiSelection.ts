@@ -35,11 +35,19 @@ export const IMAGE_SELECTION_HEADER = 'x-kitchen-ai-image-selection';
 /** The client-storable selection modes (NEVER `server_managed`). */
 export type SavedSelectionMode = 'server_default' | 'user_selected';
 
+/**
+ * BYOK-5C: WHOSE credential authorizes the selected provider/model. NON-SECRET
+ * metadata only — no API key value is ever stored or transmitted here.
+ */
+export type SavedCredentialSource = 'server_environment' | 'session_only';
+
 /** One surface's saved selection preference (non-secret, catalog-free ids). */
 export interface SavedSelection {
   mode: SavedSelectionMode;
   providerId?: string;
   modelId?: string;
+  /** Non-secret credential-source intent (separate from provider/model). */
+  credentialSource?: SavedCredentialSource;
 }
 
 /** The full persisted selection-preferences shape (non-secret). */
@@ -257,19 +265,28 @@ export function parseStoredSelection(raw: unknown): ParsedStoredSelection {
   const modelId = typeof row.modelId === 'string' ? row.modelId.trim() : '';
   // Reject oversized identifiers — never truncate them into valid values.
   if (providerId.length > 64 || modelId.length > 128) return invalid;
+
+  // BYOK-5C credentialSource: optional, valid value only. A malformed value is a
+  // present-but-invalid explicit intent -> fail closed (never normalized away).
+  const credentialPresent = Object.prototype.hasOwnProperty.call(row, 'credentialSource');
+  if (credentialPresent && row.credentialSource !== 'server_environment' && row.credentialSource !== 'session_only') {
+    return invalid;
+  }
+  const credentialSource =
+    credentialPresent ? (row.credentialSource as SavedCredentialSource) : undefined;
+
   if (row.mode === 'server_default') {
-    if (providerPresent || modelPresent) return invalid;
+    // server_default must not carry ids or a credential source.
+    if (providerPresent || modelPresent || credentialPresent) return invalid;
     return { status: 'default', selection: { mode: 'server_default' } };
   }
   if (row.mode === 'user_selected') {
     if (!providerId) return invalid;
     if (modelPresent && !modelId) return invalid;
-    return {
-      status: 'selected',
-      selection: modelId
-        ? { mode: 'user_selected', providerId, modelId }
-        : { mode: 'user_selected', providerId },
-    };
+    const selection: SavedSelection = { mode: 'user_selected', providerId };
+    if (modelId) selection.modelId = modelId;
+    if (credentialSource) selection.credentialSource = credentialSource;
+    return { status: 'selected', selection };
   }
   return invalid;
 }
@@ -401,10 +418,13 @@ export async function saveAiSelection(
   kind: 'text' | 'image',
   mode: SavedSelectionMode,
   providerId?: string,
-  modelId?: string
+  modelId?: string,
+  credentialSource?: SavedCredentialSource
 ): Promise<SavedAiSelections> {
   const parsed = parseStoredSelection(
-    mode === 'user_selected' ? { mode: 'user_selected', providerId, modelId } : { mode: 'server_default' }
+    mode === 'user_selected'
+      ? { mode: 'user_selected', providerId, modelId, ...(credentialSource ? { credentialSource } : {}) }
+      : { mode: 'server_default' }
   );
   const selection = parsed.status === 'selected' ? parsed.selection : { mode: 'server_default' as const };
   surfaceStates[kind] = { status: 'loaded', selection };
@@ -444,11 +464,18 @@ export async function resetAiSelection(
 
 function selectionToHeaderValue(selection: SavedSelection): string | undefined {
   if (selection.mode !== 'user_selected' || !selection.providerId) return undefined;
-  const payload: { mode: 'user_selected'; providerId: string; modelId?: string } = {
+  const payload: {
+    mode: 'user_selected';
+    providerId: string;
+    modelId?: string;
+    credentialSource?: SavedCredentialSource;
+  } = {
     mode: 'user_selected',
     providerId: selection.providerId,
   };
   if (selection.modelId) payload.modelId = selection.modelId;
+  // NON-SECRET metadata only: WHOSE credential authorizes the request. No key.
+  if (selection.credentialSource) payload.credentialSource = selection.credentialSource;
   return JSON.stringify(payload);
 }
 
