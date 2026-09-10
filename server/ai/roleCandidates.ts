@@ -19,10 +19,12 @@
 import type { AiOperation } from "./operations.js";
 import { MODEL_CONFIG } from "../modelConfig.js";
 import {
+  findRegisteredProvider,
   getRegisteredProviders,
   type AiCandidate,
   type RegisteredProvider,
 } from "./providerRegistry.js";
+import { getTextSelection } from "./providerSelection.js";
 import { OPENROUTER_STRUCTURED_MODEL } from "./openRouterProvider.js";
 import { DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL } from "./deepSeekProvider.js";
 
@@ -95,11 +97,31 @@ export function roleModelsForProvider(providerId: string, operation: AiOperation
 /**
  * Resolves ordered (provider, model) candidates for an operation across all
  * enabled providers. Capability/availability filtering is the selector's job.
+ *
+ * BYOK-2 SERVER-MANAGED MODE: a valid `server_managed` pin restricts the
+ * candidate list to the SELECTED PROVIDER (and the selected model, when pinned).
+ * This is deliberate: pinned mode must NOT silently cross-provider fallback. A
+ * selected provider/model that cannot satisfy the operation is filtered out by
+ * the selector later (effective capability + availability gates) and the
+ * operation's own deterministic fallback engages — never another paid provider.
  */
 export function resolveRoleCandidates(
   operation: AiOperation,
   regs: RegisteredProvider[] = getRegisteredProviders()
 ): AiCandidate[] {
+  const selection = getTextSelection();
+  if (selection.selectionMode === "server_managed") {
+    // Invalid pin (unknown/disabled provider or uncurated model) is a NO-CANDIDATE,
+    // so the runtime falls back to the operation's deterministic path — never to an
+    // unknown provider/model.
+    if (!selection.valid || !selection.selectedProviderId) return [];
+    const registered = findRegisteredProvider(regs, selection.selectedProviderId);
+    if (!registered || registered.enabled === false) return [];
+    const models = selection.selectedModelId
+      ? [selection.selectedModelId]
+      : roleModelsForProvider(selection.selectedProviderId, operation);
+    return models.map((model) => ({ provider: registered.provider, model }));
+  }
   const out: AiCandidate[] = [];
   for (const registered of regs) {
     if (registered.enabled === false) continue;

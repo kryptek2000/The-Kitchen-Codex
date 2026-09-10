@@ -61,4 +61,13 @@ export const MODEL_CONFIG = {
    * existing fallback chains engage (next model, then offline estimators).
    */
   requestTimeoutMs: 25_000,
+  /**
+   * Server-owned image-GENERATION timeout (milliseconds). Image generation is
+   * routinely slower than a text model response (10-60s for real image models),
+   * so it gets its OWN ceiling instead of reusing the 25s TEXT `requestTimeoutMs`
+   * (which would false-time-out legitimate image generation). Applied to BOTH
+   * the Gemini ImageProvider (SDK httpOptions) and the OpenRouter ImageProvider
+   * (AbortSignal.timeout). No retries are added — a timeout is a TIMEOUT.
+   */
+  imageGenerationTimeoutMs: 60_000,
 } as const;

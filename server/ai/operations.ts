@@ -19,6 +19,17 @@ export type AiOperation =
   | "recipeGrabber"
   | "createRecipe";
 
+/** Every server-side AI operation, in a stable order (single source for catalogs). */
+export const AI_OPERATIONS: AiOperation[] = [
+  "kitchenInterpret",
+  "kitchenRank",
+  "kitchenDiscover",
+  "nutrition",
+  "metadataRecovery",
+  "recipeGrabber",
+  "createRecipe",
+];
+
 /**
  * Required capabilities per operation. `structuredOutput` operations retain their
  * existing deterministic fallback; `kitchenDiscover` ONLY runs a webSearch-capable

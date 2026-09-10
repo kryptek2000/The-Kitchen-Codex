@@ -34,12 +34,14 @@ describe("Express server wiring", () => {
 
   let originalToken: string | undefined;
   let lastImageToken = "";
+  const KITCHEN_SELECTION_ENV = ["KITCHEN_CODEX_TEXT_PROVIDER", "KITCHEN_CODEX_TEXT_MODEL", "KITCHEN_CODEX_IMAGE_PROVIDER", "KITCHEN_CODEX_IMAGE_MODEL"] as const;
   beforeEach(() => {
     originalToken = process.env.AI_ENDPOINT_TOKEN;
   });
   afterEach(() => {
     if (originalToken === undefined) delete process.env.AI_ENDPOINT_TOKEN;
     else process.env.AI_ENDPOINT_TOKEN = originalToken;
+    for (const k of KITCHEN_SELECTION_ENV) delete process.env[k];
   });
 
   it("serves the health endpoint with the canonical release version", async () => {
@@ -133,6 +135,122 @@ describe("Express server wiring", () => {
   it("gates /api/providers behind the AI endpoint token when one is configured", async () => {
     process.env.AI_ENDPOINT_TOKEN = "super-secret";
     const res = await fetch(`${baseUrl}/api/providers`);
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(body.code).toBe("UNAUTHORIZED");
+  });
+
+  it("returns a read-only provider + model catalog with NO secrets (BYOK-1)", async () => {
+    delete process.env.AI_ENDPOINT_TOKEN;
+    const res = await fetch(`${baseUrl}/api/providers/catalog`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.catalog).toBeDefined();
+    expect(Array.isArray(body.catalog.textProviders)).toBe(true);
+    expect(Array.isArray(body.catalog.imageProviders)).toBe(true);
+    const { textProviders, imageProviders } = body.catalog;
+    expect(textProviders.length).toBeGreaterThan(0);
+    expect(imageProviders.length).toBeGreaterThan(0);
+
+    for (const p of textProviders) {
+      expect(typeof p.providerId).toBe("string");
+      expect(typeof p.name).toBe("string");
+      expect(typeof p.configured).toBe("boolean");
+      expect(typeof p.enabled).toBe("boolean");
+      expect(typeof p.available).toBe("boolean");
+      expect(typeof p.supportsSecretWrites).toBe("boolean");
+      expect(p.storageScope).toBe("server_environment");
+      expect(Array.isArray(p.models)).toBe(true);
+      for (const m of p.models) {
+        expect(typeof m.id).toBe("string");
+        expect(typeof m.default).toBe("boolean");
+        expect(typeof m.capabilities).toBe("object");
+        for (const key of ["reasoning", "structuredOutput", "recipeGeneration", "webSearch"]) {
+          expect(typeof m.capabilities[key]).toBe("boolean");
+        }
+      }
+      expect(p).not.toHaveProperty("key");
+      expect(p).not.toHaveProperty("token");
+      expect(p).not.toHaveProperty("secret");
+      expect(p).not.toHaveProperty("apiKey");
+      expect(p).not.toHaveProperty("value");
+    }
+
+    const image = imageProviders[0];
+    expect(typeof image.providerId).toBe("string");
+    expect(typeof image.name).toBe("string");
+    expect(typeof image.imageGeneration).toBe("boolean");
+    expect(Array.isArray(image.formats)).toBe(true);
+    for (const format of image.formats) {
+      expect(["image/jpeg", "image/png", "image/webp", "image/avif"]).toContain(format);
+    }
+    expect(typeof image.maxBytes).toBe("number");
+    for (const m of image.models) {
+      expect(typeof m.id).toBe("string");
+      expect(typeof m.default).toBe("boolean");
+    }
+
+    const json = JSON.stringify(body);
+    expect(json).not.toContain("sk-");
+    expect(json).not.toContain("OPENROUTER_API_KEY");
+    expect(json).not.toContain("DEEPSEEK_API_KEY");
+    expect(json).not.toContain("GEMINI_API_KEY");
+
+    // BYOK-2: selection truth is present, read-only, well-formed, and secret-free.
+    const { selection } = body.catalog;
+    expect(selection).toBeDefined();
+    for (const side of ["text", "image"] as const) {
+      const block = selection[side];
+      expect(["server_default", "server_managed"]).toContain(block.selectionMode);
+      expect(typeof block.valid).toBe("boolean");
+      if (block.selectionMode === "server_managed") {
+        expect(typeof block.selectedProviderId).toBe("string");
+      }
+      expect(block).not.toHaveProperty("key");
+      expect(block).not.toHaveProperty("secret");
+      expect(block).not.toHaveProperty("apiKey");
+      expect(block).not.toHaveProperty("token");
+    }
+    expect(json).not.toContain("KITCHEN_CODEX");
+  });
+
+  it("reflects server-managed selection env truthfully in the catalog (BYOK-2)", async () => {
+    delete process.env.AI_ENDPOINT_TOKEN;
+    process.env.KITCHEN_CODEX_TEXT_PROVIDER = "gemini";
+    process.env.KITCHEN_CODEX_IMAGE_PROVIDER = "gemini-image";
+    const res = await fetch(`${baseUrl}/api/providers/catalog`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.catalog.selection.text).toMatchObject({
+      selectionMode: "server_managed",
+      selectedProviderId: "gemini",
+      valid: true,
+    });
+    expect(body.catalog.selection.image).toMatchObject({
+      selectionMode: "server_managed",
+      selectedProviderId: "gemini-image",
+      valid: true,
+    });
+    const json = JSON.stringify(body.catalog.selection);
+    expect(json).not.toContain("KITCHEN_CODEX");
+  });
+
+  it("reports valid:false for an unknown pinned provider (truth, no cross-provider fallback)", async () => {
+    delete process.env.AI_ENDPOINT_TOKEN;
+    process.env.KITCHEN_CODEX_TEXT_PROVIDER = "not-a-provider";
+    const res = await fetch(`${baseUrl}/api/providers/catalog`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.catalog.selection.text).toMatchObject({
+      selectionMode: "server_managed",
+      selectedProviderId: "not-a-provider",
+      valid: false,
+    });
+  });
+
+  it("gates /api/providers/catalog behind the AI endpoint token when one is configured", async () => {
+    process.env.AI_ENDPOINT_TOKEN = "super-secret";
+    const res = await fetch(`${baseUrl}/api/providers/catalog`);
     expect(res.status).toBe(401);
     const body = await res.json();
     expect(body.code).toBe("UNAUTHORIZED");

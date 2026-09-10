@@ -1,9 +1,10 @@
 /**
  * The Kitchen Codex — Gemini image-generation provider (v0.7 Phase 2B).
  *
- * A real ImageProvider backed by the SAME shared server-side Gemini client
- * (`server/geminiClient.ts`, keyed to `GEMINI_API_KEY` rotation) that all other
- * AI consumers use. The key never leaves the server; the provider never logs,
+ * A real ImageProvider backed by the server-side Gemini image client
+ * (`server/geminiClient.ts` -> `getGeminiImage()`, keyed to `GEMINI_API_KEY`
+ * rotation and carrying the dedicated 60s IMAGE timeout — NOT the 25s text
+ * ceiling). The key never leaves the server; the provider never logs,
  * returns, or persists the prompt.
  *
  * PROVEN SDK SEMANTICS (verified against the installed @google/genai 2.19.0 —
@@ -38,12 +39,20 @@
  */
 
 import { Modality, type GenerateContentResponse } from "@google/genai";
-import { getGemini } from "../geminiClient.js";
+import { getGeminiImage } from "../geminiClient.js";
 import {
   validateGeneratedImage,
   MAX_GENERATED_IMAGE_BYTES,
+  MAX_GENERATED_IMAGE_BASE64_CHARS,
+  countSignificantBase64Chars,
   type GeneratedImageMime,
 } from "../../src/core/recipeImage.js";
+
+/**
+ * Back-compat alias: the Gemini-specific encoded cap is now the SHARED guard
+ * derived from `MAX_GENERATED_IMAGE_BYTES` (same value, single source of truth).
+ */
+export { MAX_GENERATED_IMAGE_BASE64_CHARS as MAX_GEMINI_IMAGE_BASE64_CHARS };
 import { normalizeProviderError, ProviderOperationError } from "./providerErrors.js";
 import {
   ImageValidationError,
@@ -107,50 +116,12 @@ function finishReasonOf(candidate: unknown): string {
 }
 
 /**
- * PRE-DECODE GUARD — encoded-length cap, derived mathematically (not arbitrary).
- *
- * Standard base64 encodes 3 bytes into 4 characters. For a string of n
- * SIGNIFICANT base64 characters (excluding '=' padding and ASCII whitespace —
- * neither adds decoded bytes), the Node decoder yields at most
- * `3*floor(n/4) + 2` bytes. Solving `3*floor(n/4) + 2 <= MAX_GENERATED_IMAGE_BYTES`
- * gives `n <= 4*floor(MAX/3) + 2`:
- *
- *   4 * floor(4194304 / 3) + 2 = 5592406
- *
- * Checking the boundary: n = 5592406 decodes to at most 4194304 bytes (== cap,
- * accepted); n = 5592407 decodes to at most 4194305 bytes (> cap, rejected).
- * A properly padded encoding of an exactly-cap-sized payload has 5592404
- * significant chars + "==" — padding is excluded from the count, so it is
- * accepted, never falsely rejected.
- *
- * The count treats EVERY other character as significant. Node's decoder leniently
- * skips some invalid characters, so counting them OVER-rejects — the safe
- * direction. The cap is enforced BEFORE any Buffer.from() allocation, so an
- * oversized/malicious payload is rejected without a single decoded byte being
- * allocated. The payload string itself is NEVER logged.
+ * Docs for the shared pre-decode guard live in `src/core/recipeImage.ts`
+ * (`MAX_GENERATED_IMAGE_BASE64_CHARS` / `countSignificantBase64Chars`). The cap
+ * is enforced BEFORE any Buffer.from() allocation, so an oversized/malicious
+ * payload is rejected without a single decoded byte being allocated. The payload
+ * string itself is NEVER logged.
  */
-export const MAX_GEMINI_IMAGE_BASE64_CHARS =
-  4 * Math.floor(MAX_GENERATED_IMAGE_BYTES / 3) + 2;
-
-const BASE64_WHITESPACE = new Set([
-  0x09, 0x0a, 0x0d, 0x20, 0x0b, 0x0c, // \t \n \r space \v \f
-]);
-
-/**
- * Counts significant base64 characters (everything except '=' padding and ASCII
- * whitespace) WITHOUT allocating or decoding anything. A single O(n) scan of the
- * already-in-memory response string; rejects before any decoded allocation.
- */
-function countSignificantBase64Chars(encoded: string): number {
-  let significant = 0;
-  for (let i = 0; i < encoded.length; i++) {
-    const code = encoded.charCodeAt(i);
-    if (code === 0x3d /* '=' */ || BASE64_WHITESPACE.has(code)) continue;
-    significant++;
-  }
-  return significant;
-}
-
 export class GeminiImageProvider implements ImageProvider {
   readonly id = "gemini-image";
   readonly name = "Google Gemini Image";
@@ -167,14 +138,14 @@ export class GeminiImageProvider implements ImageProvider {
 
   /** True only when a real GEMINI_API_KEY is configured server-side. */
   isAvailable(): boolean {
-    return getGemini() !== null;
+    return getGeminiImage() !== null;
   }
 
   async generateImage(prompt: string, options: ImageGenerateOptions): Promise<GeneratedImage> {
     if (!options?.model) {
       throw new ProviderOperationError("INVALID_RESPONSE", "Image model is required.", { providerId: this.id });
     }
-    const client = getGemini();
+    const client = getGeminiImage();
     if (!client) {
       throw new ProviderOperationError("UNAVAILABLE", "Image provider is not available.", {
         providerId: this.id,
@@ -328,11 +299,11 @@ export class GeminiImageProvider implements ImageProvider {
         const data = part?.inlineData?.data;
         const mimeType = part?.inlineData?.mimeType;
         if (typeof data === "string" && data.length > 0 && typeof mimeType === "string" && mimeType) {
-          // PRE-DECODE GUARD: enforce the encoded cap BEFORE Buffer.from() so no
-          // oversized allocation can occur. No partial decode happens.
-          if (countSignificantBase64Chars(data) > MAX_GEMINI_IMAGE_BASE64_CHARS) {
+          // PRE-DECODE GUARD: enforce the shared encoded cap BEFORE Buffer.from()
+          // so no oversized allocation can occur. No partial decode happens.
+          if (countSignificantBase64Chars(data) > MAX_GENERATED_IMAGE_BASE64_CHARS) {
             throw new ImageValidationError(
-              `Gemini image rejected: encoded payload exceeds the pre-decode limit (${MAX_GEMINI_IMAGE_BASE64_CHARS} significant base64 characters).`,
+              `Gemini image rejected: encoded payload exceeds the pre-decode limit (${MAX_GENERATED_IMAGE_BASE64_CHARS} significant base64 characters).`,
               { providerId: this.id, model }
             );
           }

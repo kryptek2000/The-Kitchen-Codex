@@ -1,22 +1,27 @@
 /**
  * The Kitchen Codex — Ask My Kitchen server-side web discovery adapter.
  *
- * Uses the shared Gemini client with Google-Search grounding (when available) to
- * perform EXPLICIT query discovery. It reads result URLs ONLY from the model's
- * GROUNDING METADATA (provider-backed real web URLs); the model's generated text
- * is never used as a source of URLs, so no fabricated/hallucinated URL can
- * survive. Discovery is query-only: the handler never fetches an arbitrary URL,
- * never accesses the vault/filesystem, and never turns a web result into a
- * Recipe. The actual content retrieval belongs to the Grab Recipe pipeline later.
+ * Routes EXPLICIT query discovery through the standard provider-selection /
+ * candidate machinery (`resolveRoleCandidates` -> `selectAiCandidates`), so there
+ * is NO hard-coded provider bypass: the same server-managed text selection and
+ * registry order apply to discovery as to every other AI operation. Discovery
+ * REQUIRES a webSearch-capable provider — an ordinary text generator never runs.
  *
- * FAILURE CONTRACT: if Gemini is unconfigured, unsupported, throws, or surfaces
- * no provider-backed URLs, this returns a safe, non-sensitive
- * `{ ok:false, source:'web', reason:'unavailable' }` — never fabricated results.
+ * It reads result URLs ONLY from the model's GROUNDING METADATA (provider-backed
+ * real web URLs); the model's generated text is never used as a source of URLs,
+ * so no fabricated/hallucinated URL can survive. Discovery is query-only: the
+ * handler never fetches an arbitrary URL, never accesses the vault/filesystem,
+ * and never turns a web result into a Recipe. The actual content retrieval
+ * belongs to the Grab Recipe pipeline later.
+ *
+ * FAILURE CONTRACT: if no webSearch-capable provider/model is selected, is
+ * unsupported, throws, or surfaces no provider-backed URLs, this returns a safe,
+ * non-sensitive `{ ok:false, source:'web', reason:'unavailable' }` — never
+ * fabricated results.
  */
 import dotenv from "dotenv";
-import { getDefaultAiProvider, selectAiCandidates } from "./ai/provider.js";
+import { resolveRoleCandidates, selectAiCandidates } from "./ai/provider.js";
 import { normalizeProviderError } from "./ai/providerErrors.js";
-import { MODEL_CONFIG } from "./modelConfig.js";
 import { logModelAttempt } from "./providerDiagnostics.js";
 import {
   sanitizeWebResults,
@@ -26,9 +31,6 @@ import {
 import type { KitchenIntent } from "../src/utils/kitchenIntent.js";
 
 dotenv.config();
-
-/** Kitchen web-discovery model attempt chain (primary -> fallback). */
-const DISCOVERY_MODELS = [MODEL_CONFIG.kitchenDiscoveryPrimary, MODEL_CONFIG.kitchenDiscoveryFallback];
 
 const DISCOVERY_INSTRUCTIONS = [
   "You answer a user's request by searching the web for real recipe sources.",
@@ -62,34 +64,31 @@ function buildPrompt(request: { question: string; intent: KitchenIntent }): stri
 }
 
 /**
- * Runs explicit web discovery through the provider abstraction with a
- * primary -> fallback model chain. A result is accepted ONLY when a model
- * returns real, sanitizable provider grounding sources; a model whose text lists
- * URLs but has no grounding does NOT count. If no model produces grounding, a
- * safe unavailable response is returned. Never fabricates URLs; never throws.
+ * Runs explicit web discovery through the provider abstraction with the same
+ * selection + candidate machinery as every other AI operation. Discovery REQUIRES
+ * a webSearch-capable provider/model (never an ordinary text generator). A result
+ * is accepted ONLY when a model returns real, sanitizable provider grounding
+ * sources; a model whose text lists URLs but has no grounding does NOT count. If
+ * no candidate produces grounding, a safe unavailable response is returned.
+ * Never fabricates URLs; never throws.
  */
 export async function discoverKitchenRecipesOnServer(request: {
   question: string;
   intent: KitchenIntent;
   maxResults: number;
 }): Promise<KitchenDiscoveryResponse> {
-  const provider = getDefaultAiProvider();
-  if (!provider.isAvailable() || !provider.searchWeb) {
-    return webDiscoveryUnavailable();
-  }
-  // Discovery REQUIRES a webSearch-capable provider — an ordinary text generator
-  // must never run. This is a no-op for Gemini today but protects future providers.
-  const capable = selectAiCandidates(
-    DISCOVERY_MODELS.map((model) => ({ provider, model })),
-    ["webSearch"]
-  );
+  // Selection-aware candidate resolution (server-managed pin or the standard
+  // Gemini -> OpenRouter -> DeepSeek role chain), then capability-gated:
+  // webSearch remains a hard, enforced requirement.
+  const capable = selectAiCandidates(resolveRoleCandidates("kitchenDiscover"), ["webSearch"]);
   if (capable.length === 0) {
     return webDiscoveryUnavailable();
   }
   const prompt = buildPrompt(request);
 
   for (const candidate of capable) {
-    const { model } = candidate;
+    const { provider, model } = candidate;
+    if (!provider.searchWeb) continue;
     try {
       const sources = await provider.searchWeb(prompt, { model, temperature: 0 });
       const results = sanitizeWebResults(

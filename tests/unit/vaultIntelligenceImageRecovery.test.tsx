@@ -13,6 +13,8 @@ import { RecipeImageFindingView } from "../../src/components/VaultIntelligenceMo
 import {
   RecipeImageRecoveryController,
   isImageRecoverySupported,
+  mapRecipeImageRecoveryError,
+  RecipeImageProviderClientError,
   recipeImagePreviewPath,
   type RecipeImageRecoverySupport,
   type RecipeImageRecoveryState,
@@ -503,6 +505,29 @@ describe("RecipeImageRecoveryController — flow, liveness, guards, conflicts", 
       expect(state.message).toContain(tc.expectContains);
       expect(state.message).not.toContain("SUPER_SECRET");
       expect(state.message).not.toContain(tc.raw);
+    }
+  });
+
+  it("provider-neutral UI copy: UNAVAILABLE/BLOCKED/NO_IMAGE messages never hardcode a provider name (BYOK-3 hardening)", () => {
+    const cases: Array<{ code: string; expectMessage: string }> = [
+      {
+        code: "IMAGE_PROVIDER_TEMPORARILY_UNAVAILABLE",
+        expectMessage: "Image generation is temporarily unavailable. Please try again shortly.",
+      },
+      {
+        code: "IMAGE_PROVIDER_BLOCKED",
+        expectMessage: "The image provider could not generate an image for this recipe. Try adjusting the recipe description or generating again.",
+      },
+      {
+        code: "IMAGE_PROVIDER_NO_IMAGE",
+        expectMessage: "The image provider did not return an image for this recipe. Try generating again.",
+      },
+    ];
+    for (const tc of cases) {
+      const mapped = mapRecipeImageRecoveryError(new RecipeImageProviderClientError(502, "raw upstream text", tc.code));
+      expect(mapped.message).toBe(tc.expectMessage);
+      expect(mapped.message).not.toMatch(/Gemini|OpenRouter/i);
+      expect(mapped.message).not.toContain("raw upstream text");
     }
   });
 

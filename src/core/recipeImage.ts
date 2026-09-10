@@ -286,6 +286,54 @@ export function validateGeneratedImage(input: GeneratedImageInput): GeneratedIma
 }
 
 // ---------------------------------------------------------------------------
+// Pre-decode base64 guard (shared by image providers)
+// ---------------------------------------------------------------------------
+
+/**
+ * PRE-DECODE GUARD — encoded-length cap, derived mathematically (not arbitrary).
+ *
+ * Standard base64 encodes 3 bytes into 4 characters. For a string of n
+ * SIGNIFICANT base64 characters (excluding '=' padding and ASCII whitespace —
+ * neither adds decoded bytes), a decoder yields at most `3*floor(n/4) + 2` bytes.
+ * Solving `3*floor(n/4) + 2 <= MAX_GENERATED_IMAGE_BYTES` gives
+ * `n <= 4*floor(MAX/3) + 2`:
+ *
+ *   4 * floor(4194304 / 3) + 2 = 5592406
+ *
+ * Checking the boundary: n = 5592406 decodes to at most 4194304 bytes (== cap,
+ * accepted); n = 5592407 decodes to at most 4194305 bytes (> cap, rejected).
+ * A properly padded encoding of an exactly-cap-sized payload has 5592404
+ * significant chars + "==" — padding is excluded from the count, so it is
+ * accepted, never falsely rejected.
+ *
+ * The count treats EVERY other character as significant. Node's decoder leniently
+ * skips some invalid characters, so counting them OVER-rejects — the safe
+ * direction. The cap is enforced BEFORE any Buffer.from() allocation, so an
+ * oversized/malicious payload is rejected without a single decoded byte being
+ * allocated. The payload string itself is NEVER logged.
+ */
+export const MAX_GENERATED_IMAGE_BASE64_CHARS = 4 * Math.floor(MAX_GENERATED_IMAGE_BYTES / 3) + 2;
+
+const BASE64_WHITESPACE = new Set([
+  0x09, 0x0a, 0x0d, 0x20, 0x0b, 0x0c, // \t \n \r space \v \f
+]);
+
+/**
+ * Counts significant base64 characters (everything except '=' padding and ASCII
+ * whitespace) WITHOUT allocating or decoding anything. A single O(n) scan of the
+ * already-in-memory response string; rejects before any decoded allocation.
+ */
+export function countSignificantBase64Chars(encoded: string): number {
+  let significant = 0;
+  for (let i = 0; i < encoded.length; i++) {
+    const code = encoded.charCodeAt(i);
+    if (code === 0x3d /* '=' */ || BASE64_WHITESPACE.has(code)) continue;
+    significant++;
+  }
+  return significant;
+}
+
+// ---------------------------------------------------------------------------
 // Conflict-detection foundation (for the later Save pass)
 // ---------------------------------------------------------------------------
 

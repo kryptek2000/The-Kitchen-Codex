@@ -246,13 +246,13 @@ export function mapRecipeImageRecoveryError(error: unknown): {
       return { message: 'Image generation timed out. Please try again.' };
     }
     if (code === 'IMAGE_PROVIDER_TEMPORARILY_UNAVAILABLE') {
-      return { message: 'Gemini image generation is temporarily unavailable. Please try again shortly.' };
+      return { message: 'Image generation is temporarily unavailable. Please try again shortly.' };
     }
     if (code === 'IMAGE_PROVIDER_NO_IMAGE') {
-      return { message: 'Gemini did not return an image for this recipe. Try generating again.' };
+      return { message: 'The image provider did not return an image for this recipe. Try generating again.' };
     }
     if (code === 'IMAGE_PROVIDER_BLOCKED') {
-      return { message: 'Gemini could not generate an image for this recipe. Try adjusting the recipe description or generating again.' };
+      return { message: 'The image provider could not generate an image for this recipe. Try adjusting the recipe description or generating again.' };
     }
     if (code === 'IMAGE_PROVIDER_AUTH') {
       return { message: 'Image generation could not be authorized. Please check the server configuration.' };

@@ -27,13 +27,14 @@ import { interpretKitchenQuestionOnServer } from "./kitchenInterpret.js";
 import { rankKitchenCandidatesOnServer } from "./kitchenRank.js";
 import { discoverKitchenRecipesOnServer } from "./kitchenDiscover.js";
 import { getAiProviderStatus } from "./ai/providerStatus.js";
+import { buildProviderCatalog } from "./ai/providerCatalog.js";
 import { generateRecipeDraftOnServer, CreateRecipeValidationError } from "./createRecipe.js";
 import {
   generateRecipeImagePreview,
   GenerateRecipeImageValidationError,
 } from "./recipeImage.js";
 import { DeterministicImageProvider, type ImageProvider } from "./ai/imageProvider.js";
-import { GeminiImageProvider, DEFAULT_GEMINI_IMAGE_MODEL } from "./ai/geminiImageProvider.js";
+import { resolveSelectedImagePair } from "./ai/providerSelection.js";
 import { ImagePreviewStore, PreviewStoreCapacityError } from "./imagePreviewStore.js";
 import { sniffGeneratedImageMime } from "../src/core/recipeImage.js";
 import {
@@ -65,14 +66,19 @@ export interface CreateAppOptions {
 
 /**
  * Resolves the production image provider + model override for the generate-image
- * route. The DEFAULT (no `imageProvider` option) is ALWAYS the real
- * GeminiImageProvider — the DeterministicImageProvider is a thin test seam and is
- * selected ONLY when explicitly injected via the createApp test option. Being a
+ * route. The DEFAULT (no `imageProvider` option, no server-managed image pin) is
+ * ALWAYS the real GeminiImageProvider + its proven default model when image
+ * selection is UNSET — the DeterministicImageProvider is a thin test seam and is
+ * selected ONLY when explicitly injected via the createApp test option.
+ * Server-managed selection (KITCHEN_CODEX_IMAGE_PROVIDER/MODEL) is validated
+ * against the image registry; an EXPLICIT but INVALID pin FAILS CLOSED (provider
+ * resolves to null, the route returns a distinct bounded not-configured/invalid
+ * failure, ZERO provider execution — never a silent Gemini fallback). Being a
  * pure exported helper (exposed independently of `createApp`) makes the default
  * production wiring directly regression-testable without booting a server.
  */
 export function resolveImageProvider(opts: Pick<CreateAppOptions, 'imageProvider'>): {
-  provider: ImageProvider;
+  provider: ImageProvider | null;
   modelOverride: { model?: string };
 } {
   if (opts.imageProvider) {
@@ -81,8 +87,11 @@ export function resolveImageProvider(opts: Pick<CreateAppOptions, 'imageProvider
     // NOT in use.
     return { provider: opts.imageProvider, modelOverride: {} };
   }
-  // Production default: real Gemini provider + its proven default model.
-  return { provider: new GeminiImageProvider(), modelOverride: { model: DEFAULT_GEMINI_IMAGE_MODEL } };
+  // Server-managed image selection (or the safe Gemini production default when
+  // UNSET). An EXPLICIT invalid pin yields null (fail closed, zero execution).
+  const pair = resolveSelectedImagePair();
+  if (!pair) return { provider: null, modelOverride: {} };
+  return { provider: pair.provider, modelOverride: { model: pair.model } };
 }
 
 /**
@@ -110,17 +119,23 @@ export function mapImageProviderErrorToHttp(error: unknown): {
         status: 503,
         error: "Image generation is being rate limited. Please wait a moment and try again.",
         code: "IMAGE_PROVIDER_RATE_LIMIT",
-        // Preserve the upstream Retry-After when the provider reported a 429.
-        ...(typeof (error as { status?: unknown })?.status === "number" && (error as { status: number }).status === 429 ? { retryAfter: "60" } : {}),
+        // Preserve the UPSTREAM Retry-After when the provider reported one; if the
+        // provider reported a 429 without a header, fall back to the fixed "60".
+        ...(typeof (error as { retryAfter?: unknown })?.retryAfter === "string" &&
+        (error as { retryAfter?: string }).retryAfter
+          ? { retryAfter: (error as { retryAfter: string }).retryAfter }
+          : typeof (error as { status?: unknown })?.status === "number" && (error as { status: number }).status === 429
+          ? { retryAfter: "60" }
+          : {}),
       };
     case "TIMEOUT":
       return { status: 503, error: "Image generation timed out. Please try again.", code: "IMAGE_PROVIDER_TIMEOUT" };
     case "UNAVAILABLE":
-      return { status: 503, error: "Gemini image generation is temporarily unavailable. Please try again shortly.", code: "IMAGE_PROVIDER_TEMPORARILY_UNAVAILABLE" };
+      return { status: 503, error: "Image generation is temporarily unavailable. Please try again shortly.", code: "IMAGE_PROVIDER_TEMPORARILY_UNAVAILABLE" };
     case "BLOCKED":
-      return { status: 502, error: "Gemini could not generate an image for this recipe. Try adjusting the recipe description or generating again.", code: "IMAGE_PROVIDER_BLOCKED" };
+      return { status: 502, error: "The image provider could not generate an image for this recipe. Try adjusting the recipe description or generating again.", code: "IMAGE_PROVIDER_BLOCKED" };
     case "NO_IMAGE":
-      return { status: 502, error: "Gemini did not return an image for this recipe. Try generating again.", code: "IMAGE_PROVIDER_NO_IMAGE" };
+      return { status: 502, error: "The image provider did not return an image for this recipe. Try generating again.", code: "IMAGE_PROVIDER_NO_IMAGE" };
     case "AUTH":
       return { status: 502, error: "Image generation could not be authorized. Please check the server configuration.", code: "IMAGE_PROVIDER_AUTH" };
     default:
@@ -697,6 +712,14 @@ export function createApp(opts: CreateAppOptions): express.Express {
     res.json({ providers: getAiProviderStatus() });
   });
 
+  // Read-only provider + model CATALOG (BYOK-1): the curated models each text
+  // provider can execute (with per-model effective capabilities) plus the
+  // production image provider's models/formats/byte limits. Secret-free,
+  // network-free, deterministic. Same gate as /api/providers.
+  app.get("/api/providers/catalog", requireAiAccessToken, (_req, res) => {
+    res.json({ catalog: buildProviderCatalog() });
+  });
+
   // Transient generated-image preview store (bounded, TTL 5min, 50MB cap).
   // Foundation for Vault Intelligence Image Recovery: generation ONLY — the
   // canonical asset write + Markdown `image` update belong to the later Save pass.
@@ -735,10 +758,12 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // only (never base64/data-URL bytes). Gated + rate-limited like other AI
   // endpoints.
   //
-  // PROVIDER SELECTION (truthful): production default is the real
+  // PROVIDER SELECTION (truthful): unset image selection uses the real
   // GeminiImageProvider; availability reflects the actual GEMINI_API_KEY and an
   // unavailable provider is an explicit 503 with a DISTINCT not-configured code
-  // (never a silent deterministic fallback). The DeterministicImageProvider is
+  // (never a silent deterministic fallback). An EXPLICIT but INVALID server-managed
+  // image pin FAILS CLOSED the same way (no provider resolves -> bounded
+  // not-configured/invalid 503, ZERO Gemini invocation). The DeterministicImageProvider is
   // reachable ONLY through the createApp test seam.
   const { provider: imageProvider, modelOverride: imageModelOverride } = resolveImageProvider(opts);
 
@@ -746,6 +771,16 @@ export function createApp(opts: CreateAppOptions): express.Express {
     try {
       if (!req.body || typeof req.body !== "object") {
         return res.status(400).json({ error: "Invalid request payload.", code: "INVALID_REQUEST" });
+      }
+      if (!imageProvider) {
+        // EXPLICIT but invalid server-managed image pin (unknown/disabled
+        // provider or uncurated model): FAIL CLOSED. Bounded, distinct from
+        // transient upstream failures; ZERO provider execution — never a silent
+        // Gemini fallback and no surprise cross-provider cost.
+        return res.status(503).json({
+          error: "The configured image provider selection is invalid. No image was generated.",
+          code: "IMAGE_PROVIDER_NOT_CONFIGURED",
+        });
       }
       if (!imageProvider.isAvailable()) {
         // Distinct code from the transient-upstream failure below: the client can

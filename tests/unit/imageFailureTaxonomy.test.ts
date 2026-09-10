@@ -48,26 +48,52 @@ describe("mapImageProviderErrorToHttp — distinct end-to-end taxonomy", () => {
     const mapped = mapImageProviderErrorToHttp(err);
     expect(mapped?.code).toBe("IMAGE_PROVIDER_TEMPORARILY_UNAVAILABLE");
     expect(mapped?.status).toBe(503);
+    // Provider-neutral copy: never hardcodes a provider name into the message.
+    expect(mapped?.error).toBe("Image generation is temporarily unavailable. Please try again shortly.");
     // Distinct — quota/rate-limit/timeout all differ.
     expect(mapImageProviderErrorToHttp(new ProviderOperationError("QUOTA", "q"))?.code).toBe("IMAGE_PROVIDER_QUOTA");
     expect(mapImageProviderErrorToHttp(new ProviderOperationError("RATE_LIMIT", "r"))?.code).toBe("IMAGE_PROVIDER_RATE_LIMIT");
     expect(mapImageProviderErrorToHttp(new ProviderOperationError("TIMEOUT", "t"))?.code).toBe("IMAGE_PROVIDER_TIMEOUT");
   });
 
-  it("BLOCKED (prompt/safety) maps to IMAGE_PROVIDER_BLOCKED (502)", () => {
+  it("BLOCKED (prompt/safety) maps to IMAGE_PROVIDER_BLOCKED (502) with provider-neutral copy", () => {
     const err = new ImageBlockedError("blocked for safety", { providerId: "gemini-image" });
-    expect(mapImageProviderErrorToHttp(err)).toMatchObject({
+    const mapped = mapImageProviderErrorToHttp(err);
+    expect(mapped).toMatchObject({
       status: 502,
       code: "IMAGE_PROVIDER_BLOCKED",
     });
+    expect(mapped?.error).toBe("The image provider could not generate an image for this recipe. Try adjusting the recipe description or generating again.");
   });
 
-  it("NO_IMAGE maps to IMAGE_PROVIDER_NO_IMAGE (502)", () => {
+  it("NO_IMAGE maps to IMAGE_PROVIDER_NO_IMAGE (502) with provider-neutral copy", () => {
     const err = new ImageNoImageError("no inline image", { providerId: "gemini-image" });
-    expect(mapImageProviderErrorToHttp(err)).toMatchObject({
+    const mapped = mapImageProviderErrorToHttp(err);
+    expect(mapped).toMatchObject({
       status: 502,
       code: "IMAGE_PROVIDER_NO_IMAGE",
     });
+    expect(mapped?.error).toBe("The image provider did not return an image for this recipe. Try generating again.");
+  });
+
+  it("provider-neutral user-facing messages NEVER hardcode a provider name (Gemini/OpenRouter)", () => {
+    // Every mapped bounded message must be usable regardless of which provider is
+    // pinned — no "Gemini ..." strings may surface while OpenRouter is selected.
+    const cases = [
+      new ProviderOperationError("UNAVAILABLE", "x", { providerId: "openrouter-image" }),
+      new ProviderOperationError("QUOTA", "x", { providerId: "openrouter-image" }),
+      new ProviderOperationError("RATE_LIMIT", "x", { providerId: "openrouter-image" }),
+      new ProviderOperationError("TIMEOUT", "x", { providerId: "openrouter-image" }),
+      new ProviderOperationError("AUTH", "x", { providerId: "openrouter-image" }),
+      new ImageBlockedError("x", { providerId: "openrouter-image" }),
+      new ImageNoImageError("x", { providerId: "openrouter-image" }),
+    ];
+    for (const err of cases) {
+      const mapped = mapImageProviderErrorToHttp(err);
+      expect(mapped).toBeDefined();
+      expect(mapped?.error).toBeTruthy();
+      expect(mapped?.error).not.toMatch(/Gemini|OpenRouter/i);
+    }
   });
 
   it("AUTH maps to IMAGE_PROVIDER_AUTH (502)", () => {

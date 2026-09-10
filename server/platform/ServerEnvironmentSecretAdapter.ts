@@ -47,15 +47,17 @@ export function serverSecretEnvName(id: ProviderSecretId): string | undefined {
 }
 
 /**
- * Maps an `AiProvider` id (gemini / openrouter / deepseek) to the provider-neutral
- * secret id used by the secret boundary, or `undefined` for providers with no
- * operator secret.
+ * Maps a provider id (TEXT: gemini / openrouter / deepseek; IMAGE:
+ * gemini-image / openrouter-image) to the provider-neutral secret id used by the
+ * secret boundary, or `undefined` for providers with no operator secret.
  */
 export function providerSecretIdForProvider(providerId: string): ProviderSecretId | undefined {
   switch (providerId) {
     case 'gemini':
+    case 'gemini-image':
       return 'gemini_api_key';
     case 'openrouter':
+    case 'openrouter-image':
       return 'openrouter_api_key';
     case 'deepseek':
       return 'deepseek_api_key';
