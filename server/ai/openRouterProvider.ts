@@ -41,11 +41,35 @@ const STRUCTURED_SCHEMA_NAME = "structured_output";
 
 /**
  * Maps the provider-neutral `AiJsonSchema` onto standard JSON Schema for
- * OpenRouter's `json_schema` structured-output format. Object nodes are closed
- * (`additionalProperties: false`) so strict mode is honored; `required`,
- * `enum`, `items`, and `description` are preserved verbatim.
+ * OpenRouter's `json_schema` structured-output format (OpenAI strict subset).
+ *
+ * OPENAI STRICT REQUIREMENTS (the reason this converter is non-trivial):
+ *   - EVERY object node MUST supply `required`, and `required` MUST list EVERY
+ *     key in `properties` (OpenAI rejects a schema whose `required` omits a
+ *     property). A provider-neutral schema with NO `required` therefore cannot
+ *     be emitted verbatim.
+ *   - A provider-neutral OPTIONAL property must stay semantically optional. We
+ *     make it NULLABLE instead of forcing the model to invent a value:
+ *     `{ anyOf: [ <node>, { type: "null" } ] }` (the canonical OpenAI SDK shape
+ *     for `Optional[...]`). This preserves optional semantics while satisfying
+ *     the strict `required`-includes-every-key rule.
+ *   - `additionalProperties: false` is mandatory on every object.
+ *   - enums/descriptions/items are preserved; the recursion applies to nested
+ *     objects and array items.
+ *
+ * Explicitly-required provider-neutral fields (`schema.required`) stay
+ * non-nullable. The provider-neutral meaning is preserved; the sanitizer remains
+ * the final authority and treats a model-emitted `null` as absent.
  */
-function toOpenRouterJsonSchema(schema: AiJsonSchema): Record<string, unknown> {
+export function toOpenRouterJsonSchema(schema: AiJsonSchema, optional = false): Record<string, unknown> {
+  const node = buildOpenRouterNode(schema);
+  if (!optional) return node;
+  // Nullable wrapper: the model MAY return null for an optional property.
+  return { anyOf: [node, { type: "null" }] };
+}
+
+/** Builds one strict JSON-Schema node (without the optional-null wrapper). */
+function buildOpenRouterNode(schema: AiJsonSchema): Record<string, unknown> {
   const node: Record<string, unknown> = { type: schema.type };
   if (typeof schema.description === "string" && schema.description.trim()) {
     node.description = schema.description.trim();
@@ -55,16 +79,22 @@ function toOpenRouterJsonSchema(schema: AiJsonSchema): Record<string, unknown> {
       if (Array.isArray(schema.enum) && schema.enum.length) node.enum = schema.enum;
       break;
     case "array":
+      // Array items are always present within a present array (not optional).
       node.items = toOpenRouterJsonSchema(schema.items);
       break;
     case "object": {
+      const requiredSet = new Set(Array.isArray(schema.required) ? schema.required : []);
       const properties: Record<string, unknown> = {};
+      const allKeys: string[] = [];
       for (const [key, child] of Object.entries(schema.properties)) {
-        properties[key] = toOpenRouterJsonSchema(child);
+        allKeys.push(key);
+        // Optional (not explicitly required) -> nullable; required -> plain.
+        properties[key] = toOpenRouterJsonSchema(child, !requiredSet.has(key));
       }
       node.properties = properties;
       node.additionalProperties = false;
-      if (Array.isArray(schema.required) && schema.required.length) node.required = schema.required;
+      // OpenAI strict: `required` must list EVERY property key.
+      node.required = allKeys;
       break;
     }
     // number / integer / boolean: no extra members.

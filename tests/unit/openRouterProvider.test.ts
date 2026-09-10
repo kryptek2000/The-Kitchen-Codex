@@ -110,9 +110,21 @@ describe("OpenRouterProvider (v0.7 1B)", () => {
     };
     await provider.generateStructured("x", schema, { model: "m" });
     const sent = (JSON.parse(String(seenInit?.body)) as any).response_format.json_schema.schema;
+    // OpenAI strict: `required` lists EVERY property key.
+    expect(sent.required).toEqual(["tags", "confidence", "nested"]);
+    // Explicitly-required property -> not nullable.
     expect(sent.properties.tags).toEqual({ type: "array", items: { type: "string" } });
-    expect(sent.properties.confidence).toEqual({ type: "string", enum: ["high", "low"], description: "level" });
-    expect(sent.properties.nested).toEqual({ type: "object", properties: { v: { type: "integer" } }, required: ["v"], additionalProperties: false });
+    // Optional properties -> nullable wrappers (optional-equivalent).
+    expect(sent.properties.confidence).toEqual({
+      anyOf: [{ type: "string", enum: ["high", "low"], description: "level" }, { type: "null" }],
+    });
+    expect(sent.properties.nested.anyOf[0]).toEqual({
+      type: "object",
+      properties: { v: { type: "integer" } },
+      additionalProperties: false,
+      required: ["v"],
+    });
+    expect(sent.properties.nested.anyOf[1]).toEqual({ type: "null" });
     expect(sent.description).toBe("root");
   });
 
