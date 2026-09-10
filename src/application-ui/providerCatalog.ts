@@ -132,11 +132,18 @@ const TEXT_CAPABILITY_KEYS: (keyof AiCapabilities)[] = [
   'webSearch',
 ];
 
-/** The four truthful storage scopes (mirrors the SecretAdapter contract). */
+/**
+ * The truthful storage scopes accepted by the catalog view (mirrors the
+ * SecretAdapter contract). The current server catalog emits only
+ * `server_environment` for provider rows, but `unavailable` is a valid scope and
+ * is retained so a truthful future payload is never silently dropped; an
+ * UNKNOWN scope still fails closed (the row is rejected).
+ */
 const KNOWN_STORAGE_SCOPES: SecretStorageScope[] = [
   'server_environment',
   'secure_platform',
   'local_plaintext',
+  'session_only',
   'unavailable',
 ];
 

@@ -44,6 +44,7 @@ const STORAGE_SCOPE_LABELS: Record<SecretStorageScope, string> = {
   server_environment: 'Server environment',
   secure_platform: 'Secure platform storage',
   local_plaintext: 'Local plaintext storage',
+  session_only: 'Session only (server memory)',
   unavailable: 'Unavailable',
 };
 

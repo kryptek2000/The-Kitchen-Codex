@@ -22,9 +22,11 @@
  *     through a frontend env var (no `VITE_*` key) or localStorage.
  *   - Browser/PWA concrete implementations MUST reject writes
  *     (`supportsWrites() === false`) and expose no key to the page.
- *   - Hosted per-user BYOK remains BLOCKED and is NOT represented by a scope in
- *     this phase (it requires auth/session identity, per-user secret isolation,
- *     protected/encrypted storage, and lifecycle/revocation semantics).
+ *   - Hosted per-user BYOK remains BLOCKED. `session_only` (BYOK-5A) is the
+ *     narrowly-scoped exception: a SERVER-PROCESS-MEMORY-ONLY store for a
+ *     trusted local/single-user deployment. It is NEVER disk/browser/vault
+ *     persisted, NEVER copied into `process.env`, and is lost on restart. It is
+ *     NOT `secure_platform` (no OS keychain) and NOT `local_plaintext`.
  *   - Adapters MUST NOT read arbitrary secret names: server implementations use
  *     an explicit allowlist of provider secret ids (see `ProviderSecretId`).
  *
@@ -42,12 +44,17 @@
  *                          (read-only operator configuration, NOT per-user BYOK).
  *   - `secure_platform`  — genuinely protected platform storage (OS keychain,
  *                          secure enclave, encrypted credential store).
+ *   - `session_only`     — SERVER PROCESS MEMORY ONLY (BYOK-5A). Lost on restart;
+ *                          never disk/browser/vault persisted; never copied into
+ *                          `process.env`. Distinct from `server_environment`
+ *                          (operator config) and from `secure_platform`.
  */
 export type SecretStorageScope =
   | 'unavailable'
   | 'local_plaintext'
   | 'server_environment'
-  | 'secure_platform';
+  | 'secure_platform'
+  | 'session_only';
 
 /**
  * Provider-neutral secret identifiers used at the application boundary. These are

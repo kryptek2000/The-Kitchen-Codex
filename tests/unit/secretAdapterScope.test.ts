@@ -12,15 +12,17 @@ const VALID_SCOPES: SecretStorageScope[] = [
   "local_plaintext",
   "server_environment",
   "secure_platform",
+  "session_only",
 ];
 
-describe("secret storage scope truth (v0.7 1D)", () => {
-  it("only the four truthful scopes are valid (no misleading categories)", () => {
-    expect(VALID_SCOPES).toHaveLength(4);
+describe("secret storage scope truth (v0.7 1D + BYOK-5A)", () => {
+  it("only the truthful scopes are valid (no misleading categories)", () => {
+    expect(VALID_SCOPES).toHaveLength(5);
     expect(VALID_SCOPES).toContain("unavailable");
     expect(VALID_SCOPES).toContain("local_plaintext");
     expect(VALID_SCOPES).toContain("server_environment");
     expect(VALID_SCOPES).toContain("secure_platform");
+    expect(VALID_SCOPES).toContain("session_only");
   });
 
   it("server env adapter truthfully reports server_environment, read-only", () => {
@@ -45,7 +47,7 @@ describe("secret storage scope truth (v0.7 1D)", () => {
     expect(VALID_SCOPES).toContain(a.storageScope);
   });
 
-  it("no current adapter falsely claims secure_platform or local_plaintext", () => {
+  it("no current SecretAdapter falsely claims secure_platform / local_plaintext / session_only", () => {
     const adapters = [new ServerEnvironmentSecretAdapter(), new BrowserSecretAdapter(), new ObsidianSecretAdapter()];
     for (const adapter of adapters) {
       // `secure_platform` means genuinely protected storage (OS keychain). No
@@ -54,6 +56,9 @@ describe("secret storage scope truth (v0.7 1D)", () => {
       // `local_plaintext` is reserved for a FUTURE Obsidian plaintext adapter and
       // must not be claimed until a concrete adapter actually persists keys.
       expect(adapter.storageScope).not.toBe("local_plaintext");
+      // `session_only` is owned by the in-memory session store (BYOK-5A), never
+      // by a persistent SecretAdapter.
+      expect(adapter.storageScope).not.toBe("session_only");
     }
   });
 
