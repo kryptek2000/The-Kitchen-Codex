@@ -80,7 +80,7 @@ export interface ProviderSelectionView {
   selectedProviderId?: string;
   /** Present only when server-managed (optional model pin). */
   selectedModelId?: string;
-  /** False when a pin is invalid — the runtime then uses the safe server default. */
+  /** False when a pin is invalid — the runtime then fails closed (never uses another provider). */
   valid: boolean;
 }
 

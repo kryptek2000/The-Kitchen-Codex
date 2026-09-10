@@ -207,7 +207,7 @@ describe("ProviderStatusPanel catalog selection truth (BYOK-2)", () => {
       },
     };
     const html = render(<ProviderStatusPanel statuses={STATUSES} catalog={catalog} onRefresh={() => {}} />);
-    expect(html).toContain("Server-managed provider selection is invalid; Kitchen Codex is using the default.");
+    expect(html).toContain("Server-managed provider selection is invalid; Kitchen Codex will not use another provider until the selection is fixed.");
     expect(html).not.toContain('class="error');
   });
 

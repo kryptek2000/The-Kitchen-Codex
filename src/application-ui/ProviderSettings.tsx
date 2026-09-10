@@ -240,7 +240,7 @@ function SelectionSummaryCard({ kind, selection }: { kind: 'text' | 'image'; sel
       <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">{label}</div>
       <div className="text-[12px] text-gray-200">{value}</div>
       {selection.selectionMode === 'server_managed' && !selection.valid && (
-        <div className="text-[11px] text-amber-300">Server-managed provider selection is invalid; Kitchen Codex is using the default.</div>
+        <div className="text-[11px] text-amber-300">Server-managed provider selection is invalid; Kitchen Codex will not use another provider until the selection is fixed.</div>
       )}
     </div>
   );

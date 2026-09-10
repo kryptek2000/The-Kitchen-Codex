@@ -106,7 +106,10 @@ export interface ProviderCatalog {
   /**
    * Effective SERVER-MANAGED selection truth (BYOK-2), non-secret: mode plus the
    * validated provider/model pins. When unset -> `server_default`; when a pin is
-   * invalid -> `valid:false` and the runtime uses the safe server default.
+   * invalid -> `valid:false` and the runtime FAILS CLOSED for that surface (text:
+   * no AI candidates, so the deterministic fallback engages; image: no provider
+   * resolves, so image generation returns a bounded not-configured failure). An
+   * invalid pin NEVER silently falls back to another provider.
    */
   selection: {
     text: ProviderSelectionState;
