@@ -98,7 +98,7 @@ describe("BYOK-4 — runConnectionTest bounded + fail-closed (no real network)",
     expect(stub.calls).toHaveLength(0);
   });
 
-  it("OpenRouter text probe uses the FIXED chat endpoint, a tiny max_tokens, and bounds auth failures", async () => {
+  it("OpenRouter text probe uses the FIXED /api/v1/key credential endpoint (no generation) and bounds auth failures", async () => {
     const { connectionTest } = await freshModule({ OPENROUTER_API_KEY: SENTINEL });
     const stub = stubFetch(401, JSON.stringify({ error: 'secret raw body with key "' + SENTINEL + '"' }));
     try {
@@ -107,6 +107,7 @@ describe("BYOK-4 — runConnectionTest bounded + fail-closed (no real network)",
       if (result.ok === false) {
         expect(result.code).toBe("AUTH");
         expect(result.model).toBe("openai/gpt-4o-mini");
+        expect(result.credentialSource).toBe("server_environment");
         expect(JSON.stringify(result)).not.toContain(SENTINEL);
         expect(result.message).not.toContain("secret raw body");
       }
@@ -114,8 +115,8 @@ describe("BYOK-4 — runConnectionTest bounded + fail-closed (no real network)",
       stub.restore();
     }
     expect(stub.calls).toHaveLength(1);
-    expect(stub.calls[0].url).toBe("https://openrouter.ai/api/v1/chat/completions");
-    expect(JSON.parse(stub.calls[0].body!).max_tokens).toBe(8);
+    expect(stub.calls[0].method).toBe("GET");
+    expect(stub.calls[0].url).toBe("https://openrouter.ai/api/v1/key");
   });
 
   it("DeepSeek text probe uses the allowlisted DeepSeek chat endpoint with a tiny max_tokens", async () => {
@@ -411,7 +412,7 @@ describe("BYOK-4 — universal probe response-byte bounds", () => {
     globalThis.fetch = (async () => {
       networkCalls += 1;
       await gate;
-      return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), { status: 200 });
+      return new Response(JSON.stringify({ data: { label: "x" } }), { status: 200 });
     }) as unknown as typeof globalThis.fetch;
     try {
       const running = Array.from({ length: max + 1 }, () =>
@@ -510,11 +511,14 @@ describe("BYOK-4 — connection test honors the server-managed operator pin", ()
       KITCHEN_CODEX_TEXT_PROVIDER: "openrouter",
       KITCHEN_CODEX_TEXT_MODEL: "openai/gpt-4o-mini",
     });
-    const stub = stubFetch(200, JSON.stringify({ choices: [{ message: { content: "ok" } }] }));
+    const stub = stubFetch(200, JSON.stringify({ data: { label: "x" } }));
     try {
       const result = await connectionTest.runConnectionTest({ providerId: "openrouter", kind: "text", modelId: "openai/gpt-4o-mini" });
       expect(result.ok).toBe(true);
-      if (result.ok === true) expect(result.model).toBe("openai/gpt-4o-mini");
+      if (result.ok === true) {
+        expect(result.model).toBe("openai/gpt-4o-mini");
+        expect(result.credentialSource).toBe("server_environment");
+      }
     } finally {
       stub.restore();
     }

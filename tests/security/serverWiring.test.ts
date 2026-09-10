@@ -365,6 +365,39 @@ describe("Express server wiring", () => {
     }
   });
 
+  it("POST /api/providers/test-connection rejects a malformed credentialSource with a bounded 400", async () => {
+    delete process.env.AI_ENDPOINT_TOKEN;
+    for (const credentialSource of [7, {}, [], "", "bogus", "SESSION_ONLY", " session_only"]) {
+      const res = await fetch(`${baseUrl}/api/providers/test-connection`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ providerId: "gemini", kind: "text", credentialSource }),
+      });
+      expect(res.status, JSON.stringify(credentialSource)).toBe(400);
+      const body = await res.json();
+      expect(body.code, JSON.stringify(credentialSource)).toBe("INVALID_REQUEST");
+      // The malformed value is never echoed back (skip the empty-string case).
+      if (typeof credentialSource === "string" && credentialSource.length > 0) {
+        expect(JSON.stringify(body)).not.toContain(credentialSource);
+      }
+    }
+  });
+
+  it("POST /api/providers/test-connection accepts the canonical credentialSource values", async () => {
+    delete process.env.AI_ENDPOINT_TOKEN;
+    for (const credentialSource of ["server_environment", "session_only"] as const) {
+      const res = await fetch(`${baseUrl}/api/providers/test-connection`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ providerId: "not-a-provider", kind: "text", credentialSource }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.ok).toBe(false);
+      expect(body.credentialSource).toBe(credentialSource);
+    }
+  });
+
   it("POST /api/providers/test-connection is rate-limited (429) under a burst", async () => {
     delete process.env.AI_ENDPOINT_TOKEN;
     const original = process.env.PROVIDER_TEST_RATE_LIMIT;

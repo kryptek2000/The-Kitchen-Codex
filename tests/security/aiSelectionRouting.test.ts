@@ -376,6 +376,35 @@ describe("BYOK-4 audit — STRICT malformed selection intent fails closed at the
       await new Promise<void>((r) => server.close(() => r()));
     }
   });
+
+  it("BYOK-5D: an explicit session_only image intent cannot generate an image (image runtime deferred)", async () => {
+    const { server, baseUrl } = await startApp({
+      GEMINI_API_KEY: SENTINEL,
+      OPENROUTER_API_KEY: SENTINEL,
+    });
+    const stub = stubOpenRouter(async () => new Response("{}", { status: 200 }));
+    try {
+      const res = await fetch(`${baseUrl}/api/recipes/image/generate`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          [IMAGE_HEADER]: JSON.stringify({
+            mode: "user_selected",
+            providerId: "openrouter-image",
+            credentialSource: "session_only",
+          }),
+        },
+        body: JSON.stringify({ title: "Hearty Soup" }),
+      });
+      // Image session RUNTIME remains blocked: fail closed, no provider call.
+      expect(res.status).toBe(503);
+      expect((await res.json()).code).toBe("IMAGE_PROVIDER_NOT_CONFIGURED");
+      expect(stub.calls).toHaveLength(0);
+    } finally {
+      stub.restore();
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
 });
 
 describe("BYOK-4 audit — IMAGE selection header reaches runtime routing", () => {

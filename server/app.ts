@@ -764,7 +764,12 @@ export function createApp(opts: CreateAppOptions): express.Express {
         return res.status(400).json({ error: "Invalid request payload." });
       }
 
-      const { providerId, kind: rawKind, modelId: rawModelId } = req.body;
+      const {
+        providerId,
+        kind: rawKind,
+        modelId: rawModelId,
+        credentialSource: rawCredentialSource,
+      } = req.body;
 
       // STRICT request schema: wrong types are bounded 400 (never coerced), and
       // identifiers are NEVER truncated into valid-looking values.
@@ -800,7 +805,27 @@ export function createApp(opts: CreateAppOptions): express.Express {
         modelId = cleanModelId || undefined;
       }
 
-      const result = await runConnectionTest({ providerId: cleanProviderId, kind, modelId });
+      // BYOK-5D: optional credentialSource. STRICT: wrong type / empty / unknown
+      // value is a bounded 400 — a malformed PRESENT value is NEVER treated as
+      // absent. Absent preserves the existing server_environment behavior.
+      let credentialSource: "server_environment" | "session_only" | undefined;
+      if (rawCredentialSource !== undefined) {
+        if (typeof rawCredentialSource !== "string") {
+          return res.status(400).json({
+            error: '"credentialSource" must be a string.',
+            code: "INVALID_REQUEST",
+          });
+        }
+        if (rawCredentialSource !== "server_environment" && rawCredentialSource !== "session_only") {
+          return res.status(400).json({
+            error: '"credentialSource" must be "server_environment" or "session_only".',
+            code: "INVALID_REQUEST",
+          });
+        }
+        credentialSource = rawCredentialSource;
+      }
+
+      const result = await runConnectionTest({ providerId: cleanProviderId, kind, modelId, credentialSource });
       // Client-validation failures (arbitrary/unknown model ids) are bounded 4xx:
       // rejected against the server-owned curated model set BEFORE any provider or
       // SDK network call. Operational probe failures stay 200 with a bounded body.
@@ -813,6 +838,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
         ok: false,
         providerId: "",
         model: "",
+        credentialSource: "server_environment",
         code: "PROVIDER_ERROR",
         message: "Connection test failed unexpectedly.",
       });

@@ -55,15 +55,23 @@ import { getServerSecretSync } from "../platform/ServerEnvironmentSecretAdapter.
 import { classifyProviderError } from "./providerErrors.js";
 import { getRegisteredProviders, findRegisteredProvider } from "./providerRegistry.js";
 import { findRegisteredImageProvider } from "./imageProviderRegistry.js";
-import { OPENROUTER_CHAT_ENDPOINT } from "./openRouterProvider.js";
 import { DEEPSEEK_CHAT_ENDPOINT } from "./deepSeekProvider.js";
 import { roleModelsForProvider, curatedTextModels } from "./roleModels.js";
 import { getTextSelection, getImageSelection } from "./providerSelection.js";
+import { isSessionByokSupportedDeployment } from "./sessionByokDeployment.js";
+import { resolveCredential, type CredentialSource } from "./credentialResolver.js";
 
 /** Bounded connection-probe result (success or bounded failure — never raw errors). */
 export type ConnectionTestResult =
-  | { ok: true; providerId: string; model: string; latencyMs: number }
-  | { ok: false; providerId: string; model: string; code: string; message: string };
+  | { ok: true; providerId: string; model: string; credentialSource: CredentialSource; latencyMs: number }
+  | {
+      ok: false;
+      providerId: string;
+      model: string;
+      credentialSource: CredentialSource;
+      code: string;
+      message: string;
+    };
 
 /** The probe type surfaced to the catalog (non-secret). */
 export type ConnectionTestKind = "network_probe" | "credential_check" | "unavailable";
@@ -82,6 +90,14 @@ const BOUNDED_MESSAGES: Record<string, string> = {
   OPERATOR_PIN: "This surface is managed by the server operator; only the pinned provider can be tested.",
   BUSY: "Too many connection tests are running. Please try again shortly.",
   PROVIDER_ERROR: "Could not reach the provider.",
+  // BYOK-5D: session credential source failures (bounded, non-secret).
+  // missing / expired / revoked all normalize to SESSION_CREDENTIAL_MISSING.
+  SESSION_CREDENTIAL_MISSING: "No session credential is configured for this provider.",
+  CREDENTIAL_SOURCE_INVALID: "The requested credential source is invalid.",
+  // The operator/environment credential source is unavailable.
+  CREDENTIAL_SOURCE_UNAVAILABLE: "The requested credential source is unavailable.",
+  // Session-only BYOK is blocked by deployment policy (distinct from the above).
+  SESSION_BYOK_UNAVAILABLE: "Session-only BYOK is not available in this deployment.",
 };
 
 function boundedMessage(code: string): string {
@@ -314,8 +330,10 @@ function geminiProbeKey(): string | undefined {
   return key && key !== "MY_GEMINI_API_KEY" ? key : undefined;
 }
 
-async function probeGeminiText(model: string): Promise<void> {
-  const key = geminiProbeKey();
+async function probeGeminiText(model: string, credential?: string): Promise<void> {
+  // A supplied credential (session_only) is used EXCLUSIVELY; otherwise the
+  // operator env seam is used (placeholder-aware) — never a fallback.
+  const key = credential ?? geminiProbeKey();
   if (!key) throw new ReadyError("UNAVAILABLE", "Gemini is not configured.");
   const res = await fetch(`${GEMINI_API_BASE}/models/${encodeURIComponent(model)}:generateContent`, {
     method: "POST",
@@ -335,17 +353,16 @@ async function probeGeminiText(model: string): Promise<void> {
   if (!isGeminiGenerateSuccess(text)) throw new ReadyError("INVALID_RESPONSE", "Gemini returned an unusable response.");
 }
 
-async function probeOpenRouterText(model: string): Promise<void> {
-  const key = getServerSecretSync("openrouter_api_key");
+async function probeOpenRouterText(_model: string, credential?: string): Promise<void> {
+  const key = credential ?? getServerSecretSync("openrouter_api_key");
   if (!key) throw new ReadyError("UNAVAILABLE", "OpenRouter is not configured.");
-  const res = await fetch(OPENROUTER_CHAT_ENDPOINT, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: "user", content: TEXT_PROBE_PROMPT }],
-      max_tokens: TEXT_PROBE_MAX_TOKENS,
-    }),
+  // BYOK-5D: prefer a REAL authenticated credential validation that does NOT
+  // generate content. The FIXED `/api/v1/key` endpoint is a real credential
+  // check (`/models` returns 200 even for a fake key). The model is already
+  // constrained by the server-owned curated allowlist.
+  const res = await fetch(OPENROUTER_KEY_ENDPOINT, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${key}` },
     signal: AbortSignal.timeout(MODEL_CONFIG.requestTimeoutMs),
   });
   if (!res.ok) {
@@ -354,13 +371,13 @@ async function probeOpenRouterText(model: string): Promise<void> {
   }
   const { text, truncated } = await readBoundedResponse(res);
   if (truncated) throw new ReadyError("INVALID_RESPONSE", "OpenRouter response exceeded the size limit.");
-  if (!isChatCompletionSuccess(text)) {
-    throw new ReadyError("INVALID_RESPONSE", "OpenRouter returned an unusable response.");
+  if (!isOpenRouterKeySuccess(text)) {
+    throw new ReadyError("INVALID_RESPONSE", "OpenRouter returned an unusable credential response.");
   }
 }
 
-async function probeDeepSeekText(model: string): Promise<void> {
-  const key = getServerSecretSync("deepseek_api_key");
+async function probeDeepSeekText(model: string, credential?: string): Promise<void> {
+  const key = credential ?? getServerSecretSync("deepseek_api_key");
   if (!key) throw new ReadyError("UNAVAILABLE", "DeepSeek is not configured.");
   const res = await fetch(DEEPSEEK_CHAT_ENDPOINT, {
     method: "POST",
@@ -387,8 +404,8 @@ async function probeDeepSeekText(model: string): Promise<void> {
 // Image probes (quota-free credential checks — NO image generation)
 // ---------------------------------------------------------------------------
 
-async function probeGeminiImage(): Promise<void> {
-  const key = geminiProbeKey();
+async function probeGeminiImage(credential?: string): Promise<void> {
+  const key = credential ?? geminiProbeKey();
   if (!key) throw new ReadyError("UNAVAILABLE", "Gemini image is not configured.");
   // A bounded REST `models` list verifies the key/endpoint without spending
   // generation quota AND without the SDK's unbounded body parsing.
@@ -406,8 +423,8 @@ async function probeGeminiImage(): Promise<void> {
   if (!isGeminiModelsSuccess(text)) throw new ReadyError("INVALID_RESPONSE", "Gemini returned an unusable response.");
 }
 
-async function probeOpenRouterImage(): Promise<void> {
-  const key = getServerSecretSync("openrouter_api_key");
+async function probeOpenRouterImage(credential?: string): Promise<void> {
+  const key = credential ?? getServerSecretSync("openrouter_api_key");
   if (!key) throw new ReadyError("UNAVAILABLE", "OpenRouter image is not configured.");
   // REAL authenticated credential validation. `/models` returns 200 even for a
   // fake bearer key, so it is NOT a credential check; `/key` is. The response
@@ -433,16 +450,16 @@ async function probeOpenRouterImage(): Promise<void> {
 // Probe dispatch + error normalization
 // ---------------------------------------------------------------------------
 
-function probeText(providerId: string, model: string): Promise<void> {
-  if (providerId === "gemini") return probeGeminiText(model);
-  if (providerId === "openrouter") return probeOpenRouterText(model);
-  if (providerId === "deepseek") return probeDeepSeekText(model);
+function probeText(providerId: string, model: string, credential?: string): Promise<void> {
+  if (providerId === "gemini") return probeGeminiText(model, credential);
+  if (providerId === "openrouter") return probeOpenRouterText(model, credential);
+  if (providerId === "deepseek") return probeDeepSeekText(model, credential);
   return Promise.reject(new ReadyError("PROVIDER_ERROR", "Unknown text provider."));
 }
 
-function probeImage(providerId: string): Promise<void> {
-  if (providerId === "gemini-image") return probeGeminiImage();
-  if (providerId === "openrouter-image") return probeOpenRouterImage();
+function probeImage(providerId: string, credential?: string): Promise<void> {
+  if (providerId === "gemini-image") return probeGeminiImage(credential);
+  if (providerId === "openrouter-image") return probeOpenRouterImage(credential);
   return Promise.reject(new ReadyError("PROVIDER_ERROR", "Unknown image provider."));
 }
 
@@ -501,14 +518,14 @@ function enforceOperatorPin(
   providerId: string,
   kind: "text" | "image",
   modelId: string | undefined
-): { allowed: true; modelId?: string } | { allowed: false } {
+): { allowed: true; modelId?: string; serverManaged: boolean } | { allowed: false } {
   const selection = kind === "text" ? getTextSelection() : getImageSelection();
-  if (selection.selectionMode !== "server_managed") return { allowed: true, modelId };
+  if (selection.selectionMode !== "server_managed") return { allowed: true, modelId, serverManaged: false };
   if (!selection.valid || !selection.selectedProviderId) return { allowed: false };
   if (providerId !== selection.selectedProviderId) return { allowed: false };
   const pinnedModel = selection.selectedModelId ?? resolveProbeModel(providerId, kind);
   if (modelId && pinnedModel && modelId !== pinnedModel) return { allowed: false };
-  return { allowed: true, modelId: pinnedModel ?? modelId };
+  return { allowed: true, modelId: pinnedModel ?? modelId, serverManaged: true };
 }
 
 /**
@@ -520,66 +537,104 @@ export async function runConnectionTest(options: {
   providerId: string;
   kind: "text" | "image";
   modelId?: string;
+  /** BYOK-5D: whose credential to validate. Defaults to server_environment. */
+  credentialSource?: CredentialSource;
 }): Promise<ConnectionTestResult> {
   const { providerId, kind, modelId } = options;
+  const requestedSource: CredentialSource = options.credentialSource ?? "server_environment";
+
+  const fail = (
+    code: string,
+    credentialSource: CredentialSource,
+    model: string = modelId ?? ""
+  ): ConnectionTestResult => ({
+    ok: false,
+    providerId,
+    model,
+    credentialSource,
+    code,
+    message: boundedMessage(code),
+  });
 
   // Fail-fast: provider registered?
   const reg =
     kind === "text"
       ? findRegisteredProvider(getRegisteredProviders(), providerId)
       : findRegisteredImageProvider(providerId);
-  if (!reg) {
-    return { ok: false, providerId, model: modelId ?? "", code: "PROVIDER_ERROR", message: boundedMessage("PROVIDER_ERROR") };
-  }
+  if (!reg) return fail("PROVIDER_ERROR", requestedSource);
 
   // OPERATOR POLICY: a server-managed pin restricts the probe to the pinned
-  // provider/model; an invalid pin fails closed. ZERO provider traffic either way.
+  // provider/model AND FORCES server_environment credentials (a session key can
+  // never replace the operator credential). An invalid pin fails closed. ZERO
+  // provider traffic either way.
   const pinned = enforceOperatorPin(providerId, kind, modelId);
-  if (!pinned.allowed) {
-    return {
-      ok: false,
-      providerId,
-      model: modelId ?? "",
-      code: "OPERATOR_PIN",
-      message: boundedMessage("OPERATOR_PIN"),
-    };
+  if (!pinned.allowed) return fail("OPERATOR_PIN", requestedSource);
+
+  // Effective credential source: a valid pin forces server_environment; the
+  // caller's explicit credentialSource is honored ONLY when there is no pin.
+  const effectiveSource: CredentialSource = pinned.serverManaged
+    ? "server_environment"
+    : requestedSource;
+
+  // Session-only connection testing uses the SAME local/single-user deployment
+  // guard as key storage/runtime. Hosted/non-loopback fails closed with a code
+  // DISTINCT from the ordinary environment-credential-unavailable case.
+  if (effectiveSource === "session_only" && !isSessionByokSupportedDeployment()) {
+    return fail("SESSION_BYOK_UNAVAILABLE", effectiveSource, pinned.modelId ?? modelId ?? "");
   }
 
-  const testKind = connectionTestKindForProvider(providerId, kind);
-  if (testKind === "unavailable") {
-    return { ok: false, providerId, model: pinned.modelId ?? modelId ?? "", code: "UNAVAILABLE", message: boundedMessage("UNAVAILABLE") };
+  // For server_environment, preserve the existing fail-fast availability check
+  // (a session_only provider may be env-unavailable yet session-available).
+  if (effectiveSource === "server_environment") {
+    const testKind = connectionTestKindForProvider(providerId, kind);
+    if (testKind === "unavailable") {
+      return fail("UNAVAILABLE", effectiveSource, pinned.modelId ?? modelId ?? "");
+    }
   }
 
   // MODEL ALLOWLIST (INVALID_MODEL): an explicit modelId MUST exist in the
   // server-owned curated model set for this provider/kind. Rejected BEFORE any
-  // provider (or SDK) call — an arbitrary/unknown model is never probed and is
-  // never resolved to a default.
+  // provider (or SDK) call.
   if (modelId && !curatedConnectionTestModels(providerId, kind).includes(modelId)) {
-    return { ok: false, providerId, model: modelId, code: "INVALID_MODEL", message: boundedMessage("INVALID_MODEL") };
+    return fail("INVALID_MODEL", effectiveSource, modelId);
   }
 
   const model = pinned.modelId ?? modelId ?? resolveProbeModel(providerId, kind) ?? "";
-  if (!model) {
-    return { ok: false, providerId, model, code: "UNSUPPORTED_CAPABILITY", message: boundedMessage("UNSUPPORTED_CAPABILITY") };
+  if (!model) return fail("UNSUPPORTED_CAPABILITY", effectiveSource, model);
+
+  // Resolve the EXACT credential for session_only (no env fallback, no
+  // cross-provider lookup). server_environment probes read the env seam directly
+  // so the existing placeholder/availability semantics are unchanged.
+  let sessionCredential: string | undefined;
+  if (effectiveSource === "session_only") {
+    const resolved = resolveCredential(providerId, "session_only");
+    if ("code" in resolved) return fail(resolved.code, effectiveSource, model);
+    sessionCredential = resolved.lease.secret;
   }
 
   // GLOBAL CONCURRENCY CEILING: reject BEFORE any provider call when saturated.
   if (inFlightConnectionTests >= MAX_IN_FLIGHT_CONNECTION_TESTS) {
-    return { ok: false, providerId, model, code: "BUSY", message: boundedMessage("BUSY") };
+    return fail("BUSY", effectiveSource, model);
   }
   inFlightConnectionTests += 1;
 
   const start = Date.now();
   try {
     if (kind === "text") {
-      await probeText(providerId, model);
+      await probeText(providerId, model, sessionCredential);
     } else {
-      await probeImage(providerId);
+      await probeImage(providerId, sessionCredential);
     }
-    return { ok: true, providerId, model, latencyMs: Date.now() - start };
+    return {
+      ok: true,
+      providerId,
+      model,
+      credentialSource: effectiveSource,
+      latencyMs: Date.now() - start,
+    };
   } catch (err) {
     const code = normalizeProbeError(err);
-    return { ok: false, providerId, model, code, message: boundedMessage(code) };
+    return fail(code, effectiveSource, model);
   } finally {
     inFlightConnectionTests = Math.max(0, inFlightConnectionTests - 1);
   }

@@ -32,10 +32,13 @@ import type { AiProvider } from "./types.js";
 /** The two non-secret credential sources. */
 export type CredentialSource = "server_environment" | "session_only";
 
-/** Bounded, provider-neutral credential failure codes (never secret-derived). */
+/**
+ * Bounded, provider-neutral credential failure codes (never secret-derived).
+ * NOTE: missing / expired / revoked all normalize to SESSION_CREDENTIAL_MISSING
+ * (the session store intentionally does not expose lifecycle detail).
+ */
 export type CredentialErrorCode =
   | "SESSION_CREDENTIAL_MISSING"
-  | "SESSION_CREDENTIAL_EXPIRED"
   | "CREDENTIAL_SOURCE_INVALID"
   | "CREDENTIAL_SOURCE_UNAVAILABLE";
 
