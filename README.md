@@ -1,6 +1,6 @@
-# 🍳 The Kitchen Codex `v0.6.0`
+# 🍳 The Kitchen Codex `v0.7.0`
 
-[![Version](https://img.shields.io/badge/version-0.6.0-amber.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.7.0-amber.svg)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A markdown-native recipe manager, meal planner, culinary knowledge base, and interactive cooking companion built specifically for **Obsidian** vaults. Read, edit, sync, and cook directly from your Obsidian `.md` recipe collection with YAML frontmatter, Dataview tags, wikilinks (`[[Ingredient]]`, `[[Target|Alias]]`), AI nutrition estimation, dynamic portion scaling, multi-step cooking timers, and AI-powered web recipe scraping.
@@ -245,7 +245,12 @@ favorite: true
 
 ## 📌 Changelog
 
-### `v0.6.0` (Current Release)
+### `v0.7.0` (Current Release)
+- **Create for Me**: a guided recipe-creation assistant with canonical vault-integrity hardening (recipe/vault stale-conflict protection, lock-key normalization, liveness-guarded Save so no operation can silently run behind a closed window or stale session).
+- **Vault Intelligence image recovery**: missing/broken-image detection, explicit Gemini image generation, AI preview before save, and Save / Regenerate / Cancel controls with collision-safe local `Assets/` writes and generated-image provenance.
+- **Provider/error resilience groundwork**: an `ImageProvider` abstraction for Gemini image generation with an exact failure taxonomy (quota / rate-limit / timeout / unavailable / blocked / no-image / auth) — bounded messages, no auto-retries, no automatic image generation, and a pre-decode base64 memory guard.
+
+### `v0.6.0` (Previous Release)
 - **AI provider abstraction**: every live AI consumer (interpret, rank, discover, metadata recovery, nutrition, Grab Recipe) now routes through a provider-neutral `AiProvider` abstraction; the Gemini SDK is confined to infrastructure (`server/geminiClient.ts` + `server/ai/geminiProvider.ts`), with no application-level direct-Gemini consumer remaining.
 - **Redacted provider diagnostics**: all AI consumers log failed model attempts through a shared, bounded, secret-redacted helper — no raw provider errors reach clients.
 - **Nutrition hardening**: AI-estimated non-finite numbers (`Infinity`, `NaN`) now coerce to `0`; finite rounding/clamping and deterministic-first behavior unchanged.

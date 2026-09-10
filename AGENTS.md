@@ -105,13 +105,30 @@ in dev (Vite HMR). `frame-ancestors` is configurable via `CSP_FRAME_ANCESTORS`.
 
 ## Current state / open items
 
-- **v0.6.0 is the current release** ("The Kitchen Codex v0.6.0 — AI Provider
-  Abstraction"). `RELEASE_VERSION` in
+- **v0.7.0 is the current release** ("The Kitchen Codex v0.7.0 — Create for Me
+  & Vault Intelligence Image Recovery"). `RELEASE_VERSION` in
   `src/appVersion.ts` is the single runtime source of truth for BOTH the
   client (`src/version.ts`) and the server (`/api/health`). `package.json`/
   `README.md` reference the same release. To bump, run
   `bun x tsx scripts/bump_version.ts vX.Y.Z`.
-- **v0.6.0 delivers a provider-neutral AI layer**: every live AI consumer
+- **v0.7.0 delivers Create for Me + Vault Intelligence image recovery**: a
+  guided recipe-creation assistant with canonical vault-integrity hardening
+  (recipe/vault stale-conflict protection, lock-key normalization,
+  liveness-guarded Save), missing/broken-image detection, explicit Gemini image
+  generation with an AI preview before save and Save / Regenerate / Cancel
+  controls, canonical vault-safe image save with collision-safe `Assets/` paths
+  and generated-image provenance, an exact image-provider failure taxonomy
+  (quota / rate-limit / timeout / unavailable / blocked / no-image / auth) with
+  bounded messages, a pre-decode base64 memory guard, transient preview tokens,
+  and a NO-automatic-image-generation invariant on every
+  save/scan/render/resolve surface. Gemini image generation is best-effort and
+  may be quota/rate limited by the provider account; image availability is NOT
+  an app bug.
+- **Verified baseline**: 1583/1583 tests across 103 files; 98/98 security tests
+  across 8 files; typecheck and browser + plugin builds clean. Release notes:
+  `RELEASE_NOTES_v0.7.0.md`.
+- **v0.6.0 was the previous release**: it delivered a provider-neutral AI layer.
+  Every live AI consumer
   (kitchen interpret, rank, discover, metadata recovery, nutrition, Grab Recipe)
   is migrated onto the `server/ai/*` provider abstraction; the Gemini SDK is
   confined to infrastructure (`server/geminiClient.ts` + `server/ai/geminiProvider.ts`),
@@ -120,11 +137,8 @@ in dev (Vite HMR). `frame-ancestors` is configurable via `CSP_FRAME_ANCESTORS`.
   Nutrition AI values are hardened against non-finite numbers. The dead legacy
   answer path (`server/kitchenAnswer.ts`, `POST /api/kitchen/answer`, its rate
   limiter + tests, and the `buildAnswerRequest`/`isAnswerResponse` helpers) was
-  removed.
-- **Verified baseline**: 926/926 tests across 41 files; 84/84 security tests
-  across 8 files; typecheck and production build clean. Release notes:
-  `RELEASE_NOTES_v0.6.0.md`. Next architectural direction: a multi-surface
-  audit and the v0.7 AI product layer.
+  removed. Release notes: `RELEASE_NOTES_v0.6.0.md`. Next direction investigated
+  earlier: a multi-surface architecture audit.
 - **v0.5.1 was the previous release** — a kitchen AI provider-resilience hotfix
   (commit `6da612b`):
   dedicated Kitchen model aliases plus a primary -> fallback model chain for
@@ -274,7 +288,7 @@ own Markdown knowledge base.
 - **v0.6.0 — AI Provider Abstraction** — provider-neutral AI layer across all
   live AI consumers, Gemini SDK isolated to infrastructure, redacted provider
   diagnostics, nutrition non-finite hardening, and legacy answer-path cleanup.
-  [PREPARING FOR RELEASE — see RELEASE_NOTES_v0.6.0.md]
+  [SHIPPED — see RELEASE_NOTES_v0.6.0.md]
 - **v0.7 and later** — multi-surface architecture audit, then resume the longer
   roadmap: intelligent meal planning, smart shopping/pantry, cooking history,
   Cooking Mode 2.0/voice, recipe intelligence (OCR/PDF/image import), Recipe

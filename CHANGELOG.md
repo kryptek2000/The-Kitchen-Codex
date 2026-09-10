@@ -7,7 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.6.0] - 2026-09-06
+## [0.7.0] - 2026-09-09
+
+### 🧑‍🍳 Create for Me
+
+- Added a guided recipe-creation assistant with canonical vault-integrity
+  hardening: recipe/vault stale-conflict protection (content-hash and
+  vault-session mismatch detection), save lock-key normalization across
+  recipe-path and vault-relative forms, and liveness-guarded Save (an open
+  window can never commit behind an expired session).
+- Explicit user acceptance + create-in-vault flow with no automatic writes.
+
+### 🖼️ Vault Intelligence Image Recovery
+
+- Missing/broken-image detection for recipe findings via a syntax-only,
+  read-only local check (no remote probing).
+- Explicit Gemini image generation with an AI preview before any save, and
+  Save / Regenerate / Cancel controls in the recovery UI.
+- Canonical vault-safe image save: collision-safe `Assets/` paths
+  (`Title.png`, `Title (n).png`), generated-image provenance metadata in the
+  frontmatter, and recipe/vault-change conflict protection.
+- No silent replacement of valid images and no automatic image generation on
+  any save/scan/render/resolve surface.
+
+### 📡 Provider / Error Resilience (groundwork)
+
+- Introduced an `ImageProvider` abstraction (`server/ai/imageProvider.ts`) with
+  a Gemini image provider (`server/ai/geminiImageProvider.ts`).
+- Exact provider failure taxonomy preserved end to end: quota / rate-limit /
+  timeout / unavailable / blocked / no-image / auth each map to their own
+  bounded HTTP code + message; no collapse into a generic outage.
+- Transient preview-token store (`server/imagePreviewStore.ts`), rate-limited
+  generate/preview endpoints, and a pre-decode base64 memory guard that rejects
+  oversized payloads before any allocation.
+
+### 🛡️ Security & Integrity
+
+- Server-side keys only; no prompt / key / base64 content ever reaches logs or
+  clients (scanned in the failure-taxonomy suite).
+- SSRF guard, WAF (402/403/429) handling, and canonical-Markdown-as-source
+  invariants preserved.
+- New security wiring tests cover the image generate/preview routes and rate
+  limiters.
+
+### 🧪 Testing & Verification
+
+- 1583/1583 Vitest tests across 103 files; 98/98 security tests across 8 files.
+- TypeScript typecheck clean; browser and plugin builds clean;
+  `git diff --check` clean; 0 blocking / 0 important findings.
 
 ### 🧩 AI Provider Abstraction
 
