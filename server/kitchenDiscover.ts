@@ -22,6 +22,7 @@
 import dotenv from "dotenv";
 import { resolveRoleCandidates, selectAiCandidates } from "./ai/provider.js";
 import { normalizeProviderError } from "./ai/providerErrors.js";
+import type { SelectionInput } from "./ai/effectiveSelection.js";
 import { logModelAttempt } from "./providerDiagnostics.js";
 import {
   sanitizeWebResults,
@@ -76,11 +77,11 @@ export async function discoverKitchenRecipesOnServer(request: {
   question: string;
   intent: KitchenIntent;
   maxResults: number;
-}): Promise<KitchenDiscoveryResponse> {
-  // Selection-aware candidate resolution (server-managed pin or the standard
-  // Gemini -> OpenRouter -> DeepSeek role chain), then capability-gated:
-  // webSearch remains a hard, enforced requirement.
-  const capable = selectAiCandidates(resolveRoleCandidates("kitchenDiscover"), ["webSearch"]);
+}, userSelection?: SelectionInput): Promise<KitchenDiscoveryResponse> {
+  // Selection-aware candidate resolution (server-managed pin, valid user
+  // selection, or the standard Gemini -> OpenRouter -> DeepSeek role chain),
+  // then capability-gated: webSearch remains a hard, enforced requirement.
+  const capable = selectAiCandidates(resolveRoleCandidates("kitchenDiscover", undefined, userSelection), ["webSearch"]);
   if (capable.length === 0) {
     return webDiscoveryUnavailable();
   }

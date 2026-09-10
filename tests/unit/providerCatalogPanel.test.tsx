@@ -54,6 +54,8 @@ const CATALOG: ProviderCatalogView = {
       available: true,
       storageScope: "server_environment",
       supportsSecretWrites: false,
+      connectionTest: "network_probe",
+      selectable: true,
       models: [
         {
           id: "gemini-3.7-flash",
@@ -75,6 +77,8 @@ const CATALOG: ProviderCatalogView = {
       available: false,
       storageScope: "server_environment",
       supportsSecretWrites: false,
+      connectionTest: "network_probe",
+      selectable: false,
       models: [
         {
           id: "openai/gpt-4o-mini",
@@ -92,6 +96,8 @@ const CATALOG: ProviderCatalogView = {
       enabled: true,
       available: true,
       imageGeneration: true,
+      connectionTest: "credential_check",
+      selectable: true,
       formats: ["image/png"],
       maxBytes: 4 * 1024 * 1024,
       models: [{ id: "gemini-2.5-flash-image", default: true }],
@@ -105,6 +111,8 @@ const CATALOG: ProviderCatalogView = {
       valid: true,
     },
     image: { selectionMode: "server_default", valid: true },
+    userSelectionAllowed: { text: false, image: true },
+    executable: { text: true, image: true },
   },
 };
 
@@ -204,6 +212,8 @@ describe("ProviderStatusPanel catalog selection truth (BYOK-2)", () => {
       selection: {
         text: { selectionMode: "server_managed", selectedProviderId: "nope", valid: false },
         image: { selectionMode: "server_default", valid: true },
+        userSelectionAllowed: CATALOG.selection.userSelectionAllowed,
+        executable: CATALOG.selection.executable,
       },
     };
     const html = render(<ProviderStatusPanel statuses={STATUSES} catalog={catalog} onRefresh={() => {}} />);
@@ -217,6 +227,8 @@ describe("ProviderStatusPanel catalog selection truth (BYOK-2)", () => {
       selection: {
         text: { selectionMode: "server_managed", selectedProviderId: "gemini", valid: true },
         image: CATALOG.selection.image,
+        userSelectionAllowed: CATALOG.selection.userSelectionAllowed,
+        executable: CATALOG.selection.executable,
       },
     };
     const html = render(<ProviderStatusPanel statuses={STATUSES} catalog={catalog} onRefresh={() => {}} />);

@@ -20,6 +20,8 @@ function textProvider(
     available: true,
     storageScope: "server_environment",
     supportsSecretWrites: false,
+    connectionTest: "network_probe",
+    selectable: true,
     models: [
       {
         id: "gemini-3.7-flash",
@@ -39,6 +41,8 @@ function imageProvider(overrides: Record<string, unknown> = {}): Record<string, 
     enabled: true,
     available: true,
     imageGeneration: true,
+    connectionTest: "credential_check",
+    selectable: true,
     formats: ["image/png", "image/webp"],
     maxBytes: 4 * 1024 * 1024,
     models: [{ id: "gemini-2.5-flash-image", default: true }],
@@ -50,16 +54,25 @@ function selection(overrides: Record<string, unknown> = {}): Record<string, unkn
   return { selectionMode: "server_default", valid: true, ...overrides };
 }
 
+function allowedBlock(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return { text: true, image: true, ...overrides };
+}
+
 function payload(
   textProviders = [textProvider()],
   imageProviders = [imageProvider()],
-  selectionBlock: { text?: Record<string, unknown>; image?: Record<string, unknown> } = {}
+  selectionBlock: { text?: Record<string, unknown>; image?: Record<string, unknown> } = {},
+  userSelectionAllowed: Record<string, unknown> = {}
 ) {
   return {
     catalog: {
       textProviders,
       imageProviders,
-      selection: { text: selection(selectionBlock.text), image: selection(selectionBlock.image) },
+      selection: {
+        text: selection(selectionBlock.text),
+        image: selection(selectionBlock.image),
+        userSelectionAllowed: allowedBlock(userSelectionAllowed),
+      },
     },
   };
 }
@@ -215,6 +228,24 @@ describe("provider catalog view model (BYOK-2) — selection truth", () => {
         },
       })
     ).toThrow();
+  });
+
+  it("normalizes runtime executability separately from config-valid (fail-closed false when absent)", () => {
+    // Absent => fail-closed false.
+    expect(normalizeProviderCatalog(payload()).selection.executable).toEqual({ text: false, image: false });
+    const withExec = normalizeProviderCatalog({
+      catalog: {
+        textProviders: [textProvider()],
+        imageProviders: [imageProvider()],
+        selection: {
+          text: selection(),
+          image: selection(),
+          userSelectionAllowed: allowedBlock(),
+          executable: { text: true, image: false },
+        },
+      },
+    });
+    expect(withExec.selection.executable).toEqual({ text: true, image: false });
   });
 });
 

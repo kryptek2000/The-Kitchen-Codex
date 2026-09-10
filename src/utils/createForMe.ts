@@ -21,6 +21,7 @@ import {
   type GeneratedStep,
 } from '../schema/generatedRecipe';
 import { parseIngredientLine } from './markdownParser';
+import { buildAiSelectionRequestOptions } from '../application/aiSelection';
 
 /** The application-backed generation path (read/write app transport). */
 export const CREATE_RECIPE_PATH = '/api/recipes/generate';
@@ -131,7 +132,11 @@ export async function requestGeneratedRecipe(
   constraints: CreateForMeConstraintsInput = {}
 ): Promise<GeneratedRecipeClientResult> {
   const body = buildCreateRecipeRequest(prompt, constraints);
-  const res: NetworkResponse<unknown> = await network.post<unknown, CreateRecipeRequest>(CREATE_RECIPE_PATH, body);
+  const res: NetworkResponse<unknown> = await network.post<unknown, CreateRecipeRequest>(
+    CREATE_RECIPE_PATH,
+    body,
+    await buildAiSelectionRequestOptions()
+  );
   if (!res.ok) {
     const data = (typeof res.data === 'object' && res.data !== null ? res.data : {}) as Record<string, string>;
     throw new CreateRecipeClientError(

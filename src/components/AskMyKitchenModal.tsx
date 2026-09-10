@@ -48,6 +48,7 @@ import {
   prepareKitchenIntentForExecution,
 } from '../utils/kitchenIntentPolicy';
 import type { KitchenIntent, TrustedKitchenContext } from '../utils/kitchenIntent';
+import { buildAiSelectionRequestOptions } from '../application/aiSelection';
 
 type AskStatus =
   | 'idle'
@@ -268,7 +269,11 @@ export function AskMyKitchenModal({
     setWebStatus('discovering');
     try {
       const request = buildKitchenDiscoveryRequest(question, intent, MAX_WEB_RESULTS);
-      const res = await network.post<{ results?: KitchenWebResult[] }>('/api/kitchen/discover', request);
+      const res = await network.post<{ results?: KitchenWebResult[] }>(
+        '/api/kitchen/discover',
+        request,
+        await buildAiSelectionRequestOptions()
+      );
       const data = res.data;
       if (tokenRef.current !== token) return;
       if (res.ok && isKitchenDiscoveryResponse(data)) {
@@ -317,7 +322,11 @@ export function AskMyKitchenModal({
 
     try {
       // A) Interpret the question.
-      const interpretRes = await network.post<{ intent: any }>('/api/kitchen/interpret', buildInterpretRequest(trimmed));
+      const interpretRes = await network.post<{ intent: any }>(
+        '/api/kitchen/interpret',
+        buildInterpretRequest(trimmed),
+        await buildAiSelectionRequestOptions()
+      );
       const interpretData = interpretRes.data;
       if (tokenRef.current !== token) return;
       if (!interpretRes.ok) {
@@ -381,7 +390,11 @@ export function AskMyKitchenModal({
         index,
         question: trimmed,
         aiRank: async (input) => {
-          const rankRes = await network.post('/api/kitchen/rank', buildRankRequest(input.question, input.intent, input.candidates, input.resultCount));
+          const rankRes = await network.post(
+            '/api/kitchen/rank',
+            buildRankRequest(input.question, input.intent, input.candidates, input.resultCount),
+            await buildAiSelectionRequestOptions()
+          );
           const rankData = rankRes.data;
           if (tokenRef.current !== token) return null;
           if (!rankRes.ok || !rankData || (rankData as { ok?: boolean }).ok !== true) return null;

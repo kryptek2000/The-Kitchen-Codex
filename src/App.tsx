@@ -56,6 +56,7 @@ import {
   type RecipeImageRecoverySupport,
 } from './application/recipeImageRecovery';
 import { saveGeneratedRecipeImageToVault, hashCanonicalMarkdown, type GeneratedImageSaveResult } from './application/recipeImageSave';
+import { hydrateAiSelections } from './application/aiSelection';
 import { playTimerChime } from './utils/audioAlert';
 import { APP_VERSION } from './version';
 import ProviderSettings from './application-ui/ProviderSettings';
@@ -449,6 +450,26 @@ export default function App() {
         if (!cancelled) setSettingsHydrated(true);
       }
     })();
+    return () => {
+      cancelled = true;
+    };
+  }, [settingsAdapter]);
+
+  // 2b. CENTRAL APPLICATION BOOTSTRAP — hydrate AI provider/model selection
+  // preferences BEFORE any AI feature can execute. This is deliberately NOT a
+  // UI-panel side effect (ProviderSettings may never be opened). The application
+  // selection layer fails closed while hydration is pending and after a settings
+  // read error, so there is NO server-default routing window.
+  useEffect(() => {
+    let cancelled = false;
+    hydrateAiSelections(settingsAdapter).catch((err) => {
+      if (!cancelled) {
+        console.warn(
+          'Failed to hydrate AI provider selections:',
+          err instanceof Error ? err.message : 'unknown error'
+        );
+      }
+    });
     return () => {
       cancelled = true;
     };
@@ -1411,8 +1432,8 @@ export default function App() {
             onNavigateToMealPlan={() => setActiveTab('mealplan')}
           />
         ) : activeTab === 'providers' ? (
-          /* Read-only AI Provider Status / Settings View (no key entry) */
-          <ProviderSettings network={networkAdapter} />
+          /* AI Provider Status / Selection View (read-only truth + safe client preferences) */
+          <ProviderSettings network={networkAdapter} settings={settingsAdapter} />
         ) : (
           /* Themes View */
           <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">

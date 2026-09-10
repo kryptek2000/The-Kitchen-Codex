@@ -1,6 +1,7 @@
 import dotenv from "dotenv";
 import { runWithAiFallback, resolveRoleCandidates } from "./ai/provider.js";
 import type { AiJsonSchema, AiProvider } from "./ai/types.js";
+import type { SelectionInput } from "./ai/effectiveSelection.js";
 import { estimateAlgorithmicNutrition } from "./nutritionEstimator.js";
 import { logModelAttempt } from "./providerDiagnostics.js";
 
@@ -423,11 +424,12 @@ Guidelines:
  * fallback on total provider failure.
  */
 export async function recoverRecipeMetadata(
-  req: MetadataRecoveryRequest
+  req: MetadataRecoveryRequest,
+  userSelection?: SelectionInput
 ): Promise<MetadataRecoveryResult> {
   try {
     const { result } = await runWithAiFallback<MetadataRecoveryResult>({
-      candidates: resolveRoleCandidates("metadataRecovery"),
+      candidates: resolveRoleCandidates("metadataRecovery", undefined, userSelection),
       requiredCapabilities: ["structuredOutput"],
       run: (candidate) => aiRecoverMetadata(candidate.provider, candidate.model, req),
     });

@@ -1,6 +1,7 @@
 import dotenv from "dotenv";
 import { resolveRoleCandidates, runWithAiFallback } from "./ai/provider.js";
 import type { AiJsonSchema, AiProvider } from "./ai/types.js";
+import type { SelectionInput } from "./ai/effectiveSelection.js";
 import { logModelAttempt } from "./providerDiagnostics.js";
 import { estimateDeterministicNutrition, type DeterministicNutritionResult } from "./deterministicNutrition.js";
 import {
@@ -346,7 +347,8 @@ Guidelines:
  * All serving arithmetic is performed deterministically by the application.
  */
 export async function estimateRecipeNutrition(
-  req: NutritionEstimateRequest
+  req: NutritionEstimateRequest,
+  userSelection?: SelectionInput
 ): Promise<NutritionEstimateResult> {
   const recipeTitle = req.title ? req.title.trim().slice(0, 200) : "Culinary Recipe";
   const servings = Math.max(1, Math.min(100, Number(req.servings) || 4));
@@ -413,7 +415,7 @@ export async function estimateRecipeNutrition(
   // the deterministic estimator is NEVER replaced by provider fallback.
   try {
     const { result } = await runWithAiFallback<NutritionEstimateResult>({
-      candidates: resolveRoleCandidates("nutrition"),
+      candidates: resolveRoleCandidates("nutrition", undefined, userSelection),
       requiredCapabilities: ["structuredOutput"],
       run: (candidate) =>
         aiEstimateNutrition(candidate.provider, candidate.model, recipeTitle, servings, cleanedIngredientLines),

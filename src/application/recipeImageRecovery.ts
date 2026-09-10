@@ -30,6 +30,7 @@ import type { NetworkAdapter } from './adapters/NetworkAdapter';
 import type { GeneratedImageSaveResult } from './recipeImageSave';
 import { RecipeImageSaveConflictError } from './recipeImageSave';
 import { createCreateForMeSession, runGuarded } from './createForMeSession';
+import { buildAiSelectionRequestOptions } from './aiSelection';
 
 /** The application-backed image-generation path (same as the server wiring). */
 export const GENERATE_RECIPE_IMAGE_PATH = '/api/recipes/image/generate';
@@ -170,7 +171,11 @@ export async function requestGeneratedRecipeImage(
   network: NetworkAdapter,
   body: Record<string, unknown>
 ): Promise<GeneratedRecipeImageClientResult> {
-  const res = await network.post<unknown, Record<string, unknown>>(GENERATE_RECIPE_IMAGE_PATH, body);
+  const res = await network.post<unknown, Record<string, unknown>>(
+    GENERATE_RECIPE_IMAGE_PATH,
+    body,
+    await buildAiSelectionRequestOptions(undefined, undefined, 'image')
+  );
   if (!res.ok) {
     const data = (typeof res.data === 'object' && res.data !== null ? res.data : {}) as Record<string, unknown>;
     throw new RecipeImageProviderClientError(

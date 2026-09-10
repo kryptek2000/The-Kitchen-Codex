@@ -27,6 +27,7 @@ import {
 import { saveImageToVaultAssets, vaultAssets, type SaveImageDeps } from '../utils/vaultAssets';
 import { resolveNewRecipeVaultPath } from '../core/vaultPath';
 import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
+import { buildAiSelectionRequestOptions } from '../application/aiSelection';
 import { useVaultImage } from '../hooks/useVaultImage';
 
 interface RecipeEditorModalProps {
@@ -254,7 +255,8 @@ export function RecipeEditorModal({
           title: title || 'Recipe',
           servings: numServings,
           ingredients: lines,
-        }
+        },
+        await buildAiSelectionRequestOptions()
       );
 
       const data = res.data;
@@ -331,7 +333,11 @@ export function RecipeEditorModal({
         },
       };
 
-      const res = await network.post<{ recovered?: any; error?: string }>('/api/recover-metadata', payload);
+      const res = await network.post<{ recovered?: any; error?: string }>(
+        '/api/recover-metadata',
+        payload,
+        await buildAiSelectionRequestOptions()
+      );
 
       if (!res.ok) {
         const d = res.data as { error?: string } | undefined;

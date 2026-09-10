@@ -33,8 +33,8 @@ import type {
 } from "./types.js";
 
 /** OpenRouter's fixed, official chat-completions endpoint (never configurable). */
-const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
-const OPENROUTER_CHAT_ENDPOINT = `${OPENROUTER_BASE_URL}/chat/completions`;
+export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+export const OPENROUTER_CHAT_ENDPOINT = `${OPENROUTER_BASE_URL}/chat/completions`;
 
 /** Stable, safe json_schema name (OpenRouter/OpenAI structured output requires it). */
 const STRUCTURED_SCHEMA_NAME = "structured_output";

@@ -8,127 +8,46 @@
  * the ordered candidate list.
  *
  * OWNERSHIP:
- *   - `server/modelConfig.ts` remains authoritative for GEMINI role models.
- *   - This module layers per-provider OFFSET role models (e.g. OpenRouter) over
- *     the same operation shape, without duplicating consumer-side logic.
+ *   - `server/ai/roleModels.ts` is the module owning the curated role models
+ *     (per provider per operation).
+ *   - This module uses `normalizeOperationSelection` / `resolveTextCandidateContext`
+ *     from `effectiveSelection.ts` to honor the EFFECTIVE selection (BYOK-4).
  *
  * Deterministic: provider order = registry order; model order = role-model order.
  * Server-side only. No platform enum. No UI config. No raw secrets.
  */
 
 import type { AiOperation } from "./operations.js";
-import { MODEL_CONFIG } from "../modelConfig.js";
+import type { AiCandidate, RegisteredProvider } from "./providerRegistry.js";
+import { getRegisteredProviders } from "./providerRegistry.js";
 import {
-  findRegisteredProvider,
-  getRegisteredProviders,
-  type AiCandidate,
-  type RegisteredProvider,
-} from "./providerRegistry.js";
-import { getTextSelection } from "./providerSelection.js";
-import { OPENROUTER_STRUCTURED_MODEL } from "./openRouterProvider.js";
-import { DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL } from "./deepSeekProvider.js";
-
-/** Gemini role models per operation (unchanged v0.6 behavior). */
-const GEMINI_ROLE_MODELS: Record<AiOperation, string[]> = {
-  kitchenInterpret: [MODEL_CONFIG.kitchenPrimary, MODEL_CONFIG.kitchenFallback],
-  kitchenRank: [MODEL_CONFIG.kitchenPrimary, MODEL_CONFIG.kitchenFallback],
-  kitchenDiscover: [MODEL_CONFIG.kitchenDiscoveryPrimary, MODEL_CONFIG.kitchenDiscoveryFallback],
-  nutrition: [MODEL_CONFIG.nutritionPrimary, MODEL_CONFIG.nutritionFallback],
-  metadataRecovery: [MODEL_CONFIG.metadataRecoveryPrimary, MODEL_CONFIG.metadataRecoveryFallback],
-  recipeGrabber: [MODEL_CONFIG.recipeGrabberPrimary, MODEL_CONFIG.recipeGrabberFallback, MODEL_CONFIG.recipeGrabberAlias],
-  // Create for Me is recipe generation: reuse the recipe-oriented Gemini models.
-  createRecipe: [MODEL_CONFIG.recipeGrabberPrimary, MODEL_CONFIG.recipeGrabberFallback],
-};
-
-/** OpenRouter role models per operation (curated, cost-conscious structured-capable set). */
-const OPENROUTER_ROLE_MODELS: Record<AiOperation, string[]> = {
-  kitchenInterpret: [OPENROUTER_STRUCTURED_MODEL],
-  kitchenRank: [OPENROUTER_STRUCTURED_MODEL],
-  // Discovery candidates are resolved but capability-filtered out (webSearch:false).
-  kitchenDiscover: [OPENROUTER_STRUCTURED_MODEL],
-  nutrition: [OPENROUTER_STRUCTURED_MODEL],
-  metadataRecovery: [OPENROUTER_STRUCTURED_MODEL],
-  recipeGrabber: [OPENROUTER_STRUCTURED_MODEL],
-  // Create for Me: only the curated structured+recipe-capable model is a candidate.
-  createRecipe: [OPENROUTER_STRUCTURED_MODEL],
-};
+  resolveTextCandidateContext,
+  type SelectionInput,
+} from "./effectiveSelection.js";
 
 /**
- * DeepSeek role models per operation (curated, cost-conscious). DeepSeek has NO
- * schema-constrained structured output and NO webSearch, so these candidates are
- * resolved but capability-filtered OUT of every structured operation and out of
- * `kitchenDiscover`. The flash model is preferred (cheaper/faster); pro is the
- * stronger fallback. Mapping is provider-neutral (like OpenRouter) — the
- * selector owns the real capability gate.
- */
-const DEEPSEEK_ROLE_MODELS: Record<AiOperation, string[]> = {
-  kitchenInterpret: [DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL],
-  kitchenRank: [DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL],
-  // Discovery candidates are resolved but capability-filtered out (webSearch:false).
-  kitchenDiscover: [DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL],
-  nutrition: [DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL],
-  metadataRecovery: [DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL],
-  recipeGrabber: [DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL],
-  // Create for Me: candidates are resolved but filtered out (no schema-constrained
-  // structured output and no recipe-generation capability).
-  createRecipe: [DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL],
-};
-
-function geminiModels(operation: AiOperation): string[] {
-  return GEMINI_ROLE_MODELS[operation] ?? [];
-}
-
-function openRouterModels(operation: AiOperation): string[] {
-  return OPENROUTER_ROLE_MODELS[operation] ?? [];
-}
-
-function deepSeekModels(operation: AiOperation): string[] {
-  return DEEPSEEK_ROLE_MODELS[operation] ?? [];
-}
-
-/** Resolves the model list for a provider + operation (empty for unknown provider). */
-export function roleModelsForProvider(providerId: string, operation: AiOperation): string[] {
-  if (providerId === "gemini") return geminiModels(operation);
-  if (providerId === "openrouter") return openRouterModels(operation);
-  if (providerId === "deepseek") return deepSeekModels(operation);
-  return [];
-}
-
-/**
- * Resolves ordered (provider, model) candidates for an operation across all
- * enabled providers. Capability/availability filtering is the selector's job.
+ * Resolves ordered (provider, model) candidates for an operation honoring the
+ * EFFECTIVE selection (BYOK-4):
  *
- * BYOK-2 SERVER-MANAGED MODE: a valid `server_managed` pin restricts the
- * candidate list to the SELECTED PROVIDER (and the selected model, when pinned).
- * This is deliberate: pinned mode must NOT silently cross-provider fallback. A
- * selected provider/model that cannot satisfy the operation is filtered out by
- * the selector later (effective capability + availability gates) and the
- * operation's own deterministic fallback engages — never another paid provider.
+ *   server_managed (valid env pin) > user_selected (valid) > server_default.
+ *
+ * Capability/availability filtering is the selector's job. The candidate list is
+ * RESTRICTED so that neither server_managed nor user_selected mode silently
+ * cross-provider falls back: an invalid/incapable selected provider/model yields
+ * a NO-CANDIDATE list, so the operation's own deterministic fallback engages —
+ * never a DIFFERENT paid provider.
+ *
+ * `userSelection` is the client's per-request, NON-SECRET selection intent
+ * (strict discriminated header parse, or the legacy bounded metadata shape). It
+ * is honored ONLY when no valid server-managed pin exists, and always fails
+ * closed against the current catalog.
  */
 export function resolveRoleCandidates(
   operation: AiOperation,
-  regs: RegisteredProvider[] = getRegisteredProviders()
+  regs: RegisteredProvider[] = getRegisteredProviders(),
+  userSelection?: SelectionInput
 ): AiCandidate[] {
-  const selection = getTextSelection();
-  if (selection.selectionMode === "server_managed") {
-    // Invalid pin (unknown/disabled provider or uncurated model) is a NO-CANDIDATE,
-    // so the runtime falls back to the operation's deterministic path — never to an
-    // unknown provider/model.
-    if (!selection.valid || !selection.selectedProviderId) return [];
-    const registered = findRegisteredProvider(regs, selection.selectedProviderId);
-    if (!registered || registered.enabled === false) return [];
-    const models = selection.selectedModelId
-      ? [selection.selectedModelId]
-      : roleModelsForProvider(selection.selectedProviderId, operation);
-    return models.map((model) => ({ provider: registered.provider, model }));
-  }
-  const out: AiCandidate[] = [];
-  for (const registered of regs) {
-    if (registered.enabled === false) continue;
-    const models = roleModelsForProvider(registered.provider.id, operation);
-    for (const model of models) {
-      out.push({ provider: registered.provider, model });
-    }
-  }
-  return out;
+  return resolveTextCandidateContext(operation, regs, userSelection).candidates;
 }
+
+export { roleModelsForProvider } from "./roleModels.js";

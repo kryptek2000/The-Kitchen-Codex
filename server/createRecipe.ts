@@ -28,6 +28,7 @@ import {
 } from "./ai/provider.js";
 import type { AiCandidate, RegisteredProvider } from "./ai/provider.js";
 import type { AiProvider } from "./ai/types.js";
+import type { SelectionInput } from "./ai/effectiveSelection.js";
 import {
   buildGeneratedRecipeSchema,
   normalizeGeneratedRecipeDraft,
@@ -61,6 +62,8 @@ export interface GeneratedRecipeResult {
 export interface CreateRecipeOverrides {
   candidates?: AiCandidate[];
   registry?: RegisteredProvider[];
+  /** Per-request user selection metadata (honored only when valid + no pin). */
+  userSelection?: SelectionInput;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -229,7 +232,7 @@ export async function generateRecipeDraftOnServer(
   const req = validated.value;
   const prompt = buildCreateRecipePrompt(req);
   const schema = buildGeneratedRecipeSchema();
-  const candidates = overrides.candidates ?? resolveRoleCandidates("createRecipe");
+  const candidates = overrides.candidates ?? resolveRoleCandidates("createRecipe", undefined, overrides.userSelection);
   const registry = overrides.registry;
 
   const { result, providerId, model } = await runWithAiFallback<GeneratedRecipeDraft>({

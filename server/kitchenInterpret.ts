@@ -3,23 +3,28 @@
  *
  * This is the ONLY place that involves AI for Step 2. It turns a user
  * question into a structured `KitchenQuery` by:
- *   1. calling the provider abstraction (`getDefaultAiProvider()`) with a strict
- *      JSON schema + instructions that forbid answering, inventing recipes,
- *      inferring metadata, resolving synonyms, or browsing (section 13);
+ *   1. calling the provider abstraction with a strict JSON schema + instructions
+ *      that forbid answering, inventing recipes, inferring metadata, resolving
+ *      synonyms, or browsing (section 13); the provider is resolved through the
+ *      EFFECTIVE selection (server-managed pin > valid user selection >
+ *      server_default), NOT a hardcoded default provider;
  *   2. wrapping the result through the pure, deterministic sanitizer in
  *      `src/utils/kitchenQueryInterpreter.ts`, which is the ultimate authority
  *      on query shape (prompt-injection + malformed-output resilience);
- *   3. falling back to the conservative deterministic parser when AI is
- *      unconfigured / unavailable / returns no usable constraints.
+ *   3. falling back to the conservative deterministic parser when NO effective
+ *      provider candidate is executable for this operation.
  *
  * PRIVACY: only the user's QUESTION is sent to the AI provider. No recipe/vault
  * content is ever transmitted here; interpretation is question-only by
  * construction.
  */
 import dotenv from "dotenv";
-import { getDefaultAiProvider, runWithAiFallback, resolveRoleCandidates } from "./ai/provider.js";
+import { runWithAiFallback, resolveRoleCandidates } from "./ai/provider.js";
+import { getRegisteredProviders } from "./ai/provider.js";
+import { resolveExecutableTextCandidates } from "./ai/effectiveSelection.js";
 import { normalizeProviderError } from "./ai/providerErrors.js";
 import type { AiJsonSchema } from "./ai/types.js";
+import type { SelectionInput } from "./ai/effectiveSelection.js";
 import { logModelAttempt } from "./providerDiagnostics.js";
 import {
   interpretKitchenIntent,
@@ -131,17 +136,17 @@ function buildSchema(): AiJsonSchema {
  * logged (redacted) and skipped; the first model that produces a result wins. If
  * every model fails it throws so the deterministic interpreter can take over.
  */
-async function aiInterpret(question: string): Promise<unknown> {
-  const provider = getDefaultAiProvider();
+async function aiInterpret(question: string, userSelection?: SelectionInput): Promise<unknown> {
   const schema = buildSchema();
 
   // Interpret requires a structured-output-capable provider. Candidates are
-  // resolved per operation across configured providers (Gemini first) and
-  // capability-filtered by the selector; failures fall back across providers only
-  // when fallback-eligible, then the deterministic interpreter takes over.
+  // resolved for the EFFECTIVE selection (server pin > valid user selection >
+  // server_default) across configured providers and capability-filtered by the
+  // selector; failures fall back across providers only when fallback-eligible,
+  // then the deterministic interpreter takes over.
   try {
     const { result } = await runWithAiFallback<unknown>({
-      candidates: resolveRoleCandidates("kitchenInterpret"),
+      candidates: resolveRoleCandidates("kitchenInterpret", undefined, userSelection),
       requiredCapabilities: ["structuredOutput"],
       run: (candidate) =>
         candidate.provider.generateStructured(
@@ -156,7 +161,7 @@ async function aiInterpret(question: string): Promise<unknown> {
     });
     return result;
   } catch (err) {
-    const normalized = normalizeProviderError(err, { providerId: provider.id });
+    const normalized = normalizeProviderError(err);
     logModelAttempt("interpret", normalized.model ?? "", normalized);
     throw normalized;
   }
@@ -164,17 +169,28 @@ async function aiInterpret(question: string): Promise<unknown> {
 
 /**
  * Interprets a question on the server into a SANITIZED `KitchenIntent`. Uses the
- * AI provider when available (wrapped by deterministic sanitization), otherwise
- * the conservative deterministic semantic fallback. Never throws for expected
- * interpretation failures; returns a safe state. Trusted-context resolution +
- * execution readiness happen on the client, so this route returns sanitized
- * semantic intent only (no trusted ids).
+ * EFFECTIVE selection to decide whether AI is attempted at all: if at least one
+ * capable + runtime-available candidate resolves (server-managed pin, valid user
+ * selection, or the server-default chain), the AI path runs; otherwise the
+ * conservative deterministic semantic fallback runs. A valid selected/pinned
+ * provider is honored even when the DEFAULT provider (Gemini) is unavailable. An
+ * invalid explicit selection fails closed to the deterministic path and never
+ * cross-executes another provider. Never throws for expected interpretation
+ * failures; returns a safe state. Trusted-context resolution + execution
+ * readiness happen on the client, so this route returns sanitized semantic
+ * intent only (no trusted ids).
  */
 export async function interpretKitchenQuestionOnServer(
-  question: string
+  question: string,
+  userSelection?: SelectionInput
 ): Promise<KitchenIntentInterpretation> {
-  const provider = getDefaultAiProvider();
-  const deps = provider.isAvailable() ? { aiInterpret } : {};
+  const candidates = resolveExecutableTextCandidates(
+    "kitchenInterpret",
+    getRegisteredProviders(),
+    userSelection
+  );
+  const deps =
+    candidates.length > 0 ? { aiInterpret: (q: string) => aiInterpret(q, userSelection) } : {};
   return interpretKitchenIntent(question, deps);
 }
 

@@ -14,6 +14,9 @@ describe("Express server wiring", () => {
   let seamBaseUrl: string;
 
   beforeAll(async () => {
+    // Keep the connection-test limiter from cross-test interference; the
+    // rate-limit regression sets its own low limit explicitly.
+    process.env.PROVIDER_TEST_RATE_LIMIT = "1000";
     const app = createApp({ isProduction: false });
     server = http.createServer(app);
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -28,6 +31,7 @@ describe("Express server wiring", () => {
   });
 
   afterAll(async () => {
+    delete process.env.PROVIDER_TEST_RATE_LIMIT;
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await new Promise<void>((resolve) => seamServer.close(() => resolve()));
   });
@@ -254,6 +258,210 @@ describe("Express server wiring", () => {
     expect(res.status).toBe(401);
     const body = await res.json();
     expect(body.code).toBe("UNAUTHORIZED");
+  });
+
+  // ---- BYOK-4: provider connection test route ------------------------------
+
+  it("POST /api/providers/test-connection requires the AI endpoint token when configured", async () => {
+    process.env.AI_ENDPOINT_TOKEN = "super-secret";
+    const res = await fetch(`${baseUrl}/api/providers/test-connection`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ providerId: "gemini", kind: "text" }),
+    });
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(body.code).toBe("UNAUTHORIZED");
+  });
+
+  it("POST /api/providers/test-connection rejects a missing providerId", async () => {
+    delete process.env.AI_ENDPOINT_TOKEN;
+    const res = await fetch(`${baseUrl}/api/providers/test-connection`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "text" }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toContain("providerId");
+  });
+
+  it("POST /api/providers/test-connection returns a bounded secret-free result for an unknown provider", async () => {
+    delete process.env.AI_ENDPOINT_TOKEN;
+    const res = await fetch(`${baseUrl}/api/providers/test-connection`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ providerId: "not-a-provider", kind: "text" }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(typeof body.code).toBe("string");
+    expect(typeof body.message).toBe("string");
+    const json = JSON.stringify(body);
+    expect(json).not.toContain("API_KEY");
+    expect(json).not.toContain("Bearer");
+    expect(json).not.toContain("sk-");
+  });
+
+  it("POST /api/providers/test-connection rejects an ARBITRARY model id with a bounded 4xx (INVALID_MODEL) and no secret leak", async () => {
+    delete process.env.AI_ENDPOINT_TOKEN;
+    const original = process.env.GEMINI_API_KEY;
+    process.env.GEMINI_API_KEY = "SUPER_SECRET_BYOK4HARDEN_TESTKEY";
+    try {
+      const res = await fetch(`${baseUrl}/api/providers/test-connection`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ providerId: "gemini", kind: "text", modelId: "totally-arbitrary-model" }),
+      });
+      // Bounded 4xx for a client-side validation failure (verified pre-network).
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.ok).toBe(false);
+      expect(body.code).toBe("INVALID_MODEL");
+      expect(body.model).toBe("totally-arbitrary-model");
+      const json = JSON.stringify(body);
+      expect(json).not.toContain("SUPER_SECRET_BYOK4HARDEN_TESTKEY");
+      expect(json).not.toContain("API_KEY");
+      expect(json).not.toContain("Bearer");
+    } finally {
+      if (original === undefined) delete process.env.GEMINI_API_KEY;
+      else process.env.GEMINI_API_KEY = original;
+    }
+  });
+
+  it("POST /api/providers/test-connection rejects an UNKNOWN kind with a bounded 400 (never normalized to text)", async () => {
+    delete process.env.AI_ENDPOINT_TOKEN;
+    const res = await fetch(`${baseUrl}/api/providers/test-connection`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ providerId: "gemini", kind: "bogus" }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toContain("kind");
+    // Missing kind is equally invalid (no silent text default).
+    const missing = await fetch(`${baseUrl}/api/providers/test-connection`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ providerId: "gemini" }),
+    });
+    expect(missing.status).toBe(400);
+    expect((await missing.json()).error).toContain("kind");
+  });
+
+  it("POST /api/providers/test-connection still accepts the canonical text and image kinds", async () => {
+    delete process.env.AI_ENDPOINT_TOKEN;
+    for (const kind of ["text", "image"] as const) {
+      const res = await fetch(`${baseUrl}/api/providers/test-connection`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ providerId: "not-a-provider", kind }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.ok).toBe(false);
+      expect(typeof body.code).toBe("string");
+    }
+  });
+
+  it("POST /api/providers/test-connection is rate-limited (429) under a burst", async () => {
+    delete process.env.AI_ENDPOINT_TOKEN;
+    const original = process.env.PROVIDER_TEST_RATE_LIMIT;
+    process.env.PROVIDER_TEST_RATE_LIMIT = "3";
+    try {
+      let saw429 = false;
+      for (let i = 0; i < 5; i++) {
+        const res = await fetch(`${baseUrl}/api/providers/test-connection`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ providerId: "not-a-provider", kind: "text" }),
+        });
+        if (res.status === 429) {
+          saw429 = true;
+          const body = await res.json();
+          expect(body.error).toContain("connection test");
+          expect(res.headers.get("Retry-After")).toBeTruthy();
+          break;
+        }
+      }
+      expect(saw429).toBe(true);
+    } finally {
+      if (original === undefined) delete process.env.PROVIDER_TEST_RATE_LIMIT;
+      else process.env.PROVIDER_TEST_RATE_LIMIT = original;
+    }
+  });
+
+  it("POST /api/providers/test-connection rejects WRONG-TYPE providerId/modelId/kind with a bounded 400", async () => {
+    delete process.env.AI_ENDPOINT_TOKEN;
+    const wrongProvider = await fetch(`${baseUrl}/api/providers/test-connection`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ providerId: 123, kind: "text" }),
+    });
+    expect(wrongProvider.status).toBe(400);
+    expect((await wrongProvider.json()).error).toContain("providerId");
+
+    const wrongModel = await fetch(`${baseUrl}/api/providers/test-connection`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ providerId: "gemini", kind: "text", modelId: { bad: true } }),
+    });
+    expect(wrongModel.status).toBe(400);
+    expect((await wrongModel.json()).error).toContain("modelId");
+
+    const wrongKind = await fetch(`${baseUrl}/api/providers/test-connection`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ providerId: "gemini", kind: 7 }),
+    });
+    expect(wrongKind.status).toBe(400);
+    expect((await wrongKind.json()).error).toContain("kind");
+  });
+
+  it("POST /api/providers/test-connection rejects OVERSIZED ids with a bounded 400 (no truncation)", async () => {
+    delete process.env.AI_ENDPOINT_TOKEN;
+    const oversizedProvider = await fetch(`${baseUrl}/api/providers/test-connection`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ providerId: "p".repeat(65), kind: "text" }),
+    });
+    expect(oversizedProvider.status).toBe(400);
+    const providerBody = await oversizedProvider.json();
+    expect(providerBody.error).toContain("providerId");
+    // The oversized value is NEVER echoed back truncated/valid.
+    expect(JSON.stringify(providerBody)).not.toContain("p".repeat(65));
+
+    const oversizedModel = await fetch(`${baseUrl}/api/providers/test-connection`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ providerId: "gemini", kind: "text", modelId: "m".repeat(129) }),
+    });
+    expect(oversizedModel.status).toBe(400);
+    expect((await oversizedModel.json()).error).toContain("modelId");
+  });
+
+  it("POST /api/providers/test-connection honors a server-managed pin (cannot probe another provider)", async () => {
+    delete process.env.AI_ENDPOINT_TOKEN;
+    const original = process.env.KITCHEN_CODEX_TEXT_PROVIDER;
+    process.env.KITCHEN_CODEX_TEXT_PROVIDER = "gemini";
+    try {
+      const res = await fetch(`${baseUrl}/api/providers/test-connection`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ providerId: "openrouter", kind: "text" }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.ok).toBe(false);
+      expect(body.code).toBe("OPERATOR_PIN");
+      // Bounded, secret-free.
+      expect(JSON.stringify(body)).not.toContain("Bearer");
+      expect(JSON.stringify(body)).not.toContain("sk-");
+    } finally {
+      if (original === undefined) delete process.env.KITCHEN_CODEX_TEXT_PROVIDER;
+      else process.env.KITCHEN_CODEX_TEXT_PROVIDER = original;
+    }
   });
 
   it("POST /api/recipes/generate requires the AI endpoint token when configured", async () => {

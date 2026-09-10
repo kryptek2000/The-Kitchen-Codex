@@ -53,4 +53,35 @@ export {
 export type { ProviderErrorCode, ProviderErrorContext, ProviderDiagnostic } from "./providerErrors.js";
 export { OPERATION_REQUIRED_CAPABILITIES, operationRequiredCapabilities } from "./operations.js";
 export type { AiOperation } from "./operations.js";
-export { resolveRoleCandidates, roleModelsForProvider } from "./roleCandidates.js";
+export { resolveRoleCandidates } from "./roleCandidates.js";
+export { roleModelsForProvider, curatedTextModels } from "./roleModels.js";
+export {
+  normalizeOperationSelection,
+  coerceSelectionInput,
+  hasExplicitUserSelection,
+  validateUserTextSelection,
+  userTextSelectionMatchesOperation,
+  resolveTextCandidateContext,
+  resolveExecutableTextCandidates,
+  validateUserImageSelection,
+  resolveEffectiveImageSelection,
+} from "./effectiveSelection.js";
+export type {
+  EffectiveImageSelection,
+  SelectedOperationMetadata,
+  SelectionInput,
+  CoercedSelectionInput,
+} from "./effectiveSelection.js";
+export {
+  parseTextSelectionHeader,
+  parseImageSelectionHeader,
+  isExplicitSelectionIntent,
+  selectionIntentToMetadata,
+  SELECTION_HEADER_NAMES,
+  SELECTION_HEADER_BOUNDS,
+} from "./parseSelectionMetadata.js";
+export type {
+  SelectionHeaderSource,
+  SelectionIntent,
+  SelectionInvalidReason,
+} from "./parseSelectionMetadata.js";

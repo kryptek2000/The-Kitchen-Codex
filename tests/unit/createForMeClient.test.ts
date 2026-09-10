@@ -1,5 +1,12 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import type { NetworkAdapter, NetworkResponse } from "../../src/application/adapters/NetworkAdapter.js";
+import { hydrateAiSelections } from "../../src/application/aiSelection.js";
+
+// The application AI-selection layer fails closed until hydrated; hydrate the
+// shared module once so the client flow can build request options.
+beforeAll(async () => {
+  await hydrateAiSelections({ get: async () => undefined });
+});
 import {
   buildCreateRecipeRequest,
   parseEditedDraftLines,

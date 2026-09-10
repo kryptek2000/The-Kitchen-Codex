@@ -4,6 +4,7 @@ import { renderIngredientLine, parseIngredientLine } from "../src/utils/markdown
 import { runWithAiFallback, resolveRoleCandidates } from "./ai/provider.js";
 import type { ProviderDiagnostic } from "./ai/providerErrors.js";
 import type { AiJsonSchema } from "./ai/types.js";
+import type { SelectionInput } from "./ai/effectiveSelection.js";
 import { logFallbackAttempt, logModelAttempt } from "./providerDiagnostics.js";
 
 dotenv.config();
@@ -608,7 +609,7 @@ export async function grabRecipeFromWeb(params: {
   url?: string;
   rawText?: string;
   html?: string;
-}): Promise<GrabbedRecipeResult> {
+}, userSelection?: SelectionInput): Promise<GrabbedRecipeResult> {
   const { url, rawText } = params;
   let htmlContent = params.html || "";
   let siteName = "";
@@ -678,7 +679,7 @@ REQUIREMENTS:
 
     try {
       const { result } = await runWithAiFallback<GrabbedRecipeResult>({
-        candidates: resolveRoleCandidates("recipeGrabber"),
+        candidates: resolveRoleCandidates("recipeGrabber", undefined, userSelection),
         requiredCapabilities: ["structuredOutput"],
         // Bounded same-model transient retry, restoring the prior per-model
         // resilience (RATE_LIMIT/UNAVAILABLE/TIMEOUT/INVALID_RESPONSE). AUTH and

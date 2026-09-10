@@ -31,9 +31,8 @@
  * model); it does NOT grant capabilities.
  */
 
-import { AI_OPERATIONS } from "./operations.js";
 import { findRegisteredProvider, getRegisteredProviders } from "./providerRegistry.js";
-import { roleModelsForProvider } from "./roleCandidates.js";
+import { curatedTextModels } from "./roleModels.js";
 import {
   curatedImageModels,
   findRegisteredImageProvider,
@@ -53,9 +52,17 @@ export interface ProviderSelectionState {
   /** Present only when server-managed (env model pin; optional). */
   selectedModelId?: string;
   /**
-   * False when the pin references an unknown/disabled provider or a model that is
-   * not in the curated catalog. FAIL CLOSED: an explicit invalid pin resolves no
-   * provider at runtime (never a silent fallback to the safe server default).
+   * CONFIG/SYNTAX VALIDITY of the pin — it references a registered + enabled
+   * provider and (when set) a model in the curated catalog. This is deliberately
+   * a CONFIG-ONLY check: it does NOT consult runtime provider availability (for
+   * example a pinned Gemini provider is `valid` even when `GEMINI_API_KEY` is
+   * absent, because the provider is registered/enabled and the model is curated).
+   *
+   * The separate RUNTIME EXECUTABILITY truth is exposed non-secretly by the
+   * provider catalog (`selection.executable`) — a pin is executable only when it
+   * is `valid` AND the pinned provider reports runtime availability. FAIL CLOSED:
+   * an explicit invalid pin resolves no provider at runtime (never a silent
+   * fallback to the safe server default).
    */
   valid: boolean;
 }
@@ -78,13 +85,7 @@ function envValue(name: (typeof SELECTION_ENV_NAMES)[number]): string | undefine
 
 /** The curated model set a text provider can execute (from role-model config). */
 function textCuratedModels(providerId: string): Set<string> {
-  const models = new Set<string>();
-  for (const operation of AI_OPERATIONS) {
-    for (const model of roleModelsForProvider(providerId, operation)) {
-      models.add(model);
-    }
-  }
-  return models;
+  return new Set(curatedTextModels(providerId));
 }
 
 /** Validation-truth for the TEXT selection (does NOT consult runtime availability). */

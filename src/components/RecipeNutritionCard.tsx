@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { ObsidianRecipe, RecipeNutrition } from '../types';
 import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
+import { buildAiSelectionRequestOptions } from '../application/aiSelection';
 import {
   normalizeServings,
   nutritionForServings,
@@ -108,15 +109,19 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
     try {
       const ingredientList = recipe.ingredients.map((ing) => ing.original || ing.name);
 
-      const res = await network.post<{ success: boolean; error?: string; nutrition?: any }>('/api/estimate-nutrition', {
-        title: recipe.title,
-        // The estimator is called against the recipe AS WRITTEN (unscaled base
-        // ingredient batch). `servings` is accepted for API compatibility and is
-        // never used as a nutrition denominator; we send the recipe's original
-        // serving count for clarity.
-        servings: recipeBaseServings,
-        ingredients: ingredientList,
-      });
+      const res = await network.post<{ success: boolean; error?: string; nutrition?: any }>(
+        '/api/estimate-nutrition',
+        {
+          title: recipe.title,
+          // The estimator is called against the recipe AS WRITTEN (unscaled base
+          // ingredient batch). `servings` is accepted for API compatibility and is
+          // never used as a nutrition denominator; we send the recipe's original
+          // serving count for clarity.
+          servings: recipeBaseServings,
+          ingredients: ingredientList,
+        },
+        await buildAiSelectionRequestOptions()
+      );
 
       const data = res.data;
 

@@ -37,6 +37,7 @@ import {
   RecoveryConfidence,
 } from '../types';
 import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
+import { buildAiSelectionRequestOptions } from '../application/aiSelection';
 import {
   assessRecipeHealth,
   summarizeVaultHealth,
@@ -476,7 +477,11 @@ export function VaultIntelligenceModal({
         },
       };
 
-        const res = await network.post<{ recovered?: any; error?: string }>('/api/recover-metadata', payload);
+const res = await network.post<{ recovered?: any; error?: string }>(
+        '/api/recover-metadata',
+        payload,
+        await buildAiSelectionRequestOptions()
+      );
 
       if (!res.ok) {
         throw new Error((res.data as { error?: string } | undefined)?.error || `Server returned error (${res.status})`);
@@ -569,7 +574,11 @@ export function VaultIntelligenceModal({
           },
         };
 
-      const res = await network.post<{ recovered?: any; error?: string }>('/api/recover-metadata', payload);
+      const res = await network.post<{ recovered?: any; error?: string }>(
+        '/api/recover-metadata',
+        payload,
+        await buildAiSelectionRequestOptions()
+      );
 
         if (res.ok) {
           const data = res.data;

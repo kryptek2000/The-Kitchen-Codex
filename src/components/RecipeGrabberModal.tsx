@@ -26,6 +26,7 @@ import { serializeRecipeToObsidianMarkdown, parseObsidianRecipeMarkdown } from '
 import { saveImageToVaultAssets, syncResolveVaultAssetUrl, type SaveImageDeps } from '../utils/vaultAssets';
 import { resolveNewRecipeVaultPath } from '../core/vaultPath';
 import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
+import { buildAiSelectionRequestOptions } from '../application/aiSelection';
 
 interface RecipeGrabberModalProps {
   isOpen: boolean;
@@ -158,11 +159,15 @@ export function RecipeGrabberModal({
 
     try {
       const isHtmlText = trimmedText.includes('<') && (trimmedText.includes('</') || trimmedText.includes('/>') || trimmedText.includes('<html') || trimmedText.includes('<body') || trimmedText.includes('<div') || trimmedText.includes('<script'));
-      const response = await network.post<{ success: boolean; code?: string; error?: string; message?: string; recipe: GrabbedRecipeData }>('/api/grab-recipe', {
-        url: inputMode === 'url' ? trimmedUrl : undefined,
-        rawText: inputMode === 'text' && !isHtmlText ? trimmedText : undefined,
-        html: inputMode === 'text' && isHtmlText ? trimmedText : undefined,
-      });
+      const response = await network.post<{ success: boolean; code?: string; error?: string; message?: string; recipe: GrabbedRecipeData }>(
+        '/api/grab-recipe',
+        {
+          url: inputMode === 'url' ? trimmedUrl : undefined,
+          rawText: inputMode === 'text' && !isHtmlText ? trimmedText : undefined,
+          html: inputMode === 'text' && isHtmlText ? trimmedText : undefined,
+        },
+        await buildAiSelectionRequestOptions()
+      );
 
       const data = response.data;
 

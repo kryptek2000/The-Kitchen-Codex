@@ -6,9 +6,16 @@
  * liveness, busy guards, and conflict messaging — no DOM interaction needed).
  */
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeAll } from "vitest";
 import { renderToString } from "react-dom/server";
 import type { ReactElement } from "react";
+import { hydrateAiSelections } from "../../src/application/aiSelection.js";
+
+// The application AI-selection layer fails closed until hydrated; hydrate the
+// shared module once so the image-recovery controller can build request options.
+beforeAll(async () => {
+  await hydrateAiSelections({ get: async () => undefined });
+});
 import { RecipeImageFindingView } from "../../src/components/VaultIntelligenceModal.js";
 import {
   RecipeImageRecoveryController,

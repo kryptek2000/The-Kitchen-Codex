@@ -15,9 +15,11 @@
  *   - Capability truth comes ONLY from the registry (`effectiveCapabilities`):
  *     provider baseline + curated per-model overrides. An unknown model NEVER
  *     gains a capability automatically; it falls back to the provider baseline.
- *   - Models are sourced EXCLUSIVELY from the curated role-model configuration
- *     (`roleModelsForProvider`) — the same source selection actually uses. The
- *     catalog does NOT invent or probe for models.
+ *   - Models are sourced EXCLUSIVELY from the shared server-owned curated set
+ *     (`curatedTextModels(providerId)`, itself derived from AI_OPERATIONS +
+ *     `roleModelsForProvider`) — the exact same source connection-test,
+ *     user-selection, and server-pin validation use. The catalog does NOT
+ *     invent or probe for models.
  *   - Image visibility reflects the PRODUCTION image provider singleton
  *     (`GeminiImageProvider` + `DEFAULT_GEMINI_IMAGE_MODEL`). The
  *     `DeterministicImageProvider` test seam is never catalogued.
@@ -39,15 +41,17 @@ import {
   providerSecretIdForProvider,
 } from "../platform/ServerEnvironmentSecretAdapter.js";
 import type { SecretStorageScope } from "../../src/application/adapters/SecretAdapter.js";
-import { roleModelsForProvider } from "./roleCandidates.js";
+import { roleModelsForProvider, curatedTextModels } from "./roleModels.js";
 import { AI_OPERATIONS } from "./operations.js";
 import {
   getImageSelection,
   getTextSelection,
   type ProviderSelectionState,
 } from "./providerSelection.js";
-import { getRegisteredImageProviders } from "./imageProviderRegistry.js";
+import { getRegisteredImageProviders, findRegisteredImageProvider } from "./imageProviderRegistry.js";
 import type { GeneratedImageMime } from "../../src/core/recipeImage.js";
+import { connectionTestKindForProvider, type ConnectionTestKind } from "./connectionTest.js";
+import { findRegisteredProvider } from "./providerRegistry.js";
 
 /** A single curated text model row in the catalog. */
 export interface ProviderCatalogTextModel {
@@ -73,6 +77,10 @@ export interface ProviderCatalogTextProvider {
   storageScope: SecretStorageScope;
   /** Whether provider secrets can be written through the secret boundary. */
   supportsSecretWrites: boolean;
+  /** The connection-test surface for this provider. */
+  connectionTest: ConnectionTestKind;
+  /** True when the user may select this provider on this surface. */
+  selectable: boolean;
   /** Curated models this provider can actually execute (structurally unique). */
   models: ProviderCatalogTextModel[];
 }
@@ -90,6 +98,10 @@ export interface ProviderCatalogImageProvider {
   configured: boolean;
   enabled: boolean;
   available: boolean;
+  /** The connection-test surface for this provider. */
+  connectionTest: ConnectionTestKind;
+  /** True when the user may select this provider on this surface. */
+  selectable: boolean;
   /** Provider-owned image-generation capability truth. */
   imageGeneration: boolean;
   /** Generated MIME types the provider emits (subset of the shared allowlist). */
@@ -114,22 +126,92 @@ export interface ProviderCatalog {
   selection: {
     text: ProviderSelectionState;
     image: ProviderSelectionState;
+    /**
+     * True when a user selection is currently PERMITTED on a surface:
+     * honored ONLY when there is no valid server-managed pin (server_default).
+     * When a valid server-managed pin exists, this is false and the UI must
+     * expose the selection as read-only (`userSelectionAllowed` gated in the
+     * preference storage + per-request header transport).
+     */
+    userSelectionAllowed: { text: boolean; image: boolean };
+    /**
+     * RUNTIME PROVIDER-AVAILABILITY truth, non-secret and DISTINCT from the
+     * config-valid `valid` flag above. `valid` answers "is the pin syntactically/
+     * config correct?" (registered + enabled + curated model); `executable`
+     * answers "is the effective provider configured/available RIGHT NOW?" — it
+     * additionally requires the provider to report runtime availability
+     * (`isAvailable()`).
+     *
+     * This is DELIBERATELY NOT an operation-readiness claim: a provider may be
+     * available yet unable to satisfy a specific operation's capability contract
+     * (e.g. DeepSeek has no schema-constrained structured output / webSearch).
+     * The UI labels this "Runtime provider available/unavailable".
+     *
+     *   - server_managed: true only when `valid` AND the pinned provider is
+     *     runtime-available.
+     *   - server_default: true when at least one provider in the default chain
+     *     (text) / the default image provider (image) is runtime-available.
+     */
+    executable: { text: boolean; image: boolean };
   };
 }
 
 /**
- * Collects the structurally-unique curated models for a provider, deduped in
- * role-model order. Only `roleModelsForProvider` is consulted — the catalog
- * never probes or invents models.
+ * Computes whether the user is currently allowed to override the surface
+ * selection: true ONLY when selection mode is server_default (a valid
+ * server-managed pin always blocks user selection override).
+ */
+function userSelectionAllowed(selection: ProviderSelectionState): boolean {
+  return selection.selectionMode === "server_default";
+}
+
+/**
+ * Runtime executability for a TEXT selection (see `selection.executable`).
+ * Distinct from config `valid`: a config-valid pin whose provider is not
+ * runtime-available is executable:false (truthful, no cross-provider fallback).
+ */
+function textSelectionExecutable(selection: ProviderSelectionState): boolean {
+  const regs = getRegisteredProviders();
+  if (selection.selectionMode === "server_managed") {
+    if (!selection.valid || !selection.selectedProviderId) return false;
+    const registered = findRegisteredProvider(regs, selection.selectedProviderId);
+    return Boolean(
+      registered && registered.enabled !== false && registered.provider.isAvailable()
+    );
+  }
+  return regs.some(
+    (r) =>
+      r.enabled !== false &&
+      r.provider.isAvailable() &&
+      curatedTextModels(r.provider.id).length > 0
+  );
+}
+
+/**
+ * Runtime executability for an IMAGE selection (see `selection.executable`).
+ * Distinct from config `valid`: a config-valid pin whose provider is not
+ * runtime-available is executable:false (truthful, no cross-provider fallback).
+ */
+function imageSelectionExecutable(selection: ProviderSelectionState): boolean {
+  if (selection.selectionMode === "server_managed") {
+    if (!selection.valid || !selection.selectedProviderId) return false;
+    const registered = findRegisteredImageProvider(selection.selectedProviderId);
+    return Boolean(
+      registered && registered.enabled !== false && registered.provider.isAvailable()
+    );
+  }
+  const registered = getRegisteredImageProviders()[0];
+  return Boolean(registered && registered.enabled !== false && registered.provider.isAvailable());
+}
+
+/**
+ * The curated text models for a provider come EXCLUSIVELY from the shared
+ * server-owned helper (`curatedTextModels`), the exact source connection-test,
+ * user-selection, and server-pin validation use. The catalog never probes or
+ * invents models.
  */
 function curatedModelsForProvider(registered: RegisteredProvider): string[] {
-  const models: string[] = [];
-  for (const operation of AI_OPERATIONS) {
-    for (const model of roleModelsForProvider(registered.provider.id, operation)) {
-      if (!models.includes(model)) models.push(model);
-    }
-  }
-  return models;
+  return curatedTextModels(registered.provider.id);
 }
 
 /** Computes the models whose FIRST role occurrence marks them as the primary candidate. */
@@ -146,6 +228,8 @@ function textProviderRows(regs: RegisteredProvider[]): ProviderCatalogTextProvid
   return regs.map((registered) => {
     const secretId = providerSecretIdForProvider(registered.provider.id);
     const configured = secretId ? Boolean(getServerSecretSync(secretId)) : false;
+    const enabled = registered.enabled !== false;
+    const available = registered.provider.isAvailable();
     const primary = primaryRoleModels(registered);
     const models: ProviderCatalogTextModel[] = curatedModelsForProvider(registered).map(
       (model) => ({
@@ -158,10 +242,12 @@ function textProviderRows(regs: RegisteredProvider[]): ProviderCatalogTextProvid
       providerId: registered.provider.id,
       name: registered.provider.name,
       configured,
-      enabled: registered.enabled !== false,
-      available: registered.provider.isAvailable(),
+      enabled,
+      available,
       storageScope: "server_environment",
       supportsSecretWrites: false,
+      connectionTest: connectionTestKindForProvider(registered.provider.id, "text"),
+      selectable: enabled && available && models.length > 0,
       models,
     };
   });
@@ -179,6 +265,8 @@ function imageProviderRows(): ProviderCatalogImageProvider[] {
     const capabilities = registered.provider.capabilities;
     const secretId = providerSecretIdForProvider(registered.provider.id);
     const curated = registered.models ?? [registered.defaultModel];
+    const enabled = registered.enabled !== false;
+    const available = registered.provider.isAvailable();
     const models: ProviderCatalogImageModel[] = curated.map((model) => ({
       id: model,
       default: model === registered.defaultModel,
@@ -187,8 +275,10 @@ function imageProviderRows(): ProviderCatalogImageProvider[] {
       providerId: registered.provider.id,
       name: registered.provider.name,
       configured: secretId ? Boolean(getServerSecretSync(secretId)) : false,
-      enabled: registered.enabled !== false,
-      available: registered.provider.isAvailable(),
+      enabled,
+      available,
+      connectionTest: connectionTestKindForProvider(registered.provider.id, "image"),
+      selectable: enabled && available && curated.length > 0,
       imageGeneration: capabilities.imageGeneration,
       formats: [...(capabilities.formats ?? [])],
       maxBytes: capabilities.maxBytes ?? 0,
@@ -203,12 +293,22 @@ function imageProviderRows(): ProviderCatalogImageProvider[] {
  * (registry order), network-free, and secret-free. Safe to call on every request.
  */
 export function buildProviderCatalog(): ProviderCatalog {
+  const textSelection = getTextSelection();
+  const imageSelection = getImageSelection();
   return {
     textProviders: textProviderRows(getRegisteredProviders()),
     imageProviders: imageProviderRows(),
     selection: {
-      text: getTextSelection(),
-      image: getImageSelection(),
+      text: textSelection,
+      image: imageSelection,
+      userSelectionAllowed: {
+        text: userSelectionAllowed(textSelection),
+        image: userSelectionAllowed(imageSelection),
+      },
+      executable: {
+        text: textSelectionExecutable(textSelection),
+        image: imageSelectionExecutable(imageSelection),
+      },
     },
   };
 }

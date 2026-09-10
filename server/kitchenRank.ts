@@ -16,6 +16,7 @@
 import dotenv from "dotenv";
 import { resolveRoleCandidates, runWithAiFallback } from "./ai/provider.js";
 import type { AiJsonSchema } from "./ai/types.js";
+import type { SelectionInput } from "./ai/effectiveSelection.js";
 import { sanitizeKitchenIntent, type KitchenIntent } from "../src/utils/kitchenIntent.js";
 import {
   buildRankPrompt,
@@ -61,10 +62,10 @@ async function aiRankWithFallback(input: {
   intent: KitchenIntent;
   candidates: KitchenCandidateEvidence[];
   resultCount: number;
-}): Promise<unknown> {
+}, userSelection?: SelectionInput): Promise<unknown> {
   const schema = buildSchema();
   const { result } = await runWithAiFallback<unknown>({
-    candidates: resolveRoleCandidates("kitchenRank"),
+    candidates: resolveRoleCandidates("kitchenRank", undefined, userSelection),
     requiredCapabilities: ["structuredOutput"],
     run: (candidate) =>
       candidate.provider.generateStructured(buildRankPrompt(input), schema, {
@@ -87,9 +88,9 @@ export async function rankKitchenCandidatesOnServer(input: {
   intent: KitchenIntent;
   candidates: KitchenCandidateEvidence[];
   resultCount: number;
-}): Promise<RankedKitchenCandidate[] | null> {
+}, userSelection?: SelectionInput): Promise<RankedKitchenCandidate[] | null> {
   try {
-    const raw = await aiRankWithFallback(input);
+    const raw = await aiRankWithFallback(input, userSelection);
     const allowlist = new Set(input.candidates.map((c) => c.recipeId));
     const sanitized = sanitizeAiRankedCandidates(raw, allowlist, {
       maxResults: input.resultCount,

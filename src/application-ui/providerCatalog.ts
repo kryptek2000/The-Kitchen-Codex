@@ -28,6 +28,9 @@ import {
 /** The single application-backed catalog path (read-only). */
 export const PROVIDER_CATALOG_API_PATH = '/api/providers/catalog';
 
+/** The probe surface the server performs for a provider (non-secret, non-proprietary). */
+export type ConnectionTestKindView = 'network_probe' | 'credential_check' | 'unavailable';
+
 /** A view-model text model row (only allowlisted fields). */
 export interface ProviderCatalogTextModelView {
   id: string;
@@ -46,6 +49,10 @@ export interface ProviderCatalogTextProviderView {
   available: boolean;
   storageScope: SecretStorageScope;
   supportsSecretWrites: boolean;
+  /** The server connection-test surface for this provider. */
+  connectionTest: ConnectionTestKindView;
+  /** True when the user may select this provider on this surface. */
+  selectable: boolean;
   models: ProviderCatalogTextModelView[];
 }
 
@@ -62,6 +69,10 @@ export interface ProviderCatalogImageProviderView {
   configured: boolean;
   enabled: boolean;
   available: boolean;
+  /** The server connection-test surface for this provider. */
+  connectionTest: ConnectionTestKindView;
+  /** True when the user may select this provider on this surface. */
+  selectable: boolean;
   imageGeneration: boolean;
   /** Allowlisted generated MIME types (unknown formats are never surfaced). */
   formats: GeneratedImageMime[];
@@ -91,6 +102,21 @@ export interface ProviderCatalogView {
   selection: {
     text: ProviderSelectionView;
     image: ProviderSelectionView;
+    /**
+     * True when the user is currently PERMITTED to override a surface:
+     * honored only when there is NO valid server-managed pin. When false, the
+     * UI must present the selection as read-only (server-managed).
+     */
+    userSelectionAllowed: { text: boolean; image: boolean };
+    /**
+     * Runtime PROVIDER-AVAILABILITY truth (distinct from config-valid `valid`):
+     * whether the effective provider is configured/available right now. This is
+     * deliberately NOT an operation-readiness claim — a provider may be
+     * available yet unable to satisfy a specific operation's capability
+     * contract. The UI labels it "Runtime provider available/unavailable".
+     * Fail-closed default when the server does not expose it.
+     */
+    executable: { text: boolean; image: boolean };
   };
 }
 
@@ -113,6 +139,20 @@ const KNOWN_STORAGE_SCOPES: SecretStorageScope[] = [
   'local_plaintext',
   'unavailable',
 ];
+
+/** The probe surface allowlist (mirror of the server catalog truth). */
+const KNOWN_CONNECTION_TEST_KINDS: ConnectionTestKindView[] = [
+  'network_probe',
+  'credential_check',
+  'unavailable',
+];
+
+function normalizeConnectionTestKind(raw: unknown): ConnectionTestKindView | null {
+  if (typeof raw === 'string' && (KNOWN_CONNECTION_TEST_KINDS as string[]).includes(raw)) {
+    return raw as ConnectionTestKindView;
+  }
+  return null;
+}
 
 function isBoolean(v: unknown): v is boolean {
   return typeof v === 'boolean';
@@ -173,11 +213,14 @@ function normalizeTextProvider(raw: unknown): ProviderCatalogTextProviderView | 
   if (typeof row['providerId'] !== 'string' || typeof row['name'] !== 'string') return null;
   const storageScope = row['storageScope'] as SecretStorageScope;
   if (!KNOWN_STORAGE_SCOPES.includes(storageScope)) return null;
+  const connectionTest = normalizeConnectionTestKind(row['connectionTest']);
+  if (!connectionTest) return null;
   if (
     !isBoolean(row['configured']) ||
     !isBoolean(row['enabled']) ||
     !isBoolean(row['available']) ||
-    !isBoolean(row['supportsSecretWrites'])
+    !isBoolean(row['supportsSecretWrites']) ||
+    !isBoolean(row['selectable'])
   ) {
     return null;
   }
@@ -195,6 +238,8 @@ function normalizeTextProvider(raw: unknown): ProviderCatalogTextProviderView | 
     available: row['available'],
     storageScope,
     supportsSecretWrites: row['supportsSecretWrites'],
+    connectionTest,
+    selectable: row['selectable'],
     models,
   };
 }
@@ -204,11 +249,14 @@ function normalizeImageProvider(raw: unknown): ProviderCatalogImageProviderView 
   if (typeof raw !== 'object' || raw === null) return null;
   const row = raw as Record<string, unknown>;
   if (typeof row['providerId'] !== 'string' || typeof row['name'] !== 'string') return null;
+  const connectionTest = normalizeConnectionTestKind(row['connectionTest']);
+  if (!connectionTest) return null;
   if (
     !isBoolean(row['configured']) ||
     !isBoolean(row['enabled']) ||
     !isBoolean(row['available']) ||
-    !isBoolean(row['imageGeneration'])
+    !isBoolean(row['imageGeneration']) ||
+    !isBoolean(row['selectable'])
   ) {
     return null;
   }
@@ -239,6 +287,8 @@ function normalizeImageProvider(raw: unknown): ProviderCatalogImageProviderView 
     configured: row['configured'],
     enabled: row['enabled'],
     available: row['available'],
+    connectionTest,
+    selectable: row['selectable'],
     imageGeneration: row['imageGeneration'],
     formats,
     maxBytes: row['maxBytes'],
@@ -275,6 +325,26 @@ export function normalizeProviderCatalog(payload: unknown): ProviderCatalogView 
   if (!text || !image) {
     throw new Error('Provider catalog response was missing selection truth.');
   }
+  // Fail-closed: unless the server EXPLICITLY confirms user selection is
+  // allowed for a surface (no valid server-managed pin), the UI must NOT offer
+  // selection overrides.
+  const allowedBlock =
+    typeof selectionBlock['userSelectionAllowed'] === 'object' && selectionBlock['userSelectionAllowed'] !== null
+      ? (selectionBlock['userSelectionAllowed'] as Record<string, unknown>)
+      : {};
+  const userSelectionAllowed = {
+    text: allowedBlock['text'] === true,
+    image: allowedBlock['image'] === true,
+  };
+  // Runtime executability (fail-closed: absent/malformed -> false).
+  const executableBlock =
+    typeof selectionBlock['executable'] === 'object' && selectionBlock['executable'] !== null
+      ? (selectionBlock['executable'] as Record<string, unknown>)
+      : {};
+  const executable = {
+    text: executableBlock['text'] === true,
+    image: executableBlock['image'] === true,
+  };
   const textProviders: ProviderCatalogTextProviderView[] = [];
   for (const item of rawText) {
     const row = normalizeTextProvider(item);
@@ -288,7 +358,7 @@ export function normalizeProviderCatalog(payload: unknown): ProviderCatalogView 
   if (textProviders.length === 0 && imageProviders.length === 0) {
     throw new Error('Provider catalog response contained no valid providers.');
   }
-  return { textProviders, imageProviders, selection: { text, image } };
+  return { textProviders, imageProviders, selection: { text, image, userSelectionAllowed, executable } };
 }
 
 /**

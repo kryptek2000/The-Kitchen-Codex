@@ -8,8 +8,19 @@ import {
 } from "../../src/application-ui/ProviderSettings.js";
 import type { ProviderStatusView } from "../../src/application-ui/providerStatus.js";
 import type { NetworkAdapter } from "../../src/application/adapters/NetworkAdapter.js";
+import type { SettingsAdapter } from "../../src/application/adapters/SettingsAdapter.js";
 
 const SENTINEL = "SUPER_SECRET_PHASE1E_SENTINEL";
+
+/** A no-op settings adapter stub (ProviderSettings only needs it referenced;
+ * SSR does not run effects, so nothing is actually read or written). */
+function stubSettings(): SettingsAdapter {
+  return {
+    get: async () => undefined,
+    set: async () => {},
+    remove: async () => {},
+  };
+}
 
 function status(partial: Partial<ProviderStatusView>): ProviderStatusView {
   return {
@@ -163,7 +174,7 @@ describe("ProviderStatusPanel (v0.7 1E)", () => {
 describe("ProviderSettings states (v0.7 1E)", () => {
   it("initial render is the loading state (no fabricated provider data)", () => {
     const network = {} as unknown as NetworkAdapter;
-    const html = render(<ProviderSettings network={network} />);
+    const html = render(<ProviderSettings network={network} settings={stubSettings()} />);
     expect(html).toContain("Loading provider status");
     expect(html).not.toContain("Google Gemini");
     expect(html).not.toContain("OpenRouter");

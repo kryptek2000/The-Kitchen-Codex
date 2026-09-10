@@ -342,3 +342,95 @@ describe("provider catalog (BYOK-2) — server-managed selection truth", () => {
     expect(json).not.toContain("API_KEY");
   });
 });
+
+describe("provider catalog (BYOK-4) — connection-test + selection-extension truth", () => {
+  it("exposes a bounded connectionTest kind and strict selectable boolean per provider", async () => {
+    const { catalog } = await freshCatalog({
+      GEMINI_API_KEY: SENTINEL,
+      OPENROUTER_API_KEY: SENTINEL,
+    });
+    const findText = (providerId: string) => catalog.textProviders.find((p) => p.providerId === providerId)!;
+    for (const p of catalog.textProviders) {
+      expect(["network_probe", "credential_check", "unavailable"]).toContain(p.connectionTest);
+      expect(typeof p["selectable"]).toBe("boolean");
+    }
+    // Configured text providers are network_probe; unconfigured are unavailable.
+    expect(findText("gemini").connectionTest).toBe("network_probe");
+    expect(findText("deepseek").connectionTest).toBe("unavailable");
+    expect(findText("openrouter").connectionTest).toBe("network_probe");
+
+    const findImage = (providerId: string) => catalog.imageProviders.find((p) => p.providerId === providerId)!;
+    expect(findImage("gemini-image").connectionTest).toBe("credential_check");
+    expect(findImage("openrouter-image").connectionTest).toBe("credential_check");
+    for (const im of catalog.imageProviders) {
+      expect(["network_probe", "credential_check", "unavailable"]).toContain(im.connectionTest);
+      expect(typeof im["selectable"]).toBe("boolean");
+    }
+  });
+
+  it("unconfigured providers are NOT selectable; configured curated providers are", async () => {
+    const noKeys = await freshCatalog({});
+    for (const p of noKeys.catalog.textProviders) expect(p["selectable"]).toBe(false);
+    for (const im of noKeys.catalog.imageProviders) expect(im["selectable"]).toBe(false);
+
+    const withKeys = await freshCatalog({ GEMINI_API_KEY: SENTINEL, OPENROUTER_API_KEY: SENTINEL });
+    for (const p of withKeys.catalog.textProviders) {
+      expect(p["selectable"]).toBe(p.available && p.models.length > 0);
+    }
+    const image = byProviderId(withKeys.catalog.imageProviders);
+    expect(image["gemini-image"]["selectable"]).toBe(true);
+    expect(image["openrouter-image"]["selectable"]).toBe(true);
+  });
+
+  it("userSelectionAllowed is TRUE only when the selection is server_default (no valid pin)", async () => {
+    const defaultCatalog = await freshCatalog({ GEMINI_API_KEY: SENTINEL });
+    expect(defaultCatalog.catalog.selection.userSelectionAllowed).toEqual({ text: true, image: true });
+
+    // A valid server-managed pin blocks user selection for that surface only.
+    const pinned = await freshCatalog({
+      GEMINI_API_KEY: SENTINEL,
+      OPENROUTER_API_KEY: SENTINEL,
+      KITCHEN_CODEX_TEXT_PROVIDER: "openrouter",
+    });
+    expect(pinned.catalog.selection.userSelectionAllowed).toEqual({ text: false, image: true });
+
+    // An INVALID pin also blocks user selection (fail-closed: user override can
+    // never bypass a server pin, even an invalid one).
+    const invalidPin = await freshCatalog({ KITCHEN_CODEX_TEXT_PROVIDER: "ghost" });
+    expect(invalidPin.catalog.selection.userSelectionAllowed).toEqual({ text: false, image: true });
+  });
+
+  it("the selection JSON stays secret-free with the new userSelectionAllowed block", async () => {
+    const { catalog } = await freshCatalog({ GEMINI_API_KEY: SENTINEL });
+    const json = JSON.stringify(catalog.selection);
+    expect(json).not.toContain(SENTINEL);
+    expect(json).not.toContain("API_KEY");
+    expect(json).toContain("userSelectionAllowed");
+  });
+
+  it("exposes RUNTIME executability separately from config-valid `valid`", async () => {
+    // Gemini pinned with NO key: config-valid (registered/enabled) but NOT
+    // runtime-executable. The two truths are exposed distinctly.
+    const noKey = await freshCatalog({ KITCHEN_CODEX_TEXT_PROVIDER: "gemini" });
+    expect(noKey.catalog.selection.text).toMatchObject({
+      selectionMode: "server_managed",
+      selectedProviderId: "gemini",
+      valid: true,
+    });
+    expect(noKey.catalog.selection.executable.text).toBe(false);
+    expect(noKey.catalog.selection.executable.image).toBe(false);
+
+    // With the key configured the same pin becomes runtime-executable.
+    const withKey = await freshCatalog({
+      GEMINI_API_KEY: SENTINEL,
+      KITCHEN_CODEX_TEXT_PROVIDER: "gemini",
+    });
+    expect(withKey.catalog.selection.executable.text).toBe(true);
+    expect(withKey.catalog.selection.executable.image).toBe(true);
+
+    // An INVALID pin is neither valid nor executable.
+    const invalid = await freshCatalog({ GEMINI_API_KEY: SENTINEL, KITCHEN_CODEX_TEXT_PROVIDER: "ghost" });
+    expect(invalid.catalog.selection.text.valid).toBe(false);
+    expect(invalid.catalog.selection.executable.text).toBe(false);
+  });
+});

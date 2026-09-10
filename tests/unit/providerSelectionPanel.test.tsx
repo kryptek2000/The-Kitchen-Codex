@@ -1,0 +1,238 @@
+import { describe, it, expect, afterEach } from "vitest";
+import { renderToString } from "react-dom/server";
+import {
+  ProviderSelectionPanel,
+  ProviderStatusPanel,
+  connectionTestSuccessLabel,
+  PROVIDER_CATALOG_UNAVAILABLE_COPY,
+} from "../../src/application-ui/ProviderSettings.js";
+import type { ProviderCatalogView } from "../../src/application-ui/providerCatalog.js";
+import type { NetworkAdapter } from "../../src/application/adapters/NetworkAdapter.js";
+import type { SettingsAdapter } from "../../src/application/adapters/SettingsAdapter.js";
+import { saveAiSelection, resetAiSelection } from "../../src/application/aiSelection.js";
+
+const SENTINEL = "SUPER_SECRET_BYOK4_SENTINEL";
+
+function stubSettings(): SettingsAdapter {
+  return { get: async () => undefined, set: async () => {}, remove: async () => {} };
+}
+
+afterEach(async () => {
+  // Restore the in-memory cache so a preserved stale selection never leaks into
+  // later tests.
+  await resetAiSelection(stubSettings(), "text");
+  await resetAiSelection(stubSettings(), "image");
+});
+
+function stubNetwork(): NetworkAdapter {
+  return {
+    request: async () => ({ status: 200, ok: true, data: undefined }),
+    get: async () => ({ status: 200, ok: true, data: undefined }),
+    post: async () => ({ status: 200, ok: true, data: undefined }),
+  };
+}
+
+function catalog(allowed: { text: boolean; image: boolean }): ProviderCatalogView {
+  return {
+    textProviders: [
+      {
+        providerId: "gemini",
+        name: "Google Gemini",
+        configured: true,
+        enabled: true,
+        available: true,
+        storageScope: "server_environment",
+        supportsSecretWrites: false,
+        connectionTest: "network_probe",
+        selectable: true,
+        models: [
+          { id: "gemini-3.7-flash", default: true, capabilities: { reasoning: true, structuredOutput: true, recipeGeneration: true, webSearch: true } },
+        ],
+      },
+    ],
+    imageProviders: [
+      {
+        providerId: "gemini-image",
+        name: "Google Gemini Image",
+        configured: true,
+        enabled: true,
+        available: true,
+        imageGeneration: true,
+        connectionTest: "credential_check",
+        selectable: true,
+        formats: ["image/png"],
+        maxBytes: 4 * 1024 * 1024,
+        models: [{ id: "gemini-2.5-flash-image", default: true }],
+      },
+    ],
+    selection: {
+      text: { selectionMode: "server_default", valid: true },
+      image: { selectionMode: "server_default", valid: true },
+      userSelectionAllowed: allowed,
+      executable: { text: allowed.text, image: allowed.image },
+    },
+  };
+}
+
+function render(el: React.ReactElement): string {
+  return renderToString(el);
+}
+
+describe("BYOK-4 — ProviderSelectionPanel (interactive selection)", () => {
+  it("renders interactive mode/provider/model controls when user selection is allowed", () => {
+    const html = render(
+      <ProviderSelectionPanel catalog={catalog({ text: true, image: true })} settings={stubSettings()} network={stubNetwork()} />
+    );
+    expect(html).toContain("Your AI Provider Selection");
+    expect(html).toContain('data-selection-control-kind="text"');
+    expect(html).toContain('data-selection-control-kind="image"');
+    expect(html).toContain('data-selection-mode-select="text"');
+    expect(html).toContain('data-selection-mode-select="image"');
+    expect(html).toContain("Server default");
+    expect(html).toContain("Use my selection");
+    expect(html).toContain("Apply selection");
+    expect(html).not.toContain("Server locked");
+  });
+
+  it("locks a surface (read-only) when a server pin blocks user selection", () => {
+    const html = render(
+      <ProviderSelectionPanel catalog={catalog({ text: false, image: true })} settings={stubSettings()} network={stubNetwork()} />
+    );
+    // Text surface is locked: no interactive controls, "Server locked" badge.
+    expect(html).toContain("Server locked");
+    expect(html).not.toContain('data-selection-mode-select="text"');
+    // Image surface remains interactive.
+    expect(html).toContain('data-selection-mode-select="image"');
+  });
+
+  it("shows the pinned provider read-only when locked (fail-closed messaging, no selection controls)", () => {
+    const c = catalog({ text: false, image: true });
+    c.selection.text = { selectionMode: "server_managed", selectedProviderId: "openrouter", selectedModelId: "openai/gpt-4o-mini", valid: true };
+    const html = render(<ProviderSelectionPanel catalog={c} settings={stubSettings()} network={stubNetwork()} />);
+    const lockedCard = html.slice(html.indexOf('data-selection-control-kind="text"'), html.indexOf('data-selection-control-kind="image"'));
+    expect(lockedCard).toContain("openrouter");
+    expect(lockedCard).toContain("openai/gpt-4o-mini");
+    expect(lockedCard).not.toContain("<select");
+  });
+
+  it("renders a Test Connection button per provider (text + image) with bounded labels", () => {
+    const html = render(
+      <ProviderSelectionPanel catalog={catalog({ text: true, image: true })} settings={stubSettings()} network={stubNetwork()} />
+    );
+    expect(html).toContain('data-connection-test-provider="gemini"');
+    expect(html).toContain('data-connection-test-provider="gemini-image"');
+    expect((html.match(/Test Connection/g) || []).length).toBe(2);
+  });
+
+  it("renders the truthful connection-test kind labels in the read-only catalog cards", () => {
+    const html = render(
+      <ProviderStatusPanel statuses={[]} catalog={catalog({ text: true, image: true })} onRefresh={() => {}} />
+    );
+    expect(html).toContain("Network probe");
+    expect(html).toContain("Credential check");
+  });
+
+  it("never renders a secret value, secret-shaped input, or key-entry control anywhere", () => {
+    // Belt-and-braces: even if secret-shaped props were smuggled into the view
+    // model, the presentational panel only reads allowlisted fields.
+    const c = catalog({ text: true, image: true });
+    const smuggled = {
+      ...c,
+      textProviders: [{ ...c.textProviders[0], ...({ apiKey: SENTINEL, token: SENTINEL } as Record<string, unknown>) }] as unknown as ProviderCatalogView["textProviders"],
+    };
+    const html = render(<ProviderSelectionPanel catalog={smuggled} settings={stubSettings()} network={stubNetwork()} />);
+    expect(html).not.toContain(SENTINEL);
+    expect(html).not.toContain("<input");
+    expect(html).not.toContain("<textarea");
+    expect(html).not.toContain('type="password"');
+    expect(html).not.toContain("Save key");
+    expect(html).not.toContain("Add key");
+    expect(html).not.toContain("Delete key");
+    expect(html).not.toContain("Reveal key");
+    expect(html).not.toContain("GEMINI_API_KEY");
+    expect(html).not.toContain("OPENROUTER_API_KEY");
+    expect(html).not.toContain("DEEPSEEK_API_KEY");
+  });
+
+  it("warns (and preserves) an explicit selection whose provider is now UNAVAILABLE", async () => {
+    const c = catalog({ text: true, image: true });
+    c.textProviders[0].available = false;
+    c.textProviders[0].selectable = false;
+    await saveAiSelection(stubSettings(), "text", "user_selected", "gemini", "gemini-3.7-flash");
+    const html = render(
+      <ProviderSelectionPanel catalog={c} settings={stubSettings()} network={stubNetwork()} />
+    );
+    expect(html).toContain('data-selection-invalid="text"');
+    expect(html).toContain("Your saved selection is no longer available");
+  });
+
+  it("warns (and preserves) an explicit selection whose provider is now UNSELECTABLE", async () => {
+    const c = catalog({ text: true, image: true });
+    c.textProviders[0].selectable = false;
+    await saveAiSelection(stubSettings(), "text", "user_selected", "gemini", "gemini-3.7-flash");
+    const html = render(
+      <ProviderSelectionPanel catalog={c} settings={stubSettings()} network={stubNetwork()} />
+    );
+    expect(html).toContain('data-selection-invalid="text"');
+    expect(html).toContain("Your saved selection is no longer available");
+  });
+
+  it("warns for a stale model that is no longer curated", async () => {
+    const c = catalog({ text: true, image: true });
+    c.textProviders[0].models = [];
+    await saveAiSelection(stubSettings(), "text", "user_selected", "gemini", "gemini-removed-model");
+    const html = render(
+      <ProviderSelectionPanel catalog={c} settings={stubSettings()} network={stubNetwork()} />
+    );
+    expect(html).toContain('data-selection-invalid="text"');
+  });
+
+  it("labels an image credential check truthfully (never 'Connected · model')", () => {
+    expect(connectionTestSuccessLabel("credential_check", "gemini-2.5-flash-image")).toBe("Credential check passed");
+    expect(connectionTestSuccessLabel("network_probe", "gemini-3.7-flash")).toBe("Connected · gemini-3.7-flash");
+    expect(connectionTestSuccessLabel("network_probe")).toBe("Connected");
+  });
+
+  it("catalog-unavailable copy never promises a server-default fallback", () => {
+    expect(PROVIDER_CATALOG_UNAVAILABLE_COPY.toLowerCase()).not.toContain("server default");
+    expect(PROVIDER_CATALOG_UNAVAILABLE_COPY.toLowerCase()).not.toContain("will use the server");
+    expect(PROVIDER_CATALOG_UNAVAILABLE_COPY).toContain("fails closed");
+  });
+
+  it("surfaces the server runtime PROVIDER-AVAILABILITY truth (selection.executable), not an operation claim", () => {
+    const c = catalog({ text: true, image: true });
+    c.selection.executable = { text: false, image: true };
+    const html = render(<ProviderStatusPanel statuses={[]} catalog={c} onRefresh={() => {}} />);
+    expect(html).toContain('data-selection-executable="text"');
+    expect(html).toContain('data-selection-executable="image"');
+    expect(html).toMatch(/Runtime provider:.*Unavailable/);
+    expect(html).toMatch(/Runtime provider:.*Available/);
+    // Never overstate as a generic operation-readiness claim.
+    expect(html).not.toContain("Runtime: Executable");
+    expect(html).not.toContain(">Executable<");
+  });
+
+  it("does not label an availability-only provider (e.g. DeepSeek) as generically 'Executable'", () => {
+    const c = catalog({ text: true, image: true });
+    // A configured/available provider that cannot satisfy any current app AI
+    // operation (no schema-constrained structured output / no webSearch) is
+    // still "available" — the UI must NOT claim operation readiness.
+    c.selection.executable = { text: true, image: false };
+    const html = render(<ProviderStatusPanel statuses={[]} catalog={c} onRefresh={() => {}} />);
+    expect(html).toMatch(/Runtime provider:.*Available/);
+    expect(html).not.toContain("Runtime: Executable");
+  });
+
+  it("disables Test Connection for a provider whose connectionTest is unavailable", () => {
+    const c = catalog({ text: true, image: true });
+    c.textProviders[0].connectionTest = "unavailable";
+    c.textProviders[0].available = false;
+    const html = render(
+      <ProviderSelectionPanel catalog={c} settings={stubSettings()} network={stubNetwork()} />
+    );
+    expect(html).toContain('data-connection-test-provider="gemini"');
+    expect(html).toMatch(/<button[^>]*data-connection-test-run="text:gemini"[^>]*disabled=""/);
+    // The available provider's button remains enabled.
+    expect(html).not.toMatch(/<button[^>]*data-connection-test-run="image:gemini-image"[^>]*disabled=""/);
+  });
+});

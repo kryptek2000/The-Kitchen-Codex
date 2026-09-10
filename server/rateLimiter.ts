@@ -374,6 +374,47 @@ export function imageGenerateRateLimiter(req: Request, res: Response, next: Next
 }
 
 /**
+ * Express middleware for rate limiting on provider connection-test requests.
+ * Bounded: 6 requests per minute per IP (configurable via
+ * `PROVIDER_TEST_RATE_LIMIT`). The connection test makes a real, bounded
+ * network call, so it must be rate-limited to prevent abuse.
+ */
+export function providerTestRateLimiter(req: Request, res: Response, next: NextFunction) {
+  const parsedLimit = parseInt(process.env.PROVIDER_TEST_RATE_LIMIT || "6", 10);
+  const maxRequestsPerWindow = isNaN(parsedLimit) || parsedLimit <= 0 ? 6 : parsedLimit;
+  const windowMs = 60 * 1000;
+
+  const clientIp = getClientIp(req);
+  const now = Date.now();
+
+  let entry = clientIpStore.get(`providertest_${clientIp}`);
+
+  if (!entry || entry.resetTime <= now) {
+    entry = { count: 1, resetTime: now + windowMs };
+    clientIpStore.set(`providertest_${clientIp}`, entry);
+  } else {
+    entry.count += 1;
+  }
+
+  const remaining = Math.max(0, maxRequestsPerWindow - entry.count);
+  const resetSeconds = Math.ceil((entry.resetTime - now) / 1000);
+
+  res.setHeader("RateLimit-Limit", maxRequestsPerWindow);
+  res.setHeader("RateLimit-Remaining", remaining);
+  res.setHeader("RateLimit-Reset", resetSeconds);
+
+  if (entry.count > maxRequestsPerWindow) {
+    res.setHeader("Retry-After", resetSeconds);
+    return res.status(429).json({
+      error: "Too many connection test requests. Please wait a moment before trying again.",
+      retryAfterSeconds: resetSeconds,
+    });
+  }
+
+  next();
+}
+
+/**
  * Express middleware for rate limiting on generated-image preview fetches. Generous
  * enough for an <img> element (multi-read until token expiry), still bounded.
  * Configurable via `IMAGE_PREVIEW_RATE_LIMIT` (default 60 requests per minute).

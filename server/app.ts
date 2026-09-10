@@ -21,6 +21,7 @@ import {
   createRecipeRateLimiter,
   imageGenerateRateLimiter,
   imagePreviewRateLimiter,
+  providerTestRateLimiter,
   getClientIp,
 } from "./rateLimiter.js";
 import { interpretKitchenQuestionOnServer } from "./kitchenInterpret.js";
@@ -28,13 +29,19 @@ import { rankKitchenCandidatesOnServer } from "./kitchenRank.js";
 import { discoverKitchenRecipesOnServer } from "./kitchenDiscover.js";
 import { getAiProviderStatus } from "./ai/providerStatus.js";
 import { buildProviderCatalog } from "./ai/providerCatalog.js";
+import { runConnectionTest } from "./ai/connectionTest.js";
 import { generateRecipeDraftOnServer, CreateRecipeValidationError } from "./createRecipe.js";
 import {
   generateRecipeImagePreview,
   GenerateRecipeImageValidationError,
 } from "./recipeImage.js";
 import { DeterministicImageProvider, type ImageProvider } from "./ai/imageProvider.js";
-import { resolveSelectedImagePair } from "./ai/providerSelection.js";
+import { resolveEffectiveImageSelection } from "./ai/effectiveSelection.js";
+import {
+  parseTextSelectionHeader,
+  parseImageSelectionHeader,
+} from "./ai/parseSelectionMetadata.js";
+import type { SelectionInput } from "./ai/effectiveSelection.js";
 import { ImagePreviewStore, PreviewStoreCapacityError } from "./imagePreviewStore.js";
 import { sniffGeneratedImageMime } from "../src/core/recipeImage.js";
 import {
@@ -77,21 +84,28 @@ export interface CreateAppOptions {
  * pure exported helper (exposed independently of `createApp`) makes the default
  * production wiring directly regression-testable without booting a server.
  */
-export function resolveImageProvider(opts: Pick<CreateAppOptions, 'imageProvider'>): {
+export function resolveImageProvider(opts: Pick<CreateAppOptions, 'imageProvider'>, userSelection?: SelectionInput): {
   provider: ImageProvider | null;
   modelOverride: { model?: string };
+  /** True when a PRESENT-but-malformed selection payload was rejected. */
+  selectionInvalid: boolean;
 } {
   if (opts.imageProvider) {
     // Explicit test seam (DeterministicImageProvider in tests): keep the caller's
     // model default (the seam's own default), only signal a production model is
     // NOT in use.
-    return { provider: opts.imageProvider, modelOverride: {} };
+    return { provider: opts.imageProvider, modelOverride: {}, selectionInvalid: false };
   }
   // Server-managed image selection (or the safe Gemini production default when
   // UNSET). An EXPLICIT invalid pin yields null (fail closed, zero execution).
-  const pair = resolveSelectedImagePair();
-  if (!pair) return { provider: null, modelOverride: {} };
-  return { provider: pair.provider, modelOverride: { model: pair.model } };
+  // A VALID user selection (no server-managed pin) is honored. An
+  // invalid/incapable EXPLICIT user pick ALSO yields null (fail closed, zero
+  // execution) — it never falls back to Gemini or any other provider.
+  const effective = resolveEffectiveImageSelection(userSelection);
+  if (!effective.provider) {
+    return { provider: null, modelOverride: {}, selectionInvalid: effective.invalidIntent };
+  }
+  return { provider: effective.provider, modelOverride: { model: effective.model ?? "" }, selectionInvalid: false };
 }
 
 /**
@@ -245,11 +259,13 @@ export function createApp(opts: CreateAppOptions): express.Express {
         });
       }
 
+      const userSelection = parseTextSelectionHeader(req.headers);
+
       const recipe = await grabRecipeFromWeb({
         url: cleanUrl,
         rawText: cleanRawText,
         html: cleanHtml,
-      });
+      }, userSelection);
 
       return res.json({ success: true, recipe });
     } catch (error: any) {
@@ -417,11 +433,13 @@ export function createApp(opts: CreateAppOptions): express.Express {
         });
       }
 
+      const userSelection = parseTextSelectionHeader(req.headers);
+
       const nutrition = await estimateRecipeNutrition({
         title: typeof title === "string" ? title.slice(0, 200) : undefined,
         servings: typeof servings === "number" ? servings : undefined,
         ingredients,
-      });
+      }, userSelection);
 
       return res.json({ success: true, nutrition });
     } catch (error: any) {
@@ -478,6 +496,8 @@ export function createApp(opts: CreateAppOptions): express.Express {
         });
       }
 
+      const userSelection = parseTextSelectionHeader(req.headers);
+
       const result = await recoverRecipeMetadata({
         title: typeof title === "string" ? title.slice(0, 300) : undefined,
         rawMarkdown: typeof rawMarkdown === "string" ? rawMarkdown : undefined,
@@ -486,7 +506,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
         notes: typeof notes === "string" ? notes.slice(0, 10000) : undefined,
         existingMetadata: typeof existingMetadata === "object" && existingMetadata !== null ? existingMetadata : undefined,
         targetFields: Array.isArray(targetFields) ? targetFields : undefined,
-      });
+      }, userSelection);
 
       return res.json({ success: true, recovered: result });
     } catch (error: any) {
@@ -536,7 +556,9 @@ export function createApp(opts: CreateAppOptions): express.Express {
         });
       }
 
-      const result = await interpretKitchenQuestionOnServer(question);
+      const userSelection = parseTextSelectionHeader(req.headers);
+
+      const result = await interpretKitchenQuestionOnServer(question, userSelection);
       if (!result.ok) {
         // If the AI interpreter was present but failed to produce a usable query,
         // the problem is an upstream/model failure, not the user's wording — so
@@ -631,12 +653,14 @@ export function createApp(opts: CreateAppOptions): express.Express {
           ? Math.max(1, Math.min(MAX_RANKED_RESULTS, Math.round(rawResultCount)))
           : MAX_RANKED_RESULTS;
 
+      const userSelection = parseTextSelectionHeader(req.headers);
+
       const ranked = await rankKitchenCandidatesOnServer({
         question,
         intent: sanitizedIntent,
         candidates,
         resultCount,
-      });
+      }, userSelection);
 
       if (!ranked) {
         return res.json({ ok: false, source: "deterministic" });
@@ -690,11 +714,13 @@ export function createApp(opts: CreateAppOptions): express.Express {
           ? Math.max(1, Math.min(MAX_WEB_RESULTS, Math.round(rawMax)))
           : MAX_WEB_RESULTS;
 
+      const userSelection = parseTextSelectionHeader(req.headers);
+
       const response = await discoverKitchenRecipesOnServer({
         question,
         intent: sanitizedIntent,
         maxResults,
-      });
+      }, userSelection);
 
       return res.json(response);
     } catch (error: any) {
@@ -720,6 +746,73 @@ export function createApp(opts: CreateAppOptions): express.Express {
     res.json({ catalog: buildProviderCatalog() });
   });
 
+  // Provider connection test (BYOK-4): performs a REAL, bounded probe against
+  // the requested provider's fixed endpoint. Auth-gated + rate-limited. NO
+  // retries, NO raw error leakage, NO secret in response. Text providers get a
+  // real (minimal) chat call; image providers get a credential check (no
+  // generation). Returns { ok, providerId, model, latencyMs } or a bounded
+  // { ok:false, providerId, model, code, message }.
+  app.post("/api/providers/test-connection", requireAiAccessToken, providerTestRateLimiter, async (req, res) => {
+    try {
+      if (!req.body || typeof req.body !== "object") {
+        return res.status(400).json({ error: "Invalid request payload." });
+      }
+
+      const { providerId, kind: rawKind, modelId: rawModelId } = req.body;
+
+      // STRICT request schema: wrong types are bounded 400 (never coerced), and
+      // identifiers are NEVER truncated into valid-looking values.
+      if (typeof providerId !== "string") {
+        return res.status(400).json({ error: '"providerId" must be a string.' });
+      }
+      const cleanProviderId = providerId.trim();
+      if (!cleanProviderId) {
+        return res.status(400).json({ error: '"providerId" is required.' });
+      }
+      if (cleanProviderId.length > 64) {
+        return res.status(400).json({ error: '"providerId" is too long.' });
+      }
+
+      // STRICT kind validation: only the two canonical surfaces are valid. A
+      // wrong type / unknown / omitted kind is a bounded 400 — never silently
+      // normalized to "text" (which could probe a text provider for an image
+      // request).
+      if (rawKind !== "text" && rawKind !== "image") {
+        return res.status(400).json({ error: '"kind" must be "text" or "image".' });
+      }
+      const kind = rawKind;
+
+      let modelId: string | undefined;
+      if (rawModelId !== undefined) {
+        if (typeof rawModelId !== "string") {
+          return res.status(400).json({ error: '"modelId" must be a string.' });
+        }
+        const cleanModelId = rawModelId.trim();
+        if (cleanModelId.length > 128) {
+          return res.status(400).json({ error: '"modelId" is too long.' });
+        }
+        modelId = cleanModelId || undefined;
+      }
+
+      const result = await runConnectionTest({ providerId: cleanProviderId, kind, modelId });
+      // Client-validation failures (arbitrary/unknown model ids) are bounded 4xx:
+      // rejected against the server-owned curated model set BEFORE any provider or
+      // SDK network call. Operational probe failures stay 200 with a bounded body.
+      if (result.ok === false && result.code === "INVALID_MODEL") {
+        return res.status(400).json(result);
+      }
+      return res.json(result);
+    } catch {
+      return res.status(500).json({
+        ok: false,
+        providerId: "",
+        model: "",
+        code: "PROVIDER_ERROR",
+        message: "Connection test failed unexpectedly.",
+      });
+    }
+  });
+
   // Transient generated-image preview store (bounded, TTL 5min, 50MB cap).
   // Foundation for Vault Intelligence Image Recovery: generation ONLY — the
   // canonical asset write + Markdown `image` update belong to the later Save pass.
@@ -735,7 +828,9 @@ export function createApp(opts: CreateAppOptions): express.Express {
       if (!req.body || typeof req.body !== "object") {
         return res.status(400).json({ error: "Invalid request payload.", code: "INVALID_REQUEST" });
       }
-      const result = await generateRecipeDraftOnServer(req.body as any);
+      const userSelection = parseTextSelectionHeader(req.headers);
+
+      const result = await generateRecipeDraftOnServer(req.body as any, { userSelection });
       return res.json(result);
     } catch (error: any) {
       if (error instanceof CreateRecipeValidationError || error?.name === "CreateRecipeValidationError") {
@@ -764,22 +859,30 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // (never a silent deterministic fallback). An EXPLICIT but INVALID server-managed
   // image pin FAILS CLOSED the same way (no provider resolves -> bounded
   // not-configured/invalid 503, ZERO Gemini invocation). The DeterministicImageProvider is
-  // reachable ONLY through the createApp test seam.
-  const { provider: imageProvider, modelOverride: imageModelOverride } = resolveImageProvider(opts);
-
+  // reachable ONLY through the createApp test seam. A VALID per-request USER
+  // selection (header) is honored ONLY when no server-managed pin exists; an
+  // invalid/incapable EXPLICIT user pick ALSO FAILS CLOSED (no provider
+  // resolves, ZERO execution) — it never falls back to Gemini or any other
+  // provider.
   app.post("/api/recipes/image/generate", requireAiAccessToken, imageGenerateRateLimiter, async (req, res) => {
     try {
       if (!req.body || typeof req.body !== "object") {
         return res.status(400).json({ error: "Invalid request payload.", code: "INVALID_REQUEST" });
       }
+      const userSelection = parseImageSelectionHeader(req.headers);
+      const { provider: imageProvider, modelOverride: imageModelOverride, selectionInvalid } = resolveImageProvider(opts, userSelection);
       if (!imageProvider) {
+        // A PRESENT-but-malformed selection payload is a distinct bounded
+        // selection-invalid failure (never a provider attempt). Otherwise an
         // EXPLICIT but invalid server-managed image pin (unknown/disabled
-        // provider or uncurated model): FAIL CLOSED. Bounded, distinct from
+        // provider or uncurated model) FAILS CLOSED. Bounded, distinct from
         // transient upstream failures; ZERO provider execution — never a silent
         // Gemini fallback and no surprise cross-provider cost.
         return res.status(503).json({
-          error: "The configured image provider selection is invalid. No image was generated.",
-          code: "IMAGE_PROVIDER_NOT_CONFIGURED",
+          error: selectionInvalid
+            ? "The AI provider selection was invalid. No image was generated."
+            : "The configured image provider selection is invalid. No image was generated.",
+          code: selectionInvalid ? "IMAGE_SELECTION_INVALID" : "IMAGE_PROVIDER_NOT_CONFIGURED",
         });
       }
       if (!imageProvider.isAvailable()) {
