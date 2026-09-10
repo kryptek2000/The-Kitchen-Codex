@@ -7,6 +7,14 @@ interface RateLimitEntry {
 
 const clientIpStore = new Map<string, RateLimitEntry>();
 
+/**
+ * Test seam: clears every rate-limit window. Never call from production code.
+ * Lets tests assert the ACTUAL per-endpoint defaults without cross-test bleed.
+ */
+export function resetRateLimitersForTests(): void {
+  clientIpStore.clear();
+}
+
 // Periodic cleanup every 5 minutes to prevent memory accumulation
 setInterval(() => {
   const now = Date.now();
@@ -453,3 +461,71 @@ export function imagePreviewRateLimiter(req: Request, res: Response, next: NextF
 
   next();
 }
+
+/**
+ * BYOK-5B session-key mutation limiter factory. The mutation routes are tiny but
+ * sensitive, so they get dedicated per-client windows separate from every other
+ * endpoint. Rate limiting runs BEFORE any body parse or store mutation.
+ */
+function sessionKeyRateLimiter(
+  envName: string,
+  defaultLimit: number,
+  bucket: string,
+  message: string
+): (req: Request, res: Response, next: NextFunction) => void {
+  return (req, res, next) => {
+    const parsedLimit = parseInt(process.env[envName] || String(defaultLimit), 10);
+    const maxRequestsPerWindow = isNaN(parsedLimit) || parsedLimit <= 0 ? defaultLimit : parsedLimit;
+    const windowMs = 60 * 1000;
+
+    const clientIp = getClientIp(req);
+    const now = Date.now();
+    const key = `${bucket}_${clientIp}`;
+
+    let entry = clientIpStore.get(key);
+    if (!entry || entry.resetTime <= now) {
+      entry = { count: 1, resetTime: now + windowMs };
+      clientIpStore.set(key, entry);
+    } else {
+      entry.count += 1;
+    }
+
+    const remaining = Math.max(0, maxRequestsPerWindow - entry.count);
+    const resetSeconds = Math.ceil((entry.resetTime - now) / 1000);
+
+    res.setHeader("RateLimit-Limit", maxRequestsPerWindow);
+    res.setHeader("RateLimit-Remaining", remaining);
+    res.setHeader("RateLimit-Reset", resetSeconds);
+
+    if (entry.count > maxRequestsPerWindow) {
+      res.setHeader("Retry-After", resetSeconds);
+      return res.status(429).json({ error: message, retryAfterSeconds: resetSeconds });
+    }
+
+    next();
+  };
+}
+
+/** Session-key set/rotate limiter (default 10/min per client). */
+export const sessionKeySetRateLimiter = sessionKeyRateLimiter(
+  "SESSION_KEY_SET_RATE_LIMIT",
+  10,
+  "sessionkeyset",
+  "Too many session key requests. Please wait a moment before trying again."
+);
+
+/** Session-key revoke limiter (default 20/min per client). */
+export const sessionKeyRevokeRateLimiter = sessionKeyRateLimiter(
+  "SESSION_KEY_REVOKE_RATE_LIMIT",
+  20,
+  "sessionkeyrevoke",
+  "Too many session key revocation requests. Please wait a moment before trying again."
+);
+
+/** Session-key status read limiter (default 60/min per client). */
+export const sessionKeyStatusRateLimiter = sessionKeyRateLimiter(
+  "SESSION_KEY_STATUS_RATE_LIMIT",
+  60,
+  "sessionkeystatus",
+  "Too many session key status requests. Please wait a moment before trying again."
+);

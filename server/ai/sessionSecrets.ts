@@ -44,8 +44,19 @@ import { isSessionByokSupportedDeployment } from "./sessionByokDeployment.js";
 export const SESSION_SECRET_ABSOLUTE_TTL_MS = 30 * 60 * 1000;
 /** Idle session lifetime (15 minutes since last successful read). */
 export const SESSION_SECRET_IDLE_TTL_MS = 15 * 60 * 1000;
-/** Maximum accepted secret length (bounded, generous for real provider keys). */
-export const MAX_SESSION_SECRET_LENGTH = 512;
+/**
+ * Maximum accepted secret size in UTF-8 BYTES (BYOK-5 contract §10: 4 KiB).
+ * Enforced with `Buffer.byteLength(secret, "utf8")` — NOT JS string length — so
+ * a multibyte key cannot exceed the byte ceiling. Keys are rejected outright,
+ * never truncated.
+ */
+export const MAX_SESSION_SECRET_BYTES = 4096;
+
+/**
+ * Back-compat alias for `MAX_SESSION_SECRET_BYTES`. The bound is UTF-8 BYTES,
+ * not JavaScript string length.
+ */
+export const MAX_SESSION_SECRET_LENGTH = MAX_SESSION_SECRET_BYTES;
 
 /** A bounded, secret-free error code for session-secret failures. */
 export type SessionSecretErrorCode =
@@ -164,7 +175,8 @@ export function setSessionSecret(
   if (typeof secret !== "string" || secret.length === 0) {
     throw new SessionSecretError("INVALID_SECRET", "A non-empty secret is required.");
   }
-  if (secret.length > MAX_SESSION_SECRET_LENGTH) {
+  // The ceiling is UTF-8 BYTES, not JS string length (multibyte keys included).
+  if (Buffer.byteLength(secret, "utf8") > MAX_SESSION_SECRET_BYTES) {
     throw new SessionSecretError("SECRET_TOO_LONG", "The secret exceeds the maximum length.");
   }
 

@@ -11,6 +11,7 @@ import {
   SessionSecretError,
   SESSION_SECRET_ABSOLUTE_TTL_MS,
   SESSION_SECRET_IDLE_TTL_MS,
+  MAX_SESSION_SECRET_BYTES,
   MAX_SESSION_SECRET_LENGTH,
 } from "../../server/ai/sessionSecrets.js";
 import { isSessionByokSupportedDeployment } from "../../server/ai/sessionByokDeployment.js";
@@ -106,6 +107,34 @@ describe("BYOK-5A — SET", () => {
     } catch (e) {
       expect((e as SessionSecretError).code).toBe("SECRET_TOO_LONG");
     }
+  });
+
+  it("enforces the secret ceiling as UTF-8 BYTES (not JS string length)", () => {
+    // 4096 ASCII bytes accepted.
+    expect(() => setSessionSecret("gemini", "x".repeat(4096))).not.toThrow();
+    expect(Buffer.byteLength(getSessionSecret("gemini") ?? "", "utf8")).toBe(4096);
+    revokeSessionSecret("gemini");
+
+    // 4097 ASCII bytes rejected.
+    expect(() => setSessionSecret("gemini", "x".repeat(4097))).toThrowError(SessionSecretError);
+
+    // A multibyte key whose CHAR count is under 4096 but whose BYTE count is over.
+    const multibyteOver = "\u00e9".repeat(2049); // 2049 chars, 4098 UTF-8 bytes
+    expect(multibyteOver.length).toBeLessThan(4096);
+    expect(Buffer.byteLength(multibyteOver, "utf8")).toBeGreaterThan(4096);
+    expect(() => setSessionSecret("gemini", multibyteOver)).toThrowError(SessionSecretError);
+    expect(getSessionSecret("gemini")).toBeUndefined();
+
+    // Exactly 4096 UTF-8 bytes accepted.
+    const multibyteExact = "\u00e9".repeat(2048); // 2048 chars, 4096 UTF-8 bytes
+    expect(Buffer.byteLength(multibyteExact, "utf8")).toBe(4096);
+    expect(() => setSessionSecret("gemini", multibyteExact)).not.toThrow();
+    expect(getSessionSecret("gemini")).toBe(multibyteExact);
+  });
+
+  it("the byte bound constant is 4096 and the legacy alias matches", () => {
+    expect(MAX_SESSION_SECRET_BYTES).toBe(4096);
+    expect(MAX_SESSION_SECRET_LENGTH).toBe(4096);
   });
 
   it("refuses writes in a hosted/unsupported deployment", () => {
@@ -318,6 +347,12 @@ describe("BYOK-5A — deployment guard", () => {
     expect(isSessionByokSupportedDeployment({ KITCHEN_CODEX_SESSION_BYOK: "1" } as NodeJS.ProcessEnv)).toBe(true);
     expect(
       isSessionByokSupportedDeployment({ KITCHEN_CODEX_SESSION_BYOK: "1", HOST: "127.0.0.1" } as NodeJS.ProcessEnv)
+    ).toBe(true);
+    expect(
+      isSessionByokSupportedDeployment({ KITCHEN_CODEX_SESSION_BYOK: "1", HOST: "localhost" } as NodeJS.ProcessEnv)
+    ).toBe(true);
+    expect(
+      isSessionByokSupportedDeployment({ KITCHEN_CODEX_SESSION_BYOK: "1", HOST: "::1" } as NodeJS.ProcessEnv)
     ).toBe(true);
   });
 

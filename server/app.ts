@@ -57,6 +57,7 @@ import { sanitizeKitchenIntent } from "../src/utils/kitchenIntent.js";
 import { safeFetchImage, WafProtectionError } from "./ssrfGuard.js";
 import { createSecurityMiddleware } from "./securityHeaders.js";
 import { requireAiAccessToken } from "./aiEndpointAuth.js";
+import { registerSessionKeyRoutes } from "./ai/sessionKeyRoutes.js";
 import { createApiErrorHandler } from "./errorHandler.js";
 import { RELEASE_VERSION } from "../src/appVersion.js";
 
@@ -183,6 +184,11 @@ export function createApp(opts: CreateAppOptions): express.Express {
     const n = Number(raw);
     return Number.isInteger(n) && n >= 0 ? n : raw;
   })());
+
+  // BYOK-5B session-key routes are registered BEFORE the global JSON parser so
+  // their dedicated 8 KiB body ceiling is actually enforced (a second
+  // `express.json()` after the global 2 MiB parser would be skipped).
+  registerSessionKeyRoutes(app);
 
   // Middleware for parsing JSON with request size bounds
   app.use(express.json({ limit: "2mb" }));
