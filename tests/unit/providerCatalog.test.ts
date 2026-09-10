@@ -27,9 +27,7 @@ async function freshCatalog(env: Record<string, string>): Promise<{
   return { catalog: catalogMod.buildProviderCatalog(), registry: registryMod.getRegisteredProviders() };
 }
 
-function byProviderId(
-  providers: { providerId: string }[]
-): Record<string, (typeof providers)[number]> {
+function byProviderId<T extends { providerId: string }>(providers: T[]): Record<string, T> {
   return Object.fromEntries(providers.map((p) => [p.providerId, p]));
 }
 
@@ -447,5 +445,30 @@ describe("provider catalog (BYOK-4) — connection-test + selection-extension tr
     const invalid = await freshCatalog({ GEMINI_API_KEY: SENTINEL, KITCHEN_CODEX_TEXT_PROVIDER: "ghost" });
     expect(invalid.catalog.selection.text.valid).toBe(false);
     expect(invalid.catalog.selection.executable.text).toBe(false);
+  });
+});
+
+describe("provider catalog (BYOK-5F) — session capability truth", () => {
+  it("marks session-capable providers regardless of operator env keys (secret-free boolean)", async () => {
+    const { catalog } = await freshCatalog({}); // NO operator keys
+    const text = byProviderId(catalog.textProviders);
+    expect(text["gemini"].sessionKeySupported).toBe(true);
+    expect(text["openrouter"].sessionKeySupported).toBe(true);
+    expect(text["deepseek"].sessionKeySupported).toBe(true);
+    const image = byProviderId(catalog.imageProviders);
+    expect(image["gemini-image"].sessionKeySupported).toBe(true);
+    expect(image["openrouter-image"].sessionKeySupported).toBe(true);
+    for (const row of [...catalog.textProviders, ...catalog.imageProviders]) {
+      expect(typeof row.sessionKeySupported).toBe("boolean");
+    }
+    const json = JSON.stringify(catalog);
+    expect(json).toContain("sessionKeySupported");
+    expect(json).not.toContain(SENTINEL);
+  });
+
+  it("session capability does NOT change env `selectable` truth (server_environment stays fail-closed)", async () => {
+    const { catalog } = await freshCatalog({});
+    for (const p of catalog.textProviders) expect(p.selectable).toBe(false);
+    for (const im of catalog.imageProviders) expect(im.selectable).toBe(false);
   });
 });

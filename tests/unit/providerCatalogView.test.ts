@@ -151,6 +151,31 @@ describe("provider catalog view model (BYOK-1) — normalization", () => {
     expect(view.imageProviders.map((p) => p.providerId)).toEqual(["gemini-image"]);
   });
 
+  it("BYOK-5F: normalizes the server-owned per-provider session capability (fail-closed when absent)", () => {
+    const withField = normalizeProviderCatalog(
+      payload([textProvider({ sessionKeySupported: true })], [imageProvider({ sessionKeySupported: true })])
+    );
+    expect(withField.textProviders[0].sessionKeySupported).toBe(true);
+    expect(withField.imageProviders[0].sessionKeySupported).toBe(true);
+
+    const absent = normalizeProviderCatalog(payload());
+    expect(absent.textProviders[0].sessionKeySupported).toBe(false);
+    expect(absent.imageProviders[0].sessionKeySupported).toBe(false);
+
+    const malformed = normalizeProviderCatalog(payload([textProvider({ sessionKeySupported: "yes" })]));
+    expect(malformed.textProviders[0].sessionKeySupported).toBe(false);
+  });
+
+  it("BYOK-5F: normalizes sessionByokSupported (fail-closed false when absent/malformed)", () => {
+    expect(normalizeProviderCatalog(payload()).sessionByokSupported).toBe(false);
+    const p = payload();
+    (p.catalog as Record<string, unknown>).sessionByokSupported = true;
+    expect(normalizeProviderCatalog(p).sessionByokSupported).toBe(true);
+    const bad = payload();
+    (bad.catalog as Record<string, unknown>).sessionByokSupported = "yes";
+    expect(normalizeProviderCatalog(bad).sessionByokSupported).toBe(false);
+  });
+
   it("throws on fundamentally malformed payloads (never fabricates a catalog)", () => {
     expect(() => normalizeProviderCatalog(null)).toThrow();
     expect(() => normalizeProviderCatalog("nope")).toThrow();

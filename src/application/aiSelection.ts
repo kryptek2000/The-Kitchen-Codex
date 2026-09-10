@@ -68,14 +68,24 @@ export interface AiSelectionCatalogSurface {
     available?: boolean;
     enabled?: boolean;
     selectable?: boolean;
+    /** BYOK-5F: server-owned session-capability truth (fail-closed when absent). */
+    sessionKeySupported?: boolean;
   }[];
   imageProviders: {
     providerId: string;
     models: { id: string }[];
+    /** Exposed by the catalog view; optional so minimal callers stay valid. */
     available?: boolean;
     enabled?: boolean;
     selectable?: boolean;
+    /** BYOK-5F: server-owned session-capability truth (fail-closed when absent). */
+    sessionKeySupported?: boolean;
   }[];
+  /**
+   * BYOK-5E: deployment capability for session-only BYOK (server-reported).
+   * Optional; anything other than `true` is treated as unsupported (fail closed).
+   */
+  sessionByokSupported?: boolean;
 }
 
 /** The default (no user selection) preferences. */
@@ -322,9 +332,24 @@ export function isSelectionValidAgainstCatalog(
   const surface = kind === 'text' ? catalog.textProviders : catalog.imageProviders;
   const provider = surface.find((p) => p.providerId === selection.providerId);
   if (!provider) return false;
-  if (provider.available === false) return false;
-  if (provider.enabled === false) return false;
-  if (provider.selectable === false) return false;
+
+  if (selection.credentialSource === 'session_only') {
+    // BYOK-5F: a session_only selection is governed by SESSION availability, NOT
+    // the operator environment key. The provider must be server-declared
+    // session-capable, the deployment must support session-only BYOK, and it must
+    // expose at least one curated model. `available`/`enabled`/`selectable`
+    // (environment truth) MUST NOT invalidate it. A missing/expired session key
+    // remains a RUNTIME fail-closed condition — never an env fallback.
+    if (catalog.sessionByokSupported !== true) return false;
+    if (provider.sessionKeySupported !== true) return false;
+    if (provider.models.length === 0) return false;
+  } else {
+    // server_environment (default): retain the existing environment checks.
+    if (provider.available === false) return false;
+    if (provider.enabled === false) return false;
+    if (provider.selectable === false) return false;
+  }
+
   if (selection.modelId && !provider.models.some((m) => m.id === selection.modelId)) return false;
   return true;
 }
@@ -423,7 +448,16 @@ export async function saveAiSelection(
 ): Promise<SavedAiSelections> {
   const parsed = parseStoredSelection(
     mode === 'user_selected'
-      ? { mode: 'user_selected', providerId, modelId, ...(credentialSource ? { credentialSource } : {}) }
+      ? {
+          mode: 'user_selected',
+          providerId,
+          // A provider-only selection (no explicit model) is supported legacy
+          // behavior. Omit absent fields entirely: a present `modelId: undefined`
+          // key would be treated as a malformed field by the strict parser and
+          // silently collapse the selection to server_default.
+          ...(modelId ? { modelId } : {}),
+          ...(credentialSource ? { credentialSource } : {}),
+        }
       : { mode: 'server_default' }
   );
   const selection = parsed.status === 'selected' ? parsed.selection : { mode: 'server_default' as const };

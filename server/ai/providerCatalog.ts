@@ -53,6 +53,10 @@ import type { GeneratedImageMime } from "../../src/core/recipeImage.js";
 import { connectionTestKindForProvider, type ConnectionTestKind } from "./connectionTest.js";
 import { findRegisteredProvider } from "./providerRegistry.js";
 import { isSessionByokSupportedDeployment } from "./sessionByokDeployment.js";
+import {
+  supportsSessionBoundTextProvider,
+  supportsSessionBoundImageProvider,
+} from "./credentialResolver.js";
 
 /** A single curated text model row in the catalog. */
 export interface ProviderCatalogTextModel {
@@ -82,6 +86,14 @@ export interface ProviderCatalogTextProvider {
   connectionTest: ConnectionTestKind;
   /** True when the user may select this provider on this surface. */
   selectable: boolean;
+  /**
+   * BYOK-5F: server-owned, static capability truth — whether this provider can be
+   * authorized by an EXACT provider-scoped SESSION credential. When true (and the
+   * deployment supports session-only BYOK), the provider is selectable with
+   * `credentialSource=session_only` EVEN IF its operator environment credential is
+   * unconfigured/unavailable. Never a secret.
+   */
+  sessionKeySupported: boolean;
   /** Curated models this provider can actually execute (structurally unique). */
   models: ProviderCatalogTextModel[];
 }
@@ -103,6 +115,12 @@ export interface ProviderCatalogImageProvider {
   connectionTest: ConnectionTestKind;
   /** True when the user may select this provider on this surface. */
   selectable: boolean;
+  /**
+   * BYOK-5F: server-owned, static capability truth — whether this image provider
+   * can be authorized by an EXACT provider-scoped SESSION credential (independent
+   * of the operator environment key). Never a secret.
+   */
+  sessionKeySupported: boolean;
   /** Provider-owned image-generation capability truth. */
   imageGeneration: boolean;
   /** Generated MIME types the provider emits (subset of the shared allowlist). */
@@ -255,6 +273,7 @@ function textProviderRows(regs: RegisteredProvider[]): ProviderCatalogTextProvid
       supportsSecretWrites: false,
       connectionTest: connectionTestKindForProvider(registered.provider.id, "text"),
       selectable: enabled && available && models.length > 0,
+      sessionKeySupported: supportsSessionBoundTextProvider(registered.provider.id),
       models,
     };
   });
@@ -286,6 +305,7 @@ function imageProviderRows(): ProviderCatalogImageProvider[] {
       available,
       connectionTest: connectionTestKindForProvider(registered.provider.id, "image"),
       selectable: enabled && available && curated.length > 0,
+      sessionKeySupported: supportsSessionBoundImageProvider(registered.provider.id),
       imageGeneration: capabilities.imageGeneration,
       formats: [...(capabilities.formats ?? [])],
       maxBytes: capabilities.maxBytes ?? 0,

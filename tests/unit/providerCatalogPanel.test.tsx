@@ -56,6 +56,7 @@ const CATALOG: ProviderCatalogView = {
       supportsSecretWrites: false,
       connectionTest: "network_probe",
       selectable: true,
+      sessionKeySupported: true,
       models: [
         {
           id: "gemini-3.7-flash",
@@ -79,6 +80,7 @@ const CATALOG: ProviderCatalogView = {
       supportsSecretWrites: false,
       connectionTest: "network_probe",
       selectable: false,
+      sessionKeySupported: true,
       models: [
         {
           id: "openai/gpt-4o-mini",
@@ -98,6 +100,7 @@ const CATALOG: ProviderCatalogView = {
       imageGeneration: true,
       connectionTest: "credential_check",
       selectable: true,
+      sessionKeySupported: true,
       formats: ["image/png"],
       maxBytes: 4 * 1024 * 1024,
       models: [{ id: "gemini-2.5-flash-image", default: true }],

@@ -219,3 +219,24 @@ describe("BYOK-5E — same-provider operation ordering (operation epoch)", () =>
     expect(c.getState().notice?.text).toContain("revoked");
   });
 });
+
+describe("BYOK-5F — Session API Key test stays session_only", () => {
+  it("E. TEST posts credentialSource=session_only with the curated model and NO apiKey", async () => {
+    const { network, pending } = makeNetwork();
+    const c = new SessionKeyController(network, PROVIDERS);
+    const p = c.test();
+    const entry = pending.find((x) => x.method === "POST" && x.path.includes("test-connection"));
+    expect(entry).toBeTruthy();
+    expect(entry!.body).toEqual({
+      providerId: "openrouter",
+      kind: "text",
+      modelId: "openai/gpt-4o-mini",
+      credentialSource: "session_only",
+    });
+    expect(JSON.stringify(entry!.body)).not.toContain("apiKey");
+    expect(entry!.body.apiKey).toBeUndefined();
+    settleAt(pending, pending.indexOf(entry!), { ok: true, providerId: "openrouter", model: "openai/gpt-4o-mini", credentialSource: "session_only" });
+    await p;
+    expect(c.getState().testResult?.credentialSource).toBe("session_only");
+  });
+});

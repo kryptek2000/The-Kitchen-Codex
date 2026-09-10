@@ -5,6 +5,7 @@ import {
   ProviderStatusPanel,
   connectionTestSuccessLabel,
   shouldClearSessionKeyOnCredentialSource,
+  buildServerEnvironmentTestBody,
   PROVIDER_CATALOG_UNAVAILABLE_COPY,
 } from "../../src/application-ui/ProviderSettings.js";
 import type { ProviderCatalogView } from "../../src/application-ui/providerCatalog.js";
@@ -46,6 +47,7 @@ function catalog(allowed: { text: boolean; image: boolean }): ProviderCatalogVie
         supportsSecretWrites: false,
         connectionTest: "network_probe",
         selectable: true,
+        sessionKeySupported: true,
         models: [
           { id: "gemini-3.7-flash", default: true, capabilities: { reasoning: true, structuredOutput: true, recipeGeneration: true, webSearch: true } },
         ],
@@ -61,6 +63,7 @@ function catalog(allowed: { text: boolean; image: boolean }): ProviderCatalogVie
         imageGeneration: true,
         connectionTest: "credential_check",
         selectable: true,
+        sessionKeySupported: true,
         formats: ["image/png"],
         maxBytes: 4 * 1024 * 1024,
         models: [{ id: "gemini-2.5-flash-image", default: true }],
@@ -72,7 +75,47 @@ function catalog(allowed: { text: boolean; image: boolean }): ProviderCatalogVie
       userSelectionAllowed: allowed,
       executable: { text: allowed.text, image: allowed.image },
     },
+    sessionByokSupported: true,
   };
+}
+
+/**
+ * BYOK-5F: a catalog where OpenRouter text/image are env-UNAVAILABLE (no operator
+ * key) but server-declared session-capable, with session BYOK supported.
+ */
+function sessionCapableCatalog(): ProviderCatalogView {
+  const c = catalog({ text: true, image: true });
+  c.sessionByokSupported = true;
+  c.textProviders.push({
+    providerId: "openrouter",
+    name: "OpenRouter",
+    configured: false,
+    enabled: false,
+    available: false,
+    storageScope: "server_environment",
+    supportsSecretWrites: false,
+    connectionTest: "unavailable",
+    selectable: false,
+    sessionKeySupported: true,
+    models: [
+      { id: "openai/gpt-4o-mini", default: true, capabilities: { reasoning: false, structuredOutput: true, recipeGeneration: true, webSearch: false } },
+    ],
+  });
+  c.imageProviders.push({
+    providerId: "openrouter-image",
+    name: "OpenRouter Image",
+    configured: false,
+    enabled: false,
+    available: false,
+    imageGeneration: true,
+    connectionTest: "unavailable",
+    selectable: false,
+    sessionKeySupported: true,
+    formats: ["image/png"],
+    maxBytes: 4 * 1024 * 1024,
+    models: [{ id: "google/gemini-2.5-flash-image", default: true }],
+  });
+  return c;
 }
 
 function render(el: React.ReactElement): string {
@@ -258,5 +301,88 @@ describe("BYOK-4 — ProviderSelectionPanel (interactive selection)", () => {
     expect(html).toMatch(/<button[^>]*data-connection-test-run="text:gemini"[^>]*disabled=""/);
     // The available provider's button remains enabled.
     expect(html).not.toMatch(/<button[^>]*data-connection-test-run="image:gemini-image"[^>]*disabled=""/);
+  });
+});
+
+describe("BYOK-5F — credential-source-aware provider selection", () => {
+  it("A. a session-capable provider with NO operator key is offered when session BYOK is supported", async () => {
+    // Open the interactive (user_selected) controls for both surfaces first.
+    await saveAiSelection(stubSettings(), "text", "user_selected", "gemini", "gemini-3.7-flash", "server_environment");
+    await saveAiSelection(stubSettings(), "image", "user_selected", "gemini-image", "gemini-2.5-flash-image", "server_environment");
+    const html = render(
+      <ProviderSelectionPanel catalog={sessionCapableCatalog()} settings={stubSettings()} network={stubNetwork()} />
+    );
+    const textCard = html.slice(
+      html.indexOf('data-selection-control-kind="text"'),
+      html.indexOf('data-selection-control-kind="image"')
+    );
+    expect(textCard).toContain('value="openrouter"');
+    const imageCard = html.slice(html.indexOf('data-selection-control-kind="image"'));
+    expect(imageCard).toContain('value="openrouter-image"');
+  });
+
+  it("B. the SAME env-unavailable provider under server_environment stays INVALID (fail closed)", async () => {
+    await saveAiSelection(stubSettings(), "text", "user_selected", "openrouter", "openai/gpt-4o-mini", "server_environment");
+    const html = render(
+      <ProviderSelectionPanel catalog={sessionCapableCatalog()} settings={stubSettings()} network={stubNetwork()} />
+    );
+    expect(html).toContain('data-selection-invalid="text"');
+  });
+
+  it("C. a saved session_only selection is VALID even when the operator env key is absent", async () => {
+    await saveAiSelection(stubSettings(), "text", "user_selected", "openrouter", "openai/gpt-4o-mini", "session_only");
+    const html = render(
+      <ProviderSelectionPanel catalog={sessionCapableCatalog()} settings={stubSettings()} network={stubNetwork()} />
+    );
+    expect(html).not.toContain('data-selection-invalid="text"');
+  });
+
+  it("G. image parity: session_only openrouter-image is offered and valid with no operator key", async () => {
+    await saveAiSelection(stubSettings(), "image", "user_selected", "openrouter-image", "google/gemini-2.5-flash-image", "session_only");
+    const html = render(
+      <ProviderSelectionPanel catalog={sessionCapableCatalog()} settings={stubSettings()} network={stubNetwork()} />
+    );
+    const imageCard = html.slice(html.indexOf('data-selection-control-kind="image"'));
+    expect(imageCard).toContain('value="openrouter-image"');
+    expect(html).not.toContain('data-selection-invalid="image"');
+  });
+
+  it("H. exact-ID isolation: openrouter != openrouter-image (cross-surface ids are invalid)", async () => {
+    await saveAiSelection(stubSettings(), "text", "user_selected", "openrouter-image", undefined, "session_only");
+    await saveAiSelection(stubSettings(), "image", "user_selected", "openrouter", undefined, "session_only");
+    const html = render(
+      <ProviderSelectionPanel catalog={sessionCapableCatalog()} settings={stubSettings()} network={stubNetwork()} />
+    );
+    expect(html).toContain('data-selection-invalid="text"');
+    expect(html).toContain('data-selection-invalid="image"');
+  });
+
+  it("session_only is INVALID when the deployment does not support session BYOK", async () => {
+    const c = sessionCapableCatalog();
+    c.sessionByokSupported = false;
+    await saveAiSelection(stubSettings(), "text", "user_selected", "openrouter", "openai/gpt-4o-mini", "session_only");
+    const html = render(<ProviderSelectionPanel catalog={c} settings={stubSettings()} network={stubNetwork()} />);
+    expect(html).toContain('data-selection-invalid="text"');
+  });
+
+  it("F. the upper Server Environment test body is ALWAYS server_environment and never carries a key", () => {
+    expect(buildServerEnvironmentTestBody("openrouter", "text", "openai/gpt-4o-mini")).toEqual({
+      providerId: "openrouter",
+      kind: "text",
+      modelId: "openai/gpt-4o-mini",
+      credentialSource: "server_environment",
+    });
+    expect(buildServerEnvironmentTestBody("openrouter-image", "image").credentialSource).toBe("server_environment");
+    expect(JSON.stringify(buildServerEnvironmentTestBody("openrouter", "text"))).not.toContain("apiKey");
+  });
+
+  it("renames the upper section and explains env vs session testing truthfully", () => {
+    const html = render(
+      <ProviderSelectionPanel catalog={sessionCapableCatalog()} settings={stubSettings()} network={stubNetwork()} />
+    );
+    expect(html).toContain("Server Environment Connection Tests");
+    expect(html).toContain("Session API Keys below");
+    // A session-capable provider with no env key is NOT generically "unavailable".
+    expect(html).toContain("Environment credential unavailable. This provider is session-capable");
   });
 });

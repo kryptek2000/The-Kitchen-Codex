@@ -105,6 +105,26 @@ export function connectionTestSuccessLabel(
 }
 
 /**
+ * The upper "Server Environment Connection Tests" ALWAYS probe the operator/
+ * environment credential source. Session-only credentials are validated
+ * separately in the Session API Keys panel. This pure builder is exported so the
+ * credential-source contract is directly testable (and can never silently drift
+ * to `session_only`). No secret is ever included.
+ */
+export function buildServerEnvironmentTestBody(
+  providerId: string,
+  kind: 'text' | 'image',
+  modelId?: string
+): { providerId: string; kind: 'text' | 'image'; modelId?: string; credentialSource: 'server_environment' } {
+  return {
+    providerId,
+    kind,
+    ...(modelId ? { modelId } : {}),
+    credentialSource: 'server_environment',
+  };
+}
+
+/**
  * BYOK-5E: true when a TEXT credential-source transition (or a reset to
  * server_default, represented by `undefined`) must clear any typed session key.
  * Only `session_only` keeps the session-key panel's typed state.
@@ -723,8 +743,18 @@ export function ProviderSelectionPanel({
     };
   }, [settings]);
 
-  const selectedTextProviders = catalog.textProviders.filter((p) => p.selectable && p.enabled && p.available);
-  const selectedImageProviders = catalog.imageProviders.filter((p) => p.selectable && p.enabled && p.available);
+  // BYOK-5F: the user-selectable provider list is CREDENTIAL-SOURCE AWARE. A
+  // provider is offered when it is selectable under EITHER source:
+  //   - server_environment: the existing environment availability/selectability;
+  //   - session_only: the server declares it session-capable AND the deployment
+  //     supports session-only BYOK (operator env availability is irrelevant).
+  // Unknown/unregistered providers are never offered (they are not in the
+  // server-owned catalog), and the server re-validates every selection.
+  const sessionByokSupported = catalog.sessionByokSupported === true;
+  const isSessionSelectable = (p: { sessionKeySupported: boolean; models: unknown[] }) =>
+    sessionByokSupported && p.sessionKeySupported && p.models.length > 0;
+  const selectedTextProviders = catalog.textProviders.filter((p) => p.selectable || isSessionSelectable(p));
+  const selectedImageProviders = catalog.imageProviders.filter((p) => p.selectable || isSessionSelectable(p));
 
   // A preserved explicit selection that no longer exists in the catalog is shown
   // as invalid; it keeps failing closed at the server until the user resets.
@@ -786,12 +816,7 @@ export function ProviderSelectionPanel({
           latencyMs?: number;
           code?: string;
           message?: string;
-        }>(PROVIDER_TEST_CONNECTION_API_PATH, {
-          providerId,
-          kind,
-          ...(modelId ? { modelId } : {}),
-          credentialSource: 'server_environment',
-        });
+        }>(PROVIDER_TEST_CONNECTION_API_PATH, buildServerEnvironmentTestBody(providerId, kind, modelId));
         const data = res.data ?? {};
         if (res.ok && data.ok === true) {
           setTests((prev) => ({
@@ -823,6 +848,7 @@ export function ProviderSelectionPanel({
     providerId: string;
     name: string;
     connectionTest: ProviderCatalogTextProviderView['connectionTest'];
+    sessionKeySupported: boolean;
     defaultModelId?: string;
   }[] = [
     ...catalog.textProviders.map((p) => ({
@@ -830,6 +856,7 @@ export function ProviderSelectionPanel({
       providerId: p.providerId,
       name: p.name,
       connectionTest: p.connectionTest,
+      sessionKeySupported: p.sessionKeySupported,
       defaultModelId: p.models.find((m) => m.default)?.id ?? p.models[0]?.id,
     })),
     ...catalog.imageProviders.map((p) => ({
@@ -837,6 +864,7 @@ export function ProviderSelectionPanel({
       providerId: p.providerId,
       name: p.name,
       connectionTest: p.connectionTest,
+      sessionKeySupported: p.sessionKeySupported,
       defaultModelId: p.models.find((m) => m.default)?.id ?? p.models[0]?.id,
     })),
   ];
@@ -905,18 +933,24 @@ export function ProviderSelectionPanel({
 
       <div className="pt-2 border-t border-white/5">
         <h4 className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">
-          Provider Connection Tests
+          Server Environment Connection Tests
         </h4>
         <p className="text-xs text-gray-400 mt-1 max-w-2xl">
-          Runs a real, bounded probe against the provider's fixed endpoint. Text providers execute
-          a minimal chat call; image providers run a quota-free credential check. Results never
-          include API keys or raw provider errors, and tests are rate-limited server-side.
+          These tests check credentials configured by the server operator (the environment
+          credential source). Text providers execute a minimal chat call; image providers run a
+          quota-free credential check. Session-only credentials are tested separately in Session
+          API Keys below. Results never include API keys or raw provider errors, and tests are
+          rate-limited server-side.
         </p>
         <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {allProviders.map((p) => {
             const key = `${p.kind}:${p.providerId}`;
             const result = tests[key];
             const unavailable = p.connectionTest === 'unavailable';
+            // A provider with no operator env key is NOT generically "unavailable":
+            // it may be session-capable (and even have a configured session key).
+            const sessionAlternative =
+              unavailable && sessionByokSupported && p.sessionKeySupported;
             return (
               <div
                 key={key}
@@ -933,12 +967,18 @@ export function ProviderSelectionPanel({
                     data-connection-test-run={key}
                     onClick={() => testConnection(p.kind, p.providerId, p.defaultModelId)}
                     disabled={result?.state === 'testing' || unavailable}
-                    title={unavailable ? 'No server operator key is configured for this provider.' : undefined}
+                    title={unavailable ? 'No server operator key is configured for this provider (environment test unavailable).' : undefined}
                     className="px-2.5 py-1 rounded-lg text-[11px] font-medium bg-white/10 text-gray-200 hover:bg-white/15 border border-white/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     {result?.state === 'testing' ? 'Testing…' : 'Test Connection'}
                   </button>
                 </div>
+                {sessionAlternative && (
+                  <div className="text-[11px] text-amber-300/90">
+                    Environment credential unavailable. This provider is session-capable — test a
+                    session key in Session API Keys below.
+                  </div>
+                )}
                 {result?.state === 'success' && (
                   <div className="text-[11px] text-emerald-300">
                     {connectionTestSuccessLabel(p.connectionTest, result.model)}
@@ -956,8 +996,10 @@ export function ProviderSelectionPanel({
           })}
         </div>
         <div className="text-[11px] text-gray-500 mt-2">
-          Providers the server reports as unavailable (no operator key) cannot be tested — the
-          button is disabled. An unavailable provider never affects the others.
+          A provider with no operator environment key cannot be tested here (its environment
+          credential is unavailable) — but it may still be usable with a session key; test that in
+          Session API Keys below. A provider with an unavailable environment credential never
+          affects the others.
         </div>
       </div>
     </section>

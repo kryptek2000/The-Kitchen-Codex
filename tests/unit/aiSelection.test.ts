@@ -492,3 +492,123 @@ describe("BYOK-5C — malformed stored preference blocks the request", () => {
     expect(options.headers).toBeUndefined();
   });
 });
+
+describe("BYOK-5F — credential-source-aware selection validity", () => {
+  function sessionCatalog(): AiSelectionCatalogSurface {
+    return {
+      sessionByokSupported: true,
+      textProviders: [
+        { providerId: "openrouter", models: [{ id: "openai/gpt-4o-mini" }], available: false, enabled: false, selectable: false, sessionKeySupported: true },
+      ],
+      imageProviders: [
+        { providerId: "openrouter-image", models: [{ id: "google/gemini-2.5-flash-image" }], available: false, enabled: false, selectable: false, sessionKeySupported: true },
+      ],
+    };
+  }
+
+  it("C. session_only stays VALID when the operator environment credential is unavailable", async () => {
+    const mod = await fresh();
+    const cat = sessionCatalog();
+    expect(
+      mod.isSelectionValidAgainstCatalog(
+        { mode: "user_selected", providerId: "openrouter", modelId: "openai/gpt-4o-mini", credentialSource: "session_only" },
+        cat,
+        "text"
+      )
+    ).toBe(true);
+    // The SAME env-unavailable provider under server_environment stays INVALID.
+    expect(
+      mod.isSelectionValidAgainstCatalog(
+        { mode: "user_selected", providerId: "openrouter", modelId: "openai/gpt-4o-mini", credentialSource: "server_environment" },
+        cat,
+        "text"
+      )
+    ).toBe(false);
+    // Image parity.
+    expect(
+      mod.isSelectionValidAgainstCatalog(
+        { mode: "user_selected", providerId: "openrouter-image", modelId: "google/gemini-2.5-flash-image", credentialSource: "session_only" },
+        cat,
+        "image"
+      )
+    ).toBe(true);
+  });
+
+  it("session_only is INVALID when the deployment does not support it or the provider is not session-capable", async () => {
+    const mod = await fresh();
+    const unsupported: AiSelectionCatalogSurface = {
+      sessionByokSupported: false,
+      textProviders: [{ providerId: "openrouter", models: [{ id: "m" }], sessionKeySupported: true }],
+      imageProviders: [],
+    };
+    expect(
+      mod.isSelectionValidAgainstCatalog({ mode: "user_selected", providerId: "openrouter", credentialSource: "session_only" }, unsupported, "text")
+    ).toBe(false);
+    const notCapable: AiSelectionCatalogSurface = {
+      sessionByokSupported: true,
+      textProviders: [{ providerId: "ghost", models: [{ id: "m" }] }],
+      imageProviders: [],
+    };
+    expect(
+      mod.isSelectionValidAgainstCatalog({ mode: "user_selected", providerId: "ghost", credentialSource: "session_only" }, notCapable, "text")
+    ).toBe(false);
+    // Unknown/unregistered provider is never valid.
+    expect(
+      mod.isSelectionValidAgainstCatalog({ mode: "user_selected", providerId: "nope", credentialSource: "session_only" }, notCapable, "text")
+    ).toBe(false);
+    // A session-capable provider with NO curated models is not selectable.
+    const noModels: AiSelectionCatalogSurface = {
+      sessionByokSupported: true,
+      textProviders: [{ providerId: "openrouter", models: [], sessionKeySupported: true }],
+      imageProviders: [],
+    };
+    expect(
+      mod.isSelectionValidAgainstCatalog({ mode: "user_selected", providerId: "openrouter", credentialSource: "session_only" }, noModels, "text")
+    ).toBe(false);
+  });
+
+  it("a provider-only session_only selection persists (no explicit model) instead of collapsing to default", async () => {
+    const mod = await fresh();
+    let persisted: unknown;
+    const next = await mod.saveAiSelection(
+      settings(async () => undefined, async (_k, v) => { persisted = v; }),
+      "text",
+      "user_selected",
+      "openrouter",
+      undefined,
+      "session_only"
+    );
+    expect(next.textAi).toEqual({ mode: "user_selected", providerId: "openrouter", credentialSource: "session_only" });
+    expect(persisted).toEqual({ textAi: next.textAi, imageAi: { mode: "server_default" } });
+  });
+
+  it("Ask My Kitchen TEXT request construction carries the saved session_only metadata (no key)", async () => {
+    const mod = await fresh();
+    await mod.hydrateAiSelections(
+      settings(async () => ({
+        textAi: { mode: "user_selected", providerId: "openrouter", modelId: "openai/gpt-4o-mini", credentialSource: "session_only" },
+        imageAi: { mode: "server_default" },
+      }))
+    );
+    const text = await mod.buildAiSelectionRequestOptions(undefined, undefined, "text");
+    expect(text.headers![mod.TEXT_SELECTION_HEADER]).toBe(
+      JSON.stringify({ mode: "user_selected", providerId: "openrouter", modelId: "openai/gpt-4o-mini", credentialSource: "session_only" })
+    );
+    expect(JSON.stringify(text.headers)).not.toContain("apiKey");
+  });
+
+  it("Ask My Kitchen IMAGE request construction carries the saved session_only metadata (no key)", async () => {
+    const mod = await fresh();
+    await mod.hydrateAiSelections(
+      settings(async () => ({
+        textAi: { mode: "server_default" },
+        imageAi: { mode: "user_selected", providerId: "openrouter-image", credentialSource: "session_only" },
+      }))
+    );
+    const image = await mod.buildAiSelectionRequestOptions(undefined, undefined, "image");
+    expect(image.headers![mod.IMAGE_SELECTION_HEADER]).toBe(
+      JSON.stringify({ mode: "user_selected", providerId: "openrouter-image", credentialSource: "session_only" })
+    );
+    expect(JSON.stringify(image.headers)).not.toContain("apiKey");
+  });
+});

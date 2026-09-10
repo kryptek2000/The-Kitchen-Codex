@@ -53,6 +53,13 @@ export interface ProviderCatalogTextProviderView {
   connectionTest: ConnectionTestKindView;
   /** True when the user may select this provider on this surface. */
   selectable: boolean;
+  /**
+   * BYOK-5F: server-owned capability — this provider can be authorized by an exact
+   * provider-scoped session credential, so it is selectable with
+   * `credentialSource=session_only` even when the operator environment key is
+   * absent. Fail-closed false when the server omits it.
+   */
+  sessionKeySupported: boolean;
   models: ProviderCatalogTextModelView[];
 }
 
@@ -73,6 +80,13 @@ export interface ProviderCatalogImageProviderView {
   connectionTest: ConnectionTestKindView;
   /** True when the user may select this provider on this surface. */
   selectable: boolean;
+  /**
+   * BYOK-5F: server-owned capability — this image provider can be authorized by
+   * an exact provider-scoped session credential, independent of the operator
+   * environment key. Fail-closed false when the server omits it.
+   */
+  sessionKeySupported: boolean;
+  /** True when this provider may generate images. */
   imageGeneration: boolean;
   /** Allowlisted generated MIME types (unknown formats are never surfaced). */
   formats: GeneratedImageMime[];
@@ -252,6 +266,8 @@ function normalizeTextProvider(raw: unknown): ProviderCatalogTextProviderView | 
     supportsSecretWrites: row['supportsSecretWrites'],
     connectionTest,
     selectable: row['selectable'],
+    // Fail-closed: an absent/malformed server capability is NOT session-capable.
+    sessionKeySupported: row['sessionKeySupported'] === true,
     models,
   };
 }
@@ -301,6 +317,8 @@ function normalizeImageProvider(raw: unknown): ProviderCatalogImageProviderView 
     available: row['available'],
     connectionTest,
     selectable: row['selectable'],
+    // Fail-closed: an absent/malformed server capability is NOT session-capable.
+    sessionKeySupported: row['sessionKeySupported'] === true,
     imageGeneration: row['imageGeneration'],
     formats,
     maxBytes: row['maxBytes'],
