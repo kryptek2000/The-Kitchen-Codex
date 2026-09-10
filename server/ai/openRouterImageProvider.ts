@@ -44,6 +44,7 @@
 
 import { MODEL_CONFIG } from "../modelConfig.js";
 import { getServerSecretSync } from "../platform/ServerEnvironmentSecretAdapter.js";
+import { redactSecrets } from "../providerDiagnostics.js";
 import { classifyProviderError, ProviderOperationError, type ProviderErrorCode } from "./providerErrors.js";
 import {
   ImageValidationError,
@@ -97,6 +98,12 @@ export type OpenRouterImageFetchLike = (url: string, init: RequestInit) => Promi
 export interface OpenRouterImageProviderOptions {
   /** Test-only seam; defaults to the global fetch. Never a config surface. */
   fetchFn?: OpenRouterImageFetchLike;
+  /**
+   * BYOK-5F: an EXPLICIT session credential. When present it is used INSTEAD of
+   * the operator env key (never a fallback). The provider instance is
+   * request-scoped; no global cache retains the credential.
+   */
+  credential?: string;
 }
 
 function defaultFetch(): OpenRouterImageFetchLike {
@@ -123,10 +130,25 @@ function retryAfterFrom(res: OpenRouterImageFetchResponse): string | undefined {
 }
 
 /**
+ * BYOK-5F SECURITY: builds a bounded, SANITIZED diagnostic from untrusted
+ * upstream/transport error text. The exact in-use credential is removed by
+ * literal replacement (format-independent, unlike regex redaction), then shared
+ * secret redaction is applied. The RAW text is NEVER retained. Returns an empty
+ * string when there is nothing safe to keep.
+ */
+function sanitizeDiagnosticText(rawText: unknown, credential: string | undefined): string {
+  let text = typeof rawText === "string" ? rawText : "";
+  if (!text) return "";
+  if (credential) text = text.split(credential).join("<redacted>");
+  return redactSecrets(text).slice(0, 300);
+}
+
+/**
  * Maps an OpenRouter image error body + HTTP status to a normalized code.
  * Precedence: the documented wrapped `error.code` (529 = Provider Overloaded)
- * first, then the shared HTTP/message classifier. Raw provider text never
- * escapes; only the normalized code + bounded message do.
+ * first, then the shared HTTP/message classifier. The upstream message is used
+ * ONLY transiently for classification and is never retained or surfaced; only
+ * the normalized code + bounded fixed message escape.
  */
 function classifyOpenRouterImageError(status: number, errorCode: unknown, rawMessage: string): ProviderErrorCode {
   // 529 is OpenRouter's documented provider-overloaded marker (commonly wrapped
@@ -158,18 +180,22 @@ export class OpenRouterImageProvider implements ImageProvider {
   };
 
   private readonly fetchFn: OpenRouterImageFetchLike;
+  private readonly credential?: string;
 
   constructor(options: OpenRouterImageProviderOptions = {}) {
     this.fetchFn = options.fetchFn ?? defaultFetch();
+    this.credential = options.credential;
   }
 
-  /** True only when a real OPENROUTER_API_KEY is configured server-side. */
+  /** True when a session credential is present, or a real operator key exists. */
   isAvailable(): boolean {
+    if (this.credential) return true;
     return Boolean(getServerSecretSync("openrouter_api_key"));
   }
 
   private requireKey(): string {
-    const key = getServerSecretSync("openrouter_api_key");
+    // A session credential is used EXCLUSIVELY when supplied — never env fallback.
+    const key = this.credential ?? getServerSecretSync("openrouter_api_key");
     if (!key) {
       throw new ProviderOperationError("UNAVAILABLE", "OpenRouter Image is not available (no API key).", {
         providerId: this.id,
@@ -199,28 +225,43 @@ export class OpenRouterImageProvider implements ImageProvider {
       });
     } catch (err) {
       // Transport-level failure / timeout. Connection failures map to
-      // UNAVAILABLE; timeouts/aborts to TIMEOUT. Never leaks secrets/prompt.
+      // UNAVAILABLE; timeouts/aborts to TIMEOUT. `classifyProviderError` reads
+      // name/message/status ONLY transiently.
       const code = classifyProviderError(err);
+      // SECURITY (BYOK-5F): a fetch implementation MAY include the outbound
+      // Authorization header (or other credential-bearing request metadata) in
+      // its exception text. NEVER retain the raw thrown transport exception.
+      // Retain only a bounded, sanitized diagnostic (exact in-use credential
+      // removed + shared redaction); omit the cause entirely when nothing safe
+      // remains. ProviderOperationError stores the cause non-enumerably.
+      const transportMessage =
+        err instanceof Error ? err.message : typeof err === "string" ? err : "";
+      const sanitized = sanitizeDiagnosticText(transportMessage, key);
       throw new ProviderOperationError(
         code === "PROVIDER_ERROR" ? "UNAVAILABLE" : code,
         "OpenRouter image request failed.",
         { providerId: this.id, model },
-        err
+        sanitized ? new Error(sanitized) : undefined
       );
     }
 
     if (!res.ok) {
       const parsed = await asJson<{ error?: { code?: unknown; message?: string } }>(res);
-      const rawMessage = parsed?.error?.message ?? `OpenRouter image request failed (HTTP ${res.status}).`;
+      const rawMessage = typeof parsed?.error?.message === "string" ? parsed.error.message : "";
+      // The upstream message is untrusted and MAY echo the Authorization bearer.
+      // It is used ONLY transiently to classify; it is never retained raw.
       const code = classifyOpenRouterImageError(res.status, parsed?.error?.code, rawMessage);
-      // NEVER expose raw provider text: the surfaced message is bounded and
-      // provider-agnostic; the raw error is preserved ONLY as a non-enumerable
-      // cause for internal debugging (never serialized to UI/logs/settings).
+      // SECURITY (BYOK-5F): NEVER construct `new Error(rawMessage)`. The internal
+      // cause is a BOUNDED, SANITIZED diagnostic with the exact in-use credential
+      // removed by literal replacement (format-independent) plus shared
+      // redaction. `ProviderOperationError` stores it non-enumerably. The public
+      // message is fixed and provider-agnostic.
+      const sanitized = sanitizeDiagnosticText(rawMessage, key);
       const normalized = new ProviderOperationError(
         code,
         `OpenRouter image request failed (HTTP ${res.status}).`,
         { providerId: this.id, model },
-        new Error(rawMessage)
+        sanitized ? new Error(sanitized) : undefined
       );
       // Preserve the upstream HTTP status so Retry-After semantics hold for 429.
       if (typeof res.status === "number" && res.status !== 0) {

@@ -111,11 +111,12 @@ describe("BYOK-5E — SessionKeyPanelView (presentational)", () => {
     expect(html).toMatch(/data-session-key-input="true"[^>]*disabled/);
   });
 
-  it("truthfully notes that image session generation is not enabled yet", () => {
+  it("truthfully states that image session keys are supported (validation + generation)", () => {
     const html = render(
       <SessionKeyPanelView {...baseProps({ selectedProviderId: "openrouter-image", selectedModelId: "google/gemini-2.5-flash-image" })} />
     );
-    expect(html).toContain("Session-key image generation is not enabled yet");
+    expect(html).toContain("Session keys are supported for this image provider");
+    expect(html).not.toContain("not enabled yet");
   });
 
   it("accessibly associates the Session API key label with the password input and marks async regions", () => {

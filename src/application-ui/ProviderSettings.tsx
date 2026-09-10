@@ -623,8 +623,7 @@ function SelectionControlCard({
                 </label>
               ) : (
                 <div className="text-[10px] text-gray-500">
-                  Session-key image generation is not enabled yet. Use server environment credentials
-                  for image generation; session keys can still be validated below.
+                  Session credentials are not available for this surface.
                 </div>
               )}
             </>
@@ -737,12 +736,11 @@ export function ProviderSelectionPanel({
   const changeDraft = useCallback(
     (kind: 'text' | 'image', patch: Partial<ProviderSelectionDraft>) => {
       setDrafts((prev) => ({ ...prev, [kind]: { ...prev[kind], ...patch } }));
-      // BYOK-5E: tell the session panel to clear any typed session key whenever the
-      // TEXT credential source changes away from session_only (or the mode resets).
-      if (kind === 'text') {
-        if (patch.mode === 'server_default') onCredentialSourceChange?.(undefined);
-        else if (patch.credentialSource !== undefined) onCredentialSourceChange?.(patch.credentialSource);
-      }
+      // BYOK-5E/5F: tell the session panel to clear any typed session key whenever
+      // a surface's credential source changes away from session_only (or the mode
+      // resets to server_default).
+      if (patch.mode === 'server_default') onCredentialSourceChange?.(undefined);
+      else if (patch.credentialSource !== undefined) onCredentialSourceChange?.(patch.credentialSource);
     },
     [onCredentialSourceChange]
   );
@@ -767,10 +765,10 @@ export function ProviderSelectionPanel({
     async (kind: 'text' | 'image') => {
       const next = await resetAiSelection(settings, kind);
       setSaved(next);
-      // BYOK-5E: resetting the TEXT selection to server_default must clear any
-      // typed session key (same signal as switching away from session_only). The
+      // BYOK-5E/5F: resetting a surface to server_default must clear any typed
+      // session key (same signal as switching away from session_only). The
       // server-side session key is NOT revoked and no provider traffic occurs.
-      if (kind === 'text') onCredentialSourceChange?.(undefined);
+      onCredentialSourceChange?.(undefined);
     },
     [settings, onCredentialSourceChange]
   );
@@ -897,7 +895,7 @@ export function ProviderSelectionPanel({
             invalid={imageSelectionInvalid}
             draft={drafts.image}
             providers={selectedImageProviders}
-            allowSessionCredential={false}
+            allowSessionCredential
             onChangeDraft={(patch) => changeDraft('image', patch)}
             onApply={() => applySelection('image')}
             onReset={() => resetSelection('image')}

@@ -69,7 +69,18 @@ export class ProviderOperationError extends Error {
     this.code = code;
     if (ctx.providerId) this.providerId = ctx.providerId;
     if (ctx.model) this.model = ctx.model;
-    if (cause !== undefined) this.rawCause = cause;
+    if (cause !== undefined) {
+      // DEFENSE-IN-DEPTH (BYOK-5F): store the internal cause as a genuinely
+      // NON-ENUMERABLE own property so `Object.keys`, JSON serialization, object
+      // spread, and normal inspection cannot reveal it. The PRIMARY protection is
+      // upstream: callers must never retain secret-bearing raw provider text.
+      Object.defineProperty(this, "rawCause", {
+        value: cause,
+        enumerable: false,
+        writable: false,
+        configurable: false,
+      });
+    }
   }
 
   get cause(): unknown | undefined {

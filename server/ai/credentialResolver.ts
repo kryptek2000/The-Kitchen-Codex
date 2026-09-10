@@ -27,7 +27,10 @@ import { getSessionSecret } from "./sessionSecrets.js";
 import { GeminiProvider } from "./geminiProvider.js";
 import { OpenRouterProvider } from "./openRouterProvider.js";
 import { DeepSeekProvider } from "./deepSeekProvider.js";
+import { GeminiImageProvider } from "./geminiImageProvider.js";
+import { OpenRouterImageProvider } from "./openRouterImageProvider.js";
 import type { AiProvider } from "./types.js";
+import type { ImageProvider } from "./imageProvider.js";
 
 /** The two non-secret credential sources. */
 export type CredentialSource = "server_environment" | "session_only";
@@ -114,4 +117,41 @@ export function createSessionBoundTextProvider(providerId: string): AiProvider |
   const secret = getSessionSecret(providerId);
   if (!secret) return null;
   return createCredentialBoundTextProvider(providerId, secret);
+}
+
+/**
+ * BYOK-5F: builds a REQUEST-SCOPED IMAGE provider bound to an explicit session
+ * credential. Exact image execution IDs only (`gemini-image` / `openrouter-image`);
+ * text IDs are rejected. Returns `null` for an unsupported id so the caller fails
+ * closed rather than falling back to the environment credential.
+ */
+export function createCredentialBoundImageProvider(
+  providerId: string,
+  credential: string
+): ImageProvider | null {
+  switch (providerId) {
+    case "gemini-image":
+      return new GeminiImageProvider({ credential });
+    case "openrouter-image":
+      return new OpenRouterImageProvider({ credential });
+    default:
+      return null;
+  }
+}
+
+/** True when a session credential can be safely bound to an IMAGE provider. */
+export function supportsSessionBoundImageProvider(providerId: string): boolean {
+  return providerId === "gemini-image" || providerId === "openrouter-image";
+}
+
+/**
+ * Resolves the session secret for an EXACT image provider id and returns a
+ * request-scoped image provider bound to it, or `null` when no live session
+ * credential exists. NEVER falls back to the environment credential and NEVER
+ * reads a text provider's session secret.
+ */
+export function createSessionBoundImageProvider(providerId: string): ImageProvider | null {
+  const secret = getSessionSecret(providerId);
+  if (!secret) return null;
+  return createCredentialBoundImageProvider(providerId, secret);
 }

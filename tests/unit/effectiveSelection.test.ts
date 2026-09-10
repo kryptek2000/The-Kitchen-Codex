@@ -300,7 +300,7 @@ describe("BYOK-4 — resolveEffectiveImageSelection fail-closed", () => {
     expect(result.provider?.id).toBe("gemini-image");
   });
 
-  it("BYOK-5C: an explicit session_only image intent fails closed (image wiring deferred)", async () => {
+  it("BYOK-5F: an explicit session_only image intent with NO stored session key fails closed", async () => {
     const { effectiveSelection } = await freshModule({ GEMINI_API_KEY: SENTINEL });
     const result = effectiveSelection.resolveEffectiveImageSelection({
       kind: "EXPLICIT_SELECTED",

@@ -38,8 +38,9 @@
  * an oversized/malicious payload cannot allocate hundreds of MB before rejection.
  */
 
-import { Modality, type GenerateContentResponse } from "@google/genai";
-import { getGeminiImage } from "../geminiClient.js";
+import { Modality, type GenerateContentResponse, type GoogleGenAI } from "@google/genai";
+import { createGeminiClientWithKey, getGeminiImage } from "../geminiClient.js";
+import { MODEL_CONFIG } from "../modelConfig.js";
 import {
   validateGeneratedImage,
   MAX_GENERATED_IMAGE_BYTES,
@@ -122,6 +123,17 @@ function finishReasonOf(candidate: unknown): string {
  * payload is rejected without a single decoded byte being allocated. The payload
  * string itself is NEVER logged.
  */
+/** BYOK-5F: request-scoped credential injection (session-only BYOK). */
+export interface GeminiImageProviderOptions {
+  /**
+   * An EXPLICIT session credential. When present, the provider builds a
+   * REQUEST-SCOPED Gemini client from it (using the dedicated IMAGE timeout) and
+   * NEVER falls back to the operator env key. The instance is owned by one
+   * request; no global cache retains it.
+   */
+  credential?: string;
+}
+
 export class GeminiImageProvider implements ImageProvider {
   readonly id = "gemini-image";
   readonly name = "Google Gemini Image";
@@ -136,16 +148,40 @@ export class GeminiImageProvider implements ImageProvider {
     maxBytes: MAX_GENERATED_IMAGE_BYTES,
   };
 
-  /** True only when a real GEMINI_API_KEY is configured server-side. */
+  private readonly credential?: string;
+  private sessionClient: GoogleGenAI | null = null;
+
+  constructor(options: GeminiImageProviderOptions = {}) {
+    this.credential = options.credential;
+  }
+
+  /** True when a session credential is present, or a real operator key exists. */
   isAvailable(): boolean {
+    if (this.credential) return true;
     return getGeminiImage() !== null;
+  }
+
+  /**
+   * Returns the request-scoped session client when an explicit credential is
+   * present, otherwise the shared env-backed image client. The session client is
+   * built with the dedicated IMAGE timeout (`imageGenerationTimeoutMs`, 60s) —
+   * NEVER the 25s text ceiling.
+   */
+  private client(): GoogleGenAI | null {
+    if (this.credential) {
+      if (!this.sessionClient) {
+        this.sessionClient = createGeminiClientWithKey(this.credential, MODEL_CONFIG.imageGenerationTimeoutMs);
+      }
+      return this.sessionClient;
+    }
+    return getGeminiImage();
   }
 
   async generateImage(prompt: string, options: ImageGenerateOptions): Promise<GeneratedImage> {
     if (!options?.model) {
       throw new ProviderOperationError("INVALID_RESPONSE", "Image model is required.", { providerId: this.id });
     }
-    const client = getGeminiImage();
+    const client = this.client();
     if (!client) {
       throw new ProviderOperationError("UNAVAILABLE", "Image provider is not available.", {
         providerId: this.id,

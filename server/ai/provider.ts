@@ -91,6 +91,9 @@ export {
   createCredentialBoundTextProvider,
   createSessionBoundTextProvider,
   supportsSessionBoundTextProvider,
+  createCredentialBoundImageProvider,
+  createSessionBoundImageProvider,
+  supportsSessionBoundImageProvider,
 } from "./credentialResolver.js";
 export type {
   CredentialSource,

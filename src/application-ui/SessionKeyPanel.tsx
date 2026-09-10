@@ -140,8 +140,8 @@ export function SessionKeyPanelView(props: SessionKeyPanelViewProps) {
 
         {isImage && (
           <div className="text-[11px] rounded-lg border border-white/10 bg-white/[0.03] text-gray-300 px-3 py-2">
-            Session key validation is available for this image provider. Session-key image
-            generation is not enabled yet.
+            Session keys are supported for this image provider (credential validation and
+            image generation).
           </div>
         )}
 

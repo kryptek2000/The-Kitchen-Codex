@@ -155,19 +155,20 @@ describe("BYOK-4 — ProviderSelectionPanel (interactive selection)", () => {
     expect(html).not.toContain("DEEPSEEK_API_KEY");
   });
 
-  it("BYOK-5E: text surface offers a credential-source selector; image surface does not (session image generation deferred)", async () => {
+  it("BYOK-5E/5F: BOTH surfaces offer a credential-source selector (Server environment / Session only)", async () => {
     const c = catalog({ text: true, image: true });
     await saveAiSelection(stubSettings(), "text", "user_selected", "gemini", "gemini-3.7-flash", "server_environment");
-    await saveAiSelection(stubSettings(), "image", "user_selected", "gemini-image", "gemini-2.5-flash-image");
+    await saveAiSelection(stubSettings(), "image", "user_selected", "gemini-image", "gemini-2.5-flash-image", "server_environment");
     const html = render(
       <ProviderSelectionPanel catalog={c} settings={stubSettings()} network={stubNetwork()} />
     );
     expect(html).toContain('data-selection-credential-source-select="text"');
+    expect(html).toContain('data-selection-credential-source-select="image"');
     expect(html).toContain("Server environment");
     expect(html).toContain("Session only");
-    // The image surface does NOT expose session_only as an executable source.
-    expect(html).not.toContain('data-selection-credential-source-select="image"');
-    expect(html).toContain("Session-key image generation is not enabled yet");
+    // The selection metadata never carries a key.
+    expect(html).not.toContain("apiKey");
+    expect(html).not.toContain("Session-key image generation is not enabled yet");
   });
 
   it("BYOK-5E: reset to server_default (and any non-session source) clears the typed session key", () => {

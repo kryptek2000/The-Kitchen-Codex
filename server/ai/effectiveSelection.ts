@@ -47,8 +47,10 @@ import type { AiProvider } from "./types.js";
 import type { ImageProvider } from "./imageProvider.js";
 import type { SelectionIntent } from "./parseSelectionMetadata.js";
 import {
+  createSessionBoundImageProvider,
   createSessionBoundTextProvider,
   isCredentialSource,
+  supportsSessionBoundImageProvider,
   supportsSessionBoundTextProvider,
   type CredentialSource,
 } from "./credentialResolver.js";
@@ -360,15 +362,30 @@ export function resolveExecutableTextCandidates(
   return selectCandidates(regs, candidates, operationRequiredCapabilities(operation));
 }
 
-/** Validates a user's IMAGE selection against the image registry. */
+/**
+ * Validates a user's IMAGE selection against the image registry.
+ *
+ * CREDENTIAL-SOURCE AWARE (BYOK-5F): for `session_only`, the operator-env
+ * `enabled`/`isAvailable()` gates are BYPASSED (a provider can be executable with
+ * a valid session credential even when no operator env key exists) while the
+ * provider identity + curated model allowlist are still enforced. A missing
+ * session credential is resolved later (fail closed), never substituted with env.
+ * For `server_environment`, the existing enabled/availability checks are kept.
+ */
 export function validateUserImageSelection(
   requested: SelectedOperationMetadata | undefined,
-  regs: RegisteredImageProvider[]
+  regs: RegisteredImageProvider[],
+  credentialSource: CredentialSource = "server_environment"
 ): { providerId: string; modelId?: string } | null {
   if (!requested?.providerId) return null;
   const registered = findRegisteredImageProvider(requested.providerId);
-  if (!registered || registered.enabled === false) return null;
-  if (!registered.provider.isAvailable()) return null;
+  if (!registered) return null;
+  if (credentialSource === "session_only") {
+    if (!supportsSessionBoundImageProvider(registered.provider.id)) return null;
+  } else {
+    if (registered.enabled === false) return null;
+    if (!registered.provider.isAvailable()) return null;
+  }
   const modelId = requested.modelId;
   if (modelId) {
     const curated: string[] = [...(registered.models ?? [registered.defaultModel])];
@@ -428,17 +445,27 @@ export function resolveEffectiveImageSelection(requested?: SelectionInput): Effe
     return { provider: null, model: undefined, source: "server_managed", invalidIntent: false };
   }
 
-  // BYOK-5C: IMAGE session-credential execution is a SEPARATE required substep
-  // (the image providers are not yet request-scoped/credential-injectable). An
-  // explicit `session_only` image intent therefore FAILS CLOSED here rather than
-  // silently falling back to the operator environment credential.
-  if (coerced.metadata?.credentialSource === "session_only") {
-    return { provider: null, model: undefined, source: "user_selected", invalidIntent: false };
-  }
-
-  const userSel = validateUserImageSelection(coerced.metadata, regs);
+  // WHOSE credential authorizes the user's selected image provider. Never
+  // inferred from the provider/model; defaults to the operator environment.
+  const userCredentialSource: CredentialSource = coerced.metadata?.credentialSource ?? "server_environment";
+  const userSel = validateUserImageSelection(coerced.metadata, regs, userCredentialSource);
   if (userSel) {
     const registered = findRegisteredImageProvider(userSel.providerId)!;
+    if (userCredentialSource === "session_only") {
+      // BYOK-5F: a REQUEST-SCOPED provider bound to the EXACT image provider's
+      // session credential. Missing/expired/revoked -> null (fail closed); there
+      // is NO env fallback and NO cross-provider fallback.
+      const bound = createSessionBoundImageProvider(userSel.providerId);
+      if (!bound) {
+        return { provider: null, model: undefined, source: "user_selected", invalidIntent: false };
+      }
+      return {
+        provider: bound,
+        model: userSel.modelId ?? registered.defaultModel,
+        source: "user_selected",
+        invalidIntent: false,
+      };
+    }
     return {
       provider: registered.provider,
       model: userSel.modelId ?? registered.defaultModel,
