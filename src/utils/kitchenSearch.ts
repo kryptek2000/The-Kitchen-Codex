@@ -140,9 +140,65 @@ export interface KitchenSearchResult {
  * Building it from a different recipe set would yield similarity results that
  * do not correspond to the recipe array being searched.
  */
+/**
+ * Ingredient identity matching mode.
+ *
+ * `exact` (DEFAULT) preserves the canonical exact normalized-identity behavior —
+ * the SAME authority used by relationship indexing, ingredient equivalence, and
+ * wikilink/canonical matching. It is deliberately unchanged.
+ *
+ * `phrase` is a QUERY-SIDE relaxation used ONLY by Ask My Kitchen candidate
+ * retrieval: a normalized query ingredient additionally matches when it is a
+ * whole-TOKEN phrase inside a recipe's normalized ingredient identity (e.g.
+ * "chicken" matches "shredded rotisserie chicken", but never "chickpea"). It
+ * never weakens the canonical identity functions themselves.
+ *
+ * ACCEPTED LIMITATION: this is lexical/whole-token matching, NOT semantic
+ * classification. A standalone token such as "chicken" also matches product-style
+ * normalized identities that contain it (e.g. "mock chicken",
+ * "chicken-flavored broth"). The normalized ingredient model has no reliable
+ * semantic distinction to exclude those safely, so no brittle exclusion list is
+ * used.
+ */
+export type IngredientMatchMode = 'exact' | 'phrase';
+
 export interface KitchenSearchOptions {
   /** A prebuilt relationship index built from the SAME recipes array. */
   index?: RecipeRelationshipIndex;
+  /**
+   * Ingredient matching mode (see `IngredientMatchMode`). Defaults to `exact`.
+   * Ask My Kitchen passes `phrase` so a generic ingredient request matches its
+   * more specific normalized variants; every other caller keeps exact identity.
+   */
+  ingredientMatching?: IngredientMatchMode;
+}
+
+/** Conservative whole-token split for the query-side phrase matcher. */
+function tokenizeIngredientIdentity(text: string): string[] {
+  return String(text ?? '')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length > 0);
+}
+
+/**
+ * True when `queryTokens` occurs as a CONTIGUOUS whole-token phrase inside
+ * `recipeTokens`. Word-boundary safe: "chicken" matches "chicken breast" but
+ * never "chickpea"; "chick" never matches "chicken".
+ */
+function containsTokenPhrase(recipeTokens: string[], queryTokens: string[]): boolean {
+  if (queryTokens.length === 0 || queryTokens.length > recipeTokens.length) return false;
+  for (let i = 0; i + queryTokens.length <= recipeTokens.length; i++) {
+    let matched = true;
+    for (let j = 0; j < queryTokens.length; j++) {
+      if (recipeTokens[i + j] !== queryTokens[j]) {
+        matched = false;
+        break;
+      }
+    }
+    if (matched) return true;
+  }
+  return false;
 }
 
 /**
@@ -296,6 +352,7 @@ export function searchKitchenRecipes(
 ): KitchenSearchResult[] {
   const includeKeys = ingredientQueryKeys(query.includeIngredients);
   const excludeKeys = ingredientQueryKeys(query.excludeIngredients);
+  const ingredientMatching: IngredientMatchMode = options.ingredientMatching ?? 'exact';
   const queryTags = normalizeTags(query.tags);
   const queryTagSet = new Set(queryTags);
   const cuisines = normalizeValues(query.cuisines);
@@ -329,10 +386,26 @@ export function searchKitchenRecipes(
 
     const ingredientKeys = recipeIngredientKeys(recipe);
 
-    // --- Hard ingredient filters (exact identity, ALL / NONE semantics) ---
+    // Ingredient matching: EXACT canonical identity always wins first. In
+    // `phrase` mode (Ask My Kitchen retrieval only) a normalized query ingredient
+    // additionally matches when it is a whole-token phrase within a recipe's
+    // normalized ingredient identity. The canonical identity functions are never
+    // modified; this relaxation is query-side and local to retrieval.
+    let recipeIngredientTokens: string[][] | null = null;
+    const ingredientMatches = (key: string): boolean => {
+      if (ingredientKeys.has(key)) return true;
+      if (ingredientMatching !== 'phrase') return false;
+      if (recipeIngredientTokens === null) {
+        recipeIngredientTokens = Array.from(ingredientKeys, tokenizeIngredientIdentity);
+      }
+      const queryTokens = tokenizeIngredientIdentity(key);
+      return recipeIngredientTokens.some((tokens) => containsTokenPhrase(tokens, queryTokens));
+    };
+
+    // --- Hard ingredient filters (ALL include / NONE exclude semantics) ---
     let includeOk = true;
     for (const key of includeKeys) {
-      if (!ingredientKeys.has(key)) {
+      if (!ingredientMatches(key)) {
         includeOk = false;
         break;
       }
@@ -341,7 +414,7 @@ export function searchKitchenRecipes(
 
     let excludeOk = true;
     for (const key of excludeKeys) {
-      if (ingredientKeys.has(key)) {
+      if (ingredientMatches(key)) {
         excludeOk = false;
         break;
       }
@@ -392,7 +465,7 @@ export function searchKitchenRecipes(
     const reasons: string[] = [];
 
     for (const key of includeKeys) {
-      if (ingredientKeys.has(key)) {
+      if (ingredientMatches(key)) {
         matchedIngredients.push(key);
         reasons.push(`contains "${key}"`);
       }

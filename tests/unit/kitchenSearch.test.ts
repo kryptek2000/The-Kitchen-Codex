@@ -454,6 +454,85 @@ describe('kitchenSearch: audit hardening — text inertness', () => {
   });
 });
 
+describe('kitchenSearch: Ask My Kitchen query-side phrase ingredient matching', () => {
+  const PHRASE = { ingredientMatching: 'phrase' as const };
+
+  it('A. "chicken" matches chicken breast / shredded rotisserie chicken / boneless skinless chicken thighs', () => {
+    const recipes = [
+      r({ id: 'breast', ingredients: [ing('4 skinless chicken breast halves, with ribs')] }),
+      r({ id: 'rotisserie', ingredients: [ing('2 cups shredded rotisserie chicken')] }),
+      r({ id: 'thighs', ingredients: [ing('1 lb boneless skinless chicken thighs')] }),
+    ];
+    const result = searchKitchenRecipes(recipes, { includeIngredients: ['chicken'] }, PHRASE);
+    expect(result.map((x) => x.recipeIdentity).sort()).toEqual(['breast', 'rotisserie', 'thighs']);
+    // Grounded evidence names the requested ingredient.
+    for (const row of result) expect(row.matchedIngredients).toEqual(['chicken']);
+    for (const row of result) expect(row.reasons).toContain('contains "chicken"');
+  });
+
+  it('B. "chicken" does NOT match chickpea / chickpeas / chick', () => {
+    const recipes = [
+      r({ id: 'chickpea', ingredients: [ing('1 can chickpeas')] }),
+      r({ id: 'chick', ingredients: [ing('1 chick')] }),
+    ];
+    expect(searchKitchenRecipes(recipes, { includeIngredients: ['chicken'] }, PHRASE)).toEqual([]);
+  });
+
+  it('C. "garlic" matches minced garlic / garlic cloves / roasted garlic', () => {
+    const recipes = [
+      r({ id: 'minced', ingredients: [ing('2 tablespoons minced garlic')] }),
+      r({ id: 'cloves', ingredients: [ing('4 garlic cloves')] }),
+      r({ id: 'roasted', ingredients: [ing('1 head roasted garlic')] }),
+    ];
+    const result = searchKitchenRecipes(recipes, { includeIngredients: ['garlic'] }, PHRASE);
+    expect(result.map((x) => x.recipeIdentity).sort()).toEqual(['cloves', 'minced', 'roasted']);
+  });
+
+  it('D. multiple include ingredients preserve ALL semantics under phrase matching', () => {
+    const recipes = [
+      r({ id: 'both', ingredients: [ing('2 chicken breasts'), ing('3 garlic cloves')] }),
+      r({ id: 'chicken-only', ingredients: [ing('2 chicken breasts')] }),
+      r({ id: 'garlic-only', ingredients: [ing('3 garlic cloves')] }),
+    ];
+    const result = searchKitchenRecipes(recipes, { includeIngredients: ['chicken', 'garlic'] }, PHRASE);
+    expect(result.map((x) => x.recipeIdentity)).toEqual(['both']);
+  });
+
+  it('E. exclude "chicken" filters chicken variants without touching chickpeas', () => {
+    const recipes = [
+      r({ id: 'breast', ingredients: [ing('2 chicken breasts'), ing('rice')] }),
+      r({ id: 'rotisserie', ingredients: [ing('2 cups rotisserie chicken'), ing('rice')] }),
+      r({ id: 'chickpea', ingredients: [ing('1 can chickpeas'), ing('rice')] }),
+      r({ id: 'plain', ingredients: [ing('rice')] }),
+    ];
+    const result = searchKitchenRecipes(
+      recipes,
+      { includeIngredients: ['rice'], excludeIngredients: ['chicken'] },
+      PHRASE
+    );
+    expect(result.map((x) => x.recipeIdentity).sort()).toEqual(['chickpea', 'plain']);
+  });
+
+  it('F. exact ingredient matches still work under phrase matching', () => {
+    const recipes = [r({ id: 'exact', ingredients: [ing('chicken')] })];
+    const result = searchKitchenRecipes(recipes, { includeIngredients: ['chicken'] }, PHRASE);
+    expect(result.map((x) => x.recipeIdentity)).toEqual(['exact']);
+  });
+
+  it('G. unrelated recipes never enter the candidate set', () => {
+    const recipes = [
+      r({ id: 'beef', ingredients: [ing('1 lb beef chuck')] }),
+      r({ id: 'tofu', ingredients: [ing('1 block tofu')] }),
+    ];
+    expect(searchKitchenRecipes(recipes, { includeIngredients: ['chicken'] }, PHRASE)).toEqual([]);
+  });
+
+  it('the DEFAULT (exact) mode is unchanged — "chicken" does NOT match "chicken breast"', () => {
+    const recipes = [r({ id: 'breast', ingredients: [ing('2 chicken breasts')] })];
+    expect(searchKitchenRecipes(recipes, { includeIngredients: ['chicken'] })).toEqual([]);
+  });
+});
+
 describe('kitchenSearch: audit hardening — supplied options.index contract', () => {
   it('reuses a prebuilt index from the SAME recipes array and matches the default path', () => {
     const recipes = [

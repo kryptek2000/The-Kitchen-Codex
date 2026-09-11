@@ -287,7 +287,11 @@ export function buildKitchenCandidates(
   const results = searchKitchenRecipes(
     recipes,
     { ...query, limit: Math.max(0, max) },
-    opts.index ? { index: opts.index } : {}
+    // Ask My Kitchen uses QUERY-SIDE generic ingredient matching so a generic
+    // request ("chicken") matches its more specific normalized variants
+    // ("chicken breast", "rotisserie chicken"). Canonical ingredient identity is
+    // deliberately unchanged for every other consumer (exact is the default).
+    { ingredientMatching: 'phrase', ...(opts.index ? { index: opts.index } : {}) }
   );
   const out: KitchenCandidateEvidence[] = [];
   for (const result of results) {
