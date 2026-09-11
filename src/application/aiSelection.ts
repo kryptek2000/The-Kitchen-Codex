@@ -183,6 +183,19 @@ let currentAdapter: unknown = null;
 // late-resolving hydration cannot overwrite a newer deliberate user change.
 const deliberateGeneration: Record<AiSelectionSurface, number> = { text: 0, image: 0 };
 
+/**
+ * The result of a save/reset operation. `persistenceFailed` belongs to THIS
+ * exact operation's `SettingsAdapter.set` write — never shared module state — so
+ * overlapping operations can never misattribute one surface's failure to
+ * another's success. The in-memory (runtime) selection still applies even when
+ * persistence fails; this flag only affects truthful UI messaging and NEVER
+ * affects provider execution or triggers any fallback.
+ */
+export interface AiSelectionMutationOutcome {
+  selections: SavedAiSelections;
+  persistenceFailed: boolean;
+}
+
 /** The current readiness of ONE surface. */
 export function getAiSelectionSurfaceStatus(kind: AiSelectionSurface): AiSelectionSurfaceStatus {
   return surfaceStates[kind].status;
@@ -438,14 +451,14 @@ export function hydrateAiSelections(settings: Pick<SettingsAdapter, 'get'>): Pro
  * authority that validates/fails-closed); `server_default` is stored only when
  * the user explicitly chooses it. Never persists `server_managed`.
  */
-export async function saveAiSelection(
+export async function saveAiSelectionWithOutcome(
   settings: SettingsAdapter,
   kind: 'text' | 'image',
   mode: SavedSelectionMode,
   providerId?: string,
   modelId?: string,
   credentialSource?: SavedCredentialSource
-): Promise<SavedAiSelections> {
+): Promise<AiSelectionMutationOutcome> {
   const parsed = parseStoredSelection(
     mode === 'user_selected'
       ? {
@@ -464,32 +477,62 @@ export async function saveAiSelection(
   surfaceStates[kind] = { status: 'loaded', selection };
   deliberateGeneration[kind] += 1;
   const next = getCachedAiSelections();
+  let persistenceFailed = false;
   try {
     await settings.set(AI_SELECTION_SETTINGS_KEY, next);
   } catch {
-    // Persistence failure is non-fatal: the in-memory preference still holds
-    // for this session; the next save re-attempts persistence.
+    // Persistence failure is non-fatal: the in-memory preference still holds for
+    // this session; the next save re-attempts persistence. Returned for THIS
+    // operation only (never shared state). NEVER affects execution/fallback.
+    persistenceFailed = true;
   }
-  return getCachedAiSelections();
+  return { selections: getCachedAiSelections(), persistenceFailed };
+}
+
+/**
+ * Persists a user's selection preference for ONE surface (see
+ * `saveAiSelectionWithOutcome`). Backward-compatible convenience that discards
+ * the operation-local persistence outcome.
+ */
+export async function saveAiSelection(
+  settings: SettingsAdapter,
+  kind: 'text' | 'image',
+  mode: SavedSelectionMode,
+  providerId?: string,
+  modelId?: string,
+  credentialSource?: SavedCredentialSource
+): Promise<SavedAiSelections> {
+  return (await saveAiSelectionWithOutcome(settings, kind, mode, providerId, modelId, credentialSource))
+    .selections;
 }
 
 /**
  * Clears the user selection preference for ONE surface (back to server_default).
  * Changing Text NEVER marks Image ready (and vice versa).
  */
+export async function resetAiSelectionWithOutcome(
+  settings: SettingsAdapter,
+  kind: 'text' | 'image'
+): Promise<AiSelectionMutationOutcome> {
+  surfaceStates[kind] = { status: 'loaded', selection: { mode: 'server_default' } };
+  deliberateGeneration[kind] += 1;
+  const next = getCachedAiSelections();
+  let persistenceFailed = false;
+  try {
+    await settings.set(AI_SELECTION_SETTINGS_KEY, next);
+  } catch {
+    // Non-fatal (see saveAiSelectionWithOutcome); returned for THIS operation only.
+    persistenceFailed = true;
+  }
+  return { selections: getCachedAiSelections(), persistenceFailed };
+}
+
+/** Backward-compatible reset that discards the operation-local persistence outcome. */
 export async function resetAiSelection(
   settings: SettingsAdapter,
   kind: 'text' | 'image'
 ): Promise<SavedAiSelections> {
-  surfaceStates[kind] = { status: 'loaded', selection: { mode: 'server_default' } };
-  deliberateGeneration[kind] += 1;
-  const next = getCachedAiSelections();
-  try {
-    await settings.set(AI_SELECTION_SETTINGS_KEY, next);
-  } catch {
-    // Non-fatal (see saveAiSelection).
-  }
-  return getCachedAiSelections();
+  return (await resetAiSelectionWithOutcome(settings, kind)).selections;
 }
 
 // ---------------------------------------------------------------------------

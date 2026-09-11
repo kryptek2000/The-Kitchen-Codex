@@ -612,3 +612,47 @@ describe("BYOK-5F — credential-source-aware selection validity", () => {
     expect(JSON.stringify(image.headers)).not.toContain("apiKey");
   });
 });
+
+describe("BYOK-5F — selection control race safety", () => {
+  it("a late hydration cannot overwrite a newly APPLIED selection", async () => {
+    const mod = await fresh();
+    let resolveGet!: (v: unknown) => void;
+    const getPromise = new Promise((r) => {
+      resolveGet = r;
+    });
+    const adapter = { get: () => getPromise, set: async () => {} };
+    const hydration = mod.hydrateAiSelections(adapter);
+    // Deliberate Apply while hydration is still pending.
+    await mod.saveAiSelection(adapter, "text", "user_selected", "openrouter", "openai/gpt-4o-mini", "session_only");
+    // Late hydration resolves with a DIFFERENT stored selection.
+    resolveGet({
+      textAi: { mode: "user_selected", providerId: "gemini", modelId: "gemini-3.7-flash" },
+      imageAi: { mode: "server_default" },
+    });
+    await hydration.catch(() => {});
+    expect(mod.getCachedAiSelections().textAi).toEqual({
+      mode: "user_selected",
+      providerId: "openrouter",
+      modelId: "openai/gpt-4o-mini",
+      credentialSource: "session_only",
+    });
+  });
+
+  it("a late hydration cannot RESURRECT a selection after Reset", async () => {
+    const mod = await fresh();
+    let resolveGet!: (v: unknown) => void;
+    const getPromise = new Promise((r) => {
+      resolveGet = r;
+    });
+    const adapter = { get: () => getPromise, set: async () => {} };
+    const hydration = mod.hydrateAiSelections(adapter);
+    // Deliberate Reset while hydration is still pending.
+    await mod.resetAiSelection(adapter, "text");
+    resolveGet({
+      textAi: { mode: "user_selected", providerId: "gemini", modelId: "gemini-3.7-flash" },
+      imageAi: { mode: "server_default" },
+    });
+    await hydration.catch(() => {});
+    expect(mod.getCachedAiSelections().textAi).toEqual({ mode: "server_default" });
+  });
+});

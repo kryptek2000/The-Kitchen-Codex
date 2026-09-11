@@ -26,7 +26,7 @@
  *     renders a bounded "unavailable" state (fail-closed / no fabrication).
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
 import type { SettingsAdapter } from '../application/adapters/SettingsAdapter';
 import type { AiCapabilities } from '../core/ai/types';
@@ -49,8 +49,8 @@ import {
   getCachedAiSelections,
   hydrateAiSelections,
   isSelectionValidAgainstCatalog,
-  resetAiSelection,
-  saveAiSelection,
+  resetAiSelectionWithOutcome,
+  saveAiSelectionWithOutcome,
   type SavedCredentialSource,
   type SavedSelection,
   type SavedSelectionMode,
@@ -121,6 +121,197 @@ export function buildServerEnvironmentTestBody(
     kind,
     ...(modelId ? { modelId } : {}),
     credentialSource: 'server_environment',
+  };
+}
+
+/**
+ * A truthful, NON-SECRET label for the USER's active runtime selection (their
+ * browser preference), distinct from the server/operator catalog truth. Never
+ * contains a key, version, expiry token, or any secret material.
+ */
+export function activeSelectionLabel(
+  selection: SavedSelection,
+  providers: { providerId: string; name: string }[] = []
+): string {
+  if (selection.mode !== 'user_selected' || !selection.providerId) return 'Server default';
+  const name =
+    providers.find((p) => p.providerId === selection.providerId)?.name ?? selection.providerId;
+  const model = selection.modelId ? ` / ${selection.modelId}` : '';
+  const source =
+    selection.credentialSource === 'session_only'
+      ? ' / Session only'
+      : selection.credentialSource === 'server_environment'
+      ? ' / Server environment'
+      : '';
+  return `${name}${model}${source}`;
+}
+
+/**
+ * Truthful Apply/Reset confirmation for ONE operation. `persistenceFailed` is
+ * the outcome of THAT operation's own SettingsAdapter write (never shared state),
+ * so overlapping operations cannot misattribute a failure. If the write failed,
+ * the selection is still active in memory for this session, so the copy must not
+ * claim it was saved to the browser.
+ */
+export function selectionPersistenceNotice(base: string, persistenceFailed: boolean): string {
+  return persistenceFailed
+    ? `${base} (active this session; could not be saved to this browser)`
+    : base;
+}
+
+/** Maps a saved selection to the fully-explicit editable draft shape. */
+function selectionToDraft(selection: SavedSelection): ProviderSelectionDraft {
+  return {
+    mode: selection.mode,
+    providerId: selection.providerId,
+    modelId: selection.modelId,
+    credentialSource: selection.credentialSource,
+  };
+}
+
+type SelectionDrafts = { text: ProviderSelectionDraft; image: ProviderSelectionDraft };
+
+/**
+ * Pure Apply transition: synchronize ONLY the target surface's draft to the
+ * actually-applied selection. The other surface is never touched.
+ */
+export function applyDraftSync(
+  drafts: SelectionDrafts,
+  kind: 'text' | 'image',
+  applied: SavedSelection
+): SelectionDrafts {
+  return { ...drafts, [kind]: selectionToDraft(applied) };
+}
+
+/**
+ * Pure Reset transition: reset ONLY the target surface's draft to
+ * server_default. The other surface is never touched.
+ */
+export function resetDraftSync(drafts: SelectionDrafts, kind: 'text' | 'image'): SelectionDrafts {
+  return { ...drafts, [kind]: selectionToDraft({ mode: 'server_default' }) };
+}
+
+/**
+ * The selection-control state slice owned by `ProviderSelectionPanel`. This is a
+ * pure reducer so the panel's Apply/Reset interaction is directly testable
+ * without a DOM harness. The persistence outcome travels IN the action payload,
+ * so it is ALWAYS operation-local (never inferred from shared module state).
+ */
+export interface ProviderSelectionControlState {
+  saved: SavedAiSelections;
+  drafts: SelectionDrafts;
+  notices: { text?: string; image?: string };
+  /**
+   * Per-surface id of the MOST RECENTLY STARTED Apply/Reset operation. A
+   * completion may mutate this surface's state ONLY when its captured id still
+   * equals this value; older same-surface completions are discarded. The two
+   * surfaces are INDEPENDENT (a new Image op never invalidates an in-flight Text
+   * op, and vice versa).
+   */
+  opIds: { text: number; image: number };
+}
+
+export type ProviderSelectionControlAction =
+  | { type: 'hydrated'; selections: SavedAiSelections }
+  | { type: 'draftChanged'; kind: 'text' | 'image'; patch: Partial<ProviderSelectionDraft> }
+  | { type: 'operationStarted'; kind: 'text' | 'image'; opId: number }
+  | {
+      type: 'applied';
+      kind: 'text' | 'image';
+      opId: number;
+      selections: SavedAiSelections;
+      persistenceFailed: boolean;
+    }
+  | {
+      type: 'reset';
+      kind: 'text' | 'image';
+      opId: number;
+      selections: SavedAiSelections;
+      persistenceFailed: boolean;
+    };
+
+export function providerSelectionReducer(
+  state: ProviderSelectionControlState,
+  action: ProviderSelectionControlAction
+): ProviderSelectionControlState {
+  switch (action.type) {
+    case 'hydrated':
+      return {
+        // Hydration is a full sync from the authoritative cache; it preserves the
+        // monotonic per-surface operation ids so an in-flight operation is never
+        // silently re-adopted by a late hydration.
+        ...state,
+        saved: action.selections,
+        drafts: {
+          text: selectionToDraft(action.selections.textAi),
+          image: selectionToDraft(action.selections.imageAi),
+        },
+        // A fresh hydration never resurrects a stale confirmation.
+        notices: {},
+      };
+    case 'draftChanged':
+      return {
+        ...state,
+        drafts: { ...state.drafts, [action.kind]: { ...state.drafts[action.kind], ...action.patch } },
+        // Any edit invalidates this surface's previous confirmation.
+        notices: { ...state.notices, [action.kind]: undefined },
+      };
+    case 'operationStarted':
+      return {
+        ...state,
+        opIds: { ...state.opIds, [action.kind]: action.opId },
+      };
+    case 'applied': {
+      // SAME-SURFACE STALE-COMPLETION GUARD: ignore an older operation's result.
+      if (action.opId !== state.opIds[action.kind]) return state;
+      const key = action.kind === 'text' ? 'textAi' : 'imageAi';
+      const applied = action.selections[key];
+      return {
+        ...state,
+        // Merge ONLY the target surface — the opposite surface is never altered.
+        saved: { ...state.saved, [key]: applied },
+        drafts: applyDraftSync(state.drafts, action.kind, applied),
+        notices: {
+          ...state.notices,
+          [action.kind]: selectionPersistenceNotice(
+            applied.mode === 'user_selected' ? 'Selection applied' : 'Reset to server default',
+            action.persistenceFailed
+          ),
+        },
+      };
+    }
+    case 'reset': {
+      // SAME-SURFACE STALE-COMPLETION GUARD: ignore an older operation's result.
+      if (action.opId !== state.opIds[action.kind]) return state;
+      const key = action.kind === 'text' ? 'textAi' : 'imageAi';
+      return {
+        ...state,
+        // Merge ONLY the target surface — the opposite surface is never altered.
+        saved: { ...state.saved, [key]: { mode: 'server_default' } },
+        drafts: resetDraftSync(state.drafts, action.kind),
+        notices: {
+          ...state.notices,
+          [action.kind]: selectionPersistenceNotice(
+            'Reset to server default',
+            action.persistenceFailed
+          ),
+        },
+      };
+    }
+  }
+}
+
+/** The initial selection-control state from the current cached selections. */
+export function initialProviderSelectionControlState(): ProviderSelectionControlState {
+  const cached = getCachedAiSelections();
+  return {
+    saved: cached,
+    drafts: {
+      text: selectionToDraft(cached.textAi),
+      image: selectionToDraft(cached.imageAi),
+    },
+    notices: {},
+    opIds: { text: 0, image: 0 },
   };
 }
 
@@ -358,7 +549,7 @@ function SelectionSummaryCard({
   /** Runtime executability truth from the server (`selection.executable`). */
   executable?: boolean;
 }) {
-  const label = kind === 'text' ? 'Text AI' : 'Image AI';
+  const label = kind === 'text' ? 'Server Text AI' : 'Server Image AI';
   const value =
     selection.selectionMode === 'server_managed'
       ? `Server managed: ${selection.selectedProviderId ?? '(unset)'}${selection.selectedModelId ? ` / ${selection.selectedModelId}` : ''}`
@@ -370,6 +561,9 @@ function SelectionSummaryCard({
     >
       <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">{label}</div>
       <div className="text-[12px] text-gray-200">{value}</div>
+      <div className="text-[10px] text-gray-500">
+        Operator/server truth (not your browser selection).
+      </div>
       {executable !== undefined && (
         <div
           data-selection-executable={kind}
@@ -499,7 +693,7 @@ export function ProviderStatusError({ onRefresh }: { onRefresh: () => void }) {
 // ---------------------------------------------------------------------------
 
 /** Presentational surface-selection controls (value -> callback, no hooks). */
-function SelectionControlCard({
+export function SelectionControlCard({
   kind,
   label,
   allowed,
@@ -509,6 +703,7 @@ function SelectionControlCard({
   draft,
   providers,
   allowSessionCredential,
+  notice,
   onChangeDraft,
   onApply,
   onReset,
@@ -523,11 +718,14 @@ function SelectionControlCard({
   providers: { providerId: string; name: string; models: { id: string; default: boolean }[] }[];
   /** Text surfaces may select session_only; image session generation is deferred. */
   allowSessionCredential?: boolean;
+  /** Non-secret confirmation shown after a successful Apply/Reset. */
+  notice?: string;
   onChangeDraft: (patch: Partial<ProviderSelectionDraft>) => void;
   onApply: () => void;
   onReset: () => void;
 }) {
   const selectedProvider = providers.find((p) => p.providerId === draft.providerId);
+  const activeLabel = activeSelectionLabel(effective, providers);
 
   return (
     <div
@@ -542,6 +740,20 @@ function SelectionControlCard({
           </span>
         )}
       </div>
+
+      <div data-active-selection={kind} className="text-[11px] text-gray-300">
+        Active selection: <span className="text-gray-100">{activeLabel}</span>
+      </div>
+      {notice && (
+        <div
+          data-selection-notice={kind}
+          role="status"
+          aria-live="polite"
+          className="text-[11px] text-emerald-300"
+        >
+          {notice}
+        </div>
+      )}
 
       {!allowed ? (
         <div className="text-[11px] text-gray-400">
@@ -691,21 +903,19 @@ export function ProviderSelectionPanel({
   /** BYOK-5E: notified when the TEXT credential source changes (to clear typed keys). */
   onCredentialSourceChange?: (source: SavedCredentialSource | undefined) => void;
 }) {
-  const [saved, setSaved] = useState<SavedAiSelections>(getCachedAiSelections());
-  const [drafts, setDrafts] = useState<{ text: ProviderSelectionDraft; image: ProviderSelectionDraft }>(() => ({
-    text: {
-      mode: getCachedAiSelections().textAi.mode,
-      providerId: getCachedAiSelections().textAi.providerId,
-      modelId: getCachedAiSelections().textAi.modelId,
-      credentialSource: getCachedAiSelections().textAi.credentialSource,
-    },
-    image: {
-      mode: getCachedAiSelections().imageAi.mode,
-      providerId: getCachedAiSelections().imageAi.providerId,
-      modelId: getCachedAiSelections().imageAi.modelId,
-      credentialSource: getCachedAiSelections().imageAi.credentialSource,
-    },
-  }));
+  // The selection-control slice is a pure reducer (component-used) so the
+  // Apply/Reset interaction is directly testable without a DOM harness. The
+  // persistence outcome is carried IN the dispatched action (operation-local).
+  const [control, dispatch] = useReducer(
+    providerSelectionReducer,
+    undefined,
+    initialProviderSelectionControlState
+  );
+  const { saved, drafts, notices } = control;
+  // Per-surface monotonic operation counters. The guard is PER SURFACE: a new
+  // Image operation never invalidates an in-flight Text operation (and vice
+  // versa). Hydration uses aiSelection's separate deliberate-generation guard.
+  const opCounterRef = useRef<{ text: number; image: number }>({ text: 0, image: 0 });
   const [tests, setTests] = useState<Record<string, ConnectionTestView>>({});
   const [hydrationError, setHydrationError] = useState(false);
 
@@ -719,21 +929,7 @@ export function ProviderSelectionPanel({
       .then((effective) => {
         if (cancelled) return;
         setHydrationError(false);
-        setSaved(effective);
-        setDrafts({
-          text: {
-            mode: effective.textAi.mode,
-            providerId: effective.textAi.providerId,
-            modelId: effective.textAi.modelId,
-            credentialSource: effective.textAi.credentialSource,
-          },
-          image: {
-            mode: effective.imageAi.mode,
-            providerId: effective.imageAi.providerId,
-            modelId: effective.imageAi.modelId,
-            credentialSource: effective.imageAi.credentialSource,
-          },
-        });
+        dispatch({ type: 'hydrated', selections: effective });
       })
       .catch(() => {
         if (!cancelled) setHydrationError(true);
@@ -765,7 +961,7 @@ export function ProviderSelectionPanel({
 
   const changeDraft = useCallback(
     (kind: 'text' | 'image', patch: Partial<ProviderSelectionDraft>) => {
-      setDrafts((prev) => ({ ...prev, [kind]: { ...prev[kind], ...patch } }));
+      dispatch({ type: 'draftChanged', kind, patch });
       // BYOK-5E/5F: tell the session panel to clear any typed session key whenever
       // a surface's credential source changes away from session_only (or the mode
       // resets to server_default).
@@ -778,7 +974,13 @@ export function ProviderSelectionPanel({
   const applySelection = useCallback(
     async (kind: 'text' | 'image') => {
       const draft = drafts[kind];
-      const next = await saveAiSelection(
+      // Capture THIS operation's per-surface id; a newer same-surface operation
+      // bumps the counter so this completion is discarded as stale.
+      const opId = (opCounterRef.current[kind] += 1);
+      dispatch({ type: 'operationStarted', kind, opId });
+      // The persistence outcome is returned by THIS exact operation — never read
+      // from shared state — so concurrent surfaces cannot contaminate each other.
+      const { selections, persistenceFailed } = await saveAiSelectionWithOutcome(
         settings,
         kind,
         draft.mode,
@@ -786,15 +988,18 @@ export function ProviderSelectionPanel({
         draft.modelId,
         draft.mode === 'user_selected' ? draft.credentialSource : undefined
       );
-      setSaved(next);
+      dispatch({ type: 'applied', kind, opId, selections, persistenceFailed });
     },
     [settings, catalog, drafts]
   );
 
   const resetSelection = useCallback(
     async (kind: 'text' | 'image') => {
-      const next = await resetAiSelection(settings, kind);
-      setSaved(next);
+      const opId = (opCounterRef.current[kind] += 1);
+      dispatch({ type: 'operationStarted', kind, opId });
+      // The persistence outcome is operation-local (see applySelection).
+      const { selections, persistenceFailed } = await resetAiSelectionWithOutcome(settings, kind);
+      dispatch({ type: 'reset', kind, opId, selections, persistenceFailed });
       // BYOK-5E/5F: resetting a surface to server_default must clear any typed
       // session key (same signal as switching away from session_only). The
       // server-side session key is NOT revoked and no provider traffic occurs.
@@ -910,6 +1115,7 @@ export function ProviderSelectionPanel({
             draft={drafts.text}
             providers={selectedTextProviders}
             allowSessionCredential
+            notice={notices.text}
             onChangeDraft={(patch) => changeDraft('text', patch)}
             onApply={() => applySelection('text')}
             onReset={() => resetSelection('text')}
@@ -924,6 +1130,7 @@ export function ProviderSelectionPanel({
             draft={drafts.image}
             providers={selectedImageProviders}
             allowSessionCredential
+            notice={notices.image}
             onChangeDraft={(patch) => changeDraft('image', patch)}
             onApply={() => applySelection('image')}
             onReset={() => resetSelection('image')}
