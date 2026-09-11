@@ -1043,3 +1043,130 @@ describe("BYOK-5F — AI Settings UX (friendly, advanced, credentials)", () => {
     expect(text).not.toContain('data-surface-test="text"');
   });
 });
+
+describe("AI Settings — stable card footer / Reset visibility", () => {
+  const FOOTER_TEXT_PROVIDERS = [
+    { providerId: "openrouter", name: "OpenRouter", models: [{ id: "openai/gpt-4o-mini", default: true }] },
+  ];
+  const FOOTER_IMAGE_PROVIDERS = [
+    { providerId: "openrouter-image", name: "OpenRouter Image", models: [{ id: "google/gemini-2.5-flash-image", default: true }] },
+  ];
+
+  function renderFooterCard(opts: {
+    kind: "text" | "image";
+    notice?: string;
+    credentialSource?: "server_environment" | "session_only";
+    envTest?: { state: "idle" | "testing" | "success" | "failure"; model?: string; code?: string };
+  }): string {
+    const providerId = opts.kind === "text" ? "openrouter" : "openrouter-image";
+    const modelId = opts.kind === "text" ? "openai/gpt-4o-mini" : "google/gemini-2.5-flash-image";
+    const draft = {
+      mode: "user_selected" as const,
+      providerId,
+      modelId,
+      credentialSource: opts.credentialSource ?? "server_environment",
+    };
+    return render(
+      <SelectionControlCard
+        kind={opts.kind}
+        label={opts.kind === "text" ? "Text AI" : "Image AI"}
+        allowed
+        effective={draft}
+        draft={draft}
+        providers={opts.kind === "text" ? FOOTER_TEXT_PROVIDERS : FOOTER_IMAGE_PROVIDERS}
+        sessionByokSupported
+        network={stubNetwork()}
+        envTest={opts.envTest}
+        notice={opts.notice}
+        onChangeDraft={() => {}}
+        onReset={() => {}}
+        onTestServerEnvironment={() => {}}
+      />
+    );
+  }
+
+  it("Text card renders Reset when a notice is present (notice left, Reset right)", () => {
+    const html = renderFooterCard({ kind: "text", notice: "Selection applied" });
+    expect(html).toContain('data-surface-footer="text"');
+    expect(html).toContain('data-surface-notice="text"');
+    expect(html).toContain("✓ Selection applied");
+    expect(html).toContain('data-surface-reset="text"');
+    expect(html).toContain("Reset to server default");
+    // Footer order: notice precedes Reset.
+    expect(html.indexOf('data-surface-notice="text"')).toBeLessThan(html.indexOf('data-surface-reset="text"'));
+  });
+
+  it("Image card renders Reset when a notice is present", () => {
+    const html = renderFooterCard({ kind: "image", notice: "Selection applied" });
+    expect(html).toContain('data-surface-footer="image"');
+    expect(html).toContain('data-surface-reset="image"');
+    expect(html).toContain("Reset to server default");
+  });
+
+  it("Reset is rendered when the session key panel is visible", () => {
+    const html = renderFooterCard({ kind: "text", credentialSource: "session_only" });
+    expect(html).toContain('data-surface-key-panel="text"');
+    expect(html).toContain('data-session-key-panel="true"');
+    expect(html).toContain('data-surface-reset="text"');
+  });
+
+  it("Reset is rendered when a Test Connection result is visible", () => {
+    const html = renderFooterCard({
+      kind: "text",
+      envTest: { state: "success", model: "openai/gpt-4o-mini" },
+    });
+    expect(html).toContain('data-surface-test-result="text"');
+    expect(html).toContain('data-surface-reset="text"');
+  });
+
+  it("Reset is independent from notice state (none / success / error)", () => {
+    expect(renderFooterCard({ kind: "text" })).toContain('data-surface-reset="text"');
+    expect(renderFooterCard({ kind: "text", notice: "Selection applied" })).toContain('data-surface-reset="text"');
+    expect(
+      renderFooterCard({
+        kind: "text",
+        notice: "Selection applied (active this session; could not be saved to this browser)",
+      })
+    ).toContain('data-surface-reset="text"');
+  });
+
+  it("footer allows clean wrapping at narrow widths (flex-wrap, no overflow hiding)", () => {
+    const html = renderFooterCard({ kind: "text", notice: "Selection applied" });
+    const start = html.indexOf('<div data-surface-footer="text"');
+    const tag = html.slice(start, html.indexOf(">", start));
+    expect(start).toBeGreaterThan(-1);
+    expect(tag).toContain("flex-wrap");
+    expect(tag).toContain("justify-between");
+    expect(html).not.toContain("overflow-hidden");
+  });
+
+  it("both Text and Image cards use the same footer and bind Reset to their own surface", () => {
+    const html = render(
+      <ProviderSelectionPanel catalog={sessionCapableCatalog()} settings={stubSettings()} network={stubNetwork()} />
+    );
+    const textCard = html.slice(html.indexOf('data-ai-surface-card="text"'), html.indexOf('data-ai-surface-card="image"'));
+    const imageCard = html.slice(html.indexOf('data-ai-surface-card="image"'));
+    expect(textCard).toContain('data-surface-footer="text"');
+    expect(imageCard).toContain('data-surface-footer="image"');
+    expect(textCard).toContain('data-surface-reset="text"');
+    expect(imageCard).toContain('data-surface-reset="image"');
+    expect(textCard).not.toContain('data-surface-reset="image"');
+    expect(imageCard).not.toContain('data-surface-reset="text"');
+  });
+
+  it("reset remains surface-scoped: resetting Text leaves the Image selection intact", async () => {
+    await saveAiSelection(stubSettings(), "text", "user_selected", "openrouter", "openai/gpt-4o-mini", "session_only");
+    await saveAiSelection(
+      stubSettings(),
+      "image",
+      "user_selected",
+      "openrouter-image",
+      "google/gemini-2.5-flash-image",
+      "session_only"
+    );
+    const reset = await resetAiSelectionWithOutcome(stubSettings(), "text");
+    expect(reset.selections.textAi.mode).toBe("server_default");
+    expect(reset.selections.imageAi.providerId).toBe("openrouter-image");
+    expect(reset.selections.imageAi.credentialSource).toBe("session_only");
+  });
+});

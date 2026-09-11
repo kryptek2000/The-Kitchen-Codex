@@ -869,7 +869,7 @@ export function SelectionControlCard({
     <div
       data-selection-control-kind={kind}
       data-ai-surface-card={kind}
-      className="border border-white/10 rounded-2xl bg-[#141414] p-4 sm:p-5 space-y-4"
+      className="border border-white/10 rounded-2xl bg-[#141414] p-4 sm:p-5 space-y-4 flex flex-col"
     >
       <div className="flex items-center justify-between gap-3">
         <h4 className="font-serif text-base font-semibold text-white">{label}</h4>
@@ -908,7 +908,7 @@ export function SelectionControlCard({
           This surface is managed by the server operator and cannot be changed here.
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-3 flex-1 flex flex-col">
           {invalid && (
             <div
               data-selection-invalid={kind}
@@ -1026,23 +1026,26 @@ export function SelectionControlCard({
             </div>
           )}
 
-          {notice && (
+          {/* Stable card footer: notice (left) + Reset (right). Reset is ALWAYS
+              rendered — independent of notice state — so it stays visible when a
+              session-key panel, a Test Connection result, or a notice is shown. */}
+          <div
+            data-surface-footer={kind}
+            className="mt-auto flex flex-wrap items-center justify-between gap-x-3 gap-y-1 pt-1"
+          >
             <div
               data-surface-notice={kind}
               role="status"
               aria-live="polite"
-              className="text-[11px] text-emerald-300"
+              className="min-w-0 text-[11px] text-emerald-300"
             >
-              ✓ {notice}
+              {notice ? `✓ ${notice}` : ''}
             </div>
-          )}
-
-          <div className="flex items-center pt-1">
             <button
               type="button"
               data-surface-reset={kind}
               onClick={onReset}
-              className="text-[11px] text-gray-500 hover:text-gray-300 underline-offset-2 hover:underline"
+              className="shrink-0 text-[11px] text-gray-500 hover:text-gray-300 underline-offset-2 hover:underline"
             >
               Reset to server default
             </button>
