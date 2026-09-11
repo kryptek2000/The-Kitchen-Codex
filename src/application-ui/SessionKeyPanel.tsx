@@ -58,6 +58,12 @@ export interface SessionKeyPanelViewProps {
   testState: 'idle' | 'testing';
   testResult?: ConnectionTestView;
   notice?: SessionKeyNotice;
+  /**
+   * Compact in-card mode (AI Settings redesign): hides the standalone section
+   * heading and the provider/model selects because the parent surface card
+   * already owns provider/model selection.
+   */
+  compact?: boolean;
   onSelectProvider: (providerId: string) => void;
   onSelectModel: (modelId: string) => void;
   onChangeApiKey: (value: string) => void;
@@ -76,19 +82,30 @@ export function SessionKeyPanelView(props: SessionKeyPanelViewProps) {
   const canSave = !unavailable && props.apiKey.trim().length > 0 && !busy;
   const canTest = !unavailable && !busy && props.testState !== 'testing' && configured;
 
+  const wrapperClass = props.compact
+    ? 'space-y-3'
+    : 'max-w-7xl mx-auto px-4 sm:px-6 pt-4 border-t border-white/5 space-y-4';
+  const innerClass = props.compact
+    ? 'border border-white/10 rounded-xl bg-white/[0.02] p-3 space-y-3'
+    : 'border border-white/10 rounded-2xl bg-[#141414] p-4 space-y-4 max-w-2xl';
+
   return (
     <section
       data-session-key-panel="true"
-      className="max-w-7xl mx-auto px-4 sm:px-6 pt-4 border-t border-white/5 space-y-4"
+      data-session-bound-provider={props.selectedProviderId || undefined}
+      data-session-bound-model={props.selectedModelId || undefined}
+      className={wrapperClass}
     >
-      <div>
-        <h3 className="font-serif font-semibold text-sm text-white">Session API Keys</h3>
-        <p className="text-xs text-gray-400 mt-1 max-w-2xl">
-          Store an API key in this server process memory only. It expires automatically and is lost
-          when the server restarts. The key is never saved to your browser, vault, or this
-          preference store.
-        </p>
-      </div>
+      {!props.compact && (
+        <div>
+          <h3 className="font-serif font-semibold text-sm text-white">Session API Keys</h3>
+          <p className="text-xs text-gray-400 mt-1 max-w-2xl">
+            Store an API key in this server process memory only. It expires automatically and is lost
+            when the server restarts. The key is never saved to your browser, vault, or this
+            preference store.
+          </p>
+        </div>
+      )}
 
       {!props.sessionByokSupported && (
         <div
@@ -99,46 +116,48 @@ export function SessionKeyPanelView(props: SessionKeyPanelViewProps) {
         </div>
       )}
 
-      <div className="border border-white/10 rounded-2xl bg-[#141414] p-4 space-y-4 max-w-2xl">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <label className="block space-y-1">
-            <span className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Provider</span>
-            <select
-              data-session-provider-select="true"
-              value={props.selectedProviderId}
-              onChange={(e) => props.onSelectProvider(e.target.value)}
-              className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[12px] text-gray-200"
-            >
-              <option value="">Choose a provider…</option>
-              {props.providers.map((p) => (
-                <option key={`${p.kind}:${p.providerId}`} value={p.providerId}>
-                  {p.name} ({p.providerId})
-                </option>
-              ))}
-            </select>
-          </label>
-
-          {selectedProvider && selectedProvider.models.length > 0 && (
+      <div className={innerClass}>
+        {!props.compact && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <label className="block space-y-1">
-              <span className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Model</span>
+              <span className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Provider</span>
               <select
-                data-session-model-select="true"
-                value={props.selectedModelId}
-                onChange={(e) => props.onSelectModel(e.target.value)}
+                data-session-provider-select="true"
+                value={props.selectedProviderId}
+                onChange={(e) => props.onSelectProvider(e.target.value)}
                 className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[12px] text-gray-200"
               >
-                {selectedProvider.models.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.id}
-                    {m.default ? ' (default)' : ''}
+                <option value="">Choose a provider…</option>
+                {props.providers.map((p) => (
+                  <option key={`${p.kind}:${p.providerId}`} value={p.providerId}>
+                    {p.name} ({p.providerId})
                   </option>
                 ))}
               </select>
             </label>
-          )}
-        </div>
 
-        {isImage && (
+            {selectedProvider && selectedProvider.models.length > 0 && (
+              <label className="block space-y-1">
+                <span className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Model</span>
+                <select
+                  data-session-model-select="true"
+                  value={props.selectedModelId}
+                  onChange={(e) => props.onSelectModel(e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[12px] text-gray-200"
+                >
+                  {selectedProvider.models.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.id}
+                      {m.default ? ' (default)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </div>
+        )}
+
+        {isImage && !props.compact && (
           <div className="text-[11px] rounded-lg border border-white/10 bg-white/[0.03] text-gray-300 px-3 py-2">
             Session keys are supported for this image provider (credential validation and
             image generation).
@@ -278,15 +297,34 @@ export function SessionKeyPanel({
   sessionByokSupported,
   providers,
   clearKeySignal = 0,
+  compact = false,
+  lockedProviderId,
+  lockedModelId,
+  onStatusChange,
 }: {
   network: NetworkAdapter;
   sessionByokSupported: boolean;
   providers: SessionKeyProviderOption[];
   clearKeySignal?: number;
+  /** Compact in-card mode (AI Settings redesign). */
+  compact?: boolean;
+  /**
+   * Compact mode: the EXACT provider this panel is bound to. The controller
+   * initializes from it (never `providers[0]`) and can never drift away from it.
+   */
+  lockedProviderId?: string;
+  /** Compact mode: the card's currently selected model (drives Test Connection). */
+  lockedModelId?: string;
+  /** Notifies the parent card whether a session key is configured (non-secret). */
+  onStatusChange?: (configured: boolean) => void;
 }) {
   const controllerRef = useRef<SessionKeyController | null>(null);
   if (controllerRef.current === null) {
-    controllerRef.current = new SessionKeyController(network, providers);
+    controllerRef.current = new SessionKeyController(
+      network,
+      providers,
+      lockedProviderId ? { providerId: lockedProviderId, modelId: lockedModelId } : undefined
+    );
   }
   const controller = controllerRef.current;
   const [state, setState] = useState<SessionKeyState>(controller.getState());
@@ -310,10 +348,22 @@ export function SessionKeyPanel({
     if (clearKeySignal > 0) controller.clearTypedKey();
   }, [clearKeySignal, controller]);
 
+  // A locked provider owns its model via the parent card; keep the controller's
+  // Test Connection model in sync when the card changes model (no remount).
+  useEffect(() => {
+    if (lockedProviderId) controller.syncLockedModel(lockedModelId);
+  }, [lockedProviderId, lockedModelId, controller]);
+
+  // Surface the non-secret "configured" truth to the parent card.
+  useEffect(() => {
+    onStatusChange?.(state.status === 'configured');
+  }, [state.status, onStatusChange]);
+
   return (
     <SessionKeyPanelView
       sessionByokSupported={sessionByokSupported}
       providers={providers}
+      compact={compact}
       selectedProviderId={state.selectedProviderId}
       selectedModelId={state.selectedModelId}
       apiKey={state.apiKey}

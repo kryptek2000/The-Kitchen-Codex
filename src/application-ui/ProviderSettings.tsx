@@ -147,6 +147,81 @@ export function activeSelectionLabel(
 }
 
 /**
+ * Friendly, non-secret display names for the primary (user-facing) AI settings
+ * cards. Exact internal ids remain available in Advanced / Server Diagnostics.
+ * Unknown ids fall back to the raw id (never invented).
+ */
+const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
+  gemini: 'Google Gemini',
+  openrouter: 'OpenRouter',
+  deepseek: 'DeepSeek',
+  'gemini-image': 'Google Gemini Image',
+  'openrouter-image': 'OpenRouter Image',
+};
+
+const MODEL_DISPLAY_NAMES: Record<string, string> = {
+  'openai/gpt-4o-mini': 'GPT-4o Mini',
+  'gemini-3.7-flash': 'Gemini 3.7 Flash',
+  'gemini-3.1-flash-lite': 'Gemini 3.1 Flash Lite',
+  'gemini-flash-latest': 'Gemini Flash Latest',
+  'google/gemini-2.5-flash-image': 'Gemini 2.5 Flash Image',
+  'gemini-2.5-flash-image': 'Gemini 2.5 Flash Image',
+  'bytedance-seed/seedream-4.5': 'Seedream 4.5',
+  'deepseek-v4-flash': 'DeepSeek V4 Flash',
+  'deepseek-v4-pro': 'DeepSeek V4 Pro',
+};
+
+export function friendlyProviderName(providerId: string | undefined, catalogName?: string): string {
+  if (!providerId) return '';
+  return catalogName || PROVIDER_DISPLAY_NAMES[providerId] || providerId;
+}
+
+export function friendlyModelName(modelId: string | undefined): string {
+  if (!modelId) return '';
+  return MODEL_DISPLAY_NAMES[modelId] || modelId;
+}
+
+/** Friendly user-facing label for WHOSE credential is active. */
+export function credentialUsageLabel(source: SavedCredentialSource | undefined): string {
+  return source === 'session_only' ? 'Using your temporary API key' : 'Using server API key';
+}
+
+/** Friendly option label for the credential control. */
+export function credentialSourceControlLabel(source: SavedCredentialSource | undefined): string {
+  return source === 'session_only' ? 'Use my API key' : 'Server API key';
+}
+
+/** Concise explanation for the session-key option. */
+export const SESSION_KEY_EXPLANATION =
+  'Stored temporarily in server memory. It expires automatically and is never saved to your browser or vault.';
+
+/** Truthful, friendly primary status for a surface card (never secret). */
+export function surfaceStatusLabel(
+  selection: SavedSelection,
+  sessionConfigured: boolean
+): string {
+  if (selection.mode !== 'user_selected' || !selection.providerId) return 'Server default';
+  if (selection.credentialSource === 'session_only') {
+    return sessionConfigured ? 'Connected' : 'Key required';
+  }
+  return 'Using server API key';
+}
+
+/**
+ * Compact-panel status binding: a session "configured" signal is accepted ONLY
+ * when it belongs to the EXACT provider currently selected in the card. A late
+ * response from a previously selected provider can never be shown as the new
+ * provider's status.
+ */
+export function resolveSessionConfigured(
+  status: { providerId: string; configured: boolean } | null,
+  providerId: string | undefined
+): boolean {
+  if (!providerId || !status) return false;
+  return status.providerId === providerId ? status.configured : false;
+}
+
+/**
  * Truthful Apply/Reset confirmation for ONE operation. `persistenceFailed` is
  * the outcome of THAT operation's own SettingsAdapter write (never shared state),
  * so overlapping operations cannot misattribute a failure. If the write failed,
@@ -702,11 +777,15 @@ export function SelectionControlCard({
   invalid,
   draft,
   providers,
-  allowSessionCredential,
+  sessionByokSupported,
+  network,
+  clearKeySignal = 0,
+  envTest,
   notice,
   onChangeDraft,
-  onApply,
   onReset,
+  onTestServerEnvironment,
+  onSessionStatusChange,
 }: {
   kind: 'text' | 'image';
   label: string;
@@ -716,24 +795,84 @@ export function SelectionControlCard({
   invalid?: boolean;
   draft: ProviderSelectionDraft;
   providers: { providerId: string; name: string; models: { id: string; default: boolean }[] }[];
-  /** Text surfaces may select session_only; image session generation is deferred. */
-  allowSessionCredential?: boolean;
-  /** Non-secret confirmation shown after a successful Apply/Reset. */
+  sessionByokSupported: boolean;
+  network: NetworkAdapter;
+  clearKeySignal?: number;
+  envTest?: ConnectionTestView;
   notice?: string;
   onChangeDraft: (patch: Partial<ProviderSelectionDraft>) => void;
-  onApply: () => void;
   onReset: () => void;
+  onTestServerEnvironment: (providerId: string, modelId?: string) => void;
+  onSessionStatusChange?: (configured: boolean) => void;
 }) {
   const selectedProvider = providers.find((p) => p.providerId === draft.providerId);
-  const activeLabel = activeSelectionLabel(effective, providers);
+  const activeProvider = providers.find((p) => p.providerId === effective.providerId);
+  const source = draft.credentialSource ?? 'server_environment';
+  const activeSource = effective.credentialSource ?? 'server_environment';
+  // Session-configured truth is scoped to the EXACT provider it was reported for.
+  // A late/old provider's status can never be shown as the newly selected one.
+  const [sessionStatus, setSessionStatus] = useState<{ providerId: string; configured: boolean } | null>(
+    null
+  );
+  const lockedProviderId = selectedProvider?.providerId;
+  const lockedModelId = draft.modelId;
+  const sessionConfigured = resolveSessionConfigured(sessionStatus, lockedProviderId);
+
+  const handleSessionStatusChange = useCallback(
+    (configured: boolean) => {
+      if (!lockedProviderId) return;
+      setSessionStatus({ providerId: lockedProviderId, configured });
+    },
+    [lockedProviderId]
+  );
+
+  useEffect(() => {
+    onSessionStatusChange?.(sessionConfigured);
+  }, [sessionConfigured, onSessionStatusChange]);
+
+  // Compact panels receive EXACTLY the selected provider (never the full surface
+  // list) AND an explicit lock. Provider ordering is never trusted.
+  const sessionProviders: SessionKeyProviderOption[] = selectedProvider
+    ? [
+        {
+          providerId: selectedProvider.providerId,
+          name: selectedProvider.name,
+          kind,
+          models: selectedProvider.models,
+        },
+      ]
+    : [];
+
+  const isUserSelected = effective.mode === 'user_selected' && Boolean(effective.providerId);
+  // When the surface is operator-locked, the SERVER pin is the effective truth.
+  const summaryProviderId = !allowed
+    ? lockedPin?.selectedProviderId
+    : isUserSelected
+    ? effective.providerId
+    : undefined;
+  const summaryModelId = !allowed ? lockedPin?.selectedModelId : isUserSelected ? effective.modelId : undefined;
+  const summaryProviderName = summaryProviderId
+    ? friendlyProviderName(
+        summaryProviderId,
+        providers.find((p) => p.providerId === summaryProviderId)?.name
+      )
+    : undefined;
+  const activeStatus = !allowed
+    ? summaryProviderId
+      ? 'Server managed'
+      : 'Server default'
+    : isUserSelected
+    ? surfaceStatusLabel(effective, sessionConfigured)
+    : 'Server default';
 
   return (
     <div
       data-selection-control-kind={kind}
-      className="border border-white/10 rounded-2xl bg-[#141414] p-4 space-y-3"
+      data-ai-surface-card={kind}
+      className="border border-white/10 rounded-2xl bg-[#141414] p-4 sm:p-5 space-y-4"
     >
       <div className="flex items-center justify-between gap-3">
-        <h4 className="text-sm font-semibold text-white">{label}</h4>
+        <h4 className="font-serif text-base font-semibold text-white">{label}</h4>
         {!allowed && (
           <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold border bg-amber-500/10 text-amber-300 border-amber-500/30">
             Server locked
@@ -741,28 +880,32 @@ export function SelectionControlCard({
         )}
       </div>
 
-      <div data-active-selection={kind} className="text-[11px] text-gray-300">
-        Active selection: <span className="text-gray-100">{activeLabel}</span>
-      </div>
-      {notice && (
-        <div
-          data-selection-notice={kind}
-          role="status"
-          aria-live="polite"
-          className="text-[11px] text-emerald-300"
-        >
-          {notice}
+      {/* Friendly active summary (never secret). */}
+      <div
+        data-active-summary={kind}
+        className="rounded-xl bg-white/[0.03] border border-white/10 px-3 py-2.5 space-y-0.5"
+      >
+        <div className="text-[13px] text-gray-100">
+          {summaryProviderName ?? 'Server default'}
         </div>
-      )}
+        {summaryModelId && (
+          <div className="text-[12px] text-gray-300">{friendlyModelName(summaryModelId)}</div>
+        )}
+        <div className="text-[11px] text-gray-400">
+          {!allowed
+            ? 'Server default'
+            : isUserSelected
+            ? credentialUsageLabel(activeSource)
+            : 'Server default'}
+        </div>
+        <div data-surface-status={kind} className="text-[11px] text-emerald-300/90">
+          {activeStatus}
+        </div>
+      </div>
 
       {!allowed ? (
         <div className="text-[11px] text-gray-400">
-          The server operator has pinned this surface to{' '}
-          <span className="text-gray-200">
-            {lockedPin?.selectedProviderId ?? effective.providerId ?? 'the default provider'}
-            {lockedPin?.selectedProviderId ? ` / ${lockedPin.selectedModelId ?? 'provider default'}` : effective.modelId ? ` / ${effective.modelId}` : ''}
-          </span>
-          . Your preference cannot override it and will not be charged to another provider.
+          This surface is managed by the server operator and cannot be changed here.
         </div>
       ) : (
         <div className="space-y-3">
@@ -771,118 +914,138 @@ export function SelectionControlCard({
               data-selection-invalid={kind}
               className="text-[11px] rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-200 px-2.5 py-2"
             >
-              Your saved selection is no longer available. It fails closed — no other provider
-              is used — until you apply a new selection or reset to server default.
+              Your saved selection is no longer available. It fails closed — no other provider is
+              used — until you choose another provider or reset to server default.
             </div>
           )}
+
           <label className="block space-y-1">
-            <span className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Mode</span>
+            <span className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Provider</span>
             <select
-              data-selection-mode-select={kind}
-              value={draft.mode}
-              onChange={(e) => onChangeDraft({ mode: e.target.value as SavedSelectionMode })}
+              data-surface-provider-select={kind}
+              value={draft.providerId ?? ''}
+              onChange={(e) => {
+                const id = e.target.value || undefined;
+                const p = providers.find((x) => x.providerId === id);
+                const defaultModel = p?.models.find((m) => m.default)?.id ?? p?.models[0]?.id;
+                onChangeDraft({ mode: 'user_selected', providerId: id, modelId: defaultModel });
+              }}
               className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[12px] text-gray-200"
             >
-              <option value="server_default">Server default</option>
-              <option value="user_selected">Use my selection</option>
+              <option value="">Choose a provider…</option>
+              {providers.map((p) => (
+                <option key={p.providerId} value={p.providerId}>
+                  {friendlyProviderName(p.providerId, p.name)}
+                </option>
+              ))}
             </select>
           </label>
 
-          {draft.mode === 'user_selected' && (
-            <>
-              <label className="block space-y-1">
-                <span className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Provider</span>
-                <select
-                  data-selection-provider-select={kind}
-                  value={draft.providerId ?? ''}
-                  onChange={(e) =>
-                    onChangeDraft({ providerId: e.target.value || undefined, modelId: undefined })
-                  }
-                  className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[12px] text-gray-200"
-                >
-                  <option value="">Choose a provider…</option>
-                  {providers.map((p) => (
-                    <option key={p.providerId} value={p.providerId}>
-                      {p.name} ({p.providerId})
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              {selectedProvider && selectedProvider.models.length > 0 && (
-                <label className="block space-y-1">
-                  <span className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Model</span>
-                  <select
-                    data-selection-model-select={kind}
-                    value={draft.modelId ?? ''}
-                    onChange={(e) => onChangeDraft({ modelId: e.target.value || undefined })}
-                    className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[12px] text-gray-200"
-                  >
-                    <option value="">Provider default ({selectedProvider.models.find((m) => m.default)?.id ?? 'first'})</option>
-                    {selectedProvider.models.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.id}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-
-              {allowSessionCredential ? (
-                <label className="block space-y-1">
-                  <span className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">
-                    Credential source
-                  </span>
-                  <select
-                    data-selection-credential-source-select={kind}
-                    value={draft.credentialSource ?? 'server_environment'}
-                    onChange={(e) =>
-                      onChangeDraft({
-                        credentialSource:
-                          e.target.value === 'session_only' ? 'session_only' : 'server_environment',
-                      })
-                    }
-                    className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[12px] text-gray-200"
-                  >
-                    <option value="server_environment">Server environment</option>
-                    <option value="session_only">Session only</option>
-                  </select>
-                  <span className="block text-[10px] text-gray-500">
-                    {draft.credentialSource === 'session_only'
-                      ? 'Uses a key stored only in this server process memory. It expires automatically and is lost when the server restarts.'
-                      : 'Uses the API key configured on the Kitchen Codex server.'}
-                  </span>
-                </label>
-              ) : (
-                <div className="text-[10px] text-gray-500">
-                  Session credentials are not available for this surface.
-                </div>
-              )}
-            </>
+          {selectedProvider && selectedProvider.models.length > 0 && (
+            <label className="block space-y-1">
+              <span className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Model</span>
+              <select
+                data-surface-model-select={kind}
+                value={draft.modelId ?? ''}
+                onChange={(e) => onChangeDraft({ modelId: e.target.value || undefined })}
+                className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[12px] text-gray-200"
+              >
+                <option value="">Provider default</option>
+                {selectedProvider.models.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {friendlyModelName(m.id)}
+                  </option>
+                ))}
+              </select>
+            </label>
           )}
 
-          <div className="flex items-center gap-2 pt-1">
-            <button
-              type="button"
-              data-selection-apply={kind}
-              onClick={onApply}
-              disabled={draft.mode === 'user_selected' && !draft.providerId}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white/10 text-gray-200 hover:bg-white/15 border border-white/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          <label className="block space-y-1">
+            <span className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">
+              Credential
+            </span>
+            <select
+              data-surface-credential-select={kind}
+              value={source}
+              onChange={(e) =>
+                onChangeDraft({
+                  credentialSource:
+                    e.target.value === 'session_only' ? 'session_only' : 'server_environment',
+                })
+              }
+              className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[12px] text-gray-200"
             >
-              Apply selection
-            </button>
+              <option value="server_environment">Server API key</option>
+              <option value="session_only">Use my API key</option>
+            </select>
+          </label>
+
+          {source === 'session_only' ? (
+            <div className="space-y-2" data-surface-key-panel={kind}>
+              <div className="text-[11px] text-gray-500">{SESSION_KEY_EXPLANATION}</div>
+              {selectedProvider && (
+                <SessionKeyPanel
+                  key={selectedProvider.providerId}
+                  compact
+                  network={network}
+                  sessionByokSupported={sessionByokSupported}
+                  providers={sessionProviders}
+                  lockedProviderId={selectedProvider.providerId}
+                  lockedModelId={lockedModelId}
+                  clearKeySignal={clearKeySignal}
+                  onStatusChange={handleSessionStatusChange}
+                />
+              )}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <button
+                type="button"
+                data-surface-test={kind}
+                onClick={() => {
+                  if (draft.providerId) onTestServerEnvironment(draft.providerId, draft.modelId);
+                }}
+                disabled={envTest?.state === 'testing'}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white/10 text-gray-200 hover:bg-white/15 border border-white/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {envTest?.state === 'testing' ? 'Testing…' : 'Test Connection'}
+              </button>
+              {envTest?.state === 'success' && (
+                <div data-surface-test-result={kind} className="text-[11px] text-emerald-300">
+                  Connection passed
+                  {envTest.model ? ` · ${friendlyModelName(envTest.model)}` : ''}
+                  {envTest.latencyMs !== undefined ? ` · ${envTest.latencyMs} ms` : ''}
+                </div>
+              )}
+              {envTest?.state === 'failure' && (
+                <div data-surface-test-result={kind} className="text-[11px] text-red-300">
+                  Connection failed
+                  {envTest.code ? ` (${envTest.code})` : ''}
+                </div>
+              )}
+            </div>
+          )}
+
+          {notice && (
+            <div
+              data-surface-notice={kind}
+              role="status"
+              aria-live="polite"
+              className="text-[11px] text-emerald-300"
+            >
+              ✓ {notice}
+            </div>
+          )}
+
+          <div className="flex items-center pt-1">
             <button
               type="button"
-              data-selection-reset={kind}
+              data-surface-reset={kind}
               onClick={onReset}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white/5 text-gray-400 hover:bg-white/10 border border-white/10 transition-colors"
+              className="text-[11px] text-gray-500 hover:text-gray-300 underline-offset-2 hover:underline"
             >
-              Reset to default
+              Reset to server default
             </button>
-          </div>
-          <div className="text-[11px] text-gray-500">
-            Stored in your browser preferences only (provider/model IDs — never API keys). The
-            server re-validates every selection against its own catalog.
           </div>
         </div>
       )}
@@ -895,11 +1058,19 @@ export function ProviderSelectionPanel({
   catalog,
   settings,
   network,
+  statuses = [],
+  onRefresh,
+  sessionClearSignal = 0,
   onCredentialSourceChange,
 }: {
   catalog: ProviderCatalogView;
   settings: SettingsAdapter;
   network: NetworkAdapter;
+  /** Server/operator status rows, shown ONLY inside Advanced diagnostics. */
+  statuses?: ProviderStatusView[];
+  onRefresh?: () => void;
+  /** Incremented by the parent when the credential source leaves session_only. */
+  sessionClearSignal?: number;
   /** BYOK-5E: notified when the TEXT credential source changes (to clear typed keys). */
   onCredentialSourceChange?: (source: SavedCredentialSource | undefined) => void;
 }) {
@@ -912,11 +1083,15 @@ export function ProviderSelectionPanel({
     initialProviderSelectionControlState
   );
   const { saved, drafts, notices } = control;
+  // A ref mirror of the latest drafts so immediate-save always persists the
+  // freshest merged draft (avoids a stale-closure on rapid successive changes).
+  const draftsRef = useRef(drafts);
+  draftsRef.current = drafts;
   // Per-surface monotonic operation counters. The guard is PER SURFACE: a new
   // Image operation never invalidates an in-flight Text operation (and vice
   // versa). Hydration uses aiSelection's separate deliberate-generation guard.
   const opCounterRef = useRef<{ text: number; image: number }>({ text: 0, image: 0 });
-  const [tests, setTests] = useState<Record<string, ConnectionTestView>>({});
+  const [envTests, setEnvTests] = useState<Record<string, ConnectionTestView>>({});
   const [hydrationError, setHydrationError] = useState(false);
 
   // Reflect the APPLICATION-BOOTSTRAP hydration (App.tsx). This panel is NOT the
@@ -959,45 +1134,35 @@ export function ProviderSelectionPanel({
   const imageSelectionInvalid =
     saved.imageAi.mode === 'user_selected' && !isSelectionValidAgainstCatalog(saved.imageAi, catalog, 'image');
 
-  const changeDraft = useCallback(
-    (kind: 'text' | 'image', patch: Partial<ProviderSelectionDraft>) => {
-      dispatch({ type: 'draftChanged', kind, patch });
-      // BYOK-5E/5F: tell the session panel to clear any typed session key whenever
-      // a surface's credential source changes away from session_only (or the mode
-      // resets to server_default).
-      if (patch.mode === 'server_default') onCredentialSourceChange?.(undefined);
-      else if (patch.credentialSource !== undefined) onCredentialSourceChange?.(patch.credentialSource);
-    },
-    [onCredentialSourceChange]
-  );
-
-  const applySelection = useCallback(
-    async (kind: 'text' | 'image') => {
-      const draft = drafts[kind];
-      // Capture THIS operation's per-surface id; a newer same-surface operation
-      // bumps the counter so this completion is discarded as stale.
+  /**
+   * Immediate-save: persist ONE surface's NON-SECRET preference for an explicit
+   * next draft. No provider call, no connection test, no image generation, no key
+   * write. Uses the SAME per-surface op-id guard + operation-local persistence as
+   * the previous Apply flow.
+   */
+  const persistDraft = useCallback(
+    async (kind: 'text' | 'image', next: ProviderSelectionDraft) => {
+      if (next.mode !== 'user_selected' || !next.providerId) return;
       const opId = (opCounterRef.current[kind] += 1);
       dispatch({ type: 'operationStarted', kind, opId });
-      // The persistence outcome is returned by THIS exact operation — never read
-      // from shared state — so concurrent surfaces cannot contaminate each other.
       const { selections, persistenceFailed } = await saveAiSelectionWithOutcome(
         settings,
         kind,
-        draft.mode,
-        draft.providerId,
-        draft.modelId,
-        draft.mode === 'user_selected' ? draft.credentialSource : undefined
+        'user_selected',
+        next.providerId,
+        next.modelId,
+        next.credentialSource
       );
       dispatch({ type: 'applied', kind, opId, selections, persistenceFailed });
     },
-    [settings, catalog, drafts]
+    [settings]
   );
 
   const resetSelection = useCallback(
     async (kind: 'text' | 'image') => {
       const opId = (opCounterRef.current[kind] += 1);
       dispatch({ type: 'operationStarted', kind, opId });
-      // The persistence outcome is operation-local (see applySelection).
+      // The persistence outcome is operation-local (see persistDraft).
       const { selections, persistenceFailed } = await resetAiSelectionWithOutcome(settings, kind);
       dispatch({ type: 'reset', kind, opId, selections, persistenceFailed });
       // BYOK-5E/5F: resetting a surface to server_default must clear any typed
@@ -1008,10 +1173,29 @@ export function ProviderSelectionPanel({
     [settings, onCredentialSourceChange]
   );
 
+  const changeDraft = useCallback(
+    (kind: 'text' | 'image', patch: Partial<ProviderSelectionDraft>) => {
+      const next: ProviderSelectionDraft = { ...draftsRef.current[kind], ...patch };
+      dispatch({ type: 'draftChanged', kind, patch });
+      // BYOK-5E/5F: tell the session panel to clear any typed session key whenever
+      // a surface's credential source changes away from session_only (or the mode
+      // resets to server_default).
+      if (patch.mode === 'server_default') onCredentialSourceChange?.(undefined);
+      else if (patch.credentialSource !== undefined) onCredentialSourceChange?.(patch.credentialSource);
+      // Immediate persistence (never a provider call / spend).
+      if (next.mode === 'server_default') {
+        void resetSelection(kind);
+      } else if (next.providerId) {
+        void persistDraft(kind, next);
+      }
+    },
+    [onCredentialSourceChange, persistDraft, resetSelection]
+  );
+
   const testConnection = useCallback(
     async (kind: 'text' | 'image', providerId: string, modelId?: string) => {
       const key = `${kind}:${providerId}`;
-      setTests((prev) => ({ ...prev, [key]: { state: 'testing' } }));
+      setEnvTests((prev) => ({ ...prev, [key]: { state: 'testing' } }));
       try {
         // BYOK-5E: the explicit per-provider test uses the operator environment
         // credential source; session-only testing is owned by SessionKeyPanel.
@@ -1024,12 +1208,12 @@ export function ProviderSelectionPanel({
         }>(PROVIDER_TEST_CONNECTION_API_PATH, buildServerEnvironmentTestBody(providerId, kind, modelId));
         const data = res.data ?? {};
         if (res.ok && data.ok === true) {
-          setTests((prev) => ({
+          setEnvTests((prev) => ({
             ...prev,
             [key]: { state: 'success', latencyMs: data.latencyMs, model: data.model },
           }));
         } else {
-          setTests((prev) => ({
+          setEnvTests((prev) => ({
             ...prev,
             [key]: {
               state: 'failure',
@@ -1039,7 +1223,7 @@ export function ProviderSelectionPanel({
           }));
         }
       } catch {
-        setTests((prev) => ({
+        setEnvTests((prev) => ({
           ...prev,
           [key]: { state: 'failure', code: 'NETWORK_ERROR', message: 'Could not reach the server.' },
         }));
@@ -1074,17 +1258,21 @@ export function ProviderSelectionPanel({
     })),
   ];
 
+  const envTestFor = (kind: 'text' | 'image'): ConnectionTestView | undefined => {
+    const pid = drafts[kind].providerId;
+    return pid ? envTests[`${kind}:${pid}`] : undefined;
+  };
+
   return (
     <section
       data-selection-panel="provider-selection"
       className="max-w-7xl mx-auto px-4 sm:px-6 space-y-6"
     >
       <div className="pt-4 border-t border-white/5">
-        <h3 className="font-serif font-semibold text-sm text-white">Your AI Provider Selection</h3>
+        <h3 className="font-serif font-semibold text-sm text-white">AI Settings</h3>
         <p className="text-xs text-gray-400 mt-1 max-w-2xl">
-          Choose which provider your AI requests use. Preferences are stored in this browser only
-          (never API keys) and validated by the server on every request. When the server operator
-          pins a provider, that pin always wins and this panel locks.
+          Choose the AI provider and model Kitchen Codex uses. Preferences are stored in this browser
+          only — never API keys.
         </p>
       </div>
 
@@ -1104,7 +1292,7 @@ export function ProviderSelectionPanel({
           operator pin is removed.
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <SelectionControlCard
             kind="text"
             label="Text AI"
@@ -1114,11 +1302,14 @@ export function ProviderSelectionPanel({
             invalid={textSelectionInvalid}
             draft={drafts.text}
             providers={selectedTextProviders}
-            allowSessionCredential
+            sessionByokSupported={sessionByokSupported}
+            network={network}
+            clearKeySignal={sessionClearSignal}
+            envTest={envTestFor('text')}
             notice={notices.text}
             onChangeDraft={(patch) => changeDraft('text', patch)}
-            onApply={() => applySelection('text')}
             onReset={() => resetSelection('text')}
+            onTestServerEnvironment={(providerId, modelId) => testConnection('text', providerId, modelId)}
           />
           <SelectionControlCard
             kind="image"
@@ -1129,86 +1320,98 @@ export function ProviderSelectionPanel({
             invalid={imageSelectionInvalid}
             draft={drafts.image}
             providers={selectedImageProviders}
-            allowSessionCredential
+            sessionByokSupported={sessionByokSupported}
+            network={network}
+            clearKeySignal={sessionClearSignal}
+            envTest={envTestFor('image')}
             notice={notices.image}
             onChangeDraft={(patch) => changeDraft('image', patch)}
-            onApply={() => applySelection('image')}
             onReset={() => resetSelection('image')}
+            onTestServerEnvironment={(providerId, modelId) => testConnection('image', providerId, modelId)}
           />
         </div>
       )}
 
-      <div className="pt-2 border-t border-white/5">
-        <h4 className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">
-          Server Environment Connection Tests
-        </h4>
-        <p className="text-xs text-gray-400 mt-1 max-w-2xl">
-          These tests check credentials configured by the server operator (the environment
-          credential source). Text providers execute a minimal chat call; image providers run a
-          quota-free credential check. Session-only credentials are tested separately in Session
-          API Keys below. Results never include API keys or raw provider errors, and tests are
-          rate-limited server-side.
-        </p>
-        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {allProviders.map((p) => {
-            const key = `${p.kind}:${p.providerId}`;
-            const result = tests[key];
-            const unavailable = p.connectionTest === 'unavailable';
-            // A provider with no operator env key is NOT generically "unavailable":
-            // it may be session-capable (and even have a configured session key).
-            const sessionAlternative =
-              unavailable && sessionByokSupported && p.sessionKeySupported;
-            return (
-              <div
-                key={key}
-                data-connection-test-provider={p.providerId}
-                className="border border-white/10 rounded-xl bg-white/[0.03] p-3 space-y-2"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-[12px] text-gray-200">
-                    <span className="font-medium">{p.name}</span>{' '}
-                    <span className="text-[10px] text-gray-500">{p.kind}</span>
-                  </div>
-                  <button
-                    type="button"
-                    data-connection-test-run={key}
-                    onClick={() => testConnection(p.kind, p.providerId, p.defaultModelId)}
-                    disabled={result?.state === 'testing' || unavailable}
-                    title={unavailable ? 'No server operator key is configured for this provider (environment test unavailable).' : undefined}
-                    className="px-2.5 py-1 rounded-lg text-[11px] font-medium bg-white/10 text-gray-200 hover:bg-white/15 border border-white/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+      <p className="text-[11px] text-gray-500">Text and image credentials are kept separate for security.</p>
+
+      <details data-advanced-diagnostics="true" className="pt-2 border-t border-white/5">
+        <summary className="cursor-pointer text-[11px] uppercase tracking-wide text-gray-500 font-semibold select-none">
+          Advanced / Server Diagnostics
+        </summary>
+        <div className="mt-3 space-y-5">
+          <ProviderStatusPanel
+            statuses={statuses}
+            catalog={catalog}
+            onRefresh={onRefresh ?? (() => {})}
+          />
+
+          <div>
+            <h4 className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">
+              Server Environment Connection Tests
+            </h4>
+            <p className="text-xs text-gray-400 mt-1 max-w-2xl">
+              These tests check credentials configured by the server operator (the environment
+              credential source). Text providers execute a minimal chat call; image providers run a
+              quota-free credential check. Session credentials are tested beside the provider in the
+              cards above. Results never include API keys or raw provider errors, and tests are
+              rate-limited server-side.
+            </p>
+            <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {allProviders.map((p) => {
+                const key = `${p.kind}:${p.providerId}`;
+                const result = envTests[key];
+                const unavailable = p.connectionTest === 'unavailable';
+                // A provider with no operator env key is NOT generically "unavailable":
+                // it may be session-capable (and even have a configured session key).
+                const sessionAlternative =
+                  unavailable && sessionByokSupported && p.sessionKeySupported;
+                return (
+                  <div
+                    key={key}
+                    data-connection-test-provider={p.providerId}
+                    className="border border-white/10 rounded-xl bg-white/[0.03] p-3 space-y-2"
                   >
-                    {result?.state === 'testing' ? 'Testing…' : 'Test Connection'}
-                  </button>
-                </div>
-                {sessionAlternative && (
-                  <div className="text-[11px] text-amber-300/90">
-                    Environment credential unavailable. This provider is session-capable — test a
-                    session key in Session API Keys below.
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-[12px] text-gray-200">
+                        <span className="font-medium">{p.name}</span>{' '}
+                        <span className="text-[10px] text-gray-500">{p.providerId}</span>
+                      </div>
+                      <button
+                        type="button"
+                        data-connection-test-run={key}
+                        onClick={() => testConnection(p.kind, p.providerId, p.defaultModelId)}
+                        disabled={result?.state === 'testing' || unavailable}
+                        title={unavailable ? 'No server operator key is configured for this provider (environment test unavailable).' : undefined}
+                        className="px-2.5 py-1 rounded-lg text-[11px] font-medium bg-white/10 text-gray-200 hover:bg-white/15 border border-white/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        {result?.state === 'testing' ? 'Testing…' : 'Test Connection'}
+                      </button>
+                    </div>
+                    {sessionAlternative && (
+                      <div className="text-[11px] text-amber-300/90">
+                        Environment credential unavailable. This provider is session-capable — use
+                        the session credential in the card above.
+                      </div>
+                    )}
+                    {result?.state === 'success' && (
+                      <div className="text-[11px] text-emerald-300">
+                        {connectionTestSuccessLabel(p.connectionTest, result.model)}
+                        {result.latencyMs !== undefined ? ` · ${result.latencyMs} ms` : ''}
+                      </div>
+                    )}
+                    {result?.state === 'failure' && (
+                      <div className="text-[11px] text-red-300">
+                        {result.message ?? 'Connection test failed.'}
+                        {result.code ? ` (${result.code})` : ''}
+                      </div>
+                    )}
                   </div>
-                )}
-                {result?.state === 'success' && (
-                  <div className="text-[11px] text-emerald-300">
-                    {connectionTestSuccessLabel(p.connectionTest, result.model)}
-                    {result.latencyMs !== undefined ? ` · ${result.latencyMs} ms` : ''}
-                  </div>
-                )}
-                {result?.state === 'failure' && (
-                  <div className="text-[11px] text-red-300">
-                    {result.message ?? 'Connection test failed.'}
-                    {result.code ? ` (${result.code})` : ''}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+                );
+              })}
+            </div>
+          </div>
         </div>
-        <div className="text-[11px] text-gray-500 mt-2">
-          A provider with no operator environment key cannot be tested here (its environment
-          credential is unavailable) — but it may still be usable with a session key; test that in
-          Session API Keys below. A provider with an unavailable environment credential never
-          affects the others.
-        </div>
-      </div>
+      </details>
     </section>
   );
 }
@@ -1279,42 +1482,19 @@ export function ProviderSettings({
     );
   }
 
-  const sessionKeyProviders: SessionKeyProviderOption[] = catalog
-    ? [
-        ...catalog.textProviders.map((p) => ({
-          providerId: p.providerId,
-          name: p.name,
-          kind: 'text' as const,
-          models: p.models.map((m) => ({ id: m.id, default: m.default })),
-        })),
-        ...catalog.imageProviders.map((p) => ({
-          providerId: p.providerId,
-          name: p.name,
-          kind: 'image' as const,
-          models: p.models.map((m) => ({ id: m.id, default: m.default })),
-        })),
-      ]
-    : [];
-
   return (
     <>
-      <ProviderStatusPanel statuses={statuses} catalog={catalog ?? undefined} onRefresh={load} />
       {catalog && (
         <ProviderSelectionPanel
           catalog={catalog}
           settings={settings}
           network={network}
+          statuses={statuses}
+          onRefresh={load}
+          sessionClearSignal={sessionClearSignal}
           onCredentialSourceChange={(source) => {
             if (shouldClearSessionKeyOnCredentialSource(source)) setSessionClearSignal((n) => n + 1);
           }}
-        />
-      )}
-      {catalog && (
-        <SessionKeyPanel
-          network={network}
-          sessionByokSupported={catalog.sessionByokSupported === true}
-          providers={sessionKeyProviders}
-          clearKeySignal={sessionClearSignal}
         />
       )}
     </>

@@ -13,6 +13,11 @@ import {
   selectionPersistenceNotice,
   providerSelectionReducer,
   initialProviderSelectionControlState,
+  friendlyProviderName,
+  friendlyModelName,
+  credentialUsageLabel,
+  surfaceStatusLabel,
+  SESSION_KEY_EXPLANATION,
   PROVIDER_CATALOG_UNAVAILABLE_COPY,
 } from "../../src/application-ui/ProviderSettings.js";
 import type { ProviderCatalogView } from "../../src/application-ui/providerCatalog.js";
@@ -139,18 +144,22 @@ function render(el: React.ReactElement): string {
 }
 
 describe("BYOK-4 — ProviderSelectionPanel (interactive selection)", () => {
-  it("renders interactive mode/provider/model controls when user selection is allowed", () => {
+  it("renders friendly provider/model/credential controls when user selection is allowed", () => {
     const html = render(
       <ProviderSelectionPanel catalog={catalog({ text: true, image: true })} settings={stubSettings()} network={stubNetwork()} />
     );
-    expect(html).toContain("Your AI Provider Selection");
-    expect(html).toContain('data-selection-control-kind="text"');
-    expect(html).toContain('data-selection-control-kind="image"');
-    expect(html).toContain('data-selection-mode-select="text"');
-    expect(html).toContain('data-selection-mode-select="image"');
+    expect(html).toContain("AI Settings");
+    expect(html).toContain('data-ai-surface-card="text"');
+    expect(html).toContain('data-ai-surface-card="image"');
+    expect(html).toContain('data-surface-provider-select="text"');
+    expect(html).toContain('data-surface-provider-select="image"');
+    expect(html).toContain('data-surface-credential-select="text"');
+    expect(html).toContain('data-surface-credential-select="image"');
     expect(html).toContain("Server default");
-    expect(html).toContain("Use my selection");
-    expect(html).toContain("Apply selection");
+    expect(html).toContain("Server API key");
+    expect(html).toContain("Use my API key");
+    // Apply Selection is intentionally eliminated (immediate-save UX).
+    expect(html).not.toContain("Apply selection");
     expect(html).not.toContain("Server locked");
   });
 
@@ -160,28 +169,31 @@ describe("BYOK-4 — ProviderSelectionPanel (interactive selection)", () => {
     );
     // Text surface is locked: no interactive controls, "Server locked" badge.
     expect(html).toContain("Server locked");
-    expect(html).not.toContain('data-selection-mode-select="text"');
+    expect(html).not.toContain('data-surface-provider-select="text"');
     // Image surface remains interactive.
-    expect(html).toContain('data-selection-mode-select="image"');
+    expect(html).toContain('data-surface-provider-select="image"');
   });
 
   it("shows the pinned provider read-only when locked (fail-closed messaging, no selection controls)", () => {
     const c = catalog({ text: false, image: true });
     c.selection.text = { selectionMode: "server_managed", selectedProviderId: "openrouter", selectedModelId: "openai/gpt-4o-mini", valid: true };
     const html = render(<ProviderSelectionPanel catalog={c} settings={stubSettings()} network={stubNetwork()} />);
-    const lockedCard = html.slice(html.indexOf('data-selection-control-kind="text"'), html.indexOf('data-selection-control-kind="image"'));
-    expect(lockedCard).toContain("openrouter");
-    expect(lockedCard).toContain("openai/gpt-4o-mini");
+    const lockedCard = html.slice(html.indexOf('data-ai-surface-card="text"'), html.indexOf('data-ai-surface-card="image"'));
+    // Friendly name + friendly model name (raw ids are Advanced-only).
+    expect(lockedCard).toContain("OpenRouter");
+    expect(lockedCard).toContain("GPT-4o Mini");
     expect(lockedCard).not.toContain("<select");
   });
 
-  it("renders a Test Connection button per provider (text + image) with bounded labels", () => {
+  it("renders the Advanced server-environment Test Connection buttons per provider", () => {
     const html = render(
       <ProviderSelectionPanel catalog={catalog({ text: true, image: true })} settings={stubSettings()} network={stubNetwork()} />
     );
     expect(html).toContain('data-connection-test-provider="gemini"');
     expect(html).toContain('data-connection-test-provider="gemini-image"');
-    expect((html.match(/Test Connection/g) || []).length).toBe(2);
+    // The primary cards ALSO offer a credential-scoped Test Connection.
+    expect(html).toContain('data-surface-test="text"');
+    expect(html).toContain('data-surface-test="image"');
   });
 
   it("renders the truthful connection-test kind labels in the read-only catalog cards", () => {
@@ -214,20 +226,22 @@ describe("BYOK-4 — ProviderSelectionPanel (interactive selection)", () => {
     expect(html).not.toContain("DEEPSEEK_API_KEY");
   });
 
-  it("BYOK-5E/5F: BOTH surfaces offer a credential-source selector (Server environment / Session only)", async () => {
+  it("BYOK-5E/5F: BOTH surfaces offer a FRIENDLY credential selector", async () => {
     const c = catalog({ text: true, image: true });
     await saveAiSelection(stubSettings(), "text", "user_selected", "gemini", "gemini-3.7-flash", "server_environment");
     await saveAiSelection(stubSettings(), "image", "user_selected", "gemini-image", "gemini-2.5-flash-image", "server_environment");
     const html = render(
       <ProviderSelectionPanel catalog={c} settings={stubSettings()} network={stubNetwork()} />
     );
-    expect(html).toContain('data-selection-credential-source-select="text"');
-    expect(html).toContain('data-selection-credential-source-select="image"');
-    expect(html).toContain("Server environment");
-    expect(html).toContain("Session only");
+    expect(html).toContain('data-surface-credential-select="text"');
+    expect(html).toContain('data-surface-credential-select="image"');
+    expect(html).toContain("Server API key");
+    expect(html).toContain("Use my API key");
     // The selection metadata never carries a key.
     expect(html).not.toContain("apiKey");
-    expect(html).not.toContain("Session-key image generation is not enabled yet");
+    // Internal terminology is NOT primary user-facing text.
+    expect(html).not.toContain(">Server environment<");
+    expect(html).not.toContain(">Session only<");
   });
 
   it("BYOK-5E: reset to server_default (and any non-session source) clears the typed session key", () => {
@@ -397,7 +411,7 @@ describe("BYOK-5F — credential-source-aware provider selection", () => {
       <ProviderSelectionPanel catalog={sessionCapableCatalog()} settings={stubSettings()} network={stubNetwork()} />
     );
     expect(html).toContain("Server Environment Connection Tests");
-    expect(html).toContain("Session API Keys below");
+    expect(html).toContain("Session credentials are tested beside the provider in the");
     // A session-capable provider with no env key is NOT generically "unavailable".
     expect(html).toContain("Environment credential unavailable. This provider is session-capable");
   });
@@ -579,10 +593,20 @@ describe("BYOK-5F — Provider Selection Apply/Reset control UX", () => {
     const html = render(
       <ProviderSelectionPanel catalog={sessionCapableCatalog()} settings={stubSettings()} network={stubNetwork()} />
     );
-    expect(html).toContain('data-active-selection="text"');
-    expect(html).toContain("Active selection:");
-    expect(html).toContain("OpenRouter / openai/gpt-4o-mini / Session only");
-    const imageStart = html.indexOf('data-active-selection="image"');
+    expect(html).toContain('data-active-summary="text"');
+    // Friendly user-facing summary (no internal ids / terminology).
+    expect(html).toContain("OpenRouter");
+    expect(html).toContain("GPT-4o Mini");
+    expect(html).toContain("Using your temporary API key");
+    // Within the PRIMARY text card, raw ids / internal terminology never appear as
+    // VISIBLE text (they may remain as exact <option> values, required for correct
+    // persistence; Advanced diagnostics legitimately show raw ids).
+    const textCardStart = html.indexOf('data-ai-surface-card="text"');
+    const textCard = html.slice(textCardStart, html.indexOf('data-ai-surface-card="image"'));
+    expect(textCard).not.toContain(">openai/gpt-4o-mini<");
+    expect(textCard).not.toContain(">Session only<");
+    expect(textCard).not.toContain(">server_environment<");
+    const imageStart = html.indexOf('data-active-summary="image"');
     expect(html.slice(imageStart, imageStart + 300)).toContain("Server default");
 
     const statusHtml = render(
@@ -726,19 +750,20 @@ describe("BYOK-5F — ProviderSelectionPanel interaction (render + Apply + Reset
         effective={kind === "text" ? state.saved.textAi : state.saved.imageAi}
         draft={kind === "text" ? state.drafts.text : state.drafts.image}
         providers={PROVIDERS}
-        allowSessionCredential
+        sessionByokSupported
+        network={stubNetwork()}
         notice={kind === "text" ? state.notices.text : state.notices.image}
         onChangeDraft={() => {}}
-        onApply={() => {}}
         onReset={() => {}}
+        onTestServerEnvironment={() => {}}
       />
     );
   }
 
-  it("change draft -> Apply -> observes the active selection; Reset -> observes Server default", async () => {
+  it("change draft -> immediate save -> active summary; Reset -> Server default", async () => {
     let state = initialProviderSelectionControlState();
 
-    // 1) User changes the Text draft to OpenRouter / session_only.
+    // 1) User changes the Text draft to OpenRouter / use my API key.
     state = providerSelectionReducer(state, {
       type: "draftChanged",
       kind: "text",
@@ -750,13 +775,14 @@ describe("BYOK-5F — ProviderSelectionPanel interaction (render + Apply + Reset
       },
     });
     let html = renderCard(state, "text");
-    expect(html).toContain('data-selection-mode-select="text"');
-    expect(html).toContain('data-selection-provider-select="text"');
-    expect(html).toContain("Active selection:");
-    // Not yet applied -> still server default.
+    expect(html).toContain('data-surface-provider-select="text"');
+    expect(html).toContain('data-surface-credential-select="text"');
+    expect(html).toContain("Use my API key");
+    expect(html).toContain("Server API key");
+    // Not yet persisted -> active summary still server default.
     expect(html).toContain("Server default");
 
-    // 2) "Click Apply" -> operation-local save, then the component dispatches it.
+    // 2) Immediate save (no Apply button): operation-local persist + dispatch.
     const applied = await saveAiSelectionWithOutcome(
       stubSettings(),
       "text",
@@ -774,10 +800,14 @@ describe("BYOK-5F — ProviderSelectionPanel interaction (render + Apply + Reset
       persistenceFailed: applied.persistenceFailed,
     });
     html = renderCard(state, "text");
-    expect(html).toContain("OpenRouter / openai/gpt-4o-mini / Session only");
+    // Friendly active summary (no internal ids / terminology).
+    expect(html).toContain("OpenRouter");
+    expect(html).toContain("GPT-4o Mini");
+    expect(html).toContain("Using your temporary API key");
     expect(html).toContain("Selection applied");
+    expect(html).not.toContain(">openai/gpt-4o-mini<");
 
-    // 3) "Click Reset" -> back to server default, reflected immediately.
+    // 3) Reset -> back to server default, reflected immediately.
     const reset = await resetAiSelectionWithOutcome(stubSettings(), "text");
     state = providerSelectionReducer(state, { type: "operationStarted", kind: "text", opId: 2 });
     state = providerSelectionReducer(state, {
@@ -914,5 +944,102 @@ describe("BYOK-5F — same-surface operation ordering (stale completions discard
     expect(a.persistenceFailed).toBe(true);
     // The stale A failure must NOT appear; B's success notice stands.
     expect(s.notices.text).toBe("Selection applied");
+  });
+});
+
+describe("BYOK-5F — AI Settings UX (friendly, advanced, credentials)", () => {
+  it("friendly label helpers never leak internal ids/terminology as labels", () => {
+    expect(friendlyProviderName("openrouter")).toBe("OpenRouter");
+    expect(friendlyProviderName("openrouter-image")).toBe("OpenRouter Image");
+    expect(friendlyProviderName("unknown-provider")).toBe("unknown-provider");
+    expect(friendlyModelName("openai/gpt-4o-mini")).toBe("GPT-4o Mini");
+    expect(friendlyModelName("google/gemini-2.5-flash-image")).toBe("Gemini 2.5 Flash Image");
+    expect(credentialUsageLabel("session_only")).toBe("Using your temporary API key");
+    expect(credentialUsageLabel("server_environment")).toBe("Using server API key");
+    expect(surfaceStatusLabel({ mode: "server_default" }, false)).toBe("Server default");
+    expect(
+      surfaceStatusLabel({ mode: "user_selected", providerId: "openrouter", credentialSource: "session_only" }, true)
+    ).toBe("Connected");
+    expect(
+      surfaceStatusLabel({ mode: "user_selected", providerId: "openrouter", credentialSource: "session_only" }, false)
+    ).toBe("Key required");
+    expect(SESSION_KEY_EXPLANATION).toContain("never saved to your browser or vault");
+  });
+
+  it("shows friendly provider/model/source summaries for BOTH cards", async () => {
+    await saveAiSelection(stubSettings(), "text", "user_selected", "openrouter", "openai/gpt-4o-mini", "session_only");
+    await saveAiSelection(stubSettings(), "image", "user_selected", "openrouter-image", "google/gemini-2.5-flash-image", "session_only");
+    const html = render(
+      <ProviderSelectionPanel catalog={sessionCapableCatalog()} settings={stubSettings()} network={stubNetwork()} />
+    );
+    const text = html.slice(html.indexOf('data-ai-surface-card="text"'), html.indexOf('data-ai-surface-card="image"'));
+    const image = html.slice(html.indexOf('data-ai-surface-card="image"'));
+    expect(text).toContain("OpenRouter");
+    expect(text).toContain("GPT-4o Mini");
+    expect(text).toContain("Using your temporary API key");
+    expect(image).toContain("OpenRouter Image");
+    expect(image).toContain("Gemini 2.5 Flash Image");
+    expect(image).toContain("Using your temporary API key");
+  });
+
+  it("shows session-key controls ONLY when 'Use my API key' is selected", async () => {
+    await saveAiSelection(stubSettings(), "text", "user_selected", "openrouter", "openai/gpt-4o-mini", "session_only");
+    const sessionHtml = render(
+      <ProviderSelectionPanel catalog={sessionCapableCatalog()} settings={stubSettings()} network={stubNetwork()} />
+    );
+    expect(sessionHtml).toContain('data-surface-key-panel="text"');
+    expect(sessionHtml).toContain('data-session-key-panel="true"');
+    expect(sessionHtml).toContain('data-session-key-input="true"');
+    expect(sessionHtml).not.toContain('data-surface-test="text"');
+
+    await saveAiSelection(stubSettings(), "text", "user_selected", "openrouter", "openai/gpt-4o-mini", "server_environment");
+    const serverHtml = render(
+      <ProviderSelectionPanel catalog={sessionCapableCatalog()} settings={stubSettings()} network={stubNetwork()} />
+    );
+    expect(serverHtml).toContain('data-surface-test="text"');
+    expect(serverHtml).not.toContain('data-surface-key-panel="text"');
+  });
+
+  it("never redisplays a saved session key (password input value is always empty)", async () => {
+    await saveAiSelection(stubSettings(), "text", "user_selected", "openrouter", "openai/gpt-4o-mini", "session_only");
+    const html = render(
+      <ProviderSelectionPanel catalog={sessionCapableCatalog()} settings={stubSettings()} network={stubNetwork()} />
+    );
+    expect(html).toContain('type="password"');
+    expect(html).toMatch(/data-session-key-input="true"[^>]*value=""/);
+    expect(html).not.toContain(SENTINEL);
+  });
+
+  it("Advanced / Server Diagnostics is COLLAPSED by default and preserves diagnostics", () => {
+    const html = render(
+      <ProviderSelectionPanel catalog={catalog({ text: true, image: true })} settings={stubSettings()} network={stubNetwork()} />
+    );
+    const detailsStart = html.indexOf('<details data-advanced-diagnostics="true"');
+    expect(detailsStart).toBeGreaterThan(-1);
+    const detailsOpenTag = html.slice(detailsStart, html.indexOf(">", detailsStart) + 1);
+    expect(detailsOpenTag).not.toContain("open");
+    // Diagnostics content is present (revealed when expanded).
+    expect(html).toContain("Advanced / Server Diagnostics");
+    expect(html).toContain("Provider Model Catalog");
+    expect(html).toContain("Server Text AI");
+    expect(html).toContain("Server Environment Connection Tests");
+  });
+
+  it("Test Connection follows the currently selected credential source", async () => {
+    await saveAiSelection(stubSettings(), "text", "user_selected", "openrouter", "openai/gpt-4o-mini", "server_environment");
+    let html = render(
+      <ProviderSelectionPanel catalog={sessionCapableCatalog()} settings={stubSettings()} network={stubNetwork()} />
+    );
+    let text = html.slice(html.indexOf('data-ai-surface-card="text"'), html.indexOf('data-ai-surface-card="image"'));
+    expect(text).toContain('data-surface-test="text"');
+    expect(text).not.toContain('data-session-test="true"');
+
+    await saveAiSelection(stubSettings(), "text", "user_selected", "openrouter", "openai/gpt-4o-mini", "session_only");
+    html = render(
+      <ProviderSelectionPanel catalog={sessionCapableCatalog()} settings={stubSettings()} network={stubNetwork()} />
+    );
+    text = html.slice(html.indexOf('data-ai-surface-card="text"'), html.indexOf('data-ai-surface-card="image"'));
+    expect(text).toContain('data-session-test="true"');
+    expect(text).not.toContain('data-surface-test="text"');
   });
 });

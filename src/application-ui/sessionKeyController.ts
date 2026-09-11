@@ -48,6 +48,18 @@ export interface SessionKeyProviderOption {
   models: { id: string; default: boolean }[];
 }
 
+/**
+ * A provider the controller is HARD-LOCKED to (compact in-card mode). When set,
+ * the controller NEVER initializes from `providers[0]`, NEVER drifts to another
+ * provider via `selectProvider`, and owns its model via the parent card. This
+ * closes the compact-panel bug where the visible card could say OpenRouter while
+ * the controller targeted Gemini (element zero of the surface provider list).
+ */
+export interface SessionKeyLockedProvider {
+  providerId: string;
+  modelId?: string;
+}
+
 export type SessionKeyStatusState = 'loading' | 'unavailable' | 'not-configured' | 'configured' | 'error';
 export interface SessionKeyNotice {
   kind: 'error' | 'success';
@@ -89,15 +101,22 @@ export class SessionKeyController {
   private disposed = false;
   /** The rotation version WITH the exact provider it belongs to (never shared). */
   private version: { providerId: string; version: string } | null = null;
+  /** When non-null, the controller is hard-locked to this exact provider. */
+  private readonly lockedProviderId: string | null;
 
   constructor(
     private readonly network: NetworkAdapter,
-    private readonly providers: SessionKeyProviderOption[]
+    private readonly providers: SessionKeyProviderOption[],
+    lockedProvider?: SessionKeyLockedProvider
   ) {
-    const first = providers[0]?.providerId ?? '';
+    this.lockedProviderId = lockedProvider?.providerId ?? null;
+    // Locked mode binds to the EXPLICIT provider; legacy mode keeps providers[0].
+    // Provider ordering is NEVER trusted for a locked compact panel.
+    const initialProviderId = this.lockedProviderId ?? providers[0]?.providerId ?? '';
+    const explicitModel = this.lockedProviderId ? lockedProvider?.modelId : undefined;
     this.state = {
-      selectedProviderId: first,
-      selectedModelId: defaultModelFor(providers, first),
+      selectedProviderId: initialProviderId,
+      selectedModelId: explicitModel || defaultModelFor(providers, initialProviderId),
       apiKey: '',
       status: 'loading',
       saveState: 'idle',
@@ -165,6 +184,8 @@ export class SessionKeyController {
   }
 
   selectProvider(providerId: string): void {
+    // A locked (compact) controller can NEVER drift to another provider.
+    if (this.lockedProviderId) return;
     if (!providerId || providerId === this.state.selectedProviderId) return;
     // Invalidate ALL in-flight work (generation + epoch); reset version +
     // transient state; clear any typed key so it cannot leak across providers.
@@ -187,7 +208,24 @@ export class SessionKeyController {
   }
 
   selectModel(modelId: string): void {
+    // A locked (compact) controller's model is owned by the parent card.
+    if (this.lockedProviderId) return;
     this.setState({ selectedModelId: modelId });
+  }
+
+  /**
+   * Applies the parent card's currently-selected model to a locked controller.
+   * Used when the card changes model WITHIN the same locked provider (no
+   * remount). A stale test result is cleared because it belonged to the prior
+   * model. Never changes the provider and never triggers a provider call.
+   */
+  syncLockedModel(modelId: string | undefined): void {
+    if (!this.lockedProviderId) return;
+    // An empty/absent card model means "provider default" — resolve it for the
+    // LOCKED provider (never another provider's default).
+    const resolved = modelId || defaultModelFor(this.providers, this.lockedProviderId);
+    if (this.state.selectedModelId === resolved) return;
+    this.setState({ selectedModelId: resolved, testResult: undefined });
   }
 
   setApiKey(value: string): void {
