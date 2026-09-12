@@ -7,6 +7,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.8.0] - 2026-09-12
+
+### 🔐 Session-Only BYOK (Text + Image)
+
+- Session-only Bring-Your-Own-Key for Text AI and Image AI: a provider API key
+  can be entered and is retained ONLY in server process memory, expires
+  automatically, is revocable, and is never persisted to the browser, vault, or
+  settings.
+- Exact provider-scoped credential isolation is preserved: `openrouter` ≠
+  `openrouter-image` and `gemini` ≠ `gemini-image`. Credentials are never
+  aliased, migrated, or silently substituted across providers.
+- Session credentials are validated only by an explicit Test Connection; no
+  paid provider call is made merely by saving or selecting a credential.
+
+### 🎛️ Simplified AI Settings UX
+
+- The AI Settings surface is now two compact cards (Text AI / Image AI) with
+  provider, model, credential source, session-key controls, and a stable
+  footer; Advanced / Server Diagnostics remains available and collapsed by
+  default.
+- Friendly, non-secret provider/model names and truthful credential-source
+  labels replace the previous technical wall.
+
+### 🌐 Dynamic OpenRouter Model Catalog
+
+- Server-owned, cached, fail-safe OpenRouter catalog discovery (fixed trusted
+  endpoint, bounded timeout/body, no redirects, no API key required) normalized
+  into a secret-free Kitchen Codex catalog.
+- Free-first, cost-aware classification: **Free / Budget / Paid / Variable**,
+  derived from normalized per-token pricing — free is proven by zero cost, never
+  by a display name.
+- Searchable model picker (by display name and model id) with capability
+  badges; discovered-but-unverified models are shown informationally only.
+
+### 💸 Cost-Aware Spend Protection
+
+- FREE → PAID protection: a model acknowledged FREE that the current trusted
+  catalog reports as non-free is blocked with a bounded
+  `MODEL_PRICING_CHANGED` error on both text and image surfaces; the user must
+  explicitly re-select. No automatic model/provider switch and no silent charge.
+- Stale-pricing fail-closed: if FREE pricing can no longer be verified (stale or
+  failed refresh), execution is blocked with `MODEL_PRICING_UNVERIFIED`.
+- Conservative pricing classification rejects non-zero, negative, malformed,
+  NaN/Infinity, object/override, or unknown price-bearing fields as FREE.
+- Text pricing blocks surface through the shared route guard on every text AI
+  route with zero provider calls.
+
+### 🧭 Safe Server-Owned Validation
+
+- Only server-verified strict-structured text models and transport-allowlisted
+  image models are executable; arbitrary client-supplied model IDs fail closed.
+- Dynamic OpenRouter models that are discovered but not yet verified for the
+  strict structured-output runtime are informational only and are NOT
+  executable. Dynamic image-output models are likewise discovery-only unless
+  explicitly verified for the current image transport.
+- External metadata is bounded (model count, id/name length, parameter and
+  modality list caps) and duplicate/conflicting model ids are rejected.
+
+### 🍳 Ask My Kitchen
+
+- Generic ingredient matching: generic queries such as "chicken" now match
+  normalized variants ("chicken breast", "rotisserie chicken") while remaining
+  whole-token safe ("chickpea" does not match). Exact canonical identity is
+  unchanged for every other consumer.
+
+### 🖼️ Image Generation
+
+- OpenRouter image generation live-smoke verified through the explicit,
+  session-key-aware image path.
+- Image preview remains explicit-save only: no automatic image generation on
+  any save/scan/render/resolve surface. No free image-generation model is
+  advertised (free image-provider support is planned separately).
+
+### 🧪 Testing
+
+- 2220 / 2220 Vitest tests across 135 files; 269 / 269 security tests across
+  18 files; typecheck, production build, and plugin build clean.
+
+### ⚠️ Known Limitation
+
+- Discovered dynamic OpenRouter models and dynamic image-output models are not
+  automatically executable. Not every discovered free model is currently usable,
+  and there is currently no free image-generation model.
+
 ## [0.7.0] - 2026-09-09
 
 ### 🧑‍🍳 Create for Me

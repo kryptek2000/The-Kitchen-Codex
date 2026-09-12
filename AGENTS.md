@@ -105,29 +105,41 @@ in dev (Vite HMR). `frame-ancestors` is configurable via `CSP_FRAME_ANCESTORS`.
 
 ## Current state / open items
 
-- **v0.7.0 is the current release** ("The Kitchen Codex v0.7.0 — Create for Me
-  & Vault Intelligence Image Recovery"). `RELEASE_VERSION` in
+- **v0.8.0 is the current release** ("The Kitchen Codex v0.8.0 — BYOK & Dynamic
+  OpenRouter Catalog"). `RELEASE_VERSION` in
   `src/appVersion.ts` is the single runtime source of truth for BOTH the
   client (`src/version.ts`) and the server (`/api/health`). `package.json`/
   `README.md` reference the same release. To bump, run
   `bun x tsx scripts/bump_version.ts vX.Y.Z`.
-- **v0.7.0 delivers Create for Me + Vault Intelligence image recovery**: a
-  guided recipe-creation assistant with canonical vault-integrity hardening
-  (recipe/vault stale-conflict protection, lock-key normalization,
-  liveness-guarded Save), missing/broken-image detection, explicit Gemini image
-  generation with an AI preview before save and Save / Regenerate / Cancel
-  controls, canonical vault-safe image save with collision-safe `Assets/` paths
-  and generated-image provenance, an exact image-provider failure taxonomy
-  (quota / rate-limit / timeout / unavailable / blocked / no-image / auth) with
-  bounded messages, a pre-decode base64 memory guard, transient preview tokens,
-  and a NO-automatic-image-generation invariant on every
-  save/scan/render/resolve surface. Gemini image generation is best-effort and
-  may be quota/rate limited by the provider account; image availability is NOT
-  an app bug.
-- **Verified baseline**: 1583/1583 tests across 103 files; 98/98 security tests
-  across 8 files; typecheck and browser + plugin builds clean. Release notes:
+- **v0.8.0 delivers session-only BYOK + a safe dynamic OpenRouter catalog**: a
+  simplified two-card AI Settings UX; session-only API keys for Text AI and
+  Image AI (server-memory only, expiring, revocable, never persisted), with
+  exact `openrouter`/`openrouter-image` (and `gemini`/`gemini-image`) credential
+  isolation; a server-owned, cached, fail-safe OpenRouter model catalog with
+  Free / Budget / Paid / Variable pricing and a searchable free-first picker;
+  FREE -> PAID (`MODEL_PRICING_CHANGED`) and stale-pricing
+  (`MODEL_PRICING_UNVERIFIED`) spend protection with zero provider calls when
+  blocked; server-verified strict-structured text models and
+  transport-allowlisted image models only (arbitrary client model IDs fail
+  closed); and Ask My Kitchen generic ingredient matching. Discovered dynamic
+  models that are not server-verified are informational only and NOT executable;
+  no free image-generation model is advertised.
+- **Verified baseline**: 2220/2220 tests across 135 files; 269/269 security tests
+  across 18 files; typecheck and browser + plugin builds clean. Release notes:
+  `RELEASE_NOTES_v0.8.0.md`.
+- **v0.7.0 was the previous release**: it delivered Create for Me + Vault
+  Intelligence image recovery — a guided recipe-creation assistant with
+  canonical vault-integrity hardening (recipe/vault stale-conflict protection,
+  lock-key normalization, liveness-guarded Save), missing/broken-image
+  detection, explicit Gemini image generation with an AI preview before save and
+  Save / Regenerate / Cancel controls, canonical vault-safe image save with
+  collision-safe `Assets/` paths and generated-image provenance, an exact
+  image-provider failure taxonomy (quota / rate-limit / timeout / unavailable /
+  blocked / no-image / auth) with bounded messages, a pre-decode base64 memory
+  guard, transient preview tokens, and a NO-automatic-image-generation invariant
+  on every save/scan/render/resolve surface. Release notes:
   `RELEASE_NOTES_v0.7.0.md`.
-- **v0.6.0 was the previous release**: it delivered a provider-neutral AI layer.
+- **v0.6.0 was an earlier release**: it delivered a provider-neutral AI layer.
   Every live AI consumer
   (kitchen interpret, rank, discover, metadata recovery, nutrition, Grab Recipe)
   is migrated onto the `server/ai/*` provider abstraction; the Gemini SDK is

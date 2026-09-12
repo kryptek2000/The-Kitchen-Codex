@@ -1,6 +1,6 @@
-# 🍳 The Kitchen Codex `v0.7.0`
+# 🍳 The Kitchen Codex `v0.8.0`
 
-[![Version](https://img.shields.io/badge/version-0.7.0-amber.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.8.0-amber.svg)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A markdown-native recipe manager, meal planner, culinary knowledge base, and interactive cooking companion built specifically for **Obsidian** vaults. Read, edit, sync, and cook directly from your Obsidian `.md` recipe collection with YAML frontmatter, Dataview tags, wikilinks (`[[Ingredient]]`, `[[Target|Alias]]`), AI nutrition estimation, dynamic portion scaling, multi-step cooking timers, and AI-powered web recipe scraping.
@@ -245,7 +245,19 @@ favorite: true
 
 ## 📌 Changelog
 
-### `v0.7.0` (Current Release)
+### `v0.8.0` (Current Release)
+- **Session-only BYOK for Text AI and Image AI**: enter a provider API key that is stored only in server process memory, expires automatically, is revocable, and is never written to the browser, vault, or settings. Exact provider-scoped credential isolation is preserved (`openrouter` ≠ `openrouter-image`; `gemini` ≠ `gemini-image`).
+- **Simplified two-card AI Settings UX**: Text AI and Image AI each get a compact card with provider, model, credential source, session-key controls, and a stable footer — Advanced / Server Diagnostics stays collapsed by default.
+- **Dynamic OpenRouter model discovery**: a server-owned, cached, fail-safe catalog discovers OpenRouter models and classifies **Free / Budget / Paid / Variable** pricing, with a searchable free-first model picker.
+- **Cost-aware FREE → PAID protection**: a model selected while FREE that later becomes paid (or whose price can no longer be verified) is blocked with an explicit `MODEL_PRICING_CHANGED` / `MODEL_PRICING_UNVERIFIED` error — zero provider calls, no silent charge, no automatic re-selection.
+- **Stale-pricing fail-closed**: expired/refreshed-failed catalog pricing never permits a FREE-acknowledged selection to execute.
+- **Safe server-owned model validation**: only server-verified strict-structured text models and transport-allowlisted image models are executable; unknown client model IDs fail closed.
+- **Ask My Kitchen generic ingredient matching**: generic queries like "chicken" now match their normalized variants ("chicken breast", "rotisserie chicken") while remaining whole-token safe ("chickpea" does not match).
+- **OpenRouter image generation**: live-smoke verified through the explicit, session-key-aware image path; image preview remains explicit-save only (no automatic image generation).
+
+**Limitation**: dynamic OpenRouter models that are discovered but not yet verified for the Kitchen Codex strict structured-output runtime are shown informationally but are **not executable**. Dynamic image-output models are likewise discovery-only unless explicitly verified for the current image transport. Not every discovered free model is currently usable, and there is **no free image-generation model** at this time (free image-provider support is planned separately).
+
+### `v0.7.0` (Previous Release)
 - **Create for Me**: a guided recipe-creation assistant with canonical vault-integrity hardening (recipe/vault stale-conflict protection, lock-key normalization, liveness-guarded Save so no operation can silently run behind a closed window or stale session).
 - **Vault Intelligence image recovery**: missing/broken-image detection, explicit Gemini image generation, AI preview before save, and Save / Regenerate / Cancel controls with collision-safe local `Assets/` writes and generated-image provenance.
 - **Provider/error resilience groundwork**: an `ImageProvider` abstraction for Gemini image generation with an exact failure taxonomy (quota / rate-limit / timeout / unavailable / blocked / no-image / auth) — bounded messages, no auto-retries, no automatic image generation, and a pre-decode base64 memory guard.
