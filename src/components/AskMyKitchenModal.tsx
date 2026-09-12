@@ -48,7 +48,7 @@ import {
   prepareKitchenIntentForExecution,
 } from '../utils/kitchenIntentPolicy';
 import type { KitchenIntent, TrustedKitchenContext } from '../utils/kitchenIntent';
-import { buildAiSelectionRequestOptions } from '../application/aiSelection';
+import { buildAiSelectionRequestOptions, aiPricingBlockMessage } from '../application/aiSelection';
 
 type AskStatus =
   | 'idle'
@@ -331,7 +331,8 @@ export function AskMyKitchenModal({
       if (tokenRef.current !== token) return;
       if (!interpretRes.ok) {
         setStatus('error');
-        setErrorMsg(httpErrorMessage(interpretRes.status));
+        const pricingMsg = aiPricingBlockMessage((interpretData as { code?: unknown } | undefined)?.code);
+        setErrorMsg(pricingMsg ?? httpErrorMessage(interpretRes.status));
         return;
       }
       if (!isInterpretResponse(interpretData)) {

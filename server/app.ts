@@ -37,7 +37,7 @@ import {
   GenerateRecipeImageValidationError,
 } from "./recipeImage.js";
 import { DeterministicImageProvider, type ImageProvider } from "./ai/imageProvider.js";
-import { resolveEffectiveImageSelection } from "./ai/effectiveSelection.js";
+import { resolveEffectiveImageSelection, textSelectionPricingBlock } from "./ai/effectiveSelection.js";
 import {
   parseTextSelectionHeader,
   parseImageSelectionHeader,
@@ -118,6 +118,23 @@ export function resolveImageProvider(opts: Pick<CreateAppOptions, 'imageProvider
   }
   return { provider: effective.provider, modelOverride: { model: effective.model ?? "" }, selectionInvalid: false };
 }
+
+/**
+ * v0.8.0 FLAG fix: a TEXT pricing guard middleware. When the client's TEXT
+ * selection was acknowledged FREE but the current trusted catalog reports it as
+ * non-free (or pricing cannot currently be verified), the request is rejected
+ * with a bounded 409 BEFORE any provider work. This guarantees the reason
+ * reaches the HTTP response for every text route instead of being dropped during
+ * candidate resolution. No provider call, no fallback, no spend.
+ */
+const textPricingGuard: express.RequestHandler = (req, res, next) => {
+  const block = textSelectionPricingBlock(parseTextSelectionHeader(req.headers));
+  if (block) {
+    res.status(409).json({ error: block.message, code: block.code });
+    return;
+  }
+  next();
+};
 
 /**
  * Maps a normalized image-provider error to a distinct HTTP response shape.
@@ -209,7 +226,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   });
 
   // Recipe Grabber Web Importer endpoint with rate limiting & input validation
-  app.post("/api/grab-recipe", requireAiAccessToken, recipeImportRateLimiter, async (req, res) => {
+  app.post("/api/grab-recipe", requireAiAccessToken, textPricingGuard, recipeImportRateLimiter, async (req, res) => {
     const clientIp = getClientIp(req);
 
     try {
@@ -423,7 +440,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   });
 
   // AI Nutrition Estimator endpoint with rate limiting & input validation
-  app.post("/api/estimate-nutrition", requireAiAccessToken, nutritionEstimateRateLimiter, async (req, res) => {
+  app.post("/api/estimate-nutrition", requireAiAccessToken, textPricingGuard, nutritionEstimateRateLimiter, async (req, res) => {
     const clientIp = getClientIp(req);
 
     try {
@@ -487,7 +504,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   });
 
   // AI Vault Intelligence Metadata Recovery endpoint with rate limiting & validation
-  app.post("/api/recover-metadata", requireAiAccessToken, metadataRecoveryRateLimiter, async (req, res) => {
+  app.post("/api/recover-metadata", requireAiAccessToken, textPricingGuard, metadataRecoveryRateLimiter, async (req, res) => {
     const clientIp = getClientIp(req);
 
     try {
@@ -539,7 +556,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // validation. Accepts ONLY a question (no recipe/vault data), interprets it
   // into a structured KitchenQuery, and returns it: the client performs the
   // deterministic local retrieval (searchKitchenRecipes).
-  app.post("/api/kitchen/interpret", requireAiAccessToken, kitchenInterpretRateLimiter, async (req, res) => {
+  app.post("/api/kitchen/interpret", requireAiAccessToken, textPricingGuard, kitchenInterpretRateLimiter, async (req, res) => {
     const clientIp = getClientIp(req);
 
     try {
@@ -615,7 +632,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // this endpoint only ranks that compact evidence (never sees the vault).
   // Ranking is advisory: a provider failure must NOT fail the local request, so
   // this route returns a safe non-sensitive failure for the client to degrade.
-  app.post("/api/kitchen/rank", requireAiAccessToken, kitchenRankRateLimiter, async (req, res) => {
+  app.post("/api/kitchen/rank", requireAiAccessToken, textPricingGuard, kitchenRankRateLimiter, async (req, res) => {
     const clientIp = getClientIp(req);
 
     try {
@@ -694,7 +711,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // Discovery is QUERY-ONLY: it never accepts or fetches an arbitrary URL target,
   // never accesses the vault/filesystem, and never turns a web result into a
   // Recipe. Result URLs come only from provider grounding (no hallucinated URLs).
-  app.post("/api/kitchen/discover", requireAiAccessToken, kitchenDiscoverRateLimiter, async (req, res) => {
+  app.post("/api/kitchen/discover", requireAiAccessToken, textPricingGuard, kitchenDiscoverRateLimiter, async (req, res) => {
     const clientIp = getClientIp(req);
 
     try {
@@ -868,7 +885,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // vault write path). NEVER saves, NEVER mutates the vault, NEVER returns a
   // prompt, secret, or raw provider response. Gated + rate-limited like other AI
   // endpoints; no semantic downgrade (unsupported capability -> explicit 503).
-  app.post("/api/recipes/generate", requireAiAccessToken, createRecipeRateLimiter, async (req, res) => {
+  app.post("/api/recipes/generate", requireAiAccessToken, textPricingGuard, createRecipeRateLimiter, async (req, res) => {
     try {
       if (!req.body || typeof req.body !== "object") {
         return res.status(400).json({ error: "Invalid request payload.", code: "INVALID_REQUEST" });

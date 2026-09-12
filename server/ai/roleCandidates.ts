@@ -47,7 +47,26 @@ export function resolveRoleCandidates(
   regs: RegisteredProvider[] = getRegisteredProviders(),
   userSelection?: SelectionInput
 ): AiCandidate[] {
-  return resolveTextCandidateContext(operation, regs, userSelection).candidates;
+  return resolveRoleCandidateContext(operation, regs, userSelection).candidates;
+}
+
+/**
+ * v0.8.0 FLAG fix: the SAME resolution as `resolveRoleCandidates`, but it ALSO
+ * preserves the bounded pricing-block reason (`MODEL_PRICING_CHANGED` /
+ * `MODEL_PRICING_UNVERIFIED`) so a caller can surface an explicit user-action
+ * error instead of collapsing it into a generic no-candidate result. `candidates`
+ * is empty whenever `pricingBlocked` is set (ZERO provider execution).
+ */
+export function resolveRoleCandidateContext(
+  operation: AiOperation,
+  regs: RegisteredProvider[] = getRegisteredProviders(),
+  userSelection?: SelectionInput
+): { candidates: AiCandidate[]; pricingBlocked?: string } {
+  const context = resolveTextCandidateContext(operation, regs, userSelection);
+  return {
+    candidates: context.candidates,
+    ...(context.pricingBlocked ? { pricingBlocked: context.pricingBlocked } : {}),
+  };
 }
 
 export { roleModelsForProvider } from "./roleModels.js";

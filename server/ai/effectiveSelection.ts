@@ -47,7 +47,7 @@ import { operationRequiredCapabilities } from "./operations.js";
 import type { AiProvider } from "./types.js";
 import type { ImageProvider } from "./imageProvider.js";
 import type { SelectionIntent } from "./parseSelectionMetadata.js";
-import { openRouterPricingGuard } from "./openRouterCatalog.js";
+import { openRouterPricingGuard, type PricingGuardCode } from "./openRouterCatalog.js";
 import {
   createSessionBoundImageProvider,
   createSessionBoundTextProvider,
@@ -389,6 +389,31 @@ export function resolveExecutableTextCandidates(
 ): AiCandidate[] {
   const { candidates } = resolveTextCandidateContext(operation, regs, userSelection);
   return selectCandidates(regs, candidates, operationRequiredCapabilities(operation));
+}
+
+/**
+ * v0.8.0 FLAG fix: surfaces a FREE -> PAID / pricing-unverified block for a TEXT
+ * selection BEFORE any provider execution. It mirrors the guard inside
+ * `resolveTextCandidateContext` (only an OTHERWISE-VALID selection can be
+ * pricing-blocked; an arbitrary/invalid selection keeps its normal fail-closed
+ * behavior). Returns undefined when there is no pricing block.
+ */
+export function textSelectionPricingBlock(
+  userSelection?: SelectionInput,
+  regs: RegisteredProvider[] = getRegisteredProviders()
+): { code: PricingGuardCode; message: string } | undefined {
+  const coerced = coerceSelectionInput(userSelection);
+  if (coerced.invalid || !coerced.metadata) return undefined;
+  const credentialSource: CredentialSource = coerced.metadata.credentialSource ?? "server_environment";
+  const userSel = validateUserTextSelection(coerced.metadata, regs, credentialSource);
+  if (!userSel) return undefined;
+  const guard = openRouterPricingGuard(
+    userSel.providerId,
+    userSel.modelId,
+    coerced.metadata.selectedCostClass
+  );
+  if (guard.ok === false) return { code: guard.code, message: guard.message };
+  return undefined;
 }
 
 /**

@@ -637,3 +637,17 @@ export async function buildAiSelectionRequestOptions(
   }
   return { ...existing, headers: { ...existing?.headers, ...headers } };
 }
+/**
+ * v0.8.0: maps a server pricing-block code to a concise, actionable user
+ * message. The server prevents the charge; the user must review and re-select.
+ * Returns undefined for any other code (callers use their existing fallback).
+ */
+export function aiPricingBlockMessage(code: unknown): string | undefined {
+  if (code === 'MODEL_PRICING_CHANGED') {
+    return 'This model is no longer free. Kitchen Codex prevented a possible charge — review the current price and re-select the model if you still want to use it.';
+  }
+  if (code === 'MODEL_PRICING_UNVERIFIED') {
+    return 'The current price for this model could not be verified. Kitchen Codex prevented a possible charge — refresh the model catalog and re-select the model before using it.';
+  }
+  return undefined;
+}
