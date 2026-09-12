@@ -48,7 +48,15 @@ export interface SavedSelection {
   modelId?: string;
   /** Non-secret credential-source intent (separate from provider/model). */
   credentialSource?: SavedCredentialSource;
+  /**
+   * v0.8.0: the non-secret cost class the user ACKNOWLEDGED when selecting the
+   * model. Used by the server to detect a FREE -> PAID transition and fail closed.
+   */
+  selectedCostClass?: SavedCostClass;
 }
+
+/** Non-secret acknowledged cost class (FREE -> PAID spend protection). */
+export type SavedCostClass = 'free' | 'budget' | 'paid' | 'variable';
 
 /** The full persisted selection-preferences shape (non-secret). */
 export interface SavedAiSelections {
@@ -298,9 +306,23 @@ export function parseStoredSelection(raw: unknown): ParsedStoredSelection {
   const credentialSource =
     credentialPresent ? (row.credentialSource as SavedCredentialSource) : undefined;
 
+  // v0.8.0 selectedCostClass: optional, valid value only. A malformed value is a
+  // present-but-invalid explicit intent -> fail closed.
+  const costPresent = Object.prototype.hasOwnProperty.call(row, 'selectedCostClass');
+  if (
+    costPresent &&
+    row.selectedCostClass !== 'free' &&
+    row.selectedCostClass !== 'budget' &&
+    row.selectedCostClass !== 'paid' &&
+    row.selectedCostClass !== 'variable'
+  ) {
+    return invalid;
+  }
+  const selectedCostClass = costPresent ? (row.selectedCostClass as SavedCostClass) : undefined;
+
   if (row.mode === 'server_default') {
-    // server_default must not carry ids or a credential source.
-    if (providerPresent || modelPresent || credentialPresent) return invalid;
+    // server_default must not carry ids, a credential source, or a cost class.
+    if (providerPresent || modelPresent || credentialPresent || costPresent) return invalid;
     return { status: 'default', selection: { mode: 'server_default' } };
   }
   if (row.mode === 'user_selected') {
@@ -309,6 +331,7 @@ export function parseStoredSelection(raw: unknown): ParsedStoredSelection {
     const selection: SavedSelection = { mode: 'user_selected', providerId };
     if (modelId) selection.modelId = modelId;
     if (credentialSource) selection.credentialSource = credentialSource;
+    if (selectedCostClass) selection.selectedCostClass = selectedCostClass;
     return { status: 'selected', selection };
   }
   return invalid;
@@ -457,7 +480,8 @@ export async function saveAiSelectionWithOutcome(
   mode: SavedSelectionMode,
   providerId?: string,
   modelId?: string,
-  credentialSource?: SavedCredentialSource
+  credentialSource?: SavedCredentialSource,
+  selectedCostClass?: SavedCostClass
 ): Promise<AiSelectionMutationOutcome> {
   const parsed = parseStoredSelection(
     mode === 'user_selected'
@@ -470,6 +494,7 @@ export async function saveAiSelectionWithOutcome(
           // silently collapse the selection to server_default.
           ...(modelId ? { modelId } : {}),
           ...(credentialSource ? { credentialSource } : {}),
+          ...(selectedCostClass ? { selectedCostClass } : {}),
         }
       : { mode: 'server_default' }
   );
@@ -500,9 +525,10 @@ export async function saveAiSelection(
   mode: SavedSelectionMode,
   providerId?: string,
   modelId?: string,
-  credentialSource?: SavedCredentialSource
+  credentialSource?: SavedCredentialSource,
+  selectedCostClass?: SavedCostClass
 ): Promise<SavedAiSelections> {
-  return (await saveAiSelectionWithOutcome(settings, kind, mode, providerId, modelId, credentialSource))
+  return (await saveAiSelectionWithOutcome(settings, kind, mode, providerId, modelId, credentialSource, selectedCostClass))
     .selections;
 }
 
@@ -546,6 +572,7 @@ function selectionToHeaderValue(selection: SavedSelection): string | undefined {
     providerId: string;
     modelId?: string;
     credentialSource?: SavedCredentialSource;
+    selectedCostClass?: SavedCostClass;
   } = {
     mode: 'user_selected',
     providerId: selection.providerId,
@@ -553,6 +580,8 @@ function selectionToHeaderValue(selection: SavedSelection): string | undefined {
   if (selection.modelId) payload.modelId = selection.modelId;
   // NON-SECRET metadata only: WHOSE credential authorizes the request. No key.
   if (selection.credentialSource) payload.credentialSource = selection.credentialSource;
+  // NON-SECRET cost acknowledgement (FREE -> PAID protection).
+  if (selection.selectedCostClass) payload.selectedCostClass = selection.selectedCostClass;
   return JSON.stringify(payload);
 }
 

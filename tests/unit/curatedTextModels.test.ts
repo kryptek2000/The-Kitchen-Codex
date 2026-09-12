@@ -61,7 +61,10 @@ describe("BYOK-4 audit — curatedTextModels is the ONE shared text-model truth"
     const regs = registry.getRegisteredProviders();
 
     for (const providerId of PROVIDERS) {
-      const expected = roleModels.curatedTextModels(providerId);
+      // v0.8.0: `selectableTextModels` is the single shared truth. For non-
+      // OpenRouter providers it equals the curated role set; for OpenRouter it is
+      // curated + the SERVER-OWNED normalized dynamic catalog (never client ids).
+      const expected = roleModels.selectableTextModels(providerId);
       expect(expected.length).toBeGreaterThan(0);
 
       // 1. Provider catalog.

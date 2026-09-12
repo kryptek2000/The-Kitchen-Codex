@@ -22,6 +22,7 @@
 
 import { GeminiProvider } from "./geminiProvider.js";
 import { OpenRouterProvider, OPENROUTER_MODEL_CAPABILITIES } from "./openRouterProvider.js";
+import { openRouterDynamicCapabilities } from "./openRouterCatalog.js";
 import { DeepSeekProvider, DEEPSEEK_MODEL_CAPABILITIES } from "./deepSeekProvider.js";
 import { getServerSecretSync } from "../platform/ServerEnvironmentSecretAdapter.js";
 import type { AiCapabilities, AiProvider } from "./types.js";
@@ -51,6 +52,13 @@ export interface RegisteredProvider {
    * `defaultCapabilities` and never magically gains a capability.
    */
   modelCapabilities?: Record<string, Partial<AiCapabilities>>;
+  /**
+   * v0.8.0: optional DYNAMIC per-model capability resolver (e.g. the live
+   * OpenRouter catalog). Consulted AFTER the provider baseline but BEFORE the
+   * curated `modelCapabilities` override, so curated truth always wins. Never a
+   * config/secret surface; returns undefined for unknown models.
+   */
+  dynamicCapabilities?: (model: string) => Partial<AiCapabilities> | undefined;
   /** When false, the provider is skipped by selection. Defaults to true. */
   enabled?: boolean;
 }
@@ -117,6 +125,9 @@ export function getRegisteredProviders(): RegisteredProvider[] {
         provider: openRouter,
         defaultCapabilities: { ...openRouter.capabilities },
         modelCapabilities: OPENROUTER_MODEL_CAPABILITIES,
+        // v0.8.0: live catalog capability truth (structured output / reasoning)
+        // for dynamically discovered OpenRouter models.
+        dynamicCapabilities: openRouterDynamicCapabilities,
         // Config-driven in the sense that it reflects whether a key is configured;
         // it is NOT user-set capability truth, and it is never a raw secret.
         enabled: openRouterConfigured(),
@@ -157,6 +168,14 @@ export function effectiveCapabilities(
   model: string
 ): AiCapabilities {
   let caps: AiCapabilities = { ...registered.defaultCapabilities };
+  // Dynamic catalog truth (if any) is applied BEFORE the curated override so the
+  // curated per-model truth always remains authoritative.
+  const dynamic = registered.dynamicCapabilities?.(model);
+  if (dynamic) {
+    for (const key of Object.keys(dynamic) as AiCapabilityKey[]) {
+      caps = { ...caps, [key]: Boolean(dynamic[key]) };
+    }
+  }
   const override = registered.modelCapabilities?.[model];
   if (override) {
     for (const key of Object.keys(override) as AiCapabilityKey[]) {

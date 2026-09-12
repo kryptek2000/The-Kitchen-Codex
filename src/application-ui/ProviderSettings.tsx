@@ -52,11 +52,14 @@ import {
   resetAiSelectionWithOutcome,
   saveAiSelectionWithOutcome,
   type SavedCredentialSource,
+  type SavedCostClass,
   type SavedSelection,
   type SavedSelectionMode,
   type SavedAiSelections,
 } from '../application/aiSelection';
 import { SessionKeyPanel, type SessionKeyProviderOption } from './SessionKeyPanel';
+import { ModelPicker } from './ModelPicker';
+import type { SurfaceModelOption } from './modelPicker';
 
 /** The app-scoped server endpoint for a bounded provider connection test. */
 export const PROVIDER_TEST_CONNECTION_API_PATH = '/api/providers/test-connection';
@@ -77,6 +80,8 @@ export interface ProviderSelectionDraft {
   modelId?: string;
   /** BYOK-5E: non-secret credential-source preference (text surface). */
   credentialSource?: SavedCredentialSource;
+  /** v0.8.0: non-secret acknowledged cost class (FREE -> PAID protection). */
+  selectedCostClass?: SavedCostClass;
 }
 
 /** Label for the server's connection-test surface kind (truthful, non-secret). */
@@ -241,6 +246,7 @@ function selectionToDraft(selection: SavedSelection): ProviderSelectionDraft {
     providerId: selection.providerId,
     modelId: selection.modelId,
     credentialSource: selection.credentialSource,
+    selectedCostClass: selection.selectedCostClass,
   };
 }
 
@@ -794,7 +800,7 @@ export function SelectionControlCard({
   lockedPin?: { selectedProviderId?: string; selectedModelId?: string };
   invalid?: boolean;
   draft: ProviderSelectionDraft;
-  providers: { providerId: string; name: string; models: { id: string; default: boolean }[] }[];
+  providers: { providerId: string; name: string; models: SurfaceModelOption[]; discoveredModels?: SurfaceModelOption[] }[];
   sessionByokSupported: boolean;
   network: NetworkAdapter;
   clearKeySignal?: number;
@@ -928,7 +934,8 @@ export function SelectionControlCard({
                 const id = e.target.value || undefined;
                 const p = providers.find((x) => x.providerId === id);
                 const defaultModel = p?.models.find((m) => m.default)?.id ?? p?.models[0]?.id;
-                onChangeDraft({ mode: 'user_selected', providerId: id, modelId: defaultModel });
+                const defaultCost = p?.models.find((m) => m.id === defaultModel)?.costClass;
+                onChangeDraft({ mode: 'user_selected', providerId: id, modelId: defaultModel, selectedCostClass: defaultCost });
               }}
               className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[12px] text-gray-200"
             >
@@ -942,22 +949,44 @@ export function SelectionControlCard({
           </label>
 
           {selectedProvider && selectedProvider.models.length > 0 && (
-            <label className="block space-y-1">
+            <div className="block space-y-1">
               <span className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Model</span>
-              <select
-                data-surface-model-select={kind}
-                value={draft.modelId ?? ''}
-                onChange={(e) => onChangeDraft({ modelId: e.target.value || undefined })}
-                className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[12px] text-gray-200"
-              >
-                <option value="">Provider default</option>
-                {selectedProvider.models.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {friendlyModelName(m.id)}
-                  </option>
-                ))}
-              </select>
-            </label>
+              {selectedProvider.providerId === 'openrouter' ||
+              selectedProvider.providerId === 'openrouter-image' ? (
+                <ModelPicker
+                  kind={kind}
+                  models={selectedProvider.models.map((m) => ({
+                    ...m,
+                    displayName: m.displayName || friendlyModelName(m.id),
+                  }))}
+                  discoveredModels={(selectedProvider.discoveredModels ?? []).map((m) => ({
+                    ...m,
+                    displayName: m.displayName || friendlyModelName(m.id),
+                  }))}
+                  value={draft.modelId}
+                  onChange={(modelId) => {
+                    const chosen = modelId
+                      ? selectedProvider.models.find((m) => m.id === modelId)
+                      : undefined;
+                    onChangeDraft({ modelId, selectedCostClass: chosen?.costClass });
+                  }}
+                />
+              ) : (
+                <select
+                  data-surface-model-select={kind}
+                  value={draft.modelId ?? ''}
+                  onChange={(e) => onChangeDraft({ modelId: e.target.value || undefined })}
+                  className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[12px] text-gray-200"
+                >
+                  <option value="">Provider default</option>
+                  {selectedProvider.models.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {friendlyModelName(m.id)}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
           )}
 
           <label className="block space-y-1">
@@ -1154,7 +1183,8 @@ export function ProviderSelectionPanel({
         'user_selected',
         next.providerId,
         next.modelId,
-        next.credentialSource
+        next.credentialSource,
+        next.selectedCostClass
       );
       dispatch({ type: 'applied', kind, opId, selections, persistenceFailed });
     },

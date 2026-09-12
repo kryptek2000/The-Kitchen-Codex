@@ -31,6 +31,17 @@ export const PROVIDER_CATALOG_API_PATH = '/api/providers/catalog';
 /** The probe surface the server performs for a provider (non-secret, non-proprietary). */
 export type ConnectionTestKindView = 'network_probe' | 'credential_check' | 'unavailable';
 
+/** Normalized per-token pricing view (dynamic catalog; never a secret). */
+export interface CatalogPricingView {
+  promptPerToken: number | null;
+  completionPerToken: number | null;
+  imageOutputPerToken: number | null;
+  variable: boolean;
+}
+
+/** User-facing cost class. */
+export type CatalogCostClassView = 'free' | 'budget' | 'paid' | 'variable';
+
 /** A view-model text model row (only allowlisted fields). */
 export interface ProviderCatalogTextModelView {
   id: string;
@@ -38,6 +49,25 @@ export interface ProviderCatalogTextModelView {
   default: boolean;
   /** Per-model effective capabilities (server-owned truth). */
   capabilities: AiCapabilities;
+  /** Non-secret display name (dynamic catalog; falls back to the id). */
+  displayName?: string;
+  contextLength?: number;
+  pricing?: CatalogPricingView;
+  isFree?: boolean;
+  /** True only when every pricing field parsed finite from a live record. */
+  pricingVerified?: boolean;
+  /** Server-owned verified strict-structured compatibility. */
+  structuredVerified?: boolean;
+  /** True when the model may execute on the current Kitchen Codex transport. */
+  executionCompatible?: boolean;
+  /** UI compatibility state. */
+  compatibility?: 'compatible' | 'experimental' | 'unsupported';
+  isRouter?: boolean;
+  costClass?: CatalogCostClassView;
+  inputModalities?: string[];
+  outputModalities?: string[];
+  vision?: boolean;
+  largeContext?: boolean;
 }
 
 /** A view-model text provider (only allowlisted fields). */
@@ -61,12 +91,20 @@ export interface ProviderCatalogTextProviderView {
    */
   sessionKeySupported: boolean;
   models: ProviderCatalogTextModelView[];
+  /** v0.8.0: discovered but NON-selectable informational models (never executable). */
+  discoveredModels?: ProviderCatalogTextModelView[];
 }
 
 /** A view-model image model row. */
 export interface ProviderCatalogImageModelView {
   id: string;
   default: boolean;
+  displayName?: string;
+  pricing?: CatalogPricingView;
+  isFree?: boolean;
+  pricingVerified?: boolean;
+  compatibility?: 'compatible' | 'experimental' | 'unsupported';
+  costClass?: CatalogCostClassView;
 }
 
 /** A view-model image provider (only allowlisted fields). */
@@ -137,6 +175,23 @@ export interface ProviderCatalogView {
    * Optional; treat `true` as supported and anything else as fail-closed.
    */
   sessionByokSupported?: boolean;
+  /**
+   * v0.8.0: non-secret dynamic OpenRouter catalog observability. Optional and
+   * fail-closed; absent when the server does not expose it.
+   */
+  dynamicCatalog?: {
+    source: 'live' | 'cached' | 'curated_fallback';
+    fetchedAt: number;
+    pricingFresh: boolean;
+    textModelCount: number;
+    freeTextModelCount: number;
+    verifiedFreeTextCount: number;
+    selectableTextCount: number;
+    imageModelCount: number;
+    freeImageModelCount: number;
+    selectableImageCount: number;
+    freeRouterVerified: boolean;
+  };
 }
 
 /** The raw response shape from `GET /api/providers/catalog`. */
@@ -211,6 +266,35 @@ function isFiniteNumber(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v) && v >= 0;
 }
 
+const COST_CLASSES: CatalogCostClassView[] = ['free', 'budget', 'paid', 'variable'];
+
+function normalizeCostClass(raw: unknown): CatalogCostClassView | undefined {
+  return typeof raw === 'string' && (COST_CLASSES as string[]).includes(raw)
+    ? (raw as CatalogCostClassView)
+    : undefined;
+}
+
+/** Normalizes an optional, non-secret per-token pricing block. */
+function normalizePricing(raw: unknown): CatalogPricingView | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const row = raw as Record<string, unknown>;
+  const component = (v: unknown): number | null =>
+    typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null;
+  return {
+    promptPerToken: component(row['promptPerToken']),
+    completionPerToken: component(row['completionPerToken']),
+    imageOutputPerToken: component(row['imageOutputPerToken']),
+    variable: row['variable'] === true,
+  };
+}
+
+function normalizeModalities(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: string[] = [];
+  for (const item of raw) if (typeof item === 'string' && item) out.push(item);
+  return out;
+}
+
 /** Normalizes a text model row, keeping ONLY allowlisted fields. */
 function normalizeTextModel(raw: unknown): ProviderCatalogTextModelView | null {
   if (typeof raw !== 'object' || raw === null) return null;
@@ -229,7 +313,34 @@ function normalizeTextModel(raw: unknown): ProviderCatalogTextModelView | null {
       capabilities[key] = caps[key as string] === true;
     }
   }
-  return { id: row['id'], default: row['default'], capabilities };
+  const model: ProviderCatalogTextModelView = { id: row['id'], default: row['default'], capabilities };
+  if (typeof row['displayName'] === 'string' && row['displayName'].length > 0) {
+    model.displayName = row['displayName'];
+  }
+  if (isFiniteNumber(row['contextLength'])) model.contextLength = row['contextLength'];
+  const pricing = normalizePricing(row['pricing']);
+  if (pricing) model.pricing = pricing;
+  if (typeof row['isFree'] === 'boolean') model.isFree = row['isFree'];
+  if (typeof row['pricingVerified'] === 'boolean') model.pricingVerified = row['pricingVerified'];
+  if (typeof row['structuredVerified'] === 'boolean') model.structuredVerified = row['structuredVerified'];
+  if (typeof row['executionCompatible'] === 'boolean') model.executionCompatible = row['executionCompatible'];
+  if (
+    row['compatibility'] === 'compatible' ||
+    row['compatibility'] === 'experimental' ||
+    row['compatibility'] === 'unsupported'
+  ) {
+    model.compatibility = row['compatibility'];
+  }
+  if (typeof row['isRouter'] === 'boolean') model.isRouter = row['isRouter'];
+  const costClass = normalizeCostClass(row['costClass']);
+  if (costClass) model.costClass = costClass;
+  const inputModalities = normalizeModalities(row['inputModalities']);
+  if (inputModalities) model.inputModalities = inputModalities;
+  const outputModalities = normalizeModalities(row['outputModalities']);
+  if (outputModalities) model.outputModalities = outputModalities;
+  if (typeof row['vision'] === 'boolean') model.vision = row['vision'];
+  if (typeof row['largeContext'] === 'boolean') model.largeContext = row['largeContext'];
+  return model;
 }
 
 /** Normalizes a text provider row, keeping ONLY allowlisted fields. */
@@ -256,6 +367,13 @@ function normalizeTextProvider(raw: unknown): ProviderCatalogTextProviderView | 
     const model = normalizeTextModel(item);
     if (model) models.push(model);
   }
+  const discoveredModels: ProviderCatalogTextModelView[] = [];
+  if (Array.isArray(row['discoveredModels'])) {
+    for (const item of row['discoveredModels']) {
+      const model = normalizeTextModel(item);
+      if (model) discoveredModels.push(model);
+    }
+  }
   return {
     providerId: row['providerId'],
     name: row['name'],
@@ -269,6 +387,7 @@ function normalizeTextProvider(raw: unknown): ProviderCatalogTextProviderView | 
     // Fail-closed: an absent/malformed server capability is NOT session-capable.
     sessionKeySupported: row['sessionKeySupported'] === true,
     models,
+    ...(discoveredModels.length > 0 ? { discoveredModels } : {}),
   };
 }
 
@@ -306,7 +425,24 @@ function normalizeImageProvider(raw: unknown): ProviderCatalogImageProviderView 
     if (typeof item !== 'object' || item === null) continue;
     const model = item as Record<string, unknown>;
     if (typeof model['id'] === 'string' && model['id'].length > 0 && isBoolean(model['default'])) {
-      models.push({ id: model['id'], default: model['default'] });
+      const view: ProviderCatalogImageModelView = { id: model['id'], default: model['default'] };
+      if (typeof model['displayName'] === 'string' && model['displayName'].length > 0) {
+        view.displayName = model['displayName'];
+      }
+      const pricing = normalizePricing(model['pricing']);
+      if (pricing) view.pricing = pricing;
+      if (typeof model['isFree'] === 'boolean') view.isFree = model['isFree'];
+      if (typeof model['pricingVerified'] === 'boolean') view.pricingVerified = model['pricingVerified'];
+      if (
+        model['compatibility'] === 'compatible' ||
+        model['compatibility'] === 'experimental' ||
+        model['compatibility'] === 'unsupported'
+      ) {
+        view.compatibility = model['compatibility'];
+      }
+      const costClass = normalizeCostClass(model['costClass']);
+      if (costClass) view.costClass = costClass;
+      models.push(view);
     }
   }
   return {
@@ -390,11 +526,38 @@ export function normalizeProviderCatalog(payload: unknown): ProviderCatalogView 
   }
   // Deployment capability: fail closed (false) unless the server explicitly says true.
   const sessionByokSupported = catalogRow['sessionByokSupported'] === true;
+  const dynamicCatalog = normalizeDynamicCatalog(catalogRow['dynamicCatalog']);
   return {
     textProviders,
     imageProviders,
     selection: { text, image, userSelectionAllowed, executable },
     sessionByokSupported,
+    ...(dynamicCatalog ? { dynamicCatalog } : {}),
+  };
+}
+
+/** Normalizes the optional non-secret dynamic-catalog observability block. */
+function normalizeDynamicCatalog(raw: unknown): ProviderCatalogView['dynamicCatalog'] | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const row = raw as Record<string, unknown>;
+  const source =
+    row['source'] === 'live' || row['source'] === 'cached' || row['source'] === 'curated_fallback'
+      ? row['source']
+      : undefined;
+  if (!source) return undefined;
+  const count = (v: unknown): number => (isFiniteNumber(v) ? Math.floor(v) : 0);
+  return {
+    source,
+    fetchedAt: isFiniteNumber(row['fetchedAt']) ? row['fetchedAt'] : 0,
+    pricingFresh: row['pricingFresh'] === true,
+    textModelCount: count(row['textModelCount']),
+    freeTextModelCount: count(row['freeTextModelCount']),
+    verifiedFreeTextCount: count(row['verifiedFreeTextCount']),
+    selectableTextCount: count(row['selectableTextCount']),
+    imageModelCount: count(row['imageModelCount']),
+    freeImageModelCount: count(row['freeImageModelCount']),
+    selectableImageCount: count(row['selectableImageCount']),
+    freeRouterVerified: row['freeRouterVerified'] === true,
   };
 }
 

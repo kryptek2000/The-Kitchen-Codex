@@ -32,7 +32,7 @@
  */
 
 import { findRegisteredProvider, getRegisteredProviders } from "./providerRegistry.js";
-import { curatedTextModels } from "./roleModels.js";
+import { selectableTextModels } from "./roleModels.js";
 import {
   curatedImageModels,
   findRegisteredImageProvider,
@@ -83,9 +83,9 @@ function envValue(name: (typeof SELECTION_ENV_NAMES)[number]): string | undefine
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-/** The curated model set a text provider can execute (from role-model config). */
+/** The selectable model set a text provider can execute (curated + dynamic). */
 function textCuratedModels(providerId: string): Set<string> {
-  return new Set(curatedTextModels(providerId));
+  return new Set(selectableTextModels(providerId));
 }
 
 /** Validation-truth for the TEXT selection (does NOT consult runtime availability). */

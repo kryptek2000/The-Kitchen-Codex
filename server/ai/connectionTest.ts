@@ -56,7 +56,7 @@ import { classifyProviderError } from "./providerErrors.js";
 import { getRegisteredProviders, findRegisteredProvider } from "./providerRegistry.js";
 import { findRegisteredImageProvider } from "./imageProviderRegistry.js";
 import { DEEPSEEK_CHAT_ENDPOINT } from "./deepSeekProvider.js";
-import { roleModelsForProvider, curatedTextModels } from "./roleModels.js";
+import { roleModelsForProvider, selectableTextModels } from "./roleModels.js";
 import { getTextSelection, getImageSelection } from "./providerSelection.js";
 import { isSessionByokSupportedDeployment } from "./sessionByokDeployment.js";
 import { resolveCredential, type CredentialSource } from "./credentialResolver.js";
@@ -483,7 +483,7 @@ function resolveProbeModel(providerId: string, kind: "text" | "image"): string |
 export function curatedConnectionTestModels(providerId: string, kind: "text" | "image"): string[] {
   if (kind === "text") {
     if (!findRegisteredProvider(getRegisteredProviders(), providerId)) return [];
-    return curatedTextModels(providerId);
+    return selectableTextModels(providerId);
   }
   const registered = findRegisteredImageProvider(providerId);
   return registered ? [...(registered.models ?? [registered.defaultModel])] : [];

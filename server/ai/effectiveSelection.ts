@@ -38,14 +38,16 @@ import {
 import {
   findRegisteredImageProvider,
   getRegisteredImageProviders,
+  selectableImageModels,
   type RegisteredImageProvider,
 } from "./imageProviderRegistry.js";
-import { roleModelsForProvider, curatedTextModels } from "./roleModels.js";
+import { roleModelsForProvider, selectableTextModels } from "./roleModels.js";
 import type { AiOperation } from "./operations.js";
 import { operationRequiredCapabilities } from "./operations.js";
 import type { AiProvider } from "./types.js";
 import type { ImageProvider } from "./imageProvider.js";
 import type { SelectionIntent } from "./parseSelectionMetadata.js";
+import { openRouterPricingGuard } from "./openRouterCatalog.js";
 import {
   createSessionBoundImageProvider,
   createSessionBoundTextProvider,
@@ -72,6 +74,11 @@ export interface SelectedOperationMetadata {
    * `server_environment`.
    */
   credentialSource?: CredentialSource;
+  /**
+   * v0.8.0: the cost class the user ACKNOWLEDGED when selecting this model
+   * (non-secret). Used to detect a FREE -> PAID transition and fail closed.
+   */
+  selectedCostClass?: "free" | "budget" | "paid" | "variable";
 }
 
 /**
@@ -117,6 +124,7 @@ export function coerceSelectionInput(input: SelectionInput): CoercedSelectionInp
         const metadata: SelectedOperationMetadata = { mode: "user_selected", providerId: input.providerId };
         if (input.modelId) metadata.modelId = input.modelId;
         if (input.credentialSource) metadata.credentialSource = input.credentialSource;
+        if (input.selectedCostClass) metadata.selectedCostClass = input.selectedCostClass;
         return { invalid: false, explicit: true, metadata };
       }
       case "INVALID":
@@ -169,6 +177,10 @@ export function normalizeOperationSelection(raw: unknown): SelectedOperationMeta
   if (row["mode"] === "user_selected" || row["mode"] === "server_default") out.mode = row["mode"];
   if (providerId) out.providerId = providerId;
   if (modelId) out.modelId = modelId;
+  const costClass = row["selectedCostClass"];
+  if (costClass === "free" || costClass === "budget" || costClass === "paid" || costClass === "variable") {
+    out.selectedCostClass = costClass;
+  }
   return out;
 }
 
@@ -196,10 +208,10 @@ export function validateUserTextSelection(
   }
   const modelId = requested.modelId;
   if (modelId) {
-    // Model must be in the provider's CURATED role-model set (never invented).
-    // Uses the SAME shared server-owned truth as the catalog, connection-test
-    // allowlist, and server-managed pin validation.
-    if (!new Set(curatedTextModels(registered.provider.id)).has(modelId)) return null;
+    // Model must be in the provider's SERVER-OWNED selectable set (curated role
+    // models for most providers; curated + live normalized catalog for
+    // OpenRouter). An arbitrary client-supplied id is never a member.
+    if (!new Set(selectableTextModels(registered.provider.id)).has(modelId)) return null;
   }
   return modelId ? { providerId: registered.provider.id, modelId } : { providerId: registered.provider.id };
 }
@@ -239,6 +251,8 @@ export function resolveTextCandidateContext(
   candidates: AiCandidate[];
   source: "server_managed" | "user_selected" | "server_default";
   credentialSource: CredentialSource;
+  /** v0.8.0: set when a FREE-acknowledged selection is blocked (fail closed). */
+  pricingBlocked?: string;
 } {
   const coerced = coerceSelectionInput(userSelection);
 
@@ -283,6 +297,21 @@ export function resolveTextCandidateContext(
   const userCredentialSource: CredentialSource = coerced.metadata?.credentialSource ?? "server_environment";
   const userSel = validateUserTextSelection(coerced.metadata, regs, userCredentialSource);
   if (userSel) {
+    // v0.8.0 FREE -> PAID spend protection: a selection acknowledged as FREE
+    // that the current trusted catalog no longer verifies as free FAILS CLOSED.
+    const pricing = openRouterPricingGuard(
+      userSel.providerId,
+      userSel.modelId,
+      coerced.metadata?.selectedCostClass
+    );
+    if (pricing.ok === false) {
+      return {
+        candidates: [],
+        source: "user_selected",
+        credentialSource: userCredentialSource,
+        pricingBlocked: pricing.code,
+      };
+    }
     const registered = findRegisteredProvider(regs, userSel.providerId)!;
     if (userTextSelectionMatchesOperation(registered, userSel.modelId, operation)) {
       const models = userSel.modelId
@@ -388,8 +417,8 @@ export function validateUserImageSelection(
   }
   const modelId = requested.modelId;
   if (modelId) {
-    const curated: string[] = [...(registered.models ?? [registered.defaultModel])];
-    if (!curated.includes(modelId)) return null;
+    const selectable: string[] = selectableImageModels(registered);
+    if (!selectable.includes(modelId)) return null;
   }
   return modelId ? { providerId: registered.provider.id, modelId } : { providerId: registered.provider.id };
 }
@@ -405,6 +434,9 @@ export interface EffectiveImageSelection {
    * bounded "selection invalid" failure instead of "provider not configured".
    */
   invalidIntent: boolean;
+  /** v0.8.0: set when a FREE-acknowledged image selection is blocked. */
+  pricingBlocked?: string;
+  pricingMessage?: string;
 }
 
 /**
@@ -450,6 +482,22 @@ export function resolveEffectiveImageSelection(requested?: SelectionInput): Effe
   const userCredentialSource: CredentialSource = coerced.metadata?.credentialSource ?? "server_environment";
   const userSel = validateUserImageSelection(coerced.metadata, regs, userCredentialSource);
   if (userSel) {
+    // v0.8.0 FREE -> PAID spend protection (image surfaces).
+    const pricing = openRouterPricingGuard(
+      userSel.providerId,
+      userSel.modelId,
+      coerced.metadata?.selectedCostClass
+    );
+    if (pricing.ok === false) {
+      return {
+        provider: null,
+        model: undefined,
+        source: "user_selected",
+        invalidIntent: false,
+        pricingBlocked: pricing.code,
+        pricingMessage: pricing.message,
+      };
+    }
     const registered = findRegisteredImageProvider(userSel.providerId)!;
     if (userCredentialSource === "session_only") {
       // BYOK-5F: a REQUEST-SCOPED provider bound to the EXACT image provider's

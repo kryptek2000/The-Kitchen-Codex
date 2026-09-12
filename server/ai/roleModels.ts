@@ -23,6 +23,7 @@ import type { AiOperation } from "./operations.js";
 import { AI_OPERATIONS } from "./operations.js";
 import { MODEL_CONFIG } from "../modelConfig.js";
 import { OPENROUTER_STRUCTURED_MODEL } from "./openRouterProvider.js";
+import { openRouterSelectableTextModelIds } from "./openRouterCatalog.js";
 import { DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL } from "./deepSeekProvider.js";
 
 /** Gemini role models per operation (unchanged v0.6 behavior). */
@@ -110,6 +111,25 @@ export function curatedTextModels(providerId: string): string[] {
     for (const model of roleModelsForProvider(providerId, operation)) {
       if (!models.includes(model)) models.push(model);
     }
+  }
+  return models;
+}
+
+/**
+ * v0.8.0: the models a provider may be USER-SELECTED with. For OpenRouter this is
+ * the union of the curated role models AND the live, normalized dynamic catalog
+ * (structured-capable text models + the free router). Every other provider uses
+ * the curated set unchanged. The dynamic set is server-owned and bounded: an
+ * arbitrary client-supplied model id is never a member.
+ */
+export function selectableTextModels(providerId: string): string[] {
+  if (providerId !== "openrouter") return curatedTextModels(providerId);
+  const models: string[] = [];
+  for (const id of openRouterSelectableTextModelIds()) {
+    if (!models.includes(id)) models.push(id);
+  }
+  for (const id of curatedTextModels(providerId)) {
+    if (!models.includes(id)) models.push(id);
   }
   return models;
 }

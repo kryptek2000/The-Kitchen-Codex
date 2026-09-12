@@ -29,6 +29,7 @@ import { rankKitchenCandidatesOnServer } from "./kitchenRank.js";
 import { discoverKitchenRecipesOnServer } from "./kitchenDiscover.js";
 import { getAiProviderStatus } from "./ai/providerStatus.js";
 import { buildProviderCatalog } from "./ai/providerCatalog.js";
+import { refreshOpenRouterCatalog } from "./ai/openRouterCatalog.js";
 import { runConnectionTest } from "./ai/connectionTest.js";
 import { generateRecipeDraftOnServer, CreateRecipeValidationError } from "./createRecipe.js";
 import {
@@ -90,6 +91,9 @@ export function resolveImageProvider(opts: Pick<CreateAppOptions, 'imageProvider
   modelOverride: { model?: string };
   /** True when a PRESENT-but-malformed selection payload was rejected. */
   selectionInvalid: boolean;
+  /** v0.8.0: set when a FREE-acknowledged selection is blocked (fail closed). */
+  pricingBlocked?: string;
+  pricingMessage?: string;
 } {
   if (opts.imageProvider) {
     // Explicit test seam (DeterministicImageProvider in tests): keep the caller's
@@ -104,7 +108,13 @@ export function resolveImageProvider(opts: Pick<CreateAppOptions, 'imageProvider
   // execution) — it never falls back to Gemini or any other provider.
   const effective = resolveEffectiveImageSelection(userSelection);
   if (!effective.provider) {
-    return { provider: null, modelOverride: {}, selectionInvalid: effective.invalidIntent };
+    return {
+      provider: null,
+      modelOverride: {},
+      selectionInvalid: effective.invalidIntent,
+      ...(effective.pricingBlocked ? { pricingBlocked: effective.pricingBlocked } : {}),
+      ...(effective.pricingMessage ? { pricingMessage: effective.pricingMessage } : {}),
+    };
   }
   return { provider: effective.provider, modelOverride: { model: effective.model ?? "" }, selectionInvalid: false };
 }
@@ -744,11 +754,14 @@ export function createApp(opts: CreateAppOptions): express.Express {
     res.json({ providers: getAiProviderStatus() });
   });
 
-  // Read-only provider + model CATALOG (BYOK-1): the curated models each text
+  // Read-only provider + model CATALOG (BYOK-1 / v0.8.0): the models each text
   // provider can execute (with per-model effective capabilities) plus the
-  // production image provider's models/formats/byte limits. Secret-free,
-  // network-free, deterministic. Same gate as /api/providers.
-  app.get("/api/providers/catalog", requireAiAccessToken, (_req, res) => {
+  // production image provider's models/formats/byte limits. Secret-free. The
+  // OpenRouter dynamic catalog is refreshed (bounded, cached, fail-safe) before
+  // building so the response reflects live truth when available and the safe
+  // last-known/baseline truth otherwise. Never throws, never spends.
+  app.get("/api/providers/catalog", requireAiAccessToken, async (_req, res) => {
+    await refreshOpenRouterCatalog();
     res.json({ catalog: buildProviderCatalog() });
   });
 
@@ -902,8 +915,17 @@ export function createApp(opts: CreateAppOptions): express.Express {
         return res.status(400).json({ error: "Invalid request payload.", code: "INVALID_REQUEST" });
       }
       const userSelection = parseImageSelectionHeader(req.headers);
-      const { provider: imageProvider, modelOverride: imageModelOverride, selectionInvalid } = resolveImageProvider(opts, userSelection);
+      const { provider: imageProvider, modelOverride: imageModelOverride, selectionInvalid, pricingBlocked, pricingMessage } = resolveImageProvider(opts, userSelection);
       if (!imageProvider) {
+        if (pricingBlocked) {
+          // v0.8.0 FREE -> PAID spend protection: the acknowledged FREE model is
+          // no longer verified free (or pricing could not be verified). FAIL
+          // CLOSED with a distinct bounded code — never a silent paid execution.
+          return res.status(409).json({
+            error: pricingMessage ?? "This model is no longer free. Review and re-select it before using it.",
+            code: pricingBlocked,
+          });
+        }
         // A PRESENT-but-malformed selection payload is a distinct bounded
         // selection-invalid failure (never a provider attempt). Otherwise an
         // EXPLICIT but invalid server-managed image pin (unknown/disabled

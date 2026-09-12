@@ -111,13 +111,25 @@ export function getImageProvider(id: string): ImageProvider | undefined {
 }
 
 /**
+ * The selectable image-model set a registered provider can execute. This is the
+ * provider's CURATED set only: dynamic OpenRouter image-output models are NOT
+ * assumed compatible with the current `/api/v1/images` transport and are never
+ * made selectable (IMPORTANT-3). Discovered image models remain display-only.
+ */
+export function selectableImageModels(registered: RegisteredImageProvider | undefined): string[] {
+  if (!registered) return [];
+  const out: string[] = [];
+  for (const id of registered.models ?? [registered.defaultModel]) {
+    if (!out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
+/**
  * The curated image-model set a registered provider can execute (used by
  * server-managed image selection validation). Falls back to the default model
  * so legacy single-model providers stay valid.
  */
 export function curatedImageModels(registered: RegisteredImageProvider | undefined): Set<string> {
-  const set = new Set<string>();
-  if (!registered) return set;
-  for (const id of registered.models ?? [registered.defaultModel]) set.add(id);
-  return set;
+  return new Set(selectableImageModels(registered));
 }

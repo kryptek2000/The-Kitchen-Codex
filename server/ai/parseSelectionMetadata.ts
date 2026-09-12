@@ -54,7 +54,8 @@ export type SelectionInvalidReason =
   | "default_with_ids"
   | "malformed_field"
   | "invalid_credential_source"
-  | "default_with_credential_source";
+  | "default_with_credential_source"
+  | "default_with_cost_class";
 
 /** The strict, discriminated selection intent. */
 export type SelectionIntent =
@@ -66,6 +67,8 @@ export type SelectionIntent =
       modelId?: string;
       /** BYOK-5C non-secret credential source (never a secret). */
       credentialSource?: "server_environment" | "session_only";
+      /** v0.8.0 non-secret acknowledged cost class (FREE->PAID protection). */
+      selectedCostClass?: "free" | "budget" | "paid" | "variable";
     }
   | { kind: "INVALID"; reason: SelectionInvalidReason };
 
@@ -143,11 +146,24 @@ function parseSelectionHeader(raw: string | string[] | undefined): SelectionInte
     credentialSource = rawCredentialSource;
   }
 
+  // v0.8.0 selectedCostClass: optional, one of the four non-secret cost classes.
+  // Present-but-malformed/unknown is INVALID (fail closed).
+  const costClassPresent = Object.prototype.hasOwnProperty.call(row, "selectedCostClass");
+  let selectedCostClass: "free" | "budget" | "paid" | "variable" | undefined;
+  if (costClassPresent) {
+    const rawCost = row["selectedCostClass"];
+    if (rawCost !== "free" && rawCost !== "budget" && rawCost !== "paid" && rawCost !== "variable") {
+      return { kind: "INVALID", reason: "malformed_field" };
+    }
+    selectedCostClass = rawCost;
+  }
+
   // Explicit server_default MUST NOT carry provider/model ids or a credential
   // source (server_default never consumes a session key).
   if (mode === "server_default") {
     if (providerPresent || modelPresent) return { kind: "INVALID", reason: "default_with_ids" };
     if (credentialPresent) return { kind: "INVALID", reason: "default_with_credential_source" };
+    if (costClassPresent) return { kind: "INVALID", reason: "default_with_cost_class" };
     return { kind: "EXPLICIT_DEFAULT" };
   }
 
@@ -172,8 +188,8 @@ function parseSelectionHeader(raw: string | string[] | undefined): SelectionInte
   if (modelPresent && !modelId) return { kind: "INVALID", reason: "empty_model" };
 
   return modelId
-    ? { kind: "EXPLICIT_SELECTED", providerId, modelId, ...(credentialSource ? { credentialSource } : {}) }
-    : { kind: "EXPLICIT_SELECTED", providerId, ...(credentialSource ? { credentialSource } : {}) };
+    ? { kind: "EXPLICIT_SELECTED", providerId, modelId, ...(credentialSource ? { credentialSource } : {}), ...(selectedCostClass ? { selectedCostClass } : {}) }
+    : { kind: "EXPLICIT_SELECTED", providerId, ...(credentialSource ? { credentialSource } : {}), ...(selectedCostClass ? { selectedCostClass } : {}) };
 }
 
 function headerValue(headers: SelectionHeaderSource, name: string): string | string[] | undefined {
@@ -201,6 +217,7 @@ export function selectionIntentToMetadata(intent: SelectionIntent): SelectedOper
   const out: SelectedOperationMetadata = { mode: "user_selected", providerId: intent.providerId };
   if (intent.modelId) out.modelId = intent.modelId;
   if (intent.credentialSource) out.credentialSource = intent.credentialSource;
+  if (intent.selectedCostClass) out.selectedCostClass = intent.selectedCostClass;
   return out;
 }
 

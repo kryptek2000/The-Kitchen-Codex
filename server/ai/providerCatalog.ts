@@ -41,18 +41,31 @@ import {
   providerSecretIdForProvider,
 } from "../platform/ServerEnvironmentSecretAdapter.js";
 import type { SecretStorageScope } from "../../src/application/adapters/SecretAdapter.js";
-import { roleModelsForProvider, curatedTextModels } from "./roleModels.js";
+import { roleModelsForProvider, curatedTextModels, selectableTextModels } from "./roleModels.js";
 import { AI_OPERATIONS } from "./operations.js";
 import {
   getImageSelection,
   getTextSelection,
   type ProviderSelectionState,
 } from "./providerSelection.js";
-import { getRegisteredImageProviders, findRegisteredImageProvider } from "./imageProviderRegistry.js";
+import {
+  getRegisteredImageProviders,
+  findRegisteredImageProvider,
+  selectableImageModels,
+} from "./imageProviderRegistry.js";
 import type { GeneratedImageMime } from "../../src/core/recipeImage.js";
 import { connectionTestKindForProvider, type ConnectionTestKind } from "./connectionTest.js";
 import { findRegisteredProvider } from "./providerRegistry.js";
 import { isSessionByokSupportedDeployment } from "./sessionByokDeployment.js";
+import {
+  findOpenRouterCatalogModel,
+  getOpenRouterCatalogSnapshot,
+  isCompatibleOpenRouterTextModel,
+  isSelectableOpenRouterTextModel,
+  openRouterSelectableTextModelIds,
+  openRouterSelectableImageModelIds,
+  type OpenRouterCatalogModel,
+} from "./openRouterCatalog.js";
 import {
   supportsSessionBoundTextProvider,
   supportsSessionBoundImageProvider,
@@ -66,6 +79,37 @@ export interface ProviderCatalogTextModel {
   default: boolean;
   /** Per-model EFFECTIVE capabilities (provider baseline + curated override). */
   capabilities: AiCapabilities;
+  /** Non-secret display name (dynamic catalog; falls back to the id). */
+  displayName?: string;
+  /** Input context window length (dynamic catalog; 0 when unknown). */
+  contextLength?: number;
+  /** Normalized per-token pricing (dynamic catalog; secret-free). */
+  pricing?: {
+    promptPerToken: number | null;
+    completionPerToken: number | null;
+    imageOutputPerToken: number | null;
+    variable: boolean;
+  };
+  /** Proven zero-cost (dynamic catalog truth). */
+  isFree?: boolean;
+  /** True only when every pricing field was parsed finite from a live record. */
+  pricingVerified?: boolean;
+  /** Server-owned verified strict-structured compatibility. */
+  structuredVerified?: boolean;
+  /** True when the model may execute on the current Kitchen Codex transport. */
+  executionCompatible?: boolean;
+  /** UI compatibility state (never inferred optimistically). */
+  compatibility?: "compatible" | "experimental" | "unsupported";
+  /** An OpenRouter router id (e.g. `openrouter/free`). */
+  isRouter?: boolean;
+  /** User-facing cost class. */
+  costClass?: "free" | "budget" | "paid" | "variable";
+  /** Input/output modalities (dynamic catalog). */
+  inputModalities?: string[];
+  outputModalities?: string[];
+  /** Compact capability badges derived ONLY from catalog metadata. */
+  vision?: boolean;
+  largeContext?: boolean;
 }
 
 /** A read-only text-provider row in the catalog. */
@@ -96,12 +140,34 @@ export interface ProviderCatalogTextProvider {
   sessionKeySupported: boolean;
   /** Curated models this provider can actually execute (structurally unique). */
   models: ProviderCatalogTextModel[];
+  /**
+   * v0.8.0: DISCOVERED but NON-SELECTABLE models (informational only). These are
+   * never executable/selectable; the picker may display them as experimental.
+   */
+  discoveredModels?: ProviderCatalogTextModel[];
 }
 
 /** A single curated image model row in the catalog. */
 export interface ProviderCatalogImageModel {
   id: string;
   default: boolean;
+  /** Non-secret display name (dynamic catalog; falls back to the id). */
+  displayName?: string;
+  /** Normalized per-token pricing (dynamic catalog; secret-free). */
+  pricing?: {
+    promptPerToken: number | null;
+    completionPerToken: number | null;
+    imageOutputPerToken: number | null;
+    variable: boolean;
+  };
+  /** Proven zero-cost (dynamic catalog truth). */
+  isFree?: boolean;
+  /** True only when every pricing field was parsed finite from a live record. */
+  pricingVerified?: boolean;
+  /** UI compatibility state (curated `/images` transport allowlist). */
+  compatibility?: "compatible" | "experimental" | "unsupported";
+  /** User-facing cost class. */
+  costClass?: "free" | "budget" | "paid" | "variable";
 }
 
 /** A read-only image-provider row in the catalog. */
@@ -179,6 +245,23 @@ export interface ProviderCatalog {
    * controls. The UI MUST NOT infer this from the browser hostname.
    */
   sessionByokSupported: boolean;
+  /**
+   * v0.8.0: non-secret dynamic OpenRouter catalog observability (source, counts,
+   * fetch time). Never contains a secret, URL, or raw upstream payload.
+   */
+  dynamicCatalog?: {
+    source: "live" | "cached" | "curated_fallback";
+    fetchedAt: number;
+    pricingFresh: boolean;
+    textModelCount: number;
+    freeTextModelCount: number;
+    verifiedFreeTextCount: number;
+    selectableTextCount: number;
+    imageModelCount: number;
+    freeImageModelCount: number;
+    selectableImageCount: number;
+    freeRouterVerified: boolean;
+  };
 }
 
 /**
@@ -230,13 +313,13 @@ function imageSelectionExecutable(selection: ProviderSelectionState): boolean {
 }
 
 /**
- * The curated text models for a provider come EXCLUSIVELY from the shared
- * server-owned helper (`curatedTextModels`), the exact source connection-test,
- * user-selection, and server-pin validation use. The catalog never probes or
- * invents models.
+ * The selectable text models for a provider: curated role models for most
+ * providers; curated + live normalized catalog for OpenRouter (v0.8.0). This is
+ * the exact source connection-test, user-selection, and server-pin validation
+ * use, so all consumers agree by construction.
  */
 function curatedModelsForProvider(registered: RegisteredProvider): string[] {
-  return curatedTextModels(registered.provider.id);
+  return selectableTextModels(registered.provider.id);
 }
 
 /** Computes the models whose FIRST role occurrence marks them as the primary candidate. */
@@ -256,13 +339,54 @@ function textProviderRows(regs: RegisteredProvider[]): ProviderCatalogTextProvid
     const enabled = registered.enabled !== false;
     const available = registered.provider.isAvailable();
     const primary = primaryRoleModels(registered);
-    const models: ProviderCatalogTextModel[] = curatedModelsForProvider(registered).map(
-      (model) => ({
+    const isOpenRouter = registered.provider.id === "openrouter";
+
+    const toRow = (model: OpenRouterCatalogModel): ProviderCatalogTextModel => ({
+      id: model.modelId,
+      default: primary.has(model.modelId),
+      capabilities: effectiveCapabilities(registered, model.modelId),
+      displayName: model.displayName,
+      contextLength: model.contextLength,
+      pricing: model.pricing,
+      isFree: model.isFree,
+      pricingVerified: model.pricingVerified,
+      structuredVerified: model.structuredVerified,
+      executionCompatible: model.executionCompatible,
+      compatibility: model.executionCompatible
+        ? "compatible"
+        : model.capabilities.structuredOutput
+        ? "experimental"
+        : "unsupported",
+      isRouter: model.isRouter,
+      costClass: model.costClass,
+      inputModalities: model.inputModalities,
+      outputModalities: model.outputModalities,
+      vision: model.capabilities.vision,
+      largeContext: model.capabilities.largeContext,
+    });
+
+    const models: ProviderCatalogTextModel[] = curatedModelsForProvider(registered).map((model) => {
+      if (isOpenRouter) {
+        const dyn = findOpenRouterCatalogModel(model);
+        if (dyn) return toRow(dyn);
+      }
+      return {
         id: model,
         default: primary.has(model),
         capabilities: effectiveCapabilities(registered, model),
-      })
-    );
+      };
+    });
+
+    // Informational-only discovered models (never selectable/executable).
+    let discoveredModels: ProviderCatalogTextModel[] | undefined;
+    if (isOpenRouter) {
+      const snap = getOpenRouterCatalogSnapshot();
+      discoveredModels = snap.textModels
+        .filter((m) => isCompatibleOpenRouterTextModel(m) && !isSelectableOpenRouterTextModel(m))
+        .slice(0, 250)
+        .map(toRow);
+    }
+
     return {
       providerId: registered.provider.id,
       name: registered.provider.name,
@@ -275,6 +399,7 @@ function textProviderRows(regs: RegisteredProvider[]): ProviderCatalogTextProvid
       selectable: enabled && available && models.length > 0,
       sessionKeySupported: supportsSessionBoundTextProvider(registered.provider.id),
       models,
+      ...(discoveredModels ? { discoveredModels } : {}),
     };
   });
 }
@@ -290,13 +415,27 @@ function imageProviderRows(): ProviderCatalogImageProvider[] {
   return getRegisteredImageProviders().map((registered) => {
     const capabilities = registered.provider.capabilities;
     const secretId = providerSecretIdForProvider(registered.provider.id);
-    const curated = registered.models ?? [registered.defaultModel];
+    const selectableModels = selectableImageModels(registered);
     const enabled = registered.enabled !== false;
     const available = registered.provider.isAvailable();
-    const models: ProviderCatalogImageModel[] = curated.map((model) => ({
-      id: model,
-      default: model === registered.defaultModel,
-    }));
+    const models: ProviderCatalogImageModel[] = selectableModels.map((model) => {
+      const row: ProviderCatalogImageModel = {
+        id: model,
+        default: model === registered.defaultModel,
+        compatibility: "compatible",
+      };
+      if (registered.provider.id === "openrouter-image") {
+        const dyn = findOpenRouterCatalogModel(model);
+        if (dyn) {
+          row.displayName = dyn.displayName;
+          row.pricing = dyn.pricing;
+          row.isFree = dyn.isFree;
+          row.pricingVerified = dyn.pricingVerified;
+          row.costClass = dyn.costClass;
+        }
+      }
+      return row;
+    });
     return {
       providerId: registered.provider.id,
       name: registered.provider.name,
@@ -304,7 +443,7 @@ function imageProviderRows(): ProviderCatalogImageProvider[] {
       enabled,
       available,
       connectionTest: connectionTestKindForProvider(registered.provider.id, "image"),
-      selectable: enabled && available && curated.length > 0,
+      selectable: enabled && available && selectableModels.length > 0,
       sessionKeySupported: supportsSessionBoundImageProvider(registered.provider.id),
       imageGeneration: capabilities.imageGeneration,
       formats: [...(capabilities.formats ?? [])],
@@ -322,6 +461,7 @@ function imageProviderRows(): ProviderCatalogImageProvider[] {
 export function buildProviderCatalog(): ProviderCatalog {
   const textSelection = getTextSelection();
   const imageSelection = getImageSelection();
+  const snapshot = getOpenRouterCatalogSnapshot();
   return {
     textProviders: textProviderRows(getRegisteredProviders()),
     imageProviders: imageProviderRows(),
@@ -338,5 +478,20 @@ export function buildProviderCatalog(): ProviderCatalog {
       },
     },
     sessionByokSupported: isSessionByokSupportedDeployment(),
+    dynamicCatalog: {
+      source: snapshot.source,
+      fetchedAt: snapshot.fetchedAt,
+      pricingFresh: snapshot.pricingFresh,
+      textModelCount: snapshot.textModels.length,
+      freeTextModelCount: snapshot.textModels.filter((m) => m.isFree).length,
+      verifiedFreeTextCount: snapshot.textModels.filter((m) => m.isFree && m.pricingVerified).length,
+      selectableTextCount: openRouterSelectableTextModelIds().length,
+      imageModelCount: snapshot.imageModels.length,
+      freeImageModelCount: snapshot.imageModels.filter((m) => m.isFree).length,
+      selectableImageCount: openRouterSelectableImageModelIds().length,
+      freeRouterVerified: snapshot.textModels.some(
+        (m) => m.isRouter && m.isFree && m.pricingVerified
+      ),
+    },
   };
 }

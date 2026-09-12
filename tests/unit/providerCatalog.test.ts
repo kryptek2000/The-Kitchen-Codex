@@ -83,13 +83,15 @@ describe("provider catalog (BYOK-1) — shape and ordering", () => {
     expect(gemini.imageGeneration).toBe(true);
     expect(gemini.formats).toEqual(["image/png"]);
     expect(gemini.maxBytes).toBe(4 * 1024 * 1024);
-    expect(gemini.models).toEqual([{ id: "gemini-2.5-flash-image", default: true }]);
+    expect(gemini.models.map((m) => ({ id: m.id, default: m.default }))).toEqual([
+      { id: "gemini-2.5-flash-image", default: true },
+    ]);
     const openRouter = catalog.imageProviders.find((p) => p.providerId === "openrouter-image")!;
     expect(openRouter.imageGeneration).toBe(true);
     // OpenRouter image models produce raster containers; formats are within the allowlist.
     expect(openRouter.formats).toEqual(["image/png", "image/jpeg", "image/webp"]);
     expect(openRouter.maxBytes).toBe(4 * 1024 * 1024);
-    expect(openRouter.models).toEqual([
+    expect(openRouter.models.map((m) => ({ id: m.id, default: m.default }))).toEqual([
       { id: "google/gemini-2.5-flash-image", default: true },
       { id: "bytedance-seed/seedream-4.5", default: false },
     ]);
@@ -150,15 +152,19 @@ describe("provider catalog (BYOK-1) — curated model truth", () => {
     }
   });
 
-  it("OpenRouter has one curated model; per-model capabilities match the registry override", async () => {
+  it("OpenRouter exposes only the server-owned curated model; dynamic models are NOT selectable", async () => {
     const { catalog } = await freshCatalog({ GEMINI_API_KEY: SENTINEL, OPENROUTER_API_KEY: SENTINEL });
     const openRouter = byProviderId(catalog.textProviders)["openrouter"] as ProviderCatalogTextProvider;
-    expect(openRouter.models).toHaveLength(1);
-    expect(openRouter.models[0]).toMatchObject({
-      id: "openai/gpt-4o-mini",
+    // Curated fallback (no live fetch in tests): ONLY the curated structured model
+    // is selectable. openrouter/free is NEVER force-inserted or labeled FREE.
+    expect(openRouter.models.map((m) => m.id)).toEqual(["openai/gpt-4o-mini"]);
+    const structured = openRouter.models.find((m) => m.id === "openai/gpt-4o-mini")!;
+    expect(structured).toMatchObject({
       default: true,
       capabilities: { reasoning: false, structuredOutput: true, recipeGeneration: true, webSearch: false },
     });
+    expect(structured.structuredVerified).toBe(true);
+    expect(openRouter.models.some((m) => m.id === "openrouter/free")).toBe(false);
   });
 
   it("DeepSeek models are curated role models with reasoning but no structured output", async () => {
@@ -183,9 +189,10 @@ describe("provider catalog (BYOK-1) — curated model truth", () => {
     }
   });
 
-  it("derives all catalog models from the curated role-model set (never invents models)", async () => {
+  it("derives all catalog models from the server-owned selectable set (never invents models)", async () => {
     const { catalog, registry } = await freshCatalog({});
     const roleCandidates = await import("../../server/ai/roleCandidates.js");
+    const roleModels = await import("../../server/ai/roleModels.js");
     const operations = [
       "kitchenInterpret",
       "kitchenRank",
@@ -200,13 +207,19 @@ describe("provider catalog (BYOK-1) — curated model truth", () => {
       for (const operation of operations) {
         for (const id of roleCandidates.roleModelsForProvider(provider.providerId, operation)) curated.add(id);
       }
+      // v0.8.0: OpenRouter additionally exposes the server-owned dynamic catalog
+      // (baseline in tests). Every catalog row must still be in the single shared
+      // selectable set — an arbitrary client id is never a member.
+      const selectable = new Set(roleModels.selectableTextModels(provider.providerId));
       if (provider.models.length === 0) {
-        // Providers with no curated role models must be empty in the catalog.
         expect(curated.size).toBe(0);
         continue;
       }
       for (const model of provider.models) {
-        expect(curated.has(model.id)).toBe(true);
+        expect(selectable.has(model.id)).toBe(true);
+        if (provider.providerId !== "openrouter") {
+          expect(curated.has(model.id)).toBe(true);
+        }
       }
     }
     const reg = registry.find((r) => r.provider.id === "openrouter")!;
