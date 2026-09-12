@@ -28,6 +28,21 @@ import {
 /** The single application-backed catalog path (read-only). */
 export const PROVIDER_CATALOG_API_PATH = '/api/providers/catalog';
 
+/**
+ * v0.8.x explicit OpenRouter capability-verification path (server-validated).
+ * The provider is FIXED to `openrouter`; only the model id is caller-supplied.
+ */
+export const OPENROUTER_MODEL_VERIFY_API_PATH = '/api/providers/openrouter/models';
+
+/** Builds the exact verification path for one model id (segments encoded). */
+export function openRouterModelVerifyPath(modelId: string): string {
+  const encoded = modelId
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+  return `${OPENROUTER_MODEL_VERIFY_API_PATH}/${encoded}/verify`;
+}
+
 /** The probe surface the server performs for a provider (non-secret, non-proprietary). */
 export type ConnectionTestKindView = 'network_probe' | 'credential_check' | 'unavailable';
 
@@ -58,6 +73,8 @@ export interface ProviderCatalogTextModelView {
   pricingVerified?: boolean;
   /** Server-owned verified strict-structured compatibility. */
   structuredVerified?: boolean;
+  /** True when a CURRENT runtime capability verification made this model executable. */
+  capabilityVerified?: boolean;
   /** True when the model may execute on the current Kitchen Codex transport. */
   executionCompatible?: boolean;
   /** UI compatibility state. */
@@ -323,6 +340,7 @@ function normalizeTextModel(raw: unknown): ProviderCatalogTextModelView | null {
   if (typeof row['isFree'] === 'boolean') model.isFree = row['isFree'];
   if (typeof row['pricingVerified'] === 'boolean') model.pricingVerified = row['pricingVerified'];
   if (typeof row['structuredVerified'] === 'boolean') model.structuredVerified = row['structuredVerified'];
+  if (typeof row['capabilityVerified'] === 'boolean') model.capabilityVerified = row['capabilityVerified'];
   if (typeof row['executionCompatible'] === 'boolean') model.executionCompatible = row['executionCompatible'];
   if (
     row['compatibility'] === 'compatible' ||

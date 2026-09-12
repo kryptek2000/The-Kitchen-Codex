@@ -47,7 +47,7 @@ import { operationRequiredCapabilities } from "./operations.js";
 import type { AiProvider } from "./types.js";
 import type { ImageProvider } from "./imageProvider.js";
 import type { SelectionIntent } from "./parseSelectionMetadata.js";
-import { openRouterPricingGuard, type PricingGuardCode } from "./openRouterCatalog.js";
+import { openRouterPricingGuard, findOpenRouterCatalogModel, type PricingGuardCode } from "./openRouterCatalog.js";
 import {
   createSessionBoundImageProvider,
   createSessionBoundTextProvider,
@@ -406,13 +406,32 @@ export function textSelectionPricingBlock(
   if (coerced.invalid || !coerced.metadata) return undefined;
   const credentialSource: CredentialSource = coerced.metadata.credentialSource ?? "server_environment";
   const userSel = validateUserTextSelection(coerced.metadata, regs, credentialSource);
-  if (!userSel) return undefined;
-  const guard = openRouterPricingGuard(
-    userSel.providerId,
-    userSel.modelId,
-    coerced.metadata.selectedCostClass
-  );
-  if (guard.ok === false) return { code: guard.code, message: guard.message };
+  if (userSel) {
+    const guard = openRouterPricingGuard(
+      userSel.providerId,
+      userSel.modelId,
+      coerced.metadata.selectedCostClass
+    );
+    if (guard.ok === false) return { code: guard.code, message: guard.message };
+    return undefined;
+  }
+  // v0.8.x: a selection that is no longer SELECTABLE may still be a KNOWN catalog
+  // model referenced by a FREE acknowledgement (e.g. a previously capability-
+  // verified dynamic model that became PAID, or whose verification was
+  // invalidated). Surface the pricing reason explicitly instead of silently
+  // collapsing to the deterministic path. An UNKNOWN/arbitrary model id keeps its
+  // normal fail-closed behavior (never a pricing block).
+  const meta = coerced.metadata;
+  if (
+    coerced.explicit &&
+    meta.providerId === "openrouter" &&
+    meta.modelId &&
+    meta.selectedCostClass === "free" &&
+    findOpenRouterCatalogModel(meta.modelId)
+  ) {
+    const guard = openRouterPricingGuard(meta.providerId, meta.modelId, meta.selectedCostClass);
+    if (guard.ok === false) return { code: guard.code, message: guard.message };
+  }
   return undefined;
 }
 

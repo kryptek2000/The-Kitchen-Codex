@@ -60,6 +60,7 @@ import { isSessionByokSupportedDeployment } from "./sessionByokDeployment.js";
 import {
   findOpenRouterCatalogModel,
   getOpenRouterCatalogSnapshot,
+  isCapabilityVerifiedOpenRouterTextModel,
   isCompatibleOpenRouterTextModel,
   isSelectableOpenRouterTextModel,
   openRouterSelectableTextModelIds,
@@ -96,6 +97,8 @@ export interface ProviderCatalogTextModel {
   pricingVerified?: boolean;
   /** Server-owned verified strict-structured compatibility. */
   structuredVerified?: boolean;
+  /** True when a CURRENT runtime capability verification made this model executable. */
+  capabilityVerified?: boolean;
   /** True when the model may execute on the current Kitchen Codex transport. */
   executionCompatible?: boolean;
   /** UI compatibility state (never inferred optimistically). */
@@ -341,29 +344,38 @@ function textProviderRows(regs: RegisteredProvider[]): ProviderCatalogTextProvid
     const primary = primaryRoleModels(registered);
     const isOpenRouter = registered.provider.id === "openrouter";
 
-    const toRow = (model: OpenRouterCatalogModel): ProviderCatalogTextModel => ({
-      id: model.modelId,
-      default: primary.has(model.modelId),
-      capabilities: effectiveCapabilities(registered, model.modelId),
-      displayName: model.displayName,
-      contextLength: model.contextLength,
-      pricing: model.pricing,
-      isFree: model.isFree,
-      pricingVerified: model.pricingVerified,
-      structuredVerified: model.structuredVerified,
-      executionCompatible: model.executionCompatible,
-      compatibility: model.executionCompatible
-        ? "compatible"
-        : model.capabilities.structuredOutput
-        ? "experimental"
-        : "unsupported",
-      isRouter: model.isRouter,
-      costClass: model.costClass,
-      inputModalities: model.inputModalities,
-      outputModalities: model.outputModalities,
-      vision: model.capabilities.vision,
-      largeContext: model.capabilities.largeContext,
-    });
+    const toRow = (model: OpenRouterCatalogModel): ProviderCatalogTextModel => {
+      // Dynamic text executability is computed at call time so a just-recorded
+      // capability verification is reflected without a catalog refetch. Image
+      // executability stays the curated transport allowlist.
+      const isImage = model.capabilities.imageGeneration;
+      const selectable = isImage ? model.executionCompatible : isSelectableOpenRouterTextModel(model);
+      const capabilityVerified = !isImage && isCapabilityVerifiedOpenRouterTextModel(model);
+      return {
+        id: model.modelId,
+        default: primary.has(model.modelId),
+        capabilities: effectiveCapabilities(registered, model.modelId),
+        displayName: model.displayName,
+        contextLength: model.contextLength,
+        pricing: model.pricing,
+        isFree: model.isFree,
+        pricingVerified: model.pricingVerified,
+        structuredVerified: model.structuredVerified,
+        capabilityVerified,
+        executionCompatible: selectable,
+        compatibility: selectable
+          ? "compatible"
+          : model.capabilities.structuredOutput
+          ? "experimental"
+          : "unsupported",
+        isRouter: model.isRouter,
+        costClass: model.costClass,
+        inputModalities: model.inputModalities,
+        outputModalities: model.outputModalities,
+        vision: model.capabilities.vision,
+        largeContext: model.capabilities.largeContext,
+      };
+    };
 
     const models: ProviderCatalogTextModel[] = curatedModelsForProvider(registered).map((model) => {
       if (isOpenRouter) {

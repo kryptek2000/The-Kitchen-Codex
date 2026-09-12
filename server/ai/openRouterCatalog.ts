@@ -32,6 +32,7 @@ import { OPENROUTER_STRUCTURED_MODEL } from "./openRouterProvider.js";
 import {
   OPENROUTER_IMAGE_MODELS,
 } from "./openRouterImageProvider.js";
+import { isCapabilityVerified } from "./capabilityVerificationStore.js";
 
 /** OpenRouter's fixed, official model-catalog endpoint (never configurable). */
 export const OPENROUTER_MODELS_ENDPOINT = "https://openrouter.ai/api/v1/models";
@@ -372,13 +373,55 @@ export function isCompatibleOpenRouterTextModel(model: OpenRouterCatalogModel): 
 }
 
 /**
- * A text model is SELECTABLE only when it is on the server-owned VERIFIED strict
- * structured allowlist. Parameter names alone are never trusted. (The verified
- * allowlist is authoritative, so the fallback curated model stays selectable
- * even though it carries no discovered parameter metadata.)
+ * The stable per-model catalog fingerprint a capability verification is bound to.
+ * It covers the pricing truth AND the capability-relevant metadata, so a price
+ * change, a FREE -> PAID transition, or a capability/metadata change all change
+ * the fingerprint and invalidate any stored verification.
+ */
+export function openRouterModelFingerprint(model: OpenRouterCatalogModel): string {
+  return JSON.stringify({
+    modelId: model.modelId,
+    pricing: model.pricing,
+    isFree: model.isFree,
+    pricingVerified: model.pricingVerified,
+    costClass: model.costClass,
+    capabilities: model.capabilities,
+    supportedParameters: model.supportedParameters,
+    inputModalities: model.inputModalities,
+    outputModalities: model.outputModalities,
+    contextLength: model.contextLength,
+    isRouter: model.isRouter,
+  });
+}
+
+/**
+ * True when a dynamically discovered text model has a CURRENT, fingerprint-bound
+ * successful capability verification. Requires the trusted catalog price truth to
+ * be FRESH and the model to be VERIFIED FREE right now. Routers are NEVER
+ * eligible (their request-to-request routing cannot be pinned to a compatible
+ * model). This is the ONLY way a non-allowlisted dynamic model becomes
+ * executable — browser/client claims can never set it.
+ */
+export function isCapabilityVerifiedOpenRouterTextModel(
+  model: OpenRouterCatalogModel,
+  now: number = Date.now()
+): boolean {
+  if (model.isRouter || model.capabilities.imageGeneration) return false;
+  if (!model.isFree || model.costClass !== "free" || !model.pricingVerified) return false;
+  if (!getOpenRouterCatalogSnapshot().pricingFresh) return false;
+  return isCapabilityVerified("openrouter", model.modelId, openRouterModelFingerprint(model), now);
+}
+
+/**
+ * A text model is SELECTABLE when it is EITHER on the server-owned VERIFIED
+ * strict-structured allowlist OR it has a CURRENT successful runtime capability
+ * verification bound to fresh, verified-FREE pricing. Parameter names alone are
+ * never trusted. (The verified allowlist is authoritative, so the fallback
+ * curated model stays selectable even though it carries no discovered parameter
+ * metadata.)
  */
 export function isSelectableOpenRouterTextModel(model: OpenRouterCatalogModel): boolean {
-  return model.structuredVerified;
+  return model.structuredVerified || isCapabilityVerifiedOpenRouterTextModel(model);
 }
 
 /** An image model is DISCOVERABLE when it emits images (not a variable router). */
@@ -697,9 +740,11 @@ export function openRouterSelectableImageModelIds(): string[] {
 
 /**
  * Dynamic capability truth for an OpenRouter text model. `structuredOutput` is
- * TRUE only for the server-owned VERIFIED allowlist; arbitrary catalog candidates
- * are NOT trusted for structured Kitchen Codex operations. recipeGeneration and
- * webSearch are never claimed.
+ * TRUE only for the server-owned VERIFIED allowlist OR a model with a CURRENT
+ * runtime capability verification. Arbitrary catalog candidates are NOT trusted
+ * for structured Kitchen Codex operations. recipeGeneration and webSearch are
+ * never claimed: a trivial strict-schema probe does not prove recipe-invention
+ * quality, and OpenRouter has no grounded web search.
  */
 export function openRouterDynamicCapabilities(
   modelId: string
@@ -708,7 +753,7 @@ export function openRouterDynamicCapabilities(
   if (!model) return undefined;
   return {
     reasoning: model.capabilities.reasoning,
-    structuredOutput: model.structuredVerified,
+    structuredOutput: isSelectableOpenRouterTextModel(model),
     recipeGeneration: false,
     webSearch: false,
   };

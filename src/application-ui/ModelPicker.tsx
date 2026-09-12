@@ -18,9 +18,12 @@ import {
   countFreeModels,
   formatImageModelPrice,
   formatModelPrice,
+  freeVerificationLabel,
   modelBadges,
+  modelCostClass,
   pickerModels,
   type ModelPickerGroup,
+  type ModelVerificationView,
   type SurfaceModelOption,
 } from './modelPicker';
 
@@ -39,6 +42,16 @@ export interface ModelPickerProps {
   onChange: (modelId: string | undefined) => void;
   /** Test/SSR affordance: render the panel expanded. */
   defaultOpen?: boolean;
+  /**
+   * Explicit capability-verification state per model id (text surface only).
+   * Never persisted; supplied by the parent so the panel stays presentational.
+   */
+  verifications?: Record<string, ModelVerificationView>;
+  /**
+   * Explicit "Verify for Kitchen Codex" action for a discovered FREE text model.
+   * NEVER invoked automatically — only from the user's click.
+   */
+  onVerifyModel?: (modelId: string) => void;
 }
 
 /** Finds a model row by id. */
@@ -47,7 +60,7 @@ function findModel(models: SurfaceModelOption[], id: string | undefined): Surfac
   return models.find((m) => m.id === id);
 }
 
-export function ModelPicker({ kind, models, discoveredModels = [], value, onChange, defaultOpen = false }: ModelPickerProps) {
+export function ModelPicker({ kind, models, discoveredModels = [], value, onChange, defaultOpen = false, verifications = {}, onVerifyModel }: ModelPickerProps) {
   const [open, setOpen] = useState(defaultOpen);
   const [query, setQuery] = useState('');
   const [group, setGroup] = useState<ModelPickerGroup>('free');
@@ -193,24 +206,60 @@ export function ModelPicker({ kind, models, discoveredModels = [], value, onChan
                 Discovered — not supported by the current Kitchen Codex runtime
               </div>
               <ul className="max-h-40 overflow-y-auto space-y-0.5">
-                {discovered.map((model) => (
-                  <li
-                    key={`discovered:${model.id}`}
-                    data-model-option-discovered={model.id}
-                    aria-disabled="true"
-                    className="px-2 py-1.5 rounded-lg opacity-60"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[12px] text-gray-300 truncate">
-                        {model.displayName || model.id}
-                      </span>
-                      <span className="text-[11px] text-gray-500 shrink-0">
-                        {priceLabel(model)}
-                      </span>
-                    </div>
-                    <div className="text-[10px] text-gray-500 font-mono truncate">{model.id}</div>
-                  </li>
-                ))}
+                {discovered.map((model) => {
+                  // Only FREE discovered TEXT models are eligible for an explicit
+                  // capability verification. The control is NEVER auto-run.
+                  const verifiable =
+                    kind === 'text' && modelCostClass(model) === 'free' && Boolean(onVerifyModel);
+                  const verification = verifications[model.id];
+                  const state = verification?.state ?? 'idle';
+                  return (
+                    <li
+                      key={`discovered:${model.id}`}
+                      data-model-option-discovered={model.id}
+                      aria-disabled={!verifiable}
+                      className="px-2 py-1.5 rounded-lg opacity-80"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[12px] text-gray-300 truncate">
+                          {model.displayName || model.id}
+                        </span>
+                        <span className="text-[11px] text-gray-500 shrink-0">
+                          {priceLabel(model)}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-gray-500 font-mono truncate">{model.id}</div>
+                      {verifiable && (
+                        <div className="mt-1 flex flex-wrap items-center gap-2">
+                          <span
+                            data-model-verification-state={model.id}
+                            className={`text-[10px] ${
+                              state === 'verified'
+                                ? 'text-emerald-300'
+                                : state === 'failed'
+                                ? 'text-red-300'
+                                : 'text-gray-400'
+                            }`}
+                          >
+                            {freeVerificationLabel(model, verification)}
+                          </span>
+                          <button
+                            type="button"
+                            data-model-verify={model.id}
+                            onClick={() => onVerifyModel?.(model.id)}
+                            disabled={state === 'verifying'}
+                            className="px-2 py-0.5 rounded-md text-[10px] font-medium bg-white/10 text-gray-200 hover:bg-white/15 border border-white/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            {state === 'verifying' ? 'Verifying…' : 'Verify for Kitchen Codex'}
+                          </button>
+                        </div>
+                      )}
+                      {verifiable && state === 'failed' && verification?.message && (
+                        <div className="text-[10px] text-red-300/90 mt-0.5">{verification.message}</div>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           )}

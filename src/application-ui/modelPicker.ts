@@ -27,6 +27,8 @@ export interface SurfaceModelOption {
   isFree?: boolean;
   pricingVerified?: boolean;
   structuredVerified?: boolean;
+  /** True when a CURRENT runtime capability verification made this model executable. */
+  capabilityVerified?: boolean;
   executionCompatible?: boolean;
   compatibility?: 'compatible' | 'experimental' | 'unsupported';
   isRouter?: boolean;
@@ -102,6 +104,7 @@ export function modelBadges(model: SurfaceModelOption): string[] {
   if (model.pricingVerified === false) badges.push('Pricing unverified');
   if (model.capabilities?.reasoning) badges.push('Reasoning');
   if (model.structuredVerified) badges.push('Structured Output');
+  if (model.capabilityVerified) badges.push('Verified');
   if (model.vision) badges.push('Vision');
   if (model.largeContext) badges.push('Large Context');
   if (model.compatibility === 'experimental') badges.push('Experimental');
@@ -173,4 +176,26 @@ export function pickerModels(
 /** Count of free models in a set (used for the "no free image models" truth). */
 export function countFreeModels(models: SurfaceModelOption[]): number {
   return models.filter((m) => modelCostClass(m) === 'free').length;
+}
+
+/** The per-model capability-verification UI state (never persisted). */
+export type ModelVerificationState = 'idle' | 'verifying' | 'verified' | 'failed';
+
+/** A bounded, non-secret verification view for one model. */
+export interface ModelVerificationView {
+  state: ModelVerificationState;
+  /** Bounded failure text (never a raw provider error). */
+  message?: string;
+}
+
+/** A concise "FREE · <verification state>" label for a discovered model row. */
+export function freeVerificationLabel(
+  model: SurfaceModelOption,
+  verification: ModelVerificationView | undefined
+): string {
+  const state = verification?.state ?? 'idle';
+  if (state === 'verifying') return 'FREE · Verifying…';
+  if (state === 'verified') return 'FREE · Verified';
+  if (state === 'failed') return 'FREE · Verification failed';
+  return 'FREE · Not verified';
 }

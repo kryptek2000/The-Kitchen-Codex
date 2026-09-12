@@ -529,3 +529,16 @@ export const sessionKeyStatusRateLimiter = sessionKeyRateLimiter(
   "sessionkeystatus",
   "Too many session key status requests. Please wait a moment before trying again."
 );
+
+/**
+ * Explicit OpenRouter capability-verification limiter (v0.8.x). A verification
+ * makes a real (free-gated) provider request, so it is tightly bounded to a few
+ * attempts per model/provider per minute per client. Configurable via
+ * `CAPABILITY_VERIFY_RATE_LIMIT` (default 4/min).
+ */
+export const capabilityVerifyRateLimiter = sessionKeyRateLimiter(
+  "CAPABILITY_VERIFY_RATE_LIMIT",
+  4,
+  "capverify",
+  "Too many model verification requests. Please wait a moment before trying again."
+);

@@ -40,6 +40,7 @@ import {
 } from './providerStatus';
 import {
   fetchProviderCatalog,
+  openRouterModelVerifyPath,
   type ProviderCatalogImageProviderView,
   type ProviderCatalogTextProviderView,
   type ProviderCatalogView,
@@ -59,7 +60,7 @@ import {
 } from '../application/aiSelection';
 import { SessionKeyPanel, type SessionKeyProviderOption } from './SessionKeyPanel';
 import { ModelPicker } from './ModelPicker';
-import type { SurfaceModelOption } from './modelPicker';
+import type { ModelVerificationView, SurfaceModelOption } from './modelPicker';
 
 /** The app-scoped server endpoint for a bounded provider connection test. */
 export const PROVIDER_TEST_CONNECTION_API_PATH = '/api/providers/test-connection';
@@ -788,9 +789,11 @@ export function SelectionControlCard({
   clearKeySignal = 0,
   envTest,
   notice,
+  verifications,
   onChangeDraft,
   onReset,
   onTestServerEnvironment,
+  onVerifyModel,
   onSessionStatusChange,
 }: {
   kind: 'text' | 'image';
@@ -806,9 +809,11 @@ export function SelectionControlCard({
   clearKeySignal?: number;
   envTest?: ConnectionTestView;
   notice?: string;
+  verifications?: Record<string, ModelVerificationView>;
   onChangeDraft: (patch: Partial<ProviderSelectionDraft>) => void;
   onReset: () => void;
   onTestServerEnvironment: (providerId: string, modelId?: string) => void;
+  onVerifyModel?: (modelId: string) => void;
   onSessionStatusChange?: (configured: boolean) => void;
 }) {
   const selectedProvider = providers.find((p) => p.providerId === draft.providerId);
@@ -964,6 +969,8 @@ export function SelectionControlCard({
                     displayName: m.displayName || friendlyModelName(m.id),
                   }))}
                   value={draft.modelId}
+                  verifications={verifications}
+                  onVerifyModel={onVerifyModel}
                   onChange={(modelId) => {
                     const chosen = modelId
                       ? selectedProvider.models.find((m) => m.id === modelId)
@@ -1124,6 +1131,7 @@ export function ProviderSelectionPanel({
   // versa). Hydration uses aiSelection's separate deliberate-generation guard.
   const opCounterRef = useRef<{ text: number; image: number }>({ text: 0, image: 0 });
   const [envTests, setEnvTests] = useState<Record<string, ConnectionTestView>>({});
+  const [verifications, setVerifications] = useState<Record<string, ModelVerificationView>>({});
   const [hydrationError, setHydrationError] = useState(false);
 
   // Reflect the APPLICATION-BOOTSTRAP hydration (App.tsx). This panel is NOT the
@@ -1265,6 +1273,42 @@ export function ProviderSelectionPanel({
     [network]
   );
 
+  /**
+   * v0.8.x: EXPLICIT capability verification for a discovered FREE OpenRouter
+   * text model. NEVER runs automatically (not on render, selection, filter, or
+   * catalog refresh) — only from the user's click. On success the catalog is
+   * refreshed so the model becomes selectable; on failure a bounded message is
+   * shown and nothing is auto-retried.
+   */
+  const verifyModel = useCallback(
+    async (modelId: string) => {
+      setVerifications((prev) => ({ ...prev, [modelId]: { state: 'verifying' } }));
+      const credentialSource = draftsRef.current.text.credentialSource ?? 'server_environment';
+      try {
+        const res = await network.post<{ ok?: boolean; code?: string; message?: string }>(
+          openRouterModelVerifyPath(modelId),
+          { credentialSource }
+        );
+        const data = res.data ?? {};
+        if (res.ok && data.ok === true) {
+          setVerifications((prev) => ({ ...prev, [modelId]: { state: 'verified' } }));
+          onRefresh?.();
+        } else {
+          setVerifications((prev) => ({
+            ...prev,
+            [modelId]: { state: 'failed', message: data.message ?? 'Verification failed.' },
+          }));
+        }
+      } catch {
+        setVerifications((prev) => ({
+          ...prev,
+          [modelId]: { state: 'failed', message: 'Could not reach the server.' },
+        }));
+      }
+    },
+    [network, onRefresh]
+  );
+
   const allProviders: {
     kind: 'text' | 'image';
     providerId: string;
@@ -1340,9 +1384,11 @@ export function ProviderSelectionPanel({
             clearKeySignal={sessionClearSignal}
             envTest={envTestFor('text')}
             notice={notices.text}
+            verifications={verifications}
             onChangeDraft={(patch) => changeDraft('text', patch)}
             onReset={() => resetSelection('text')}
             onTestServerEnvironment={(providerId, modelId) => testConnection('text', providerId, modelId)}
+            onVerifyModel={verifyModel}
           />
           <SelectionControlCard
             kind="image"

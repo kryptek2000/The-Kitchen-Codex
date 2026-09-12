@@ -22,6 +22,7 @@ import {
   imageGenerateRateLimiter,
   imagePreviewRateLimiter,
   providerTestRateLimiter,
+  capabilityVerifyRateLimiter,
   getClientIp,
 } from "./rateLimiter.js";
 import { interpretKitchenQuestionOnServer } from "./kitchenInterpret.js";
@@ -31,6 +32,10 @@ import { getAiProviderStatus } from "./ai/providerStatus.js";
 import { buildProviderCatalog } from "./ai/providerCatalog.js";
 import { refreshOpenRouterCatalog } from "./ai/openRouterCatalog.js";
 import { runConnectionTest } from "./ai/connectionTest.js";
+import {
+  verifyOpenRouterModelCapability,
+  type CapabilityVerificationErrorCode,
+} from "./ai/capabilityVerification.js";
 import { generateRecipeDraftOnServer, CreateRecipeValidationError } from "./createRecipe.js";
 import {
   generateRecipeImagePreview,
@@ -182,6 +187,34 @@ export function mapImageProviderErrorToHttp(error: unknown): {
       return { status: 502, error: "Image generation could not be authorized. Please check the server configuration.", code: "IMAGE_PROVIDER_AUTH" };
     default:
       return undefined;
+  }
+}
+
+/**
+ * Bounded HTTP status for a failed capability-verification result. Gate failures
+ * (pricing/model/credential) are 4xx/409; a probe that RAN but did not satisfy the
+ * strict contract is a bounded 422. Never leaks provider text.
+ */
+export function capabilityVerificationHttpStatus(code: CapabilityVerificationErrorCode): number {
+  switch (code) {
+    case "INVALID_MODEL":
+    case "CREDENTIAL_SOURCE_INVALID":
+      return 400;
+    case "MODEL_NOT_FOUND":
+      return 404;
+    case "MODEL_CAPABILITY_UNVERIFIED":
+      return 422;
+    case "CREDENTIAL_SOURCE_UNAVAILABLE":
+    case "SESSION_BYOK_UNAVAILABLE":
+      return 503;
+    case "MODEL_NOT_VERIFIED_FREE":
+    case "MODEL_PRICING_UNVERIFIED":
+    case "MODEL_PRICING_CHANGED":
+    case "MODEL_ROUTER_NOT_SUPPORTED":
+    case "OPERATOR_PIN":
+    case "SESSION_CREDENTIAL_MISSING":
+    default:
+      return 409;
   }
 }
 
@@ -874,6 +907,78 @@ export function createApp(opts: CreateAppOptions): express.Express {
       });
     }
   });
+
+  // Explicit, zero-cost OpenRouter capability verification (v0.8.x). A dynamic
+  // model becomes executable ONLY after this succeeds. The provider is FIXED to
+  // `openrouter` (never caller-controlled), the model id is the wildcard tail of
+  // the route (e.g. `openai/gpt-4o-mini`), and the CURRENT trusted catalog must
+  // prove fresh, verified FREE pricing BEFORE any provider request. Auth-gated +
+  // rate-limited; bounded timeout/response; never returns a secret or raw provider
+  // error. The client must click an explicit "Verify" control — nothing here runs
+  // automatically.
+  app.post(
+    "/api/providers/openrouter/models/*modelId/verify",
+    requireAiAccessToken,
+    capabilityVerifyRateLimiter,
+    async (req, res) => {
+      try {
+        if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
+          return res.status(400).json({ error: "Invalid request payload.", code: "INVALID_REQUEST" });
+        }
+        // Express 5 wildcard params arrive as a segment array; join with "/".
+        const rawModelId = (req.params as Record<string, unknown>)["modelId"];
+        const modelId = Array.isArray(rawModelId)
+          ? rawModelId.join("/")
+          : typeof rawModelId === "string"
+          ? rawModelId
+          : "";
+        if (!modelId || modelId.length > 200) {
+          return res.status(400).json({ error: "A valid model id is required.", code: "INVALID_MODEL" });
+        }
+
+        // Optional credentialSource: STRICT. A present-but-malformed value is a
+        // bounded 400 — never silently treated as absent.
+        const rawCredentialSource = (req.body as Record<string, unknown>)["credentialSource"];
+        let credentialSource: "server_environment" | "session_only" | undefined;
+        if (rawCredentialSource !== undefined) {
+          if (rawCredentialSource !== "server_environment" && rawCredentialSource !== "session_only") {
+            return res.status(400).json({
+              error: '"credentialSource" must be "server_environment" or "session_only".',
+              code: "CREDENTIAL_SOURCE_INVALID",
+            });
+          }
+          credentialSource = rawCredentialSource;
+        }
+
+        const result = await verifyOpenRouterModelCapability({ modelId, credentialSource });
+        if (result.ok === true) {
+          return res.json({
+            ok: true,
+            providerId: result.providerId,
+            modelId: result.modelId,
+            profile: result.profile,
+            verifiedAt: result.verifiedAt,
+          });
+        }
+        const status = capabilityVerificationHttpStatus(result.code);
+        return res.status(status).json({
+          ok: false,
+          providerId: result.providerId,
+          modelId: result.modelId,
+          code: result.code,
+          message: result.message,
+        });
+      } catch {
+        return res.status(500).json({
+          ok: false,
+          providerId: "openrouter",
+          modelId: "",
+          code: "PROVIDER_ERROR",
+          message: "Model verification failed unexpectedly.",
+        });
+      }
+    }
+  );
 
   // Transient generated-image preview store (bounded, TTL 5min, 50MB cap).
   // Foundation for Vault Intelligence Image Recovery: generation ONLY — the
