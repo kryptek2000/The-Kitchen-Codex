@@ -60,7 +60,13 @@ import {
 } from '../application/aiSelection';
 import { SessionKeyPanel, type SessionKeyProviderOption } from './SessionKeyPanel';
 import { ModelPicker } from './ModelPicker';
+import { STRICT_JSON_SCHEMA_PROFILE, type OpenRouterProfile } from '../core/ai/openRouterProfile';
 import type { ModelVerificationView, SurfaceModelOption } from './modelPicker';
+import {
+  isProbeFailureClassification,
+  probeFailureMessage,
+  PROBE_FAILURE_FALLBACK_MESSAGE,
+} from './modelPicker';
 
 /** The app-scoped server endpoint for a bounded provider connection test. */
 export const PROVIDER_TEST_CONNECTION_API_PATH = '/api/providers/test-connection';
@@ -813,7 +819,7 @@ export function SelectionControlCard({
   onChangeDraft: (patch: Partial<ProviderSelectionDraft>) => void;
   onReset: () => void;
   onTestServerEnvironment: (providerId: string, modelId?: string) => void;
-  onVerifyModel?: (modelId: string) => void;
+  onVerifyModel?: (modelId: string, profile?: OpenRouterProfile) => void;
   onSessionStatusChange?: (configured: boolean) => void;
 }) {
   const selectedProvider = providers.find((p) => p.providerId === draft.providerId);
@@ -1281,22 +1287,35 @@ export function ProviderSelectionPanel({
    * shown and nothing is auto-retried.
    */
   const verifyModel = useCallback(
-    async (modelId: string) => {
+    async (modelId: string, profile: OpenRouterProfile = STRICT_JSON_SCHEMA_PROFILE) => {
       setVerifications((prev) => ({ ...prev, [modelId]: { state: 'verifying' } }));
       const credentialSource = draftsRef.current.text.credentialSource ?? 'server_environment';
       try {
-        const res = await network.post<{ ok?: boolean; code?: string; message?: string }>(
-          openRouterModelVerifyPath(modelId),
-          { credentialSource }
-        );
+        const res = await network.post<{
+          ok?: boolean;
+          code?: string;
+          message?: string;
+          probeClassification?: string;
+        }>(openRouterModelVerifyPath(modelId), { credentialSource, profile });
         const data = res.data ?? {};
         if (res.ok && data.ok === true) {
           setVerifications((prev) => ({ ...prev, [modelId]: { state: 'verified' } }));
           onRefresh?.();
         } else {
+          // Only a KNOWN bounded classification renders a specific message.
+          // Unknown response messages are never rendered as provider diagnostics.
+          const classification = isProbeFailureClassification(data.probeClassification)
+            ? data.probeClassification
+            : undefined;
           setVerifications((prev) => ({
             ...prev,
-            [modelId]: { state: 'failed', message: data.message ?? 'Verification failed.' },
+            [modelId]: {
+              state: 'failed',
+              ...(classification ? { classification } : {}),
+              message: classification
+                ? probeFailureMessage(classification)
+                : PROBE_FAILURE_FALLBACK_MESSAGE,
+            },
           }));
         }
       } catch {

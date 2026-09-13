@@ -14,6 +14,7 @@
  */
 
 import type { AiCapabilities } from '../core/ai/types';
+import { openRouterProfileLabel, type OpenRouterProfile } from '../core/ai/openRouterProfile';
 import type { CatalogCostClassView, CatalogPricingView } from './providerCatalog';
 
 /** A model option as surfaced by the catalog to the picker. */
@@ -29,6 +30,14 @@ export interface SurfaceModelOption {
   structuredVerified?: boolean;
   /** True when a CURRENT runtime capability verification made this model executable. */
   capabilityVerified?: boolean;
+  /**
+   * SERVER-OWNED candidate prefilter (never execution authority): the model may
+   * be offered an explicit "Verify for Kitchen Codex" action. Runtime
+   * verification is still mandatory before execution.
+   */
+  strictStructuredCandidate?: boolean;
+  jsonCandidate?: boolean;
+  verifiedProfile?: OpenRouterProfile;
   executionCompatible?: boolean;
   compatibility?: 'compatible' | 'experimental' | 'unsupported';
   isRouter?: boolean;
@@ -105,6 +114,7 @@ export function modelBadges(model: SurfaceModelOption): string[] {
   if (model.capabilities?.reasoning) badges.push('Reasoning');
   if (model.structuredVerified) badges.push('Structured Output');
   if (model.capabilityVerified) badges.push('Verified');
+  if (model.verifiedProfile) badges.push(openRouterProfileLabel(model.verifiedProfile));
   if (model.vision) badges.push('Vision');
   if (model.largeContext) badges.push('Large Context');
   if (model.compatibility === 'experimental') badges.push('Experimental');
@@ -186,6 +196,8 @@ export interface ModelVerificationView {
   state: ModelVerificationState;
   /** Bounded failure text (never a raw provider error). */
   message?: string;
+  /** Bounded public probe classification (mirror of the server union). */
+  classification?: ProbeFailureClassification;
 }
 
 /** A concise "FREE · <verification state>" label for a discovered model row. */
@@ -198,4 +210,81 @@ export function freeVerificationLabel(
   if (state === 'verified') return 'FREE · Verified';
   if (state === 'failed') return 'FREE · Verification failed';
   return 'FREE · Not verified';
+}
+
+/**
+ * The bounded, non-secret PUBLIC probe-failure classification (mirror of the
+ * server-owned union in `server/ai/capabilityVerification.ts`). The client
+ * renders ONLY these classifications so arbitrary upstream text can never reach
+ * the UI.
+ */
+export const PROBE_FAILURE_CLASSIFICATIONS = [
+  'PROBE_OUTPUT_TRUNCATED',
+  'PROBE_REFUSAL',
+  'PROBE_TOOL_CALL_ONLY',
+  'PROBE_CONTENT_PARTS_UNSUPPORTED',
+  'PROBE_WRONG_JSON_SHAPE',
+  'PROBE_WRONG_REQUIRED_VALUE',
+  'PROBE_EXTRA_PROPERTIES',
+  'PROBE_TRANSPORT_ERROR',
+  'PROBE_TIMEOUT',
+  'PROBE_AUTH',
+  'PROBE_RATE_LIMIT',
+  'PROBE_QUOTA',
+  'PROBE_UNAVAILABLE',
+  'PROBE_NO_COMPATIBLE_ENDPOINT',
+  'PROBE_HTTP_ERROR',
+  'PROBE_EMPTY_RESPONSE',
+  'PROBE_OVERSIZED',
+  'PROBE_MALFORMED_JSON',
+  'PROBE_SCHEMA_MISMATCH',
+] as const;
+
+export type ProbeFailureClassification = (typeof PROBE_FAILURE_CLASSIFICATIONS)[number];
+
+/** True when a value is one of the bounded public classifications. */
+export function isProbeFailureClassification(value: unknown): value is ProbeFailureClassification {
+  return (
+    typeof value === 'string' &&
+    (PROBE_FAILURE_CLASSIFICATIONS as readonly string[]).includes(value)
+  );
+}
+
+/** Bounded, non-secret user-facing messages (never raw provider text). */
+const PROBE_FAILURE_MESSAGES: Record<ProbeFailureClassification, string> = {
+  PROBE_OUTPUT_TRUNCATED: 'The model exhausted its output budget before completing an answer. No mode was verified.',
+  PROBE_REFUSAL: 'The model refused this verification request.',
+  PROBE_TOOL_CALL_ONLY: 'The model returned a tool call instead of the required JSON answer.',
+  PROBE_CONTENT_PARTS_UNSUPPORTED: 'The model returned content parts outside the supported Chat Completions contract.',
+  PROBE_WRONG_JSON_SHAPE: 'The model returned JSON with the wrong object shape.',
+  PROBE_WRONG_REQUIRED_VALUE: 'The model returned the wrong required verification value.',
+  PROBE_EXTRA_PROPERTIES: 'The model returned unexpected JSON properties.',
+  PROBE_TRANSPORT_ERROR: 'Could not reach OpenRouter. Check the connection and try again.',
+  PROBE_TIMEOUT: 'OpenRouter did not respond in time. Try again.',
+  PROBE_AUTH: 'OpenRouter authentication failed or the session key expired. Update the session key and try again.',
+  PROBE_RATE_LIMIT: 'OpenRouter rate-limited this verification. Wait a moment before trying again.',
+  PROBE_QUOTA: 'The OpenRouter credential has insufficient quota or credit.',
+  PROBE_UNAVAILABLE: 'OpenRouter is temporarily unavailable. Try again shortly.',
+  PROBE_NO_COMPATIBLE_ENDPOINT:
+    'OpenRouter found no endpoint that supports the requested JSON profile for this model.',
+  PROBE_HTTP_ERROR: 'OpenRouter returned an unexpected error.',
+  PROBE_EMPTY_RESPONSE: 'OpenRouter returned an empty response.',
+  PROBE_OVERSIZED: 'OpenRouter returned a response larger than the allowed limit.',
+  PROBE_MALFORMED_JSON: 'OpenRouter returned malformed JSON.',
+  PROBE_SCHEMA_MISMATCH: 'The model did not return a complete supported JSON answer.',
+};
+
+/** The generic bounded fallback when a classification is absent/unknown. */
+export const PROBE_FAILURE_FALLBACK_MESSAGE =
+  'Verification failed. No JSON compatibility profile was verified.';
+
+/**
+ * The bounded UI message for a verification failure. Only known classifications
+ * render a specific message; anything else (or an unknown string) renders the
+ * generic bounded fallback — a raw server/provider message is NEVER rendered.
+ */
+export function probeFailureMessage(classification: unknown): string {
+  return isProbeFailureClassification(classification)
+    ? PROBE_FAILURE_MESSAGES[classification]
+    : PROBE_FAILURE_FALLBACK_MESSAGE;
 }

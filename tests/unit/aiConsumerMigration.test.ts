@@ -14,11 +14,7 @@ vi.mock("../../server/geminiClient.js", () => ({
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 function openRouterResponse(content: unknown) {
-  return {
-    ok: true,
-    status: 200,
-    json: async () => ({ choices: [{ message: { content: JSON.stringify(content) } }] }),
-  };
+  return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }));
 }
 
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -68,7 +64,7 @@ describe("metadataRecovery — provider-neutral migration (v0.7 1C #31)", () => 
   });
 
   it("wrong-shaped / non-JSON provider output is rejected and falls through (no fabricated metadata)", async () => {
-    fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ choices: [{ message: { content: "{ not json" } }] }) }));
+    fetchMock = vi.fn(async () => new Response(JSON.stringify({ choices: [{ message: { content: "{ not json" } }] })));
     vi.stubGlobal("fetch", fetchMock);
     const result = await recoverRecipeMetadata({ title: "T", ingredients: ["1 cup flour"], instructions: ["Mix."] });
     // Invalid structured output -> algorithmic fallback; no fabrication of cookTime/servings.
@@ -115,13 +111,13 @@ describe("recipeGrabber — provider-neutral migration (v0.7 1C #32)", () => {
       title: "  ",
       cuisine: "",
       category: "",
-      ingredients: null,
+      ingredients: [],
       instructions: [{ stepNumber: 1, text: "Do a thing." }],
     });
     const result = await grabRecipeFromWeb({ rawText: SAMPLE_TEXT });
     expect(result.title).toBeTruthy(); // normalized default applied, not a blank title
     expect(result.cuisine).toBe("General");
-    expect(result.ingredients).toEqual([]); // null -> [] (never fabricated placeholder)
+    expect(result.ingredients).toEqual([]); // schema-valid empty array, never fabricated
     expect(result.instructions[0].text).toBe("Do a thing.");
     expect(result.servings).toBeUndefined();
     expect(result.prepTime).toBe("");

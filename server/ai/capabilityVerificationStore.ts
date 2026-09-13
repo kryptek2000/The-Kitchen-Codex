@@ -20,16 +20,19 @@
  */
 
 /** The versioned capability profile a successful strict probe establishes. */
-export const STRICT_JSON_SCHEMA_PROFILE = "strict_json_schema_v1";
+import { STRICT_JSON_SCHEMA_PROFILE, isOpenRouterProfile, type OpenRouterProfile } from '../../src/core/ai/openRouterProfile.js';
+export { STRICT_JSON_SCHEMA_PROFILE };
 
 /** The current capability-probe version. Bump to invalidate all verifications. */
-export const CAPABILITY_PROBE_VERSION = STRICT_JSON_SCHEMA_PROFILE;
+export const CAPABILITY_PROBE_VERSION = 'free_text_output_v2';
 
 /** Bounded in-memory TTL for a successful verification (45 minutes). */
 export const CAPABILITY_VERIFICATION_TTL_MS = 45 * 60 * 1000;
 
 /** A server-memory capability-verification record (never persisted). */
 export interface CapabilityVerificationRecord {
+  /** New writes are explicit. Absent legacy records mean strict, never JSON mode. */
+  profile?: OpenRouterProfile;
   providerId: string;
   modelId: string;
   /** Catalog fingerprint the verification was bound to. */
@@ -73,6 +76,7 @@ export function isCapabilityVerified(
 ): boolean {
   const record = store.get(keyFor(providerId, modelId));
   if (!record) return false;
+  if (record.profile !== undefined && !isOpenRouterProfile(record.profile)) return false;
   if (record.probeVersion !== CAPABILITY_PROBE_VERSION) return false;
   if (record.catalogFingerprint !== currentFingerprint) return false;
   if (!Number.isFinite(record.verifiedAt)) return false;

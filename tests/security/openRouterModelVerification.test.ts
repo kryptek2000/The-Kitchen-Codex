@@ -52,6 +52,7 @@ interface RecordedCall {
 function stubOpenRouter(handler: (url: string, init?: RequestInit) => Promise<Response>) {
   const original = globalThis.fetch;
   const calls: RecordedCall[] = [];
+  let unexpectedProviderCalls = 0;
   globalThis.fetch = (async (input: any, init?: any) => {
     const url = typeof input === 'string' ? input : input.url;
     if (typeof url === 'string' && url.startsWith('https://openrouter.ai/')) {
@@ -69,11 +70,16 @@ function stubOpenRouter(handler: (url: string, init?: RequestInit) => Promise<Re
       calls.push({ url, method: (init?.method ?? 'GET') as string, headers, body });
       return handler(url, init);
     }
+    if (!url.startsWith('http://127.0.0.1:')) {
+      unexpectedProviderCalls++;
+      throw new Error('Unexpected external provider request in isolated test.');
+    }
     return original(input, init);
   }) as unknown as typeof globalThis.fetch;
   return {
     calls,
     chatCalls: () => calls.filter((c) => c.url.endsWith('/chat/completions')),
+    unexpectedProviderCalls: () => unexpectedProviderCalls,
     restore() {
       globalThis.fetch = original;
     },
@@ -425,12 +431,12 @@ describe('credential identity isolation', () => {
 });
 
 describe('strict probe failures are bounded and never cached', () => {
-  const cases: { name: string; content: string }[] = [
-    { name: 'J. plain text fails', content: 'ok' },
-    { name: 'K. malformed JSON fails', content: '{not json' },
-    { name: 'L. schema mismatch fails', content: '{"ok":false}' },
-    { name: 'L2. extra structure fails', content: '{"ok":true,"extra":1}' },
-    { name: 'L3. Markdown-wrapped JSON fails', content: '```json\n{"ok":true}\n```' },
+  const cases: { name: string; content: string; classification: string }[] = [
+    { name: 'J. plain text fails', content: 'ok', classification: 'PROBE_MALFORMED_JSON' },
+    { name: 'K. malformed assistant JSON fails', content: '{not json', classification: 'PROBE_MALFORMED_JSON' },
+    { name: 'L. schema mismatch fails', content: '{"ok":false}', classification: 'PROBE_WRONG_REQUIRED_VALUE' },
+    { name: 'L2. extra structure fails', content: '{"ok":true,"extra":1}', classification: 'PROBE_EXTRA_PROPERTIES' },
+    { name: 'L3. Markdown-wrapped JSON fails', content: '```json\n{"ok":true}\n```', classification: 'PROBE_MALFORMED_JSON' },
   ];
 
   for (const c of cases) {
@@ -442,6 +448,8 @@ describe('strict probe failures are bounded and never cached', () => {
         const res = await verify(baseUrl, 'dynamic/free');
         expect(res.status).toBe(422);
         expect(res.json.code).toBe('MODEL_CAPABILITY_UNVERIFIED');
+        // Bounded public classification is present and correct.
+        expect(res.json.probeClassification).toBe(c.classification);
         // Exactly ONE attempt (Z: no retry loop) and no false cache.
         expect(stub.chatCalls()).toHaveLength(1);
         const store = await import('../../server/ai/capabilityVerificationStore.js');
@@ -466,7 +474,9 @@ describe('strict probe failures are bounded and never cached', () => {
       const res = await verify(baseUrl, 'dynamic/free');
       expect(res.status).toBe(422);
       expect(res.json.code).toBe('MODEL_CAPABILITY_UNVERIFIED');
+      expect(res.json.probeClassification).toBe('PROBE_UNAVAILABLE');
       expect(JSON.stringify(res.json)).not.toContain(SENTINEL);
+      expect(JSON.stringify(res.json)).not.toContain('raw provider');
       expect(stub.chatCalls()).toHaveLength(1);
     } finally {
       stub.restore();
@@ -484,6 +494,7 @@ describe('strict probe failures are bounded and never cached', () => {
       const res = await verify(baseUrl, 'dynamic/free');
       expect(res.status).toBe(422);
       expect(res.json.code).toBe('MODEL_CAPABILITY_UNVERIFIED');
+      expect(res.json.probeClassification).toBe('PROBE_TIMEOUT');
       expect(stub.chatCalls()).toHaveLength(1);
     } finally {
       stub.restore();
@@ -541,6 +552,7 @@ describe('strict probe failures are bounded and never cached', () => {
       expect(res.status).toBe(422);
       expect(res.json.ok).toBe(false);
       expect(res.json.code).toBe('MODEL_CAPABILITY_UNVERIFIED');
+      expect(res.json.probeClassification).toBe('PROBE_OVERSIZED');
       // The body is never accepted/parsed as a valid verification, and neither its
       // content nor the credential sentinel leaks into the response.
       const responseBody = JSON.stringify(res.json);
@@ -564,6 +576,114 @@ describe('strict probe failures are bounded and never cached', () => {
       expect(candidates.some((c) => c.model === 'dynamic/free')).toBe(false);
     } finally {
       stub.restore();
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+});
+
+describe('bounded probe classifications pass through the real verification route', () => {
+  const statusCases = [
+    { name: '401 -> auth', status: 401, classification: 'PROBE_AUTH' },
+    { name: '403 -> auth', status: 403, classification: 'PROBE_AUTH' },
+    { name: '402 -> quota', status: 402, classification: 'PROBE_QUOTA' },
+    { name: '404 -> no compatible endpoint', status: 404, classification: 'PROBE_NO_COMPATIBLE_ENDPOINT' },
+    { name: '429 -> rate limit', status: 429, classification: 'PROBE_RATE_LIMIT' },
+    { name: '500 -> unavailable', status: 500, classification: 'PROBE_UNAVAILABLE' },
+    { name: '503 -> unavailable', status: 503, classification: 'PROBE_UNAVAILABLE' },
+    { name: '400 -> generic http error', status: 400, classification: 'PROBE_HTTP_ERROR' },
+  ];
+
+  for (const c of statusCases) {
+    it(`${c.name} => HTTP 422 / MODEL_CAPABILITY_UNVERIFIED / ${c.classification}, one call, no leak`, async () => {
+      const { server, baseUrl } = await startApp({ OPENROUTER_API_KEY: SENTINEL });
+      const stub = stubOpenRouter(
+        async () =>
+          new Response(JSON.stringify({ error: { message: `upstream body ${SENTINEL}` } }), {
+            status: c.status,
+          })
+      );
+      try {
+        const catalog = await primeCatalog([rawModel('dynamic/free', FREE)]);
+        const res = await verify(baseUrl, 'dynamic/free');
+        expect(res.status).toBe(422);
+        expect(res.json.code).toBe('MODEL_CAPABILITY_UNVERIFIED');
+        expect(res.json.probeClassification).toBe(c.classification);
+        expect(JSON.stringify(res.json)).not.toContain(SENTINEL);
+        expect(JSON.stringify(res.json)).not.toContain('upstream body');
+        // Exactly one attempt, no retry, no cache, still non-executable.
+        expect(stub.chatCalls()).toHaveLength(1);
+        const store = await import('../../server/ai/capabilityVerificationStore.js');
+        expect(store.getCapabilityVerification('openrouter', 'dynamic/free')).toBeUndefined();
+        expect(catalog.openRouterSelectableTextModelIds()).not.toContain('dynamic/free');
+      } finally {
+        stub.restore();
+        await new Promise<void>((r) => server.close(() => r()));
+      }
+    });
+  }
+
+  it('an empty 200 body => PROBE_EMPTY_RESPONSE', async () => {
+    const { server, baseUrl } = await startApp({ OPENROUTER_API_KEY: SENTINEL });
+    const stub = stubOpenRouter(async () => new Response('', { status: 200 }));
+    try {
+      await primeCatalog([rawModel('dynamic/free', FREE)]);
+      const res = await verify(baseUrl, 'dynamic/free');
+      expect(res.status).toBe(422);
+      expect(res.json.probeClassification).toBe('PROBE_EMPTY_RESPONSE');
+      expect(stub.chatCalls()).toHaveLength(1);
+    } finally {
+      stub.restore();
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+
+  it('a malformed 200 completion body => PROBE_MALFORMED_JSON', async () => {
+    const { server, baseUrl } = await startApp({ OPENROUTER_API_KEY: SENTINEL });
+    const stub = stubOpenRouter(async () => new Response('{not json', { status: 200 }));
+    try {
+      await primeCatalog([rawModel('dynamic/free', FREE)]);
+      const res = await verify(baseUrl, 'dynamic/free');
+      expect(res.status).toBe(422);
+      expect(res.json.probeClassification).toBe('PROBE_MALFORMED_JSON');
+      expect(stub.chatCalls()).toHaveLength(1);
+    } finally {
+      stub.restore();
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+});
+
+describe('catalog exposes the server-owned strict-structured candidate signal', () => {
+  it('marks a Liquid-like free model as a candidate, a Gemma-like one as not, and excludes audio-output models', async () => {
+    const { server } = await startApp({ OPENROUTER_API_KEY: SENTINEL });
+    try {
+      await primeCatalog([
+        rawModel('liquid/lfm-like:free', FREE),
+        rawModel('google/gemma-like:free', FREE, ['temperature', 'max_tokens', 'response_format']),
+        {
+          id: 'google/lyria-like',
+          name: 'Lyria-like',
+          context_length: 1000,
+          architecture: { input_modalities: ['text'], output_modalities: ['text', 'audio'] },
+          pricing: FREE,
+          supported_parameters: ['temperature', 'max_tokens', 'response_format', 'structured_outputs'],
+        },
+      ]);
+      const { buildProviderCatalog } = await import('../../server/ai/providerCatalog.js');
+      const built = buildProviderCatalog();
+      const provider = built.textProviders.find((p) => p.providerId === 'openrouter')!;
+      const all = [...provider.models, ...(provider.discoveredModels ?? [])];
+
+      const liquid = all.find((m) => m.id === 'liquid/lfm-like:free');
+      expect(liquid?.strictStructuredCandidate).toBe(true);
+      expect(liquid?.executionCompatible).toBe(false); // candidate != executable
+
+      const gemma = all.find((m) => m.id === 'google/gemma-like:free');
+      expect(gemma?.strictStructuredCandidate).toBe(false);
+      expect(gemma?.executionCompatible).toBe(false);
+
+      expect(all.some((m) => m.id === 'google/lyria-like')).toBe(false);
+    } finally {
       await new Promise<void>((r) => server.close(() => r()));
     }
   });
@@ -628,6 +748,120 @@ describe('no automatic verification + rate limiting + no forge', () => {
     } finally {
       stub.restore();
       await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+});
+
+describe('explicit application-validated JSON route', () => {
+  it('verifies JSON-only metadata using the exact session identity, then executes the recorded profile', async () => {
+    const { server, baseUrl } = await startApp({ OPENROUTER_API_KEY: 'OPERATOR_NOT_SESSION' });
+    let attempt = 0;
+    const stub = stubOpenRouter(async () => okResponse(attempt++ === 0 ? '{"ok":true}' : intentContent()));
+    try {
+      const secrets = await import('../../server/ai/sessionSecrets.js');
+      secrets.setSessionSecret('openrouter', SENTINEL);
+      const catalog = await primeCatalog([rawModel('dynamic/json', FREE, ['max_tokens', 'response_format'])]);
+      expect(catalog.isOpenRouterJsonCandidate(catalog.findOpenRouterCatalogModel('dynamic/json'))).toBe(true);
+      expect(catalog.isOpenRouterStrictStructuredCandidate(catalog.findOpenRouterCatalogModel('dynamic/json'))).toBe(false);
+      const verified = await verify(baseUrl, 'dynamic/json', {
+        credentialSource: 'session_only', profile: 'application_validated_json_v1',
+      });
+      expect(verified.status).toBe(200);
+      expect(verified.json.profile).toBe('application_validated_json_v1');
+      const store = await import('../../server/ai/capabilityVerificationStore.js');
+      expect(store.getCapabilityVerification('openrouter', 'dynamic/json')?.profile).toBe('application_validated_json_v1');
+      const headers = { [TEXT_HEADER]: JSON.stringify({
+        mode: 'user_selected', providerId: 'openrouter', modelId: 'dynamic/json',
+        credentialSource: 'session_only', selectedCostClass: 'free',
+      }) };
+      const result = await post(baseUrl, '/api/kitchen/interpret', { question: 'what can I make with chicken' }, headers);
+      expect(result.status).toBe(200);
+      expect(result.json.source).toBe('ai');
+      expect(stub.chatCalls()).toHaveLength(2);
+      for (const call of stub.chatCalls()) {
+        expect(call.headers.authorization).toBe('Bearer ' + SENTINEL);
+        expect(call.body.model).toBe('dynamic/json');
+        expect(call.body.response_format).toEqual({ type: 'json_object' });
+        expect(call.body.provider).toEqual({ require_parameters: true });
+        expect(call.body.reasoning).toEqual({ exclude: true });
+      }
+      const built = (await import('../../server/ai/providerCatalog.js')).buildProviderCatalog();
+      expect(built.textProviders.find(p => p.providerId === 'openrouter')?.models.find(m => m.id === 'dynamic/json'))
+        .toMatchObject({ capabilityVerified: true, executionCompatible: true, verifiedProfile: 'application_validated_json_v1' });
+      expect(JSON.stringify([verified.json, result.json])).not.toContain(SENTINEL);
+    } finally {
+      stub.restore();
+      await new Promise<void>(r => server.close(() => r()));
+    }
+  });
+
+  it('rejects an unknown profile before network and never trusts client verification claims', async () => {
+    const { server, baseUrl } = await startApp({ OPENROUTER_API_KEY: SENTINEL });
+    const stub = stubOpenRouter(async () => okResponse('{"ok":true}'));
+    try {
+      await primeCatalog([rawModel('dynamic/free', FREE)]);
+      const res = await verify(baseUrl, 'dynamic/free', { profile: 'forged' });
+      expect(res.status).toBe(400);
+      const forged = await post(baseUrl, '/api/kitchen/interpret', { question: 'chicken', profile: 'application_validated_json_v1', capabilityVerified: true }, selectionHeader('dynamic/free'));
+      expect(forged.json.source).not.toBe('ai');
+      expect(stub.chatCalls()).toHaveLength(0);
+      const store = await import('../../server/ai/capabilityVerificationStore.js');
+      expect(store.capabilityVerificationCount()).toBe(0);
+    } finally {
+      stub.restore();
+      await new Promise<void>(r => server.close(() => r()));
+    }
+  });
+
+  it('rejects runtime schema failure into deterministic interpretation without a paid/provider retry', async () => {
+    const { server, baseUrl } = await startApp({ OPENROUTER_API_KEY: SENTINEL, DEEPSEEK_API_KEY: 'OTHER_PROVIDER_MOCK' });
+    let calls = 0;
+    const stub = stubOpenRouter(async () => okResponse(calls++ === 0 ? '{"ok":true}' : '{"private":"PRIVATE_BODY_SENTINEL"}'));
+    try {
+      await primeCatalog([rawModel('dynamic/free', FREE)]);
+      expect((await verify(baseUrl, 'dynamic/free', { profile: 'application_validated_json_v1' })).status).toBe(200);
+      const res = await post(baseUrl, '/api/kitchen/interpret', { question: 'what can I make with chicken' }, selectionHeader('dynamic/free'));
+      expect(res.status).toBe(200);
+      expect(res.json.source).toBe('deterministic');
+      expect(stub.chatCalls()).toHaveLength(2); // one explicit probe, one runtime attempt
+      expect(stub.unexpectedProviderCalls()).toBe(0);
+      expect(stub.chatCalls().every(c => c.body.model === 'dynamic/free')).toBe(true);
+      expect(JSON.stringify(res.json)).not.toContain('PRIVATE_BODY_SENTINEL');
+      expect(JSON.stringify(res.json)).not.toContain(SENTINEL);
+    } finally {
+      stub.restore();
+      await new Promise<void>(r => server.close(() => r()));
+    }
+  });
+
+  it.each([
+    ['length', null, 'PROBE_OUTPUT_TRUNCATED'],
+    ['length', '{"ok":true}', 'PROBE_OUTPUT_TRUNCATED'],
+    ['content_filter', null, 'PROBE_REFUSAL'],
+    ['tool_calls', null, 'PROBE_TOOL_CALL_ONLY'],
+    ['stop', [{ type: 'text', text: 'PRIVATE_BODY_SENTINEL' }], 'PROBE_CONTENT_PARTS_UNSUPPORTED'],
+    ['stop', '[]', 'PROBE_WRONG_JSON_SHAPE'],
+    ['stop', '{"ok":false}', 'PROBE_WRONG_REQUIRED_VALUE'],
+    ['stop', '{"ok":true,"extra":"PRIVATE_BODY_SENTINEL"}', 'PROBE_EXTRA_PROPERTIES'],
+  ])('rejects %s/%j once, with no cached success or private output', async (finish_reason, content, classification) => {
+    const { server, baseUrl } = await startApp({ OPENROUTER_API_KEY: SENTINEL });
+    const stub = stubOpenRouter(async () => new Response(JSON.stringify({
+      choices: [{ finish_reason, message: { content, reasoning: SENTINEL } }],
+    })));
+    try {
+      const catalog = await primeCatalog([rawModel('dynamic/free', FREE)]);
+      const res = await verify(baseUrl, 'dynamic/free', { profile: 'application_validated_json_v1' });
+      expect(res.status).toBe(422);
+      expect(res.json).toMatchObject({ code: 'MODEL_CAPABILITY_UNVERIFIED', probeClassification: classification });
+      expect(stub.chatCalls()).toHaveLength(1);
+      expect(stub.chatCalls()[0].body.response_format).toEqual({ type: 'json_object' });
+      expect(JSON.stringify(res.json)).not.toContain(SENTINEL);
+      expect(JSON.stringify(res.json)).not.toContain('PRIVATE_BODY_SENTINEL');
+      expect((await import('../../server/ai/capabilityVerificationStore.js')).capabilityVerificationCount()).toBe(0);
+      expect(catalog.openRouterSelectableTextModelIds()).not.toContain('dynamic/free');
+    } finally {
+      stub.restore();
+      await new Promise<void>(r => server.close(() => r()));
     }
   });
 });

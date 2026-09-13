@@ -22,6 +22,8 @@
  */
 
 import { MODEL_CONFIG } from "../modelConfig.js";
+import { APPLICATION_VALIDATED_JSON_PROFILE, type OpenRouterProfile } from '../../src/core/ai/openRouterProfile.js';
+import { structuredRequestFields, completionContent, validatesAiSchema, readRuntimeCompletion, OPENROUTER_RUNTIME_TOKENS, type StreamResponse } from './openRouterOutput.js';
 import { getServerSecretSync } from "../platform/ServerEnvironmentSecretAdapter.js";
 import { ProviderOperationError, classifyProviderError } from "./providerErrors.js";
 import type {
@@ -110,10 +112,11 @@ const OPENROUTER_BASELINE_CAPABILITIES: AiCapabilities = {
   webSearch: false,
 };
 
-export interface OpenRouterFetchResponse {
+export interface OpenRouterFetchResponse extends StreamResponse {
   ok: boolean;
   status: number;
-  json(): Promise<unknown>;
+  /** Baseline (pre-Astra) JSON reader. Real Responses always provide it. */
+  json?(): Promise<unknown>;
 }
 
 export type OpenRouterFetchLike = (url: string, init: RequestInit) => Promise<OpenRouterFetchResponse>;
@@ -133,14 +136,22 @@ function defaultFetch(): OpenRouterFetchLike {
   return (url, init) => (globalThis as any).fetch(url, init);
 }
 
+/**
+ * EXACT baseline (pre-Astra) curated/server-default response reading. It uses the
+ * platform JSON reader with NO streamed byte ceiling, matching `f970ef8`. Applied
+ * ONLY to `curated` execution; verified-dynamic execution keeps the bounded
+ * 256 KiB streamed reader in `openRouterOutput.ts`.
+ */
 async function asJson<T>(res: OpenRouterFetchResponse): Promise<T | undefined> {
   try {
+    if (typeof res.json !== "function") return undefined;
     return (await res.json()) as T;
   } catch {
     return undefined;
   }
 }
 
+/** Baseline assistant-content extraction (curated path). */
 function extractContent(parsed: unknown): string {
   const body = (parsed ?? {}) as { choices?: unknown };
   const choices = Array.isArray(body.choices) ? body.choices : [];
@@ -148,6 +159,20 @@ function extractContent(parsed: unknown): string {
   const content = choice?.message?.content;
   return typeof content === "string" ? content.trim() : "";
 }
+
+/**
+ * TRUSTED, server-derived execution context for an OpenRouter structured call.
+ * It is NEVER derived from client input and NEVER from model-name guessing:
+ *   - `verified_dynamic` requires a CURRENT server-side capability-verification
+ *     record (pricing-fresh + fingerprint + TTL bound), and carries that
+ *     server-recorded profile;
+ *   - `curated` is membership in the server-owned strict-structured allowlist.
+ * This signal is what distinguishes the bounded dynamic-free request behavior
+ * from the EXACT baseline curated/server-default request behavior.
+ */
+export type OpenRouterExecutionContext =
+  | { source: "curated" }
+  | { source: "verified_dynamic"; profile: OpenRouterProfile };
 
 /** The one implemented provider: OpenRouter (OpenAI-compatible). */
 export class OpenRouterProvider implements AiProvider {
@@ -179,25 +204,42 @@ export class OpenRouterProvider implements AiProvider {
     return key;
   }
 
-  private buildRequest(prompt: string, options: AiGenerateOptions, schema?: AiJsonSchema) {
+  private buildRequest(
+    prompt: string,
+    options: AiGenerateOptions,
+    schema: AiJsonSchema | undefined,
+    execution: OpenRouterExecutionContext
+  ) {
     const body: Record<string, unknown> = {
       model: options.model,
       messages: [{ role: "user", content: prompt }],
     };
     if (typeof options.temperature === "number") body["temperature"] = options.temperature;
     if (schema) {
-      // Honor the supplied provider-neutral schema: json_schema (strict) mode is the
-      // semantic contract, not plain json_object. require_parameters ensures the
-      // upstream model must actually accept/use the structured-output parameters.
-      body["response_format"] = {
-        type: "json_schema",
-        json_schema: {
-          name: "structured_output",
-          strict: true,
-          schema: toOpenRouterJsonSchema(schema),
-        },
-      };
-      body["provider"] = { require_parameters: true };
+      const converted = toOpenRouterJsonSchema(schema);
+      if (execution.source === "verified_dynamic") {
+        // Explicitly verified dynamic-free execution keeps the bounded runtime
+        // budget and the server-recorded profile (never the client's claim).
+        Object.assign(
+          body,
+          structuredRequestFields(execution.profile, converted, STRUCTURED_SCHEMA_NAME, OPENROUTER_RUNTIME_TOKENS)
+        );
+        if (execution.profile === APPLICATION_VALIDATED_JSON_PROFILE) {
+          body.messages = [{ role: 'user', content: `${prompt}\nReturn only a JSON value matching this schema. No prose or Markdown.\n${JSON.stringify(converted)}` }];
+        }
+      } else {
+        // Curated/server-default execution preserves the EXACT baseline request:
+        // json_schema (strict) + require_parameters, and NO max_tokens/reasoning.
+        body["response_format"] = {
+          type: "json_schema",
+          json_schema: {
+            name: "structured_output",
+            strict: true,
+            schema: converted,
+          },
+        };
+        body["provider"] = { require_parameters: true };
+      }
     }
     return body;
   }
@@ -207,8 +249,23 @@ export class OpenRouterProvider implements AiProvider {
     options: AiGenerateOptions,
     schema?: AiJsonSchema
   ): Promise<string> {
+    // Dynamic import avoids the catalog/provider construction cycle. No await
+    // between the final authorization check and dispatch below.
+    const catalog = await import('./openRouterCatalog.js');
+    // TRUSTED server-side execution context. A verified-dynamic context requires a
+    // CURRENT verification record; curated membership is a separate server-owned
+    // signal. The model id is never compared to a hard-coded curated slug.
+    const verifiedProfile = catalog.verifiedOpenRouterProfile(options.model);
+    const execution: OpenRouterExecutionContext | undefined = verifiedProfile
+      ? { source: "verified_dynamic", profile: verifiedProfile }
+      : catalog.isVerifiedStrictStructuredModel(options.model)
+      ? { source: "curated" }
+      : undefined;
+    if (!execution || (execution.source === "verified_dynamic" && !schema)) {
+      throw new ProviderOperationError('UNSUPPORTED_CAPABILITY', 'The selected free model is not currently verified.', {});
+    }
     const key = this.requireKey();
-    const body = this.buildRequest(prompt, options, schema);
+    const body = this.buildRequest(prompt, options, schema, execution);
 
     let res: OpenRouterFetchResponse;
     try {
@@ -219,6 +276,7 @@ export class OpenRouterProvider implements AiProvider {
           "Content-Type": "application/json",
         },
         body: JSON.stringify(body),
+        redirect: 'error',
         signal: AbortSignal.timeout(MODEL_CONFIG.requestTimeoutMs),
       });
     } catch (err) {
@@ -228,19 +286,33 @@ export class OpenRouterProvider implements AiProvider {
       throw new ProviderOperationError(
         code === "PROVIDER_ERROR" ? "UNAVAILABLE" : code,
         "OpenRouter request failed.",
-        {},
-        err
+        {}
       );
     }
 
     if (!res.ok) {
-      const parsed = await asJson<{ error?: { message?: string } }>(res);
-      const rawMessage = parsed?.error?.message ?? `OpenRouter request failed (HTTP ${res.status}).`;
-      const error = Object.assign(new Error(rawMessage), { status: res.status });
+      const error = Object.assign(new Error('OpenRouter request failed.'), { status: res.status });
       const code = classifyProviderError(error);
-      throw new ProviderOperationError(code, rawMessage, {}, error);
+      throw new ProviderOperationError(code, 'OpenRouter request failed.', {});
     }
 
+    if (execution.source === "verified_dynamic") {
+      // Verified-dynamic execution: bounded 256 KiB streamed reader, overflow
+      // cancellation, and full structural validation. The body is read EXACTLY
+      // once here.
+      let parsed: unknown;
+      try {
+        parsed = await readRuntimeCompletion(res);
+      } catch {
+        throw new ProviderOperationError('INVALID_RESPONSE', 'OpenRouter returned an unreadable or oversized response.', {});
+      }
+      const extracted = completionContent(parsed);
+      if (extracted.ok === false) throw new ProviderOperationError('INVALID_RESPONSE', 'OpenRouter did not return a complete supported answer.', {});
+      return extracted.content;
+    }
+
+    // Curated/server-default execution: EXACT baseline (pre-Astra) reading with
+    // NO streamed byte ceiling. The body is read EXACTLY once here.
     const parsed = await asJson<unknown>(res);
     const text = extractContent(parsed);
     if (!text) {
@@ -260,9 +332,11 @@ export class OpenRouterProvider implements AiProvider {
   ): Promise<T> {
     const text = await this.chat(prompt, options, schema);
     try {
-      return JSON.parse(text) as T;
+      const parsed = JSON.parse(text);
+      if (!validatesAiSchema(parsed, schema)) throw new Error();
+      return parsed as T;
     } catch (err) {
-      throw new ProviderOperationError("INVALID_RESPONSE", "OpenRouter returned unparseable JSON.", {}, err);
+      throw new ProviderOperationError("INVALID_RESPONSE", "OpenRouter returned invalid structured data.", {});
     }
   }
 }

@@ -62,6 +62,9 @@ import {
   getOpenRouterCatalogSnapshot,
   isCapabilityVerifiedOpenRouterTextModel,
   isCompatibleOpenRouterTextModel,
+  isOpenRouterStrictStructuredCandidate,
+  isOpenRouterJsonCandidate,
+  verifiedOpenRouterProfile,
   isSelectableOpenRouterTextModel,
   openRouterSelectableTextModelIds,
   openRouterSelectableImageModelIds,
@@ -99,6 +102,15 @@ export interface ProviderCatalogTextModel {
   structuredVerified?: boolean;
   /** True when a CURRENT runtime capability verification made this model executable. */
   capabilityVerified?: boolean;
+  /**
+   * SERVER-OWNED candidate prefilter (never execution authority): the model is
+   * currently verified FREE, fresh, non-router, ordinary text output, and
+   * advertises BOTH response_format + structured_outputs. Runtime verification is
+   * still mandatory before the model becomes executable.
+   */
+  strictStructuredCandidate?: boolean;
+  jsonCandidate?: boolean;
+  verifiedProfile?: import('../../src/core/ai/openRouterProfile.js').OpenRouterProfile;
   /** True when the model may execute on the current Kitchen Codex transport. */
   executionCompatible?: boolean;
   /** UI compatibility state (never inferred optimistically). */
@@ -351,6 +363,7 @@ function textProviderRows(regs: RegisteredProvider[]): ProviderCatalogTextProvid
       const isImage = model.capabilities.imageGeneration;
       const selectable = isImage ? model.executionCompatible : isSelectableOpenRouterTextModel(model);
       const capabilityVerified = !isImage && isCapabilityVerifiedOpenRouterTextModel(model);
+      const strictStructuredCandidate = !isImage && isOpenRouterStrictStructuredCandidate(model);
       return {
         id: model.modelId,
         default: primary.has(model.modelId),
@@ -362,6 +375,9 @@ function textProviderRows(regs: RegisteredProvider[]): ProviderCatalogTextProvid
         pricingVerified: model.pricingVerified,
         structuredVerified: model.structuredVerified,
         capabilityVerified,
+        strictStructuredCandidate,
+        jsonCandidate: !isImage && isOpenRouterJsonCandidate(model),
+        verifiedProfile: capabilityVerified ? verifiedOpenRouterProfile(model.modelId) : undefined,
         executionCompatible: selectable,
         compatibility: selectable
           ? "compatible"

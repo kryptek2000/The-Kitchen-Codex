@@ -74,6 +74,13 @@ export interface AiCandidate {
    * store instead (exact-provider scoped; never an env fallback).
    */
   credentialSource?: CredentialSource;
+  /**
+   * v0.8.x: when true, this candidate must receive EXACTLY ONE attempt — the
+   * fallback runner NEVER retries it, regardless of the operation's retry policy.
+   * Set from TRUSTED server state only (e.g. a verified-dynamic free model whose
+   * output is not guaranteed); never from client input.
+   */
+  singleAttempt?: boolean;
 }
 
 /** Result of a successful fallback run. */
@@ -323,8 +330,11 @@ export async function runWithAiFallback<T>(
 
   for (let i = 0; i < capable.length; i++) {
     const candidate = capable[i];
-    // Retries stay LOCAL to this candidate (A1, A2, ...) before the next candidate.
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    // A `singleAttempt` candidate (trusted server state) is NEVER retried, even
+    // when the operation opts into same-model retry. Retries otherwise stay LOCAL
+    // to this candidate (A1, A2, ...) before the next candidate.
+    const candidateMaxAttempts = candidate.singleAttempt ? 1 : maxAttempts;
+    for (let attempt = 1; attempt <= candidateMaxAttempts; attempt++) {
       try {
         const result = await options.run(candidate);
         // Successful fallback: surface intermediate attempt failures (sanitized)
@@ -360,7 +370,7 @@ export async function runWithAiFallback<T>(
         // Same-model transient retry: bounded, only when opted in + code matches,
         // and only while more attempts remain for THIS candidate.
         const canRetry =
-          maxAttempts > 1 && attempt < maxAttempts && retryableCodes.includes(normalized.code);
+          candidateMaxAttempts > 1 && attempt < candidateMaxAttempts && retryableCodes.includes(normalized.code);
         if (canRetry) {
           await sleep(backoffMs);
           continue; // retry the SAME provider/model candidate.

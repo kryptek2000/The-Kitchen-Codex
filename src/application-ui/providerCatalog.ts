@@ -18,6 +18,7 @@
  */
 
 import type { NetworkAdapter, NetworkResponse } from '../application/adapters/NetworkAdapter';
+import { isOpenRouterProfile, type OpenRouterProfile } from '../core/ai/openRouterProfile';
 import type { SecretStorageScope } from '../application/adapters/SecretAdapter';
 import type { AiCapabilities } from '../core/ai/types';
 import {
@@ -75,6 +76,14 @@ export interface ProviderCatalogTextModelView {
   structuredVerified?: boolean;
   /** True when a CURRENT runtime capability verification made this model executable. */
   capabilityVerified?: boolean;
+  /**
+   * SERVER-OWNED candidate prefilter (never execution authority): currently
+   * verified FREE, fresh, non-router, ordinary text output, and advertises BOTH
+   * response_format + structured_outputs. Runtime verification is still required.
+   */
+  strictStructuredCandidate?: boolean;
+  jsonCandidate?: boolean;
+  verifiedProfile?: OpenRouterProfile;
   /** True when the model may execute on the current Kitchen Codex transport. */
   executionCompatible?: boolean;
   /** UI compatibility state. */
@@ -341,6 +350,9 @@ function normalizeTextModel(raw: unknown): ProviderCatalogTextModelView | null {
   if (typeof row['pricingVerified'] === 'boolean') model.pricingVerified = row['pricingVerified'];
   if (typeof row['structuredVerified'] === 'boolean') model.structuredVerified = row['structuredVerified'];
   if (typeof row['capabilityVerified'] === 'boolean') model.capabilityVerified = row['capabilityVerified'];
+  if (typeof row['strictStructuredCandidate'] === 'boolean') model.strictStructuredCandidate = row['strictStructuredCandidate'];
+  if (typeof row['jsonCandidate'] === 'boolean') model.jsonCandidate = row['jsonCandidate'];
+  if (isOpenRouterProfile(row['verifiedProfile'])) model.verifiedProfile = row['verifiedProfile'];
   if (typeof row['executionCompatible'] === 'boolean') model.executionCompatible = row['executionCompatible'];
   if (
     row['compatibility'] === 'compatible' ||

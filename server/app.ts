@@ -950,7 +950,11 @@ export function createApp(opts: CreateAppOptions): express.Express {
           credentialSource = rawCredentialSource;
         }
 
-        const result = await verifyOpenRouterModelCapability({ modelId, credentialSource });
+        const profile = req.body.profile;
+        if (profile !== undefined && profile !== 'strict_json_schema_v1' && profile !== 'application_validated_json_v1') {
+          return res.status(400).json({ code: 'INVALID_REQUEST', error: 'Unknown verification mode.' });
+        }
+        const result = await verifyOpenRouterModelCapability({ modelId, credentialSource, profile });
         if (result.ok === true) {
           return res.json({
             ok: true,
@@ -967,6 +971,8 @@ export function createApp(opts: CreateAppOptions): express.Express {
           modelId: result.modelId,
           code: result.code,
           message: result.message,
+          // Additive, bounded, non-secret diagnosis (present only when the probe ran).
+          ...(result.probeClassification ? { probeClassification: result.probeClassification } : {}),
         });
       } catch {
         return res.status(500).json({

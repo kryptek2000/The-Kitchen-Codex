@@ -47,7 +47,7 @@ import { operationRequiredCapabilities } from "./operations.js";
 import type { AiProvider } from "./types.js";
 import type { ImageProvider } from "./imageProvider.js";
 import type { SelectionIntent } from "./parseSelectionMetadata.js";
-import { openRouterPricingGuard, findOpenRouterCatalogModel, type PricingGuardCode } from "./openRouterCatalog.js";
+import { openRouterPricingGuard, findOpenRouterCatalogModel, verifiedOpenRouterProfile, type PricingGuardCode } from "./openRouterCatalog.js";
 import {
   createSessionBoundImageProvider,
   createSessionBoundTextProvider,
@@ -282,11 +282,13 @@ export function resolveTextCandidateContext(
       ? [serverSelection.selectedModelId]
       : roleModelsForProvider(registered.provider.id, operation);
     return {
-      candidates: models.map((model) => ({
-        provider: registered.provider,
-        model,
-        credentialSource: "server_environment" as const,
-      })),
+      candidates: models.map((model) =>
+        withDynamicSingleAttempt({
+          provider: registered.provider,
+          model,
+          credentialSource: "server_environment" as const,
+        })
+      ),
       source: "server_managed",
       credentialSource: "server_environment",
     };
@@ -341,10 +343,27 @@ export function resolveTextCandidateContext(
   for (const registered of regs) {
     if (registered.enabled === false) continue;
     for (const model of roleModelsForProvider(registered.provider.id, operation)) {
-      candidates.push({ provider: registered.provider, model, credentialSource: "server_environment" });
+      candidates.push(
+        withDynamicSingleAttempt({ provider: registered.provider, model, credentialSource: "server_environment" })
+      );
     }
   }
   return { candidates, source: "server_default", credentialSource: "server_environment" };
+}
+
+/**
+ * v0.8.x: marks a candidate that must receive EXACTLY ONE provider attempt.
+ * Derived ONLY from trusted server state: an OpenRouter model with a CURRENT
+ * capability-verification record (fresh verified-free pricing + fingerprint +
+ * TTL bound) is a verified-dynamic candidate whose malformed/invalid output must
+ * NOT trigger a same-model retry. Never derived from client input or model-id
+ * shape, and never applied to curated/server-default or other providers.
+ */
+function withDynamicSingleAttempt(candidate: AiCandidate): AiCandidate {
+  if (candidate.provider.id === "openrouter" && verifiedOpenRouterProfile(candidate.model)) {
+    return { ...candidate, singleAttempt: true };
+  }
+  return candidate;
 }
 
 /**
@@ -360,13 +379,13 @@ function buildTextCandidates(
   if (credentialSource === "session_only") {
     const bound = createSessionBoundTextProvider(registered.provider.id);
     if (!bound) return [];
-    return models.map((model) => ({ provider: bound, model, credentialSource: "session_only" as const }));
+    return models.map((model) =>
+      withDynamicSingleAttempt({ provider: bound, model, credentialSource: "session_only" as const })
+    );
   }
-  return models.map((model) => ({
-    provider: registered.provider,
-    model,
-    credentialSource: "server_environment" as const,
-  }));
+  return models.map((model) =>
+    withDynamicSingleAttempt({ provider: registered.provider, model, credentialSource: "server_environment" as const })
+  );
 }
 
 /**

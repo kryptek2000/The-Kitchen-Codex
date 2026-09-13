@@ -14,6 +14,7 @@
  */
 
 import React, { useMemo, useState } from 'react';
+import { STRICT_JSON_SCHEMA_PROFILE, APPLICATION_VALIDATED_JSON_PROFILE, type OpenRouterProfile } from '../core/ai/openRouterProfile';
 import {
   countFreeModels,
   formatImageModelPrice,
@@ -22,6 +23,7 @@ import {
   modelBadges,
   modelCostClass,
   pickerModels,
+  probeFailureMessage,
   type ModelPickerGroup,
   type ModelVerificationView,
   type SurfaceModelOption,
@@ -51,7 +53,7 @@ export interface ModelPickerProps {
    * Explicit "Verify for Kitchen Codex" action for a discovered FREE text model.
    * NEVER invoked automatically — only from the user's click.
    */
-  onVerifyModel?: (modelId: string) => void;
+  onVerifyModel?: (modelId: string, profile?: OpenRouterProfile) => void;
 }
 
 /** Finds a model row by id. */
@@ -207,17 +209,22 @@ export function ModelPicker({ kind, models, discoveredModels = [], value, onChan
               </div>
               <ul className="max-h-40 overflow-y-auto space-y-0.5">
                 {discovered.map((model) => {
-                  // Only FREE discovered TEXT models are eligible for an explicit
-                  // capability verification. The control is NEVER auto-run.
-                  const verifiable =
-                    kind === 'text' && modelCostClass(model) === 'free' && Boolean(onVerifyModel);
+                  // A "Verify for Kitchen Codex" control is offered ONLY for FREE
+                  // discovered text models the server marks as strict-structured
+                  // CANDIDATES (verified free + ordinary text output + advertises
+                  // response_format + structured_outputs). It is NEVER auto-run.
+                  const isFreeText = kind === 'text' && modelCostClass(model) === 'free';
+                  const eligible =
+                    isFreeText && model.strictStructuredCandidate === true && Boolean(onVerifyModel);
+                  const jsonEligible = isFreeText && model.jsonCandidate === true && Boolean(onVerifyModel);
+                  const incompatible = isFreeText && model.strictStructuredCandidate !== true;
                   const verification = verifications[model.id];
                   const state = verification?.state ?? 'idle';
                   return (
                     <li
                       key={`discovered:${model.id}`}
                       data-model-option-discovered={model.id}
-                      aria-disabled={!verifiable}
+                      aria-disabled={!(eligible || jsonEligible)}
                       className="px-2 py-1.5 rounded-lg opacity-80"
                     >
                       <div className="flex items-center justify-between gap-2">
@@ -229,7 +236,16 @@ export function ModelPicker({ kind, models, discoveredModels = [], value, onChan
                         </span>
                       </div>
                       <div className="text-[10px] text-gray-500 font-mono truncate">{model.id}</div>
-                      {verifiable && (
+                      {incompatible && (
+                        <div
+                          data-model-incompatible={model.id}
+                          className="mt-1 text-[10px] text-amber-300/90"
+                        >
+                          Strict structured output is unsupported by this model.
+                          {jsonEligible ? ' Application-validated JSON can be tested separately.' : ''}
+                        </div>
+                      )}
+                      {eligible && (
                         <div className="mt-1 flex flex-wrap items-center gap-2">
                           <span
                             data-model-verification-state={model.id}
@@ -246,16 +262,35 @@ export function ModelPicker({ kind, models, discoveredModels = [], value, onChan
                           <button
                             type="button"
                             data-model-verify={model.id}
-                            onClick={() => onVerifyModel?.(model.id)}
+                            onClick={() => onVerifyModel?.(model.id, STRICT_JSON_SCHEMA_PROFILE)}
                             disabled={state === 'verifying'}
                             className="px-2 py-0.5 rounded-md text-[10px] font-medium bg-white/10 text-gray-200 hover:bg-white/15 border border-white/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                           >
                             {state === 'verifying' ? 'Verifying…' : 'Verify for Kitchen Codex'}
                           </button>
+                          <span className="text-[10px] text-gray-400">Strict schema request · one free probe · application checks every answer</span>
                         </div>
                       )}
-                      {verifiable && state === 'failed' && verification?.message && (
-                        <div className="text-[10px] text-red-300/90 mt-0.5">{verification.message}</div>
+                      {jsonEligible && (
+                        <div className="mt-1 space-y-1">
+                          <button type="button" data-model-verify-json={model.id}
+                            disabled={state === 'verifying'}
+                            onClick={() => onVerifyModel?.(model.id, APPLICATION_VALIDATED_JSON_PROFILE)}
+                            className="px-2 py-1 rounded border border-white/10 text-[10px] disabled:opacity-40">
+                            Verify application-validated JSON
+                          </button>
+                          <div className="text-[10px] text-gray-400">One free probe. JSON mode; Kitchen Codex validates the schema. No provider schema-enforcement claim.</div>
+                        </div>
+                      )}
+                      {(eligible || jsonEligible) && state === 'failed' && (
+                        <div
+                          data-model-verification-error={model.id}
+                          className="text-[10px] text-red-300/90 mt-0.5"
+                        >
+                          {verification?.classification
+                            ? probeFailureMessage(verification.classification)
+                            : verification?.message ?? ''}
+                        </div>
                       )}
                     </li>
                   );

@@ -32,7 +32,8 @@ import { OPENROUTER_STRUCTURED_MODEL } from "./openRouterProvider.js";
 import {
   OPENROUTER_IMAGE_MODELS,
 } from "./openRouterImageProvider.js";
-import { isCapabilityVerified } from "./capabilityVerificationStore.js";
+import { isCapabilityVerified, getCapabilityVerification, STRICT_JSON_SCHEMA_PROFILE } from "./capabilityVerificationStore.js";
+import type { OpenRouterProfile } from '../../src/core/ai/openRouterProfile.js';
 
 /** OpenRouter's fixed, official model-catalog endpoint (never configurable). */
 export const OPENROUTER_MODELS_ENDPOINT = "https://openrouter.ai/api/v1/models";
@@ -361,9 +362,21 @@ export function normalizeOpenRouterModel(raw: unknown): OpenRouterCatalogModel |
   };
 }
 
-/** A text model is DISCOVERABLE when it emits text and advertises a chat surface. */
+/**
+ * True when a model's OUTPUT is ordinary text: it emits text and does NOT emit
+ * audio or image. INPUT modalities are deliberately irrelevant — an image/video
+ * INPUT model that outputs only text is still ordinary text. This is the primary
+ * modality rule for ordinary text discovery (it removes audio-generation models
+ * such as Google Lyria and image-output models from the text surface).
+ */
+export function isOrdinaryTextOutputModel(model: OpenRouterCatalogModel): boolean {
+  const out = model.outputModalities;
+  return out.includes("text") && !out.includes("audio") && !out.includes("image");
+}
+
+/** A text model is DISCOVERABLE when it emits ordinary text and advertises a chat surface. */
 export function isCompatibleOpenRouterTextModel(model: OpenRouterCatalogModel): boolean {
-  if (!model.outputModalities.includes("text")) return false;
+  if (!isOrdinaryTextOutputModel(model)) return false;
   const params = model.supportedParameters;
   return (
     params.includes("max_tokens") ||
@@ -422,6 +435,37 @@ export function isCapabilityVerifiedOpenRouterTextModel(
  */
 export function isSelectableOpenRouterTextModel(model: OpenRouterCatalogModel): boolean {
   return model.structuredVerified || isCapabilityVerifiedOpenRouterTextModel(model);
+}
+
+/**
+ * SERVER-OWNED candidate/eligibility signal for an explicit verification. This is
+ * a PREFILTER ONLY — it never makes a model executable and never substitutes for
+ * runtime verification. A model is an eligible candidate only when ALL current
+ * trusted catalog facts hold:
+ *   - currently verified FREE pricing (fresh snapshot + verified + costClass free);
+ *   - non-router;
+ *   - ordinary text OUTPUT (no audio/image output);
+ *   - advertises BOTH `response_format` and `structured_outputs`.
+ * Client/catalog metadata is never proof of runtime compatibility.
+ */
+export function isOpenRouterStrictStructuredCandidate(model: OpenRouterCatalogModel): boolean {
+  return isOpenRouterJsonCandidate(model) && model.supportedParameters.includes('structured_outputs');
+}
+
+export function isOpenRouterJsonCandidate(model: OpenRouterCatalogModel): boolean {
+  if (model.isRouter) return false;
+  if (!model.isFree || model.costClass !== "free" || !model.pricingVerified) return false;
+  if (!getOpenRouterCatalogSnapshot().pricingFresh) return false;
+  if (!isOrdinaryTextOutputModel(model)) return false;
+  const params = model.supportedParameters;
+  return params.includes("response_format");
+}
+
+/** Resolve by CURRENT server snapshot and record; never by a client profile hint. */
+export function verifiedOpenRouterProfile(modelId: string): OpenRouterProfile | undefined {
+  const model = getOpenRouterCatalogSnapshot().textModels.find(m => m.modelId === modelId);
+  if (!model || !isCapabilityVerifiedOpenRouterTextModel(model)) return undefined;
+  return getCapabilityVerification('openrouter', modelId)?.profile ?? STRICT_JSON_SCHEMA_PROFILE;
 }
 
 /** An image model is DISCOVERABLE when it emits images (not a variable router). */
@@ -623,7 +667,13 @@ export function buildBaselineSnapshot(now: number = Date.now()): OpenRouterCatal
 }
 
 export function getOpenRouterCatalogSnapshot(): OpenRouterCatalogSnapshot {
-  return snapshot ?? buildBaselineSnapshot();
+  if (!snapshot) return buildBaselineSnapshot();
+  const age = Date.now() - snapshot.fetchedAt;
+  // Price truth expires even if no refresh event occurs. Never resurrect a
+  // failed refresh's stale pricing merely because its original timestamp is young.
+  return snapshot.pricingFresh && age >= 0 && age < OPENROUTER_CATALOG_TTL_MS
+    ? snapshot
+    : { ...snapshot, pricingFresh: false };
 }
 
 export function resetOpenRouterCatalogForTests(): void {
@@ -678,8 +728,9 @@ export async function refreshOpenRouterCatalog(
   options: RefreshOpenRouterCatalogOptions = {}
 ): Promise<OpenRouterCatalogSnapshot> {
   const now = options.now ?? Date.now();
-  if (!options.force && snapshot && now - snapshot.fetchedAt < OPENROUTER_CATALOG_TTL_MS) {
-    return { ...snapshot, source: "cached", pricingFresh: true };
+  if (!options.force && snapshot?.pricingFresh && now >= snapshot.fetchedAt &&
+      now - snapshot.fetchedAt < OPENROUTER_CATALOG_TTL_MS) {
+    return { ...snapshot, source: "cached" };
   }
   if (inflight) return inflight;
   const fetchFn =
