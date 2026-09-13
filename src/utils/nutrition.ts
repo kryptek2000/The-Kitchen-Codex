@@ -21,6 +21,7 @@
  */
 
 import { RecipeNutrition } from '../types';
+import { canApplyNutritionEstimate, type NutritionAssessment } from '../core/nutritionSanity';
 
 /**
  * Numeric metadata on a nutrition object that must never be scaled by the
@@ -148,4 +149,54 @@ export function nutritionForRequestedServings(
 ): RecipeNutrition {
   const base = resolveNutritionBase(nutrition);
   return roundNutritionForDisplay(nutritionForServings(nutrition, base, requestedServings));
+}
+
+/**
+ * Bounded, user-facing message shown when an estimate cannot be safely applied.
+ * Never contains provider/secret/raw-error text.
+ */
+export const NUTRITION_INCOMPLETE_MESSAGE =
+  'Nutrition could not be safely calculated. Review unresolved ingredients.';
+
+/**
+ * Bounded message for a curated-reference estimate whose automatic saving is
+ * disabled in this repair (detailed provenance is not yet persisted).
+ */
+export const NUTRITION_AUTOSAVE_DISABLED_MESSAGE =
+  'Estimate matched in the curated local reference, but automatic saving is disabled until detailed provenance can be stored. Enter nutrition manually.';
+
+/**
+ * Source-aware review heading. An offline/database estimate must NEVER be
+ * presented as an "AI Estimate". This is a pure label function so the copy is
+ * directly regression-testable without a DOM.
+ */
+export function nutritionEstimateHeading(source?: RecipeNutrition['source']): string {
+  switch (source) {
+    case 'ai_estimate': return 'AI Estimate — Review & Apply';
+    case 'offline_heuristic': return 'Offline Estimate — Review & Apply';
+    case 'database': return 'Database Estimate — Review & Apply';
+    case 'source_metadata': return 'Source Nutrition — Review & Apply';
+    case 'user_defined': return 'User Nutrition — Review & Apply';
+    default: return 'Estimate — Review & Apply';
+  }
+}
+
+/**
+ * THE single apply/save contract for a pending estimate.
+ *
+ * Returns the exact whole-recipe baseline payload to persist (with its base
+ * serving denominator and WITHOUT the additive completeness assessment), or
+ * `null` when the estimate is incomplete or fails sanity validation. A `null`
+ * result means the caller MUST NOT write anything, so a rejected estimate can
+ * never overwrite existing user-entered nutrition.
+ */
+export function buildNutritionApplyPayload(
+  pending: (RecipeNutrition & { assessment?: NutritionAssessment }) | null | undefined,
+  assessment: NutritionAssessment | null | undefined,
+  baseServings: number
+): RecipeNutrition | null {
+  if (!pending) return null;
+  if (!canApplyNutritionEstimate(pending, assessment, baseServings).ok) return null;
+  const { assessment: _assessment, ...clean } = pending;
+  return { ...clean, servings: baseServings };
 }

@@ -224,8 +224,10 @@ describe("estimateRecipeNutrition - entry point invariance", () => {
   const originalKey = process.env.GEMINI_API_KEY;
 
   beforeEach(() => {
-    // Force the offline algorithmic path deterministically (the sentinel the
-    // estimator treats as "no Gemini client configured").
+    // Force the offline path deterministically (the sentinel the estimator
+    // treats as "no Gemini client configured"). The ingredients below are all
+    // in the curated source-backed reference, so the deterministic engine is
+    // selected before any AI attempt.
     process.env.GEMINI_API_KEY = "MY_GEMINI_API_KEY";
   });
 
@@ -236,15 +238,15 @@ describe("estimateRecipeNutrition - entry point invariance", () => {
 
   it("returns identical TOTAL nutrition for different requested servings", async () => {
     const ingredients = [
-      "400g spaghetti pasta",
-      "200g guanciale",
-      "4 large egg yolks",
-      "100g Pecorino Romano cheese",
+      "400 g All-Purpose Flour",
+      "4 large eggs",
+      "200 g Whole Milk",
+      "100 g Butter",
     ];
 
-    const r1 = await estimateRecipeNutrition({ title: "Carbonara", servings: 1, ingredients });
-    const r2 = await estimateRecipeNutrition({ title: "Carbonara", servings: 2, ingredients });
-    const r8 = await estimateRecipeNutrition({ title: "Carbonara", servings: 8, ingredients });
+    const r1 = await estimateRecipeNutrition({ title: "Batter", servings: 1, ingredients });
+    const r2 = await estimateRecipeNutrition({ title: "Batter", servings: 2, ingredients });
+    const r8 = await estimateRecipeNutrition({ title: "Batter", servings: 8, ingredients });
 
     expect(r1.calories).toBe(r2.calories);
     expect(r2.calories).toBe(r8.calories);

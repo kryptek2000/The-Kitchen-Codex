@@ -8,6 +8,31 @@ import {
 } from '../types';
 import { serializeRecipeToObsidianMarkdown, parseObsidianRecipeMarkdown } from './markdownParser';
 import { load as yamlLoad, dump as yamlDump } from 'js-yaml';
+import {
+  canApplyNutritionEstimate,
+  type NutritionAssessment,
+} from '../core/nutritionSanity';
+
+/**
+ * FAIL CLOSED for machine-generated recovered nutrition.
+ *
+ * Recovered nutrition is produced by the estimator/metadata-recovery path, not
+ * by the user. It may only be merged when the centralized applicability
+ * contract authorizes it (explicit trusted assessment + complete structured
+ * provenance). Recovered items that carry no trusted assessment are rejected so
+ * an unsafe generated estimate can never be persisted to the vault. Manual
+ * user-entered nutrition and existing imported nutrition are unaffected.
+ */
+function isApplicableRecoveredNutrition(item: { value?: unknown } | undefined): boolean {
+  const value = item?.value as (RecipeNutrition & { assessment?: NutritionAssessment }) | undefined;
+  if (!value || typeof value !== 'object') return false;
+  const assessment = value.assessment;
+  const baseServings =
+    typeof value.servings === 'number' && Number.isFinite(value.servings) && value.servings > 0
+      ? value.servings
+      : 1;
+  return canApplyNutritionEstimate(value, assessment, baseServings).ok;
+}
 
 /**
  * Normalizes varied time formats (e.g., "PT20M", "20m", "1 hr 15 min", "90 minutes") into clean standard display strings.
@@ -302,14 +327,20 @@ export function mergeRecoveredMetadata(
         break;
 
       case 'calories':
-        if (typeof item.value === 'number' && item.value > 0) {
+        // Machine-generated calories are gated by the applicability contract.
+        if (typeof item.value === 'number' && item.value > 0 && isApplicableRecoveredNutrition(item)) {
           updated.calories = item.value;
           frontmatter.calories = item.value;
         }
         break;
 
       case 'nutrition':
-        if (item.value && typeof item.value === 'object' && !Array.isArray(item.value)) {
+        if (
+          item.value &&
+          typeof item.value === 'object' &&
+          !Array.isArray(item.value) &&
+          isApplicableRecoveredNutrition(item)
+        ) {
           const nutr = item.value as RecipeNutrition;
           updated.nutrition = nutr;
           frontmatter.nutrition = nutr;

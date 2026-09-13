@@ -215,8 +215,12 @@ export function recoverMetadataAlgorithmically(
     tags.push("pasta");
   }
 
-  // Nutrition estimation
-  const nutResult = estimateAlgorithmicNutrition(title, nutritionServings, rawIngs.length > 0 ? rawIngs : ["1 portion ingredients"]);
+  // Nutrition estimation. A recipe with NO usable ingredient lines has nothing
+  // estimable: skip estimation entirely and return nutrition as ABSENT (never a
+  // synthetic `1 portion ingredients` sentinel and never a zero-valued object
+  // that looks evaluated). Unrelated metadata recovery continues normally.
+  const nutResult =
+    rawIngs.length > 0 ? estimateAlgorithmicNutrition(title, nutritionServings, rawIngs) : undefined;
 
   const result: MetadataRecoveryResult = {
     prepTime: {
@@ -233,27 +237,31 @@ export function recoverMetadataAlgorithmically(
           explanation: "Sum of estimated prep and cook times",
         }
       : undefined,
-    calories: {
-      value: nutResult.calories,
-      confidence: "medium",
-      source: "culinary_inference",
-      explanation: `Calculated as total nutrition for the entire recipe batch across ${nutritionServings} servings`,
-    },
-    nutrition: {
-      value: {
-        calories: nutResult.calories,
-        protein: nutResult.protein,
-        carbohydrates: nutResult.carbohydrates,
-        fat: nutResult.fat,
-        fiber: nutResult.fiber,
-        sodium: nutResult.sodium,
-        servings: nutritionServings,
-        confidenceNote: nutResult.confidenceNote,
-      },
-      confidence: "medium",
-      source: "culinary_inference",
-      explanation: "Estimated macronutrient breakdown based on culinary database heuristics",
-    },
+    ...(nutResult
+      ? {
+          calories: {
+            value: nutResult.calories,
+            confidence: "medium" as const,
+            source: "culinary_inference" as const,
+            explanation: `Total nutrition for the entire recipe batch across ${nutritionServings} servings (curated local food reference)`,
+          },
+          nutrition: {
+            value: {
+              calories: nutResult.calories,
+              protein: nutResult.protein,
+              carbohydrates: nutResult.carbohydrates,
+              fat: nutResult.fat,
+              fiber: nutResult.fiber,
+              sodium: nutResult.sodium,
+              servings: nutritionServings,
+              confidenceNote: nutResult.confidenceNote,
+            },
+            confidence: "medium" as const,
+            source: "culinary_inference" as const,
+            explanation: "Estimated macronutrient breakdown from the curated local food reference",
+          },
+        }
+      : {}),
     category: {
       value: category,
       confidence: "medium",

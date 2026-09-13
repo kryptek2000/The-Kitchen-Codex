@@ -19,7 +19,19 @@ import {
   roundNutritionForDisplay,
   nutritionForRequestedServings,
   resolveRecipeBaseServings,
+  nutritionEstimateHeading,
+  NUTRITION_INCOMPLETE_MESSAGE,
+  NUTRITION_AUTOSAVE_DISABLED_MESSAGE,
+  buildNutritionApplyPayload,
 } from '../utils/nutrition';
+import {
+  canApplyNutritionEstimate,
+  evaluateMachineNutritionApplicability,
+  type NutritionAssessment,
+} from '../core/nutritionSanity';
+
+/** A pending estimate may carry the additive machine-resolution assessment. */
+type PendingNutritionEstimate = RecipeNutrition & { assessment?: NutritionAssessment };
 
 interface RecipeNutritionCardProps {
   recipe: ObsidianRecipe;
@@ -59,7 +71,7 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
 }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [pendingEstimate, setPendingEstimate] = useState<RecipeNutrition | null>(null);
+  const [pendingEstimate, setPendingEstimate] = useState<PendingNutritionEstimate | null>(null);
   const [isExpanded, setIsExpanded] = useState(true);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
@@ -90,6 +102,24 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
   const provenanceText = [currentSourceLabel, currentConfidenceLabel]
     .filter(Boolean)
     .join(' · ');
+
+  // FAIL CLOSED: a pending machine estimate may only be applied when the
+  // centralized applicability contract authorizes it. The contract requires an
+  // explicit trusted assessment with complete structured provenance; automated
+  // application is additionally disabled until provenance can be persisted.
+  const pendingAssessment = pendingEstimate?.assessment;
+  const pendingApplyCheck = pendingEstimate
+    ? canApplyNutritionEstimate(pendingEstimate, pendingAssessment, recipeBaseServings)
+    : { ok: false, reasons: [] as string[] };
+  const canApplyPending = Boolean(pendingEstimate) && pendingApplyCheck.ok;
+  const pendingRules = pendingEstimate
+    ? evaluateMachineNutritionApplicability(pendingEstimate, pendingAssessment, recipeBaseServings)
+    : { ok: false, reasons: [] as string[] };
+  const pendingHeading = nutritionEstimateHeading(pendingEstimate?.source);
+  const pendingProvenance = pendingAssessment?.provenance;
+  const pendingUnresolved = pendingProvenance?.unresolvedIngredients ?? [];
+  const pendingResolvedCount = pendingProvenance?.resolvedIngredients ?? 0;
+  const pendingTotalCount = pendingProvenance?.totalIngredients ?? 0;
 
   // Macro calculations for ratio bar (ratios are scale-invariant)
   const protein = displayedNutrition?.protein || 0;
@@ -138,11 +168,14 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
   };
 
   const handleApplyEstimate = async () => {
-    if (!pendingEstimate) return;
+    // FAIL CLOSED: buildNutritionApplyPayload returns null for an incomplete or
+    // sanity-invalid estimate, so nothing is ever written in that case.
+    const payload = buildNutritionApplyPayload(pendingEstimate, pendingAssessment, recipeBaseServings);
+    if (!payload) return;
     try {
       // Persist the STABLE recipe-total baseline plus its original serving
       // denominator. The displayed value is a deterministic derivation of this.
-      await onUpdateNutrition({ ...pendingEstimate, servings: recipeBaseServings });
+      await onUpdateNutrition(payload);
       setPendingEstimate(null);
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
@@ -225,56 +258,101 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 text-amber-300 text-xs font-bold">
               <Sparkles className="w-4 h-4" />
-              <span>AI Estimate Generated — Review & Apply</span>
+              <span>{pendingHeading}</span>
             </div>
             <span className="text-[10px] font-mono text-gray-400">
-              {currentServings} Servings
+              {currentServings === recipeBaseServings
+                ? `Entire recipe · base ${recipeBaseServings} servings`
+                : `Total for ${currentServings} servings · base ${recipeBaseServings}`}
             </span>
           </div>
 
-          <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 text-center">
-            <div className="p-2 rounded-lg bg-[#111] border border-white/5">
-              <span className="text-[10px] text-gray-400 uppercase font-mono block">Calories</span>
-              <span className="text-sm font-bold text-white">{displayedPending?.calories ?? pendingEstimate.calories}</span>
-              <span className="text-[10px] text-gray-500 block">kcal</span>
-            </div>
-            <div className="p-2 rounded-lg bg-[#111] border border-white/5">
-              <span className="text-[10px] text-gray-400 uppercase font-mono block">Protein</span>
-              <span className="text-sm font-bold text-emerald-400">{displayedPending?.protein ?? pendingEstimate.protein ?? '—'}</span>
-              <span className="text-[10px] text-gray-500 block">g</span>
-            </div>
-            <div className="p-2 rounded-lg bg-[#111] border border-white/5">
-              <span className="text-[10px] text-gray-400 uppercase font-mono block">Carbs</span>
-              <span className="text-sm font-bold text-blue-400">{displayedPending?.carbohydrates ?? pendingEstimate.carbohydrates ?? '—'}</span>
-              <span className="text-[10px] text-gray-500 block">g</span>
-            </div>
-            <div className="p-2 rounded-lg bg-[#111] border border-white/5">
-              <span className="text-[10px] text-gray-400 uppercase font-mono block">Fat</span>
-              <span className="text-sm font-bold text-amber-400">{displayedPending?.fat ?? pendingEstimate.fat ?? '—'}</span>
-              <span className="text-[10px] text-gray-500 block">g</span>
-            </div>
-            <div className="p-2 rounded-lg bg-[#111] border border-white/5">
-              <span className="text-[10px] text-gray-400 uppercase font-mono block">Fiber</span>
-              <span className="text-sm font-bold text-purple-400">{displayedPending?.fiber ?? pendingEstimate.fiber ?? '—'}</span>
-              <span className="text-[10px] text-gray-500 block">g</span>
-            </div>
-            <div className="p-2 rounded-lg bg-[#111] border border-white/5">
-              <span className="text-[10px] text-gray-400 uppercase font-mono block">Sodium</span>
-              <span className="text-sm font-bold text-orange-400">{displayedPending?.sodium ?? pendingEstimate.sodium ?? '—'}</span>
-              <span className="text-[10px] text-gray-500 block">mg</span>
-            </div>
-          </div>
+          {canApplyPending || pendingRules.ok ? (
+            <>
+              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 text-center">
+                <div className="p-2 rounded-lg bg-[#111] border border-white/5">
+                  <span className="text-[10px] text-gray-400 uppercase font-mono block">Calories</span>
+                  <span className="text-sm font-bold text-white">{displayedPending?.calories ?? pendingEstimate.calories}</span>
+                  <span className="text-[10px] text-gray-500 block">kcal</span>
+                </div>
+                <div className="p-2 rounded-lg bg-[#111] border border-white/5">
+                  <span className="text-[10px] text-gray-400 uppercase font-mono block">Protein</span>
+                  <span className="text-sm font-bold text-emerald-400">{displayedPending?.protein ?? pendingEstimate.protein ?? '—'}</span>
+                  <span className="text-[10px] text-gray-500 block">g</span>
+                </div>
+                <div className="p-2 rounded-lg bg-[#111] border border-white/5">
+                  <span className="text-[10px] text-gray-400 uppercase font-mono block">Carbs</span>
+                  <span className="text-sm font-bold text-blue-400">{displayedPending?.carbohydrates ?? pendingEstimate.carbohydrates ?? '—'}</span>
+                  <span className="text-[10px] text-gray-500 block">g</span>
+                </div>
+                <div className="p-2 rounded-lg bg-[#111] border border-white/5">
+                  <span className="text-[10px] text-gray-400 uppercase font-mono block">Fat</span>
+                  <span className="text-sm font-bold text-amber-400">{displayedPending?.fat ?? pendingEstimate.fat ?? '—'}</span>
+                  <span className="text-[10px] text-gray-500 block">g</span>
+                </div>
+                <div className="p-2 rounded-lg bg-[#111] border border-white/5">
+                  <span className="text-[10px] text-gray-400 uppercase font-mono block">Fiber</span>
+                  <span className="text-sm font-bold text-purple-400">{displayedPending?.fiber ?? pendingEstimate.fiber ?? '—'}</span>
+                  <span className="text-[10px] text-gray-500 block">g</span>
+                </div>
+                <div className="p-2 rounded-lg bg-[#111] border border-white/5">
+                  <span className="text-[10px] text-gray-400 uppercase font-mono block">Sodium</span>
+                  <span className="text-sm font-bold text-orange-400">{displayedPending?.sodium ?? pendingEstimate.sodium ?? '—'}</span>
+                  <span className="text-[10px] text-gray-500 block">mg</span>
+                </div>
+              </div>
 
-          {(pendingSourceLabel || pendingConfidenceLabel) && (
-            <p className="text-[11px] text-gray-400 font-medium">
-              {[pendingSourceLabel, pendingConfidenceLabel].filter(Boolean).join(' · ')}
-            </p>
-          )}
+              <p className="text-[10px] font-mono text-gray-500 text-center">
+                Per serving: {Math.round((pendingEstimate.calories ?? 0) / recipeBaseServings)} kcal
+                {' · '}{Math.round(((pendingEstimate.protein ?? 0) / recipeBaseServings) * 10) / 10} g protein
+              </p>
 
-          {pendingEstimate.confidenceNote && (
-            <p className="text-[11px] text-gray-400 italic">
-              Note: {pendingEstimate.confidenceNote}
-            </p>
+              {(pendingSourceLabel || pendingConfidenceLabel) && (
+                <p className="text-[11px] text-gray-400 font-medium">
+                  {[pendingSourceLabel, pendingConfidenceLabel].filter(Boolean).join(' · ')}
+                </p>
+              )}
+
+              {pendingEstimate.confidenceNote && (
+                <p className="text-[11px] text-gray-400 italic">
+                  Note: {pendingEstimate.confidenceNote}
+                </p>
+              )}
+
+              {!canApplyPending && (
+                <div className="p-3 rounded-xl bg-amber-950/40 border border-amber-800/40 text-amber-200 text-xs flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <p>{NUTRITION_AUTOSAVE_DISABLED_MESSAGE}</p>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="p-3 rounded-xl bg-rose-950/40 border border-rose-800/40 text-rose-200 text-xs space-y-2">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                <p className="font-semibold">{NUTRITION_INCOMPLETE_MESSAGE}</p>
+              </div>
+              {pendingProvenance && (
+                <p className="text-[11px] text-rose-200/90">
+                  {pendingResolvedCount}/{pendingTotalCount} ingredients matched in the curated local reference.
+                </p>
+              )}
+              {pendingAssessment && pendingAssessment.trustedBasis !== true && (
+                <p className="text-[11px] text-rose-200/90">
+                  AI estimates are not matched in the curated local reference and cannot be applied automatically.
+                </p>
+              )}
+              {pendingUnresolved.length > 0 && (
+                <div className="text-[11px] text-rose-200/90">
+                  <p className="font-medium">Unresolved ingredients:</p>
+                  <ul className="list-disc list-inside space-y-0.5">
+                    {pendingUnresolved.map((line, idx) => (
+                      <li key={idx} className="break-words">{line}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
           )}
 
           <div className="flex items-center justify-end gap-2 pt-1">
@@ -284,14 +362,16 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
             >
               Discard
             </button>
-            <button
-              id="save-nutrition-btn"
-              onClick={handleApplyEstimate}
-              className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-semibold bg-emerald-500 hover:bg-emerald-400 text-black transition-colors shadow-sm"
-            >
-              <Check className="w-3.5 h-3.5" />
-              <span>Save to Recipe Markdown</span>
-            </button>
+            {canApplyPending && (
+              <button
+                id="save-nutrition-btn"
+                onClick={handleApplyEstimate}
+                className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-semibold bg-emerald-500 hover:bg-emerald-400 text-black transition-colors shadow-sm"
+              >
+                <Check className="w-3.5 h-3.5" />
+                <span>Save to Recipe Markdown</span>
+              </button>
+            )}
           </div>
         </div>
       )}

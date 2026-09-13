@@ -19,7 +19,7 @@ import {
   Image as ImageIcon,
   BrainCircuit,
 } from 'lucide-react';
-import { ObsidianRecipe, ParsedIngredient, RecipeStep, RecipeNutrition } from '../types';
+import { ObsidianRecipe, ParsedIngredient, RecipeStep, RecipeNutrition, RecoveredRecipeMetadata } from '../types';
 import {
   parseObsidianRecipeMarkdown,
   serializeRecipeToObsidianMarkdown,
@@ -29,6 +29,15 @@ import { resolveNewRecipeVaultPath } from '../core/vaultPath';
 import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
 import { buildAiSelectionRequestOptions } from '../application/aiSelection';
 import { useVaultImage } from '../hooks/useVaultImage';
+import {
+  canApplyNutritionEstimate,
+  evaluateMachineNutritionApplicability,
+  type NutritionAssessment,
+} from '../core/nutritionSanity';
+import {
+  NUTRITION_INCOMPLETE_MESSAGE,
+  NUTRITION_AUTOSAVE_DISABLED_MESSAGE,
+} from '../utils/nutrition';
 
 interface RecipeEditorModalProps {
   initialRecipe?: ObsidianRecipe | null;
@@ -62,6 +71,122 @@ export function deriveNutritionProvenance(
     source: current?.source,
     confidence: current?.confidence,
     confidenceNote: current?.confidenceNote,
+  };
+}
+
+/** Safe non-nutrition editor fields a metadata recovery may populate. */
+export interface RecoveredEditorFieldUpdates {
+  prepTime?: string;
+  cookTime?: string;
+  servings?: number;
+  category?: string;
+  cuisine?: string;
+  difficulty?: 'Easy' | 'Medium' | 'Hard';
+}
+
+/** The exact plan the Auto Recover handler applies to editor state. */
+export interface RecoveredMetadataApplicationPlan {
+  /** Non-nutrition field updates (only when the current value is empty). */
+  updates: RecoveredEditorFieldUpdates;
+  /** Number of non-nutrition fields that will be applied. */
+  recoveredCount: number;
+  /** True when the recovery provided machine nutrition and/or calories. */
+  hasRecoveredNutrition: boolean;
+  /** True ONLY when the centralized contract authorized applying nutrition. */
+  nutritionApplicable: boolean;
+  /** The authorized whole-recipe nutrition block, or null when omitted. */
+  nutrition: RecipeNutrition | null;
+  /** True when recovered nutrition/calories were present but omitted. */
+  nutritionOmitted: boolean;
+}
+
+/**
+ * Pure planner for the Auto Recover Metadata handler.
+ *
+ * Safe non-nutrition metadata is always planned. MACHINE-GENERATED nutrition is
+ * passed through the SAME authoritative applicability contract used by the
+ * dedicated estimator (`canApplyNutritionEstimate`), NOT through a
+ * client-supplied boolean. Because automated machine-nutrition application is
+ * intentionally disabled, recovered nutrition is currently omitted entirely and
+ * no nutrition field is ever partially written. Existing values are never
+ * overwritten (non-nutrition updates are gated on an empty current value).
+ */
+export function planRecoveredMetadataApplication(
+  rec: RecoveredRecipeMetadata,
+  current: {
+    prepTime?: string;
+    cookTime?: string;
+    servings?: string | number;
+    calories?: string;
+    category?: string;
+    cuisine?: string;
+    difficulty?: string;
+  },
+  baseServings: number
+): RecoveredMetadataApplicationPlan {
+  const updates: RecoveredEditorFieldUpdates = {};
+  let recoveredCount = 0;
+
+  if (rec.prepTime?.value && !current.prepTime) {
+    updates.prepTime = rec.prepTime.value;
+    recoveredCount++;
+  }
+  if (rec.cookTime?.value && !current.cookTime) {
+    updates.cookTime = rec.cookTime.value;
+    recoveredCount++;
+  }
+  if (rec.servings?.value && (!current.servings || current.servings === '')) {
+    updates.servings = rec.servings.value;
+    recoveredCount++;
+  }
+  if (rec.category?.value && !current.category) {
+    updates.category = rec.category.value;
+    recoveredCount++;
+  }
+  if (rec.cuisine?.value && !current.cuisine) {
+    updates.cuisine = rec.cuisine.value;
+    recoveredCount++;
+  }
+  if (rec.difficulty?.value && (!current.difficulty || current.difficulty === 'Easy')) {
+    updates.difficulty = rec.difficulty.value;
+    recoveredCount++;
+  }
+
+  const nutritionValue = rec.nutrition?.value as
+    | (RecipeNutrition & { assessment?: NutritionAssessment })
+    | undefined;
+  const hasRecoveredCalories =
+    typeof rec.calories?.value === 'number' && Number.isFinite(rec.calories.value);
+  const hasRecoveredNutrition = Boolean(nutritionValue) || hasRecoveredCalories;
+
+  let nutritionApplicable = false;
+  let nutrition: RecipeNutrition | null = null;
+  if (nutritionValue) {
+    const nutritionBase =
+      typeof nutritionValue.servings === 'number' &&
+      Number.isFinite(nutritionValue.servings) &&
+      nutritionValue.servings > 0
+        ? nutritionValue.servings
+        : baseServings;
+    nutritionApplicable = canApplyNutritionEstimate(
+      nutritionValue,
+      nutritionValue.assessment,
+      nutritionBase
+    ).ok;
+    if (nutritionApplicable) {
+      nutrition = { ...nutritionValue, servings: nutritionBase };
+    }
+  }
+
+  return {
+    updates,
+    recoveredCount,
+    hasRecoveredNutrition,
+    nutritionApplicable,
+    nutrition,
+    // A top-level calories-only recovery is part of the same machine nutrition
+    // result; it is authorized only together with the nutrition block.
+    nutritionOmitted: hasRecoveredNutrition && !nutritionApplicable,
   };
 }
 
@@ -265,6 +390,15 @@ export function RecipeEditorModal({
       }
 
       if (data.nutrition) {
+        // FAIL CLOSED: never populate the editor from a machine-generated
+        // estimate unless the centralized applicability contract authorizes it.
+        const assessment = data.nutrition.assessment;
+        const rules = evaluateMachineNutritionApplicability(data.nutrition, assessment, numServings);
+        const gate = canApplyNutritionEstimate(data.nutrition, assessment, numServings);
+        if (!gate.ok) {
+          setNutritionError(rules.ok ? NUTRITION_AUTOSAVE_DISABLED_MESSAGE : NUTRITION_INCOMPLETE_MESSAGE);
+          return;
+        }
         if (data.nutrition.calories !== undefined) setCalories(data.nutrition.calories.toString());
         if (data.nutrition.protein !== undefined) setProtein(data.nutrition.protein.toString());
         if (data.nutrition.carbohydrates !== undefined) setCarbs(data.nutrition.carbohydrates.toString());
@@ -347,53 +481,49 @@ export function RecipeEditorModal({
       const data = res.data;
       if (data?.recovered) {
         const rec = data.recovered;
-        let recoveredCount = 0;
+        const recoverBaseServings =
+          typeof servings === 'number' ? servings : parseInt(String(servings), 10) || 4;
 
-        if (rec.prepTime?.value && !prepTime) {
-          setPrepTime(rec.prepTime.value);
-          recoveredCount++;
-        }
-        if (rec.cookTime?.value && !cookTime) {
-          setCookTime(rec.cookTime.value);
-          recoveredCount++;
-        }
-        if (rec.servings?.value && (!servings || servings === '')) {
-          setServings(rec.servings.value);
-          recoveredCount++;
-        }
-        if (rec.calories?.value && !calories) {
-          setCalories(rec.calories.value.toString());
-          recoveredCount++;
-        }
-        if (rec.category?.value && !category) {
-          setCategory(rec.category.value);
-          recoveredCount++;
-        }
-        if (rec.cuisine?.value && !cuisine) {
-          setCuisine(rec.cuisine.value);
-          recoveredCount++;
-        }
-        if (rec.difficulty?.value && (!difficulty || difficulty === 'Easy')) {
-          setDifficulty(rec.difficulty.value);
-          recoveredCount++;
-        }
-        if (rec.nutrition?.value) {
-          if (rec.nutrition.value.protein) setProtein(rec.nutrition.value.protein.toString());
-          if (rec.nutrition.value.carbohydrates) setCarbs(rec.nutrition.value.carbohydrates.toString());
-          if (rec.nutrition.value.fat) setFat(rec.nutrition.value.fat.toString());
-          if (rec.nutrition.value.fiber) setFiber(rec.nutrition.value.fiber.toString());
-          // Recovered nutrition is TOTAL for the recipe batch; tag it so the
-          // saved block carries its serving denominator.
+        // The planner routes recovered nutrition through the SAME centralized
+        // applicability contract used by the estimator. Non-nutrition metadata
+        // is planned normally; generated nutrition is omitted entirely (never
+        // partially written) when the contract does not authorize it.
+        const plan = planRecoveredMetadataApplication(
+          rec,
+          { prepTime, cookTime, servings, calories, category, cuisine, difficulty },
+          recoverBaseServings
+        );
+
+        if (plan.updates.prepTime !== undefined) setPrepTime(plan.updates.prepTime);
+        if (plan.updates.cookTime !== undefined) setCookTime(plan.updates.cookTime);
+        if (plan.updates.servings !== undefined) setServings(plan.updates.servings);
+        if (plan.updates.category !== undefined) setCategory(plan.updates.category);
+        if (plan.updates.cuisine !== undefined) setCuisine(plan.updates.cuisine);
+        if (plan.updates.difficulty !== undefined) setDifficulty(plan.updates.difficulty);
+
+        // Only a contract-authorized nutrition block may touch nutrition state.
+        if (plan.nutritionApplicable && plan.nutrition) {
+          if (plan.nutrition.calories !== undefined) setCalories(plan.nutrition.calories.toString());
+          if (plan.nutrition.protein !== undefined) setProtein(plan.nutrition.protein.toString());
+          if (plan.nutrition.carbohydrates !== undefined) setCarbs(plan.nutrition.carbohydrates.toString());
+          if (plan.nutrition.fat !== undefined) setFat(plan.nutrition.fat.toString());
+          if (plan.nutrition.fiber !== undefined) setFiber(plan.nutrition.fiber.toString());
+          if (plan.nutrition.sodium !== undefined) setSodium(plan.nutrition.sodium.toString());
           setNutritionFromEstimate(true);
           setNutritionDirty(false);
           setNutritionProvenance({
-            source: rec.nutrition.value.source,
-            confidence: rec.nutrition.value.confidence,
-            confidenceNote: rec.nutrition.value.confidenceNote,
+            source: plan.nutrition.source,
+            confidence: plan.nutrition.confidence,
+            confidenceNote: plan.nutrition.confidenceNote,
           });
         }
 
-        setMetadataRecoverySuccess(`Recovered ${recoveredCount} metadata fields from recipe text!`);
+        const omittedNote = plan.nutritionOmitted
+          ? ' Generated nutrition was omitted (automatic application disabled).'
+          : '';
+        setMetadataRecoverySuccess(
+          `Recovered ${plan.recoveredCount} metadata fields from recipe text!${omittedNote}`
+        );
         setTimeout(() => setMetadataRecoverySuccess(null), 4000);
       }
     } catch (err: any) {

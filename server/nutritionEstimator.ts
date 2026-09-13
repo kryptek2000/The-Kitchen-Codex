@@ -3,12 +3,24 @@ import { resolveRoleCandidates, runWithAiFallback } from "./ai/provider.js";
 import type { AiJsonSchema, AiProvider } from "./ai/types.js";
 import type { SelectionInput } from "./ai/effectiveSelection.js";
 import { logModelAttempt } from "./providerDiagnostics.js";
-import { estimateDeterministicNutrition, type DeterministicNutritionResult } from "./deterministicNutrition.js";
+import {
+  estimateDeterministicNutrition,
+  type DeterministicNutritionResult,
+} from "./deterministicNutrition.js";
 import {
   buildDeterministicCacheKey,
   getDeterministicNutritionCache,
   setDeterministicNutritionCache,
 } from "./nutritionCache.js";
+import {
+  validateNutritionNumbers,
+  NUTRITION_CALCULATION_ID,
+  NUTRITION_CALCULATION_VERSION,
+  type NutritionAssessment,
+  type NutritionProvenance,
+  type NutritionResolutionRecord,
+  type NutritionConversionBasis,
+} from "../src/core/nutritionSanity.js";
 import type { NutritionSource, NutritionConfidence } from "../src/schema/recipeSchema.js";
 
 dotenv.config();
@@ -31,9 +43,96 @@ export interface NutritionEstimateResult {
   source: NutritionSource;
   /** Application-assigned confidence (never model-self-rated). */
   confidence: NutritionConfidence;
+  /**
+   * Additive whole-recipe resolution assessment. Never a nutrient value and
+   * never persisted to Markdown. Absent for AI estimates (which are not matched
+   * in the curated local reference and therefore never automatically
+   * applicable).
+   */
+  assessment?: NutritionAssessment;
 }
 
+const TRUSTED_CONVERSION_BASES: readonly NutritionConversionBasis[] = [
+  'direct_mass',
+  'density',
+  'count_weight',
+];
 
+function isTrustedBasis(reason: string): reason is NutritionConversionBasis {
+  return (TRUSTED_CONVERSION_BASES as readonly string[]).includes(reason);
+}
+
+/**
+ * Builds the structured, auditable assessment for a curated deterministic
+ * result. Resolution is trusted ONLY when it came from an exact curated food
+ * record (`matchedFoodId`) with a real conversion basis. Keyword/category hits
+ * cannot exist here because the algorithmic profile layer has been removed.
+ */
+function buildDeterministicAssessment(
+  det: DeterministicNutritionResult,
+  baseServings?: number
+): NutritionAssessment {
+  const resolved: NutritionResolutionRecord[] = [];
+  for (const c of det.contributions) {
+    if (
+      c.resolved &&
+      c.matchedFoodId &&
+      typeof c.resolvedGrams === 'number' &&
+      Number.isFinite(c.resolvedGrams) &&
+      isTrustedBasis(c.massResolutionReason)
+    ) {
+      resolved.push({
+        ingredient: c.ingredient,
+        foodId: c.matchedFoodId,
+        basis: c.massResolutionReason,
+        source: 'curated_local',
+      });
+    }
+  }
+
+  const unresolvedIngredients = det.contributions
+    .filter((c) => !c.resolved && !c.qualitative)
+    .map((c) => c.ingredient)
+    .slice(0, 50);
+
+  const limitations: string[] = [];
+  if (resolved.some((r) => r.basis !== 'direct_mass')) {
+    limitations.push('density_and_count_weights_are_representative_approximations');
+  }
+  if (unresolvedIngredients.length > 0) {
+    limitations.push('not_all_ingredients_resolved');
+  }
+
+  const provenance: NutritionProvenance = {
+    calculationId: NUTRITION_CALCULATION_ID,
+    calculationVersion: NUTRITION_CALCULATION_VERSION,
+    resolved,
+    unresolvedIngredients,
+    totalIngredients: det.coverage.totalIngredients,
+    resolvedIngredients: resolved.length,
+    resolvedMassGrams: det.coverage.resolvedMassGrams,
+    limitations,
+  };
+
+  const sanity = validateNutritionNumbers(det.totals, {
+    resolvedMassGrams: det.coverage.resolvedMassGrams,
+    ...(baseServings !== undefined ? { baseServings } : {}),
+  });
+
+  const reasons: string[] = [];
+  if (!det.coverage.sufficient) reasons.push('incomplete_curated_coverage');
+  if (resolved.length < 1) reasons.push('no_resolved_ingredients');
+  if (!sanity.ok) reasons.push(...sanity.reasons);
+
+  return {
+    complete: det.coverage.sufficient && resolved.length >= 1 && sanity.ok,
+    // trustedBasis is TRUE only when at least one ingredient matched a canonical
+    // curated record. Zero matches => false (no traceable resolution exists).
+    trustedBasis: resolved.length >= 1,
+    provenance,
+    reasons: [...new Set(reasons)],
+  };
+}
 
 /**
  * Builds the estimator result shape from a deterministic curated estimate,
@@ -55,6 +154,7 @@ function buildDeterministicEstimateResult(
     confidenceNote: det.confidenceNote,
     source: det.source,
     confidence: det.confidence,
+    assessment: buildDeterministicAssessment(det),
   };
 }
 
@@ -69,8 +169,15 @@ function cleanWikilinks(text: string): string {
 }
 
 /**
- * Fallback algorithmic culinary nutritional estimator based on standard
- * ingredient profiles.
+ * Fail-closed offline estimator.
+ *
+ * The previous algorithmic keyword/category profile database (and its unsourced
+ * densities and count weights) has been REMOVED. The ONLY offline basis is the
+ * curated `foodReference` layer (representative local reference values), reached
+ * through `estimateDeterministicNutrition` (exact curated food identity +
+ * food-specific conversion). An ingredient that cannot be resolved by an exact
+ * curated record is reported UNRESOLVED and blocks completeness. No
+ * nutrient/density/count constants are invented here.
  *
  * Returns TOTAL nutrition for the supplied recipe batch as written. The
  * `servings` argument is accepted for signature compatibility only and is NOT
@@ -81,156 +188,31 @@ export function estimateAlgorithmicNutrition(
   servings: number,
   ingredientLines: string[]
 ): NutritionEstimateResult {
-  let totalCalories = 0;
-  let totalProtein = 0;
-  let totalCarbs = 0;
-  let totalFat = 0;
-  let totalFiber = 0;
-  let totalSodium = 0;
+  void recipeTitle;
+  const det = estimateDeterministicNutrition(ingredientLines);
+  const assessment = buildDeterministicAssessment(det, servings);
 
-  for (const rawLine of ingredientLines) {
-    const line = cleanWikilinks(rawLine);
-    const lower = line.toLowerCase();
-    
-    // Extract numerical amount if present
-    const amountMatch = lower.match(/(\d+(?:\.\d+)?|\d+\s*\/\s*\d+)/);
-    let amount = 1;
-    if (amountMatch) {
-      const rawNum = amountMatch[1];
-      if (rawNum.includes('/')) {
-        const parts = rawNum.split('/');
-        amount = parseFloat(parts[0]) / parseFloat(parts[1]);
-      } else {
-        amount = parseFloat(rawNum);
-      }
-    }
+  const unresolvedCount = assessment.provenance
+    ? assessment.provenance.unresolvedIngredients.length
+    : 0;
+  const resolvedCount = assessment.provenance ? assessment.provenance.resolvedIngredients : 0;
 
-    if (lower.includes('pasta') || lower.includes('spaghetti') || lower.includes('rigatoni') || lower.includes('noodle') || lower.includes('rice') || lower.includes('flour') || lower.includes('oat') || lower.includes('grain') || lower.includes('quinoa') || lower.includes('couscous') || lower.includes('barley')) {
-      const multiplier = lower.includes('lb') || lower.includes('pound') ? amount * 450 : lower.includes('cup') ? amount * 80 : lower.includes('g') ? amount : amount * 100;
-      totalCalories += (multiplier / 100) * 360;
-      totalProtein += (multiplier / 100) * 12;
-      totalCarbs += (multiplier / 100) * 70;
-      totalFat += (multiplier / 100) * 3;
-      totalFiber += (multiplier / 100) * 6;
-      totalSodium += (multiplier / 100) * 5;
-    } else if (lower.includes('walnut') || lower.includes('almond') || lower.includes('pecan') || lower.includes('cashew') || lower.includes('peanut') || lower.includes('nut') || lower.includes('seed') || lower.includes('chia') || lower.includes('flax')) {
-      const multiplier = lower.includes('cup') ? amount * 120 : lower.includes('tbsp') ? amount * 15 : lower.includes('g') ? amount : lower.includes('oz') ? amount * 28.3 : amount * 30;
-      totalCalories += (multiplier / 100) * 600;
-      totalProtein += (multiplier / 100) * 18;
-      totalCarbs += (multiplier / 100) * 16;
-      totalFat += (multiplier / 100) * 55;
-      totalFiber += (multiplier / 100) * 8;
-      totalSodium += (multiplier / 100) * 5;
-    } else if (lower.includes('salmon') || lower.includes('tuna') || lower.includes('fish') || lower.includes('shrimp') || lower.includes('seafood') || lower.includes('cod')) {
-      const multiplier = lower.includes('g') ? amount : lower.includes('oz') ? amount * 28.3 : lower.includes('lb') ? amount * 450 : amount * 120;
-      totalCalories += (multiplier / 100) * 180;
-      totalProtein += (multiplier / 100) * 25;
-      totalFat += (multiplier / 100) * 8;
-      totalSodium += (multiplier / 100) * 80;
-    } else if (lower.includes('chicken') || lower.includes('poultry') || lower.includes('turkey')) {
-      const multiplier = lower.includes('g') ? amount : lower.includes('oz') ? amount * 28.3 : lower.includes('lb') ? amount * 450 : amount * 120;
-      totalCalories += (multiplier / 100) * 165;
-      totalProtein += (multiplier / 100) * 31;
-      totalFat += (multiplier / 100) * 3.6;
-      totalSodium += (multiplier / 100) * 70;
-    } else if (lower.includes('guanciale') || lower.includes('pancetta') || lower.includes('bacon') || lower.includes('pork') || lower.includes('beef') || lower.includes('steak')) {
-      const multiplier = lower.includes('g') ? amount : lower.includes('oz') ? amount * 28.3 : lower.includes('lb') ? amount * 450 : amount * 50;
-      totalCalories += (multiplier / 100) * 600;
-      totalProtein += (multiplier / 100) * 15;
-      totalFat += (multiplier / 100) * 60;
-      totalSodium += (multiplier / 100) * 1200;
-    } else if (lower.includes('bean') || lower.includes('chickpea') || lower.includes('lentil') || lower.includes('tofu') || lower.includes('edamame')) {
-      const multiplier = lower.includes('cup') ? amount * 180 : lower.includes('can') ? amount * 240 : lower.includes('g') ? amount : amount * 100;
-      totalCalories += (multiplier / 100) * 140;
-      totalProtein += (multiplier / 100) * 9;
-      totalCarbs += (multiplier / 100) * 22;
-      totalFat += (multiplier / 100) * 2;
-      totalFiber += (multiplier / 100) * 7;
-      totalSodium += (multiplier / 100) * 150;
-    } else if (lower.includes('egg yolk') || lower.includes('yolk')) {
-      totalCalories += amount * 55;
-      totalProtein += amount * 2.7;
-      totalFat += amount * 4.5;
-      totalSodium += amount * 8;
-    } else if (lower.includes('egg')) {
-      totalCalories += amount * 72;
-      totalProtein += amount * 6.3;
-      totalFat += amount * 4.8;
-      totalSodium += amount * 71;
-    } else if (lower.includes('pecorino') || lower.includes('parmesan') || lower.includes('parmigiano') || lower.includes('cheese') || lower.includes('cheddar') || lower.includes('mozzarella')) {
-      const multiplier = lower.includes('cup') ? amount * 100 : lower.includes('g') ? amount : lower.includes('oz') ? amount * 28.3 : amount * 30;
-      totalCalories += (multiplier / 100) * 390;
-      totalProtein += (multiplier / 100) * 32;
-      totalFat += (multiplier / 100) * 28;
-      totalSodium += (multiplier / 100) * 1800;
-    } else if (lower.includes('milk') || lower.includes('yogurt')) {
-      const multiplier = lower.includes('cup') ? amount * 240 : lower.includes('tbsp') ? amount * 15 : amount * 100;
-      totalCalories += (multiplier / 100) * 60;
-      totalProtein += (multiplier / 100) * 4;
-      totalCarbs += (multiplier / 100) * 5;
-      totalFat += (multiplier / 100) * 3;
-      totalSodium += (multiplier / 100) * 50;
-    } else if (lower.includes('oil') || lower.includes('butter')) {
-      const multiplier = lower.includes('tbsp') ? amount * 14 : lower.includes('tsp') ? amount * 5 : lower.includes('cup') ? amount * 220 : amount * 14;
-      totalCalories += (multiplier / 14) * 120;
-      totalFat += (multiplier / 14) * 14;
-    } else if (lower.includes('cream')) {
-      const multiplier = lower.includes('cup') ? amount * 240 : lower.includes('tbsp') ? amount * 15 : amount * 100;
-      totalCalories += (multiplier / 100) * 340;
-      totalFat += (multiplier / 100) * 36;
-      totalProtein += (multiplier / 100) * 2.8;
-      totalCarbs += (multiplier / 100) * 2.7;
-    } else if (lower.includes('salt')) {
-      totalSodium += (lower.includes('tsp') ? amount * 2300 : 300);
-    } else if (lower.includes('sugar') || lower.includes('honey') || lower.includes('syrup')) {
-      const multiplier = lower.includes('tbsp') ? amount * 15 : lower.includes('cup') ? amount * 200 : amount * 15;
-      totalCalories += (multiplier / 15) * 60;
-      totalCarbs += (multiplier / 15) * 15;
-    } else if (lower.includes('berry') || lower.includes('blueberr') || lower.includes('strawberr') || lower.includes('apple') || lower.includes('banana') || lower.includes('fruit')) {
-      const multiplier = lower.includes('cup') ? amount * 150 : lower.includes('g') ? amount : amount * 100;
-      totalCalories += (multiplier / 100) * 60;
-      totalCarbs += (multiplier / 100) * 14;
-      totalFiber += (multiplier / 100) * 3;
-      totalProtein += (multiplier / 100) * 1;
-    } else {
-      // General vegetable, spice, broth, condiment baseline
-      totalCalories += 25;
-      totalCarbs += 4;
-      totalProtein += 1;
-      totalFiber += 1;
-      totalSodium += 50;
-    }
-  }
-
-  // Ensure a reasonable serving-independent baseline only if no ingredients
-  // yielded calories. The baseline scales with the number of ingredient lines,
-  // NOT with the requested serving count, so the recipe-total nutrition stays
-  // stable regardless of how many servings the user later selects.
-  if (totalCalories <= 0) {
-    const count = Math.max(1, ingredientLines.length);
-    totalCalories = 450 * count;
-    totalProtein = 18 * count;
-    totalCarbs = 45 * count;
-    totalFat = 15 * count;
-    totalFiber = 3 * count;
-    totalSodium = 600 * count;
-  }
-
-  // These are TOTAL nutrition values for the entire recipe batch as written.
-  // They are intentionally independent of the requested serving count; serving
-  // arithmetic is performed deterministically by the application on the frontend
-  // (nutritionForServings). The `servings` argument is accepted for signature
-  // compatibility only and is never used as a divisor.
   return {
-    calories: Math.max(0, Math.round(totalCalories)),
-    protein: Math.max(0, Math.round(totalProtein * 10) / 10),
-    carbohydrates: Math.max(0, Math.round(totalCarbs * 10) / 10),
-    fat: Math.max(0, Math.round(totalFat * 10) / 10),
-    fiber: Math.max(0, Math.round(totalFiber * 10) / 10),
-    sodium: Math.max(0, Math.round(totalSodium)),
-    confidenceNote: `Nutrition values are estimates for the entire recipe based on ${ingredientLines.length} ingredients.`,
+    calories: Math.max(0, Math.round(det.totals.calories)),
+    protein: Math.max(0, Math.round(det.totals.protein * 10) / 10),
+    carbohydrates: Math.max(0, Math.round(det.totals.carbohydrates * 10) / 10),
+    fat: Math.max(0, Math.round(det.totals.fat * 10) / 10),
+    fiber: Math.max(0, Math.round(det.totals.fiber * 10) / 10),
+    sodium: Math.max(0, Math.round(det.totals.sodium)),
+    confidenceNote:
+      `Offline estimate from the curated local food reference: ` +
+      `${resolvedCount}/${ingredientLines.length} ingredient(s) resolved.` +
+      (unresolvedCount > 0
+        ? ` ${unresolvedCount} unresolved ingredient(s) were not estimated.`
+        : ''),
     source: 'offline_heuristic' as NutritionSource,
     confidence: 'low' as NutritionConfidence,
+    assessment,
   };
 }
 
@@ -333,6 +315,14 @@ Guidelines:
     confidenceNote,
     source: 'ai_estimate' as NutritionSource,
     confidence: 'medium' as NutritionConfidence,
+    // An AI estimate is NOT curated-reference authority. It carries an explicit
+    // non-trusted assessment so the applicability contract fails closed and the
+    // UI never offers to save it automatically.
+    assessment: {
+      complete: false,
+      trustedBasis: false,
+      reasons: ['ai_estimate_without_source_backed_provenance'],
+    },
   };
 }
 

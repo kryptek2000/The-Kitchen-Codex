@@ -181,7 +181,10 @@ describe('E) Offline heuristic provenance', () => {
     expect(result.confidence).toBe('low');
     // The entry point delegates to the identical algorithm (no "improvement").
     expect(result).toEqual(algorithm);
-    expect(result.calories).toBeGreaterThan(0);
+    // Fail closed: none of these ingredients has a source-backed curated record,
+    // so the offline result is incomplete and contributes no fabricated total.
+    expect(result.assessment?.complete).toBe(false);
+    expect(result.calories).toBe(0);
   });
 
   it('is invariant to requested serving count and matches the algorithm total', async () => {
