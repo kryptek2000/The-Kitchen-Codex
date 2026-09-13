@@ -30,6 +30,10 @@ export interface SurfaceModelOption {
   structuredVerified?: boolean;
   /** True when a CURRENT runtime capability verification made this model executable. */
   capabilityVerified?: boolean;
+  /** True when this model currently holds the separate `recipe_generation_v1` capability. */
+  recipeGenerationVerified?: boolean;
+  /** True when the model is profile-verified and eligible for an explicit recipe verification. */
+  recipeGenerationCandidate?: boolean;
   /**
    * SERVER-OWNED candidate prefilter (never execution authority): the model may
    * be offered an explicit "Verify for Kitchen Codex" action. Runtime
@@ -212,6 +216,18 @@ export function freeVerificationLabel(
   return 'FREE · Not verified';
 }
 
+/** A concise recipe-creation verification label for a selectable model row. */
+export function recipeVerificationLabel(
+  model: SurfaceModelOption,
+  verification: ModelVerificationView | undefined
+): string {
+  const state = verification?.state ?? (model.recipeGenerationVerified ? 'verified' : 'idle');
+  if (state === 'verifying') return 'Recipe creation · Verifying…';
+  if (state === 'verified') return 'Recipe creation · Verified';
+  if (state === 'failed') return 'Recipe creation · Failed';
+  return 'Recipe creation · Not verified';
+}
+
 /**
  * The bounded, non-secret PUBLIC probe-failure classification (mirror of the
  * server-owned union in `server/ai/capabilityVerification.ts`). The client
@@ -226,6 +242,8 @@ export const PROBE_FAILURE_CLASSIFICATIONS = [
   'PROBE_WRONG_JSON_SHAPE',
   'PROBE_WRONG_REQUIRED_VALUE',
   'PROBE_EXTRA_PROPERTIES',
+  'PROBE_PROFILE_REQUIRED',
+  'PROBE_RECIPE_INVALID',
   'PROBE_TRANSPORT_ERROR',
   'PROBE_TIMEOUT',
   'PROBE_AUTH',
@@ -259,6 +277,8 @@ const PROBE_FAILURE_MESSAGES: Record<ProbeFailureClassification, string> = {
   PROBE_WRONG_JSON_SHAPE: 'The model returned JSON with the wrong object shape.',
   PROBE_WRONG_REQUIRED_VALUE: 'The model returned the wrong required verification value.',
   PROBE_EXTRA_PROPERTIES: 'The model returned unexpected JSON properties.',
+  PROBE_PROFILE_REQUIRED: 'The model has not verified its structured-text compatibility profile yet.',
+  PROBE_RECIPE_INVALID: 'The model did not return a complete, schema-valid recipe draft.',
   PROBE_TRANSPORT_ERROR: 'Could not reach OpenRouter. Check the connection and try again.',
   PROBE_TIMEOUT: 'OpenRouter did not respond in time. Try again.',
   PROBE_AUTH: 'OpenRouter authentication failed or the session key expired. Update the session key and try again.',

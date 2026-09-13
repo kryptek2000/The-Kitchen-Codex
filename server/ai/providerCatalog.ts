@@ -62,6 +62,7 @@ import {
   getOpenRouterCatalogSnapshot,
   isCapabilityVerifiedOpenRouterTextModel,
   isCompatibleOpenRouterTextModel,
+  isOpenRouterRecipeGenerationAuthorized,
   isOpenRouterStrictStructuredCandidate,
   isOpenRouterJsonCandidate,
   verifiedOpenRouterProfile,
@@ -102,6 +103,16 @@ export interface ProviderCatalogTextModel {
   structuredVerified?: boolean;
   /** True when a CURRENT runtime capability verification made this model executable. */
   capabilityVerified?: boolean;
+  /**
+   * True when this model currently holds the SEPARATE `recipe_generation_v1`
+   * capability (explicitly runtime-proven). Create for Me eligibility.
+   */
+  recipeGenerationVerified?: boolean;
+  /**
+   * True when the model is profile-verified and therefore ELIGIBLE for an explicit
+   * "Verify recipe creation" action. Eligibility is never execution authority.
+   */
+  recipeGenerationCandidate?: boolean;
   /**
    * SERVER-OWNED candidate prefilter (never execution authority): the model is
    * currently verified FREE, fresh, non-router, ordinary text output, and
@@ -364,6 +375,8 @@ function textProviderRows(regs: RegisteredProvider[]): ProviderCatalogTextProvid
       const selectable = isImage ? model.executionCompatible : isSelectableOpenRouterTextModel(model);
       const capabilityVerified = !isImage && isCapabilityVerifiedOpenRouterTextModel(model);
       const strictStructuredCandidate = !isImage && isOpenRouterStrictStructuredCandidate(model);
+      const recipeGenerationVerified = !isImage && isOpenRouterRecipeGenerationAuthorized(model.modelId);
+      const recipeGenerationCandidate = !isImage && capabilityVerified;
       return {
         id: model.modelId,
         default: primary.has(model.modelId),
@@ -376,6 +389,8 @@ function textProviderRows(regs: RegisteredProvider[]): ProviderCatalogTextProvid
         structuredVerified: model.structuredVerified,
         capabilityVerified,
         strictStructuredCandidate,
+        recipeGenerationVerified,
+        recipeGenerationCandidate,
         jsonCandidate: !isImage && isOpenRouterJsonCandidate(model),
         verifiedProfile: capabilityVerified ? verifiedOpenRouterProfile(model.modelId) : undefined,
         executionCompatible: selectable,

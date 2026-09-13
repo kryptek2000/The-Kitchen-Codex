@@ -27,7 +27,9 @@ import {
   ProviderOperationError,
 } from "./ai/provider.js";
 import type { AiCandidate, RegisteredProvider } from "./ai/provider.js";
-import type { AiProvider } from "./ai/types.js";
+import { isOpenRouterRecipeGenerationAuthorized, verifiedOpenRouterProfile } from "./ai/openRouterCatalog.js";
+import { getRecipeGenerationVerification } from "./ai/capabilityVerificationStore.js";
+import { coerceSelectionInput } from "./ai/effectiveSelection.js";
 import type { SelectionInput } from "./ai/effectiveSelection.js";
 import {
   buildGeneratedRecipeSchema,
@@ -191,19 +193,62 @@ ${constraints}` : ''}`;
 }
 
 /**
+ * DISPATCH-TIME re-authorization for a verified-dynamic OpenRouter recipe
+ * candidate. It re-checks, immediately before the provider call, that the model
+ * still holds the `recipe_generation_v1` capability under the CURRENT catalog
+ * fingerprint/profile instance/credential generation, and that the exact
+ * credential source matches. Curated/other providers are unaffected (their
+ * capability truth is server-owned and static). Fail closed: no provider call.
+ */
+function assertRecipeGenerationAuthorized(candidate: AiCandidate): void {
+  if (candidate.provider.id !== "openrouter") return;
+  // Curated/server-owned allowlist models keep their static, server-owned
+  // capability truth (recipeGeneration:true) — no dynamic recipe record is needed.
+  if (!verifiedOpenRouterProfile(candidate.model)) return;
+  // Verified-dynamic: require the separate recipe-generation capability.
+  const source = candidate.credentialSource ?? "server_environment";
+  const record = getRecipeGenerationVerification("openrouter", candidate.model);
+  if (!isOpenRouterRecipeGenerationAuthorized(candidate.model) || !record || record.credentialSource !== source) {
+    throw new ProviderOperationError(
+      "UNSUPPORTED_CAPABILITY",
+      "The selected free model is not verified for recipe creation.",
+      { providerId: candidate.provider.id, model: candidate.model }
+    );
+  }
+}
+
+/**
+ * True when the user explicitly selected an OpenRouter model that IS
+ * profile-verified but is NOT recipe-generation verified. Used to return a
+ * SPECIFIC, bounded Create-for-Me message instead of the generic
+ * no-capable-provider error. Derived from trusted server state only.
+ */
+export function isRecipeGenerationNotVerifiedSelection(userSelection?: SelectionInput): boolean {
+  const coerced = coerceSelectionInput(userSelection);
+  const meta = coerced.metadata;
+  if (coerced.invalid || !meta?.providerId || !meta.modelId) return false;
+  if (meta.providerId !== "openrouter") return false;
+  return (
+    Boolean(verifiedOpenRouterProfile(meta.modelId)) &&
+    !isOpenRouterRecipeGenerationAuthorized(meta.modelId)
+  );
+}
+
+/**
  * Runs a single (provider, model) candidate and normalizes its structured output
  * into a validated draft. A malformed result is an INVALID_RESPONSE (fallback-
  * eligible), so the next capable candidate may be tried instead of silently
- * accepting bad output.
+ * accepting bad output. A verified-dynamic candidate is re-authorized at dispatch
+ * time and is terminal (no fallback) via the trusted candidate policy.
  */
 async function generateDraftForCandidate(
-  provider: AiProvider,
-  model: string,
+  candidate: AiCandidate,
   prompt: string,
   schema: ReturnType<typeof buildGeneratedRecipeSchema>
 ): Promise<GeneratedRecipeDraft> {
-  const raw = await provider.generateStructured<unknown>(prompt, schema, {
-    model,
+  assertRecipeGenerationAuthorized(candidate);
+  const raw = await candidate.provider.generateStructured<unknown>(prompt, schema, {
+    model: candidate.model,
     temperature: 0.4,
   });
   try {
@@ -212,7 +257,7 @@ async function generateDraftForCandidate(
     throw new ProviderOperationError(
       "INVALID_RESPONSE",
       "Provider returned an invalid recipe draft.",
-      { providerId: provider.id, model }
+      { providerId: candidate.provider.id, model: candidate.model }
     );
   }
 }
@@ -239,7 +284,7 @@ export async function generateRecipeDraftOnServer(
     candidates,
     requiredCapabilities: ["structuredOutput", "recipeGeneration"],
     registry,
-    run: (candidate: AiCandidate) => generateDraftForCandidate(candidate.provider, candidate.model, prompt, schema),
+    run: (candidate: AiCandidate) => generateDraftForCandidate(candidate, prompt, schema),
   });
 
   return {

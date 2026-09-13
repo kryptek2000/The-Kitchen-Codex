@@ -24,6 +24,7 @@ import {
   modelCostClass,
   pickerModels,
   probeFailureMessage,
+  recipeVerificationLabel,
   type ModelPickerGroup,
   type ModelVerificationView,
   type SurfaceModelOption,
@@ -54,6 +55,16 @@ export interface ModelPickerProps {
    * NEVER invoked automatically — only from the user's click.
    */
   onVerifyModel?: (modelId: string, profile?: OpenRouterProfile) => void;
+  /**
+   * Explicit recipe-creation verification state per model id (text surface only).
+   * Never persisted; supplied by the parent so the panel stays presentational.
+   */
+  recipeVerifications?: Record<string, ModelVerificationView>;
+  /**
+   * Explicit "Verify recipe creation" action for a profile-verified text model.
+   * NEVER invoked automatically — only from the user's click.
+   */
+  onVerifyRecipeModel?: (modelId: string) => void;
 }
 
 /** Finds a model row by id. */
@@ -62,7 +73,7 @@ function findModel(models: SurfaceModelOption[], id: string | undefined): Surfac
   return models.find((m) => m.id === id);
 }
 
-export function ModelPicker({ kind, models, discoveredModels = [], value, onChange, defaultOpen = false, verifications = {}, onVerifyModel }: ModelPickerProps) {
+export function ModelPicker({ kind, models, discoveredModels = [], value, onChange, defaultOpen = false, verifications = {}, onVerifyModel, recipeVerifications = {}, onVerifyRecipeModel }: ModelPickerProps) {
   const [open, setOpen] = useState(defaultOpen);
   const [query, setQuery] = useState('');
   const [group, setGroup] = useState<ModelPickerGroup>('free');
@@ -154,6 +165,11 @@ export function ModelPicker({ kind, models, discoveredModels = [], value, onChan
             {visible.map((model) => {
               const badges = modelBadges(model);
               const isSelected = model.id === value;
+              const recipeEligible =
+                kind === 'text' && model.recipeGenerationCandidate === true && Boolean(onVerifyRecipeModel);
+              const recipeVerification = recipeVerifications[model.id];
+              const recipeState =
+                recipeVerification?.state ?? (model.recipeGenerationVerified ? 'verified' : 'idle');
               return (
                 <li key={model.id}>
                   <button
@@ -194,6 +210,42 @@ export function ModelPicker({ kind, models, discoveredModels = [], value, onChan
                       </div>
                     )}
                   </button>
+                  {recipeEligible && (
+                    <div className="px-2 pb-1 flex flex-wrap items-center gap-2">
+                      <span
+                        data-model-recipe-state={model.id}
+                        className={`text-[10px] ${
+                          recipeState === 'verified'
+                            ? 'text-emerald-300'
+                            : recipeState === 'failed'
+                            ? 'text-red-300'
+                            : 'text-gray-400'
+                        }`}
+                      >
+                        {recipeVerificationLabel(model, recipeVerification)}
+                      </span>
+                      <button
+                        type="button"
+                        data-model-verify-recipe={model.id}
+                        onClick={() => onVerifyRecipeModel?.(model.id)}
+                        disabled={recipeState === 'verifying'}
+                        title="Makes exactly one free capability probe."
+                        className="px-2 py-0.5 rounded-md text-[10px] font-medium bg-white/10 text-gray-200 hover:bg-white/15 border border-white/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        {recipeState === 'verifying' ? 'Verifying…' : 'Verify recipe creation'}
+                      </button>
+                    </div>
+                  )}
+                  {recipeEligible && recipeState === 'failed' && (
+                    <div
+                      data-model-recipe-error={model.id}
+                      className="px-2 pb-1 text-[10px] text-red-300/90"
+                    >
+                      {recipeVerification?.classification
+                        ? probeFailureMessage(recipeVerification.classification)
+                        : recipeVerification?.message ?? ''}
+                    </div>
+                  )}
                 </li>
               );
             })}

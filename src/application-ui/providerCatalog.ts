@@ -44,6 +44,15 @@ export function openRouterModelVerifyPath(modelId: string): string {
   return `${OPENROUTER_MODEL_VERIFY_API_PATH}/${encoded}/verify`;
 }
 
+/** Builds the exact RECIPE-GENERATION verification path for one model id. */
+export function openRouterModelVerifyRecipePath(modelId: string): string {
+  const encoded = modelId
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+  return `${OPENROUTER_MODEL_VERIFY_API_PATH}/${encoded}/verify-recipe`;
+}
+
 /** The probe surface the server performs for a provider (non-secret, non-proprietary). */
 export type ConnectionTestKindView = 'network_probe' | 'credential_check' | 'unavailable';
 
@@ -76,6 +85,10 @@ export interface ProviderCatalogTextModelView {
   structuredVerified?: boolean;
   /** True when a CURRENT runtime capability verification made this model executable. */
   capabilityVerified?: boolean;
+  /** True when this model currently holds the separate `recipe_generation_v1` capability. */
+  recipeGenerationVerified?: boolean;
+  /** True when the model is profile-verified and eligible for an explicit recipe verification. */
+  recipeGenerationCandidate?: boolean;
   /**
    * SERVER-OWNED candidate prefilter (never execution authority): currently
    * verified FREE, fresh, non-router, ordinary text output, and advertises BOTH
@@ -350,6 +363,8 @@ function normalizeTextModel(raw: unknown): ProviderCatalogTextModelView | null {
   if (typeof row['pricingVerified'] === 'boolean') model.pricingVerified = row['pricingVerified'];
   if (typeof row['structuredVerified'] === 'boolean') model.structuredVerified = row['structuredVerified'];
   if (typeof row['capabilityVerified'] === 'boolean') model.capabilityVerified = row['capabilityVerified'];
+  if (typeof row['recipeGenerationVerified'] === 'boolean') model.recipeGenerationVerified = row['recipeGenerationVerified'];
+  if (typeof row['recipeGenerationCandidate'] === 'boolean') model.recipeGenerationCandidate = row['recipeGenerationCandidate'];
   if (typeof row['strictStructuredCandidate'] === 'boolean') model.strictStructuredCandidate = row['strictStructuredCandidate'];
   if (typeof row['jsonCandidate'] === 'boolean') model.jsonCandidate = row['jsonCandidate'];
   if (isOpenRouterProfile(row['verifiedProfile'])) model.verifiedProfile = row['verifiedProfile'];

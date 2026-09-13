@@ -361,7 +361,7 @@ export function resolveTextCandidateContext(
  */
 function withDynamicSingleAttempt(candidate: AiCandidate): AiCandidate {
   if (candidate.provider.id === "openrouter" && verifiedOpenRouterProfile(candidate.model)) {
-    return { ...candidate, singleAttempt: true };
+    return { ...candidate, singleAttempt: true, terminalOnFailure: true };
   }
   return candidate;
 }

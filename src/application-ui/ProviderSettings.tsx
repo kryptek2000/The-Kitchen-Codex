@@ -41,6 +41,7 @@ import {
 import {
   fetchProviderCatalog,
   openRouterModelVerifyPath,
+  openRouterModelVerifyRecipePath,
   type ProviderCatalogImageProviderView,
   type ProviderCatalogTextProviderView,
   type ProviderCatalogView,
@@ -800,6 +801,8 @@ export function SelectionControlCard({
   onReset,
   onTestServerEnvironment,
   onVerifyModel,
+  recipeVerifications,
+  onVerifyRecipeModel,
   onSessionStatusChange,
 }: {
   kind: 'text' | 'image';
@@ -820,6 +823,8 @@ export function SelectionControlCard({
   onReset: () => void;
   onTestServerEnvironment: (providerId: string, modelId?: string) => void;
   onVerifyModel?: (modelId: string, profile?: OpenRouterProfile) => void;
+  recipeVerifications?: Record<string, ModelVerificationView>;
+  onVerifyRecipeModel?: (modelId: string) => void;
   onSessionStatusChange?: (configured: boolean) => void;
 }) {
   const selectedProvider = providers.find((p) => p.providerId === draft.providerId);
@@ -977,6 +982,8 @@ export function SelectionControlCard({
                   value={draft.modelId}
                   verifications={verifications}
                   onVerifyModel={onVerifyModel}
+                  recipeVerifications={recipeVerifications}
+                  onVerifyRecipeModel={onVerifyRecipeModel}
                   onChange={(modelId) => {
                     const chosen = modelId
                       ? selectedProvider.models.find((m) => m.id === modelId)
@@ -1138,6 +1145,7 @@ export function ProviderSelectionPanel({
   const opCounterRef = useRef<{ text: number; image: number }>({ text: 0, image: 0 });
   const [envTests, setEnvTests] = useState<Record<string, ConnectionTestView>>({});
   const [verifications, setVerifications] = useState<Record<string, ModelVerificationView>>({});
+  const [recipeVerifications, setRecipeVerifications] = useState<Record<string, ModelVerificationView>>({});
   const [hydrationError, setHydrationError] = useState(false);
 
   // Reflect the APPLICATION-BOOTSTRAP hydration (App.tsx). This panel is NOT the
@@ -1328,6 +1336,52 @@ export function ProviderSelectionPanel({
     [network, onRefresh]
   );
 
+  /**
+   * v0.8.x: EXPLICIT recipe-creation verification for a profile-verified free
+   * OpenRouter model. Makes exactly one free capability probe. NEVER runs
+   * automatically. On success the catalog is refreshed so Create for Me becomes
+   * eligible for this model.
+   */
+  const verifyRecipeModel = useCallback(
+    async (modelId: string) => {
+      setRecipeVerifications((prev) => ({ ...prev, [modelId]: { state: 'verifying' } }));
+      const credentialSource = draftsRef.current.text.credentialSource ?? 'server_environment';
+      try {
+        const res = await network.post<{
+          ok?: boolean;
+          code?: string;
+          message?: string;
+          probeClassification?: string;
+        }>(openRouterModelVerifyRecipePath(modelId), { credentialSource });
+        const data = res.data ?? {};
+        if (res.ok && data.ok === true) {
+          setRecipeVerifications((prev) => ({ ...prev, [modelId]: { state: 'verified' } }));
+          onRefresh?.();
+        } else {
+          const classification = isProbeFailureClassification(data.probeClassification)
+            ? data.probeClassification
+            : undefined;
+          setRecipeVerifications((prev) => ({
+            ...prev,
+            [modelId]: {
+              state: 'failed',
+              ...(classification ? { classification } : {}),
+              message: classification
+                ? probeFailureMessage(classification)
+                : PROBE_FAILURE_FALLBACK_MESSAGE,
+            },
+          }));
+        }
+      } catch {
+        setRecipeVerifications((prev) => ({
+          ...prev,
+          [modelId]: { state: 'failed', message: 'Could not reach the server.' },
+        }));
+      }
+    },
+    [network, onRefresh]
+  );
+
   const allProviders: {
     kind: 'text' | 'image';
     providerId: string;
@@ -1408,6 +1462,8 @@ export function ProviderSelectionPanel({
             onReset={() => resetSelection('text')}
             onTestServerEnvironment={(providerId, modelId) => testConnection('text', providerId, modelId)}
             onVerifyModel={verifyModel}
+            recipeVerifications={recipeVerifications}
+            onVerifyRecipeModel={verifyRecipeModel}
           />
           <SelectionControlCard
             kind="image"

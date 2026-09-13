@@ -542,3 +542,15 @@ export const capabilityVerifyRateLimiter = sessionKeyRateLimiter(
   "capverify",
   "Too many model verification requests. Please wait a moment before trying again."
 );
+
+/**
+ * Explicit OpenRouter RECIPE-GENERATION verification limiter (v0.8.x). Like the
+ * profile verification, this makes a real (free-gated) provider request, so it is
+ * tightly bounded. Configurable via `RECIPE_VERIFY_RATE_LIMIT` (default 4/min).
+ */
+export const recipeVerifyRateLimiter = sessionKeyRateLimiter(
+  "RECIPE_VERIFY_RATE_LIMIT",
+  4,
+  "recipeverify",
+  "Too many recipe verification requests. Please wait a moment before trying again."
+);

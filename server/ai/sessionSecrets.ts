@@ -39,6 +39,7 @@ import { randomUUID } from "node:crypto";
 import { getRegisteredProviders } from "./providerRegistry.js";
 import { getRegisteredImageProviders } from "./imageProviderRegistry.js";
 import { isSessionByokSupportedDeployment } from "./sessionByokDeployment.js";
+import { bumpCredentialGeneration } from "./capabilityVerificationStore.js";
 
 /** Absolute session lifetime (30 minutes). */
 export const SESSION_SECRET_ABSOLUTE_TTL_MS = 30 * 60 * 1000;
@@ -127,6 +128,8 @@ function purgeExpired(now: number): number {
   for (const [providerId, entry] of store) {
     if (isExpired(entry, now)) {
       store.delete(providerId);
+      // A credential-lifecycle change invalidates dependent recipe authorization.
+      bumpCredentialGeneration(providerId);
       removed += 1;
     }
   }
@@ -213,6 +216,9 @@ export function setSessionSecret(
     version: randomUUID(),
   };
   store.set(providerId, entry);
+  // A new/replaced credential is a new generation: dependent recipe
+  // authorization bound to the previous generation becomes invalid.
+  bumpCredentialGeneration(providerId);
   return statusFromEntry(entry);
 }
 
@@ -230,6 +236,7 @@ export function getSessionSecret(providerId: string): string | undefined {
   if (!entry) return undefined;
   if (isExpired(entry, now)) {
     store.delete(providerId);
+    bumpCredentialGeneration(providerId);
     return undefined;
   }
   entry.lastUsedAt = now;
@@ -238,7 +245,10 @@ export function getSessionSecret(providerId: string): string | undefined {
 
 /** Revokes a provider's session secret. Idempotent; future reads return undefined. */
 export function revokeSessionSecret(providerId: string): void {
-  if (typeof providerId === "string") store.delete(providerId);
+  if (typeof providerId === "string" && store.has(providerId)) {
+    store.delete(providerId);
+    bumpCredentialGeneration(providerId);
+  }
 }
 
 /**
@@ -258,6 +268,7 @@ export function getSessionSecretStatus(providerId: string): SessionSecretStatus 
   if (!entry) return base;
   if (isExpired(entry, now)) {
     store.delete(providerId);
+    bumpCredentialGeneration(providerId);
     return base;
   }
   return statusFromEntry(entry);

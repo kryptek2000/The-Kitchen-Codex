@@ -23,6 +23,7 @@ import {
   imagePreviewRateLimiter,
   providerTestRateLimiter,
   capabilityVerifyRateLimiter,
+  recipeVerifyRateLimiter,
   getClientIp,
 } from "./rateLimiter.js";
 import { interpretKitchenQuestionOnServer } from "./kitchenInterpret.js";
@@ -34,9 +35,14 @@ import { refreshOpenRouterCatalog } from "./ai/openRouterCatalog.js";
 import { runConnectionTest } from "./ai/connectionTest.js";
 import {
   verifyOpenRouterModelCapability,
+  verifyOpenRouterRecipeGenerationCapability,
   type CapabilityVerificationErrorCode,
 } from "./ai/capabilityVerification.js";
-import { generateRecipeDraftOnServer, CreateRecipeValidationError } from "./createRecipe.js";
+import {
+  generateRecipeDraftOnServer,
+  isRecipeGenerationNotVerifiedSelection,
+  CreateRecipeValidationError,
+} from "./createRecipe.js";
 import {
   generateRecipeImagePreview,
   GenerateRecipeImageValidationError,
@@ -986,6 +992,78 @@ export function createApp(opts: CreateAppOptions): express.Express {
     }
   );
 
+  // Explicit, zero-cost OpenRouter RECIPE-GENERATION capability verification
+  // (`recipe_generation_v1`). A dynamic model becomes eligible for Create for Me
+  // ONLY after this succeeds. It REQUIRES a current structured-text profile
+  // verification and runs the REAL recipe schema/sanitizer probe. The client may
+  // supply only the credential-source choice — never a profile, capability,
+  // fingerprint, pricing class, or verification identity. Auth-gated +
+  // rate-limited; bounded timeout/response; never returns a secret or raw
+  // provider error. The client must click an explicit control — nothing here runs
+  // automatically.
+  app.post(
+    "/api/providers/openrouter/models/*modelId/verify-recipe",
+    requireAiAccessToken,
+    recipeVerifyRateLimiter,
+    async (req, res) => {
+      try {
+        if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
+          return res.status(400).json({ error: "Invalid request payload.", code: "INVALID_REQUEST" });
+        }
+        const rawModelId = (req.params as Record<string, unknown>)["modelId"];
+        const modelId = Array.isArray(rawModelId)
+          ? rawModelId.join("/")
+          : typeof rawModelId === "string"
+          ? rawModelId
+          : "";
+        if (!modelId || modelId.length > 200) {
+          return res.status(400).json({ error: "A valid model id is required.", code: "INVALID_MODEL" });
+        }
+
+        const rawCredentialSource = (req.body as Record<string, unknown>)["credentialSource"];
+        let credentialSource: "server_environment" | "session_only" | undefined;
+        if (rawCredentialSource !== undefined) {
+          if (rawCredentialSource !== "server_environment" && rawCredentialSource !== "session_only") {
+            return res.status(400).json({
+              error: '"credentialSource" must be "server_environment" or "session_only".',
+              code: "CREDENTIAL_SOURCE_INVALID",
+            });
+          }
+          credentialSource = rawCredentialSource;
+        }
+
+        const result = await verifyOpenRouterRecipeGenerationCapability({ modelId, credentialSource });
+        if (result.ok === true) {
+          return res.json({
+            ok: true,
+            providerId: result.providerId,
+            modelId: result.modelId,
+            capability: result.capability,
+            profile: result.profile,
+            verifiedAt: result.verifiedAt,
+          });
+        }
+        const status = capabilityVerificationHttpStatus(result.code);
+        return res.status(status).json({
+          ok: false,
+          providerId: result.providerId,
+          modelId: result.modelId,
+          code: result.code,
+          message: result.message,
+          ...(result.probeClassification ? { probeClassification: result.probeClassification } : {}),
+        });
+      } catch {
+        return res.status(500).json({
+          ok: false,
+          providerId: "openrouter",
+          modelId: "",
+          code: "PROVIDER_ERROR",
+          message: "Recipe verification failed unexpectedly.",
+        });
+      }
+    }
+  );
+
   // Transient generated-image preview store (bounded, TTL 5min, 50MB cap).
   // Foundation for Vault Intelligence Image Recovery: generation ONLY — the
   // canonical asset write + Markdown `image` update belong to the later Save pass.
@@ -1002,6 +1080,16 @@ export function createApp(opts: CreateAppOptions): express.Express {
         return res.status(400).json({ error: "Invalid request payload.", code: "INVALID_REQUEST" });
       }
       const userSelection = parseTextSelectionHeader(req.headers);
+
+      // A profile-verified but recipe-unverified free model gets a SPECIFIC,
+      // bounded message instead of the generic no-capable-provider error.
+      if (isRecipeGenerationNotVerifiedSelection(userSelection)) {
+        return res.status(503).json({
+          error:
+            "This free model is verified for structured text but not for recipe creation. Verify recipe creation in AI Settings first.",
+          code: "RECIPE_GENERATION_NOT_VERIFIED",
+        });
+      }
 
       const result = await generateRecipeDraftOnServer(req.body as any, { userSelection });
       return res.json(result);

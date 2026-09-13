@@ -8,6 +8,7 @@ import {
   probeFailureMessage,
   PROBE_FAILURE_CLASSIFICATIONS,
   PROBE_FAILURE_FALLBACK_MESSAGE,
+  recipeVerificationLabel,
   type ProbeFailureClassification,
   type SurfaceModelOption,
 } from '../../src/application-ui/modelPicker.js';
@@ -215,5 +216,100 @@ describe('verified models move into the selectable Free group', () => {
     };
     expect(groupModels([selectable], 'free').map((m) => m.id)).toContain('dynamic/candidate');
     expect(modelBadges(selectable)).toContain('Verified');
+  });
+});
+
+describe('ModelPicker recipe-creation controls', () => {
+  const PROFILE_VERIFIED: SurfaceModelOption = {
+    id: 'dynamic/recipe',
+    default: false,
+    isFree: true,
+    pricingVerified: true,
+    costClass: 'free',
+    capabilityVerified: true,
+    recipeGenerationCandidate: true,
+    executionCompatible: true,
+    compatibility: 'compatible',
+    strictStructuredCandidate: true,
+  };
+
+  it('offers the recipe control only for a profile-verified candidate and never auto-runs', () => {
+    const onVerifyRecipeModel = vi.fn();
+    const html = renderToString(
+      <ModelPicker
+        kind="text"
+        models={[PROFILE_VERIFIED]}
+        discoveredModels={[]}
+        onChange={() => {}}
+        defaultOpen
+        onVerifyRecipeModel={onVerifyRecipeModel}
+      />
+    );
+    expect(onVerifyRecipeModel).not.toHaveBeenCalled();
+    expect(html).toContain('Recipe creation · Not verified');
+    expect(html).toContain('Verify recipe creation');
+    expect(html).toContain('data-model-verify-recipe="dynamic/recipe"');
+    // One-free-probe disclosure.
+    expect(html).toContain('Makes exactly one free capability probe.');
+  });
+
+  it('does not offer the recipe control without a profile verification', () => {
+    const html = renderToString(
+      <ModelPicker
+        kind="text"
+        models={[{ ...PROFILE_VERIFIED, capabilityVerified: false, recipeGenerationCandidate: false }]}
+        discoveredModels={[]}
+        onChange={() => {}}
+        defaultOpen
+        onVerifyRecipeModel={() => {}}
+      />
+    );
+    expect(html).not.toContain('Verify recipe creation');
+  });
+
+  it('renders the verified state and bounded failure message only (never raw text)', () => {
+    const verified = renderToString(
+      <ModelPicker
+        kind="text"
+        models={[PROFILE_VERIFIED]}
+        discoveredModels={[]}
+        onChange={() => {}}
+        defaultOpen
+        onVerifyRecipeModel={() => {}}
+        recipeVerifications={{ 'dynamic/recipe': { state: 'verified' } }}
+      />
+    );
+    expect(verified).toContain('Recipe creation · Verified');
+
+    const failed = renderToString(
+      <ModelPicker
+        kind="text"
+        models={[PROFILE_VERIFIED]}
+        discoveredModels={[]}
+        onChange={() => {}}
+        defaultOpen
+        onVerifyRecipeModel={() => {}}
+        recipeVerifications={{
+          'dynamic/recipe': {
+            state: 'failed',
+            classification: 'PROBE_RECIPE_INVALID',
+            message: 'RAW_PROVIDER_BODY sk-or-v1-LEAK_SENTINEL',
+          },
+        }}
+      />
+    );
+    expect(failed).toContain(probeFailureMessage('PROBE_RECIPE_INVALID'));
+    expect(failed).not.toContain('RAW_PROVIDER_BODY');
+    expect(failed).not.toContain('sk-or-v1-LEAK_SENTINEL');
+  });
+
+  it('recipeVerificationLabel reflects the four states', () => {
+    expect(recipeVerificationLabel(PROFILE_VERIFIED, undefined)).toBe('Recipe creation · Not verified');
+    expect(recipeVerificationLabel(PROFILE_VERIFIED, { state: 'verifying' })).toBe('Recipe creation · Verifying…');
+    expect(recipeVerificationLabel(PROFILE_VERIFIED, { state: 'verified' })).toBe('Recipe creation · Verified');
+    expect(recipeVerificationLabel(PROFILE_VERIFIED, { state: 'failed' })).toBe('Recipe creation · Failed');
+    expect(recipeVerificationLabel({ ...PROFILE_VERIFIED, recipeGenerationVerified: true }, undefined)).toBe(
+      'Recipe creation · Verified'
+    );
   });
 });

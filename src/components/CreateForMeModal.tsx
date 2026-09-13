@@ -158,7 +158,9 @@ export function CreateForMeModal({ isOpen, onClose, network, onSaveRecipe }: Cre
       (result) => dispatch({ type: 'GENERATION_SUCCESS', draft: result.draft, provenance: result.provenance }),
       (err) => {
         const message =
-          err instanceof CreateRecipeClientError && err.code === 'UNSUPPORTED_CAPABILITY'
+          err instanceof CreateRecipeClientError && err.code === 'RECIPE_GENERATION_NOT_VERIFIED'
+            ? 'This free model is verified for structured text but not for recipe creation. Verify recipe creation in AI Settings first.'
+            : err instanceof CreateRecipeClientError && err.code === 'UNSUPPORTED_CAPABILITY'
             ? 'No configured AI provider supports recipe generation.'
             : "Couldn't generate a recipe right now.";
         dispatch({ type: 'GENERATION_FAILURE', message });

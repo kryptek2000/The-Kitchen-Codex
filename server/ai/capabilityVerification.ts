@@ -52,17 +52,26 @@ import { resolveCredential, isCredentialSource, type CredentialSource } from "./
 import {
   findOpenRouterCatalogModel,
   getOpenRouterCatalogSnapshot,
+  isCapabilityVerifiedOpenRouterTextModel,
   openRouterModelFingerprint,
   isValidOpenRouterModelId,
   type OpenRouterCatalogModel,
 } from "./openRouterCatalog.js";
-import { OPENROUTER_CHAT_ENDPOINT } from "./openRouterProvider.js";
+import { OPENROUTER_CHAT_ENDPOINT, toOpenRouterJsonSchema } from "./openRouterProvider.js";
 import {
   CAPABILITY_PROBE_VERSION,
+  RECIPE_GENERATION_PROBE_VERSION,
   getCapabilityVerification,
+  getCredentialGeneration,
   recordCapabilityVerification,
+  recordRecipeGenerationVerification,
   STRICT_JSON_SCHEMA_PROFILE,
 } from "./capabilityVerificationStore.js";
+import {
+  buildGeneratedRecipeSchema,
+  normalizeGeneratedRecipeDraft,
+  validateGeneratedRecipeDraft,
+} from "../../src/schema/generatedRecipe.js";
 
 /** The one provider this surface can verify (never caller-controlled). */
 export const CAPABILITY_VERIFICATION_PROVIDER_ID = "openrouter" as const;
@@ -89,6 +98,7 @@ export type CapabilityVerificationErrorCode =
   | "SESSION_CREDENTIAL_MISSING"
   | "CREDENTIAL_SOURCE_UNAVAILABLE"
   | "SESSION_BYOK_UNAVAILABLE"
+  | "MODEL_PROFILE_NOT_VERIFIED"
   | "MODEL_CAPABILITY_UNVERIFIED";
 
 /**
@@ -105,6 +115,8 @@ export type ProbeFailureClassification =
   | "PROBE_WRONG_JSON_SHAPE"
   | "PROBE_WRONG_REQUIRED_VALUE"
   | "PROBE_EXTRA_PROPERTIES"
+  | "PROBE_PROFILE_REQUIRED"
+  | "PROBE_RECIPE_INVALID"
   | "PROBE_TRANSPORT_ERROR"
   | "PROBE_TIMEOUT"
   | "PROBE_AUTH"
@@ -151,6 +163,8 @@ const BOUNDED_MESSAGES: Record<CapabilityVerificationErrorCode, string> = {
   SESSION_CREDENTIAL_MISSING: "No session credential is configured for OpenRouter.",
   CREDENTIAL_SOURCE_UNAVAILABLE: "No OpenRouter server credential is configured.",
   SESSION_BYOK_UNAVAILABLE: "Session-only BYOK is not available in this deployment.",
+  MODEL_PROFILE_NOT_VERIFIED:
+    "Verify this model's structured-text compatibility before verifying recipe creation.",
   MODEL_CAPABILITY_UNVERIFIED: "The model has not verified the requested JSON compatibility profile.",
 };
 
@@ -167,6 +181,8 @@ export type ProbeFailureReason =
   | "wrong_json_shape"
   | "wrong_required_value"
   | "extra_properties"
+  | "profile_required"
+  | "recipe_invalid"
   | "transport_error"
   | "timeout"
   | "auth"
@@ -192,6 +208,8 @@ export const PROBE_FAILURE_CLASSIFICATION: Record<ProbeFailureReason, ProbeFailu
   wrong_json_shape: 'PROBE_WRONG_JSON_SHAPE',
   wrong_required_value: 'PROBE_WRONG_REQUIRED_VALUE',
   extra_properties: 'PROBE_EXTRA_PROPERTIES',
+  profile_required: 'PROBE_PROFILE_REQUIRED',
+  recipe_invalid: 'PROBE_RECIPE_INVALID',
   transport_error: "PROBE_TRANSPORT_ERROR",
   timeout: "PROBE_TIMEOUT",
   auth: "PROBE_AUTH",
@@ -215,6 +233,8 @@ export const PROBE_FAILURE_MESSAGES: Record<ProbeFailureClassification, string> 
   PROBE_WRONG_JSON_SHAPE: 'The model returned JSON with the wrong object shape.',
   PROBE_WRONG_REQUIRED_VALUE: 'The model returned the wrong required verification value.',
   PROBE_EXTRA_PROPERTIES: 'The model returned unexpected JSON properties.',
+  PROBE_PROFILE_REQUIRED: 'The model has not verified its structured-text compatibility profile yet.',
+  PROBE_RECIPE_INVALID: 'The model did not return a complete, schema-valid recipe draft.',
   PROBE_TRANSPORT_ERROR: "Could not reach OpenRouter. Check the connection and try again.",
   PROBE_TIMEOUT: "OpenRouter did not respond in time. Try again.",
   PROBE_AUTH: "OpenRouter authentication failed or the session key expired. Update the session key and try again.",
@@ -388,10 +408,11 @@ async function readBoundedProbeText(res: ProbeFetchResponse, maxBytes: number): 
 }
 
 async function runCapabilityProbe(options: {
-  profile: OpenRouterProfile;
   modelId: string;
   credential: string;
   fetchFn: CapabilityProbeFetchLike;
+  buildBody: () => Record<string, unknown>;
+  validateContent: (content: unknown) => ProbeValidation;
 }): Promise<ProbeValidation> {
   let res: ProbeFetchResponse;
   try {
@@ -401,7 +422,7 @@ async function runCapabilityProbe(options: {
         Authorization: `Bearer ${options.credential}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(buildCapabilityProbeRequest(options.modelId, options.profile)),
+      body: JSON.stringify(options.buildBody()),
       redirect: 'error',
       signal: AbortSignal.timeout(CAPABILITY_PROBE_TIMEOUT_MS),
     });
@@ -434,7 +455,7 @@ async function runCapabilityProbe(options: {
   }
   const extracted = completionContent(parsed);
   if (extracted.ok === false) return extracted;
-  return validateCapabilityProbeContent(extracted.content);
+  return options.validateContent(extracted.content);
 }
 
 export interface VerifyCapabilityOptions {
@@ -524,7 +545,13 @@ export async function verifyOpenRouterModelCapability(
   // 5. The provider probe (the ONLY provider request in this flow).
   const fetchFn = options.fetchFn ?? defaultProbeFetch();
   const fingerprint = openRouterModelFingerprint(model);
-  const probe = await runCapabilityProbe({ modelId, profile, credential: resolved.lease.secret, fetchFn });
+  const probe = await runCapabilityProbe({
+    modelId,
+    credential: resolved.lease.secret,
+    fetchFn,
+    buildBody: () => buildCapabilityProbeRequest(modelId, profile),
+    validateContent: validateCapabilityProbeContent,
+  });
   if (probe.ok === false) {
     return fail("MODEL_CAPABILITY_UNVERIFIED", true, probeFailureClassification(probe.reason));
   }
@@ -558,3 +585,247 @@ export async function verifyOpenRouterModelCapability(
 
 /** Re-exported for tests/documentation; the profile this probe establishes. */
 export { STRICT_JSON_SCHEMA_PROFILE };
+
+// ---------------------------------------------------------------------------
+// Separate RECIPE-GENERATION capability verification (`recipe_generation_v1`)
+// ---------------------------------------------------------------------------
+
+/** The explicit capability this probe establishes. */
+export const RECIPE_GENERATION_CAPABILITY = "recipe_generation_v1" as const;
+
+/** The recipe-probe schema name (distinct from the trivial profile probe). */
+const RECIPE_PROBE_SCHEMA_NAME = "kitchen_codex_recipe_probe";
+
+/**
+ * DEDICATED output-token allowance for the `recipe_generation_v1` verification
+ * probe. Unlike the trivial structured-text probe (which keeps the 512-token
+ * `OPENROUTER_PROBE_TOKENS` budget), the recipe probe runs the REAL
+ * GeneratedRecipeDraft schema. Reasoning models can consume output-token budget
+ * on hidden reasoning even though `reasoning.exclude: true` keeps it out of the
+ * returned body; 512 tokens proved insufficient for such a model in live
+ * acceptance testing. The recipe probe therefore uses the same bounded
+ * 4096-token request ceiling as verified-dynamic runtime generation. This is a
+ * REQUEST allowance only and does NOT weaken the independent 16 KiB streamed
+ * response-body ceiling enforced by `readBoundedProbeText`.
+ */
+export const RECIPE_PROBE_MAX_TOKENS = 4096;
+
+/** Fixed, tiny recipe-probe prompt (never user content). */
+const RECIPE_GENERATION_PROBE_PROMPT =
+  'Invent one tiny recipe with exactly two short ingredients and two short steps. Return only the JSON required by the supplied recipe schema.';
+
+/** The exact recipe probe request (same runtime mechanics as Create for Me). */
+export function buildRecipeGenerationProbeRequest(
+  modelId: string,
+  profile: OpenRouterProfile
+): Record<string, unknown> {
+  const converted = toOpenRouterJsonSchema(buildGeneratedRecipeSchema());
+  const body: Record<string, unknown> = {
+    model: modelId,
+    messages: [{ role: "user", content: RECIPE_GENERATION_PROBE_PROMPT }],
+    temperature: 0,
+    ...structuredRequestFields(profile, converted, RECIPE_PROBE_SCHEMA_NAME, RECIPE_PROBE_MAX_TOKENS),
+  };
+  // Match the production application-validated mechanics: the schema is carried
+  // in the prompt because json_object mode does not enforce it upstream.
+  if (profile === APPLICATION_VALIDATED_JSON_PROFILE) {
+    body.messages = [
+      {
+        role: "user",
+        content: `${RECIPE_GENERATION_PROBE_PROMPT}\nReturn only a JSON value matching this schema. No prose or Markdown.\n${JSON.stringify(converted)}`,
+      },
+    ];
+  }
+  return body;
+}
+
+/**
+ * Validates a recipe probe response with the REAL production schema and sanitizer.
+ * A structurally-valid completion whose content is not a complete, schema-valid
+ * recipe draft FAILS. No reduced parallel schema.
+ */
+export function validateRecipeGenerationProbeContent(content: unknown): ProbeValidation {
+  if (typeof content !== "string" || content.trim().length === 0) {
+    return { ok: false, reason: "empty_response" };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content.trim());
+  } catch {
+    return { ok: false, reason: "malformed_json" };
+  }
+  if (validateGeneratedRecipeDraft(parsed).passed !== true) {
+    return { ok: false, reason: "recipe_invalid" };
+  }
+  let draft;
+  try {
+    draft = normalizeGeneratedRecipeDraft(parsed);
+  } catch {
+    return { ok: false, reason: "recipe_invalid" };
+  }
+  if (!draft.title || draft.ingredients.length === 0 || draft.steps.length === 0) {
+    return { ok: false, reason: "recipe_invalid" };
+  }
+  return { ok: true };
+}
+
+export type RecipeGenerationVerificationResult =
+  | {
+      ok: true;
+      providerId: typeof CAPABILITY_VERIFICATION_PROVIDER_ID;
+      modelId: string;
+      capability: typeof RECIPE_GENERATION_CAPABILITY;
+      profile: OpenRouterProfile;
+      verifiedAt: number;
+      providerCalled: boolean;
+    }
+  | {
+      ok: false;
+      providerId: typeof CAPABILITY_VERIFICATION_PROVIDER_ID;
+      modelId: string;
+      code: CapabilityVerificationErrorCode;
+      message: string;
+      probeClassification?: ProbeFailureClassification;
+      providerCalled: boolean;
+    };
+
+export interface VerifyRecipeGenerationOptions {
+  modelId: string;
+  /** Whose credential authorizes the probe. Defaults to server_environment. */
+  credentialSource?: CredentialSource;
+  /** Test seam: defaults to global fetch. Never a config surface. */
+  fetchFn?: CapabilityProbeFetchLike;
+  /** Test seam: verification timestamp. */
+  now?: number;
+}
+
+/**
+ * Runs the explicit, zero-cost `recipe_generation_v1` verification for an
+ * OpenRouter model. It REQUIRES a current structured-output profile verification,
+ * runs the REAL recipe schema/sanitizer probe under the recorded profile, and
+ * records a SEPARATE, fingerprint/instance/credential-generation-bound capability.
+ * It never saves a recipe and never returns a secret or raw provider error.
+ */
+export async function verifyOpenRouterRecipeGenerationCapability(
+  options: VerifyRecipeGenerationOptions
+): Promise<RecipeGenerationVerificationResult> {
+  const modelId = typeof options.modelId === "string" ? options.modelId.trim() : "";
+  const providerId = CAPABILITY_VERIFICATION_PROVIDER_ID;
+
+  const fail = (
+    code: CapabilityVerificationErrorCode,
+    providerCalled: boolean,
+    probeClassification?: ProbeFailureClassification
+  ): RecipeGenerationVerificationResult => ({
+    ok: false,
+    providerId,
+    modelId,
+    code,
+    message: probeClassification ? probeFailureMessage(probeClassification) : boundedMessage(code),
+    ...(probeClassification ? { probeClassification } : {}),
+    providerCalled,
+  });
+
+  if (!isValidOpenRouterModelId(modelId)) return fail("INVALID_MODEL", false);
+
+  // Operator policy: a server-managed text pin restricts the probe.
+  const selection = getTextSelection();
+  if (selection.selectionMode === "server_managed") {
+    if (!selection.valid || selection.selectedProviderId !== providerId) return fail("OPERATOR_PIN", false);
+    if (selection.selectedModelId && selection.selectedModelId !== modelId) return fail("OPERATOR_PIN", false);
+  }
+
+  // HARD ZERO-COST GATE — current trusted catalog truth only.
+  const snapshot = getOpenRouterCatalogSnapshot();
+  const model: OpenRouterCatalogModel | undefined = findOpenRouterCatalogModel(modelId);
+  if (!model || !snapshot.textModels.some((m) => m.modelId === modelId)) {
+    return fail("MODEL_NOT_FOUND", false);
+  }
+  if (model.isRouter) return fail("MODEL_ROUTER_NOT_SUPPORTED", false);
+  if (!snapshot.pricingFresh || !model.pricingVerified) {
+    return fail("MODEL_PRICING_UNVERIFIED", false);
+  }
+  if (model.costClass !== "free" || model.isFree !== true) {
+    const hadVerification = Boolean(getCapabilityVerification(providerId, modelId));
+    return fail(hadVerification ? "MODEL_PRICING_CHANGED" : "MODEL_NOT_VERIFIED_FREE", false);
+  }
+
+  // A current structured-output PROFILE verification is REQUIRED first.
+  const profileRecord = getCapabilityVerification(providerId, modelId);
+  if (!profileRecord || !isCapabilityVerifiedOpenRouterTextModel(model)) {
+    return fail("MODEL_PROFILE_NOT_VERIFIED", false, "PROBE_PROFILE_REQUIRED");
+  }
+  const profile = profileRecord.profile ?? STRICT_JSON_SCHEMA_PROFILE;
+  if (!isOpenRouterProfile(profile)) return fail("MODEL_PROFILE_NOT_VERIFIED", false, "PROBE_PROFILE_REQUIRED");
+  if (
+    !model.supportedParameters.includes("response_format") ||
+    (profile !== APPLICATION_VALIDATED_JSON_PROFILE &&
+      !model.supportedParameters.includes("structured_outputs"))
+  ) {
+    return fail("MODEL_CAPABILITY_UNVERIFIED", false);
+  }
+
+  // EXACT credential identity + source. No aliasing / fallback.
+  const source: CredentialSource = options.credentialSource ?? "server_environment";
+  if (!isCredentialSource(source)) return fail("CREDENTIAL_SOURCE_INVALID", false);
+  if (source === "session_only" && !isSessionByokSupportedDeployment()) {
+    return fail("SESSION_BYOK_UNAVAILABLE", false);
+  }
+  const resolved = resolveCredential(providerId, source);
+  if ("code" in resolved) return fail(resolved.code, false);
+  const credentialGeneration = getCredentialGeneration(providerId);
+
+  // The probe (the ONLY provider request in this flow).
+  const fetchFn = options.fetchFn ?? defaultProbeFetch();
+  const fingerprint = openRouterModelFingerprint(model);
+  const probe = await runCapabilityProbe({
+    modelId,
+    credential: resolved.lease.secret,
+    fetchFn,
+    buildBody: () => buildRecipeGenerationProbeRequest(modelId, profile),
+    validateContent: validateRecipeGenerationProbeContent,
+  });
+  if (probe.ok === false) {
+    return fail("MODEL_CAPABILITY_UNVERIFIED", true, probeFailureClassification(probe.reason));
+  }
+
+  // An in-flight catalog/profile change cannot be promoted by an older success.
+  const current = findOpenRouterCatalogModel(modelId);
+  const currentProfile = getCapabilityVerification(providerId, modelId);
+  if (
+    !current ||
+    !getOpenRouterCatalogSnapshot().pricingFresh ||
+    !current.pricingVerified ||
+    !current.isFree ||
+    current.costClass !== "free" ||
+    openRouterModelFingerprint(current) !== fingerprint ||
+    !currentProfile ||
+    currentProfile.instance !== profileRecord.instance
+  ) {
+    return fail("MODEL_PRICING_UNVERIFIED", true);
+  }
+
+  const verifiedAt = options.now ?? Date.now();
+  recordRecipeGenerationVerification({
+    capability: RECIPE_GENERATION_CAPABILITY,
+    providerId,
+    modelId,
+    profile,
+    profileInstance: profileRecord.instance as number,
+    credentialGeneration,
+    credentialSource: source,
+    catalogFingerprint: openRouterModelFingerprint(current),
+    probeVersion: RECIPE_GENERATION_PROBE_VERSION,
+    verifiedAt,
+  });
+
+  return {
+    ok: true,
+    providerId,
+    modelId,
+    capability: RECIPE_GENERATION_CAPABILITY,
+    profile,
+    verifiedAt,
+    providerCalled: true,
+  };
+}

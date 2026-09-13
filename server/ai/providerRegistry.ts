@@ -81,6 +81,12 @@ export interface AiCandidate {
    * output is not guaranteed); never from client input.
    */
   singleAttempt?: boolean;
+  /**
+   * v0.8.x: when true, failure of this candidate TERMINATES AI fallback for the
+   * operation — no later model/provider/profile is attempted. Set from TRUSTED
+   * server state only (verified-dynamic execution); never from client input.
+   */
+  terminalOnFailure?: boolean;
 }
 
 /** Result of a successful fallback run. */
@@ -351,6 +357,12 @@ export async function runWithAiFallback<T>(
 
         // Capability mismatch must never be treated as an ordinary runtime fallback.
         if (normalized.code === "UNSUPPORTED_CAPABILITY") throw normalized;
+
+        // A TRUSTED terminal candidate ends AI fallback for this operation: no
+        // later model/provider/profile is attempted after it fails. This is set
+        // from server state only, so a future registry reordering cannot allow a
+        // paid/curated/provider candidate to run afterward.
+        if (candidate.terminalOnFailure) throw normalized;
 
         if (normalized.code === "AUTH") {
           // AUTH is NEVER retried (same-model). Fallback to a DIFFERENT provider

@@ -32,7 +32,7 @@ import { OPENROUTER_STRUCTURED_MODEL } from "./openRouterProvider.js";
 import {
   OPENROUTER_IMAGE_MODELS,
 } from "./openRouterImageProvider.js";
-import { isCapabilityVerified, getCapabilityVerification, STRICT_JSON_SCHEMA_PROFILE } from "./capabilityVerificationStore.js";
+import { isCapabilityVerified, getCapabilityVerification, getCredentialGeneration, isRecipeGenerationVerified, STRICT_JSON_SCHEMA_PROFILE } from "./capabilityVerificationStore.js";
 import type { OpenRouterProfile } from '../../src/core/ai/openRouterProfile.js';
 
 /** OpenRouter's fixed, official model-catalog endpoint (never configurable). */
@@ -468,6 +468,29 @@ export function verifiedOpenRouterProfile(modelId: string): OpenRouterProfile | 
   return getCapabilityVerification('openrouter', modelId)?.profile ?? STRICT_JSON_SCHEMA_PROFILE;
 }
 
+/**
+ * True when a dynamic OpenRouter model currently holds the SEPARATE
+ * `recipe_generation_v1` capability. Requires ALL of: a current verified-free
+ * profile (fresh pricing, fingerprint, TTL), a current recipe record bound to the
+ * EXACT profile-verification instance, and the current credential generation.
+ * Never derived from client input, model id shape, or catalog metadata.
+ */
+export function isOpenRouterRecipeGenerationAuthorized(
+  modelId: string,
+  now: number = Date.now()
+): boolean {
+  const model = getOpenRouterCatalogSnapshot().textModels.find((m) => m.modelId === modelId);
+  if (!model || model.isRouter) return false;
+  if (!isCapabilityVerifiedOpenRouterTextModel(model, now)) return false;
+  const profileRecord = getCapabilityVerification('openrouter', modelId);
+  if (!profileRecord) return false;
+  return isRecipeGenerationVerified('openrouter', modelId, openRouterModelFingerprint(model), {
+    profileInstance: profileRecord.instance,
+    credentialGeneration: getCredentialGeneration('openrouter'),
+    now,
+  });
+}
+
 /** An image model is DISCOVERABLE when it emits images (not a variable router). */
 export function isCompatibleOpenRouterImageModel(model: OpenRouterCatalogModel): boolean {
   return model.outputModalities.includes("image") && !model.isRouter && !model.pricing.variable;
@@ -792,10 +815,11 @@ export function openRouterSelectableImageModelIds(): string[] {
 /**
  * Dynamic capability truth for an OpenRouter text model. `structuredOutput` is
  * TRUE only for the server-owned VERIFIED allowlist OR a model with a CURRENT
- * runtime capability verification. Arbitrary catalog candidates are NOT trusted
- * for structured Kitchen Codex operations. recipeGeneration and webSearch are
- * never claimed: a trivial strict-schema probe does not prove recipe-invention
- * quality, and OpenRouter has no grounded web search.
+ * runtime capability verification. `recipeGeneration` is TRUE only when the model
+ * holds the SEPARATE, runtime-proven `recipe_generation_v1` capability (never from
+ * the trivial text probe). Arbitrary catalog candidates are NOT trusted for
+ * structured Kitchen Codex operations. webSearch is never claimed: OpenRouter has
+ * no grounded web search.
  */
 export function openRouterDynamicCapabilities(
   modelId: string
@@ -805,7 +829,7 @@ export function openRouterDynamicCapabilities(
   return {
     reasoning: model.capabilities.reasoning,
     structuredOutput: isSelectableOpenRouterTextModel(model),
-    recipeGeneration: false,
+    recipeGeneration: isOpenRouterRecipeGenerationAuthorized(modelId),
     webSearch: false,
   };
 }
