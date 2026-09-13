@@ -132,10 +132,12 @@ Batter mix.
     const { asset, writes } = recordingAsset();
     const recipe = recipeNoImage();
     const img = getRecipeImage(recipe);
-    // Rendering yields a display URL (remote stock fallback) — never an asset path
-    // and never a write.
+    // Rendering yields the repository-owned LOCAL placeholder (Phase 1: no remote
+    // stock fallback) — never an asset path, never a write, never a third-party
+    // request.
     expect(typeof img).toBe("string");
-    expect(img).toMatch(/^https?:/);
+    expect(img).toMatch(/^data:/);
+    expect(img).not.toMatch(/^https?:/);
     expect(img).not.toContain("Assets/");
     expect(writes).toEqual([]);
   });

@@ -38,6 +38,20 @@ import {
   NUTRITION_INCOMPLETE_MESSAGE,
   NUTRITION_AUTOSAVE_DISABLED_MESSAGE,
 } from '../utils/nutrition';
+import { RepresentativeImageChooser } from './RepresentativeImageChooser';
+import {
+  buildRepresentativeSearchInput,
+  findRepresentativeImages,
+  mapRepresentativeImageError,
+  selectRepresentativeImage,
+} from '../application/representativeImage';
+import { recipeImagePreviewPath } from '../application/recipeImageRecovery';
+import { fetchAppPreviewBlob } from '../platform/browser/downloadImageViaBackend';
+import type {
+  RepresentativeImageCandidate,
+  RepresentativeImageProvenance,
+} from '../core/representativeImage';
+import { isRepresentativeImageProvenance } from '../core/representativeImage';
 
 interface RecipeEditorModalProps {
   initialRecipe?: ObsidianRecipe | null;
@@ -239,6 +253,66 @@ export function RecipeEditorModal({
   const [saveError, setSaveError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Explicit representative-image flow (Phase 1). No automatic search, no AI.
+  const [representativeOpen, setRepresentativeOpen] = useState(false);
+  const [representativeCandidates, setRepresentativeCandidates] = useState<RepresentativeImageCandidate[]>([]);
+  const [representativeQuery, setRepresentativeQuery] = useState('');
+  const [representativeBusy, setRepresentativeBusy] = useState(false);
+  const [representativeMessage, setRepresentativeMessage] = useState<string | null>(null);
+  const [representativeError, setRepresentativeError] = useState<string | null>(null);
+  // Provenance of the CURRENT image. Initialized from the recipe's frontmatter
+  // (a representative image already saved on this recipe).
+  const [representativeProvenance, setRepresentativeProvenance] = useState<RepresentativeImageProvenance | null>(() => {
+    const existing = initialRecipe?.frontmatter?.['codex_representative_image'];
+    return isRepresentativeImageProvenance(existing) ? existing : null;
+  });
+  // True once the image has been changed through a NON-representative path, so
+  // stale representative/generated provenance is removed on save.
+  const [imageProvenanceCleared, setImageProvenanceCleared] = useState(false);
+  // A selected representative image whose Asset write is DEFERRED until Save.
+  const [pendingRepresentative, setPendingRepresentative] = useState<
+    { blob: Blob; ext: string; provenance: RepresentativeImageProvenance } | null
+  >(null);
+  // Object URLs created by THIS flow. They are revoked only after React has
+  // switched away from them (or on unmount) — never while still active.
+  const representativePreviewUrlsRef = useRef<Set<string>>(new Set());
+  // Image/provenance state BEFORE the pending representative selection, so a
+  // failed Save can restore the original recipe/image state.
+  const preRepresentativeRef = useRef<{
+    image: string;
+    provenance: RepresentativeImageProvenance | null;
+    cleared: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    for (const url of representativePreviewUrlsRef.current) {
+      if (url !== image) {
+        URL.revokeObjectURL(url);
+        representativePreviewUrlsRef.current.delete(url);
+      }
+    }
+  }, [image]);
+
+  useEffect(
+    () => () => {
+      for (const url of representativePreviewUrlsRef.current) URL.revokeObjectURL(url);
+      representativePreviewUrlsRef.current.clear();
+    },
+    []
+  );
+
+  /**
+   * Any NON-representative image change (manual URL, vault picker, upload,
+   * Remove Image, AI generation) MUST clear representative provenance so a
+   * different image never keeps stale licensing/attribution.
+   */
+  const setImageManually = (value: string): void => {
+    setImage(value);
+    setRepresentativeProvenance(null);
+    setImageProvenanceCleared(true);
+    setPendingRepresentative(null);
+  };
+
   const previewImageUrl = useVaultImage(image, folderHandle);
 
   // Callout
@@ -276,7 +350,10 @@ export function RecipeEditorModal({
     }
   }, [activeTab]);
 
-  const generateCurrentMarkdown = (): string => {
+  const generateCurrentMarkdown = (
+    imageOverride?: string,
+    provenanceOverride: RepresentativeImageProvenance | null = representativeProvenance
+  ): string => {
     const tags = tagsInput.split(',').map((t) => t.trim().replace(/^#/, '')).filter(Boolean);
     const parsedIngs: ParsedIngredient[] = ingredientsText
       .split('\n')
@@ -347,11 +424,26 @@ export function RecipeEditorModal({
             };
           })()
         : undefined,
-      image: image || undefined,
+      image: (imageOverride ?? image) || undefined,
       callouts: calloutContent ? [{ type: 'tip', title: calloutTitle, content: calloutContent }] : [],
       ingredients: parsedIngs,
       instructions: parsedSteps,
       notes: notes || undefined,
+      frontmatter: (() => {
+        const fm: Record<string, unknown> = { ...(initialRecipe?.frontmatter || {}) };
+        // A non-representative image change clears stale representative AND
+        // generated provenance (a different image must not keep stale licensing).
+        if (imageProvenanceCleared) {
+          delete fm['codex_representative_image'];
+          delete fm['codex_generated_image'];
+        }
+        if (provenanceOverride) {
+          // A representative image must not retain stale generated provenance.
+          delete fm['codex_generated_image'];
+          fm['codex_representative_image'] = provenanceOverride;
+        }
+        return fm;
+      })(),
     };
 
     return serializeRecipeToObsidianMarkdown(partial);
@@ -534,8 +626,106 @@ export function RecipeEditorModal({
     }
   };
 
+  const handleFindRepresentativeImage = async () => {
+    setRepresentativeBusy(true);
+    setRepresentativeError(null);
+    setRepresentativeMessage(null);
+    try {
+      const ingredientLines = ingredientsText
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean);
+      const input = buildRepresentativeSearchInput({
+        ...(initialRecipe ?? {}),
+        title: title || initialRecipe?.title || '',
+        cuisine,
+        category,
+        ingredients: ingredientLines.map((original) => ({ original, name: original })),
+      } as ObsidianRecipe);
+      if (!input.title) {
+        setRepresentativeError('Add a recipe title before searching for a representative image.');
+        return;
+      }
+      const result = await findRepresentativeImages(network, input);
+      setRepresentativeCandidates(result.candidates);
+      setRepresentativeQuery(result.query);
+      setRepresentativeOpen(true);
+      if (result.candidates.length === 0) {
+        setRepresentativeMessage('No reusable representative images were found. Your current image was kept.');
+      }
+    } catch (err) {
+      setRepresentativeError(mapRepresentativeImageError(err));
+    } finally {
+      setRepresentativeBusy(false);
+    }
+  };
+
+  const handleUseRepresentativeImage = async (candidate: RepresentativeImageCandidate) => {
+    setRepresentativeBusy(true);
+    setRepresentativeError(null);
+    try {
+      const selected = await selectRepresentativeImage(network, candidate.id);
+      // Capture the pre-selection image/provenance so a failed Save can restore
+      // the original recipe/image state.
+      preRepresentativeRef.current = { image, provenance: representativeProvenance, cleared: imageProvenanceCleared };
+      // Fetch the validated bytes through the application's own authenticated
+      // preview endpoint (scoped platform helper; never a remote host). The
+      // vault Asset write is DEFERRED until the user explicitly Saves.
+      const blob = await fetchAppPreviewBlob(recipeImagePreviewPath(selected.token));
+      const ext = selected.contentType.includes('png')
+        ? 'png'
+        : selected.contentType.includes('webp')
+        ? 'webp'
+        : selected.contentType.includes('avif')
+        ? 'avif'
+        : 'jpg';
+      setPendingRepresentative({ blob, ext, provenance: selected.provenance });
+      setRepresentativeProvenance(selected.provenance);
+      // A representative image replaces any prior image/provenance on save.
+      setImageProvenanceCleared(true);
+      // Local preview only; NO vault write happens here. Track the object URL so
+      // it can be revoked after React stops using it (or on unmount).
+      const previewUrl = URL.createObjectURL(blob);
+      representativePreviewUrlsRef.current.add(previewUrl);
+      setImage(previewUrl);
+      setRepresentativeOpen(false);
+      setRepresentativeMessage('Representative image selected. It will be saved when you save the recipe.');
+    } catch (err) {
+      // Failure preserves the current image; no asset/Markdown change.
+      setRepresentativeError(mapRepresentativeImageError(err));
+    } finally {
+      setRepresentativeBusy(false);
+    }
+  };
+
   const handleSave = async () => {
     let finalRecipe: ObsidianRecipe;
+    let imagePathOverride: string | undefined;
+    let createdAssetPath: string | undefined;
+    let provenanceOverride: RepresentativeImageProvenance | null = representativeProvenance;
+
+    // DEFERRED representative asset write: only during explicit Save. On
+    // failure the current image/provenance is preserved and the save aborts.
+    if (pendingRepresentative) {
+      try {
+        const saved = await saveImageToVaultAssets(
+          imageService ?? { folderHandle },
+          title || 'Recipe',
+          pendingRepresentative.blob,
+          pendingRepresentative.ext
+        );
+        if (!saved.success) throw new Error(saved.error || 'save');
+        imagePathOverride = saved.relativePath;
+        createdAssetPath = saved.relativePath;
+        provenanceOverride = { ...pendingRepresentative.provenance, localAssetPath: saved.relativePath };
+        setImage(saved.relativePath);
+        setRepresentativeProvenance(provenanceOverride);
+        setPendingRepresentative(null);
+      } catch {
+        setSaveError('The representative image could not be saved. Your current image was kept.');
+        return;
+      }
+    }
 
     if (activeTab === 'markdown') {
       finalRecipe = parseObsidianRecipeMarkdown(
@@ -545,7 +735,7 @@ export function RecipeEditorModal({
         initialRecipe?.filePath || resolveNewRecipeVaultPath(fileName)
       );
     } else {
-      const md = generateCurrentMarkdown();
+      const md = generateCurrentMarkdown(imagePathOverride, provenanceOverride);
       const safeName = fileName.endsWith('.md') ? fileName : `${(title || 'New Recipe').replace(/[\/\\?%*:|"<>]/g, '-')}.md`;
       finalRecipe = parseObsidianRecipeMarkdown(
         md,
@@ -566,7 +756,33 @@ export function RecipeEditorModal({
     try {
       await onSave(finalRecipe);
     } catch (err: any) {
-      setSaveError(err?.message || 'Failed to save recipe to the vault.');
+      let message: string = err?.message || 'Failed to save recipe to the vault.';
+      if (createdAssetPath) {
+        // Roll back ONLY the asset created during THIS Save operation. Never
+        // delete a pre-existing user asset.
+        const del = imageService?.asset?.delete;
+        if (typeof del === 'function') {
+          try {
+            await del.call(imageService!.asset, createdAssetPath);
+          } catch {
+            message =
+              'Recipe save failed. A newly created image asset may remain in Assets and may need to be removed manually.';
+          }
+        } else {
+          message =
+            'Recipe save failed. A newly created image asset may remain in Assets and may need to be removed manually.';
+        }
+      }
+      // Preserve the original recipe/image state (the vault was not changed).
+      const previous = preRepresentativeRef.current;
+      if (previous) {
+        setImage(previous.image);
+        setRepresentativeProvenance(previous.provenance);
+        setImageProvenanceCleared(previous.cleared);
+        setPendingRepresentative(null);
+        preRepresentativeRef.current = null;
+      }
+      setSaveError(message);
     }
   };
 
@@ -927,7 +1143,7 @@ export function RecipeEditorModal({
                           try {
                             setIsSavingImageAsset(true);
                             const saved = await saveImageToVaultAssets(imageService ?? { folderHandle }, title || 'Recipe', file);
-                            setImage(saved.relativePath);
+                            setImageManually(saved.relativePath);
                           } catch (err: any) {
                             console.error('Failed to upload image to vault Assets/:', err);
                           } finally {
@@ -963,7 +1179,7 @@ export function RecipeEditorModal({
                             key={item.path}
                             type="button"
                             onClick={() => {
-                              setImage(item.path);
+                              setImageManually(item.path);
                               setIsAssetPickerOpen(false);
                             }}
                             className={`group text-left p-1.5 rounded-lg border transition-all flex flex-col gap-1 items-center bg-[#141414] ${
@@ -991,7 +1207,7 @@ export function RecipeEditorModal({
                   <input
                     type="text"
                     value={image}
-                    onChange={(e) => setImage(e.target.value)}
+                    onChange={(e) => setImageManually(e.target.value)}
                     placeholder="Assets/filename.jpg or https://... food photo URL"
                     className="flex-1 bg-[#0C0C0C] border border-white/10 rounded-lg p-2 text-gray-300 font-mono text-xs focus:border-amber-500 focus:outline-none"
                   />
@@ -1003,7 +1219,7 @@ export function RecipeEditorModal({
                         try {
                           setIsSavingImageAsset(true);
                           const saved = await saveImageToVaultAssets(imageService ?? { folderHandle }, title || 'Recipe', image);
-                          setImage(saved.relativePath);
+                          setImageManually(saved.relativePath);
                         } catch (err: any) {
                           console.error('Failed to download image to Assets/:', err);
                         } finally {
@@ -1026,6 +1242,23 @@ export function RecipeEditorModal({
                         className="w-full h-full object-cover"
                       />
                     </div>
+                  )}
+                </div>
+
+                {/* Explicit licensed representative-image search (Phase 1). */}
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    data-testid="find-representative-image"
+                    onClick={handleFindRepresentativeImage}
+                    disabled={representativeBusy}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 border border-sky-500/30 transition-colors disabled:opacity-50"
+                  >
+                    <ImageIcon className="w-3.5 h-3.5" />
+                    <span>{representativeBusy ? 'Searching…' : 'Find Representative Image'}</span>
+                  </button>
+                  {representativeMessage && (
+                    <span className="text-[11px] text-gray-400">{representativeMessage}</span>
                   )}
                 </div>
               </div>
@@ -1141,6 +1374,21 @@ export function RecipeEditorModal({
           </button>
         </div>
       </div>
+
+      {representativeOpen && (
+        <RepresentativeImageChooser
+          candidates={representativeCandidates}
+          query={representativeQuery}
+          busy={representativeBusy}
+          message={representativeError ?? representativeMessage}
+          messageKind={representativeError ? 'error' : 'info'}
+          onSelect={handleUseRepresentativeImage}
+          onCancel={() => {
+            setRepresentativeOpen(false);
+            setRepresentativeError(null);
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -87,3 +87,25 @@ export const browserRemoteImageDownloader: RemoteImageDownloader = {
     return downloadImageViaBackend(imageUrl, { signal: options?.signal });
   },
 };
+
+/**
+ * Fetches a TRANSIENT preview (the application's OWN authenticated preview
+ * endpoint, addressed by an opaque token) as a Blob. This is a scoped platform
+ * helper: the platform-neutral application/UI layers never call bare `fetch()`.
+ * The path is RESTRICTED to the exact app-local preview route — absolute URLs,
+ * protocol-relative URLs, data:/blob:, traversal, alternate API routes, and
+ * query/authority tricks are all rejected.
+ */
+const APP_PREVIEW_ROUTE = /^\/api\/recipes\/image\/preview\/[A-Za-z0-9_-]{1,512}$/;
+
+export async function fetchAppPreviewBlob(previewPath: string, options: DownloadImageOptions = {}): Promise<Blob> {
+  if (typeof previewPath !== 'string' || !APP_PREVIEW_ROUTE.test(previewPath)) {
+    throw new BackendImageDownloadError(0, 'Invalid preview path.');
+  }
+  const fetchFn = options.fetchFn ?? defaultFetch();
+  const res = await fetchFn(previewPath, { method: 'GET', signal: options.signal });
+  if (!res.ok) {
+    throw new BackendImageDownloadError(res.status, `Preview fetch failed (HTTP ${res.status}).`);
+  }
+  return await res.blob();
+}

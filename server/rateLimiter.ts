@@ -382,6 +382,96 @@ export function imageGenerateRateLimiter(req: Request, res: Response, next: Next
 }
 
 /**
+ * Shared bounded per-IP limiter factory for the representative-image surface.
+ * Failures count (every request increments). Trusted-proxy behavior is preserved
+ * by `getClientIp`.
+ */
+function representativeRateLimiter(
+  keyPrefix: string,
+  envName: string,
+  defaultLimit: number,
+  message: string
+): (req: Request, res: Response, next: NextFunction) => void {
+  return (req, res, next) => {
+    const parsedLimit = parseInt(process.env[envName] || String(defaultLimit), 10);
+    const maxRequestsPerWindow = isNaN(parsedLimit) || parsedLimit <= 0 ? defaultLimit : parsedLimit;
+    const windowMs = 60 * 1000;
+
+    const clientIp = getClientIp(req);
+    const now = Date.now();
+
+    let entry = clientIpStore.get(`${keyPrefix}_${clientIp}`);
+    if (!entry || entry.resetTime <= now) {
+      entry = { count: 1, resetTime: now + windowMs };
+      clientIpStore.set(`${keyPrefix}_${clientIp}`, entry);
+    } else {
+      entry.count += 1;
+    }
+
+    const remaining = Math.max(0, maxRequestsPerWindow - entry.count);
+    const resetSeconds = Math.ceil((entry.resetTime - now) / 1000);
+
+    res.setHeader("RateLimit-Limit", maxRequestsPerWindow);
+    res.setHeader("RateLimit-Remaining", remaining);
+    res.setHeader("RateLimit-Reset", resetSeconds);
+
+    if (entry.count > maxRequestsPerWindow) {
+      res.setHeader("Retry-After", resetSeconds);
+      res.status(429).json({ error: message, retryAfterSeconds: resetSeconds });
+      return;
+    }
+    next();
+  };
+}
+
+/**
+ * Catalog SEARCH limiter (small, explicit allowance). Default 12/min/IP
+ * (configurable via `REPRESENTATIVE_IMAGE_SEARCH_RATE_LIMIT`).
+ */
+export function representativeImageSearchRateLimiter(req: Request, res: Response, next: NextFunction) {
+  return representativeRateLimiter(
+    "repimgsearch",
+    "REPRESENTATIVE_IMAGE_SEARCH_RATE_LIMIT",
+    12,
+    "Too many representative image searches. Please wait a moment before trying again."
+  )(req, res, next);
+}
+
+/**
+ * Thumbnail LOADING limiter (six thumbnails must not consume the search
+ * allowance). Default 60/min/IP (configurable via
+ * `REPRESENTATIVE_IMAGE_THUMBNAIL_RATE_LIMIT`).
+ */
+export function representativeImageThumbnailRateLimiter(req: Request, res: Response, next: NextFunction) {
+  return representativeRateLimiter(
+    "repimgthumb",
+    "REPRESENTATIVE_IMAGE_THUMBNAIL_RATE_LIMIT",
+    60,
+    "Too many representative image thumbnail requests. Please wait a moment before trying again."
+  )(req, res, next);
+}
+
+/**
+ * Final SELECTION/download limiter (the costly path). Default 12/min/IP
+ * (configurable via `REPRESENTATIVE_IMAGE_SELECT_RATE_LIMIT`).
+ */
+export function representativeImageSelectRateLimiter(req: Request, res: Response, next: NextFunction) {
+  return representativeRateLimiter(
+    "repimgselect",
+    "REPRESENTATIVE_IMAGE_SELECT_RATE_LIMIT",
+    12,
+    "Too many representative image selections. Please wait a moment before trying again."
+  )(req, res, next);
+}
+
+/**
+ * Back-compat alias: the SEARCH limiter (existing callers/tests).
+ */
+export function representativeImageRateLimiter(req: Request, res: Response, next: NextFunction) {
+  return representativeImageSearchRateLimiter(req, res, next);
+}
+
+/**
  * Express middleware for rate limiting on provider connection-test requests.
  * Bounded: 6 requests per minute per IP (configurable via
  * `PROVIDER_TEST_RATE_LIMIT`). The connection test makes a real, bounded

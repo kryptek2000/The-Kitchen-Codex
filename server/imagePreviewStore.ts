@@ -22,6 +22,7 @@
 
 import { randomBytes } from 'node:crypto';
 import type { GeneratedImageMime } from '../src/core/recipeImage.js';
+import type { RepresentativeImageProvenance } from '../src/core/representativeImage.js';
 
 export const DEFAULT_PREVIEW_TTL_MS = 5 * 60 * 1000;
 export const DEFAULT_PREVIEW_MAX_TOTAL_BYTES = 50 * 1024 * 1024;
@@ -33,6 +34,11 @@ export interface ImagePreviewRecord {
   model: string;
   createdAt: number;
   expiresAt: number;
+  /**
+   * Optional representative-image provenance (Phase 1). Present only for a
+   * licensed representative image selected by the user; absent for AI generation.
+   */
+  provenance?: RepresentativeImageProvenance;
 }
 
 export interface ImagePreviewMetadata {
@@ -43,6 +49,7 @@ export interface ImagePreviewMetadata {
   model: string;
   createdAt: number;
   expiresAt: number;
+  provenance?: RepresentativeImageProvenance;
 }
 
 export class PreviewStoreCapacityError extends Error {
@@ -97,6 +104,7 @@ export class ImagePreviewStore {
     contentType: GeneratedImageMime;
     provider: string;
     model: string;
+    provenance?: RepresentativeImageProvenance;
   }): ImagePreviewMetadata {
     const now = this.now();
     this.sweep();
@@ -119,6 +127,7 @@ export class ImagePreviewStore {
       model: input.model,
       createdAt: now,
       expiresAt: now + this.ttlMs,
+      ...(input.provenance ? { provenance: input.provenance } : {}),
     };
     this.records.set(token, record);
     return this.toMetadata(record);
@@ -185,6 +194,7 @@ export class ImagePreviewStore {
       model: record.model,
       createdAt: record.createdAt,
       expiresAt: record.expiresAt,
+      ...(record.provenance ? { provenance: record.provenance } : {}),
     };
   }
 }

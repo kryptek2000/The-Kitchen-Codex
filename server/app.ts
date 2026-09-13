@@ -21,6 +21,9 @@ import {
   createRecipeRateLimiter,
   imageGenerateRateLimiter,
   imagePreviewRateLimiter,
+  representativeImageSearchRateLimiter,
+  representativeImageThumbnailRateLimiter,
+  representativeImageSelectRateLimiter,
   providerTestRateLimiter,
   capabilityVerifyRateLimiter,
   recipeVerifyRateLimiter,
@@ -55,6 +58,15 @@ import {
 } from "./ai/parseSelectionMetadata.js";
 import type { SelectionInput } from "./ai/effectiveSelection.js";
 import { ImagePreviewStore, PreviewStoreCapacityError } from "./imagePreviewStore.js";
+import { buildRepresentativeImageQuery } from "../src/core/representativeImage.js";
+import { createHash, randomBytes as cryptoRandomBytes } from "node:crypto";
+import {
+  RepresentativeImageCandidateStore,
+  RepresentativeImageSelectionError,
+  fetchRepresentativeThumbnail,
+  searchRepresentativeImages,
+  selectRepresentativeImage,
+} from "./representativeImage.js";
 import { sniffGeneratedImageMime } from "../src/core/recipeImage.js";
 import {
   sanitizeCandidateEvidenceList,
@@ -1068,6 +1080,47 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // Foundation for Vault Intelligence Image Recovery: generation ONLY — the
   // canonical asset write + Markdown `image` update belong to the later Save pass.
   const imagePreviewStore = new ImagePreviewStore();
+  // Server-owned representative-image candidate authority (Phase 1): opaque ids,
+  // short TTL, bounded count, bound to a SERVER-DERIVED requester identity.
+  const representativeImageCandidates = new RepresentativeImageCandidateStore();
+  // Process-random, in-memory salt for requester-id hashing (never persisted).
+  // LIMITATION: requester scope is the trusted client IP (per the configured
+  // proxy policy), so users behind the SAME NAT/proxy-derived IP SHARE a scope.
+  // Appropriate for local-first/single-user use; a shared multi-user deployment
+  // must bind authority to an authenticated user/session instead. See
+  // docs/Representative-Image-Security.md ("Requester scope").
+  const representativeRequesterSalt = cryptoRandomBytes(32);
+  const representativeRequesterId = (req: import("express").Request): string =>
+    createHash("sha256")
+      .update(representativeRequesterSalt)
+      .update(":")
+      .update(getClientIp(req))
+      .digest("hex");
+  // Bounded thumbnail byte cache (strict memory limit; short TTL). Keyed by
+  // REQUESTER + candidate so a cache hit can never bypass requester ownership.
+  const REPRESENTATIVE_THUMB_CACHE_MAX_ENTRIES = 48;
+  const REPRESENTATIVE_THUMB_CACHE_MAX_BYTES = 8 * 1024 * 1024;
+  const representativeThumbCache = new Map<string, { bytes: Buffer; contentType: string; expiresAt: number }>();
+  let representativeThumbCacheBytes = 0;
+  const representativeThumbCacheKey = (requesterId: string, candidateId: string): string =>
+    `${requesterId}\u0000${candidateId}`;
+  const cacheRepresentativeThumb = (requesterId: string, candidateId: string, bytes: Buffer, contentType: string): void => {
+    const now = Date.now();
+    for (const [key, value] of representativeThumbCache) {
+      if (now >= value.expiresAt) {
+        representativeThumbCache.delete(key);
+        representativeThumbCacheBytes -= value.bytes.length;
+      }
+    }
+    if (representativeThumbCache.size >= REPRESENTATIVE_THUMB_CACHE_MAX_ENTRIES) return;
+    if (representativeThumbCacheBytes + bytes.length > REPRESENTATIVE_THUMB_CACHE_MAX_BYTES) return;
+    representativeThumbCache.set(representativeThumbCacheKey(requesterId, candidateId), {
+      bytes,
+      contentType,
+      expiresAt: now + 60 * 1000,
+    });
+    representativeThumbCacheBytes += bytes.length;
+  };
 
   // Create for Me — explicit recipe invention. Generates a schema-constrained
   // DRAFT and returns it (the client previews/edits and saves via the existing
@@ -1225,6 +1278,137 @@ export function createApp(opts: CreateAppOptions): express.Express {
     }
     imagePreviewStore.remove(token);
     return res.status(200).json({ ok: true });
+  });
+
+  // EXPLICIT representative-image search (Phase 1). User-initiated only. The
+  // deterministic query is built server-side from bounded recipe-owned fields;
+  // only approved-license Openverse/Wikimedia candidates are returned. Bounded
+  // metadata fetch through the hardened SSRF JSON path; never returns raw
+  // upstream errors. Gated + rate-limited; no AI, no generation.
+  app.post("/api/recipes/image/find-representative", requireAiAccessToken, representativeImageSearchRateLimiter, async (req, res) => {
+    try {
+      if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
+        return res.status(400).json({ error: "Invalid request payload.", code: "INVALID_REQUEST" });
+      }
+      const body = req.body as Record<string, unknown>;
+      const query = buildRepresentativeImageQuery({
+        title: typeof body['title'] === "string" ? body['title'] : undefined,
+        cuisine: typeof body['cuisine'] === "string" ? body['cuisine'] : undefined,
+        category: typeof body['category'] === "string" ? body['category'] : undefined,
+        tags: Array.isArray(body['tags']) ? (body['tags'] as string[]) : undefined,
+        ingredients: Array.isArray(body['ingredients']) ? (body['ingredients'] as Array<string | { name?: string | null }>) : undefined,
+      });
+      // No safe visual term -> ZERO external calls, bounded local error.
+      if (!query) {
+        return res.status(422).json({
+          error: "This recipe does not contain safe visual search terms. No external search was performed.",
+          code: "IMAGE_QUERY_UNSAFE",
+        });
+      }
+      const requesterId = representativeRequesterId(req);
+      const found = await searchRepresentativeImages(query);
+      const candidates = representativeImageCandidates.insertAll(requesterId, found);
+      // The public response contains NO external thumbnail/full-resolution URL.
+      return res.json({ query, candidates });
+    } catch {
+      return res.status(502).json({
+        error: "Representative image search is temporarily unavailable. Please try again.",
+        code: "IMAGE_SEARCH_UNAVAILABLE",
+      });
+    }
+  });
+
+  // App-local THUMBNAIL proxy. The browser NEVER receives or renders an external
+  // thumbnail URL: it requests this route, and the server fetches the EXACT
+  // stored thumbnail through the hardened SSRF-safe image path, validates it, and
+  // returns raster bytes with nosniff + a short private cache. Requester-bound;
+  // does NOT consume the candidate.
+  app.get(
+    "/api/recipes/image/representative-thumbnail/:candidateId",
+    requireAiAccessToken,
+    representativeImageThumbnailRateLimiter,
+    async (req, res) => {
+      const candidateId = String(req.params?.candidateId ?? "");
+      const requesterId = representativeRequesterId(req);
+      // OWNERSHIP + EXPIRY ARE CHECKED BEFORE ANY CACHE HIT. A cached byte
+      // response must never bypass `store.get(candidateId, requesterId)`.
+      const owned = representativeImageCandidates.get(candidateId, requesterId);
+      if (!owned) {
+        representativeThumbCache.delete(representativeThumbCacheKey(requesterId, candidateId));
+        // Unknown/expired/cross-requester all look identical (no existence oracle).
+        return res.status(404).json({ error: "Thumbnail not found.", code: "CANDIDATE_NOT_FOUND" });
+      }
+      const cached = representativeThumbCache.get(representativeThumbCacheKey(requesterId, candidateId));
+      if (cached && Date.now() < cached.expiresAt) {
+        res.setHeader("Content-Type", cached.contentType);
+        res.setHeader("Content-Length", String(cached.bytes.length));
+        res.setHeader("Cache-Control", "private, max-age=60");
+        res.setHeader("X-Content-Type-Options", "nosniff");
+        return res.status(200).end(cached.bytes);
+      }
+      try {
+        const thumb = await fetchRepresentativeThumbnail(candidateId, {
+          store: representativeImageCandidates,
+          requesterId,
+        });
+        const buffer = Buffer.from(thumb.bytes);
+        cacheRepresentativeThumb(requesterId, candidateId, buffer, thumb.contentType);
+        res.setHeader("Content-Type", thumb.contentType);
+        res.setHeader("Content-Length", String(buffer.length));
+        res.setHeader("Cache-Control", "private, max-age=60");
+        res.setHeader("X-Content-Type-Options", "nosniff");
+        return res.status(200).end(buffer);
+      } catch (error: any) {
+        if (error instanceof RepresentativeImageSelectionError) {
+          // Unknown/expired/cross-requester all look identical (no existence oracle).
+          return res.status(404).json({ error: "Thumbnail not found.", code: "CANDIDATE_NOT_FOUND" });
+        }
+        return res.status(502).json({ error: "That thumbnail could not be loaded.", code: "THUMBNAIL_FAILED" });
+      }
+    }
+  );
+
+  // EXPLICIT representative-image selection (Phase 1). The client submits ONLY
+  // the opaque server-owned candidate id; the server recovers the exact stored
+  // candidate (requester-bound), revalidates its license, downloads the exact
+  // stored remote URL through the hardened SSRF image path, validates the bytes,
+  // CONSUMES the candidate, and stores a short-lived preview token carrying the
+  // representative provenance.
+  app.post("/api/recipes/image/select-representative", requireAiAccessToken, representativeImageSelectRateLimiter, async (req, res) => {
+    try {
+      if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
+        return res.status(400).json({ error: "Invalid request payload.", code: "INVALID_REQUEST" });
+      }
+      const candidateId = (req.body as Record<string, unknown>)['candidateId'];
+      const selected = await selectRepresentativeImage(candidateId, {
+        store: representativeImageCandidates,
+        requesterId: representativeRequesterId(req),
+      });
+      const metadata = imagePreviewStore.insert({
+        bytes: selected.bytes,
+        contentType: selected.contentType,
+        provider: "representative",
+        model: selected.provenance.source,
+        provenance: selected.provenance,
+      });
+      return res.json({
+        token: metadata.token,
+        contentType: metadata.contentType,
+        bytes: metadata.bytes,
+        expiresAt: metadata.expiresAt,
+        provenance: selected.provenance,
+      });
+    } catch (error: any) {
+      if (error instanceof RepresentativeImageSelectionError) {
+        const status =
+          error.code === "CANDIDATE_NOT_FOUND" ? 404 : error.code === "LICENSE_NOT_ALLOWED" ? 403 : 422;
+        return res.status(status).json({ error: error.message, code: error.code });
+      }
+      if (error instanceof PreviewStoreCapacityError) {
+        return res.status(503).json({ error: "Image preview store is at capacity. Try again shortly.", code: "PREVIEW_CAPACITY" });
+      }
+      return res.status(502).json({ error: "That image could not be prepared.", code: "IMAGE_SELECTION_FAILED" });
+    }
   });
 
   // JSON 404 for unknown API routes so the client always gets JSON, never an

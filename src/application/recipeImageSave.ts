@@ -309,15 +309,16 @@ export async function saveGeneratedRecipeImageToVault(
       // Dedicated namespaced frontmatter (nested YAML round-trip is proven safe:
       // parse -> canonical normalize -> serialize preserves nested mappings, and
       // unknown/custom keys pass through untouched). No raw prompt, ever.
-      recipe.frontmatter = {
-        ...(recipe.frontmatter || {}),
-        codex_generated_image: {
-          generated: true,
-          provider: sanitizeProvenanceValue(preview.provider) || 'unknown',
-          model: sanitizeProvenanceValue(preview.model) || 'unknown',
-          generated_at: generatedAt,
-        },
+      // An AI-generated replacement must NOT retain representative provenance.
+      const nextFrontmatter: Record<string, unknown> = { ...(recipe.frontmatter || {}) };
+      delete nextFrontmatter['codex_representative_image'];
+      nextFrontmatter['codex_generated_image'] = {
+        generated: true,
+        provider: sanitizeProvenanceValue(preview.provider) || 'unknown',
+        model: sanitizeProvenanceValue(preview.model) || 'unknown',
+        generated_at: generatedAt,
       };
+      recipe.frontmatter = nextFrontmatter;
       const updatedMarkdown = serializeRecipeToObsidianMarkdown(recipe);
       // (k) Write the Markdown through the canonical VaultAdapter path.
       await vault.writeText(input.recipePath, updatedMarkdown);

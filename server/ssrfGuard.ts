@@ -701,6 +701,88 @@ export async function safeFetchHtml(initialUrl: string): Promise<{ html: string;
   throw new Error("Exceeded maximum redirects.");
 }
 
+/**
+ * Secure JSON fetch for FIXED, server-owned public metadata APIs (Openverse /
+ * Wikimedia Commons). It reuses the SAME SSRF/DNS-pinning core as
+ * `safeFetchHtml` — a single authoritative resolution per hop, every address
+ * validated, manual redirect handling with full re-validation, bounded timeout,
+ * bounded body bytes, and a REQUIRED JSON content type before parsing. It never
+ * returns raw upstream errors or bodies.
+ */
+export async function safeFetchJson<T = unknown>(
+  initialUrl: string,
+  options: { maxBytes?: number; timeoutMs?: number } = {}
+): Promise<T> {
+  const maxBytes = options.maxBytes ?? MAX_BODY_BYTES;
+  const timeoutMs = options.timeoutMs ?? FETCH_TIMEOUT_MS;
+  let currentUrl = initialUrl;
+  let redirectsFollowed = 0;
+
+  while (redirectsFollowed <= MAX_REDIRECTS) {
+    const target = await validateAndPinUrl(currentUrl);
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
+
+    let response: IncomingMessage;
+    try {
+      response = await pinnedRequestWithFailover(target, {
+        headers: {
+          Accept: "application/json",
+          "User-Agent": "The-Kitchen-Codex/0.8 (representative-image-search)",
+        },
+        signal: timeoutSignal,
+        connectTimeoutMs: PER_ADDRESS_CONNECT_TIMEOUT_MS,
+      });
+    } catch (fetchErr: any) {
+      if (isTimeoutError(fetchErr)) {
+        throw new Error("Metadata request timed out.");
+      }
+      throw new Error("Metadata request failed.");
+    }
+
+    const status = response.statusCode ?? 0;
+
+    if (status >= 300 && status < 400) {
+      const locationHeader = normalizeHeader(response.headers["location"]);
+      response.destroy();
+      if (!locationHeader) throw new Error("Redirect location header missing.");
+      redirectsFollowed++;
+      if (redirectsFollowed > MAX_REDIRECTS) throw new Error("Too many redirects encountered.");
+      currentUrl = new URL(locationHeader, target.url).toString();
+      continue;
+    }
+
+    if (status < 200 || status >= 300) {
+      response.destroy();
+      throw new Error("Metadata server returned an unexpected status.");
+    }
+
+    const rawContentType = normalizeHeader(response.headers["content-type"]);
+    const mediaType = typeof rawContentType === "string" ? rawContentType.split(";")[0].trim().toLowerCase() : "";
+    if (mediaType !== "application/json" && mediaType !== "application/ld+json") {
+      response.destroy();
+      throw new Error("Metadata response was not JSON.");
+    }
+
+    const contentLength = normalizeHeader(response.headers["content-length"]);
+    if (contentLength) {
+      const parsedLength = parseInt(contentLength, 10);
+      if (!isNaN(parsedLength) && parsedLength > maxBytes) {
+        response.destroy();
+        throw new Error("Metadata response exceeds the size limit.");
+      }
+    }
+
+    const fullBuffer = await readBodyWithCap(response, maxBytes, "Metadata response exceeds the size limit.");
+    try {
+      return JSON.parse(fullBuffer.toString("utf-8")) as T;
+    } catch {
+      throw new Error("Metadata response was not valid JSON.");
+    }
+  }
+
+  throw new Error("Exceeded maximum redirects.");
+}
+
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB limit for food photography
 
 /**
