@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Image as ImageIcon, X, Check, AlertCircle, ExternalLink } from 'lucide-react';
+import { Image as ImageIcon, X, Check, AlertCircle, ExternalLink, Search } from 'lucide-react';
 import type { RepresentativeImageCandidate } from '../core/representativeImage';
 
 /**
@@ -11,20 +11,38 @@ import type { RepresentativeImageCandidate } from '../core/representativeImage';
  * exact generated dish. Thumbnails are rendered ONLY from the app-local proxy
  * route (never a third-party host). Attribution (source, creator, license) is
  * always shown as escaped text/links. No AI generation control exists.
+ *
+ * Search is EXPLICIT: typing never searches; only the Search button or Enter
+ * submits one bounded search. Broader suggestions merely fill the input.
  */
 
 export interface RepresentativeImageChooserProps {
   candidates: RepresentativeImageCandidate[];
   /** Query the candidates were found with (shown for transparency). */
   query?: string;
+  /** Current search terms (prefilled with the deterministic default). */
+  searchTerms?: string;
+  /** Up to three deterministic, privacy-sanitized broader suggestions. */
+  suggestions?: string[];
+  /**
+   * Monotonic search generation. Every new search increments this, which
+   * IMMEDIATELY invalidates any prior candidate selection/preview.
+   */
+  searchGeneration?: number;
   /** True while a search/selection is in flight. */
   busy?: boolean;
   /** Bounded message (info/error). */
   message?: string | null;
   messageKind?: 'info' | 'error';
+  /** Explicit search action (button/Enter). Never called on keystroke. */
+  onSearch?: (terms: string) => void;
   onSelect: (candidate: RepresentativeImageCandidate) => void;
   onCancel: () => void;
 }
+
+/** The ONE authoritative no-results message (never duplicated). */
+export const REPRESENTATIVE_NO_RESULTS_MESSAGE =
+  'No reusable representative images were found for these search terms. Try a broader search. Your current image was kept.';
 
 function licenseLabel(id: RepresentativeImageCandidate['license'], version?: string): string {
   const base =
@@ -45,14 +63,37 @@ function licenseLabel(id: RepresentativeImageCandidate['license'], version?: str
 export const RepresentativeImageChooser: React.FC<RepresentativeImageChooserProps> = ({
   candidates,
   query,
+  searchTerms,
+  suggestions = [],
+  searchGeneration,
   busy = false,
   message,
   messageKind = 'info',
+  onSearch,
   onSelect,
   onCancel,
 }) => {
   const [preview, setPreview] = useState<RepresentativeImageCandidate | null>(null);
+  const [terms, setTerms] = useState<string>(searchTerms ?? '');
   const dialogRef = useRef<HTMLDivElement>(null);
+
+  // Keep the input in sync with the sanitized default/updated terms, but never
+  // search as a side effect of that update.
+  useEffect(() => {
+    setTerms(searchTerms ?? '');
+  }, [searchTerms]);
+
+  // A NEW search immediately invalidates ALL prior candidate-selection state:
+  // the previewed candidate and the confirmation authority tied to the old
+  // result set. This holds for every new search attempt, regardless of outcome.
+  useEffect(() => {
+    setPreview(null);
+  }, [searchGeneration]);
+
+  // Defense-in-depth: a preview is only confirmable while it still belongs to
+  // the CURRENT result set.
+  const selectedCandidate =
+    preview && candidates.some((candidate) => candidate.id === preview.id) ? preview : null;
 
   // Escape-to-close without saving; focus the dialog on open.
   useEffect(() => {
@@ -66,6 +107,23 @@ export const RepresentativeImageChooser: React.FC<RepresentativeImageChooserProp
     dialogRef.current?.focus();
     return () => document.removeEventListener('keydown', onKey);
   }, [onCancel]);
+
+  /**
+   * The SINGLE canonical submit path. It is invoked only by the real form's
+   * `onSubmit` (native implicit submission covers both the Search button and
+   * Enter in the input). There is deliberately NO separate key handler, so
+   * there is no second dispatch path to double-fire or to trip on IME
+   * composition. Clearing the preview here means a new search can never leave
+   * an old candidate confirmable, even before the generation prop re-renders.
+   */
+  const submitSearch = () => {
+    const clean = terms.trim();
+    if (!clean || busy || !onSearch) return;
+    setPreview(null);
+    onSearch(clean);
+  };
+
+  const showNoResults = !busy && !message && candidates.length === 0;
 
   return (
     <div className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5 overflow-y-auto">
@@ -104,6 +162,42 @@ export const RepresentativeImageChooser: React.FC<RepresentativeImageChooserProp
           </button>
         </div>
 
+        {/* Explicit, editable search terms. Typing never searches. */}
+        <form
+          data-testid="representative-search-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            submitSearch();
+          }}
+          className="flex flex-col sm:flex-row sm:items-end gap-2"
+        >
+          <div className="flex-1">
+            <label htmlFor="representative-search-terms" className="block text-[10px] font-semibold text-gray-400 mb-1">
+              Search terms
+            </label>
+            <input
+              id="representative-search-terms"
+              data-testid="representative-search-input"
+              type="text"
+              value={terms}
+              onChange={(event) => setTerms(event.target.value)}
+              disabled={busy}
+              maxLength={120}
+              placeholder="e.g. blue cheese burger"
+              className="w-full px-3 py-2 rounded-xl bg-[#0E0E0E] border border-white/10 text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-sky-500/50 disabled:opacity-50"
+            />
+          </div>
+          <button
+            type="submit"
+            data-testid="representative-search-button"
+            disabled={busy || !terms.trim()}
+            className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-black text-xs font-bold transition-colors disabled:opacity-50"
+          >
+            <Search className="w-3.5 h-3.5" />
+            <span>{busy ? 'Searching…' : 'Search'}</span>
+          </button>
+        </form>
+
         {message && (
           <div
             role={messageKind === 'error' ? 'alert' : 'status'}
@@ -118,18 +212,43 @@ export const RepresentativeImageChooser: React.FC<RepresentativeImageChooserProp
           </div>
         )}
 
-        {candidates.length === 0 ? (
-          <div className="text-center py-8 px-4 rounded-xl bg-[#0E0E0E] border border-dashed border-white/10">
-            <p className="text-xs text-gray-400">
-              No reusable representative images were found. Your current image (or placeholder) was kept.
-            </p>
+        {busy && (
+          <div data-testid="representative-loading" className="text-center py-8 px-4 rounded-xl bg-[#0E0E0E] border border-white/10">
+            <p className="text-xs text-gray-400">Searching licensed image catalogs…</p>
           </div>
-        ) : (
+        )}
+
+        {showNoResults && (
+          <div className="text-center py-6 px-4 rounded-xl bg-[#0E0E0E] border border-dashed border-white/10 space-y-3">
+            <p className="text-xs text-gray-400">{REPRESENTATIVE_NO_RESULTS_MESSAGE}</p>
+            {suggestions.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-[10px] text-gray-500">Try a broader search:</p>
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  {suggestions.map((suggestion) => (
+                    <button
+                      key={suggestion}
+                      type="button"
+                      data-testid="representative-suggestion"
+                      onClick={() => setTerms(suggestion)}
+                      className="px-3 py-1.5 rounded-lg text-[11px] bg-sky-500/10 hover:bg-sky-500/20 text-sky-300 border border-sky-500/30 transition-colors"
+                    >
+                      {suggestion}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[10px] text-gray-600">Suggestions fill the search box — press Search to use one.</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {candidates.length > 0 && (
           <div className="overflow-y-auto pr-1">
             {query && <p className="text-[10px] font-mono text-gray-500 mb-2">Search: {query}</p>}
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               {candidates.map((candidate) => {
-                const selected = preview?.id === candidate.id;
+                const selected = selectedCandidate?.id === candidate.id;
                 return (
                   <button
                     key={candidate.id}
@@ -170,31 +289,31 @@ export const RepresentativeImageChooser: React.FC<RepresentativeImageChooserProp
           </div>
         )}
 
-        {preview && (
+        {selectedCandidate && (
           <div className="p-3 rounded-xl bg-[#0F0F0F] border border-white/10 space-y-1">
-            <p className="text-[11px] text-gray-300 font-medium">Preview: {preview.title}</p>
+            <p className="text-[11px] text-gray-300 font-medium">Preview: {selectedCandidate.title}</p>
             <p className="text-[10px] text-gray-400">
               Source:{' '}
               <a
-                href={preview.sourcePageUrl}
+                href={selectedCandidate.sourcePageUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-sky-400 underline inline-flex items-center gap-0.5"
               >
-                {preview.source === 'openverse' ? 'Openverse' : 'Wikimedia Commons'}
+                {selectedCandidate.source === 'openverse' ? 'Openverse' : 'Wikimedia Commons'}
                 <ExternalLink className="w-3 h-3" />
               </a>
-              {preview.creator ? ` · Creator: ${preview.creator}` : ''}
+              {selectedCandidate.creator ? ` · Creator: ${selectedCandidate.creator}` : ''}
             </p>
             <p className="text-[10px] text-gray-400">
               License:{' '}
               <a
-                href={preview.licenseUrl}
+                href={selectedCandidate.licenseUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-emerald-400 underline"
               >
-                {licenseLabel(preview.license, preview.licenseVersion)}
+                {licenseLabel(selectedCandidate.license, selectedCandidate.licenseVersion)}
               </a>
             </p>
           </div>
@@ -212,8 +331,8 @@ export const RepresentativeImageChooser: React.FC<RepresentativeImageChooserProp
           <button
             type="button"
             data-testid="use-representative-image"
-            onClick={() => preview && onSelect(preview)}
-            disabled={!preview || busy}
+            onClick={() => selectedCandidate && onSelect(selectedCandidate)}
+            disabled={!selectedCandidate || busy}
             className="flex items-center gap-1.5 px-5 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-black text-xs font-bold shadow-md shadow-sky-500/20 transition-colors disabled:opacity-50"
           >
             <Check className="w-4 h-4" />

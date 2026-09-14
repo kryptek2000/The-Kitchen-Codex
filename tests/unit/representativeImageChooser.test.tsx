@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
-import { RepresentativeImageChooser } from '../../src/components/RepresentativeImageChooser';
+import {
+  RepresentativeImageChooser,
+  REPRESENTATIVE_NO_RESULTS_MESSAGE,
+} from '../../src/components/RepresentativeImageChooser';
 import type { RepresentativeImageCandidate } from '../../src/core/representativeImage';
 
 const candidates: RepresentativeImageCandidate[] = [
@@ -67,10 +70,182 @@ describe('RepresentativeImageChooser — explicit selection UI', () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it('shows a bounded no-results state that keeps the current image', () => {
+  it('shows exactly ONE authoritative no-results message that keeps the current image', () => {
     render(<RepresentativeImageChooser candidates={[]} onSelect={() => {}} onCancel={() => {}} />);
-    expect(screen.getByText(/No reusable representative images were found/)).toBeTruthy();
-    expect(screen.getByText(/current image \(or placeholder\) was kept/)).toBeTruthy();
+    const matches = screen.getAllByText(/No reusable representative images were found/);
+    expect(matches).toHaveLength(1);
+    expect(matches[0].textContent).toBe(REPRESENTATIVE_NO_RESULTS_MESSAGE);
+  });
+
+  it('prefills the sanitized default search terms', () => {
+    render(
+      <RepresentativeImageChooser
+        candidates={[]}
+        searchTerms="blue cheese smashburger"
+        onSelect={() => {}}
+        onCancel={() => {}}
+      />
+    );
+    expect((screen.getByTestId('representative-search-input') as HTMLInputElement).value).toBe(
+      'blue cheese smashburger'
+    );
+  });
+
+  it('typing alone makes NO search request', () => {
+    const onSearch = vi.fn();
+    render(
+      <RepresentativeImageChooser
+        candidates={[]}
+        searchTerms="blue cheese smashburger"
+        onSearch={onSearch}
+        onSelect={() => {}}
+        onCancel={() => {}}
+      />
+    );
+    fireEvent.change(screen.getByTestId('representative-search-input'), {
+      target: { value: 'blue cheese burger' },
+    });
+    expect(onSearch).not.toHaveBeenCalled();
+  });
+
+  it('the Search button submits exactly one explicit search', () => {
+    const onSearch = vi.fn();
+    render(
+      <RepresentativeImageChooser
+        candidates={[]}
+        searchTerms="blue cheese burger"
+        onSearch={onSearch}
+        onSelect={() => {}}
+        onCancel={() => {}}
+      />
+    );
+    fireEvent.click(screen.getByTestId('representative-search-button'));
+    expect(onSearch).toHaveBeenCalledTimes(1);
+    expect(onSearch).toHaveBeenCalledWith('blue cheese burger');
+  });
+
+  it('native Enter (form submit) submits exactly one explicit search', () => {
+    const onSearch = vi.fn();
+    render(
+      <RepresentativeImageChooser
+        candidates={[]}
+        searchTerms="cheeseburger"
+        onSearch={onSearch}
+        onSelect={() => {}}
+        onCancel={() => {}}
+      />
+    );
+    // Native implicit submission from Enter is the form's submit event — the
+    // SINGLE dispatch path (the Search button uses the same one).
+    fireEvent.submit(screen.getByTestId('representative-search-form'));
+    expect(onSearch).toHaveBeenCalledTimes(1);
+    expect(onSearch).toHaveBeenCalledWith('cheeseburger');
+  });
+
+  it('has NO separate key handler: raw and IME/composition Enter do not dispatch', () => {
+    const onSearch = vi.fn();
+    render(
+      <RepresentativeImageChooser
+        candidates={[]}
+        searchTerms="cheeseburger"
+        onSearch={onSearch}
+        onSelect={() => {}}
+        onCancel={() => {}}
+      />
+    );
+    const input = screen.getByTestId('representative-search-input');
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+    fireEvent.keyDown(input, { key: 'Process', isComposing: true });
+    expect(onSearch).not.toHaveBeenCalled();
+  });
+
+  it('the Search button and form share ONE canonical path (exactly once)', () => {
+    const onSearch = vi.fn();
+    render(
+      <RepresentativeImageChooser
+        candidates={[]}
+        searchTerms="blue cheese burger"
+        onSearch={onSearch}
+        onSelect={() => {}}
+        onCancel={() => {}}
+      />
+    );
+    fireEvent.click(screen.getByTestId('representative-search-button'));
+    expect(onSearch).toHaveBeenCalledTimes(1);
+    expect(onSearch).toHaveBeenCalledWith('blue cheese burger');
+  });
+
+  it('a new search generation immediately clears the preview and disables confirmation', () => {
+    const { rerender } = render(
+      <RepresentativeImageChooser
+        candidates={candidates}
+        searchGeneration={1}
+        onSelect={() => {}}
+        onCancel={() => {}}
+      />
+    );
+    fireEvent.click(screen.getAllByTestId('representative-candidate')[0]);
+    expect((screen.getByTestId('use-representative-image') as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByText(/Preview:/)).toBeTruthy();
+
+    // Same candidate list, NEW generation: selection authority must be gone.
+    rerender(
+      <RepresentativeImageChooser
+        candidates={candidates}
+        searchGeneration={2}
+        onSelect={() => {}}
+        onCancel={() => {}}
+      />
+    );
+    expect((screen.getByTestId('use-representative-image') as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByText(/Preview:/)).toBeNull();
+  });
+
+  it('a preview that is not part of the current result set is never confirmable', () => {
+    const onSelect = vi.fn();
+    const { rerender } = render(
+      <RepresentativeImageChooser candidates={candidates} onSelect={onSelect} onCancel={() => {}} />
+    );
+    fireEvent.click(screen.getAllByTestId('representative-candidate')[0]); // opaque-1
+    expect((screen.getByTestId('use-representative-image') as HTMLButtonElement).disabled).toBe(false);
+
+    // New result set does NOT include opaque-1.
+    rerender(
+      <RepresentativeImageChooser candidates={[candidates[1]]} onSelect={onSelect} onCancel={() => {}} />
+    );
+    expect((screen.getByTestId('use-representative-image') as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByText(/Preview:/)).toBeNull();
+    fireEvent.click(screen.getByTestId('use-representative-image'));
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('no-results shows bounded suggestions that fill the input but never auto-search', () => {
+    const onSearch = vi.fn();
+    render(
+      <RepresentativeImageChooser
+        candidates={[]}
+        suggestions={['blue cheese burger', 'smashburger', 'cheeseburger']}
+        onSearch={onSearch}
+        onSelect={() => {}}
+        onCancel={() => {}}
+      />
+    );
+    const suggestions = screen.getAllByTestId('representative-suggestion');
+    expect(suggestions).toHaveLength(3);
+    fireEvent.click(suggestions[0]);
+    expect(onSearch).not.toHaveBeenCalled();
+    expect((screen.getByTestId('representative-search-input') as HTMLInputElement).value).toBe(
+      'blue cheese burger'
+    );
+  });
+
+  it('shows a bounded loading state while searching', () => {
+    render(
+      <RepresentativeImageChooser candidates={[]} busy onSelect={() => {}} onCancel={() => {}} />
+    );
+    expect(screen.getByTestId('representative-loading')).toBeTruthy();
+    expect(screen.queryByText(/No reusable representative images were found/)).toBeNull();
   });
 
   it('exposes no AI-generation control in this phase', () => {

@@ -24,7 +24,14 @@ export const FIND_REPRESENTATIVE_IMAGE_PATH = '/api/recipes/image/find-represent
 export const SELECT_REPRESENTATIVE_IMAGE_PATH = '/api/recipes/image/select-representative';
 
 export interface RepresentativeSearchInput {
-  title: string;
+  /**
+   * Explicit user-editable search terms. When present, these are submitted as
+   * the authoritative query (the server re-sanitizes and bounds them). When
+   * absent, the deterministic recipe-owned fields below are submitted and the
+   * server builds the query.
+   */
+  query?: string;
+  title?: string;
   cuisine?: string;
   category?: string;
   tags?: string[];
@@ -109,7 +116,10 @@ export async function findRepresentativeImages(
   network: NetworkAdapter,
   input: RepresentativeSearchInput
 ): Promise<RepresentativeSearchResult> {
-  const res = await network.post<unknown, RepresentativeSearchInput>(FIND_REPRESENTATIVE_IMAGE_PATH, input);
+  // Explicit terms take precedence and are sent ALONE; the server re-sanitizes.
+  const payload: RepresentativeSearchInput =
+    typeof input.query === 'string' && input.query.trim() ? { query: input.query } : input;
+  const res = await network.post<unknown, RepresentativeSearchInput>(FIND_REPRESENTATIVE_IMAGE_PATH, payload);
   if (!res.ok) throw boundedError(res, 'Representative image search is temporarily unavailable.');
   const data = (typeof res.data === 'object' && res.data !== null ? res.data : {}) as Record<string, unknown>;
   const query = typeof data['query'] === 'string' ? data['query'] : '';

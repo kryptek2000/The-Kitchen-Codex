@@ -119,6 +119,94 @@ describe('POST /api/recipes/image/find-representative', () => {
     expect(res.json.candidates[0].thumbnailUrl).toBeUndefined();
   });
 
+  it('re-sanitizes submitted search terms; unsafe-only terms make zero external calls', async () => {
+    searchMock.mockResolvedValue(FOUND);
+    const xff = { 'X-Forwarded-For': '10.90.0.1' };
+    const ok = await post('/api/recipes/image/find-representative', { query: '  Blue   Cheese   Burger ' }, xff);
+    expect(ok.status).toBe(200);
+    expect(searchMock).toHaveBeenCalledWith('blue cheese burger');
+
+    searchMock.mockClear();
+    const unsafe = await post(
+      '/api/recipes/image/find-representative',
+      { query: 'sk-or-v1-SECRET https://evil.example' },
+      xff
+    );
+    expect(unsafe.status).toBe(422);
+    expect(unsafe.json.code).toBe('IMAGE_QUERY_UNSAFE');
+    expect(searchMock).not.toHaveBeenCalled();
+  });
+
+  it('preserves safe terms from mixed input and blocks punctuation-only input (zero calls)', async () => {
+    searchMock.mockResolvedValue(FOUND);
+    const xff = { 'X-Forwarded-For': '10.90.0.2' };
+    const mixed = await post(
+      '/api/recipes/image/find-representative',
+      { query: 'blue cheese burger https://evil.example' },
+      xff
+    );
+    expect(mixed.status).toBe(200);
+    expect(searchMock).toHaveBeenCalledWith('blue cheese burger');
+
+    searchMock.mockClear();
+    for (const punctuationOnly of ['---', '...', '___']) {
+      const res = await post('/api/recipes/image/find-representative', { query: punctuationOnly }, xff);
+      expect(res.status).toBe(422);
+      expect(res.json.code).toBe('IMAGE_QUERY_UNSAFE');
+    }
+    expect(searchMock).not.toHaveBeenCalled();
+  });
+
+  it('server re-sanitizes forged private-key and encoded-URL queries (zero calls)', async () => {
+    searchMock.mockResolvedValue(FOUND);
+    const xff = { 'X-Forwarded-For': '10.90.0.3' };
+
+    // Mixed: safe food term survives around a private-key header.
+    const mixed = await post(
+      '/api/recipes/image/find-representative',
+      { query: 'burger BEGIN OPENSSH PRIVATE KEY' },
+      xff
+    );
+    expect(mixed.status).toBe(200);
+    expect(searchMock).toHaveBeenCalledWith('burger');
+    expect(JSON.stringify(searchMock.mock.calls)).not.toContain('OPENSSH');
+
+    searchMock.mockClear();
+    // Unsafe-only secret/encoded inputs make ZERO external calls.
+    for (const unsafe of [
+      'BEGIN OPENSSH PRIVATE KEY',
+      '-----BEGIN RSA PRIVATE KEY-----MIIEowIBAAKCAQEA1234567890abcdefghij-----END RSA PRIVATE KEY-----',
+      'https%3A%2F%2Fevil.example%2Fx',
+      'file%3A%2F%2Fetc%2Fpasswd',
+    ]) {
+      const res = await post('/api/recipes/image/find-representative', { query: unsafe }, xff);
+      expect(res.status).toBe(422);
+      expect(res.json.code).toBe('IMAGE_QUERY_UNSAFE');
+    }
+    expect(searchMock).not.toHaveBeenCalled();
+  });
+
+  it('server re-sanitizes forged comma-decimal and scheme-less domain queries', async () => {
+    searchMock.mockResolvedValue(FOUND);
+    const xff = { 'X-Forwarded-For': '10.90.0.4' };
+
+    // Only the SANITIZED value reaches the catalog search — never the domain.
+    const mixed = await post('/api/recipes/image/find-representative', { query: 'burger evil.example' }, xff);
+    expect(mixed.status).toBe(200);
+    expect(searchMock).toHaveBeenCalledWith('burger');
+    expect(JSON.stringify(searchMock.mock.calls)).not.toContain('evil.example');
+    expect(JSON.stringify(searchMock.mock.calls)).not.toContain('evilexample');
+
+    searchMock.mockClear();
+    // Unsafe-only comma-decimal/domain inputs make ZERO external calls.
+    for (const unsafe of ['1,5', 'evil.example', 'private.internal', 'subdomain.example.com', '192.168.1.1']) {
+      const res = await post('/api/recipes/image/find-representative', { query: unsafe }, xff);
+      expect(res.status).toBe(422);
+      expect(res.json.code).toBe('IMAGE_QUERY_UNSAFE');
+    }
+    expect(searchMock).not.toHaveBeenCalled();
+  });
+
   it('rate-limits search with a bounded 429', async () => {
     process.env.REPRESENTATIVE_IMAGE_SEARCH_RATE_LIMIT = '1';
     searchMock.mockResolvedValue(FOUND);

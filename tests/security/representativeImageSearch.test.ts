@@ -9,6 +9,7 @@ import {
   WIKIMEDIA_COMMONS_ENDPOINT,
   MAX_STORED_CANDIDATES,
   MAX_STORED_CANDIDATES_PER_REQUESTER,
+  REPRESENTATIVE_UPSTREAM_PAGE_SIZE,
 } from '../../server/representativeImage';
 import { MAX_REPRESENTATIVE_RESULTS } from '../../src/core/representativeImage';
 import {
@@ -158,6 +159,66 @@ describe('representative image — Openverse search', () => {
     });
     const results = await searchRepresentativeImages('burger', { fetchJson });
     expect(results).toEqual([]);
+  });
+
+  // --- Recall repair (F2): broader sample, same strict local filtering ------
+
+  it('samples a broader upstream page but returns at most six candidates', async () => {
+    const urls: string[] = [];
+    const many = Array.from({ length: 20 }, (_, i) =>
+      openverseResult({ url: `https://live.staticflickr.com/${i}.jpg`, title: `Burger ${i}` })
+    );
+    const fetchJson = vi.fn(async (url: string) => {
+      urls.push(url);
+      return openversePayload(many);
+    });
+    const results = await searchRepresentativeImages('burger', { fetchJson });
+    expect(fetchJson).toHaveBeenCalledTimes(1);
+    expect(urls[0]).toContain(`page_size=${REPRESENTATIVE_UPSTREAM_PAGE_SIZE}`);
+    expect(results).toHaveLength(MAX_REPRESENTATIVE_RESULTS);
+  });
+
+  it('rejects disallowed licenses even when they appear before allowed results', async () => {
+    const fetchJson = vi.fn(async () =>
+      openversePayload([
+        openverseResult({ license: 'by-nc', title: 'NC first' }),
+        openverseResult({ license: 'by-nd', title: 'ND second' }),
+        openverseResult({ license: 'unknown-license', title: 'Unknown third' }),
+        openverseResult({ license: 'by', title: 'Allowed later' }),
+      ])
+    );
+    const results = await searchRepresentativeImages('burger', { fetchJson });
+    expect(results).toHaveLength(1);
+    expect(results[0].title).toBe('Allowed later');
+    expect(results[0].license).toBe('cc_by');
+  });
+
+  it('makes at most ONE Wikimedia fallback request when Openverse yields nothing safe', async () => {
+    const fetchJson = vi.fn(async (url: string) => {
+      if (url.startsWith(OPENVERSE_ENDPOINT)) return openversePayload([openverseResult({ license: 'by-nc' })]);
+      expect(url.startsWith(WIKIMEDIA_COMMONS_ENDPOINT)).toBe(true);
+      return {
+        query: {
+          pages: {
+            '1': {
+              title: 'File:Burger.jpg',
+              imageinfo: [
+                {
+                  url: 'https://upload.wikimedia.org/full.jpg',
+                  thumburl: 'https://upload.wikimedia.org/thumb.jpg',
+                  descriptionurl: 'https://commons.wikimedia.org/wiki/File:Burger.jpg',
+                  extmetadata: { LicenseShortName: { value: 'CC0' } },
+                },
+              ],
+            },
+          },
+        },
+      };
+    });
+    const results = await searchRepresentativeImages('burger', { fetchJson });
+    expect(fetchJson).toHaveBeenCalledTimes(2); // 1 Openverse + exactly 1 Wikimedia
+    expect(results).toHaveLength(1);
+    expect(results[0].source).toBe('wikimedia_commons');
   });
 });
 

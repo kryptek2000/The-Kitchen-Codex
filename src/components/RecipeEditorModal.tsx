@@ -51,7 +51,11 @@ import type {
   RepresentativeImageCandidate,
   RepresentativeImageProvenance,
 } from '../core/representativeImage';
-import { isRepresentativeImageProvenance } from '../core/representativeImage';
+import {
+  buildRepresentativeImageQuery,
+  buildRepresentativeImageSuggestions,
+  isRepresentativeImageProvenance,
+} from '../core/representativeImage';
 
 interface RecipeEditorModalProps {
   initialRecipe?: ObsidianRecipe | null;
@@ -257,9 +261,16 @@ export function RecipeEditorModal({
   const [representativeOpen, setRepresentativeOpen] = useState(false);
   const [representativeCandidates, setRepresentativeCandidates] = useState<RepresentativeImageCandidate[]>([]);
   const [representativeQuery, setRepresentativeQuery] = useState('');
+  const [representativeSearchTerms, setRepresentativeSearchTerms] = useState('');
+  const [representativeSuggestions, setRepresentativeSuggestions] = useState<string[]>([]);
   const [representativeBusy, setRepresentativeBusy] = useState(false);
   const [representativeMessage, setRepresentativeMessage] = useState<string | null>(null);
   const [representativeError, setRepresentativeError] = useState<string | null>(null);
+  // Monotonic search generation: a NEW search immediately invalidates any prior
+  // candidate/preview selection, and a SLOW older response can never overwrite
+  // or reauthorize results from a newer search.
+  const [representativeSearchGeneration, setRepresentativeSearchGeneration] = useState(0);
+  const representativeSearchGenRef = useRef(0);
   // Provenance of the CURRENT image. Initialized from the recipe's frontmatter
   // (a representative image already saved on this recipe).
   const [representativeProvenance, setRepresentativeProvenance] = useState<RepresentativeImageProvenance | null>(() => {
@@ -626,38 +637,66 @@ export function RecipeEditorModal({
     }
   };
 
-  const handleFindRepresentativeImage = async () => {
+  /**
+   * Runs exactly ONE explicit search for the given terms (server re-sanitizes).
+   * Never called on keystroke; only from the initial action or the Search
+   * button/Enter in the chooser.
+   */
+  const runRepresentativeSearch = async (terms: string) => {
+    // New generation: immediately drop the OLD result set + any prior selection
+    // authority, so nothing from a previous search remains confirmable while
+    // this one is in flight (success, no-results, unsafe, or failure alike).
+    const generation = representativeSearchGenRef.current + 1;
+    representativeSearchGenRef.current = generation;
+    setRepresentativeSearchGeneration(generation);
+    setRepresentativeCandidates([]);
     setRepresentativeBusy(true);
     setRepresentativeError(null);
     setRepresentativeMessage(null);
     try {
-      const ingredientLines = ingredientsText
-        .split('\n')
-        .map((l) => l.trim())
-        .filter(Boolean);
-      const input = buildRepresentativeSearchInput({
-        ...(initialRecipe ?? {}),
-        title: title || initialRecipe?.title || '',
-        cuisine,
-        category,
-        ingredients: ingredientLines.map((original) => ({ original, name: original })),
-      } as ObsidianRecipe);
-      if (!input.title) {
-        setRepresentativeError('Add a recipe title before searching for a representative image.');
-        return;
-      }
-      const result = await findRepresentativeImages(network, input);
+      const result = await findRepresentativeImages(network, { query: terms });
+      // A slow OLDER response must never overwrite a NEWER search.
+      if (generation !== representativeSearchGenRef.current) return;
       setRepresentativeCandidates(result.candidates);
       setRepresentativeQuery(result.query);
-      setRepresentativeOpen(true);
-      if (result.candidates.length === 0) {
-        setRepresentativeMessage('No reusable representative images were found. Your current image was kept.');
-      }
+      // Reflect the server-sanitized terms in the editable input.
+      setRepresentativeSearchTerms(result.query || terms);
     } catch (err) {
+      if (generation !== representativeSearchGenRef.current) return;
+      // A failure is NOT a no-results state; keep the user's terms for retry.
       setRepresentativeError(mapRepresentativeImageError(err));
     } finally {
-      setRepresentativeBusy(false);
+      if (generation === representativeSearchGenRef.current) setRepresentativeBusy(false);
     }
+  };
+
+  const handleFindRepresentativeImage = async () => {
+    const ingredientLines = ingredientsText
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean);
+    const input = buildRepresentativeSearchInput({
+      ...(initialRecipe ?? {}),
+      title: title || initialRecipe?.title || '',
+      cuisine,
+      category,
+      ingredients: ingredientLines.map((original) => ({ original, name: original })),
+    } as ObsidianRecipe);
+    if (!input.title) {
+      setRepresentativeError('Add a recipe title before searching for a representative image.');
+      return;
+    }
+    // Concise, deterministic, dish-first default query (e.g. "blue cheese
+    // smashburger") plus bounded broader suggestions (display only).
+    const defaultQuery = buildRepresentativeImageQuery(input);
+    setRepresentativeCandidates([]);
+    setRepresentativeQuery(defaultQuery);
+    setRepresentativeSearchTerms(defaultQuery);
+    setRepresentativeSuggestions(buildRepresentativeImageSuggestions(input));
+    setRepresentativeError(null);
+    setRepresentativeMessage(null);
+    setRepresentativeOpen(true);
+    await runRepresentativeSearch(defaultQuery);
   };
 
   const handleUseRepresentativeImage = async (candidate: RepresentativeImageCandidate) => {
@@ -1379,9 +1418,13 @@ export function RecipeEditorModal({
         <RepresentativeImageChooser
           candidates={representativeCandidates}
           query={representativeQuery}
+          searchTerms={representativeSearchTerms}
+          suggestions={representativeSuggestions}
+          searchGeneration={representativeSearchGeneration}
           busy={representativeBusy}
           message={representativeError ?? representativeMessage}
           messageKind={representativeError ? 'error' : 'info'}
+          onSearch={runRepresentativeSearch}
           onSelect={handleUseRepresentativeImage}
           onCancel={() => {
             setRepresentativeOpen(false);

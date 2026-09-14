@@ -42,6 +42,16 @@ describe('representative image client — search', () => {
     expect(post).not.toHaveBeenCalledWith(expect.stringContaining('/api/recipes/image/generate'), expect.anything());
   });
 
+  it('submits explicit editable terms as the authoritative query (server re-sanitizes)', async () => {
+    const { network, post } = networkWith(() => ({
+      ok: true,
+      status: 200,
+      data: { query: 'blue cheese burger', candidates: [] },
+    }));
+    await findRepresentativeImages(network, { query: '  Blue  Cheese  Burger ', title: 'Ignored Title' });
+    expect(post).toHaveBeenCalledWith(FIND_REPRESENTATIVE_IMAGE_PATH, { query: '  Blue  Cheese  Burger ' });
+  });
+
   it('drops malformed/unsafe candidate rows (unknown source, missing id/license)', async () => {
     const { network } = networkWith(() => ({
       ok: true,

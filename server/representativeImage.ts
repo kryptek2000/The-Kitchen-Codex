@@ -39,6 +39,13 @@ export const REPRESENTATIVE_CANDIDATE_TTL_MS = 10 * 60 * 1000;
 export const MAX_STORED_CANDIDATES = 120;
 /** Per-requester cap so one requester cannot consume the global budget. */
 export const MAX_STORED_CANDIDATES_PER_REQUESTER = 24;
+/**
+ * Upstream sample size examined before LOCAL filtering. A broader sample
+ * improves recall (disallowed/malformed results are skipped, not counted)
+ * while the PUBLIC result count stays capped at MAX_REPRESENTATIVE_RESULTS.
+ * Single request, no pagination loop.
+ */
+export const REPRESENTATIVE_UPSTREAM_PAGE_SIZE = 24;
 
 export type RepresentativeJsonFetch = (url: string) => Promise<unknown>;
 
@@ -231,8 +238,10 @@ function wikimediaResults(payload: unknown): RawCandidate[] {
 
 export interface RepresentativeImageSearchDeps {
   fetchJson?: RepresentativeJsonFetch;
-  /** Max candidates returned (bounded to MAX_REPRESENTATIVE_RESULTS). */
+  /** Max candidates RETURNED (bounded to MAX_REPRESENTATIVE_RESULTS). */
   limit?: number;
+  /** Upstream sample size examined (bounded, single request per source). */
+  pageSize?: number;
 }
 
 /**
@@ -246,7 +255,14 @@ export async function searchRepresentativeImages(
   deps: RepresentativeImageSearchDeps = {}
 ): Promise<Array<Omit<StoredRepresentativeCandidate, 'id' | 'requesterId' | 'expiresAt'>>> {
   const fetchJson = deps.fetchJson ?? defaultJsonFetch();
-  const boundedLimit = Math.max(1, Math.min(deps.limit ?? MAX_REPRESENTATIVE_RESULTS, MAX_REPRESENTATIVE_RESULTS));
+  const outputLimit = Math.max(1, Math.min(deps.limit ?? MAX_REPRESENTATIVE_RESULTS, MAX_REPRESENTATIVE_RESULTS));
+  // Examine a BROADER upstream sample than we return, so locally-rejected
+  // (disallowed/malformed) results do not starve recall. Still ONE request per
+  // source, no pagination loop.
+  const upstreamPageSize = Math.max(
+    outputLimit,
+    Math.min(deps.pageSize ?? REPRESENTATIVE_UPSTREAM_PAGE_SIZE, 50)
+  );
   const cleanQuery = sanitizeRepresentativeText(query, 120);
   if (!cleanQuery) return [];
 
@@ -257,10 +273,12 @@ export async function searchRepresentativeImages(
   ): Promise<Array<Omit<StoredRepresentativeCandidate, 'id' | 'requesterId' | 'expiresAt'>>> => {
     const payload = await fetchJson(url);
     const normalized: Array<Omit<StoredRepresentativeCandidate, 'id' | 'requesterId' | 'expiresAt'>> = [];
+    // Scan the WHOLE returned sample, skipping locally-rejected results, and
+    // stop only once we have enough safe candidates.
     for (const raw of map(payload)) {
       const candidate = normalizeRawCandidate(source, cleanQuery, raw);
       if (candidate) normalized.push(candidate);
-      if (normalized.length >= boundedLimit) break;
+      if (normalized.length >= outputLimit) break;
     }
     return normalized;
   };
@@ -271,7 +289,7 @@ export async function searchRepresentativeImages(
     // filtering below remains MANDATORY (upstream metadata is not authority).
     const openverseUrl =
       `${OPENVERSE_ENDPOINT}?q=${encodeURIComponent(cleanQuery)}` +
-      `&license=cc0,pdm,by,by-sa&page_size=${boundedLimit}`;
+      `&license=cc0,pdm,by,by-sa&page_size=${upstreamPageSize}`;
     candidates = await collect('openverse', openverseUrl, openverseResults);
   } catch {
     candidates = [];
@@ -281,7 +299,7 @@ export async function searchRepresentativeImages(
     try {
       const wikimediaUrl =
         `${WIKIMEDIA_COMMONS_ENDPOINT}?action=query&format=json&generator=search` +
-        `&gsrsearch=${encodeURIComponent(cleanQuery)}&gsrnamespace=6&gsrlimit=${boundedLimit}` +
+        `&gsrsearch=${encodeURIComponent(cleanQuery)}&gsrnamespace=6&gsrlimit=${upstreamPageSize}` +
         `&prop=imageinfo&iiprop=url|extmetadata|mime&iiurlwidth=480`;
       candidates = await collect('wikimedia_commons', wikimediaUrl, wikimediaResults);
     } catch {
@@ -289,7 +307,7 @@ export async function searchRepresentativeImages(
     }
   }
 
-  return candidates.slice(0, boundedLimit);
+  return candidates.slice(0, outputLimit);
 }
 
 export type RepresentativeImageFetch = (

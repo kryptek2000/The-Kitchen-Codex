@@ -58,7 +58,7 @@ import {
 } from "./ai/parseSelectionMetadata.js";
 import type { SelectionInput } from "./ai/effectiveSelection.js";
 import { ImagePreviewStore, PreviewStoreCapacityError } from "./imagePreviewStore.js";
-import { buildRepresentativeImageQuery } from "../src/core/representativeImage.js";
+import { buildRepresentativeImageQuery, sanitizeRepresentativeSearchTerms } from "../src/core/representativeImage.js";
 import { createHash, randomBytes as cryptoRandomBytes } from "node:crypto";
 import {
   RepresentativeImageCandidateStore,
@@ -1291,13 +1291,18 @@ export function createApp(opts: CreateAppOptions): express.Express {
         return res.status(400).json({ error: "Invalid request payload.", code: "INVALID_REQUEST" });
       }
       const body = req.body as Record<string, unknown>;
-      const query = buildRepresentativeImageQuery({
-        title: typeof body['title'] === "string" ? body['title'] : undefined,
-        cuisine: typeof body['cuisine'] === "string" ? body['cuisine'] : undefined,
-        category: typeof body['category'] === "string" ? body['category'] : undefined,
-        tags: Array.isArray(body['tags']) ? (body['tags'] as string[]) : undefined,
-        ingredients: Array.isArray(body['ingredients']) ? (body['ingredients'] as Array<string | { name?: string | null }>) : undefined,
-      });
+      // Explicit user-submitted search terms (editable in the chooser) are
+      // re-sanitized and bounded HERE; client sanitization is never authority.
+      const submittedTerms = typeof body['query'] === "string" ? body['query'] : "";
+      const query = submittedTerms.trim()
+        ? sanitizeRepresentativeSearchTerms(submittedTerms)
+        : buildRepresentativeImageQuery({
+            title: typeof body['title'] === "string" ? body['title'] : undefined,
+            cuisine: typeof body['cuisine'] === "string" ? body['cuisine'] : undefined,
+            category: typeof body['category'] === "string" ? body['category'] : undefined,
+            tags: Array.isArray(body['tags']) ? (body['tags'] as string[]) : undefined,
+            ingredients: Array.isArray(body['ingredients']) ? (body['ingredients'] as Array<string | { name?: string | null }>) : undefined,
+          });
       // No safe visual term -> ZERO external calls, bounded local error.
       if (!query) {
         return res.status(422).json({

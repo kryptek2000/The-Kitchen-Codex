@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react';
 import { RecipeEditorModal } from '../../src/components/RecipeEditorModal';
 import { hydrateAiSelections } from '../../src/application/aiSelection';
 import type { NetworkAdapter } from '../../src/application/adapters/NetworkAdapter';
@@ -93,6 +93,7 @@ afterEach(() => {
 async function selectFirstCandidate() {
   fireEvent.click(screen.getByTestId('find-representative-image'));
   await waitFor(() => expect(screen.getByText('Choose a Representative Recipe Image')).toBeTruthy());
+  await waitFor(() => expect(screen.getAllByTestId('representative-candidate').length).toBeGreaterThan(0));
   fireEvent.click(screen.getAllByTestId('representative-candidate')[0]);
   fireEvent.click(screen.getByTestId('use-representative-image'));
   // Wait for the async selection handler to finish (chooser closes on success).
@@ -118,6 +119,7 @@ describe('RecipeEditorModal — explicit representative image flow (deferred sav
     // Open the chooser and inspect thumbnails WHILE it is open.
     fireEvent.click(screen.getByTestId('find-representative-image'));
     await waitFor(() => expect(screen.getByText('Choose a Representative Recipe Image')).toBeTruthy());
+    await waitFor(() => expect(screen.getAllByTestId('representative-candidate').length).toBeGreaterThan(0));
     const thumbs = Array.from(document.querySelectorAll('img')).map((img) => img.getAttribute('src') || '');
     expect(thumbs.some((src) => src.startsWith('/api/recipes/image/representative-thumbnail/'))).toBe(true);
     for (const src of thumbs) expect(src).not.toMatch(/^https?:\/\//);
@@ -210,6 +212,49 @@ describe('RecipeEditorModal — explicit representative image flow (deferred sav
     const saved = onSave.mock.calls[0][0] as ObsidianRecipe;
     expect(saved.image).toBe('Assets/Manual.jpg');
     expect((saved.frontmatter as any)?.codex_representative_image).toBeUndefined();
+  });
+
+  it('no-results shows ONE message + suggestions; suggestions never auto-search and the image is kept', async () => {
+    const post = vi.fn(async (path: string) => {
+      if (path === '/api/recipes/image/find-representative') {
+        return { ok: true, status: 200, data: { query: 'blue cheese smashburger', candidates: [] } };
+      }
+      return { ok: false, status: 404, data: {} };
+    });
+    const network = { request: vi.fn(), get: vi.fn(), post } as unknown as NetworkAdapter;
+    const asset = makeAsset();
+    const onSave = vi.fn();
+    render(
+      <RecipeEditorModal
+        initialRecipe={makeRecipe({ image: 'Assets/Old.jpg' })}
+        imageService={{ asset }}
+        network={network}
+        onSave={onSave}
+        onClose={() => {}}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId('find-representative-image'));
+    await waitFor(() => expect(screen.getAllByText(/No reusable representative images were found/)).toHaveLength(1));
+    // The duplicate "placeholder" variant is gone.
+    expect(screen.queryByText(/current image \(or placeholder\) was kept/)).toBeNull();
+
+    const suggestions = screen.getAllByTestId('representative-suggestion');
+    expect(suggestions.length).toBeGreaterThan(0);
+
+    const before = post.mock.calls.length;
+    fireEvent.click(suggestions[0]);
+    // Clicking a suggestion fills the input ONLY — no automatic retry.
+    expect(post.mock.calls.length).toBe(before);
+
+    // Explicitly searching the suggestion performs exactly one more request.
+    fireEvent.click(screen.getByTestId('representative-search-button'));
+    await waitFor(() => expect(post.mock.calls.length).toBe(before + 1));
+
+    // The current image is untouched; nothing is written or saved.
+    expect(asset.write).not.toHaveBeenCalled();
+    expect(onSave).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalledWith('/api/recipes/image/generate', expect.anything());
   });
 });
 
@@ -340,5 +385,168 @@ describe('RecipeEditorModal — rollback surfacing, object-URL lifecycle, Escape
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(asset.write).not.toHaveBeenCalled();
     expect(onSave).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stale-selection invalidation + search-generation authority
+// ---------------------------------------------------------------------------
+
+const FIND_PATH = '/api/recipes/image/find-representative';
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function candidateWith(id: string, title: string) {
+  return { ...CANDIDATE, id, title, thumbnailPath: `/api/recipes/image/representative-thumbnail/${id}` };
+}
+
+function queuedNetwork(responses: Array<Promise<unknown> | unknown>) {
+  let index = 0;
+  const post = vi.fn((path: string) => {
+    if (path === FIND_PATH) {
+      const response = responses[Math.min(index, responses.length - 1)];
+      index += 1;
+      return Promise.resolve(response);
+    }
+    return Promise.resolve({ ok: false, status: 404, data: {} });
+  });
+  return { network: { request: vi.fn(), get: vi.fn(), post } as unknown as NetworkAdapter, post };
+}
+
+function useButton(): HTMLButtonElement {
+  return screen.getByTestId('use-representative-image') as HTMLButtonElement;
+}
+
+describe('RecipeEditorModal — stale selection is invalidated by a new search', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn());
+  });
+
+  async function previewFirstResult() {
+    fireEvent.click(screen.getByTestId('find-representative-image'));
+    await waitFor(() => expect(screen.getAllByTestId('representative-candidate').length).toBeGreaterThan(0));
+    fireEvent.click(screen.getAllByTestId('representative-candidate')[0]);
+    expect(useButton().disabled).toBe(false);
+  }
+
+  function startSecondSearch() {
+    fireEvent.change(screen.getByTestId('representative-search-input'), { target: { value: 'cheeseburger' } });
+    fireEvent.click(screen.getByTestId('representative-search-button'));
+  }
+
+  it('BLOCKING: search B success immediately clears preview A and cannot confirm A', async () => {
+    const second = deferred<unknown>();
+    const { network, post } = queuedNetwork([
+      { ok: true, status: 200, data: { query: 'blue cheese smashburger', candidates: [candidateWith('cand-A', 'Candidate A')] } },
+      second.promise,
+    ]);
+    const asset = makeAsset();
+    render(<RecipeEditorModal initialRecipe={makeRecipe()} imageService={{ asset }} network={network} onSave={vi.fn()} onClose={() => {}} />);
+    await previewFirstResult();
+
+    startSecondSearch();
+    // Immediately (while B is in flight): preview gone, confirmation disabled.
+    await waitFor(() => expect(useButton().disabled).toBe(true));
+    expect(screen.queryByText(/Preview:/)).toBeNull();
+
+    second.resolve({ ok: true, status: 200, data: { query: 'cheeseburger', candidates: [candidateWith('cand-B', 'Candidate B')] } });
+    await waitFor(() => expect(screen.getByText('Candidate B')).toBeTruthy());
+    expect(screen.queryByText('Candidate A')).toBeNull();
+    expect(useButton().disabled).toBe(true);
+    // No asset written merely because a search ran.
+    expect(asset.write).not.toHaveBeenCalled();
+    expect(post).toHaveBeenCalledTimes(2);
+  });
+
+  it('search B no-results cannot confirm candidate A and keeps the current image', async () => {
+    const { network, post } = queuedNetwork([
+      { ok: true, status: 200, data: { query: 'blue cheese smashburger', candidates: [candidateWith('cand-A', 'Candidate A')] } },
+      { ok: true, status: 200, data: { query: 'cheeseburger', candidates: [] } },
+    ]);
+    const asset = makeAsset();
+    const onSave = vi.fn();
+    render(<RecipeEditorModal initialRecipe={makeRecipe({ image: 'Assets/Old.jpg' })} imageService={{ asset }} network={network} onSave={onSave} onClose={() => {}} />);
+    await previewFirstResult();
+
+    startSecondSearch();
+    await waitFor(() => expect(screen.getAllByText(/No reusable representative images were found/)).toHaveLength(1));
+    expect(useButton().disabled).toBe(true);
+    expect(screen.queryByText('Candidate A')).toBeNull();
+    expect(asset.write).not.toHaveBeenCalled();
+    expect(onSave).not.toHaveBeenCalled();
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    expect(post).toHaveBeenCalledTimes(2);
+  });
+
+  it('search B IMAGE_QUERY_UNSAFE cannot confirm candidate A', async () => {
+    const { network } = queuedNetwork([
+      { ok: true, status: 200, data: { query: 'blue cheese smashburger', candidates: [candidateWith('cand-A', 'Candidate A')] } },
+      { ok: false, status: 422, data: { code: 'IMAGE_QUERY_UNSAFE', error: 'unsafe' } },
+    ]);
+    render(<RecipeEditorModal initialRecipe={makeRecipe()} imageService={{ asset: makeAsset() }} network={network} onSave={vi.fn()} onClose={() => {}} />);
+    await previewFirstResult();
+
+    startSecondSearch();
+    await waitFor(() => expect(screen.getByText(/does not contain safe visual search terms/)).toBeTruthy());
+    expect(useButton().disabled).toBe(true);
+    expect(screen.queryByText('Candidate A')).toBeNull();
+  });
+
+  it('search B network failure cannot confirm candidate A', async () => {
+    const { network } = queuedNetwork([
+      { ok: true, status: 200, data: { query: 'blue cheese smashburger', candidates: [candidateWith('cand-A', 'Candidate A')] } },
+      { ok: false, status: 502, data: { code: 'IMAGE_SEARCH_UNAVAILABLE', error: 'down' } },
+    ]);
+    render(<RecipeEditorModal initialRecipe={makeRecipe()} imageService={{ asset: makeAsset() }} network={network} onSave={vi.fn()} onClose={() => {}} />);
+    await previewFirstResult();
+
+    startSecondSearch();
+    await waitFor(() => expect(screen.getByText(/temporarily unavailable/)).toBeTruthy());
+    expect(useButton().disabled).toBe(true);
+    expect(screen.queryByText('Candidate A')).toBeNull();
+  });
+
+  it('a slow OLDER response cannot overwrite a newer search (generation guard)', async () => {
+    const slowA = deferred<unknown>();
+    const fastB = deferred<unknown>();
+    let findCalls = 0;
+    const post = vi.fn((path: string) => {
+      if (path === FIND_PATH) {
+        findCalls += 1;
+        return findCalls === 1 ? slowA.promise : fastB.promise;
+      }
+      return Promise.resolve({ ok: false, status: 404, data: {} });
+    });
+    const network = { request: vi.fn(), get: vi.fn(), post } as unknown as NetworkAdapter;
+    render(<RecipeEditorModal initialRecipe={makeRecipe()} imageService={{ asset: makeAsset() }} network={network} onSave={vi.fn()} onClose={() => {}} />);
+
+    // Induce overlapping requests within one batched event (button not yet disabled).
+    const findButton = screen.getByTestId('find-representative-image') as HTMLButtonElement;
+    await act(async () => {
+      findButton.click();
+      findButton.click();
+    });
+    expect(findCalls).toBe(2);
+
+    // B (the newer search) resolves first with Candidate B.
+    fastB.resolve({ ok: true, status: 200, data: { query: 'B', candidates: [candidateWith('cand-B', 'Candidate B')] } });
+    await waitFor(() => expect(screen.getByText('Candidate B')).toBeTruthy());
+
+    // The slow OLDER A resolves last and must NOT overwrite B.
+    slowA.resolve({ ok: true, status: 200, data: { query: 'A', candidates: [candidateWith('cand-A', 'Candidate A')] } });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByText('Candidate B')).toBeTruthy();
+    expect(screen.queryByText('Candidate A')).toBeNull();
+    expect(screen.queryByText(/Search: A/)).toBeNull();
   });
 });
