@@ -48,16 +48,32 @@ import {
 } from "./createRecipe.js";
 import {
   generateRecipeImagePreview,
+  validateGenerateRecipeImageRequest,
+  validateImageQuoteRequest,
+  canonicalImageRequestBinding,
+  imageVaultScope,
   GenerateRecipeImageValidationError,
 } from "./recipeImage.js";
 import { DeterministicImageProvider, type ImageProvider } from "./ai/imageProvider.js";
 import { resolveEffectiveImageSelection, textSelectionPricingBlock } from "./ai/effectiveSelection.js";
+import { findRegisteredImageProvider } from "./ai/imageProviderRegistry.js";
+import { imagePricingTruth } from "./ai/imagePricing.js";
+import type { CredentialSource } from "./ai/credentialResolver.js";
+import {
+  ImageGenerationAuthorizationStore,
+  ImageGenerationAuthorizationCapacityError,
+} from "./imageGenerationAuthorization.js";
 import {
   parseTextSelectionHeader,
   parseImageSelectionHeader,
 } from "./ai/parseSelectionMetadata.js";
 import type { SelectionInput } from "./ai/effectiveSelection.js";
-import { ImagePreviewStore, PreviewStoreCapacityError } from "./imagePreviewStore.js";
+import {
+  ImagePreviewStore,
+  PreviewStoreCapacityError,
+  type ImagePreviewReservation,
+} from "./imagePreviewStore.js";
+import { getCredentialGeneration } from "./ai/capabilityVerificationStore.js";
 import { buildRepresentativeImageQuery, sanitizeRepresentativeSearchTerms } from "../src/core/representativeImage.js";
 import { createHash, randomBytes as cryptoRandomBytes } from "node:crypto";
 import {
@@ -67,7 +83,10 @@ import {
   searchRepresentativeImages,
   selectRepresentativeImage,
 } from "./representativeImage.js";
-import { sniffGeneratedImageMime } from "../src/core/recipeImage.js";
+import {
+  sniffGeneratedImageMime,
+  MAX_GENERATED_IMAGE_BYTES,
+} from "../src/core/recipeImage.js";
 import {
   sanitizeCandidateEvidenceList,
   MAX_KITCHEN_CANDIDATES,
@@ -94,6 +113,12 @@ export interface CreateAppOptions {
    * be wired as a production default.
    */
   imageProvider?: ImageProvider;
+  /**
+   * TEST SEAM ONLY: overrides the transient preview store so capacity behavior
+   * (reservations, full store) is exercisable at the route level. Production
+   * always constructs its own bounded store.
+   */
+  imagePreviewStore?: ImagePreviewStore;
 }
 
 /**
@@ -112,6 +137,8 @@ export interface CreateAppOptions {
 export function resolveImageProvider(opts: Pick<CreateAppOptions, 'imageProvider'>, userSelection?: SelectionInput): {
   provider: ImageProvider | null;
   modelOverride: { model?: string };
+  /** WHOSE credential authorizes the effective provider (never inferred). */
+  credentialSource: CredentialSource;
   /** True when a PRESENT-but-malformed selection payload was rejected. */
   selectionInvalid: boolean;
   /** v0.8.0: set when a FREE-acknowledged selection is blocked (fail closed). */
@@ -122,7 +149,12 @@ export function resolveImageProvider(opts: Pick<CreateAppOptions, 'imageProvider
     // Explicit test seam (DeterministicImageProvider in tests): keep the caller's
     // model default (the seam's own default), only signal a production model is
     // NOT in use.
-    return { provider: opts.imageProvider, modelOverride: {}, selectionInvalid: false };
+    return {
+      provider: opts.imageProvider,
+      modelOverride: {},
+      credentialSource: "server_environment",
+      selectionInvalid: false,
+    };
   }
   // Server-managed image selection (or the safe Gemini production default when
   // UNSET). An EXPLICIT invalid pin yields null (fail closed, zero execution).
@@ -134,12 +166,28 @@ export function resolveImageProvider(opts: Pick<CreateAppOptions, 'imageProvider
     return {
       provider: null,
       modelOverride: {},
+      credentialSource: effective.credentialSource,
       selectionInvalid: effective.invalidIntent,
       ...(effective.pricingBlocked ? { pricingBlocked: effective.pricingBlocked } : {}),
       ...(effective.pricingMessage ? { pricingMessage: effective.pricingMessage } : {}),
     };
   }
-  return { provider: effective.provider, modelOverride: { model: effective.model ?? "" }, selectionInvalid: false };
+  return {
+    provider: effective.provider,
+    modelOverride: { model: effective.model ?? "" },
+    credentialSource: effective.credentialSource,
+    selectionInvalid: false,
+  };
+}
+
+/**
+ * The exact model an effective image request will execute: the resolved override
+ * when present, otherwise the registered provider's curated default model. Used
+ * for pricing truth and authorization binding (never a client-supplied value).
+ */
+export function effectiveImageModel(provider: ImageProvider, modelOverride: { model?: string }): string {
+  if (modelOverride.model) return modelOverride.model;
+  return findRegisteredImageProvider(provider.id)?.defaultModel ?? "";
 }
 
 /**
@@ -1079,7 +1127,12 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // Transient generated-image preview store (bounded, TTL 5min, 50MB cap).
   // Foundation for Vault Intelligence Image Recovery: generation ONLY — the
   // canonical asset write + Markdown `image` update belong to the later Save pass.
-  const imagePreviewStore = new ImagePreviewStore();
+  const imagePreviewStore = opts.imagePreviewStore ?? new ImagePreviewStore();
+  // Phase 2: server-owned, single-use authorizations for paid/variable image
+  // generation. Bounded, process-memory, TTL-bound. A client boolean is never
+  // authority; only a token issued here (after resolving the effective selection
+  // + trusted pricing truth) authorizes exactly one provider call.
+  const imageGenerationAuthorizations = new ImageGenerationAuthorizationStore();
   // Server-owned representative-image candidate authority (Phase 1): opaque ids,
   // short TTL, bounded count, bound to a SERVER-DERIVED requester identity.
   const representativeImageCandidates = new RepresentativeImageCandidateStore();
@@ -1161,6 +1214,102 @@ export function createApp(opts: CreateAppOptions): express.Express {
     }
   });
 
+  // Phase 2: server-owned image generation QUOTE. Resolves the effective image
+  // provider/model + credential source and the CURRENT trusted pricing truth, and
+  // issues an opaque, single-use confirmation token ONLY for a paid/variable
+  // model. Makes ZERO provider inference calls. Gated + rate-limited like the
+  // generation route.
+  app.post("/api/recipes/image/quote", requireAiAccessToken, imageGenerateRateLimiter, async (req, res) => {
+    try {
+      if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
+        return res.status(400).json({ error: "Invalid request payload.", code: "INVALID_REQUEST" });
+      }
+      const body = req.body as Record<string, unknown>;
+      const userSelection = parseImageSelectionHeader(req.headers);
+      const {
+        provider: imageProvider,
+        modelOverride: imageModelOverride,
+        credentialSource,
+        selectionInvalid,
+        pricingBlocked,
+        pricingMessage,
+      } = resolveImageProvider(opts, userSelection);
+      if (!imageProvider) {
+        if (pricingBlocked) {
+          return res.status(409).json({
+            error: pricingMessage ?? "This model is no longer free. Review and re-select it before using it.",
+            code: pricingBlocked,
+          });
+        }
+        return res.status(503).json({
+          error: selectionInvalid
+            ? "The AI provider selection was invalid. No image was generated."
+            : "The configured image provider selection is invalid. No image was generated.",
+          code: selectionInvalid ? "IMAGE_SELECTION_INVALID" : "IMAGE_PROVIDER_NOT_CONFIGURED",
+        });
+      }
+      if (!imageProvider.isAvailable()) {
+        return res.status(503).json({
+          error: "No image generation provider is configured on the server.",
+          code: "IMAGE_PROVIDER_NOT_CONFIGURED",
+        });
+      }
+
+      // Canonical server-verifiable binding (I4): the quote requires the SAME
+      // bounded generation inputs the generate route requires. The server
+      // recomputes the binding from the VALIDATED fields here and again at
+      // generate time; a client-supplied hash is never authority. Malformed or
+      // missing inputs fail closed BEFORE any authorization is issued.
+      const quoteValidation = validateImageQuoteRequest(body);
+      if (!quoteValidation.ok || !quoteValidation.value) {
+        return res.status(400).json({ error: "Invalid image generation request.", code: "INVALID_REQUEST" });
+      }
+      const quoteFields = quoteValidation.value;
+      const recipeBinding = canonicalImageRequestBinding(quoteFields);
+      const vaultScope = imageVaultScope(quoteFields.vaultSessionId);
+
+      const model = effectiveImageModel(imageProvider, imageModelOverride);
+      const pricing = imagePricingTruth(imageProvider.id, model);
+      const base = {
+        ok: true,
+        provider: { id: imageProvider.id, name: imageProvider.name },
+        model,
+        credentialSource,
+        costClass: pricing.costClass,
+        costLabel: pricing.label,
+        requiresConfirmation: pricing.requiresConfirmation,
+      };
+      if (!pricing.requiresConfirmation) {
+        // Verified zero price: explicit generation may skip confirmation.
+        return res.json(base);
+      }
+      const issued = imageGenerationAuthorizations.issue(representativeRequesterId(req), {
+        providerId: imageProvider.id,
+        modelId: model,
+        credentialSource,
+        // Opaque server-owned credential lifecycle counter for the EXACT provider.
+        credentialGeneration: getCredentialGeneration(imageProvider.id),
+        costClass: pricing.costClass,
+        ...(pricing.pricingFingerprint ? { pricingFingerprint: pricing.pricingFingerprint } : {}),
+        recipeBinding,
+        vaultScope,
+      });
+      return res.json({
+        ...base,
+        confirmationToken: issued.token,
+        confirmationExpiresAt: issued.expiresAt,
+      });
+    } catch (error) {
+      if (error instanceof ImageGenerationAuthorizationCapacityError) {
+        return res.status(503).json({
+          error: "Image generation confirmation is temporarily unavailable. Please try again shortly.",
+          code: "IMAGE_CONFIRMATION_CAPACITY",
+        });
+      }
+      return res.status(502).json({ error: "Couldn't prepare image generation right now.", code: "IMAGE_QUOTE_FAILED" });
+    }
+  });
+
   // Vault Intelligence Image Recovery (Phase 2B): generate a TRANSIENT validated
   // image preview from MINIMUM grounded recipe fields. No canonical save, no
   // Markdown mutation, no prompt persisted/logged. Returns tiny token metadata
@@ -1179,12 +1328,22 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // resolves, ZERO execution) — it never falls back to Gemini or any other
   // provider.
   app.post("/api/recipes/image/generate", requireAiAccessToken, imageGenerateRateLimiter, async (req, res) => {
+    // Capacity reservation for this in-flight generation. It is released on every
+    // path that does not commit it, so a failed/aborted call never leaks capacity.
+    let reservation: ImagePreviewReservation | undefined;
     try {
       if (!req.body || typeof req.body !== "object") {
         return res.status(400).json({ error: "Invalid request payload.", code: "INVALID_REQUEST" });
       }
       const userSelection = parseImageSelectionHeader(req.headers);
-      const { provider: imageProvider, modelOverride: imageModelOverride, selectionInvalid, pricingBlocked, pricingMessage } = resolveImageProvider(opts, userSelection);
+      const {
+        provider: imageProvider,
+        modelOverride: imageModelOverride,
+        credentialSource,
+        selectionInvalid,
+        pricingBlocked,
+        pricingMessage,
+      } = resolveImageProvider(opts, userSelection);
       if (!imageProvider) {
         if (pricingBlocked) {
           // v0.8.0 FREE -> PAID spend protection: the acknowledged FREE model is
@@ -1218,9 +1377,99 @@ export function createApp(opts: CreateAppOptions): express.Express {
           code: "IMAGE_PROVIDER_NOT_CONFIGURED",
         });
       }
-      const result = await generateRecipeImagePreview(req.body, imageProvider, imagePreviewStore, imageModelOverride);
+
+      // Phase 2: paid/variable image models require a valid, server-issued,
+      // single-use confirmation token. The bounded request is validated FIRST so
+      // an invalid request never consumes a token; bindings are verified and the
+      // token is consumed atomically immediately before the sole provider call.
+      const model = effectiveImageModel(imageProvider, imageModelOverride);
+      const pricing = imagePricingTruth(imageProvider.id, model);
+
+      // RESERVE preview capacity BEFORE consuming the token or calling the
+      // provider. A full store fails closed with ZERO provider calls and does NOT
+      // consume the confirmation token (so a retry after freeing space is safe).
+      // The reservation is requester-scoped: per-requester and global reservation
+      // bounds both apply.
+      try {
+        reservation = imagePreviewStore.reserve(MAX_GENERATED_IMAGE_BYTES, representativeRequesterId(req));
+      } catch (capacityError: any) {
+        if (
+          capacityError instanceof PreviewStoreCapacityError ||
+          capacityError?.name === "PreviewStoreCapacityError"
+        ) {
+          return res.status(503).json({
+            error: "Image preview store is at capacity. Try again shortly.",
+            code: "PREVIEW_CAPACITY",
+          });
+        }
+        throw capacityError;
+      }
+
+      if (pricing.requiresConfirmation) {
+        const rawToken = (req.body as Record<string, unknown>)["confirmationToken"];
+        if (rawToken === undefined) {
+          imagePreviewStore.release(reservation);
+          return res.status(409).json({
+            error: "This image model requires an explicit per-generation confirmation.",
+            code: "IMAGE_CONFIRMATION_REQUIRED",
+          });
+        }
+        if (typeof rawToken !== "string" || rawToken.length === 0 || rawToken.length > 512) {
+          imagePreviewStore.release(reservation);
+          return res.status(409).json({
+            error: "Image generation confirmation is invalid or expired. Please request a new quote.",
+            code: "IMAGE_CONFIRMATION_INVALID",
+          });
+        }
+        const validatedRequest = validateGenerateRecipeImageRequest(req.body);
+        if (!validatedRequest.ok || !validatedRequest.value) {
+          imagePreviewStore.release(reservation);
+          return res.status(400).json({ error: "Invalid image generation request.", code: "INVALID_REQUEST" });
+        }
+        // Recompute the canonical binding from the ACTUAL validated generation
+        // request and compare it with the authorization record: substituted,
+        // stale, cross-recipe, or cross-vault inputs fail closed here with zero
+        // provider calls and without consuming a still-valid token.
+        const generateBinding = canonicalImageRequestBinding(validatedRequest.value);
+        const generateScope = imageVaultScope(validatedRequest.value.vaultSessionId);
+        const consumed = imageGenerationAuthorizations.consume(
+          rawToken,
+          representativeRequesterId(req),
+          {
+            providerId: imageProvider.id,
+            modelId: model,
+            credentialSource,
+            // Re-read the CURRENT credential generation immediately before
+            // dispatch: a replaced/revoked/expired/purged session key or a
+            // source switch fails closed with zero provider calls.
+            credentialGeneration: getCredentialGeneration(imageProvider.id),
+            costClass: pricing.costClass,
+            ...(pricing.pricingFingerprint ? { pricingFingerprint: pricing.pricingFingerprint } : {}),
+            recipeBinding: generateBinding,
+            vaultScope: generateScope,
+          }
+        );
+        if (!consumed.ok) {
+          imagePreviewStore.release(reservation);
+          return res.status(409).json({
+            error: "Image generation confirmation is invalid or expired. Please request a new quote.",
+            code: "IMAGE_CONFIRMATION_INVALID",
+          });
+        }
+      }
+      const result = await generateRecipeImagePreview(
+        req.body,
+        imageProvider,
+        imagePreviewStore,
+        imageModelOverride,
+        reservation,
+        representativeRequesterId(req)
+      );
       return res.json(result);
     } catch (error: any) {
+      // Release the reservation exactly once on any failure (commit already
+      // released it on success; release is idempotent).
+      if (reservation) imagePreviewStore.release(reservation);
       if (error instanceof GenerateRecipeImageValidationError || error?.name === "GenerateRecipeImageValidationError") {
         return res.status(400).json({ error: error?.message || "Invalid image generation request.", code: "INVALID_REQUEST" });
       }
@@ -1246,16 +1495,19 @@ export function createApp(opts: CreateAppOptions): express.Express {
 
   // Streams a transient generated-image preview by opaque token. Multi-read until
   // the token expires; exact safe Content-Type (never caller-supplied MIME);
-  // Cache-Control: no-store + nosniff; unknown/expired tokens are 404/410.
+  // Cache-Control: no-store + nosniff; unknown/expired/foreign-requester tokens
+  // are 404. Records are requester-bound at insert: token possession alone never
+  // crosses requester boundaries (the client-IP/shared-NAT limitation still
+  // applies: co-located requesters share an identity by design).
   app.get("/api/recipes/image/preview/:token", requireAiAccessToken, imagePreviewRateLimiter, (req, res) => {
     const token = String(req.params?.token ?? "");
     if (!token || token.length > 512) {
       return res.status(404).json({ error: "Preview not found." });
     }
-    const record = imagePreviewStore.get(token);
+    const record = imagePreviewStore.get(token, representativeRequesterId(req));
     if (!record) {
-      // Unknown and expired tokens are both inaccessible; no state oracle is
-      // exposed, so inaccessible previews always return 404.
+      // Unknown, expired, and foreign-requester tokens are all inaccessible; no
+      // state oracle is exposed, so inaccessible previews always return 404.
       return res.status(404).json({ error: "Preview not found or expired." });
     }
     const detected = sniffGeneratedImageMime(record.bytes);
@@ -1269,14 +1521,15 @@ export function createApp(opts: CreateAppOptions): express.Express {
 
   // Invalidates a transient generated-image preview token (preview lifecycle
   // after a successful canonical save). Token-shaped lookups only; the response
-  // never distinguishes unknown vs removed vs expired (no existence oracle).
-  // Gated + rate-limited like the other preview operations.
+  // never distinguishes unknown vs removed vs expired vs foreign-requester (no
+  // existence oracle). A foreign requester cannot invalidate another requester's
+  // record. Gated + rate-limited like the other preview operations.
   app.delete("/api/recipes/image/preview/:token", requireAiAccessToken, imagePreviewRateLimiter, (req, res) => {
     const token = String(req.params?.token ?? "");
     if (!token || token.length > 512) {
       return res.status(404).json({ error: "Preview not found." });
     }
-    imagePreviewStore.remove(token);
+    imagePreviewStore.remove(token, representativeRequesterId(req));
     return res.status(200).json({ ok: true });
   });
 
@@ -1395,7 +1648,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
         provider: "representative",
         model: selected.provenance.source,
         provenance: selected.provenance,
-      });
+      }, representativeRequesterId(req));
       return res.json({
         token: metadata.token,
         contentType: metadata.contentType,

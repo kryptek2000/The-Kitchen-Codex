@@ -52,6 +52,17 @@ export interface NetworkResponse<TData = unknown> {
   data?: TData;
 }
 
+/** A normalized BINARY application response (image preview bytes). */
+export interface NetworkBinaryResponse {
+  status: number;
+  /** True for a 2xx response with readable bytes. */
+  ok: boolean;
+  /** Raw response bytes (present only on success). */
+  bytes?: Uint8Array;
+  /** Server-declared content type (UNTRUSTED; the caller revalidates). */
+  contentType?: string;
+}
+
 /**
  * The application-facing transport port. Implementations may be Express-backed
  * (standalone), hosted/remote (PWA), or a plugin bridge (Obsidian).
@@ -72,4 +83,12 @@ export interface NetworkAdapter {
     body: TBody,
     options?: NetworkRequestOptions
   ): Promise<NetworkResponse<TResponse>>;
+  /**
+   * OPTIONAL binary GET for app-local byte responses (e.g. the transient image
+   * preview route). Implementations may omit it; callers fall back to a scoped
+   * platform helper. Still restricted to application `/api/` paths — never an
+   * arbitrary URL. JSON request headers (including any auth header the adapter
+   * applies) are preserved.
+   */
+  getBytes?(path: string, options?: NetworkRequestOptions): Promise<NetworkBinaryResponse>;
 }

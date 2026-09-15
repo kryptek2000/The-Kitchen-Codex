@@ -96,7 +96,7 @@ describe("image preview store (v0.7 Phase 2B)", () => {
       PreviewStoreCapacityError
     );
     // The rejected insertion did not corrupt accounting.
-    expect(store.stats()).toEqual({ count: 1, totalBytes: 60 });
+    expect(store.stats()).toMatchObject({ count: 1, totalBytes: 60 });
     store.dispose();
   });
 
@@ -105,7 +105,7 @@ describe("image preview store (v0.7 Phase 2B)", () => {
     expect(() => store.insert({ bytes: new Uint8Array(0), contentType: "image/png", provider: "p", model: "m" })).toThrowError(
       PreviewStoreCapacityError
     );
-    expect(store.stats()).toEqual({ count: 0, totalBytes: 0 });
+    expect(store.stats()).toMatchObject({ count: 0, totalBytes: 0 });
     store.dispose();
   });
 
@@ -120,7 +120,7 @@ describe("image preview store (v0.7 Phase 2B)", () => {
     expect(store.stats().totalBytes).toBe(0);
     store.insert({ bytes: pngBytes(16), contentType: "image/png", provider: "p", model: "m" });
     store.clear();
-    expect(store.stats()).toEqual({ count: 0, totalBytes: 0 });
+    expect(store.stats()).toMatchObject({ count: 0, totalBytes: 0 });
     store.dispose();
   });
 

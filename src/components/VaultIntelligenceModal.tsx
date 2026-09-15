@@ -50,7 +50,7 @@ import {
 } from '../core/recipeImage';
 import {
   RecipeImageRecoveryController,
-  recipeImagePreviewPath,
+  fetchGeneratedPreviewBytes,
   isImageRecoverySupported,
   type RecipeImageRecoverySupport,
   type RecipeImageRecoveryState,
@@ -87,9 +87,18 @@ export interface RecipeImageFindingViewProps {
   recoveryState: RecipeImageRecoveryState;
   busy: boolean;
   onGenerate: () => void;
+  /** Explicit per-generation confirmation for a paid/variable quote. */
+  onConfirm?: () => void;
   onSave: () => void;
   onRegenerate: () => void;
   onCancel: () => void;
+  /**
+   * Managed object URL for the transient preview, resolved through the
+   * authenticated `NetworkAdapter.getBytes` path (never a plain protected-route
+   * `<img src>`, which cannot attach authorization). Null while loading or when
+   * the adapter has no binary path (fail closed with a bounded placeholder).
+   */
+  previewUrl?: string | null;
 }
 
 /**
@@ -107,11 +116,13 @@ export function RecipeImageFindingView({
   recoveryState,
   busy,
   onGenerate,
+  onConfirm,
   onSave,
   onRegenerate,
   onCancel,
+  previewUrl,
 }: RecipeImageFindingViewProps) {
-  const { phase, preview, message, messageKind } = recoveryState;
+  const { phase, quote, preview, message, messageKind } = recoveryState;
 
   const finding = (() => {
     if (!health) {
@@ -243,20 +254,68 @@ export function RecipeImageFindingView({
         </div>
       )}
 
-      {/* Preview: AI-generated, transient, nothing saved yet. Renders via the
-          authenticated preview endpoint — never base64/data URL. */}
+      {/* Paid/variable quote: provider, exact model, credential source, and the
+          truthful pricing classification BEFORE the one confirmed generation. */}
+      {phase === 'confirming' && quote && (
+        <div
+          data-testid="image-generation-quote"
+          className="space-y-2 p-3 rounded-xl bg-[#0C0C0C] border border-amber-500/30"
+        >
+          <div className="text-[10px] font-bold uppercase tracking-wider text-amber-300">
+            Confirm image generation
+          </div>
+          <div className="text-[11px] text-gray-200">{quote.provider.name}</div>
+          <div className="text-[11px] text-gray-400 font-mono">{quote.model}</div>
+          <div className="text-[10px] text-gray-500">
+            {quote.credentialSource === 'session_only' ? 'Using your temporary API key' : 'Using server API key'}
+          </div>
+          <div className="text-[11px] text-amber-300">{quote.costLabel}</div>
+          <div className="flex items-center justify-end gap-2 pt-1">
+            <button
+              onClick={onCancel}
+              disabled={busy}
+              className="px-3 py-1.5 text-xs text-gray-400 hover:text-white rounded-lg disabled:opacity-40"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={onConfirm}
+              disabled={busy || !onConfirm}
+              data-testid="confirm-generate-image"
+              className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-lg bg-amber-500 hover:bg-amber-400 text-black disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Confirm &amp; Generate</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Preview: AI-generated, transient, nothing saved yet. Rendered from a
+          managed object URL built from authenticated preview bytes — never a
+          plain protected-route request and never a base64/data URL. */}
       {preview && (
         <div className="space-y-2.5 p-3 rounded-xl bg-[#0C0C0C] border border-purple-500/20">
           <div className="flex items-center justify-between">
             <span className="text-[10px] font-bold uppercase tracking-wider text-purple-300">AI-generated preview</span>
             <span className="text-[10px] text-gray-500">nothing saved yet</span>
           </div>
-          <img
-            src={recipeImagePreviewPath(preview.token)}
-            alt="AI-generated recipe preview"
-            data-testid="recipe-image-preview"
-            className="max-h-56 rounded-lg border border-white/10 w-full object-contain bg-black/40"
-          />
+          {previewUrl ? (
+            <img
+              src={previewUrl}
+              alt="AI-generated recipe preview"
+              data-testid="recipe-image-preview"
+              className="max-h-56 rounded-lg border border-white/10 w-full object-contain bg-black/40"
+            />
+          ) : (
+            <div
+              data-testid="recipe-image-preview-loading"
+              role="status"
+              className="max-h-56 rounded-lg border border-white/10 w-full bg-black/40 py-8 text-center text-[11px] text-gray-400"
+            >
+              Loading secure preview…
+            </div>
+          )}
           <div className="text-[10px] text-gray-500 font-mono">
             {preview.provider} · {preview.model}
           </div>
@@ -423,6 +482,9 @@ export function VaultIntelligenceModal({
   const handleImageSave = useCallback(() => {
     if (selectedRecipe && imageControllerRef.current) void imageControllerRef.current.save(selectedRecipe);
   }, [selectedRecipe]);
+  const handleImageConfirm = useCallback(() => {
+    if (selectedRecipe && imageControllerRef.current) void imageControllerRef.current.confirm(selectedRecipe);
+  }, [selectedRecipe]);
   const handleImageRegenerate = useCallback(() => {
     if (selectedRecipe && imageControllerRef.current) void imageControllerRef.current.regenerate(selectedRecipe);
   }, [selectedRecipe]);
@@ -433,6 +495,39 @@ export function VaultIntelligenceModal({
     imageControllerRef.current?.close();
     onClose();
   }, [onClose]);
+
+  // Secure transient preview (F1): the preview token renders ONLY through a
+  // managed object URL built from bytes fetched over the authenticated
+  // `NetworkAdapter.getBytes` path (same current endpoint token as JSON). A
+  // plain protected-route `<img src>` could not attach authorization, so it is
+  // never used. The URL is revoked on token change, cancellation, close, and
+  // unmount; an adapter without a binary path fails closed with a bounded
+  // placeholder (no provider retry, no unauthenticated fallback).
+  const previewToken = imageRecoveryState.preview?.token;
+  const [securePreviewUrl, setSecurePreviewUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    let url: string | null = null;
+    setSecurePreviewUrl(null);
+    if (!isOpen || !previewToken) return;
+    (async () => {
+      const viaAdapter = await fetchGeneratedPreviewBytes(network, previewToken);
+      if (cancelled) return;
+      if (!viaAdapter) return; // fail closed: bounded placeholder stays
+      url = URL.createObjectURL(new Blob([viaAdapter.bytes.slice()], { type: viaAdapter.contentType }));
+      if (cancelled) {
+        URL.revokeObjectURL(url);
+        return;
+      }
+      setSecurePreviewUrl(url);
+    })().catch(() => {
+      /* bounded placeholder stays */
+    });
+    return () => {
+      cancelled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [isOpen, network, previewToken]);
   // -------------------------------------------------------------------------
 
   // Filtered reports for queue
@@ -1221,11 +1316,17 @@ const res = await network.post<{ recovered?: any; error?: string }>(
                       canGenerate={canGenerateImage}
                       unavailableReason={imageRecoveryUnavailableReason}
                       recoveryState={imageRecoveryState}
-                      busy={imageRecoveryState.phase === 'generating' || imageRecoveryState.phase === 'saving'}
+                      busy={
+                        imageRecoveryState.phase === 'quoting' ||
+                        imageRecoveryState.phase === 'generating' ||
+                        imageRecoveryState.phase === 'saving'
+                      }
                       onGenerate={handleImageGenerate}
+                      onConfirm={handleImageConfirm}
                       onSave={handleImageSave}
                       onRegenerate={handleImageRegenerate}
                       onCancel={handleImageCancel}
+                      previewUrl={securePreviewUrl}
                     />
                   </div>
                 ) : (

@@ -176,6 +176,11 @@ export type GeneratedImageMime = (typeof GENERATED_IMAGE_MIME_ALLOWLIST)[number]
 export const MAX_GENERATED_IMAGE_BYTES = 4 * 1024 * 1024;
 /** Minimum sensible non-empty image payload (smallest valid signature header). */
 export const MIN_GENERATED_IMAGE_BYTES = 12;
+/**
+ * Hard bound on a single PNG raster dimension (width/height). Parsed from the
+ * fixed IHDR offsets without decoding. NOT decompression-bomb protection.
+ */
+export const MAX_GENERATED_IMAGE_DIMENSION = 12000;
 
 export interface GeneratedImageInput {
   bytes: Uint8Array;
@@ -246,6 +251,9 @@ function normalizeMime(contentType: string): string {
  *   C. bounded size (non-empty minimum, hard 4MB max)
  *   D. byte signature/container must AGREE with the declared MIME (no silent relabel)
  *   E. obviously truncated/malformed input rejected
+ *   F. PNG raster dimensions (IHDR, fixed offsets — parsed WITHOUT decoding)
+ *      are bounded. This is NOT decompression-bomb protection (no such claim):
+ *      it only rejects absurd header dimensions before any decoder runs.
  */
 export function validateGeneratedImage(input: GeneratedImageInput): GeneratedImageValidation {
   const declared = normalizeMime(input.contentType);
@@ -281,6 +289,21 @@ export function validateGeneratedImage(input: GeneratedImageInput): GeneratedIma
       detectedMime: detected,
       error: `Generated image content does not match its declared type (declared ${declared}, bytes are ${detected}).`,
     };
+  }
+  // PNG IHDR dimensions live at fixed offsets (16-23) and are parsed WITHOUT
+  // decoding the image. Absurd/zero dimensions fail closed before any decoder
+  // runs. Other containers are not dimension-checked here.
+  if (detected === 'image/png' && bytes.length >= 24 && readAscii(bytes, 12, 4) === 'IHDR') {
+    const width = readU32BE(bytes, 16);
+    const height = readU32BE(bytes, 20);
+    if (
+      width === 0 ||
+      height === 0 ||
+      width > MAX_GENERATED_IMAGE_DIMENSION ||
+      height > MAX_GENERATED_IMAGE_DIMENSION
+    ) {
+      return { valid: false, error: 'Generated image dimensions are out of bounds.' };
+    }
   }
   return { valid: true, detectedMime: detected };
 }

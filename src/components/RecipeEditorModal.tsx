@@ -24,8 +24,9 @@ import {
   parseObsidianRecipeMarkdown,
   serializeRecipeToObsidianMarkdown,
 } from '../utils/markdownParser';
-import { saveImageToVaultAssets, vaultAssets, type SaveImageDeps } from '../utils/vaultAssets';
+import { saveImageToVaultAssets, saveImageToVaultAssetsCollisionSafe, vaultAssets, type SaveImageDeps } from '../utils/vaultAssets';
 import { resolveNewRecipeVaultPath } from '../core/vaultPath';
+import { validateGeneratedImage } from '../core/recipeImage';
 import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
 import { buildAiSelectionRequestOptions } from '../application/aiSelection';
 import { useVaultImage } from '../hooks/useVaultImage';
@@ -38,15 +39,23 @@ import {
   NUTRITION_INCOMPLETE_MESSAGE,
   NUTRITION_AUTOSAVE_DISABLED_MESSAGE,
 } from '../utils/nutrition';
-import { RepresentativeImageChooser } from './RepresentativeImageChooser';
+import { RecipeImageChooser, type AiImagePanelState, type RecipeImageChooserMode } from './RecipeImageChooser';
 import {
   buildRepresentativeSearchInput,
   findRepresentativeImages,
   mapRepresentativeImageError,
   selectRepresentativeImage,
 } from '../application/representativeImage';
-import { recipeImagePreviewPath } from '../application/recipeImageRecovery';
-import { fetchAppPreviewBlob } from '../platform/browser/downloadImageViaBackend';
+import {
+  recipeImagePreviewPath,
+  requestImageGenerationQuote,
+  requestGeneratedRecipeImage,
+  fetchGeneratedPreviewBytes,
+  mapRecipeImageRecoveryError,
+  RecipeImageProviderClientError,
+  type RecipeImageGenerationQuote,
+} from '../application/recipeImageRecovery';
+import { fetchProviderCatalog } from '../application-ui/providerCatalog';
 import type {
   RepresentativeImageCandidate,
   RepresentativeImageProvenance,
@@ -66,6 +75,8 @@ interface RecipeEditorModalProps {
   /** App-backend API transport (injected by the bootstrap). */
   network: NetworkAdapter;
   onClose: () => void;
+  /** Opens AI Settings (used when no image provider is configured). */
+  onOpenAiSettings?: () => void;
 }
 
 /**
@@ -215,6 +226,7 @@ export function RecipeEditorModal({
   network,
   onSave,
   onClose,
+  onOpenAiSettings,
 }: RecipeEditorModalProps) {
   const [activeTab, setActiveTab] = useState<'visual' | 'markdown'>('visual');
 
@@ -257,7 +269,9 @@ export function RecipeEditorModal({
   const [saveError, setSaveError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Explicit representative-image flow (Phase 1). No automatic search, no AI.
+  // Two-mode image chooser (Phase 2): Licensed Search (default, free) and
+  // Generate with AI (explicit). Opening/switching/typing make ZERO provider calls.
+  const [imageChooserMode, setImageChooserMode] = useState<RecipeImageChooserMode>('licensed');
   const [representativeOpen, setRepresentativeOpen] = useState(false);
   const [representativeCandidates, setRepresentativeCandidates] = useState<RepresentativeImageCandidate[]>([]);
   const [representativeQuery, setRepresentativeQuery] = useState('');
@@ -280,13 +294,26 @@ export function RecipeEditorModal({
   // True once the image has been changed through a NON-representative path, so
   // stale representative/generated provenance is removed on save.
   const [imageProvenanceCleared, setImageProvenanceCleared] = useState(false);
-  // A selected representative image whose Asset write is DEFERRED until Save.
-  const [pendingRepresentative, setPendingRepresentative] = useState<
-    { blob: Blob; ext: string; provenance: RepresentativeImageProvenance } | null
-  >(null);
+  // A selected representative OR AI-generated image whose Asset write is
+  // DEFERRED until Save. The discriminator selects the truthful provenance.
+  type PendingImage =
+    | { kind: 'representative'; blob: Blob; ext: string; provenance: RepresentativeImageProvenance }
+    | { kind: 'generated'; blob: Blob; ext: string; provider: string; model: string };
+  const [pendingImage, setPendingImage] = useState<PendingImage | null>(null);
   // Object URLs created by THIS flow. They are revoked only after React has
   // switched away from them (or on unmount) — never while still active.
   const representativePreviewUrlsRef = useRef<Set<string>>(new Set());
+  // Synchronous Save-transaction lock (I1): two clicks can never enter the
+  // Asset writer twice. Released on every success and failure path.
+  const saveTransactionRef = useRef(false);
+  const [isSaving, setIsSaving] = useState(false);
+  // Mount liveness (I2): false after unmount so late async completions never
+  // create untracked object URLs or touch state.
+  const mountedRef = useRef(true);
+  // Monotonic preview-operation generation shared by the representative
+  // select path (I2): close/replace bumps it so a late selection result is
+  // dropped (and any late-created object URL immediately revoked).
+  const previewRunRef = useRef(0);
   // Image/provenance state BEFORE the pending representative selection, so a
   // failed Save can restore the original recipe/image state.
   const preRepresentativeRef = useRef<{
@@ -294,6 +321,40 @@ export function RecipeEditorModal({
     provenance: RepresentativeImageProvenance | null;
     cleared: boolean;
   } | null>(null);
+
+  // ---- Generate with AI (Phase 2) -----------------------------------------
+  const [aiPhase, setAiPhase] = useState<AiImagePanelState['phase']>('idle');
+  const [aiQuote, setAiQuote] = useState<RecipeImageGenerationQuote | null>(null);
+  const [aiPreview, setAiPreview] = useState<{ provider: string; model: string; previewUrl: string } | null>(null);
+  const [aiMessage, setAiMessage] = useState<string | null>(null);
+  const [aiMessageKind, setAiMessageKind] = useState<'info' | 'error'>('info');
+  // undefined = unknown (show the Generate action; the server fails closed).
+  const [aiProviderConfigured, setAiProviderConfigured] = useState<boolean | undefined>(undefined);
+  const [aiBusy, setAiBusy] = useState(false);
+  const aiProviderCheckedRef = useRef(false);
+  // Monotonic AI-run generation. Cancel/close/replace bumps it so a late async
+  // quote/generation result can never repopulate the panel after the dialog was
+  // dismissed (the same liveness pattern as the licensed search).
+  const aiRunRef = useRef(0);
+  const invalidateAiRun = (): void => {
+    aiRunRef.current += 1;
+  };
+  // The accepted generated preview whose Asset write is DEFERRED until Save.
+  const aiPreviewRef = useRef<{
+    token: string;
+    blob: Blob;
+    ext: string;
+    provider: string;
+    model: string;
+    previewUrl: string;
+  } | null>(null);
+  // Truthful generated-image provenance initialized from the recipe frontmatter.
+  const [generatedProvenance, setGeneratedProvenance] = useState<Record<string, unknown> | null>(() => {
+    const existing = initialRecipe?.frontmatter?.['codex_generated_image'];
+    return existing && typeof existing === 'object' && !Array.isArray(existing)
+      ? (existing as Record<string, unknown>)
+      : null;
+  });
 
   useEffect(() => {
     for (const url of representativePreviewUrlsRef.current) {
@@ -306,6 +367,12 @@ export function RecipeEditorModal({
 
   useEffect(
     () => () => {
+      mountedRef.current = false;
+      // Advance every async generation so late quote/generation/byte results
+      // can never repopulate a dismissed dialog (I2).
+      aiRunRef.current += 1;
+      previewRunRef.current += 1;
+      representativeSearchGenRef.current += 1;
       for (const url of representativePreviewUrlsRef.current) URL.revokeObjectURL(url);
       representativePreviewUrlsRef.current.clear();
     },
@@ -320,8 +387,11 @@ export function RecipeEditorModal({
   const setImageManually = (value: string): void => {
     setImage(value);
     setRepresentativeProvenance(null);
+    setGeneratedProvenance(null);
     setImageProvenanceCleared(true);
-    setPendingRepresentative(null);
+    setPendingImage(null);
+    aiPreviewRef.current = null;
+    setAiPreview(null);
   };
 
   const previewImageUrl = useVaultImage(image, folderHandle);
@@ -363,7 +433,8 @@ export function RecipeEditorModal({
 
   const generateCurrentMarkdown = (
     imageOverride?: string,
-    provenanceOverride: RepresentativeImageProvenance | null = representativeProvenance
+    provenanceOverride: RepresentativeImageProvenance | null = representativeProvenance,
+    generatedOverride: Record<string, unknown> | null = generatedProvenance
   ): string => {
     const tags = tagsInput.split(',').map((t) => t.trim().replace(/^#/, '')).filter(Boolean);
     const parsedIngs: ParsedIngredient[] = ingredientsText
@@ -442,16 +513,19 @@ export function RecipeEditorModal({
       notes: notes || undefined,
       frontmatter: (() => {
         const fm: Record<string, unknown> = { ...(initialRecipe?.frontmatter || {}) };
-        // A non-representative image change clears stale representative AND
-        // generated provenance (a different image must not keep stale licensing).
-        if (imageProvenanceCleared) {
+        if (generatedOverride) {
+          // An AI-generated image must not retain stale representative provenance.
           delete fm['codex_representative_image'];
-          delete fm['codex_generated_image'];
-        }
-        if (provenanceOverride) {
+          fm['codex_generated_image'] = generatedOverride;
+        } else if (provenanceOverride) {
           // A representative image must not retain stale generated provenance.
           delete fm['codex_generated_image'];
           fm['codex_representative_image'] = provenanceOverride;
+        } else if (imageProvenanceCleared) {
+          // A non-representative image change clears stale representative AND
+          // generated provenance (a different image must not keep stale licensing).
+          delete fm['codex_representative_image'];
+          delete fm['codex_generated_image'];
         }
         return fm;
       })(),
@@ -695,86 +769,459 @@ export function RecipeEditorModal({
     setRepresentativeSuggestions(buildRepresentativeImageSuggestions(input));
     setRepresentativeError(null);
     setRepresentativeMessage(null);
+    setImageChooserMode('licensed');
     setRepresentativeOpen(true);
     await runRepresentativeSearch(defaultQuery);
   };
 
+  /**
+   * Opens the chooser in AI mode. Makes ZERO provider calls: the only work is a
+   * read-only provider-catalog check (to show the truthful "not configured"
+   * state), never an inference request.
+   */
+  const handleOpenAiImageMode = async () => {
+    setImageChooserMode('ai');
+    setRepresentativeOpen(true);
+    setAiMessage(null);
+    if (!aiProviderCheckedRef.current) {
+      aiProviderCheckedRef.current = true;
+      try {
+        const catalog = await fetchProviderCatalog(network);
+        const usable = catalog.imageProviders.some(
+          (p) => p.selectable || (p.sessionKeySupported && catalog.sessionByokSupported === true)
+        );
+        setAiProviderConfigured(usable);
+      } catch {
+        // Unknown -> leave undefined (the server still fails closed).
+        setAiProviderConfigured(undefined);
+      }
+    }
+  };
+
   const handleUseRepresentativeImage = async (candidate: RepresentativeImageCandidate) => {
+    // Liveness-guarded (I2): a close/replace during the awaits drops the late
+    // result instead of creating an untracked object URL or touching state.
+    const run = ++previewRunRef.current;
     setRepresentativeBusy(true);
     setRepresentativeError(null);
     try {
       const selected = await selectRepresentativeImage(network, candidate.id);
+      if (run !== previewRunRef.current || !mountedRef.current) return;
       // Capture the pre-selection image/provenance so a failed Save can restore
       // the original recipe/image state.
       preRepresentativeRef.current = { image, provenance: representativeProvenance, cleared: imageProvenanceCleared };
-      // Fetch the validated bytes through the application's own authenticated
-      // preview endpoint (scoped platform helper; never a remote host). The
-      // vault Asset write is DEFERRED until the user explicitly Saves.
-      const blob = await fetchAppPreviewBlob(recipeImagePreviewPath(selected.token));
-      const ext = selected.contentType.includes('png')
+      // The selected representative preview travels the SAME authenticated
+      // application binary transport as AI previews (`network.getBytes` with the
+      // current in-memory endpoint-access header). An adapter without a binary
+      // path FAILS CLOSED with IMAGE_PREVIEW_UNAVAILABLE — there is NO
+      // unauthenticated direct-fetch fallback. The vault Asset write is DEFERRED
+      // until the user explicitly Saves.
+      const viaAdapter = await fetchGeneratedPreviewBytes(network, selected.token);
+      if (run !== previewRunRef.current || !mountedRef.current) return;
+      if (!viaAdapter) {
+        throw new RecipeImageProviderClientError(
+          0,
+          'The image preview could not be loaded.',
+          'IMAGE_PREVIEW_UNAVAILABLE'
+        );
+      }
+      const validated = validateGeneratedImage({ bytes: viaAdapter.bytes, contentType: viaAdapter.contentType });
+      if (!validated.valid || !validated.detectedMime) {
+        throw new RecipeImageProviderClientError(0, 'The image preview is not a usable image.');
+      }
+      const blob = new Blob([viaAdapter.bytes.slice()], { type: validated.detectedMime });
+      const ext = validated.detectedMime.includes('png')
         ? 'png'
         : selected.contentType.includes('webp')
         ? 'webp'
         : selected.contentType.includes('avif')
         ? 'avif'
         : 'jpg';
-      setPendingRepresentative({ blob, ext, provenance: selected.provenance });
+      // Local preview only; NO vault write happens here. Track the object URL so
+      // it can be revoked after React stops using it (or on unmount). A late
+      // (cancelled/unmounted) completion revokes its URL immediately instead of
+      // leaking an untracked one.
+      const previewUrl = URL.createObjectURL(blob);
+      if (run !== previewRunRef.current || !mountedRef.current) {
+        URL.revokeObjectURL(previewUrl);
+        return;
+      }
+      setPendingImage({ kind: 'representative', blob, ext, provenance: selected.provenance });
       setRepresentativeProvenance(selected.provenance);
       // A representative image replaces any prior image/provenance on save.
       setImageProvenanceCleared(true);
-      // Local preview only; NO vault write happens here. Track the object URL so
-      // it can be revoked after React stops using it (or on unmount).
-      const previewUrl = URL.createObjectURL(blob);
       representativePreviewUrlsRef.current.add(previewUrl);
       setImage(previewUrl);
       setRepresentativeOpen(false);
       setRepresentativeMessage('Representative image selected. It will be saved when you save the recipe.');
     } catch (err) {
+      if (run !== previewRunRef.current || !mountedRef.current) return;
       // Failure preserves the current image; no asset/Markdown change.
       setRepresentativeError(mapRepresentativeImageError(err));
     } finally {
-      setRepresentativeBusy(false);
+      if (run === previewRunRef.current && mountedRef.current) setRepresentativeBusy(false);
     }
   };
 
+  // ---- Generate with AI handlers (Phase 2) --------------------------------
+  const buildAiImageRequest = (): Record<string, unknown> => {
+    const ingredientLines = ingredientsText.split('\n').map((l) => l.trim()).filter(Boolean);
+    const clean = (value: string, max: number): string => value.trim().slice(0, max);
+    const titleValue = clean(title || initialRecipe?.title || 'Recipe', 200);
+    const cuisineValue = clean(cuisine, 60);
+    const categoryValue = clean(category, 60);
+    return {
+      title: titleValue,
+      ...(ingredientLines.length
+        ? { ingredients: ingredientLines.map((l) => l.slice(0, 80)).slice(0, 60) }
+        : {}),
+      ...(cuisineValue ? { cuisine: cuisineValue } : {}),
+      ...(categoryValue ? { course: categoryValue } : {}),
+    };
+  };
+
+  const extFromContentType = (contentType: string): string =>
+    contentType.includes('png')
+      ? 'png'
+      : contentType.includes('webp')
+        ? 'webp'
+        : contentType.includes('avif')
+          ? 'avif'
+          : 'jpg';
+
+  const fetchAiPreviewBlob = async (token: string): Promise<{ blob: Blob; ext: string } | null> => {
+    // The generated preview MUST travel the authenticated application binary
+    // transport. An adapter without a binary path FAILS CLOSED — there is NO
+    // unauthenticated direct-fetch fallback (which would 401 on protected
+    // deployments and leak an unauthenticated request otherwise).
+    const viaAdapter = await fetchGeneratedPreviewBytes(network, token);
+    if (!viaAdapter) return null;
+    // Defense-in-depth: revalidate MIME/signature/size before creating an
+    // object URL or writing the Asset.
+    const validation = validateGeneratedImage({ bytes: viaAdapter.bytes, contentType: viaAdapter.contentType });
+    if (!validation.valid || !validation.detectedMime) {
+      throw new RecipeImageProviderClientError(0, 'The image preview is not a usable image.');
+    }
+    return {
+      // Copy into a fresh ArrayBuffer-backed view (BlobPart typing).
+      blob: new Blob([viaAdapter.bytes.slice()], { type: validation.detectedMime }),
+      ext: extFromContentType(validation.detectedMime),
+    };
+  };
+
+  /** Revokes the transient preview object URL + invalidates its server token. */
+  const invalidateAiPreview = (): void => {
+    const current = aiPreviewRef.current;
+    aiPreviewRef.current = null;
+    if (!current) return;
+    if (representativePreviewUrlsRef.current.has(current.previewUrl)) {
+      URL.revokeObjectURL(current.previewUrl);
+      representativePreviewUrlsRef.current.delete(current.previewUrl);
+    }
+    void network
+      .request({ method: 'DELETE', path: recipeImagePreviewPath(current.token) })
+      .catch(() => {
+        /* best-effort: the token still expires by TTL */
+      });
+  };
+
+  const runAiGeneration = async (quote: RecipeImageGenerationQuote, run: number): Promise<void> => {
+    setAiPhase('generating');
+    setAiMessage(null);
+    try {
+      const body = buildAiImageRequest();
+      const generated = await requestGeneratedRecipeImage(
+        network,
+        body,
+        quote.requiresConfirmation ? quote.confirmationToken : undefined
+      );
+      if (run !== aiRunRef.current || !mountedRef.current) return; // dialog dismissed: drop late result
+      const fetched = await fetchAiPreviewBlob(generated.token);
+      if (run !== aiRunRef.current || !mountedRef.current) return;
+      if (!fetched) {
+        throw new RecipeImageProviderClientError(
+          0,
+          'The image preview could not be loaded.',
+          'IMAGE_PREVIEW_UNAVAILABLE'
+        );
+      }
+      const previewUrl = URL.createObjectURL(fetched.blob);
+      if (run !== aiRunRef.current || !mountedRef.current) {
+        // Late (cancelled/unmounted) completion: never leak an untracked URL.
+        URL.revokeObjectURL(previewUrl);
+        return;
+      }
+      representativePreviewUrlsRef.current.add(previewUrl);
+      aiPreviewRef.current = {
+        token: generated.token,
+        blob: fetched.blob,
+        ext: fetched.ext,
+        provider: generated.provider,
+        model: generated.model,
+        previewUrl,
+      };
+      setAiPreview({ provider: generated.provider, model: generated.model, previewUrl });
+      setAiPhase('preview');
+      setAiBusy(false);
+    } catch (err) {
+      if (run !== aiRunRef.current || !mountedRef.current) return;
+      setAiBusy(false);
+      const mapped = mapRecipeImageRecoveryError(err);
+      setAiMessage(mapped.message);
+      setAiMessageKind('error');
+      setAiPhase('error');
+      // A consumed/forged token can never authorize a retry: clear the quote.
+      setAiQuote(null);
+    }
+  };
+
+  const handleAiGenerate = async (): Promise<void> => {
+    if (aiBusy) return;
+    const run = ++aiRunRef.current;
+    setAiBusy(true);
+    setAiMessage(null);
+    setAiPhase('quoting');
+    try {
+      // The quote carries the SAME canonical generation inputs the generate
+      // call will send, so the server can bind the authorization to this exact
+      // recipe request (I4). Draft flow: no vault session (explicit no-vault
+      // scope server-side).
+      const quote = await requestImageGenerationQuote(network, buildAiImageRequest());
+      if (run !== aiRunRef.current || !mountedRef.current) return; // dialog dismissed: drop late quote
+      setAiQuote(quote);
+      if (quote.requiresConfirmation) {
+        setAiPhase('confirming');
+        setAiBusy(false);
+        return;
+      }
+      await runAiGeneration(quote, run);
+    } catch (err) {
+      if (run !== aiRunRef.current || !mountedRef.current) return;
+      setAiBusy(false);
+      const mapped = mapRecipeImageRecoveryError(err);
+      setAiMessage(mapped.message);
+      setAiMessageKind('error');
+      setAiPhase('error');
+      if (err instanceof RecipeImageProviderClientError && err.code === 'IMAGE_PROVIDER_NOT_CONFIGURED') {
+        setAiProviderConfigured(false);
+      }
+    }
+  };
+
+  const handleAiConfirm = async (): Promise<void> => {
+    if (aiBusy || !aiQuote) return;
+    const run = ++aiRunRef.current;
+    setAiBusy(true);
+    await runAiGeneration(aiQuote, run);
+  };
+
+  const handleAiRegenerate = async (): Promise<void> => {
+    if (aiBusy) return;
+    invalidateAiPreview();
+    await handleAiGenerate();
+  };
+
+  const handleAiCancelPreview = (): void => {
+    invalidateAiRun();
+    invalidateAiPreview();
+    setAiQuote(null);
+    setAiMessage(null);
+    setAiPhase('idle');
+  };
+
+  const handleAiAccept = (): void => {
+    const current = aiPreviewRef.current;
+    if (!current) return;
+    preRepresentativeRef.current = {
+      image,
+      provenance: representativeProvenance,
+      cleared: imageProvenanceCleared,
+    };
+    setPendingImage({
+      kind: 'generated',
+      blob: current.blob,
+      ext: current.ext,
+      provider: current.provider,
+      model: current.model,
+    });
+    setRepresentativeProvenance(null);
+    setImageProvenanceCleared(true);
+    // The object URL becomes the editor's ACTIVE image; it must NOT be revoked
+    // while displayed. It stays tracked so replace/unmount/Save revokes it.
+    setImage(current.previewUrl);
+    // The server preview token is no longer needed (bytes are local); free it.
+    void network
+      .request({ method: 'DELETE', path: recipeImagePreviewPath(current.token) })
+      .catch(() => {
+        /* best-effort */
+      });
+    aiPreviewRef.current = null;
+    setAiPreview(null);
+    setAiQuote(null);
+    setAiPhase('idle');
+    setRepresentativeOpen(false);
+  };
+  // -------------------------------------------------------------------------
+
+  /** True for a transient preview reference that must never be persisted. */
+  const isTransientImageRef = (value: unknown): boolean => {
+    if (typeof value !== 'string' || !value) return false;
+    return (
+      value.startsWith('blob:') ||
+      value.startsWith('data:') ||
+      value.includes('/api/recipes/image/preview/')
+    );
+  };
+
+  // Modal-level close (I2): invalidate every in-flight image run BEFORE the
+  // parent unmounts, so late quote/generation/selection results cannot change
+  // UI state. Object-URL revocation happens in the unmount cleanup; server
+  // preview tokens remain TTL-backed.
+  const handleCloseModal = (): void => {
+    invalidateAiRun();
+    previewRunRef.current += 1;
+    representativeSearchGenRef.current += 1;
+    onClose();
+  };
+
   const handleSave = async () => {
+    // Synchronous transaction lock (I1): two clicks can never enter the Asset
+    // writer twice. Retry stays available: the lock releases on every path.
+    if (saveTransactionRef.current) return;
+    saveTransactionRef.current = true;
+    setIsSaving(true);
+    try {
+      return await handleSaveTransaction();
+    } finally {
+      saveTransactionRef.current = false;
+      if (mountedRef.current) setIsSaving(false);
+    }
+  };
+
+  const handleSaveTransaction = async () => {
     let finalRecipe: ObsidianRecipe;
     let imagePathOverride: string | undefined;
+    // Set ONLY when THIS transaction created a new asset (B1 ownership proof).
+    // Rollback deletes nothing else — a pre-existing user asset is never
+    // modified or removed.
     let createdAssetPath: string | undefined;
     let provenanceOverride: RepresentativeImageProvenance | null = representativeProvenance;
+    let generatedOverride: Record<string, unknown> | null = generatedProvenance;
 
-    // DEFERRED representative asset write: only during explicit Save. On
-    // failure the current image/provenance is preserved and the save aborts.
-    if (pendingRepresentative) {
+    // Complete pre-save snapshot (B3): restored verbatim if the Asset or recipe
+    // Save fails, so a later successful retry can never label the restored
+    // original image as newly generated.
+    const preSaveSnapshot = {
+      image,
+      generatedProvenance,
+      representativeProvenance,
+      imageProvenanceCleared,
+      pendingImage,
+    };
+
+    // Fail closed BEFORE any write: a transient preview reference must never
+    // reach saved Markdown when no pending image will resolve it.
+    if (!pendingImage && isTransientImageRef(image)) {
+      setSaveError('The image preview is not ready to be saved. Please accept or regenerate the image first.');
+      return;
+    }
+
+    // Parse + validate the Raw Markdown branch BEFORE writing any Asset: an
+    // unparseable raw buffer fails closed with no recipe or Asset write.
+    let rawParsed: ObsidianRecipe | null = null;
+    if (activeTab === 'markdown') {
       try {
-        const saved = await saveImageToVaultAssets(
+        rawParsed = parseObsidianRecipeMarkdown(
+          rawMarkdown,
+          fileName.endsWith('.md') ? fileName : `${fileName}.md`,
+          // Existing recipe: keep authoritative filePath. New recipe: connected root.
+          initialRecipe?.filePath || resolveNewRecipeVaultPath(fileName)
+        );
+      } catch {
+        rawParsed = null;
+      }
+      if (!rawParsed) {
+        setSaveError('The Raw Markdown could not be parsed. Nothing was saved.');
+        return;
+      }
+    }
+
+    // DEFERRED asset write (representative OR AI-generated): only during explicit
+    // Save, through the collision-safe writer (B1: never overwrites an existing
+    // vault Asset — a deterministic ` (n)` suffix is used instead). The SAME
+    // writer and rules apply to AI-generated and representative images.
+    if (pendingImage) {
+      try {
+        // Defense in depth (FLAG): revalidate the exact bytes about to be
+        // written before the vault Asset write, even though they were validated
+        // at selection time.
+        const pendingBytes = new Uint8Array(await pendingImage.blob.arrayBuffer());
+        const revalidation = validateGeneratedImage({
+          bytes: pendingBytes,
+          contentType: pendingImage.blob.type || 'image/jpeg',
+        });
+        if (!revalidation.valid || !revalidation.detectedMime) {
+          throw new Error('invalid-preview-bytes');
+        }
+        const saved = await saveImageToVaultAssetsCollisionSafe(
           imageService ?? { folderHandle },
           title || 'Recipe',
-          pendingRepresentative.blob,
-          pendingRepresentative.ext
+          pendingImage.blob,
+          pendingImage.ext
         );
         if (!saved.success) throw new Error(saved.error || 'save');
         imagePathOverride = saved.relativePath;
-        createdAssetPath = saved.relativePath;
-        provenanceOverride = { ...pendingRepresentative.provenance, localAssetPath: saved.relativePath };
+        if (saved.createdNew) createdAssetPath = saved.relativePath;
+        if (pendingImage.kind === 'representative') {
+          provenanceOverride = { ...pendingImage.provenance, localAssetPath: saved.relativePath };
+          generatedOverride = null;
+          setRepresentativeProvenance(provenanceOverride);
+          setGeneratedProvenance(null);
+        } else {
+          generatedOverride = {
+            generated: true,
+            provider: pendingImage.provider,
+            model: pendingImage.model,
+            generated_at: new Date().toISOString(),
+          };
+          provenanceOverride = null;
+          setGeneratedProvenance(generatedOverride);
+          setRepresentativeProvenance(null);
+        }
         setImage(saved.relativePath);
-        setRepresentativeProvenance(provenanceOverride);
-        setPendingRepresentative(null);
+        setPendingImage(null);
       } catch {
-        setSaveError('The representative image could not be saved. Your current image was kept.');
+        setSaveError(
+          pendingImage.kind === 'representative'
+            ? 'The representative image could not be saved. Your current image was kept.'
+            : 'The AI-generated image could not be saved. Your current image was kept.'
+        );
         return;
       }
     }
 
     if (activeTab === 'markdown') {
-      finalRecipe = parseObsidianRecipeMarkdown(
-        rawMarkdown,
-        fileName.endsWith('.md') ? fileName : `${fileName}.md`,
-        // Existing recipe: keep authoritative filePath. New recipe: connected root.
-        initialRecipe?.filePath || resolveNewRecipeVaultPath(fileName)
-      );
+      // Raw `.md` save (B2): the pre-validated parse receives the SAME final
+      // image/provenance resolution as the visual path — no blob:/data:/
+      // preview-token reference and no stale provenance may enter Markdown.
+      const parsed = rawParsed as ObsidianRecipe;
+      if (imagePathOverride !== undefined) parsed.image = imagePathOverride;
+      const fm: Record<string, unknown> = { ...(parsed.frontmatter || {}) };
+      if (generatedOverride) {
+        delete fm['codex_representative_image'];
+        fm['codex_generated_image'] = generatedOverride;
+      } else if (provenanceOverride) {
+        delete fm['codex_generated_image'];
+        fm['codex_representative_image'] = provenanceOverride;
+      } else if (imageProvenanceCleared) {
+        delete fm['codex_representative_image'];
+        delete fm['codex_generated_image'];
+      }
+      parsed.frontmatter = fm;
+      parsed.rawMarkdown = serializeRecipeToObsidianMarkdown(parsed);
+      finalRecipe = parsed;
     } else {
-      const md = generateCurrentMarkdown(imagePathOverride, provenanceOverride);
+      const md = generateCurrentMarkdown(imagePathOverride, provenanceOverride, generatedOverride);
       const safeName = fileName.endsWith('.md') ? fileName : `${(title || 'New Recipe').replace(/[\/\\?%*:|"<>]/g, '-')}.md`;
       finalRecipe = parseObsidianRecipeMarkdown(
         md,
@@ -797,8 +1244,8 @@ export function RecipeEditorModal({
     } catch (err: any) {
       let message: string = err?.message || 'Failed to save recipe to the vault.';
       if (createdAssetPath) {
-        // Roll back ONLY the asset created during THIS Save operation. Never
-        // delete a pre-existing user asset.
+        // Roll back ONLY the asset proven to be created by THIS Save transaction
+        // (B1). A pre-existing user asset is never deleted or modified.
         const del = imageService?.asset?.delete;
         if (typeof del === 'function') {
           try {
@@ -812,15 +1259,16 @@ export function RecipeEditorModal({
             'Recipe save failed. A newly created image asset may remain in Assets and may need to be removed manually.';
         }
       }
-      // Preserve the original recipe/image state (the vault was not changed).
-      const previous = preRepresentativeRef.current;
-      if (previous) {
-        setImage(previous.image);
-        setRepresentativeProvenance(previous.provenance);
-        setImageProvenanceCleared(previous.cleared);
-        setPendingRepresentative(null);
-        preRepresentativeRef.current = null;
-      }
+      // Restore the COMPLETE pre-save snapshot (B3): image, both provenances,
+      // cleared flags, and the pending preview. The vault was not changed, and
+      // a later successful retry serializes the restored original — never a
+      // false generated label on it.
+      setImage(preSaveSnapshot.image);
+      setGeneratedProvenance(preSaveSnapshot.generatedProvenance);
+      setRepresentativeProvenance(preSaveSnapshot.representativeProvenance);
+      setImageProvenanceCleared(preSaveSnapshot.imageProvenanceCleared);
+      setPendingImage(preSaveSnapshot.pendingImage);
+      preRepresentativeRef.current = null;
       setSaveError(message);
     }
   };
@@ -870,7 +1318,7 @@ export function RecipeEditorModal({
             </div>
 
             <button
-              onClick={onClose}
+              onClick={handleCloseModal}
               className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition-colors"
             >
               <X className="w-4 h-4" />
@@ -1284,8 +1732,10 @@ export function RecipeEditorModal({
                   )}
                 </div>
 
-                {/* Explicit licensed representative-image search (Phase 1). */}
-                <div className="flex items-center gap-2 pt-1">
+                {/* Explicit image-source actions (Phase 2): licensed search is the
+                    free default; Generate with AI is an explicit opt-in. Opening
+                    either makes ZERO provider calls. */}
+                <div className="flex flex-wrap items-center gap-2 pt-1">
                   <button
                     type="button"
                     data-testid="find-representative-image"
@@ -1296,10 +1746,35 @@ export function RecipeEditorModal({
                     <ImageIcon className="w-3.5 h-3.5" />
                     <span>{representativeBusy ? 'Searching…' : 'Find Representative Image'}</span>
                   </button>
+                  <button
+                    type="button"
+                    data-testid="generate-image-ai"
+                    onClick={handleOpenAiImageMode}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-purple-500/15 hover:bg-purple-500/25 text-purple-300 border border-purple-500/30 transition-colors"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>Generate with AI</span>
+                  </button>
                   {representativeMessage && (
                     <span className="text-[11px] text-gray-400">{representativeMessage}</span>
                   )}
                 </div>
+
+                {/* Truthful image provenance (never a copyright/accuracy claim). */}
+                {generatedProvenance && !imageProvenanceCleared && (
+                  <p className="text-[10px] text-purple-300" data-testid="generated-image-provenance">
+                    AI-generated · {String(generatedProvenance['provider'] ?? 'unknown')} ·{' '}
+                    {String(generatedProvenance['model'] ?? 'unknown')}
+                    {generatedProvenance['generated_at'] ? ` · ${String(generatedProvenance['generated_at'])}` : ''}
+                  </p>
+                )}
+                {representativeProvenance && !imageProvenanceCleared && (
+                  <p className="text-[10px] text-emerald-300" data-testid="representative-image-provenance">
+                    Representative image · {representativeProvenance.source}
+                    {representativeProvenance.creator ? ` · ${representativeProvenance.creator}` : ''} ·{' '}
+                    {representativeProvenance.license}
+                  </p>
+                )}
               </div>
 
               {/* Obsidian Callout Box */}
@@ -1397,7 +1872,7 @@ export function RecipeEditorModal({
         )}
         <div className="pt-3 border-t border-white/5 flex items-center justify-between gap-2">
           <button
-            onClick={onClose}
+            onClick={handleCloseModal}
             className="px-4 py-2 rounded-xl text-xs font-semibold text-gray-400 hover:bg-white/5 hover:text-gray-200 transition-colors"
           >
             Cancel
@@ -1406,27 +1881,55 @@ export function RecipeEditorModal({
           <button
             id="save-recipe-modal-btn"
             onClick={handleSave}
-            className="flex items-center gap-1.5 px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold shadow-md shadow-amber-500/20 transition-colors"
+            disabled={isSaving}
+            className="flex items-center gap-1.5 px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold shadow-md shadow-amber-500/20 transition-colors disabled:opacity-50"
           >
             <Save className="w-4 h-4" />
-            <span>Save Obsidian Note</span>
+            <span>{isSaving ? 'Saving…' : 'Save Obsidian Note'}</span>
           </button>
         </div>
       </div>
 
       {representativeOpen && (
-        <RepresentativeImageChooser
-          candidates={representativeCandidates}
-          query={representativeQuery}
-          searchTerms={representativeSearchTerms}
-          suggestions={representativeSuggestions}
-          searchGeneration={representativeSearchGeneration}
-          busy={representativeBusy}
-          message={representativeError ?? representativeMessage}
-          messageKind={representativeError ? 'error' : 'info'}
-          onSearch={runRepresentativeSearch}
-          onSelect={handleUseRepresentativeImage}
+        <RecipeImageChooser
+          defaultMode={imageChooserMode}
+          licensed={{
+            candidates: representativeCandidates,
+            query: representativeQuery,
+            searchTerms: representativeSearchTerms,
+            suggestions: representativeSuggestions,
+            searchGeneration: representativeSearchGeneration,
+            busy: representativeBusy,
+            message: representativeError ?? representativeMessage,
+            messageKind: representativeError ? 'error' : 'info',
+            onSearch: runRepresentativeSearch,
+            onSelect: handleUseRepresentativeImage,
+            network,
+            onCancel: () => {
+              setRepresentativeOpen(false);
+              setRepresentativeError(null);
+            },
+          }}
+          ai={{
+            phase: aiPhase,
+            quote: aiQuote,
+            preview: aiPreview,
+            message: aiMessage,
+            messageKind: aiMessageKind,
+            providerConfigured: aiProviderConfigured,
+          }}
+          onAiGenerate={handleAiGenerate}
+          onAiConfirm={handleAiConfirm}
+          onAiAccept={handleAiAccept}
+          onAiRegenerate={handleAiRegenerate}
+          onAiCancelPreview={handleAiCancelPreview}
+          onOpenAiSettings={onOpenAiSettings}
           onCancel={() => {
+            invalidateAiRun();
+            invalidateAiPreview();
+            setAiQuote(null);
+            setAiMessage(null);
+            setAiPhase('idle');
             setRepresentativeOpen(false);
             setRepresentativeError(null);
           }}

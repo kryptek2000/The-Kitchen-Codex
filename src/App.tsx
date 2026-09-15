@@ -49,14 +49,15 @@ import {
   createBrowserAssetAdapter,
   createBrowserSecretAdapter,
   browserRemoteImageDownloader,
-  fetchRecipeImagePreviewBytes,
 } from './platform/browser';
 import {
   createVaultSessionId,
+  fetchGeneratedPreviewBytes,
   type RecipeImageRecoverySupport,
 } from './application/recipeImageRecovery';
 import { saveGeneratedRecipeImageToVault, hashCanonicalMarkdown, type GeneratedImageSaveResult } from './application/recipeImageSave';
 import { hydrateAiSelections } from './application/aiSelection';
+import { getEndpointAccessHeaders } from './application/endpointAccess';
 import { playTimerChime } from './utils/audioAlert';
 import { APP_VERSION } from './version';
 import ProviderSettings from './application-ui/ProviderSettings';
@@ -174,7 +175,10 @@ export default function App() {
   // Settings/network are independent of a vault connection (built once); the
   // vault adapter is only constructible once a directory handle is connected.
   const settingsAdapter = useMemo(() => createBrowserSettingsAdapter(), []);
-  const networkAdapter = useMemo(() => createBrowserNetworkAdapter(), []);
+  const networkAdapter = useMemo(
+    () => createBrowserNetworkAdapter({ authorizationHeaders: getEndpointAccessHeaders }),
+    []
+  );
   // The browser shell truthfully exposes NO provider-secret storage (read-only,
   // `supportsWrites() === false`). No provider key is ever persisted client-side.
   const secretAdapter = useMemo(() => createBrowserSecretAdapter(), []);
@@ -227,8 +231,14 @@ export default function App() {
         const previewSource = {
           resolvePreview: async (resolvedToken: string) => {
             if (resolvedToken !== token) return undefined;
-            const bytes = await fetchRecipeImagePreviewBytes(token);
-            if (!bytes) return undefined;
+            // Prefer the authenticated NetworkAdapter binary path; fall back to
+            // the scoped browser helper for adapters without a binary path.
+            // The generated preview MUST travel the authenticated application
+            // binary transport. An adapter without a binary path FAILS CLOSED —
+            // there is NO unauthenticated direct-fetch fallback.
+            const viaAdapter = await fetchGeneratedPreviewBytes(networkAdapter, token);
+            if (!viaAdapter) return undefined;
+            const bytes = viaAdapter.bytes;
             return {
               token,
               bytes,
@@ -246,7 +256,7 @@ export default function App() {
         );
       },
     };
-  }, [vaultStatus.folderHandle, vaultStatus.accessType, vaultSessionId]);
+  }, [vaultStatus.folderHandle, vaultStatus.accessType, vaultSessionId, networkAdapter]);
 
   const imageRecoveryUnavailableReason = recipeImageRecoverySupport
     ? undefined
@@ -1496,6 +1506,11 @@ export default function App() {
             imageService={imageService}
             network={networkAdapter}
             onSave={handleSaveRecipe}
+            onOpenAiSettings={() => {
+              setIsEditorOpen(false);
+              setEditingRecipe(null);
+              setActiveTab('providers');
+            }}
             onClose={() => {
               setIsEditorOpen(false);
               setEditingRecipe(null);

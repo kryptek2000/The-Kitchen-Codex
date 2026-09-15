@@ -57,7 +57,9 @@ function makeRecipe(overrides: Partial<ObsidianRecipe> = {}): ObsidianRecipe {
   } as ObsidianRecipe;
 }
 
-function makeNetwork(): { network: NetworkAdapter; post: ReturnType<typeof vi.fn> } {
+const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+
+function makeNetwork(): { network: NetworkAdapter; post: ReturnType<typeof vi.fn>; getBytes: ReturnType<typeof vi.fn> } {
   const post = vi.fn(async (path: string) => {
     if (path === '/api/recipes/image/find-representative') {
       return { ok: true, status: 200, data: { query: 'blue cheese smashburgers ground beef', candidates: [CANDIDATE] } };
@@ -67,7 +69,9 @@ function makeNetwork(): { network: NetworkAdapter; post: ReturnType<typeof vi.fn
     }
     return { ok: false, status: 404, data: {} };
   });
-  return { network: { request: vi.fn(), get: vi.fn(), post } as unknown as NetworkAdapter, post };
+  // Authenticated app-local binary transport (the ONLY preview path).
+  const getBytes = vi.fn(async () => ({ status: 200, ok: true, bytes: PNG_BYTES, contentType: 'image/png' }));
+  return { network: { request: vi.fn(), get: vi.fn(), post, getBytes } as unknown as NetworkAdapter, post, getBytes };
 }
 
 function makeAsset() {
@@ -81,9 +85,16 @@ function makeAsset() {
 
 beforeEach(async () => {
   await hydrateAiSelections({ get: async () => undefined });
-  (URL as any).createObjectURL = vi.fn(() => 'blob:test');
+  let n = 0;
+  (URL as any).createObjectURL = vi.fn(() => `blob:test-${(n += 1)}`);
   (URL as any).revokeObjectURL = vi.fn();
 });
+
+function createdUrls(): string[] {
+  return ((URL.createObjectURL as unknown as ReturnType<typeof vi.fn>).mock.results as { value: string }[]).map(
+    (r) => r.value
+  );
+}
 
 afterEach(() => {
   cleanup();
@@ -102,14 +113,13 @@ async function selectFirstCandidate() {
 
 describe('RecipeEditorModal — explicit representative image flow (deferred save)', () => {
   it('loads thumbnails only from the app-local route and writes NO asset before Save', async () => {
-    const { network, post } = makeNetwork();
+    const { network, post, getBytes } = makeNetwork();
     const asset = makeAsset();
-    const fetchMock = vi.fn(async () =>
-      new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]), {
-        status: 200,
-        headers: { 'content-type': 'image/png' },
-      })
-    );
+    // Any bare global fetch to the preview route is a regression: the selected
+    // preview MUST travel the authenticated adapter binary path.
+    const fetchMock = vi.fn(async () => {
+      throw new Error('bare preview fetch must not occur');
+    });
     vi.stubGlobal('fetch', fetchMock);
 
     render(<RecipeEditorModal initialRecipe={makeRecipe()} imageService={{ asset }} network={network} onSave={vi.fn()} onClose={() => {}} />);
@@ -120,9 +130,19 @@ describe('RecipeEditorModal — explicit representative image flow (deferred sav
     fireEvent.click(screen.getByTestId('find-representative-image'));
     await waitFor(() => expect(screen.getByText('Choose a Representative Recipe Image')).toBeTruthy());
     await waitFor(() => expect(screen.getAllByTestId('representative-candidate').length).toBeGreaterThan(0));
-    const thumbs = Array.from(document.querySelectorAll('img')).map((img) => img.getAttribute('src') || '');
-    expect(thumbs.some((src) => src.startsWith('/api/recipes/image/representative-thumbnail/'))).toBe(true);
-    for (const src of thumbs) expect(src).not.toMatch(/^https?:\/\//);
+    // Thumbnails resolve through the authenticated binary transport into
+    // managed object URLs (protected deployments cannot use plain img src).
+    await waitFor(() => expect(getBytes).toHaveBeenCalledWith('/api/recipes/image/representative-thumbnail/opaque-1'));
+    const thumbs = Array.from(
+      document.querySelectorAll('[data-testid="representative-candidate"] img')
+    ).map((img) => img.getAttribute('src') || '');
+    expect(thumbs.length).toBeGreaterThan(0);
+    for (const src of thumbs) {
+      expect(src).not.toMatch(/^https?:\/\//);
+      // ONLY managed object URLs: a plain protected thumbnail path is forbidden.
+      expect(src.startsWith('blob:')).toBe(true);
+      expect(src).not.toContain('/api/recipes/image/representative-thumbnail/');
+    }
     // No external thumbnail host was requested by the browser.
     for (const call of fetchMock.mock.calls as unknown[][]) {
       expect(String(call[0])).not.toMatch(/^https?:\/\//);
@@ -132,9 +152,11 @@ describe('RecipeEditorModal — explicit representative image flow (deferred sav
     fireEvent.click(screen.getByTestId('use-representative-image'));
     await waitFor(() => expect(screen.queryByText('Choose a Representative Recipe Image')).toBeNull());
 
-    // The only network fetch is the app-local preview route.
+    // The selected preview travels the authenticated adapter binary path only.
+    expect(getBytes).toHaveBeenCalledWith('/api/recipes/image/preview/tok-1');
+    // No bare global fetch to the preview route occurred.
     for (const call of fetchMock.mock.calls as unknown[][]) {
-      expect(String(call[0])).toMatch(/^\/api\/recipes\/image\/preview\//);
+      expect(String(call[0])).not.toMatch(/^\/api\/recipes\/image\/preview\//);
     }
 
     // DEFERRED: no asset written before Save.
@@ -147,7 +169,7 @@ describe('RecipeEditorModal — explicit representative image flow (deferred sav
     const { network } = makeNetwork();
     const asset = makeAsset();
     const onSave = vi.fn();
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]), { status: 200, headers: { 'content-type': 'image/png' } })));
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('bare preview fetch must not occur'); }));
 
     render(<RecipeEditorModal initialRecipe={makeRecipe()} imageService={{ asset }} network={network} onSave={onSave} onClose={() => {}} />);
     await selectFirstCandidate();
@@ -172,7 +194,7 @@ describe('RecipeEditorModal — explicit representative image flow (deferred sav
     const { network } = makeNetwork();
     const asset = makeAsset();
     const onSave = vi.fn();
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]), { status: 200, headers: { 'content-type': 'image/png' } })));
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('bare preview fetch must not occur'); }));
 
     render(<RecipeEditorModal initialRecipe={makeRecipe()} imageService={{ asset }} network={network} onSave={onSave} onClose={() => {}} />);
 
@@ -200,7 +222,7 @@ describe('RecipeEditorModal — explicit representative image flow (deferred sav
       image: 'Assets/Old.jpg',
       frontmatter: { codex_representative_image: PROVENANCE },
     });
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]), { status: 200, headers: { 'content-type': 'image/png' } })));
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('bare preview fetch must not occur'); }));
 
     render(<RecipeEditorModal initialRecipe={recipe} imageService={{ asset }} network={network} onSave={onSave} onClose={() => {}} />);
 
@@ -259,13 +281,6 @@ describe('RecipeEditorModal — explicit representative image flow (deferred sav
 });
 
 describe('RecipeEditorModal — rollback surfacing, object-URL lifecycle, Escape', () => {
-  const okFetch = () =>
-    vi.fn(async () =>
-      new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]), {
-        status: 200,
-        headers: { 'content-type': 'image/png' },
-      })
-    );
   const revokeMock = () => URL.revokeObjectURL as unknown as ReturnType<typeof vi.fn>;
 
   it('rolls back the newly created asset on recipe-save failure (normal bounded failure shown)', async () => {
@@ -274,7 +289,7 @@ describe('RecipeEditorModal — rollback surfacing, object-URL lifecycle, Escape
     const onSave = vi.fn(async () => {
       throw new Error('vault write failed');
     });
-    vi.stubGlobal('fetch', okFetch());
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('bare preview fetch must not occur'); }));
     render(<RecipeEditorModal initialRecipe={makeRecipe()} imageService={{ asset }} network={network} onSave={onSave} onClose={() => {}} />);
     await selectFirstCandidate();
     fireEvent.click(screen.getByText('Save Obsidian Note'));
@@ -295,7 +310,7 @@ describe('RecipeEditorModal — rollback surfacing, object-URL lifecycle, Escape
     const onSave = vi.fn(async () => {
       throw new Error('vault write failed');
     });
-    vi.stubGlobal('fetch', okFetch());
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('bare preview fetch must not occur'); }));
     render(<RecipeEditorModal initialRecipe={makeRecipe()} imageService={{ asset }} network={network} onSave={onSave} onClose={() => {}} />);
     await selectFirstCandidate();
     fireEvent.click(screen.getByText('Save Obsidian Note'));
@@ -310,7 +325,7 @@ describe('RecipeEditorModal — rollback surfacing, object-URL lifecycle, Escape
     const onSave = vi.fn(async () => {
       throw new Error('vault write failed');
     });
-    vi.stubGlobal('fetch', okFetch());
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('bare preview fetch must not occur'); }));
     render(<RecipeEditorModal initialRecipe={makeRecipe()} imageService={{ asset }} network={network} onSave={onSave} onClose={() => {}} />);
     await selectFirstCandidate();
     fireEvent.click(screen.getByText('Save Obsidian Note'));
@@ -345,33 +360,39 @@ describe('RecipeEditorModal — rollback surfacing, object-URL lifecycle, Escape
     const { network } = makeNetwork();
     const asset = makeAsset();
     const onSave = vi.fn();
-    vi.stubGlobal('fetch', okFetch());
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('bare preview fetch must not occur'); }));
     render(<RecipeEditorModal initialRecipe={makeRecipe()} imageService={{ asset }} network={network} onSave={onSave} onClose={() => {}} />);
     await selectFirstCandidate();
-    expect(revokeMock()).not.toHaveBeenCalled();
+    // The accepted selected-preview URL is the last one created (after the
+    // candidate thumbnail URL). It stays active until Save replaces it.
+    const previewUrl = createdUrls().slice(-1)[0];
+    expect(previewUrl.startsWith('blob:')).toBe(true);
+    expect(revokeMock()).not.toHaveBeenCalledWith(previewUrl);
     fireEvent.click(screen.getByText('Save Obsidian Note'));
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(revokeMock()).toHaveBeenCalledWith('blob:test'));
+    await waitFor(() => expect(revokeMock()).toHaveBeenCalledWith(previewUrl));
   });
 
   it('revokes the preview object URL when switching to a manual image', async () => {
     const { network } = makeNetwork();
     const asset = makeAsset();
-    vi.stubGlobal('fetch', okFetch());
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('bare preview fetch must not occur'); }));
     render(<RecipeEditorModal initialRecipe={makeRecipe()} imageService={{ asset }} network={network} onSave={vi.fn()} onClose={() => {}} />);
     await selectFirstCandidate();
+    const previewUrl = createdUrls().slice(-1)[0];
     fireEvent.change(screen.getByPlaceholderText(/Assets\/filename\.jpg/), { target: { value: 'Assets/Manual.jpg' } });
-    await waitFor(() => expect(revokeMock()).toHaveBeenCalledWith('blob:test'));
+    await waitFor(() => expect(revokeMock()).toHaveBeenCalledWith(previewUrl));
   });
 
   it('revokes the preview object URL on unmount', async () => {
     const { network } = makeNetwork();
     const asset = makeAsset();
-    vi.stubGlobal('fetch', okFetch());
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('bare preview fetch must not occur'); }));
     const { unmount } = render(<RecipeEditorModal initialRecipe={makeRecipe()} imageService={{ asset }} network={network} onSave={vi.fn()} onClose={() => {}} />);
     await selectFirstCandidate();
+    const previewUrl = createdUrls().slice(-1)[0];
     unmount();
-    expect(revokeMock()).toHaveBeenCalledWith('blob:test');
+    expect(revokeMock()).toHaveBeenCalledWith(previewUrl);
   });
 
   it('Escape closes the chooser without selecting, saving, or writing an asset', async () => {

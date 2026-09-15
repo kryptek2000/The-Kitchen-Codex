@@ -31,6 +31,26 @@ export interface AssetBytes {
 }
 
 /**
+ * Raised by an exclusive asset create when the target path ALREADY exists. It
+ * signals a benign allocation race (another writer claimed the same name), so
+ * the collision-safe allocator selects the next deterministic ` (n)` suffix
+ * instead of overwriting. `code` is a stable, serialization-safe discriminator
+ * (never a secret) that survives `instanceof` across bundle boundaries.
+ */
+export class AssetPathCollisionError extends Error {
+  readonly code = 'ASSET_PATH_COLLISION';
+  constructor(path: string) {
+    super(`Asset already exists: ${path}`);
+    this.name = 'AssetPathCollisionError';
+  }
+}
+
+/** True when `error` is an exclusive-create collision (by stable `code`). */
+export function isAssetPathCollisionError(error: unknown): boolean {
+  return Boolean(error) && (error as { code?: unknown }).code === 'ASSET_PATH_COLLISION';
+}
+
+/**
  * Minimal binary asset storage boundary. Vault-root-relative forward-slash
  * paths. Implementations must never expose platform handles (FileSystem*), never
  * return a Blob/object URL, and never touch the network.
@@ -44,6 +64,17 @@ export interface AssetAdapter {
   exists(path: string): Promise<boolean>;
   /** Deletes an asset by path. */
   delete(path: string): Promise<void>;
+  /**
+   * OPTIONAL atomic create-if-absent write (collision-safe Asset allocation).
+   * An implementation that can perform a GENUINELY exclusive create (an
+   * OS-level exclusive open, or a vault API whose create rejects an existing
+   * target) MUST reject with `AssetPathCollisionError` WITHOUT modifying the
+   * existing asset. An implementation with no exclusive primitive MUST NOT
+   * claim atomicity: it may omit this method entirely (the shared collision-safe
+   * allocator then serializes same-realm allocation and rechecks existence
+   * immediately before writing).
+   */
+  writeExclusive?(path: string, data: Uint8Array, contentType?: string): Promise<void>;
 }
 
 /**

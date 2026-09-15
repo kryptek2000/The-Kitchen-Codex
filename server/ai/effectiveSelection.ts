@@ -492,6 +492,12 @@ export interface EffectiveImageSelection {
   model: string | undefined;
   source: "server_managed" | "user_selected" | "server_default";
   /**
+   * WHOSE credential authorizes the effective image provider. Never inferred
+   * from the provider/model; `server_environment` unless an explicit
+   * `session_only` user selection resolved to a session-bound provider.
+   */
+  credentialSource: CredentialSource;
+  /**
    * True only when the request carried a PRESENT-but-malformed selection
    * payload (strict `INVALID` intent). The route uses this to return a distinct
    * bounded "selection invalid" failure instead of "provider not configured".
@@ -519,7 +525,13 @@ export function resolveEffectiveImageSelection(requested?: SelectionInput): Effe
   // server-managed pin resolution. A VALID client intent cannot override the
   // pin; malformed client intent must NEVER execute paid provider work.
   if (coerced.invalid) {
-    return { provider: null, model: undefined, source: "user_selected", invalidIntent: true };
+    return {
+      provider: null,
+      model: undefined,
+      source: "user_selected",
+      credentialSource: "server_environment",
+      invalidIntent: true,
+    };
   }
 
   const serverSelection = getImageSelection();
@@ -534,10 +546,17 @@ export function resolveEffectiveImageSelection(requested?: SelectionInput): Effe
         provider: registered.provider,
         model: serverSelection.selectedModelId ?? registered.defaultModel,
         source: "server_managed",
+        credentialSource: "server_environment",
         invalidIntent: false,
       };
     }
-    return { provider: null, model: undefined, source: "server_managed", invalidIntent: false };
+    return {
+      provider: null,
+      model: undefined,
+      source: "server_managed",
+      credentialSource: "server_environment",
+      invalidIntent: false,
+    };
   }
 
   // WHOSE credential authorizes the user's selected image provider. Never
@@ -556,6 +575,7 @@ export function resolveEffectiveImageSelection(requested?: SelectionInput): Effe
         provider: null,
         model: undefined,
         source: "user_selected",
+        credentialSource: userCredentialSource,
         invalidIntent: false,
         pricingBlocked: pricing.code,
         pricingMessage: pricing.message,
@@ -568,12 +588,19 @@ export function resolveEffectiveImageSelection(requested?: SelectionInput): Effe
       // is NO env fallback and NO cross-provider fallback.
       const bound = createSessionBoundImageProvider(userSel.providerId);
       if (!bound) {
-        return { provider: null, model: undefined, source: "user_selected", invalidIntent: false };
+        return {
+          provider: null,
+          model: undefined,
+          source: "user_selected",
+          credentialSource: "session_only",
+          invalidIntent: false,
+        };
       }
       return {
         provider: bound,
         model: userSel.modelId ?? registered.defaultModel,
         source: "user_selected",
+        credentialSource: "session_only",
         invalidIntent: false,
       };
     }
@@ -581,6 +608,7 @@ export function resolveEffectiveImageSelection(requested?: SelectionInput): Effe
       provider: registered.provider,
       model: userSel.modelId ?? registered.defaultModel,
       source: "user_selected",
+      credentialSource: "server_environment",
       invalidIntent: false,
     };
   }
@@ -588,7 +616,13 @@ export function resolveEffectiveImageSelection(requested?: SelectionInput): Effe
   // EXPLICIT user_selected that is stale/invalid/unavailable FAILS CLOSED to a
   // NULL provider (ZERO image execution) — never a silent Gemini-image fallback.
   if (coerced.explicit) {
-    return { provider: null, model: undefined, source: "user_selected", invalidIntent: false };
+    return {
+      provider: null,
+      model: undefined,
+      source: "user_selected",
+      credentialSource: userCredentialSource,
+      invalidIntent: false,
+    };
   }
 
   const defaultReg = regs[0];
@@ -596,6 +630,7 @@ export function resolveEffectiveImageSelection(requested?: SelectionInput): Effe
     provider: defaultReg.provider,
     model: defaultReg.defaultModel,
     source: "server_default",
+    credentialSource: "server_environment",
     invalidIntent: false,
   };
 }

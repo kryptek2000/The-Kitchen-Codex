@@ -23,7 +23,7 @@
 import { BrowserFsaVaultAdapter } from './BrowserFsaVaultAdapter';
 import type { FsaDirectoryHandleLike } from './BrowserFsaVaultAdapter';
 import { BrowserSettingsAdapter } from './BrowserSettingsAdapter';
-import { BrowserNetworkAdapter } from './BrowserNetworkAdapter';
+import { BrowserNetworkAdapter, type BrowserNetworkAdapterOptions } from './BrowserNetworkAdapter';
 import { BrowserAssetAdapter } from './BrowserAssetAdapter';
 import { BrowserSecretAdapter } from './BrowserSecretAdapter';
 
@@ -32,9 +32,15 @@ export function createBrowserSettingsAdapter(): BrowserSettingsAdapter {
   return new BrowserSettingsAdapter();
 }
 
-/** Builds a browser app-backend JSON transport adapter. */
-export function createBrowserNetworkAdapter(): BrowserNetworkAdapter {
-  return new BrowserNetworkAdapter();
+/**
+ * Builds a browser app-backend JSON/binary transport adapter. The optional
+ * in-memory endpoint-access authorization provider is supplied by the SHELL
+ * (application layer), keeping this platform module free of application imports.
+ */
+export function createBrowserNetworkAdapter(
+  options: BrowserNetworkAdapterOptions = {}
+): BrowserNetworkAdapter {
+  return new BrowserNetworkAdapter(options);
 }
 
 /** Builds the truthful browser "no provider secret storage" adapter (unavailable). */
@@ -50,22 +56,4 @@ export function createBrowserVaultAdapter(folderHandle: unknown): BrowserFsaVaul
 /** Builds a browser File System Access asset adapter from a connected directory handle. */
 export function createBrowserAssetAdapter(folderHandle: unknown): BrowserAssetAdapter {
   return new BrowserAssetAdapter(folderHandle as FsaDirectoryHandleLike);
-}
-
-/**
- * Fetches transient generated-image preview BYTES for a token via the
- * authenticated preview endpoint. Binary-only transport: no base64/data-URL
- * channel, no arbitrary URL (fixed application API path). Returns undefined for
- * unknown/expired tokens or transport failure.
- */
-export async function fetchRecipeImagePreviewBytes(token: string): Promise<Uint8Array | undefined> {
-  if (typeof token !== 'string' || !token || token.length > 512) return undefined;
-  try {
-    const res = await fetch(`/api/recipes/image/preview/${encodeURIComponent(token)}`);
-    if (!res.ok) return undefined;
-    const buffer = await res.arrayBuffer();
-    return new Uint8Array(buffer);
-  } catch {
-    return undefined;
-  }
 }

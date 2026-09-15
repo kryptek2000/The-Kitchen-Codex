@@ -58,11 +58,21 @@ function fakeSupport(overrides: Partial<RecipeImageRecoverySupport> = {}): Recip
   };
 }
 
-function fakeNetwork(postImpl?: (path: string, body: unknown) => Promise<NetworkResponse<unknown>>, requestImpl?: (req: { method: string; path: string }) => Promise<NetworkResponse<unknown>>): NetworkAdapter & { posts: { path: string; body: unknown }[]; deletes: string[] } {
+function fakeNetwork(
+  postImpl?: (path: string, body: unknown) => Promise<NetworkResponse<unknown>>,
+  requestImpl?: (req: { method: string; path: string }) => Promise<NetworkResponse<unknown>>,
+  quoteImpl?: (path: string, body: unknown) => Promise<NetworkResponse<unknown>>
+): NetworkAdapter & {
+  posts: { path: string; body: unknown }[];
+  quotes: { path: string; body: unknown }[];
+  deletes: string[];
+} {
   const posts: { path: string; body: unknown }[] = [];
+  const quotes: { path: string; body: unknown }[] = [];
   const deletes: string[] = [];
   return {
     posts,
+    quotes,
     deletes,
     request: async (req: { method: string; path: string }) => {
       if (req.method === "DELETE") deletes.push(req.path);
@@ -71,6 +81,25 @@ function fakeNetwork(postImpl?: (path: string, body: unknown) => Promise<Network
     },
     get: async () => ({ status: 200, ok: true }),
     post: async (path: string, body: unknown) => {
+      if (path === "/api/recipes/image/quote") {
+        quotes.push({ path, body });
+        if (quoteImpl) return quoteImpl(path, body);
+        // Default: verified-zero (no confirmation required) so the controller
+        // auto-generates after the explicit Generate action.
+        return {
+          status: 200,
+          ok: true,
+          data: {
+            ok: true,
+            provider: { id: "gemini-image", name: "Google Gemini Image" },
+            model: "gemini-2.5-flash-image",
+            credentialSource: "server_environment",
+            costClass: "zero",
+            costLabel: "Verified zero price",
+            requiresConfirmation: false,
+          },
+        };
+      }
       posts.push({ path, body });
       if (postImpl) return postImpl(path, body);
       return {
@@ -79,7 +108,11 @@ function fakeNetwork(postImpl?: (path: string, body: unknown) => Promise<Network
         data: { token: PNG_PREVIEW_TOKEN, contentType: "image/png", provider: "gemini-image", model: "gemini-2.5-flash-image", recipeContentHash: "b".repeat(64), vaultSessionId: "vault-session-abc", expiresAt: Date.now() + 300000 },
       };
     },
-  } as unknown as NetworkAdapter & { posts: { path: string; body: unknown }[]; deletes: string[] };
+  } as unknown as NetworkAdapter & {
+    posts: { path: string; body: unknown }[];
+    quotes: { path: string; body: unknown }[];
+    deletes: string[];
+  };
 }
 
 function makeController(
@@ -207,7 +240,38 @@ describe("RecipeImageFindingView — capability gating + findings (rendered)", (
     expect(html).toContain("writable connected vault");
   });
 
-  it("labels the preview as AI-generated + nothing saved, and renders it via the authenticated endpoint (no base64)", () => {
+  it("labels the preview as AI-generated + nothing saved, and renders it from a managed secure URL (no base64)", () => {
+    const html = render(
+      <RecipeImageFindingView
+        {...base}
+        previewUrl="blob:secure-preview"
+        recoveryState={{
+          phase: "preview",
+          preview: {
+            token: PNG_PREVIEW_TOKEN,
+            contentType: "image/png",
+            provider: "gemini-image",
+            model: "gemini-2.5-flash-image",
+            recipeContentHash: "b".repeat(64),
+            vaultSessionId: "vault-session-abc",
+          },
+          message: "AI-generated preview — nothing is saved yet.",
+          messageKind: "info",
+        }}
+      />
+    );
+    expect(html).toContain("AI-generated preview");
+    expect(html).toContain("nothing saved yet");
+    expect(html).toContain('src="blob:secure-preview"');
+    expect(html).not.toContain("/api/recipes/image/preview/");
+    expect(html).toContain("Save Image");
+    expect(html).toContain("Regenerate");
+    expect(html).toContain("Cancel");
+    expect(html).not.toContain("data:image");
+    expect(html).not.toContain("base64");
+  });
+
+  it("shows a bounded loading placeholder while the secure preview resolves (never a plain protected src)", () => {
     const html = render(
       <RecipeImageFindingView
         {...base}
@@ -226,12 +290,34 @@ describe("RecipeImageFindingView — capability gating + findings (rendered)", (
         }}
       />
     );
-    expect(html).toContain("AI-generated preview");
-    expect(html).toContain("nothing saved yet");
-    expect(html).toContain(`src="${recipeImagePreviewPath(PNG_PREVIEW_TOKEN)}"`);
-    expect(html).toContain("Save Image");
-    expect(html).toContain("Regenerate");
-    expect(html).toContain("Cancel");
+    expect(html).toContain("Loading secure preview");
+    expect(html).not.toContain("/api/recipes/image/preview/");
+    expect(html).not.toContain("data:image");
+  });
+
+  it("shows the paid/variable quote (provider/model/credential/cost) before confirmation", () => {
+    const html = render(
+      <RecipeImageFindingView
+        {...base}
+        recoveryState={{
+          phase: "confirming",
+          quote: {
+            provider: { id: "openrouter-image", name: "OpenRouter Image" },
+            model: "google/gemini-2.5-flash-image",
+            credentialSource: "server_environment",
+            costClass: "paid",
+            costLabel: "Paid — OpenRouter pricing applies",
+            requiresConfirmation: true,
+            confirmationToken: "tok-1",
+          },
+        }}
+      />
+    );
+    expect(html).toContain("OpenRouter Image");
+    expect(html).toContain("google/gemini-2.5-flash-image");
+    expect(html).toContain("Using server API key");
+    expect(html).toContain("Paid — OpenRouter pricing applies");
+    expect(html).toContain("Confirm");
     expect(html).not.toContain("data:image");
     expect(html).not.toContain("base64");
   });
@@ -546,5 +632,126 @@ describe("RecipeImageRecoveryController — flow, liveness, guards, conflicts", 
     expect(state.phase).toBe("idle");
     expect(state.message).toBe("Couldn't generate an image right now.");
     expect(state.message).not.toContain("stack-trace-with-secrets");
+  });
+});
+
+describe("RecipeImageRecoveryController — Phase 2 quote + confirmation contract", () => {
+  const last = (states: RecipeImageRecoveryState[]) => states[states.length - 1];
+
+  const paidQuote = (token = "tok-1") => async () => ({
+    status: 200,
+    ok: true,
+    data: {
+      ok: true,
+      provider: { id: "openrouter-image", name: "OpenRouter Image" },
+      model: "google/gemini-2.5-flash-image",
+      credentialSource: "server_environment",
+      costClass: "paid",
+      costLabel: "Paid — OpenRouter pricing applies",
+      requiresConfirmation: true,
+      confirmationToken: token,
+      confirmationExpiresAt: Date.now() + 300000,
+    },
+  });
+
+  it("a paid/variable quote moves to confirming with NO provider call", async () => {
+    const network = fakeNetwork(undefined, undefined, paidQuote());
+    const { controller, states } = makeController(fakeSupport(), network);
+    await controller.generate(recipeFixture());
+    const state = last(states);
+    expect(state.phase).toBe("confirming");
+    expect(state.quote?.model).toBe("google/gemini-2.5-flash-image");
+    expect(state.quote?.costLabel).toContain("Paid");
+    expect(network.posts).toHaveLength(0);
+    expect(network.quotes).toHaveLength(1);
+  });
+
+  it("confirm submits the single-use token and performs exactly one generation", async () => {
+    const network = fakeNetwork(undefined, undefined, paidQuote());
+    const { controller, states } = makeController(fakeSupport(), network);
+    await controller.generate(recipeFixture());
+    expect(last(states).phase).toBe("confirming");
+    await controller.confirm(recipeFixture());
+    expect(network.posts).toHaveLength(1);
+    expect((network.posts[0].body as Record<string, unknown>)["confirmationToken"]).toBe("tok-1");
+    expect(last(states).phase).toBe("preview");
+  });
+
+  it("a failed generation clears the quote (a consumed token can never be retried)", async () => {
+    let generateCalls = 0;
+    const network = fakeNetwork(
+      async () => {
+        generateCalls += 1;
+        return { status: 409, ok: false, data: { code: "IMAGE_CONFIRMATION_INVALID", error: "bad" } };
+      },
+      undefined,
+      paidQuote()
+    );
+    const { controller, states } = makeController(fakeSupport(), network);
+    await controller.generate(recipeFixture());
+    await controller.confirm(recipeFixture());
+    const state = last(states);
+    expect(generateCalls).toBe(1);
+    expect(state.phase).toBe("idle");
+    expect(state.quote).toBeUndefined();
+    expect(state.message).toContain("expired or is no longer valid");
+  });
+
+  it("regenerate re-quotes (a NEW explicit confirmation) and never reuses a token", async () => {
+    let quoteCalls = 0;
+    const network = fakeNetwork(
+      undefined,
+      undefined,
+      async () => {
+        quoteCalls += 1;
+        return {
+          status: 200,
+          ok: true,
+          data: {
+            ok: true,
+            provider: { id: "openrouter-image", name: "OpenRouter Image" },
+            model: "m",
+            credentialSource: "server_environment",
+            costClass: "variable",
+            costLabel: "Variable pricing",
+            requiresConfirmation: true,
+            confirmationToken: `tok-${quoteCalls}`,
+          },
+        };
+      }
+    );
+    const { controller, states } = makeController(fakeSupport(), network);
+    await controller.generate(recipeFixture());
+    await controller.confirm(recipeFixture());
+    expect(last(states).phase).toBe("preview");
+    await controller.regenerate(recipeFixture());
+    expect(quoteCalls).toBe(2);
+    expect(last(states).phase).toBe("confirming");
+  });
+
+  it("a verified zero-price quote skips confirmation and generates in one explicit action", async () => {
+    const network = fakeNetwork(
+      undefined,
+      undefined,
+      async () => ({
+        status: 200,
+        ok: true,
+        data: {
+          ok: true,
+          provider: { id: "openrouter-image", name: "OpenRouter Image" },
+          model: "img/free",
+          credentialSource: "server_environment",
+          costClass: "zero",
+          costLabel: "Verified zero price",
+          requiresConfirmation: false,
+        },
+      })
+    );
+    const { controller, states } = makeController(fakeSupport(), network);
+    await controller.generate(recipeFixture());
+    expect(last(states).phase).toBe("preview");
+    expect(network.quotes).toHaveLength(1);
+    expect(network.posts).toHaveLength(1);
+    expect((network.posts[0].body as Record<string, unknown>)["confirmationToken"]).toBeUndefined();
   });
 });

@@ -417,18 +417,28 @@ describe("BYOK-4 audit — IMAGE selection header reaches runtime routing", () =
       async () =>
         new Response(JSON.stringify({ error: { message: "rate limited" } }), { status: 429 })
     );
+    const selectionHeaders = {
+      "Content-Type": "application/json",
+      [IMAGE_HEADER]: JSON.stringify({
+        mode: "user_selected",
+        providerId: "openrouter-image",
+        modelId: "google/gemini-2.5-flash-image",
+      }),
+    };
     try {
+      // Phase 2: paid/variable models require a server-issued confirmation token.
+      const quoteRes = await fetch(`${baseUrl}/api/recipes/image/quote`, {
+        method: "POST",
+        headers: selectionHeaders,
+        body: JSON.stringify({ title: "Hearty Soup" }),
+      });
+      const quote = await quoteRes.json();
+      expect(quote.requiresConfirmation).toBe(true);
+      expect(typeof quote.confirmationToken).toBe("string");
       const res = await fetch(`${baseUrl}/api/recipes/image/generate`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          [IMAGE_HEADER]: JSON.stringify({
-            mode: "user_selected",
-            providerId: "openrouter-image",
-            modelId: "google/gemini-2.5-flash-image",
-          }),
-        },
-        body: JSON.stringify({ title: "Hearty Soup" }),
+        headers: selectionHeaders,
+        body: JSON.stringify({ title: "Hearty Soup", confirmationToken: quote.confirmationToken }),
       });
       expect(res.status).toBe(503);
       const body = await res.json();

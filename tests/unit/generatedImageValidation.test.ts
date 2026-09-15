@@ -152,4 +152,21 @@ describe("validateGeneratedImage — rejections", () => {
     bytes.set(Buffer.from("isom", "ascii"), 8);
     expect(sniffGeneratedImageMime(bytes)).toBeUndefined();
   });
+
+  it("PNG IHDR dimensions are bounded without decoding (absurd headers fail closed)", () => {
+    const valid = pngBytes(64);
+    valid.set(Buffer.from("IHDR", "ascii"), 12);
+    const view = new DataView(valid.buffer);
+    view.setUint32(16, 64);
+    view.setUint32(20, 64);
+    expect(validateGeneratedImage({ bytes: valid, contentType: "image/png" }).valid).toBe(true);
+
+    const huge = pngBytes(64);
+    huge.set(Buffer.from("IHDR", "ascii"), 12);
+    new DataView(huge.buffer).setUint32(16, 100000);
+    new DataView(huge.buffer).setUint32(20, 100000);
+    const rejected = validateGeneratedImage({ bytes: huge, contentType: "image/png" });
+    expect(rejected.valid).toBe(false);
+    expect(rejected.error).toMatch(/dimensions/i);
+  });
 });

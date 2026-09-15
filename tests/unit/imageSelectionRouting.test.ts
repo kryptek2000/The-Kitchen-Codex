@@ -82,6 +82,40 @@ async function boot(
   };
 }
 
+/**
+ * Phase 2: obtains the server-owned per-generation confirmation quote (zero
+ * provider calls) and then performs the generate request with the token. Used by
+ * the route-level tests whose effective image model is paid/variable.
+ */
+async function quoteAndGenerate(
+  app: { baseUrl: string },
+  body: Record<string, unknown> = REQUEST_BODY
+): Promise<Response> {
+  const quoteRes = await realFetch(`${app.baseUrl}/api/recipes/image/quote`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      // Canonical quote inputs: the server binds the authorization to these
+      // exact fields and recomputes them at generate time.
+      ...(typeof body["title"] === "string" ? { title: body["title"] } : {}),
+      ...(Array.isArray(body["ingredients"]) ? { ingredients: body["ingredients"] } : {}),
+      ...(typeof body["cuisine"] === "string" ? { cuisine: body["cuisine"] } : {}),
+      ...(typeof body["course"] === "string" ? { course: body["course"] } : {}),
+      ...(typeof body["description"] === "string" ? { description: body["description"] } : {}),
+      ...(body["vaultSessionId"] ? { vaultSessionId: body["vaultSessionId"] } : {}),
+    }),
+  });
+  const quote = (await quoteRes.json()) as { confirmationToken?: string };
+  return realFetch(`${app.baseUrl}/api/recipes/image/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ...body,
+      ...(quote.confirmationToken ? { confirmationToken: quote.confirmationToken } : {}),
+    }),
+  });
+}
+
 function openRouterError(status: number, body: unknown, headers: Record<string, string> = {}): typeof fetch {
   return vi.fn(async (_url: string, init?: RequestInit) => {
     void init;
@@ -116,11 +150,7 @@ describe("route-level image selection: runtime failure NEVER invokes Gemini (BYO
     const fetchMock = openRouterError(401, { error: { message: "Invalid API key sentinel" } });
     const app = await pinnedOpenRouter(fetchMock);
     try {
-      const res = await realFetch(`${app.baseUrl}/api/recipes/image/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(REQUEST_BODY),
-      });
+      const res = await quoteAndGenerate(app);
       expect(res.status).toBe(502);
       const body = await res.json();
       expect(body.code).toBe("IMAGE_PROVIDER_AUTH");
@@ -143,11 +173,7 @@ describe("route-level image selection: runtime failure NEVER invokes Gemini (BYO
     const fetchMock = openRouterError(429, { error: { message: "Rate limited" } }, { "Retry-After": "42" });
     const app = await pinnedOpenRouter(fetchMock);
     try {
-      const res = await realFetch(`${app.baseUrl}/api/recipes/image/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(REQUEST_BODY),
-      });
+      const res = await quoteAndGenerate(app);
       expect(res.status).toBe(503);
       const body = await res.json();
       expect(body.code).toBe("IMAGE_PROVIDER_RATE_LIMIT");
@@ -167,11 +193,7 @@ describe("route-level image selection: runtime failure NEVER invokes Gemini (BYO
     }) as unknown as typeof fetch;
     const app = await pinnedOpenRouter(fetchMock);
     try {
-      const res = await realFetch(`${app.baseUrl}/api/recipes/image/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(REQUEST_BODY),
-      });
+      const res = await quoteAndGenerate(app);
       expect(res.status).toBe(503);
       const body = await res.json();
       expect(body.code).toBe("IMAGE_PROVIDER_TIMEOUT");
@@ -203,11 +225,7 @@ describe("route-level image selection: EXPLICIT invalid pins FAIL CLOSED (zero G
       fetchMock
     );
     try {
-      const res = await realFetch(`${app.baseUrl}/api/recipes/image/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(REQUEST_BODY),
-      });
+      const res = await quoteAndGenerate(app);
       expect(res.status).toBe(503);
       const body = await res.json();
       expect(body.code).toBe("IMAGE_PROVIDER_NOT_CONFIGURED");
@@ -228,11 +246,7 @@ describe("route-level image selection: EXPLICIT invalid pins FAIL CLOSED (zero G
       fetchMock
     );
     try {
-      const res = await realFetch(`${app.baseUrl}/api/recipes/image/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(REQUEST_BODY),
-      });
+      const res = await quoteAndGenerate(app);
       expect(res.status).toBe(503);
       const body = await res.json();
       expect(body.code).toBe("IMAGE_PROVIDER_NOT_CONFIGURED");
@@ -263,11 +277,7 @@ describe("route-level image selection: UNSET selection preserves the Gemini defa
     });
     const app = await boot({ GEMINI_API_KEY: KEY }, fetchMock);
     try {
-      const res = await realFetch(`${app.baseUrl}/api/recipes/image/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(REQUEST_BODY),
-      });
+      const res = await quoteAndGenerate(app);
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.provider).toBe("gemini-image");

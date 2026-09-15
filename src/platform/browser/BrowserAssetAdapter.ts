@@ -18,7 +18,7 @@
  * Runtime has no remote fetch, no provider/secret logic, no rendering concern.
  */
 
-import type { AssetAdapter } from '../../application/adapters/AssetAdapter';
+import { AssetPathCollisionError, type AssetAdapter } from '../../application/adapters/AssetAdapter';
 import type { FsaDirectoryHandleLike, FsaFileHandleLike } from './BrowserFsaVaultAdapter';
 
 const MEDIA_TYPE_TO_EXT: Record<string, string> = {
@@ -82,6 +82,24 @@ function normalizeWritePath(path: string, contentType: string | undefined): stri
   return ext ? `${path}${ext}` : path;
 }
 
+/** Writes bytes through a resolved file handle, aborting the stream on failure. */
+async function writeFileHandle(fileHandle: FsaFileHandleLike, data: Uint8Array): Promise<void> {
+  const writable = await fileHandle.createWritable();
+  try {
+    await writable.write(data);
+    await writable.close();
+  } catch (error) {
+    if (typeof writable.abort === 'function') {
+      try {
+        await writable.abort();
+      } catch {
+        // ignore secondary abort failure
+      }
+    }
+    throw error;
+  }
+}
+
 /**
  * Browser File System Access implementation of the `AssetAdapter` contract.
  * The root directory handle is supplied by the browser shell (injected).
@@ -107,20 +125,31 @@ export class BrowserAssetAdapter implements AssetAdapter {
     const target = normalizeWritePath(path, contentType);
     const { parent, fileName } = await resolveTarget(this.root, target);
     const fileHandle = await parent.getFileHandle(fileName, { create: true });
-    const writable = await fileHandle.createWritable();
+    await writeFileHandle(fileHandle, data);
+  }
+
+  /**
+   * Collision-safe create. The File System Access API exposes NO atomic
+   * exclusive-create primitive, so this checks for an existing file first and
+   * rejects with `AssetPathCollisionError` WITHOUT modifying it. That check +
+   * the shared in-process collision-safe allocation reservation is the
+   * strongest guarantee available here. TRUE cross-process exclusivity (a
+   * second browser tab / external writer racing between the check and the
+   * write) is NOT guaranteed by this adapter and must not be claimed.
+   */
+  async writeExclusive(path: string, data: Uint8Array, contentType?: string): Promise<void> {
+    const target = normalizeWritePath(path, contentType);
+    const { parent, fileName } = await resolveTarget(this.root, target);
     try {
-      await writable.write(data);
-      await writable.close();
+      await parent.getFileHandle(fileName, { create: false });
+      // Present: this is a collision, never an overwrite.
+      throw new AssetPathCollisionError(target);
     } catch (error) {
-      if (typeof writable.abort === 'function') {
-        try {
-          await writable.abort();
-        } catch {
-          // ignore secondary abort failure
-        }
-      }
-      throw error;
+      if (error instanceof AssetPathCollisionError) throw error;
+      if (!isNotFound(error)) throw error;
     }
+    const fileHandle = await parent.getFileHandle(fileName, { create: true });
+    await writeFileHandle(fileHandle, data);
   }
 
   async exists(path: string): Promise<boolean> {

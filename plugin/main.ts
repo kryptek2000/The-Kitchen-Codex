@@ -19,6 +19,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { ObsidianVaultAdapter, ObsidianSettingsAdapter, ObsidianNetworkAdapter, ObsidianSecretAdapter } from '../src/platform/obsidian';
 import { createAppServices } from '../src/application/createAppServices';
 import type { AppServices } from '../src/application/createAppServices';
+import { getEndpointAccessHeaders } from '../src/application/endpointAccess';
 import { RecipeWorkspace } from '../src/application-ui/RecipeWorkspace';
 
 const VIEW_TYPE = 'kitchen-codex-view';
@@ -74,7 +75,7 @@ class KitchenCodexView extends ItemView {
 
 export default class KitchenCodexPlugin extends Plugin {
   settings: KitchenCodexSettings = { ...DEFAULT_SETTINGS };
-  networkAdapter = new ObsidianNetworkAdapter();
+  networkAdapter = new ObsidianNetworkAdapter({ authorizationHeaders: getEndpointAccessHeaders });
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -95,7 +96,10 @@ export default class KitchenCodexPlugin extends Plugin {
   async loadSettings(): Promise<void> {
     const data = (await this.loadData()) as Partial<KitchenCodexSettings> | null;
     this.settings = { ...DEFAULT_SETTINGS, ...(data ?? {}) };
-    this.networkAdapter = new ObsidianNetworkAdapter({ baseUrl: this.settings.backendUrl || undefined });
+    this.networkAdapter = new ObsidianNetworkAdapter({
+      baseUrl: this.settings.backendUrl || undefined,
+      authorizationHeaders: getEndpointAccessHeaders,
+    });
   }
 
   async saveSettings(): Promise<void> {

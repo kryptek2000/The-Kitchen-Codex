@@ -22,9 +22,10 @@ import {
   validateGeneratedImage,
   type GeneratedImageMime,
 } from "../src/core/recipeImage.js";
+import { createHash } from "node:crypto";
 import { ProviderOperationError } from "./ai/providerErrors.js";
 import { ImageValidationError, type ImageProvider } from "./ai/imageProvider.js";
-import type { ImagePreviewStore } from "./imagePreviewStore.js";
+import type { ImagePreviewReservation, ImagePreviewStore } from "./imagePreviewStore.js";
 
 /** Bounded request contract: minimum grounded recipe fields only. */
 export interface GenerateRecipeImageRequest {
@@ -82,8 +83,7 @@ function cleanIngredientNames(value: unknown): string[] {
 }
 
 /** Validates the bounded generation request; returns the sanitized value or errors. */
-export function validateGenerateRecipeImageRequest(input: unknown): { ok: boolean; value?: GenerateRecipeImageRequest; errors: string[] } {
-  const errors: string[] = [];
+export function validateGenerateRecipeImageRequest(input: unknown): { ok: boolean; value?: GenerateRecipeImageRequest; errors: string[] } {  const errors: string[] = [];
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     return { ok: false, errors: ['Request must be an object'] };
   }
@@ -104,6 +104,83 @@ export function validateGenerateRecipeImageRequest(input: unknown): { ok: boolea
     if (!isValidRecipeContentHash(raw['recipeContentHash'])) errors.push('"recipeContentHash" must be a 64-char hex sha256 string');
     else value.recipeContentHash = raw['recipeContentHash'] as string;
   }
+  if (raw['vaultSessionId'] !== undefined) {
+    if (!isValidVaultSessionId(raw['vaultSessionId'])) errors.push('"vaultSessionId" must be a bounded opaque id');
+    else value.vaultSessionId = raw['vaultSessionId'] as string;
+  }
+  if (errors.length) return { ok: false, errors };
+  return { ok: true, value, errors: [] };
+}
+
+/**
+ * Canonical server-verifiable image-request binding (I4). The quote and
+ * generation routes share this ONE contract: the server recomputes it from the
+ * VALIDATED generation fields on both calls and the authorization record pins
+ * the recomputed value. A client-supplied hash is NEVER authority — only the
+ * server recomputation binds the token.
+ */
+export interface CanonicalImageRequestFields {
+  title: string;
+  ingredients?: string[];
+  cuisine?: string;
+  course?: string;
+  description?: string;
+}
+
+/** SHA-256 over the canonical JSON of the normalized generation fields. */
+export function canonicalImageRequestBinding(fields: CanonicalImageRequestFields): string {
+  const canonical = JSON.stringify({
+    title: fields.title,
+    ingredients: fields.ingredients ?? [],
+    cuisine: fields.cuisine ?? '',
+    course: fields.course ?? '',
+    description: fields.description ?? '',
+  });
+  return createHash('sha256').update(canonical).digest('hex');
+}
+
+/**
+ * Explicit server-owned vault scope. A present session id binds to that vault
+ * session; a deliberate no-vault draft flow is an EXPLICIT scope — never an
+ * omitted comparison — so draft tokens and vault tokens can never substitute.
+ */
+export const NO_VAULT_IMAGE_SCOPE = 'draft:no-vault';
+
+export function imageVaultScope(vaultSessionId: string | undefined): string {
+  return vaultSessionId ? `vault:${vaultSessionId}` : NO_VAULT_IMAGE_SCOPE;
+}
+
+export interface ValidatedImageQuoteRequest extends CanonicalImageRequestFields {
+  vaultSessionId?: string;
+}
+
+/**
+ * Validates the bounded QUOTE request: the same canonical generation inputs the
+ * generate route requires (title mandatory; ingredients/cuisine/course/
+ * description bounded) plus the optional vault session binding. Malformed or
+ * missing inputs fail closed BEFORE any authorization is issued.
+ */
+export function validateImageQuoteRequest(input: unknown): {
+  ok: boolean;
+  value?: ValidatedImageQuoteRequest;
+  errors: string[];
+} {
+  const errors: string[] = [];
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return { ok: false, errors: ['Request must be an object'] };
+  }
+  const raw = input as Record<string, unknown>;
+  const title = cleanField(raw['title'], MAX_TITLE);
+  if (!title) errors.push('"title" is required');
+  const value: ValidatedImageQuoteRequest = { title };
+  const ingredients = raw['ingredients'] === undefined ? undefined : cleanIngredientNames(raw['ingredients']);
+  if (ingredients && ingredients.length) value.ingredients = ingredients;
+  const cuisine = cleanField(raw['cuisine'], 60);
+  if (cuisine) value.cuisine = cuisine;
+  const course = cleanField(raw['course'], 60);
+  if (course) value.course = course;
+  const description = cleanField(raw['description'], MAX_FIELD);
+  if (description) value.description = description;
   if (raw['vaultSessionId'] !== undefined) {
     if (!isValidVaultSessionId(raw['vaultSessionId'])) errors.push('"vaultSessionId" must be a bounded opaque id');
     else value.vaultSessionId = raw['vaultSessionId'] as string;
@@ -155,7 +232,19 @@ export async function generateRecipeImagePreview(
   requestInput: unknown,
   provider: ImageProvider,
   store: ImagePreviewStore,
-  overrides: { model?: string } = {}
+  overrides: { model?: string } = {},
+  /**
+   * Optional capacity reservation taken by the caller BEFORE the provider call.
+   * When present, the validated bytes COMMIT the reservation (releasing unused
+   * capacity) instead of a plain insert, so a full store can never charge for an
+   * image it cannot retain.
+   */
+  reservation?: ImagePreviewReservation,
+  /**
+   * Server-derived requester owner bound to the stored preview record.
+   * Retrieval and deletion later require the same requester.
+   */
+  owner?: string
 ): Promise<GenerateRecipeImageResult> {
   const validated = validateGenerateRecipeImageRequest(requestInput);
   if (!validated.ok || !validated.value) {
@@ -182,12 +271,15 @@ export async function generateRecipeImagePreview(
     });
   }
 
-  const metadata = store.insert({
+  const previewInput = {
     bytes: generated.bytes,
     contentType: validation.detectedMime ?? (generated.contentType as GeneratedImageMime),
     provider: generated.provider,
     model: generated.model,
-  });
+  };
+  const metadata = reservation
+    ? store.commit(reservation, previewInput, owner)
+    : store.insert(previewInput, owner);
 
   return {
     token: metadata.token,

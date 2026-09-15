@@ -11,7 +11,11 @@
  * module), keeping shared code free of platform imports.
  */
 
-import type { AssetAdapter, RemoteImageDownloader } from '../application/adapters/AssetAdapter';
+import {
+  isAssetPathCollisionError,
+  type AssetAdapter,
+  type RemoteImageDownloader,
+} from '../application/adapters/AssetAdapter';
 
 const IMAGE_EXTENSIONS = new Set([
   'jpg',
@@ -438,11 +442,199 @@ async function resolveImageBytes(
   return { bytes, contentType: source.type || 'image/jpeg' };
 }
 
+/** Hard bound on collision-suffix attempts (mirrors the canonical save flow). */
+export const MAX_VAULT_ASSET_COLLISION_ATTEMPTS = 100;
+
+/** Sanitizes a recipe title into a safe asset basename (single authority). */
+export function sanitizeVaultAssetTitle(recipeTitle: string): string {
+  return recipeTitle.replace(/[\/\\?%*:|"<>]/g, '-').trim() || 'Recipe Photo';
+}
+
+/**
+ * Shared, module-level collision-safe allocation reservations. Independent
+ * Recipe Editor component instances (and direct concurrent callers) share this
+ * ONE set — it is NOT a per-component ref. A path is claimed SYNCHRONOUSLY
+ * before its existence is rechecked and before bytes are written, and released
+ * in a `finally` on success, failure, cancellation, and thrown exception, so
+ * the set never grows unbounded.
+ *
+ * KEY: the normalized vault-relative target path (`<directory>/<filename>`),
+ * e.g. `Assets/Recipe (2).png`. This encodes the target directory and filename;
+ * a shell instance targets ONE connected vault, so this is effectively scoped
+ * to that vault identity. Across distinct vaults the worst case is harmless
+ * over-serialization, never a missed collision.
+ *
+ * TRUTHFUL SCOPE: JavaScript is single-threaded, so the synchronous claim is
+ * atomic WITHIN this realm. It does NOT provide cross-process/cross-tab
+ * exclusivity; adapters with a genuine exclusive-create primitive
+ * (`AssetAdapter.writeExclusive`) additionally close that gap where the
+ * underlying API supports it.
+ */
+const reservedAssetPaths = new Set<string>();
+
+/** Synchronous claim; false when another in-flight transaction owns the path. */
+function reserveAssetPath(path: string): boolean {
+  if (reservedAssetPaths.has(path)) return false;
+  reservedAssetPaths.add(path);
+  return true;
+}
+
+/** Releases a claim (idempotent) on every terminal path. */
+function releaseAssetPath(path: string): void {
+  reservedAssetPaths.delete(path);
+}
+
+/** Test-only: clears shared reservations between tests (never used in prod). */
+export function resetVaultAssetAllocationForTests(): void {
+  reservedAssetPaths.clear();
+}
+
+/** Test-only: whether a path is currently reserved (never used in prod). */
+export function isVaultAssetPathReservedForTests(path: string): boolean {
+  return reservedAssetPaths.has(path);
+}
+
+/** Deterministic collision candidate: `Foo.ext`, then `Foo (n).ext`. */
+function collisionCandidate(safeTitle: string, ext: string, attempt: number): string {
+  return attempt === 0 ? `Assets/${safeTitle}.${ext}` : `Assets/${safeTitle} (${attempt}).${ext}`;
+}
+
+/** Legacy FSA probe: `getFileHandle` WITHOUT create throws when absent. */
+async function legacyFolderAssetExists(folderHandle: any, candidate: string): Promise<boolean> {
+  let assetsDir: any;
+  try {
+    assetsDir = await folderHandle.getDirectoryHandle('Assets', { create: false });
+  } catch (e) {
+    try {
+      assetsDir = await folderHandle.getDirectoryHandle('assets', { create: false });
+    } catch (e2) {
+      return false; // no Assets dir yet: the fixed name is free
+    }
+  }
+  try {
+    await assetsDir.getFileHandle(candidate.split('/').pop() || candidate, { create: false });
+    return true;
+  } catch (e) {
+    return false; // absent: free
+  }
+}
+
+/** Existence probe for the active asset boundary (AssetAdapter or legacy FSA). */
+async function assetPathExists(deps: SaveImageDeps, candidate: string): Promise<boolean> {
+  if (deps.asset) return deps.asset.exists(candidate);
+  if (deps.folderHandle && typeof deps.folderHandle.getDirectoryHandle === 'function') {
+    return legacyFolderAssetExists(deps.folderHandle, candidate);
+  }
+  throw new Error('No vault asset boundary is available.');
+}
+
+/**
+ * Writes bytes to a SPECIFIC path through the active boundary. Prefers a
+ * genuinely exclusive create (`writeExclusive`) when the adapter provides one;
+ * otherwise uses the normal (overwriting) `write`, safe here because the path
+ * is reserved and existence was just rechecked.
+ */
+async function writeAssetAtPath(
+  deps: SaveImageDeps,
+  relativePath: string,
+  bytes: Uint8Array,
+  contentType: string
+): Promise<void> {
+  if (deps.asset) {
+    if (typeof deps.asset.writeExclusive === 'function') {
+      await deps.asset.writeExclusive(relativePath, bytes, contentType);
+      return;
+    }
+    await deps.asset.write(relativePath, bytes, contentType);
+    return;
+  }
+  if (deps.folderHandle && typeof deps.folderHandle.getDirectoryHandle === 'function') {
+    // Legacy browser FSA write (preserve existing 'Assets'/'assets' preference).
+    const fileName = relativePath.split('/').pop() || relativePath;
+    let assetsDir: any;
+    try {
+      assetsDir = await deps.folderHandle.getDirectoryHandle('Assets', { create: true });
+    } catch (e) {
+      assetsDir = await deps.folderHandle.getDirectoryHandle('assets', { create: true });
+    }
+    const fileHandle = await assetsDir.getFileHandle(fileName, { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(bytesToBlob(bytes, contentType));
+    await writable.close();
+    return;
+  }
+  throw new Error('No vault asset boundary is available.');
+}
+
+/**
+ * Collision-safe create: claims a deterministic free path SYNCHRONOUSLY (the
+ * shared reservation), rechecks existence INSIDE the claim, then creates the
+ * asset while the claim is held, releasing it on every exit. A waiting
+ * transaction sees the claim (or the now-existing file) and selects the next
+ * deterministic ` (n)` suffix. An existing asset is NEVER overwritten.
+ */
+async function createCollisionSafeAsset(
+  deps: SaveImageDeps,
+  safeTitle: string,
+  ext: string,
+  bytes: Uint8Array,
+  contentType: string
+): Promise<string> {
+  for (let attempt = 0; attempt <= MAX_VAULT_ASSET_COLLISION_ATTEMPTS; attempt += 1) {
+    const candidate = collisionCandidate(safeTitle, ext, attempt);
+    // Synchronous claim: another in-flight transaction cannot claim this path.
+    if (!reserveAssetPath(candidate)) continue;
+    try {
+      // Recheck existence INSIDE the claim, immediately before writing.
+      if (await assetPathExists(deps, candidate)) continue;
+      await writeAssetAtPath(deps, candidate, bytes, contentType);
+      return candidate;
+    } catch (error) {
+      // A genuine exclusive create reports a benign collision: try next suffix.
+      if (isAssetPathCollisionError(error)) continue;
+      throw error;
+    } finally {
+      releaseAssetPath(candidate);
+    }
+  }
+  throw new Error('Could not find a free image file name.');
+}
+
+/**
+ * Resolves a collision-safe vault Asset path WITHOUT writing: the fixed name
+ * when free, otherwise a deterministic ` (n)` suffix. NEVER returns the path
+ * of an existing asset, so a later write cannot overwrite user data. Throws
+ * when the asset boundary is unavailable or no free name exists.
+ *
+ * NOTE: this is a PROBE only. It does not reserve the returned path, so callers
+ * that go on to create the asset MUST use `saveImageToVaultAssetsCollisionSafe`
+ * (which allocates and creates under the shared reservation) instead of a
+ * probe-then-write sequence.
+ */
+export async function resolveCollisionSafeAssetPath(
+  deps: SaveImageDeps,
+  recipeTitle: string,
+  ext: string
+): Promise<string> {
+  const safeTitle = sanitizeVaultAssetTitle(recipeTitle);
+  for (let attempt = 0; attempt <= MAX_VAULT_ASSET_COLLISION_ATTEMPTS; attempt += 1) {
+    const candidate = collisionCandidate(safeTitle, ext, attempt);
+    if (!(await assetPathExists(deps, candidate))) return candidate;
+    if (attempt === MAX_VAULT_ASSET_COLLISION_ATTEMPTS) {
+      throw new Error('Could not find a free image file name.');
+    }
+  }
+  throw new Error('Could not find a free image file name.');
+}
+
 /**
  * Saves an image into the connected vault's Assets folder through the injected
  * AssetAdapter (preferred) or the legacy folderHandle path (fallback), then
  * registers it in the local object-URL cache. The binary downloader is injected,
  * so this shared module NEVER imports a browser/platform module.
+ *
+ * NOTE: this fixed-name writer may overwrite an existing asset. Deferred
+ * preview Saves MUST use `saveImageToVaultAssetsCollisionSafe` instead.
  */
 export async function saveImageToVaultAssets(
   deps: SaveImageDeps,
@@ -485,6 +677,48 @@ export async function saveImageToVaultAssets(
     return {
       success: false,
       relativePath: typeof source === 'string' ? source : '',
+      error: err?.message || 'Could not save image to Assets folder.',
+    };
+  }
+}
+
+/**
+ * Collision-safe deferred-preview writer (B1). Allocates a FREE asset path AND
+ * creates it atomically under the shared module-level reservation (never
+ * overwriting an existing vault asset), and reports `createdNew: true` ONLY
+ * when this call created the asset — the transaction-ownership proof a rollback
+ * needs. Independent Recipe Editor instances therefore cannot both observe the
+ * same free path and overwrite one another: a waiting transaction observes the
+ * claim and selects the next deterministic ` (n)` suffix. A pre-existing user
+ * asset is never modified, and rollback MUST delete only a path with
+ * `createdNew`. Used identically for AI-generated and selected representative
+ * images. See `createCollisionSafeAsset` for the precise atomicity boundary.
+ */
+export async function saveImageToVaultAssetsCollisionSafe(
+  deps: SaveImageDeps,
+  recipeTitle: string,
+  source: string | Blob,
+  preferredExtension?: string
+): Promise<{ success: boolean; relativePath: string; createdNew: boolean; blobUrl?: string; error?: string }> {
+  try {
+    const { bytes, contentType } = await resolveImageBytes(source, deps);
+    const ext = imageExtension(preferredExtension, contentType);
+    const safeTitle = sanitizeVaultAssetTitle(recipeTitle);
+    // Allocate AND create atomically under the shared reservation: the chosen
+    // path is claimed before the existence recheck and held through the write.
+    const relativePath = await createCollisionSafeAsset(deps, safeTitle, ext, bytes, contentType);
+
+    // Browser rendering cache: bytes -> Blob -> object URL.
+    const blobUrl = URL.createObjectURL(bytesToBlob(bytes, contentType));
+    vaultAssets.registerAsset(relativePath, bytesToBlob(bytes, contentType), blobUrl);
+
+    return { success: true, relativePath, createdNew: true, blobUrl };
+  } catch (err: any) {
+    console.error('Failed to save image to vault Assets folder:', err);
+    return {
+      success: false,
+      relativePath: typeof source === 'string' ? source : '',
+      createdNew: false,
       error: err?.message || 'Could not save image to Assets folder.',
     };
   }

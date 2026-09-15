@@ -35,6 +35,24 @@ import { buildAiSelectionRequestOptions } from './aiSelection';
 /** The application-backed image-generation path (same as the server wiring). */
 export const GENERATE_RECIPE_IMAGE_PATH = '/api/recipes/image/generate';
 
+/** The server-owned, zero-inference image-generation quote path (Phase 2). */
+export const QUOTE_RECIPE_IMAGE_PATH = '/api/recipes/image/quote';
+
+/** The three truthful image cost classes (mirror of the server). */
+export type RecipeImageCostClass = 'zero' | 'paid' | 'variable';
+
+/** Server-owned display metadata + (paid/variable) single-use confirmation token. */
+export interface RecipeImageGenerationQuote {
+  provider: { id: string; name: string };
+  model: string;
+  credentialSource: 'server_environment' | 'session_only';
+  costClass: RecipeImageCostClass;
+  costLabel: string;
+  requiresConfirmation: boolean;
+  confirmationToken?: string;
+  confirmationExpiresAt?: number;
+}
+
 /** Authenticated transient-preview path for a token (bytes only; never base64-in-JSON). */
 export function recipeImagePreviewPath(token: string): string {
   return `/api/recipes/image/preview/${encodeURIComponent(token)}`;
@@ -96,7 +114,14 @@ export function isImageRecoverySupported(support: RecipeImageRecoverySupport | u
 }
 
 /** Controller/UI state. Holds ONLY token metadata, never image bytes. */
-export type RecipeImageRecoveryPhase = 'idle' | 'generating' | 'preview' | 'saving' | 'saved';
+export type RecipeImageRecoveryPhase =
+  | 'idle'
+  | 'quoting'
+  | 'confirming'
+  | 'generating'
+  | 'preview'
+  | 'saving'
+  | 'saved';
 
 export interface RecipeImagePreviewTokenMetadata {
   token: string;
@@ -115,6 +140,11 @@ export type RecipeImageRecoveryConflict =
 
 export interface RecipeImageRecoveryState {
   phase: RecipeImageRecoveryPhase;
+  /**
+   * The current server-owned quote (provider/model/credential/cost + single-use
+   * confirmation token). Present while awaiting explicit confirmation.
+   */
+  quote?: RecipeImageGenerationQuote;
   preview?: RecipeImagePreviewTokenMetadata;
   /** Bounded user-facing message (info/error/success). */
   message?: string;
@@ -169,11 +199,15 @@ export class RecipeImageProviderClientError extends Error {
 
 export async function requestGeneratedRecipeImage(
   network: NetworkAdapter,
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  confirmationToken?: string
 ): Promise<GeneratedRecipeImageClientResult> {
+  const payload: Record<string, unknown> = confirmationToken
+    ? { ...body, confirmationToken }
+    : body;
   const res = await network.post<unknown, Record<string, unknown>>(
     GENERATE_RECIPE_IMAGE_PATH,
-    body,
+    payload,
     await buildAiSelectionRequestOptions(undefined, undefined, 'image')
   );
   if (!res.ok) {
@@ -202,6 +236,131 @@ export async function requestGeneratedRecipeImage(
     vaultSessionId: str('vaultSessionId', ''),
     expiresAt: typeof data['expiresAt'] === 'number' ? data['expiresAt'] : 0,
   };
+}
+
+/**
+ * Requests the server-owned image-generation quote. This makes ZERO provider
+ * inference calls: the server resolves the effective provider/model + credential
+ * source + trusted pricing truth and returns bounded display metadata and (for a
+ * paid/variable model) an opaque single-use confirmation token.
+ *
+ * The caller MUST supply the SAME canonical generation inputs the generate call
+ * will send (title/ingredients/cuisine/course/description): the server binds the
+ * authorization to those exact fields (recomputed server-side at quote AND at
+ * generate time), so a substituted cross-recipe request fails closed with zero
+ * provider calls. Vault Intelligence also passes its vault session id (explicit
+ * vault scope); the deliberate no-vault draft flow omits it (explicit
+ * server-owned draft scope — never an omitted comparison).
+ */
+export async function requestImageGenerationQuote(
+  network: NetworkAdapter,
+  bindings: {
+    title?: unknown;
+    ingredients?: unknown;
+    cuisine?: unknown;
+    course?: unknown;
+    description?: unknown;
+    recipeContentHash?: unknown;
+    vaultSessionId?: unknown;
+  } = {}
+): Promise<RecipeImageGenerationQuote> {
+  const body: Record<string, unknown> = {};
+  const cleanText = (value: unknown, max: number): string | undefined => {
+    if (typeof value !== 'string') return undefined;
+    const clean = value.trim().slice(0, max);
+    return clean ? clean : undefined;
+  };
+  const title = cleanText(bindings.title, 200);
+  if (title) body['title'] = title;
+  if (Array.isArray(bindings.ingredients)) {
+    const names = bindings.ingredients
+      .filter((item): item is string => typeof item === 'string')
+      .map((name) => name.trim().slice(0, 80))
+      .filter(Boolean)
+      .slice(0, 60);
+    if (names.length) body['ingredients'] = names;
+  }
+  const cuisine = cleanText(bindings.cuisine, 60);
+  if (cuisine) body['cuisine'] = cuisine;
+  const course = cleanText(bindings.course, 60);
+  if (course) body['course'] = course;
+  const description = cleanText(bindings.description, 500);
+  if (description) body['description'] = description;
+  if (typeof bindings.recipeContentHash === 'string' && bindings.recipeContentHash) {
+    body['recipeContentHash'] = bindings.recipeContentHash;
+  }
+  if (typeof bindings.vaultSessionId === 'string' && bindings.vaultSessionId) {
+    body['vaultSessionId'] = bindings.vaultSessionId;
+  }
+  const res = await network.post<unknown, Record<string, unknown>>(
+    QUOTE_RECIPE_IMAGE_PATH,
+    body,
+    await buildAiSelectionRequestOptions(undefined, undefined, 'image')
+  );
+  const data = (typeof res.data === 'object' && res.data !== null ? res.data : {}) as Record<string, unknown>;
+  if (!res.ok) {
+    throw new RecipeImageProviderClientError(
+      res.status,
+      typeof data['error'] === 'string' && data['error'] ? data['error'] : 'Could not prepare image generation.',
+      typeof data['code'] === 'string' ? data['code'] : undefined
+    );
+  }
+  const providerRow = (typeof data['provider'] === 'object' && data['provider'] !== null ? data['provider'] : {}) as Record<string, unknown>;
+  const providerId = typeof providerRow['id'] === 'string' ? providerRow['id'] : '';
+  const model = typeof data['model'] === 'string' ? data['model'] : '';
+  if (!providerId || !model) {
+    throw new RecipeImageProviderClientError(0, 'Could not prepare image generation.');
+  }
+  const credentialSource = data['credentialSource'] === 'session_only' ? 'session_only' : 'server_environment';
+  const costClass: RecipeImageCostClass =
+    data['costClass'] === 'zero' || data['costClass'] === 'paid' || data['costClass'] === 'variable'
+      ? data['costClass']
+      : 'variable';
+  const quote: RecipeImageGenerationQuote = {
+    provider: { id: providerId, name: typeof providerRow['name'] === 'string' ? providerRow['name'].slice(0, 80) : providerId },
+    model: model.slice(0, 128),
+    credentialSource,
+    costClass,
+    costLabel:
+      typeof data['costLabel'] === 'string' && data['costLabel']
+        ? data['costLabel'].slice(0, 120)
+        : 'Variable pricing — determined by your provider account',
+    requiresConfirmation: data['requiresConfirmation'] === true,
+  };
+  if (typeof data['confirmationToken'] === 'string' && data['confirmationToken'] && data['confirmationToken'].length <= 512) {
+    quote.confirmationToken = data['confirmationToken'];
+  }
+  if (typeof data['confirmationExpiresAt'] === 'number' && Number.isFinite(data['confirmationExpiresAt'])) {
+    quote.confirmationExpiresAt = data['confirmationExpiresAt'];
+  }
+  return quote;
+}
+
+/**
+ * Fetches transient generated-preview BYTES through the application
+ * NetworkAdapter's authenticated binary path (never a bare fetch). Returns
+ * undefined when the adapter has no binary path, or for an unknown/expired token
+ * or transport failure. The caller revalidates MIME/signature/size before any
+ * write and builds the object URL only from the validated bytes.
+ */
+export interface RecipeImagePreviewBytes {
+  bytes: Uint8Array;
+  contentType: string;
+}
+
+export async function fetchGeneratedPreviewBytes(
+  network: NetworkAdapter,
+  token: string
+): Promise<RecipeImagePreviewBytes | undefined> {
+  if (typeof token !== 'string' || !token || token.length > 512) return undefined;
+  if (typeof network.getBytes !== 'function') return undefined;
+  try {
+    const res = await network.getBytes(recipeImagePreviewPath(token));
+    if (!res.ok || !res.bytes || res.bytes.length === 0) return undefined;
+    return { bytes: res.bytes, contentType: res.contentType || 'application/octet-stream' };
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -262,6 +421,21 @@ export function mapRecipeImageRecoveryError(error: unknown): {
     if (code === 'IMAGE_PROVIDER_AUTH') {
       return { message: 'Image generation could not be authorized. Please check the server configuration.' };
     }
+    if (code === 'IMAGE_CONFIRMATION_REQUIRED') {
+      return { message: 'This image model requires an explicit confirmation. Review the provider and price, then confirm.' };
+    }
+    if (code === 'IMAGE_CONFIRMATION_INVALID') {
+      return { message: 'The image generation confirmation expired or is no longer valid. Please request a new quote.' };
+    }
+    if (code === 'IMAGE_CONFIRMATION_CAPACITY') {
+      return { message: 'Too many pending image confirmations. Please wait a moment and try again.' };
+    }
+    if (code === 'IMAGE_QUOTE_FAILED') {
+      return { message: "Couldn't prepare image generation right now. Please try again." };
+    }
+    if (code === 'IMAGE_PREVIEW_UNAVAILABLE') {
+      return { message: 'The image preview could not be loaded. Please try again.' };
+    }
     if (code === 'INVALID_IMAGE') {
       return { message: 'The generated image was not usable. Please try again.' };
     }
@@ -320,60 +494,150 @@ export class RecipeImageRecoveryController {
   }
 
   /**
-   * Generate: one bounded, explicit generation. Stores ONLY returned token
-   * metadata; no canonical mutation. When `replaceToken` is given (Regenerate),
-   * the previous preview stays visible until the NEW generation succeeds and is
-   * then invalidated best-effort.
+   * Generate: one EXPLICIT user action. It first requests the server-owned quote
+   * (zero provider calls). A verified-zero-price model proceeds directly to the
+   * single provider call; a paid/variable model moves to `confirming` and waits
+   * for an explicit `confirm()`. No canonical mutation either way.
    */
-  async generate(recipe: ObsidianRecipe, options: { replaceToken?: string } = {}): Promise<void> {
+  async generate(recipe: ObsidianRecipe): Promise<void> {
     if (this.session.isBusy()) return; // duplicate Generate blocked (and Save/Generate cross-blocked)
     const support = this.deps.support;
     if (!isImageRecoverySupported(support)) return;
     this.session.setBusy(true);
-    const previousToken = options.replaceToken ?? this.state.preview?.token;
-    this.setState({ phase: 'generating', message: undefined, conflict: undefined });
-    await runGuarded(
-      this.session,
-      async () => {
-        const contentHash = await support.computeContentHash(recipe);
-        const body = buildRecipeImageGenerateRequest(recipe, {
-          vaultSessionId: support.vaultSessionId,
-          contentHash,
-        });
-        return requestGeneratedRecipeImage(this.deps.network, body);
-      },
-      (generated) => {
-        this.session.setBusy(false);
-        // Regenerate: replace the preview ONLY after success; abandon the old
-        // token best-effort (canonical recipe remains untouched either way).
-        if (previousToken && previousToken !== generated.token) {
-          void this.invalidateToken(previousToken);
-        }
-        this.setState({
-          phase: 'preview',
-          preview: generated,
-          message: 'AI-generated preview — nothing is saved yet.',
-          messageKind: 'info',
-          conflict: undefined,
-        });
-      },
-      (error) => {
-        this.session.setBusy(false);
-        const mapped = mapRecipeImageRecoveryError(error);
-        // Keep a still-valid previous preview (Regenerate failure); otherwise idle.
-        this.setState({
-          phase: this.state.preview ? 'preview' : 'idle',
-          message: mapped.message,
-          messageKind: 'error',
-          conflict: mapped.conflict,
-        });
-      }
-    );
+    this.setState({ phase: 'quoting', message: undefined, conflict: undefined });
+    const quoteResult = await this.guarded(() => this.resolveQuote(recipe));
+    if (quoteResult.status === 'dropped') return; // session invalidated: drop
+    if (quoteResult.status === 'error') {
+      this.session.setBusy(false);
+      const mapped = mapRecipeImageRecoveryError(quoteResult.error);
+      this.setState({
+        phase: this.state.preview ? 'preview' : 'idle',
+        message: mapped.message,
+        messageKind: 'error',
+        conflict: mapped.conflict,
+      });
+      return;
+    }
+    const quote = quoteResult.value;
+    if (quote.requiresConfirmation) {
+      this.session.setBusy(false);
+      this.setState({
+        phase: 'confirming',
+        quote,
+        message: `${quote.costLabel}. Confirm to generate one image.`,
+        messageKind: 'info',
+        conflict: undefined,
+      });
+      return;
+    }
+    // Verified zero price: the explicit Generate action is the confirmation.
+    await this.confirmInternal(recipe);
   }
 
-  /** Regenerate: new token; old preview replaced only after success. */
+  /**
+   * Confirm: submits the single-use token from the current quote and performs at
+   * most ONE provider call. A failed/consumed token clears the quote so a fresh
+   * explicit quote + confirmation is required.
+   */
+  async confirm(recipe: ObsidianRecipe): Promise<void> {
+    if (this.session.isBusy()) return;
+    const support = this.deps.support;
+    if (!isImageRecoverySupported(support)) return;
+    this.session.setBusy(true);
+    await this.confirmInternal(recipe);
+  }
+
+  /**
+   * Regenerate: a NEW paid/variable generation, so it ALWAYS re-quotes and
+   * requires a fresh explicit confirmation (a consumed token never authorizes a
+   * second call). The old preview is replaced only after the new one succeeds.
+   */
   async regenerate(recipe: ObsidianRecipe): Promise<void> {
-    await this.generate(recipe, { replaceToken: this.state.preview?.token });
+    await this.generate(recipe);
+  }
+
+  /**
+   * Liveness-guarded async operation. Returns `{ current: false }` when the
+   * session was invalidated (close/cancel) while in flight, so the result is
+   * dropped and no state is mutated.
+   */
+  private async guarded<T>(
+    operation: () => Promise<T>
+  ): Promise<{ status: 'dropped' } | { status: 'ok'; value: T } | { status: 'error'; error: unknown }> {
+    const epoch = this.session.begin();
+    try {
+      const value = await operation();
+      if (!this.session.isCurrent(epoch)) return { status: 'dropped' };
+      return { status: 'ok', value };
+    } catch (error) {
+      if (!this.session.isCurrent(epoch)) return { status: 'dropped' };
+      return { status: 'error', error };
+    }
+  }
+
+  /** Resolves the server-owned quote (zero provider inference calls). */
+  private async resolveQuote(recipe: ObsidianRecipe): Promise<RecipeImageGenerationQuote> {
+    const support = this.deps.support;
+    const contentHash = await support.computeContentHash(recipe);
+    // The quote carries the SAME canonical inputs the generate call will send,
+    // so the server binds the authorization to this exact recipe request.
+    const fields = buildRecipeImageGenerateRequest(recipe, {
+      vaultSessionId: support.vaultSessionId,
+      contentHash,
+    });
+    return requestImageGenerationQuote(this.deps.network, {
+      ...fields,
+      recipeContentHash: contentHash,
+      vaultSessionId: support.vaultSessionId,
+    });
+  }
+
+  /**
+   * Performs the single provider call using the current quote's token (busy
+   * already held by the caller). On failure the quote is cleared so a consumed
+   * token can never authorize a retry.
+   */
+  private async confirmInternal(recipe: ObsidianRecipe): Promise<void> {
+    const support = this.deps.support;
+    const quote = this.state.quote;
+    const confirmationToken = quote?.requiresConfirmation ? quote.confirmationToken : undefined;
+    const previousToken = this.state.preview?.token;
+    this.setState({ phase: 'generating', message: undefined, conflict: undefined });
+    const result = await this.guarded(async () => {
+      const contentHash = await support.computeContentHash(recipe);
+      const body = buildRecipeImageGenerateRequest(recipe, {
+        vaultSessionId: support.vaultSessionId,
+        contentHash,
+      });
+      return requestGeneratedRecipeImage(this.deps.network, body, confirmationToken);
+    });
+    if (result.status === 'dropped') return; // session invalidated: drop
+    this.session.setBusy(false);
+    if (result.status === 'error') {
+      const mapped = mapRecipeImageRecoveryError(result.error);
+      this.setState({
+        phase: this.state.preview ? 'preview' : 'idle',
+        quote: undefined,
+        message: mapped.message,
+        messageKind: 'error',
+        conflict: mapped.conflict,
+      });
+      return;
+    }
+    const generated = result.value;
+    // Replace the preview ONLY after success; abandon the old token best-effort
+    // (canonical recipe remains untouched either way).
+    if (previousToken && previousToken !== generated.token) {
+      void this.invalidateToken(previousToken);
+    }
+    this.setState({
+      phase: 'preview',
+      quote: undefined,
+      preview: generated,
+      message: 'AI-generated preview — nothing is saved yet.',
+      messageKind: 'info',
+      conflict: undefined,
+    });
   }
 
   /**
