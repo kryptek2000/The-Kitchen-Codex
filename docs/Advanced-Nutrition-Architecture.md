@@ -1,10 +1,10 @@
 # The Kitchen Codex — Advanced Nutrition Architecture
 
-Status: **Phase 0, Phase 1, Phase 2, and Phase 3 implemented (offline contracts,
-isolated review layer, and an isolated advisory calculation layer only)**. No USDA
-dataset is bundled, no network route or live API is used, and there is no UI,
-Apply action, or automatic persistence. Machine application of advanced nutrition
-remains disabled.
+Status: **Phase 0, Phase 1, Phase 2, Phase 3, and Phase 4 implemented (offline
+contracts, isolated review layer, an isolated advisory calculation layer, and an
+isolated advisory review/display UI layer)**. No USDA dataset is bundled, no
+network route or live API is used, and there is no Apply action or automatic
+persistence. Machine application of advanced nutrition remains disabled.
 
 Phase 1 adds a trusted, offline, key-free USDA FoodData Central contract: a
 strict release manifest, a defensive adapter for the **actual pinned download
@@ -23,8 +23,16 @@ Phase 3 adds an **isolated, advisory-only** calculation layer (§15): a trusted
 calculation context, match/record rebinding, direct-mass and reviewed
 source-portion mass resolution, entire-recipe totals with nutrient-specific
 coverage, strict serving derivation, and derived-only `%DV`. It is NOT a
-persistence or Apply layer, and it never writes `codex_nutrition`. Phase 4–6
-remain unimplemented.
+persistence or Apply layer, and it never writes `codex_nutrition`.
+
+Phase 4 adds an **isolated, advisory review-and-display UI layer** (§16): a
+lexically private Phase 4 session boundary, a separate compact Advanced Nutrition
+card, a full-screen review modal, explicit ingredient-match and source-portion
+review, deterministic basis/serving views, nutrient groups, nutrient-specific
+coverage, ingredient evidence, and accessible/responsive interaction. It is a
+DISPLAY layer only: it never writes `codex_nutrition`, modifies frontmatter, or
+authorizes machine application. Phase 5 (explicit Apply/persistence) and Phase 6
+(Vault Intelligence integration) remain unimplemented.
 
 This is the canonical architecture document for Advanced Nutrition (target
 v0.10.0). It records the trusted-source plan, the schema-v1 contract, the
@@ -435,8 +443,13 @@ enable machine-generated nutrition application.
   nutrient-specific coverage, strict serving derivation, and derived-only `%DV`
   (reusing `src/utils/servingMath.ts`). No persistence/Apply/UI. Audit gate:
   numeric regression review.
-- **Phase 4 — simple card + Advanced Nutrition page.** Full-screen modal,
-  basis toggle, nutrient groups, evidence review. Audit gate: UX/a11y review.
+- **Phase 4 — simple card + Advanced Nutrition page.** DONE (offline, isolated,
+  advisory review/display only): a lexically private Phase 4 session boundary, a
+  separate compact Advanced Nutrition card, a full-screen review modal, explicit
+  ingredient-match and source-portion review, deterministic basis/serving views,
+  nutrient groups, nutrient-specific coverage, ingredient evidence, and
+  accessible/responsive interaction. No persistence/Apply. Audit gate: UX/a11y
+  review.
 - **Phase 5 — explicit Apply/persistence and legacy compatibility.** All-or-
   nothing Apply, provenance bound to applied values, stale invalidation. Audit
   gate: persistence + migration review.
@@ -1259,6 +1272,187 @@ reference (`foodReference.ts`), UI, server, persistence/vault, provider/network,
 or test fixtures. Phase 3 tests use clearly labeled synthetic fixtures; the
 checked-in fixtures are NOT a production USDA catalog and no production bundle
 exists. Phase 3 does not claim medical accuracy. `%DV` remains derived-only.
-Phase 4 (UI / Advanced Nutrition page) and Phase 5 (explicit Apply/persistence)
-remain deferred and unimplemented; `advancedNutritionApplicationAuthorization()`
-and `canApplyNutritionEstimate` remain globally fail-closed.
+Phase 4 (UI / Advanced Nutrition page) is implemented as an isolated advisory
+review/display layer (§16); Phase 5 (explicit Apply/persistence) remains deferred
+and unimplemented; `advancedNutritionApplicationAuthorization()` and
+`canApplyNutritionEstimate` remain globally fail-closed.
+
+---
+
+## 16. Phase 4 — advisory review and display UI (isolated)
+
+Phase 4 is an **isolated, offline, ADVISORY REVIEW AND DISPLAY ONLY** layer. It
+consumes the trusted Phase 1–3 contracts without weakening them and adds a
+separate compact card plus a full-screen review modal. It NEVER creates or
+persists `codex_nutrition`, modifies Markdown/frontmatter, writes a recipe or
+vault file, enables Apply, or authorizes machine application. Phase 5 remains
+responsible for explicit Apply/persistence.
+
+### 16.1 Implementation map
+
+| Concern | Module |
+| --- | --- |
+| Closed contract, bounds, failure taxonomy, state types | `src/core/nutritionV2/phase4/types.ts` |
+| Lexically private session authority + public operations | `src/core/nutritionV2/phase4/session.ts` |
+| Narrow hostile-input materialization (own-data reads) | `src/core/nutritionV2/phase4/materialize.ts` |
+| Hardened recipe adaptation + stable line references | `src/core/nutritionV2/phase4/adapt.ts` |
+| Explicit UI state machine (reducer) | `src/core/nutritionV2/phase4/state.ts` |
+| Nutrient groups, basis/serving derivation, `%DV`, units | `src/core/nutritionV2/phase4/display.ts` |
+| Stored-block trust projection | `src/core/nutritionV2/phase4/stored.ts` |
+| Bound source-portion choice construction | `src/core/nutritionV2/phase4/portion.ts` |
+| Review rows + calculation request builder | `src/core/nutritionV2/phase4/rows.ts` |
+| Isolated barrel (not re-exported publicly) | `src/core/nutritionV2/phase4/index.ts` |
+| Compact card + full modal (React) | `src/components/AdvancedNutritionCard.tsx`, `src/components/AdvancedNutritionModal.tsx` |
+
+### 16.2 Session trust boundary
+
+`createAdvancedNutritionSession(manifest, records)` builds a genuine session
+all-or-nothing from a valid Phase 1 manifest, its canonical records, a genuine
+Phase 3 calculation context, and a genuine Phase 2 review catalog created from
+the SAME manifest and records. Construction fails closed (`invalid_session`) on
+any mismatch, including a catalog/context digest mismatch. The session exposes
+only bounded review/display results and user-intent operations:
+`metadata()`, `reviewIngredient()`, `reviewPortions()`, `confirmMatch()`, and
+`calculate()`. It never exposes canonical food records, the internal record
+index, the genuine Phase 2 catalog, or any authority state.
+
+Authority is **lexically private**: a module-local `WeakMap` with non-exported
+registration/retrieval in the SAME module as the factory. Operations resolve
+authority only for the exact receiver object (`this`), so a structural fake,
+clone, spread object, proxy, inherited object, wrapper, primitive, or `null`
+cannot impersonate a genuine session and fails closed. No registry, blessing
+token, symbol, brand, key, callback, or constructor is exported. The unkeyed
+digest proves deterministic integrity, not authenticity.
+
+### 16.3 Honest production availability
+
+No production USDA bundle exists in the repository. The UI supports an injected
+genuine session, but production composition does NOT fabricate one. When no
+session is configured, the compact card is shown, the interface clearly states
+that trusted local USDA source data are unavailable in this build, the review/
+calculation controls are unavailable, and no fixture, curated reference, AI
+estimate, empty catalog, or invented preview is substituted. The wording is calm
+and does not describe the recipe as erroneous. The injection boundary lets a
+later separately audited local-bundle acquisition phase supply the session
+without rewriting the React UI.
+
+### 16.4 Recipe adaptation, hostile-input materialization, and invalidation
+
+`adaptRecipe(recipeRaw)` is the exported adaptation boundary and treats its
+runtime input as `unknown`. The narrow adaptation envelope (only `title`, the
+identity fields, `servings`, and `ingredients`) is materialized ONCE into inert
+bounded data before any property is used; unrelated recipe fields (full Markdown,
+file handles, frontmatter, platform objects) are never touched or materialized.
+Ingredients are materialized once before Phase 4 reads or forwards them, using a
+closed whitelist for the authoritative adaptation shape. The boundary preserves
+ingredient order, assigns deterministic unique line references
+(`ing:<index>:<content-digest>`), preserves the original bounded ingredient text,
+and never mutates the recipe. The Phase 2 parser/normalizer owns measurement
+derivation; Phase 4 never reinterprets notes/preparation text as mass, infers
+volume→mass or count→mass, or treats a qualitative ingredient as measurable.
+
+Accessors/getters/setters, proxies/reflection failures, symbol keys, sparse
+arrays, cycles, non-plain prototypes, functions, bigints, present-`undefined`
+own fields, dangerous keys, and oversized inputs fail closed with a fixed,
+bounded, input-redacted Phase 4 failure (`unsafe_request` / `invalid_recipe` /
+`unknown_field`); no hostile getter is invoked and no attacker exception object
+or message can escape or be rendered. A hostile/malformed/empty/oversized recipe
+is never converted into an empty successful adaptation, and a failed adaptation
+cannot proceed to matching, review rows, or calculation. The same guarded
+own-data read is used for the stored `codexNutrition` block before it is
+materialized and projected for display.
+
+The review key combines the stable recipe identity with a digest of the adapted
+line references, so a recipe OR ingredient change invalidates all stale match
+choices, portion choices, and previews. Changing only the display basis or
+requested serving count never reruns matching and never mutates the total
+baseline.
+
+### 16.5 Matching and source-portion review
+
+The modal shows one row per ingredient with the authoritative current outcome
+(unique exact / review required / unmatched / qualitative / invalid / none
+selected). Ambiguous rows show the bounded deterministic candidate set (food
+description, data type, FDC ID, match class, concise ranking evidence) and
+require an explicit choice, including an explicit “None of these”. Nothing is
+preselected; hover/focus/opening/keyboard navigation never confirm. Automatic
+unique-exact matches are labeled as automatic and never `user_confirmed`. Source
+portions are shown only through the genuine Phase 3 context; a legitimately
+amount-less FNDDS portion remains unusable (never invented as `1`), and the final
+binding is built from the current review, record digest, candidate-set digest,
+ingredient identity digest, and selected portion (`buildPortionChoice`). A match
+change invalidates its portion; a portion change invalidates the preview.
+
+### 16.6 Advisory calculation and display
+
+Calculation is an explicit user action (`Calculate Preview`); it never runs on
+modal open. The result is an `AdvisoryNutritionPreview` — never `CodexNutritionV1`
+— and the UI adds no `schema: 1`, `codex_nutrition`, `computed_at`, persistence
+instructions, application authorization, or Apply/Save control. The preview is
+prominently labeled “Advisory nutrition preview”, shows the bounded USDA bundle
+identity, preview status, ingredient digest, nutrient scope, unresolved count,
+and a concise not-medical-advice statement, and is never shown as current after
+any calculation-affecting change.
+
+The authoritative baseline is always the immutable Phase 3 entire-recipe total.
+`Entire recipe`, `Per serving`, and `Selected servings` are derived through the
+shared `src/utils/servingMath.ts` helpers; repeated toggling cannot drift.
+Requested servings are validated with the Phase 3 rules (number only, finite,
+positive, not `-0`, `<= 1000`, bounded precision). All 34 registered nutrients
+are grouped exactly once (energy/macros, fats/cholesterol, carbohydrates/sugars,
+minerals, vitamins); missing nutrients display unavailable (never zero), an
+explicit zero displays zero, partial coverage is marked, and `%DV` is derived for
+the currently displayed amount (nutrients without a DV stay unavailable, never
+`0%`). `ug` renders as `µg`; form-qualified units keep their RAE/NE/DFE meaning.
+A recognized stored `codex_nutrition` block is validated before trusted display;
+an opaque future schema is preserved but not interpreted.
+
+### 16.7 UI state, accessibility, and isolation
+
+A closed reducer owns the workflow (unavailable / ready / preview current /
+preview stale / invalid). It invalidates a portion when its match changes,
+invalidates the preview on any calculation-affecting change, ignores stale
+operation results, and treats basis/serving changes as display-only. The modal
+provides `role="dialog"` + `aria-modal="true"`, a named dialog, initial focus,
+keyboard-operable controls, Escape close, focus containment, focus restoration,
+visible focus styles, associated labels, radio semantics for mutually exclusive
+choices, restrained `aria-live` status, non-color-only status, reduced-motion
+compatibility, and responsive layouts. No accessibility dependency is added.
+
+Phase 4 imports Phase 1–3 only through its dedicated session boundary. A
+dependency-graph security test permits exactly UI components → Phase 4
+orchestration/session → Phase 1–3 pure modules; the reverse direction and every
+persistence/network/vault/server/provider/fixture path fail the graph test. No
+nutrition core imports React/UI, no production code imports test fixtures, and
+`advancedNutritionApplicationAuthorization()` and `canApplyNutritionEstimate`
+remain globally fail-closed.
+
+### 16.8 Tests, limitations, and deferred work
+
+Phase 4 tests cover session authority (genuine/fake/clone/spread/proxy/inherited/
+wrapper/null/primitives/hostile getters, identity binding, cross-session
+rejection), hostile-input adaptation (throwing recipe/ingredient getters with
+non-execution counters, getters returning plausible values, setter-only and
+non-enumerable accessors, unknown-field getters, proxies with `get`/`ownKeys`/
+`getOwnPropertyDescriptor`/`getPrototypeOf` traps, symbol keys, sparse arrays,
+direct/indirect cycles, class instances, null-prototype acceptance, present
+`undefined`, explicit `null`, functions, bigints, dangerous keys, oversized
+text/counts, primitive/missing/non-array inputs, missing-vs-zero and `-0`-vs-`0`,
+and post-adaptation source mutation), matching review (no auto-selection,
+explicit candidate/none, exact-not-user-confirmed, stale rejection,
+match→portion invalidation), source-portion workflow (no auto-selection, absent
+amount unusable, no invented amount/density, stale digest rejection), UI state
+(recipe/ingredient invalidation, basis/serving display-only, stale-result
+rejection, StrictMode, honest unavailability, hostile-recipe failure
+containment), display (34 nutrients grouped once, missing vs zero, partial vs
+complete, coverage counts, no-DV nutrients, `%DV` from the displayed amount,
+units/`µg`, total/per/selected values, malformed/opaque stored blocks),
+accessibility (roles/names/keyboard/focus/Escape/status), and security (no
+persistence/vault/Markdown/network/provider/fixture import, disabled gates, no
+Apply/Save, bounded input-redacted failures, import-graph direction).
+
+The checked-in fixtures are NOT a production USDA catalog and no production
+bundle exists. Phase 4 does not claim medical accuracy, individualized dietary
+advice, or complete nutritional coverage when coverage is partial. Phase 5
+(explicit Apply/persistence) and Phase 6 (Vault Intelligence integration) remain
+deferred; machine application remains disabled.

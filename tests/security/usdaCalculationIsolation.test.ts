@@ -24,6 +24,8 @@ import { buildCalculationBundle, CALC_FOODS } from '../fixtures/usdaCalculationF
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '../..');
 const CALCULATION_DIR = resolve(ROOT, 'src/core/nutritionV2/calculation');
+/** The explicit, newly allowed Phase 4 review/display boundary. */
+const PHASE4_DIR = resolve(ROOT, 'src/core/nutritionV2/phase4');
 
 function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
@@ -216,18 +218,20 @@ describe('phase 3 calculation — isolation and purity', () => {
     }
   });
 
-  it('is not imported by any production surface and is not re-exported from the barrels', () => {
+  it('is imported ONLY by the explicit Phase 4 review/display boundary', () => {
     const productionRoots = [resolve(ROOT, 'src'), resolve(ROOT, 'server')];
     const offenders: string[] = [];
     const importRe = /(?:from|import)\s*(?:\(\s*)?\s*['"]([^'"]+)['"]/g;
     for (const root of productionRoots) {
       for (const file of listFiles(root)) {
         if (file.startsWith(CALCULATION_DIR)) continue;
+        if (file.startsWith(PHASE4_DIR)) continue; // the one allowed path
         const source = readFileSync(file, 'utf8');
         let match: RegExpExecArray | null;
         importRe.lastIndex = 0;
         while ((match = importRe.exec(source)) !== null) {
-          if (/nutritionV2\/calculation/.test(match[1])) {
+          const resolved = resolveProjectSpecifier(file, match[1]);
+          if (resolved && resolved.startsWith(CALCULATION_DIR)) {
             offenders.push(file.slice(ROOT.length + 1));
             break;
           }
@@ -235,8 +239,28 @@ describe('phase 3 calculation — isolation and purity', () => {
       }
     }
     expect(offenders).toEqual([]);
+
+    // Positive control: the Phase 4 boundary DOES import Phase 3.
+    let phase4Importers = 0;
+    for (const file of listFiles(PHASE4_DIR)) {
+      const source = readFileSync(file, 'utf8');
+      let match: RegExpExecArray | null;
+      importRe.lastIndex = 0;
+      while ((match = importRe.exec(source)) !== null) {
+        const resolved = resolveProjectSpecifier(file, match[1]);
+        if (resolved && resolved.startsWith(CALCULATION_DIR)) {
+          phase4Importers += 1;
+          break;
+        }
+      }
+    }
+    expect(phase4Importers).toBeGreaterThan(0);
+
     expect(readFileSync(resolve(ROOT, 'src/core/nutritionV2/index.ts'), 'utf8')).not.toMatch(/calculation/i);
     expect(readFileSync(resolve(ROOT, 'src/core/index.ts'), 'utf8')).not.toMatch(/calculation/i);
+    // Phase 4 is intentionally NOT re-exported from any public barrel.
+    expect(readFileSync(resolve(ROOT, 'src/core/nutritionV2/index.ts'), 'utf8')).not.toMatch(/phase4/i);
+    expect(readFileSync(resolve(ROOT, 'src/core/index.ts'), 'utf8')).not.toMatch(/phase4/i);
   });
 
   it('reaches no calculation engine, UI, server, persistence, provider, or fixture module', () => {

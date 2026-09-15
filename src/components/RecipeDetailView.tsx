@@ -40,6 +40,8 @@ import { assessRecipeHealth } from '../utils/vaultIntelligence';
 import { nutritionForRequestedServings } from '../utils/nutrition';
 import { buildRecipeRelationshipIndex, recipeIdentity } from '../utils/recipeRelationships';
 import { RecipeNutritionCard } from './RecipeNutritionCard';
+import { AdvancedNutritionCard } from './AdvancedNutritionCard';
+import type { AdvancedNutritionSession } from '../core/nutritionV2/phase4';
 import { WikilinkPreviewModal } from './WikilinkPreviewModal';
 import { RecipeRelationshipsPanel } from './RecipeRelationshipsPanel';
 import { IngredientUsageModal } from './IngredientUsageModal';
@@ -69,6 +71,12 @@ interface RecipeDetailViewProps {
   onSaveNoteToVault?: (note: VaultNote) => Promise<boolean | void>;
   onOpenVaultIntelligence?: (recipeId?: string) => void;
   network: NetworkAdapter;
+  /**
+   * Optional injected genuine Advanced Nutrition review session. Production
+   * composition does NOT fabricate one; when absent the separate Advanced
+   * Nutrition card honestly reports that no trusted local source data exist.
+   */
+  advancedNutritionSession?: AdvancedNutritionSession | null;
 }
 
 export function RecipeDetailView({
@@ -88,6 +96,7 @@ export function RecipeDetailView({
   onSaveNoteToVault,
   onOpenVaultIntelligence,
   network,
+  advancedNutritionSession = null,
 }: RecipeDetailViewProps) {
   const [currentServings, setCurrentServings] = useState<number>(recipe.servings || 4);
   const [activeViewMode, setActiveViewMode] = useState<'visual' | 'markdown'>('visual');
@@ -598,6 +607,13 @@ export function RecipeDetailView({
                   onUpdateNutrition={(nut) => onUpdateNutrition(recipe, nut)}
                 />
               )}
+
+              {/* Advanced Nutrition (Phase 4) — a SEPARATE advisory review/display card */}
+              <AdvancedNutritionCard
+                recipe={recipe}
+                session={advancedNutritionSession}
+                servings={currentServings}
+              />
 
               <div className="bg-[#141414] rounded-2xl border border-white/5 p-5 shadow-xs">
                 <h3 className="text-base font-serif font-bold text-white pb-3 mb-3 border-b border-white/5 flex items-center justify-between">

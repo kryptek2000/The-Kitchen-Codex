@@ -6,7 +6,7 @@
  * a runtime flow under a stubbed `fetch`.
  */
 
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect, vi, afterEach } from 'vitest';
@@ -20,6 +20,10 @@ import { buildBundle, FOUNDATION_RAW } from '../fixtures/usdaFixtures';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '../..');
 const USDA_DIR = resolve(ROOT, 'src/core/nutritionV2/usda');
+/** The explicit, newly allowed Phase 4 review/display boundary. */
+const PHASE4_DIR = resolve(ROOT, 'src/core/nutritionV2/phase4');
+/** Phase 1 is internal to the advanced-nutrition namespace (Phases 2–4). */
+const ADVANCED_NAMESPACE = resolve(ROOT, 'src/core/nutritionV2');
 
 function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
@@ -33,6 +37,17 @@ function listFiles(dir: string): string[] {
     else if (full.endsWith('.ts') || full.endsWith('.tsx')) out.push(full);
   }
   return out;
+}
+
+function resolveProjectSpecifier(fromFile: string, specifier: string): string | null {
+  const ALIAS = '@/';
+  let base: string | null = null;
+  if (specifier.startsWith(ALIAS)) base = resolve(ROOT, specifier.slice(ALIAS.length));
+  else if (specifier.startsWith('.')) base = resolve(dirname(fromFile), specifier);
+  else return null;
+  const candidates = [base, `${base}.ts`, `${base}.tsx`, `${base}.d.ts`, join(base, 'index.ts'), join(base, 'index.tsx')];
+  for (const candidate of candidates) if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
+  return null;
 }
 
 const USDA_FILES = listFiles(USDA_DIR);
@@ -111,18 +126,19 @@ describe('usda phase 1 — no network, no keys, no persistence', () => {
     }
   });
 
-  it('is not imported by any production surface', () => {
+  it('is imported ONLY by the explicit Phase 4 review/display boundary', () => {
     const productionRoots = [resolve(ROOT, 'src'), resolve(ROOT, 'server')];
     const offenders: string[] = [];
     const importRe = /(?:from|import)\s*(?:\(\s*)?\s*['"]([^'"]+)['"]/g;
     for (const root of productionRoots) {
       for (const file of listFiles(root)) {
-        if (file.startsWith(USDA_DIR)) continue;
+        if (file.startsWith(ADVANCED_NAMESPACE)) continue; // Phases 1–4 are internal
         const source = readFileSync(file, 'utf8');
         let match: RegExpExecArray | null;
         importRe.lastIndex = 0;
         while ((match = importRe.exec(source)) !== null) {
-          if (/nutritionV2\/usda/.test(match[1])) {
+          const resolved = resolveProjectSpecifier(file, match[1]);
+          if (resolved && resolved.startsWith(USDA_DIR)) {
             offenders.push(file.slice(ROOT.length + 1));
             break;
           }
@@ -130,6 +146,22 @@ describe('usda phase 1 — no network, no keys, no persistence', () => {
       }
     }
     expect(offenders).toEqual([]);
+
+    // Positive control: the Phase 4 boundary DOES import Phase 1.
+    let phase4Importers = 0;
+    for (const file of listFiles(PHASE4_DIR)) {
+      const source = readFileSync(file, 'utf8');
+      let match: RegExpExecArray | null;
+      importRe.lastIndex = 0;
+      while ((match = importRe.exec(source)) !== null) {
+        const resolved = resolveProjectSpecifier(file, match[1]);
+        if (resolved && resolved.startsWith(USDA_DIR)) {
+          phase4Importers += 1;
+          break;
+        }
+      }
+    }
+    expect(phase4Importers).toBeGreaterThan(0);
   });
 
   it('is not re-exported from the Phase 0 / core barrels', () => {
