@@ -1,6 +1,6 @@
-# 🍳 The Kitchen Codex `v0.8.0`
+# 🍳 The Kitchen Codex `v0.9.0`
 
-[![Version](https://img.shields.io/badge/version-0.8.0-amber.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.9.0-amber.svg)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A markdown-native recipe manager, meal planner, culinary knowledge base, and interactive cooking companion built specifically for **Obsidian** vaults. Read, edit, sync, and cook directly from your Obsidian `.md` recipe collection with YAML frontmatter, Dataview tags, wikilinks (`[[Ingredient]]`, `[[Target|Alias]]`), AI nutrition estimation, dynamic portion scaling, multi-step cooking timers, and AI-powered web recipe scraping.
@@ -245,7 +245,18 @@ favorite: true
 
 ## 📌 Changelog
 
-### `v0.8.0` (Current Release)
+### `v0.9.0` (Current Release)
+- **Verified-free recipe generation**: separate structured-text and recipe-generation capability verification so a model must be verified for the recipe task itself, not merely for text. Current verified-free OpenRouter recipe models can generate editable drafts, and verified dynamic generation is single-attempt and terminal — no silent paid/provider fallback, no model fallback, and no retries.
+- **Fail-closed credentials & capability**: credentials and capability authorization fail closed on replacement, revocation, expiry, source mismatch, or catalog changes; generated recipes remain unsaved drafts until an explicit Save.
+- **Nutrition safety repair**: removed fabricated algorithmic nutrition authority and disabled automatic application/saving of untrusted machine nutrition. Existing manual and legacy nutrition stays readable, editable, scalable, and round-trip safe; Advanced Nutrition remains deferred.
+- **Licensed representative recipe images**: explicit Openverse / Wikimedia Commons search with a closed reusable-license allowlist (CC0, Public Domain, CC BY, CC BY-SA), preserved attribution/provenance, app-local protected thumbnails (no browser hotlinking), and deferred `Assets/` creation until explicit recipe Save. Representative images may resemble the recipe but are not guaranteed to depict the exact dish.
+- **Explicit AI recipe image generation**: Licensed Search remains the free default and AI generation is never automatic. The exact provider/model and truthful pricing classification are disclosed; paid or variable generation requires confirmation each time; one confirmation permits exactly one provider call with no retries or provider/model fallback. The preview stays transient until `Use This Image` and recipe Save, with collision-safe Asset creation, transaction-owned rollback, provenance separation, capacity reservations, and requester-bound previews. Browser and Obsidian binary preview transport use authenticated app-local requests.
+
+**Live acceptance**: a biscuit image was generated with OpenRouter Image using `google/gemini-2.5-flash-image` at a disclosed cost of approximately $0.03; it required explicit acceptance and recipe Save, persisted into the vault `Assets/` folder, and loaded after reopening — with no automatic generation.
+
+**Limitations**: AI image pricing may be paid or variable and depends on the selected provider account; a configured image-provider API key is required for AI generation (licensed search does not require one); `AI_ENDPOINT_TOKEN`-protected browser/plugin deployments remain unsupported/fail-closed until a repository-owned secure Unlock/bootstrap token source exists; File System Access collision protection covers concurrent transactions within the active application realm and does not claim universal cross-tab/process atomicity; representative images are licensed matches, not guaranteed exact depictions; Advanced Nutrition is not included in v0.9.0.
+
+### `v0.8.0` (Previous Release)
 - **Session-only BYOK for Text AI and Image AI**: enter a provider API key that is stored only in server process memory, expires automatically, is revocable, and is never written to the browser, vault, or settings. Exact provider-scoped credential isolation is preserved (`openrouter` ≠ `openrouter-image`; `gemini` ≠ `gemini-image`).
 - **Simplified two-card AI Settings UX**: Text AI and Image AI each get a compact card with provider, model, credential source, session-key controls, and a stable footer — Advanced / Server Diagnostics stays collapsed by default.
 - **Dynamic OpenRouter model discovery**: a server-owned, cached, fail-safe catalog discovers OpenRouter models and classifies **Free / Budget / Paid / Variable** pricing, with a searchable free-first model picker.

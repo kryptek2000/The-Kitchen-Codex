@@ -7,6 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.0] - 2026-09-14
+
+### 🍳 Verified-Free Recipe Generation
+
+- Separate structured-text and recipe-generation capability verification: a
+  model must be verified for the recipe-generation task, not merely for text.
+- Current verified-free OpenRouter recipe models can generate editable recipe
+  drafts.
+- Verified dynamic generation is single-attempt and terminal — no silent
+  paid/provider fallback, no model fallback, and no retries.
+- Credentials and capability authorization fail closed on replacement,
+  revocation, expiry, source mismatch, or catalog changes.
+- Generated recipes remain unsaved drafts until an explicit Save.
+
+### 🥗 Nutrition Safety Repair
+
+- Removed fabricated algorithmic nutrition authority.
+- Automatic application/saving of untrusted machine nutrition is disabled.
+- Existing manual and legacy nutrition remains readable, editable, scalable,
+  and round-trip safe.
+- Advanced Nutrition and a trusted future nutrition engine remain deferred.
+
+### 🖼️ Licensed Representative Recipe Images
+
+- Explicit Openverse / Wikimedia Commons search.
+- Closed reusable-license allowlist: CC0, Public Domain, CC BY, and CC BY-SA.
+- Attribution and provenance preserved.
+- App-local protected thumbnails; no browser hotlinking.
+- Representative images may resemble the recipe but are not guaranteed to
+  depict the exact dish.
+- Asset creation is deferred until explicit recipe Save.
+
+### ✨ Explicit AI Recipe Image Generation
+
+- Licensed Search remains the free default.
+- AI generation is deliberate and never automatic.
+- Exact provider/model and truthful pricing classification are disclosed.
+- Paid or variable generation requires confirmation each time.
+- One confirmation permits one provider call, with no retries and no
+  provider/model fallback.
+- Preview remains transient until `Use This Image` and recipe Save.
+- Collision-safe Asset creation, transaction-owned rollback, provenance
+  separation, capacity reservations, and requester-bound previews.
+- Browser and Obsidian binary preview transport use authenticated app-local
+  requests.
+
+### ✅ Live Acceptance
+
+- Generated a biscuit image with OpenRouter Image using
+  `google/gemini-2.5-flash-image`; disclosed cost was approximately $0.03.
+- The image required explicit acceptance (`Use This Image`) and recipe Save,
+  persisted into the vault `Assets/` folder, and loaded after reopening.
+- No automatic generation occurred.
+
+### ⚠️ Known Limitations
+
+- AI image pricing may be paid or variable and depends on the selected provider
+  account.
+- A configured image-provider API key is required for AI generation; licensed
+  search does not require one.
+- `AI_ENDPOINT_TOKEN`-protected browser/plugin deployments do not yet have a
+  repository-owned secure Unlock/bootstrap token source and remain
+  unsupported/fail-closed.
+- Browser File System Access collision protection covers concurrent
+  transactions within the active application realm; it does not claim universal
+  cross-tab/process atomicity.
+- Representative images are licensed matches, not guaranteed exact depictions.
+- Advanced Nutrition is not included in v0.9.0.
+
 ## [0.8.0] - 2026-09-12
 
 ### 🔐 Session-Only BYOK (Text + Image)

@@ -105,13 +105,37 @@ in dev (Vite HMR). `frame-ancestors` is configurable via `CSP_FRAME_ANCESTORS`.
 
 ## Current state / open items
 
-- **v0.8.0 is the current release** ("The Kitchen Codex v0.8.0 — BYOK & Dynamic
-  OpenRouter Catalog"). `RELEASE_VERSION` in
+- **v0.9.0 is the current release** ("The Kitchen Codex v0.9.0 — Explicit AI
+  Recipe Images & Verified-Free Generation"). `RELEASE_VERSION` in
   `src/appVersion.ts` is the single runtime source of truth for BOTH the
   client (`src/version.ts`) and the server (`/api/health`). `package.json`/
   `README.md` reference the same release. To bump, run
   `bun x tsx scripts/bump_version.ts vX.Y.Z`.
-- **v0.8.0 delivers session-only BYOK + a safe dynamic OpenRouter catalog**: a
+- **v0.9.0 delivers verified-free recipe generation + explicit AI recipe
+  images**: separate structured-text vs recipe-generation capability
+  verification (a model must be verified for the recipe task, not merely for
+  text); current verified-free OpenRouter recipe models generate editable
+  drafts; verified dynamic generation is single-attempt and terminal with no
+  silent paid/provider/model fallback or retries; credentials and capability
+  authorization fail closed on replacement, revocation, expiry, source
+  mismatch, or catalog changes; generated recipes stay unsaved drafts until
+  explicit Save; a nutrition safety repair removes fabricated algorithmic
+  nutrition authority and disables automatic saving of untrusted machine
+  nutrition while keeping manual/legacy nutrition readable, editable, scalable,
+  and round-trip safe; explicit Openverse/Wikimedia representative-image search
+  under a closed reusable-license allowlist (CC0 / Public Domain / CC BY /
+  CC BY-SA) with preserved attribution, app-local protected thumbnails, and
+  deferred Asset creation; and explicit, never-automatic AI recipe image
+  generation with truthful pricing, per-generation confirmation, exactly one
+  provider call per confirmation, no retries/provider/model fallback, and a
+  transient preview until `Use This Image` + Save. Live-accepted with OpenRouter
+  Image (`google/gemini-2.5-flash-image`, ~$0.03). Advanced Nutrition remains
+  deferred.
+- **Verified baseline**: 2791/2791 tests across 171 files; 428/428 security
+  tests across 29 files; typecheck and browser + plugin builds clean. Release
+  notes: `RELEASE_NOTES_v0.9.0.md`.
+- **v0.8.0 was the previous release**: it delivered session-only BYOK + a safe
+  dynamic OpenRouter catalog — a
   simplified two-card AI Settings UX; session-only API keys for Text AI and
   Image AI (server-memory only, expiring, revocable, never persisted), with
   exact `openrouter`/`openrouter-image` (and `gemini`/`gemini-image`) credential
@@ -124,10 +148,7 @@ in dev (Vite HMR). `frame-ancestors` is configurable via `CSP_FRAME_ANCESTORS`.
   closed); and Ask My Kitchen generic ingredient matching. Discovered dynamic
   models that are not server-verified are informational only and NOT executable;
   no free image-generation model is advertised.
-- **Verified baseline**: 2220/2220 tests across 135 files; 269/269 security tests
-  across 18 files; typecheck and browser + plugin builds clean. Release notes:
-  `RELEASE_NOTES_v0.8.0.md`.
-- **v0.7.0 was the previous release**: it delivered Create for Me + Vault
+- **v0.7.0 was an earlier release**: it delivered Create for Me + Vault
   Intelligence image recovery — a guided recipe-creation assistant with
   canonical vault-integrity hardening (recipe/vault stale-conflict protection,
   lock-key normalization, liveness-guarded Save), missing/broken-image
