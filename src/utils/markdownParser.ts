@@ -12,6 +12,14 @@ import {
 import { obsidianToCanonicalRecipe, canonicalToObsidianRecipe } from '../schema/legacyAdapter';
 import { parseFraction } from '../schema/recipeValidator';
 import type { NutritionSource, NutritionConfidence } from '../schema/recipeSchema';
+import {
+  CODEX_NUTRITION_FRONTMATTER_KEY,
+  MARKDOWN_UNSAFE_MESSAGE,
+  decodeCodexNutrition,
+  encodeCodexNutrition,
+  toInertValue,
+  type AdvancedNutritionBlock,
+} from '../core/nutritionV2';
 
 /** Valid nutrition provenance authorities; used to gate parsing (never invented). */
 const NUTRITION_SOURCE_VALUES: ReadonlyArray<string> = [
@@ -806,11 +814,21 @@ export function parseObsidianRecipeMarkdown(
     fileHandle,
   };
 
+  // Advanced nutrition (Phase 0): decode the namespaced `codex_nutrition` block.
+  // Recognized schema v1 is strictly validated; a safe unknown future schema is
+  // preserved opaquely; malformed data is left untouched in `frontmatter` and is
+  // never interpreted.
+  const decodedAdvanced = decodeCodexNutrition(frontmatter[CODEX_NUTRITION_FRONTMATTER_KEY]);
+
   // Production Canonical Boundary (Load Path):
   // Convert through CanonicalRecipe to enforce Schema v1 normalization & validation
   // before delivering to the UI as an ObsidianRecipe.
   const canonical = obsidianToCanonicalRecipe(rawParsedRecipe);
-  return canonicalToObsidianRecipe(canonical, fileHandle);
+  const parsed = canonicalToObsidianRecipe(canonical, fileHandle);
+  if (decodedAdvanced.kind === 'v1' || decodedAdvanced.kind === 'opaque') {
+    parsed.codexNutrition = decodedAdvanced.value;
+  }
+  return parsed;
 }
 
 /**
@@ -869,6 +887,143 @@ export function renderIngredientLine(
   return `- ${check} ${amt}${unit}${name}`.trim();
 }
 
+interface AdvancedFrontmatterPresence {
+  present: boolean;
+  accessor: boolean;
+}
+
+function readDataProperty(
+  object: unknown,
+  key: string
+): { present: boolean; accessor: boolean; value: unknown } {
+  if (!object || typeof object !== 'object') return { present: false, accessor: false, value: undefined };
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(object, key);
+  } catch {
+    return { present: true, accessor: true, value: undefined };
+  }
+  if (!descriptor) return { present: false, accessor: false, value: undefined };
+  if (!('value' in descriptor)) return { present: true, accessor: true, value: undefined };
+  return { present: true, accessor: false, value: descriptor.value };
+}
+
+/**
+ * Copies user frontmatter into the serialization target using property
+ * descriptors only, so a hostile accessor is never invoked. The
+ * `codex_nutrition` slot is captured separately (its value is materialized
+ * defensively by `applyAdvancedNutritionRoundTrip`).
+ */
+function copyFrontmatterSafely(
+  rawFrontmatter: unknown,
+  target: Record<string, any>
+): AdvancedFrontmatterPresence {
+  const presence: AdvancedFrontmatterPresence = { present: false, accessor: false };
+  if (!rawFrontmatter || typeof rawFrontmatter !== 'object') return presence;
+  let names: string[];
+  try {
+    names = Object.getOwnPropertyNames(rawFrontmatter);
+  } catch {
+    presence.present = true;
+    presence.accessor = true;
+    return presence;
+  }
+  for (const name of names) {
+    let descriptor: PropertyDescriptor | undefined;
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(rawFrontmatter, name);
+    } catch {
+      if (name === CODEX_NUTRITION_FRONTMATTER_KEY) {
+        presence.present = true;
+        presence.accessor = true;
+      }
+      continue;
+    }
+    if (!descriptor || !descriptor.enumerable) continue;
+    if (name === CODEX_NUTRITION_FRONTMATTER_KEY) {
+      if (!('value' in descriptor)) {
+        presence.present = true;
+        presence.accessor = true;
+        continue;
+      }
+      if (descriptor.value === undefined || descriptor.value === null) continue;
+      presence.present = true;
+      target[name] = descriptor.value;
+      continue;
+    }
+    // Never invoke an accessor for ordinary frontmatter.
+    if (!('value' in descriptor)) continue;
+    if (descriptor.value !== undefined && descriptor.value !== null) {
+      target[name] = descriptor.value;
+    }
+  }
+  return presence;
+}
+
+/**
+ * Advanced-nutrition (`codex_nutrition`) round-trip helper.
+ *
+ * SAFE FAIL-CLOSED POLICY (documented for Phase 0):
+ *  - A validated typed block (or a valid recognized schema-v1 raw block) is
+ *    re-serialized from whitelisted canonical data only.
+ *  - A safe unknown FUTURE schema is preserved as bounded opaque data.
+ *  - A MALFORMED raw block that is safely representable is preserved as INERT
+ *    STRUCTURAL DATA (never dropped, never interpreted). This is structural
+ *    preservation, NOT byte-for-byte preservation: YAML formatting, comments,
+ *    quoting, and key order may change during an explicit Save.
+ *  - An UNREPRESENTABLE programmatic value (accessor/proxy/function/cycle/…)
+ *    is REJECTED, not preserved: serialization throws a fixed, bounded error
+ *    before producing Markdown, so hostile data is never handed to YAML and the
+ *    user's original file is never silently overwritten with a partial result.
+ *  - No block is ever created automatically.
+ */
+function applyAdvancedNutritionRoundTrip(
+  frontmatterObj: Record<string, any>,
+  original: Partial<ObsidianRecipe>,
+  recipeToSerialize: Partial<ObsidianRecipe>,
+  presence: AdvancedFrontmatterPresence
+): void {
+  const key = CODEX_NUTRITION_FRONTMATTER_KEY;
+
+  const typedFromOriginal = readDataProperty(original, 'codexNutrition');
+  const typedFromSerialize = readDataProperty(recipeToSerialize, 'codexNutrition');
+  if (typedFromOriginal.accessor || typedFromSerialize.accessor) {
+    throw new Error(MARKDOWN_UNSAFE_MESSAGE);
+  }
+  const typedPresent = typedFromOriginal.present || typedFromSerialize.present;
+  const typedValue = typedFromOriginal.present ? typedFromOriginal.value : typedFromSerialize.value;
+  if (typedPresent && typedValue !== undefined && typedValue !== null) {
+    try {
+      frontmatterObj[key] = encodeCodexNutrition(typedValue as AdvancedNutritionBlock);
+      return;
+    } catch {
+      // Fall through to raw handling below.
+    }
+  }
+
+  if (presence.accessor) throw new Error(MARKDOWN_UNSAFE_MESSAGE);
+
+  const rawPresent = presence.present || Object.prototype.hasOwnProperty.call(frontmatterObj, key);
+  if (!rawPresent) return;
+
+  const materialized = toInertValue(frontmatterObj[key]);
+  if (!materialized.ok) throw new Error(MARKDOWN_UNSAFE_MESSAGE);
+  const inert = materialized.value;
+
+  const decoded = decodeCodexNutrition(inert);
+  if (decoded.kind === 'v1' || decoded.kind === 'opaque') {
+    try {
+      frontmatterObj[key] = encodeCodexNutrition(decoded.value);
+      return;
+    } catch {
+      // Fall through to inert preservation below.
+    }
+  }
+  // Malformed but safely representable: preserve the INERT copy (never the
+  // original object), so YAML never receives a hostile value.
+  frontmatterObj[key] = inert;
+}
+
 /**
  * Serializes an ObsidianRecipe into pristine Obsidian Markdown with YAML frontmatter.
  * Preserves custom/unknown frontmatter fields, Dataview inline fields, and exact wikilinks.
@@ -887,15 +1042,13 @@ export function serializeRecipeToObsidianMarkdown(recipe: Partial<ObsidianRecipe
     }
   }
 
-  // Start with existing frontmatter if present to preserve user-authored custom fields
+  // Start with existing frontmatter if present to preserve user-authored custom fields.
+  // Descriptor-based: hostile accessors are never invoked.
   const frontmatterObj: Record<string, any> = {};
-  if (recipeToSerialize.frontmatter && typeof recipeToSerialize.frontmatter === 'object') {
-    for (const [k, v] of Object.entries(recipeToSerialize.frontmatter)) {
-      if (v !== undefined && v !== null) {
-        frontmatterObj[k] = v;
-      }
-    }
-  }
+  const advancedPresence = copyFrontmatterSafely(recipeToSerialize.frontmatter, frontmatterObj);
+
+  // Namespaced advanced-nutrition round-trip (validated encode / inert preserve).
+  applyAdvancedNutritionRoundTrip(frontmatterObj, recipe, recipeToSerialize, advancedPresence);
 
   if (recipeToSerialize.title) {
     frontmatterObj.title = recipeToSerialize.title;

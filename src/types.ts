@@ -1,4 +1,5 @@
 import type { NutritionSource, NutritionConfidence } from './schema/recipeSchema';
+import type { AdvancedNutritionBlock } from './core/nutritionV2';
 
 export interface ParsedIngredient {
   original: string;
@@ -77,6 +78,13 @@ export interface ObsidianRecipe {
   dataviewFields: Record<string, string>;
   wikilinks: string[];
   frontmatter?: Record<string, any>;
+  /**
+   * Validated advanced-nutrition view decoded from the namespaced
+   * `codex_nutrition` frontmatter block (Phase 0, read-only). The raw block is
+   * always preserved in `frontmatter`; this is the parsed/validated projection.
+   * Machine application of advanced nutrition remains disabled.
+   */
+  codexNutrition?: AdvancedNutritionBlock;
   lastModified?: string;
   fileHandle?: any; // Native FileSystemFileHandle if connected
   isFavorite?: boolean;

@@ -44,6 +44,10 @@ export * from '../utils/nutrition';
 // Deterministic food-aware whole-recipe nutrition engine (was server-owned).
 export * from './deterministicNutrition';
 
+// Advanced Nutrition v1 (Phase 0): canonical units, closed nutrient registry,
+// pinned FDA Daily Values, schema-v1 contract, evidence validation + codec.
+export * from './nutritionV2';
+
 // Provider-neutral AI contracts (AiProvider, AiCapabilities, AiJsonSchema, ...).
 // These are pure contracts only; provider SDKs/registries stay server-side.
 export * from './ai/types';
