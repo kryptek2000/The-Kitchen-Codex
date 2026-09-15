@@ -1,0 +1,567 @@
+/**
+ * The Kitchen Codex — Advanced Nutrition Phase 3: advisory calculation engine.
+ *
+ * PURE, offline. Internal to the calculation boundary; it is imported by the
+ * authority-owning `context.ts` and is NOT exported from the public barrel. It
+ * receives the private records map + genuine match catalog as plain inputs and
+ * never registers authority itself.
+ *
+ * It re-derives the CURRENT Phase 2 review for every ingredient, rebinds any
+ * confirmation to the current catalog, resolves mass only from direct mass or an
+ * explicitly reviewed source portion, and produces advisory entire-recipe totals
+ * with nutrient-specific coverage. It never persists, serializes, applies, or
+ * authorizes anything.
+ */
+
+import { isPlainObject, toInertValue } from '../schema';
+import { canonicalStringify, sha256Hex } from '../usda/digest';
+import { isNutrientId, NUTRIENT_IDS, NUTRIENT_REGISTRY, type NutrientId } from '../nutrients';
+import { isValidNutrientAmount, MAX_NUTRIENT_AMOUNT, type CanonicalUnit } from '../units';
+import { normalizeQuery } from '../matching/normalize';
+import { parseIngredient } from '../matching/parse';
+import { confirmIngredientReview, reviewIngredient } from '../matching/review';
+import type { ConfirmationResult, ReviewCatalog } from '../matching/types';
+import type { CanonicalUsdaFoodRecord } from '../usda/types';
+import { isQualitativeIngredientText } from '../../../utils/ingredientSemantics';
+import { resolvePortionMassGrams, type PortionMassResolution } from './mass';
+import { contributionFor, isWithinCanonicalBound, roundCanonicalTotal, stableSum } from './numeric';
+import { isValidStrictServingCount } from './servings';
+import {
+  CALCULATION_SCHEMA,
+  CALCULATION_VERSION,
+  MAX_CALCULATION_INGREDIENTS,
+  MAX_CALCULATION_LINE_REF_LENGTH,
+  phase3Failure,
+  type AdvisoryNutritionPreview,
+  type CalculationResult,
+  type CalculationStatus,
+  type IngredientCalculationEvidence,
+  type IngredientOutcome,
+  type MassSource,
+  type MatchStatus,
+  type NutrientTotalResult,
+  type Phase3Failure,
+  type Phase3FailureCode,
+  type PortionSelection,
+  type UnresolvedIngredient,
+} from './types';
+
+const REQUEST_KEYS = new Set(['servings', 'nutrient_scope', 'ingredients']);
+const INGREDIENT_INPUT_KEYS = new Set(['line_ref', 'ingredient', 'review', 'selection', 'portion_selection']);
+const PORTION_SELECTION_KEYS = new Set([
+  'calculation_version',
+  'line_ref',
+  'ingredient_identity_digest',
+  'bundle_release',
+  'fdc_id',
+  'record_digest',
+  'candidates_digest',
+  'portion_index',
+  'portion_amount',
+  'measure',
+  'gram_weight',
+  'modifier',
+]);
+
+export interface AdvisoryCalculationInputs {
+  readonly bundleRelease: string;
+  readonly catalogDigest: string;
+  readonly nutrientMapVersion: string;
+  readonly records: ReadonlyMap<number, CanonicalUsdaFoodRecord>;
+  readonly catalog: ReviewCatalog;
+  /** Untrusted request value. */
+  readonly request: unknown;
+}
+
+type Materialized = { ok: true; value: unknown } | { ok: false; unsafe: boolean };
+
+function materialize(raw: unknown): Materialized {
+  const result = toInertValue(raw);
+  if (result.ok) return { ok: true, value: result.value };
+  const reason = (result as { ok: false; reason: string }).reason;
+  const unsafe =
+    reason === 'dangerous_key' ||
+    reason === 'accessor_or_hidden_property' ||
+    reason === 'array_accessor_or_hole' ||
+    reason === 'reflection_failed' ||
+    reason === 'cycle' ||
+    reason === 'symbol_key';
+  return { ok: false, unsafe };
+}
+
+function fail(code: Phase3FailureCode): CalculationResult {
+  return { ok: false, failure: phase3Failure(code) };
+}
+
+function isSafePositiveInt(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && !Object.is(value, -0) && value > 0;
+}
+
+function isFiniteNonNegativeNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && !Object.is(value, -0) && value >= 0;
+}
+
+interface PreparedIngredient {
+  readonly lineRef: string;
+  readonly ingredient: unknown;
+  readonly review: unknown;
+  readonly selection: unknown;
+  readonly portionSelection: unknown;
+}
+
+interface EvaluatedIngredient {
+  readonly lineRef: string;
+  readonly originalText: string;
+  readonly amount: number | null;
+  readonly rawUnit: string | undefined;
+  readonly normalizedUnit: string;
+  readonly measurementKind: string;
+  readonly query: string;
+  readonly normalizedQuery: string;
+  readonly note: string | undefined;
+  readonly qualitative: boolean;
+  readonly matchStatus: MatchStatus;
+  readonly matched: boolean;
+  readonly ambiguous: boolean;
+  readonly fdcId: number | undefined;
+  readonly recordDigest: string | undefined;
+  readonly confirmationDigest: string | undefined;
+  readonly grams: number | undefined;
+  readonly massSource: MassSource | undefined;
+  readonly portionIndex: number | undefined;
+  readonly portionCandidatesDigest: string | undefined;
+  readonly contributions: Partial<Record<NutrientId, number>>;
+  readonly contributingNutrients: ReadonlyArray<NutrientId>;
+  readonly outcome: IngredientOutcome;
+}
+
+function identityPayload(e: EvaluatedIngredient) {
+  return {
+    line_ref: e.lineRef,
+    original_text: e.originalText,
+    amount: e.amount,
+    ...(e.rawUnit !== undefined ? { raw_unit: e.rawUnit } : {}),
+    normalized_unit: e.normalizedUnit,
+    measurement_kind: e.measurementKind,
+    query: e.query,
+    normalized_query: e.normalizedQuery,
+    ...(e.note !== undefined ? { note: e.note } : {}),
+    qualitative: e.qualitative,
+    match_status: e.matchStatus,
+    ...(e.fdcId !== undefined ? { fdc_id: e.fdcId } : {}),
+    ...(e.recordDigest !== undefined ? { record_digest: e.recordDigest } : {}),
+    ...(e.confirmationDigest !== undefined ? { confirmation_digest: e.confirmationDigest } : {}),
+  };
+}
+
+function fullPayload(e: EvaluatedIngredient) {
+  return {
+    identity: identityPayload(e),
+    mass_source: e.massSource ?? null,
+    ...(e.portionIndex !== undefined ? { portion_index: e.portionIndex } : {}),
+    ...(e.portionCandidatesDigest !== undefined
+      ? { portion_candidates_digest: e.portionCandidatesDigest }
+      : {}),
+    resolved_grams: e.grams ?? null,
+    outcome: e.outcome,
+    contributing_nutrients: [...e.contributingNutrients],
+  };
+}
+
+function digestOf(payload: unknown): string {
+  return `sha256:${sha256Hex(canonicalStringify(payload))}`;
+}
+
+function validateNutrientScope(raw: unknown): { ok: true; ids: NutrientId[] } | { ok: false; code: Phase3FailureCode } {
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > NUTRIENT_IDS.length) {
+    return { ok: false, code: 'invalid_nutrient_scope' };
+  }
+  const ids: NutrientId[] = [];
+  const seen = new Set<string>();
+  for (const value of raw) {
+    if (!isNutrientId(value)) return { ok: false, code: 'invalid_nutrient_scope' };
+    if (seen.has(value)) return { ok: false, code: 'invalid_nutrient_scope' };
+    seen.add(value);
+    ids.push(value);
+  }
+  return { ok: true, ids };
+}
+
+function sanitizePortionSelection(
+  raw: unknown
+): { ok: true; selection: PortionSelection } | { ok: false; code: Phase3FailureCode } {
+  const materialized = materialize(raw);
+  if (!materialized.ok) {
+    return {
+      ok: false,
+      code: (materialized as { ok: false; unsafe: boolean }).unsafe
+        ? 'unsafe_request'
+        : 'invalid_portion_selection',
+    };
+  }
+  if (!isPlainObject(materialized.value)) return { ok: false, code: 'invalid_portion_selection' };
+  const value = materialized.value;
+  for (const key of Object.keys(value)) {
+    if (!PORTION_SELECTION_KEYS.has(key)) return { ok: false, code: 'unknown_field' };
+  }
+  if (value.calculation_version !== CALCULATION_VERSION) return { ok: false, code: 'invalid_portion_selection' };
+  if (typeof value.line_ref !== 'string' || value.line_ref.length === 0) {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
+  if (typeof value.ingredient_identity_digest !== 'string') {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
+  if (typeof value.bundle_release !== 'string') return { ok: false, code: 'invalid_portion_selection' };
+  if (!isSafePositiveInt(value.fdc_id)) return { ok: false, code: 'invalid_portion_selection' };
+  if (typeof value.record_digest !== 'string') return { ok: false, code: 'invalid_portion_selection' };
+  if (typeof value.candidates_digest !== 'string') return { ok: false, code: 'invalid_portion_selection' };
+  if (!Number.isSafeInteger(value.portion_index) || (value.portion_index as number) < 0) {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
+  if (!isFiniteNonNegativeNumber(value.portion_amount)) return { ok: false, code: 'invalid_portion_selection' };
+  if (typeof value.measure !== 'string') return { ok: false, code: 'invalid_portion_selection' };
+  if (!isFiniteNonNegativeNumber(value.gram_weight)) return { ok: false, code: 'invalid_portion_selection' };
+  if (value.modifier !== undefined && typeof value.modifier !== 'string') {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
+  return {
+    ok: true,
+    selection: {
+      calculation_version: CALCULATION_VERSION,
+      line_ref: value.line_ref,
+      ingredient_identity_digest: value.ingredient_identity_digest,
+      bundle_release: value.bundle_release,
+      fdc_id: value.fdc_id,
+      record_digest: value.record_digest,
+      candidates_digest: value.candidates_digest,
+      portion_index: value.portion_index as number,
+      portion_amount: value.portion_amount,
+      measure: value.measure,
+      gram_weight: value.gram_weight,
+      ...(value.modifier !== undefined ? { modifier: value.modifier as string } : {}),
+    },
+  };
+}
+
+function evaluateIngredient(
+  inputs: AdvisoryCalculationInputs,
+  prepared: PreparedIngredient,
+  scope: ReadonlyArray<NutrientId>
+): { ok: true; value: EvaluatedIngredient } | { ok: false; code: Phase3FailureCode } {
+  const parsedResult = parseIngredient(prepared.ingredient);
+  if (!parsedResult.ok) return { ok: false, code: 'invalid_ingredient_input' };
+  const parsed = parsedResult.parsed;
+  // Reject a present negative / -0 / non-finite quantity (fail closed, whole request).
+  if (
+    parsed.amount !== null &&
+    (!Number.isFinite(parsed.amount) || parsed.amount < 0 || Object.is(parsed.amount, -0))
+  ) {
+    return { ok: false, code: 'invalid_ingredient_input' };
+  }
+  const hasMeasurableQuantity = typeof parsed.amount === 'number' && Number.isFinite(parsed.amount);
+  const qualitative =
+    !hasMeasurableQuantity && isQualitativeIngredientText(`${parsed.query} ${parsed.original_text}`);
+  const normalizedQuery = normalizeQuery(parsed.query).text;
+
+  const currentReview = reviewIngredient(inputs.catalog, prepared.ingredient);
+  if (currentReview.outcome === 'invalid') return { ok: false, code: 'invalid_ingredient_input' };
+
+  let matchStatus: MatchStatus = 'none';
+  let matched = false;
+  let ambiguous = false;
+  let fdcId: number | undefined;
+  let recordDigest: string | undefined;
+  let confirmationDigest: string | undefined;
+
+  if (currentReview.outcome === 'matched_exact') {
+    matched = true;
+    matchStatus = 'unique_exact';
+    fdcId = currentReview.selected_fdc_id;
+  } else if (currentReview.outcome === 'review_required') {
+    ambiguous = true;
+    if (prepared.review !== undefined && prepared.selection !== undefined) {
+      const suppliedDigest = isPlainObject(prepared.review) ? prepared.review.review_digest : undefined;
+      if (typeof suppliedDigest === 'string' && suppliedDigest === currentReview.review_digest) {
+        const confirmation: ConfirmationResult = confirmIngredientReview(
+          inputs.catalog,
+          currentReview,
+          prepared.selection
+        );
+        if (confirmation.outcome === 'confirmed') {
+          matched = true;
+          ambiguous = false;
+          matchStatus = 'user_confirmed';
+          fdcId = confirmation.fdc_id;
+          confirmationDigest = currentReview.review_digest;
+        } else if (confirmation.outcome === 'invalid') {
+          const code = confirmation.failure.code;
+          if (code === 'unsafe_selection' || code === 'unknown_field' || code === 'validation_error') {
+            return { ok: false, code: 'invalid_ingredient_input' };
+          }
+        }
+      }
+    }
+  }
+
+  // Resolve the current canonical record for a matched identity.
+  let record: CanonicalUsdaFoodRecord | undefined;
+  if (matched && fdcId !== undefined) {
+    const candidate = currentReview.candidates.find((entry) => entry.fdc_id === fdcId);
+    record = inputs.records.get(fdcId);
+    if (!candidate || !record || record.record_digest !== candidate.record_digest) {
+      return { ok: false, code: 'invalid_ingredient_input' };
+    }
+    recordDigest = record.record_digest;
+  }
+
+  // Identity digest (binds identity WITHOUT any portion selection).
+  const base: EvaluatedIngredient = {
+    lineRef: prepared.lineRef,
+    originalText: parsed.original_text,
+    amount: parsed.amount,
+    rawUnit: parsed.raw_unit,
+    normalizedUnit: parsed.normalized_unit,
+    measurementKind: parsed.measurement_kind,
+    query: parsed.query,
+    normalizedQuery,
+    note: parsed.note,
+    qualitative,
+    matchStatus,
+    matched,
+    ambiguous,
+    fdcId,
+    recordDigest,
+    confirmationDigest,
+    grams: undefined,
+    massSource: undefined,
+    portionIndex: undefined,
+    portionCandidatesDigest: undefined,
+    contributions: {},
+    contributingNutrients: [],
+    outcome: 'no_match',
+  };
+  const identityDigest = digestOf(identityPayload(base));
+
+  // Mass resolution.
+  let grams: number | undefined;
+  let massSource: MassSource | undefined;
+  let portionIndex: number | undefined;
+  let portionCandidatesDigest: string | undefined;
+
+  if (!qualitative && matched && record) {
+    if (parsed.measurement_kind === 'mass' && parsed.grams !== undefined) {
+      if (!isWithinCanonicalBound(parsed.grams)) return { ok: false, code: 'numeric_overflow' };
+      grams = parsed.grams;
+      massSource = 'direct_mass';
+    } else if (prepared.portionSelection !== undefined) {
+      const selectionResult = sanitizePortionSelection(prepared.portionSelection);
+      if (!selectionResult.ok) {
+        return { ok: false, code: (selectionResult as { ok: false; code: Phase3FailureCode }).code };
+      }
+      const amountForPortion = parsed.amount;
+      if (amountForPortion !== null && isFiniteNonNegativeNumber(amountForPortion)) {
+        const resolution: PortionMassResolution = resolvePortionMassGrams(
+          record,
+          selectionResult.selection,
+          amountForPortion,
+          inputs.bundleRelease,
+          prepared.lineRef,
+          identityDigest
+        );
+        if (resolution.ok) {
+          grams = resolution.grams;
+          massSource = 'source_portion';
+          portionIndex = selectionResult.selection.portion_index;
+          portionCandidatesDigest = selectionResult.selection.candidates_digest;
+        } else if ((resolution as { ok: false; reason: string }).reason === 'overflow') {
+          return { ok: false, code: 'numeric_overflow' };
+        }
+      }
+    }
+  }
+
+  // Contributions.
+  const contributions: Partial<Record<NutrientId, number>> = {};
+  const contributingNutrients: NutrientId[] = [];
+  if (grams !== undefined && record) {
+    for (const nutrient of scope) {
+      const nutrientRecord = record.nutrients[nutrient];
+      if (!nutrientRecord) continue;
+      const value = contributionFor(nutrientRecord.amount_per_100g, grams);
+      if (value === undefined) return { ok: false, code: 'numeric_overflow' };
+      contributions[nutrient] = value;
+      contributingNutrients.push(nutrient);
+    }
+  }
+
+  let outcome: IngredientOutcome;
+  if (qualitative) outcome = 'qualitative';
+  else if (!matched && !ambiguous) outcome = 'no_match';
+  else if (ambiguous) outcome = 'ambiguous';
+  else if (grams === undefined) outcome = 'no_mass';
+  else if (contributingNutrients.length === 0) outcome = 'no_nutrition';
+  else outcome = 'calculated';
+
+  const evaluated: EvaluatedIngredient = {
+    ...base,
+    grams,
+    massSource,
+    portionIndex,
+    portionCandidatesDigest,
+    contributions,
+    contributingNutrients,
+    outcome,
+  };
+  return { ok: true, value: evaluated };
+}
+
+/** Runs the advisory calculation. Never throws; always returns a closed result. */
+export function runAdvisoryCalculation(inputs: AdvisoryCalculationInputs): CalculationResult {
+  try {
+    const requestResult = materialize(inputs.request);
+    if (!requestResult.ok) {
+      return fail((requestResult as { ok: false; unsafe: boolean }).unsafe ? 'unsafe_request' : 'invalid_request');
+    }
+    if (!isPlainObject(requestResult.value)) return fail('invalid_request');
+    const request = requestResult.value;
+
+    for (const key of Object.keys(request)) {
+      if (!REQUEST_KEYS.has(key)) return fail('unknown_field');
+    }
+    if (!isValidStrictServingCount(request.servings)) return fail('invalid_servings');
+    const servings = request.servings as number;
+
+    const scopeResult = validateNutrientScope(request.nutrient_scope);
+    if (!scopeResult.ok) return fail((scopeResult as { ok: false; code: Phase3FailureCode }).code);
+    const scope = scopeResult.ids;
+
+    if (!Array.isArray(request.ingredients)) return fail('invalid_request');
+    if (request.ingredients.length === 0) return fail('empty_ingredients');
+    if (request.ingredients.length > MAX_CALCULATION_INGREDIENTS) return fail('too_many_ingredients');
+
+    const seenRefs = new Set<string>();
+    const prepared: PreparedIngredient[] = [];
+    for (const raw of request.ingredients) {
+      if (!isPlainObject(raw)) return fail('invalid_request');
+      for (const key of Object.keys(raw)) {
+        if (!INGREDIENT_INPUT_KEYS.has(key)) return fail('unknown_field');
+      }
+      const lineRef = raw.line_ref;
+      if (
+        typeof lineRef !== 'string' ||
+        lineRef.trim().length === 0 ||
+        lineRef.length > MAX_CALCULATION_LINE_REF_LENGTH
+      ) {
+        return fail('invalid_line_ref');
+      }
+      if (seenRefs.has(lineRef)) return fail('duplicate_line_ref');
+      seenRefs.add(lineRef);
+      prepared.push({
+        lineRef,
+        ingredient: raw.ingredient,
+        review: raw.review,
+        selection: raw.selection,
+        portionSelection: raw.portion_selection,
+      });
+    }
+
+    const evidence: EvaluatedIngredient[] = [];
+    for (const entry of prepared) {
+      const evaluated = evaluateIngredient(inputs, entry, scope);
+      if (!evaluated.ok) return fail((evaluated as { ok: false; code: Phase3FailureCode }).code);
+      evidence.push(evaluated.value);
+    }
+
+    const measurable = evidence.filter((entry) => !entry.qualitative).length;
+    const ordered = [...evidence].sort((a, b) => (a.lineRef < b.lineRef ? -1 : a.lineRef > b.lineRef ? 1 : 0));
+
+    const totals: Partial<Record<NutrientId, NutrientTotalResult>> = {};
+    if (measurable > 0) {
+      for (const nutrient of scope) {
+        const values: number[] = [];
+        let covered = 0;
+        for (const entry of ordered) {
+          if (entry.qualitative) continue;
+          const value = entry.contributions[nutrient];
+          if (value === undefined) continue;
+          covered += 1;
+          values.push(value);
+        }
+        if (covered === 0) continue;
+        const total = stableSum(values);
+        if (total === undefined) return fail('numeric_overflow');
+        const rounded = roundCanonicalTotal(total);
+        if (!Number.isFinite(rounded) || rounded < 0 || Object.is(rounded, -0)) {
+          return fail('numeric_overflow');
+        }
+        if (rounded > MAX_NUTRIENT_AMOUNT || !isValidNutrientAmount(rounded)) {
+          return fail('numeric_overflow');
+        }
+        totals[nutrient] = Object.freeze({
+          amount: rounded,
+          unit: NUTRIENT_REGISTRY[nutrient].unit as CanonicalUnit,
+          coverage: covered / measurable,
+          covered_ingredient_count: covered,
+          measurable_ingredient_count: measurable,
+          status: covered === measurable ? 'complete' : 'partial',
+        });
+      }
+    }
+
+    const totalKeys = Object.keys(totals) as NutrientId[];
+    let status: CalculationStatus;
+    if (measurable === 0 || totalKeys.length === 0) status = 'unresolved';
+    else if (
+      totalKeys.length === scope.length &&
+      totalKeys.every((key) => totals[key]?.status === 'complete')
+    ) {
+      status = 'complete';
+    } else {
+      status = 'partial';
+    }
+
+    const ingredientEvidence: IngredientCalculationEvidence[] = evidence.map((entry) =>
+      Object.freeze({
+        line_ref: entry.lineRef,
+        original_text: entry.originalText,
+        outcome: entry.outcome,
+        qualitative: entry.qualitative,
+        match_status: entry.matchStatus,
+        user_confirmed: entry.matchStatus === 'user_confirmed',
+        ...(entry.fdcId !== undefined ? { fdc_id: entry.fdcId } : {}),
+        ...(entry.recordDigest !== undefined ? { record_digest: entry.recordDigest } : {}),
+        ...(entry.massSource !== undefined ? { mass_source: entry.massSource } : {}),
+        ...(entry.grams !== undefined ? { resolved_grams: entry.grams } : {}),
+        ingredient_identity_digest: digestOf(identityPayload(entry)),
+        ingredient_digest: digestOf(fullPayload(entry)),
+        contributing_nutrients: Object.freeze([...entry.contributingNutrients]),
+      })
+    );
+
+    const unresolved: UnresolvedIngredient[] = evidence
+      .filter((entry) => entry.outcome !== 'calculated' && entry.outcome !== 'qualitative')
+      .map((entry) => Object.freeze({ line_ref: entry.lineRef, outcome: entry.outcome }));
+
+    const preview: AdvisoryNutritionPreview = Object.freeze({
+      calculation_schema: CALCULATION_SCHEMA,
+      calculation_version: CALCULATION_VERSION,
+      bundle_release: inputs.bundleRelease,
+      catalog_digest: inputs.catalogDigest,
+      nutrient_map_version: inputs.nutrientMapVersion,
+      servings,
+      ingredient_digest: digestOf(evidence.map(fullPayload)),
+      nutrient_scope: Object.freeze([...scope]),
+      basis: 'total',
+      status,
+      totals: Object.freeze(totals),
+      ingredients: Object.freeze(ingredientEvidence),
+      unresolved: Object.freeze(unresolved),
+      advisory_only: true,
+      application_authorized: false,
+    });
+
+    return { ok: true, preview };
+  } catch {
+    return fail('validation_error');
+  }
+}

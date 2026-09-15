@@ -32,6 +32,7 @@ import {
   normalizeIngredientMeasurement,
   parseRawIngredientMeasurementParts,
 } from '../utils/measurements';
+import { isQualitativeIngredientText } from '../utils/ingredientSemantics';
 import type {
   NormalizedMeasurement,
   MeasurementKind,
@@ -161,9 +162,6 @@ export interface DeterministicNutritionResult {
   contributions: IngredientNutritionContribution[];
 }
 
-const QUALITATIVE_PATTERN =
-  /\b(?:to taste|as needed|as required|as desired|to your liking|as you like|use as needed|enough)\b/i;
-
 const CONF_RANK: Record<MeasurementConfidence, number> = {
   unknown: 0,
   low: 1,
@@ -171,20 +169,6 @@ const CONF_RANK: Record<MeasurementConfidence, number> = {
   high: 3,
 };
 const CONF_BY_RANK: MeasurementConfidence[] = ['unknown', 'low', 'medium', 'high'];
-
-/**
- * True when free-form ingredient text carries an explicit qualitative cue.
- *
- * IMPORTANT: presence of a cue ALONE is never sufficient to exempt an ingredient
- * from coverage. A quantified/material ingredient (e.g. "1 cup butter, as
- * needed") must never be demoted to qualitative just because a cue phrase
- * appears — otherwise it can be silently dropped and let an incomplete
- * deterministic total be presented as complete. The caller gates this on
- * `hasMeasurableQuantity` (see estimateDeterministicNutrition).
- */
-function isQualitative(text: string): boolean {
-  return QUALITATIVE_PATTERN.test(text);
-}
 
 /**
  * Backwards-compatible alias for the relocated, calculation-free raw-line
@@ -342,7 +326,8 @@ export function estimateDeterministicNutrition(
     let qualitative = false;
     let unresolvedReason: IngredientNutritionContribution['unresolvedReason'] = undefined;
     if (!resolved) {
-      qualitative = !hasMeasurableQuantity && isQualitative(`${parts.name} ${parts.originalText}`);
+      qualitative =
+        !hasMeasurableQuantity && isQualitativeIngredientText(`${parts.name} ${parts.originalText}`);
       if (!qualitative) {
         if (!food) {
           unresolvedReason = 'no_curated_food_match';

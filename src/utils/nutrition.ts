@@ -22,6 +22,7 @@
 
 import { RecipeNutrition } from '../types';
 import { canApplyNutritionEstimate, type NutritionAssessment } from '../core/nutritionSanity';
+import { servingFactor } from './servingMath';
 
 /**
  * Numeric metadata on a nutrition object that must never be scaled by the
@@ -77,7 +78,7 @@ export function nutritionForServings(
 ): RecipeNutrition {
   const base = normalizeServings(baseServings, 1);
   const requested = normalizeServings(requestedServings, base);
-  const factor = requested / base;
+  const factor = servingFactor(base, requested);
 
   const result: Record<string, unknown> = {};
   const source = nutrition ?? {};

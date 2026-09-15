@@ -1,9 +1,10 @@
 # The Kitchen Codex — Advanced Nutrition Architecture
 
-Status: **Phase 0, Phase 1, and Phase 2 implemented (offline contracts + isolated
-review layer only)**. No USDA dataset is bundled, no network route or live API is
-used, and there is no calculation engine, UI, Apply action, or automatic
-persistence. Machine application of advanced nutrition remains disabled.
+Status: **Phase 0, Phase 1, Phase 2, and Phase 3 implemented (offline contracts,
+isolated review layer, and an isolated advisory calculation layer only)**. No USDA
+dataset is bundled, no network route or live API is used, and there is no UI,
+Apply action, or automatic persistence. Machine application of advanced nutrition
+remains disabled.
 
 Phase 1 adds a trusted, offline, key-free USDA FoodData Central contract: a
 strict release manifest, a defensive adapter for the **actual pinned download
@@ -16,7 +17,14 @@ ingredient parsing, conservative query normalization, a manifest-bound review
 catalog, deterministic ranking, a closed outcome union, and an explicit
 confirmation/rejection boundary. It reuses the Phase 0/1 primitives and the
 existing measurement normalizer; it does **not** calculate recipe nutrition,
-persist, apply, or touch any production surface. Phase 3–6 remain unimplemented.
+persist, apply, or touch any production surface.
+
+Phase 3 adds an **isolated, advisory-only** calculation layer (§15): a trusted
+calculation context, match/record rebinding, direct-mass and reviewed
+source-portion mass resolution, entire-recipe totals with nutrient-specific
+coverage, strict serving derivation, and derived-only `%DV`. It is NOT a
+persistence or Apply layer, and it never writes `codex_nutrition`. Phase 4–6
+remain unimplemented.
 
 This is the canonical architecture document for Advanced Nutrition (target
 v0.10.0). It records the trusted-source plan, the schema-v1 contract, the
@@ -421,8 +429,12 @@ enable machine-generated nutrition application.
   cryptographically bound confirmation/rejection boundary. It is review-only —
   no calculation, persistence, UI, or application. Audit gate: matching
   precision review.
-- **Phase 3 — calculation engine and serving math.** Totals → per-serving →
-  `%DV`, reusing `src/utils/nutrition.ts`. Audit gate: numeric regression review.
+- **Phase 3 — advisory calculation engine and serving math.** DONE (offline,
+  isolated, advisory-only): trusted calculation context, match/record rebinding,
+  direct-mass and reviewed source-portion mass, entire-recipe totals with
+  nutrient-specific coverage, strict serving derivation, and derived-only `%DV`
+  (reusing `src/utils/servingMath.ts`). No persistence/Apply/UI. Audit gate:
+  numeric regression review.
 - **Phase 4 — simple card + Advanced Nutrition page.** Full-screen modal,
   basis toggle, nutrient groups, evidence review. Audit gate: UX/a11y review.
 - **Phase 5 — explicit Apply/persistence and legacy compatibility.** All-or-
@@ -1059,3 +1071,194 @@ Phase 3, Phase 4, Phase 5, or Phase 6 as implemented.
 
 `advancedNutritionApplicationAuthorization()` and `canApplyNutritionEstimate`
 remain globally fail-closed.
+
+---
+
+## 15. Phase 3 — advisory calculation engine (isolated)
+
+Phase 3 is an **isolated, pure, offline, ADVISORY-ONLY** layer under
+`src/core/nutritionV2/calculation/`. It answers: given ingredients, reviewed USDA
+identities, and defensible masses, what are the advisory entire-recipe totals,
+coverage, per-serving values, and derived `%DV`? It is **not** re-exported from
+`src/core/nutritionV2/index.ts` or `src/core/index.ts`, and no production UI,
+route, provider, estimator, persistence path, or vault path may import it.
+
+### 15.1 Implementation map
+
+| Concern | Module |
+| --- | --- |
+| Closed contract, bounds, versions, failure taxonomy | `src/core/nutritionV2/calculation/types.ts` |
+| Deterministic numeric policy (rounding/overflow/stable sum) | `src/core/nutritionV2/calculation/numeric.ts` |
+| Strict serving derivation | `src/core/nutritionV2/calculation/servings.ts` |
+| Derived-only `%DV` views | `src/core/nutritionV2/calculation/dailyValues.ts` |
+| Mass + source-portion resolution | `src/core/nutritionV2/calculation/mass.ts` |
+| Advisory engine (internal) | `src/core/nutritionV2/calculation/calculate.ts` |
+| Context authority + public operations | `src/core/nutritionV2/calculation/context.ts` |
+| Isolated barrel (not re-exported publicly) | `src/core/nutritionV2/calculation/index.ts` |
+| Shared calculation-free serving formulas | `src/utils/servingMath.ts` |
+| Shared calculation-free qualitative classifier | `src/utils/ingredientSemantics.ts` |
+| Synthetic calculation fixtures (test-only) | `tests/fixtures/usdaCalculationFixtures.ts` |
+
+### 15.2 Calculation-context authority
+
+`createNutritionCalculationContext(manifest, records)` validates the Phase 1
+manifest, validates every canonical record, verifies bundle identity, record
+count, canonical content digest, record digests, bundle/upstream releases,
+nutrient-map/canonicalization versions, and unique FDC IDs, then builds a private
+exact-ID record index and constructs its own genuine Phase 2 review catalog from
+the same inputs. Construction is all-or-nothing.
+
+Authority is **lexically private**: the registry is a module-local `WeakMap` with
+non-exported registration/retrieval in the SAME module as
+`createNutritionCalculationContext`, `calculateRecipeNutrition`, and
+`reviewFoodPortions` (`context.ts`). No direct file-path import can register a
+fake context or retrieve authority state; there is no exported registry, symbol,
+token, brand, constructor, callback, or authority object. Structural fakes,
+clones, wrappers, proxies, and inherited objects are rejected with
+`invalid_context`. Authoritative records and the internal match catalog are never
+exposed. The unkeyed digest provides integrity only.
+
+### 15.3 Match and record rebinding
+
+Every ingredient is re-parsed and re-reviewed against the context's internal
+genuine current catalog. A current `matched_exact` supplies the food identity as
+an **automatic unique-exact identity** (never `user_confirmed: true`). A
+`review_required` result contributes only when the supplied review's digest equals
+the current review's digest, `confirmIngredientReview` succeeds against the
+internal genuine current catalog, the confirmed FDC id is in the reconstructed
+current candidate set, and the selected candidate's record digest equals the
+context's canonical record digest. Rejected/missing/stale/forged/invalid
+confirmations contribute nothing (`ambiguous`); hostile selections reject the
+whole request. `unmatched` → `no_match`. A selected record absent from the private
+index or with a mismatched digest rejects the whole request.
+
+### 15.4 Ingredient digest
+
+The preview carries `ingredient_digest` = `sha256:<64 lowercase hex>` over the
+strict Phase 1 canonical serialization of every calculation-affecting ingredient
+field, including ingredient order, line reference, original bounded text, parsed
+amount, raw/normalized unit, normalized query, note, current match outcome,
+selected FDC id, selected record digest, confirmation digest, and any
+source-portion selection/digest. Missing versus zero, `undefined` versus `null`,
+`-0` versus `0`, string versus number, reordered arrays, changed preparation text,
+and changed match/portion authority all remain distinct.
+
+### 15.5 Mass and source-portion resolution
+
+Only two mass sources exist: `direct_mass` (the existing deterministic g/kg/oz/lb
+conversion, finite non-negative amount; explicit `0` resolves to zero grams;
+negatives/`-0`/non-finite are rejected) and `source_portion` (an explicitly
+reviewed portion of the selected canonical record:
+`ingredient amount / source portion amount × source gram weight`). No density,
+count weight, invented portion amount, or volume/count-to-mass inference is used.
+A portion may be used only when the selection is reconstructed exactly against
+the current canonical record (calculation version, line reference, ingredient
+identity digest, bundle release, FDC id, record digest, candidate-set digest,
+portion index/amount/measure/modifier/gram weight). FNDDS portions with a
+legitimately absent source amount yield `no_mass`. `reviewFoodPortions` returns a
+bounded, pure portion-review result listing canonical candidates. No portion
+decision is persisted.
+
+### 15.6 Nutrient calculation and nutrient-specific coverage
+
+For each scoped nutrient and material ingredient: contribution =
+`amount_per_100g × resolved grams / 100`. Missing source nutrients remain absent;
+an explicit source zero is covered evidence contributing zero. Coverage is
+per-nutrient: `measurable_ingredient_count` = non-qualitative material
+ingredients; `covered_ingredient_count` = those with authoritative identity,
+defensible mass, and a present source value; `coverage = covered / measurable`;
+`complete` requires `covered === measurable` and `coverage === 1`; `partial`
+requires at least one contribution and `covered < measurable`; `covered === 0`
+omits the nutrient entirely (never a synthesized zero). Qualitative ingredients
+do not enter the denominator but remain explained per ingredient. With no
+material ingredients the preview is `unresolved` (no zero-denominator coverage).
+
+Ingredient outcome precedence is closed: invalid/unsafe input rejects the whole
+request; then `qualitative`, `no_match`, `ambiguous`, `no_mass`,
+`no_nutrition`, `calculated`. One scoped nutrient missing from one food reduces
+coverage only for that nutrient.
+
+### 15.7 Numeric and rounding policy
+
+Internal contribution arithmetic uses binary floating-point full precision;
+reject NaN/Infinity/negatives/`-0`; detect multiplication/division/summation/
+serving-scaling overflow; enforce the Phase 0 absolute bound (`1e9`); no clipping;
+no fallback to zero; deterministic stable summation in a canonical order (sorted
+by line reference) so totals are independent of request-array iteration order.
+
+Canonical totals are rounded EXACTLY ONCE at the canonical total boundary by
+evaluating the current IEEE-754 binary number with
+`Math.round(value * 1_000_000) / 1_000_000`. ECMAScript `Math.round` selects the
+nearest integer and resolves an exact represented half-integer toward positive
+infinity; because Phase 3 rejects negatives, an exact represented non-negative
+half-integer rounds upward. This is **binary floating-point arithmetic, not
+decimal arithmetic**: a source value that appears to be a conceptual decimal half
+may be represented slightly below or above that tie, so no independent decimal
+half-away-from-zero guarantee is claimed. Totals are limited to at most six
+decimal places after the rounding operation; rounding never turns a missing
+nutrient into an explicit zero. Invalid and overflow values fail closed.
+
+### 15.8 Totals-only baseline and serving derivation
+
+The authoritative baseline is ALWAYS `basis: 'total'`. Per-serving
+(`total / baseServings`) and requested-serving
+(`total × requested / baseServings`) values are DERIVED, never persisted, always
+from the same immutable total baseline (no drift on repeated toggles). Serving
+counts are validated strictly (number only, finite, positive, not `-0`, `<= 1000`,
+bounded decimal precision); strings such as `"4"` are rejected, never coerced.
+Coverage does not change with serving scaling; only present nutrient amounts
+scale. The shared formulas live in `src/utils/servingMath.ts` (the legacy
+`src/utils/nutrition.ts` coerces first, preserving its historical behavior, then
+uses the same `servingFactor`).
+
+### 15.9 Derived-only Daily Values
+
+`%DV` is always derived at read time from the pinned `fda_adult_4plus_2020`
+standard and is NEVER stored in the advisory preview or any persisted schema.
+Missing nutrients are unavailable (never `0%`); an explicit calculated zero
+yields `0%` when the nutrient has an established DV; nutrients without a DV keep
+the existing unavailable reason. Form-qualified units are never reinterpreted and
+IU is never converted.
+
+### 15.10 Advisory preview contract
+
+The preview is a distinct immutable type (never `CodexNutritionV1`): calculation
+schema/version, bundle release, catalog digest, nutrient-map version, servings,
+ingredient digest, explicit nutrient scope, `basis: 'total'`, status
+(`complete | partial | unresolved`), entire-recipe nutrient totals with coverage,
+per-ingredient evidence, unresolved explanations, `advisory_only: true`, and
+`application_authorized: false`. It contains NO `codex_nutrition` key, NO Phase 0
+`schema: 1` marker, NO persistence instructions, and NO generated `computed_at`
+timestamp. Automatic unique-exact matches are never presented as user-confirmed.
+There is NO Apply/persistence converter.
+
+### 15.11 Failure taxonomy
+
+`invalid_context`, `invalid_request`, `unsafe_request`, `oversized_request`,
+`unknown_field`, `empty_ingredients`, `too_many_ingredients`, `duplicate_line_ref`,
+`invalid_line_ref`, `invalid_servings`, `invalid_nutrient_scope`,
+`invalid_ingredient_input`, `invalid_portion_selection`, `numeric_overflow`,
+`validation_error`. Every failure carries a fixed, bounded, input-redacted message.
+
+### 15.12 Immutability and input safety
+
+Every public untrusted boundary materializes once into inert data; accessors,
+proxies/reflection failures, symbols, sparse arrays, cycles, non-plain prototypes,
+functions/bigints/undefined, unknown fields, dangerous keys, and oversized values
+fail closed with fixed bounded input-redacted errors. Context metadata, previews,
+nutrient results, contribution arrays, ingredient evidence, unresolved entries,
+portion reviews, confirmations, serving views, and DV views are deep-frozen or
+defensively isolated; caller/returned mutation cannot change later results.
+
+### 15.13 Isolation, limitations, and deferred work
+
+Phase 3 is not wired into any production surface and is not re-exported from any
+public barrel; a transitive import-graph test proves no Phase 3 path reaches the
+legacy calculation engine (`deterministicNutrition.ts`), the curated food
+reference (`foodReference.ts`), UI, server, persistence/vault, provider/network,
+or test fixtures. Phase 3 tests use clearly labeled synthetic fixtures; the
+checked-in fixtures are NOT a production USDA catalog and no production bundle
+exists. Phase 3 does not claim medical accuracy. `%DV` remains derived-only.
+Phase 4 (UI / Advanced Nutrition page) and Phase 5 (explicit Apply/persistence)
+remain deferred and unimplemented; `advancedNutritionApplicationAuthorization()`
+and `canApplyNutritionEstimate` remain globally fail-closed.
