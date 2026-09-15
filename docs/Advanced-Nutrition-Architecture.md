@@ -1,9 +1,17 @@
 # The Kitchen Codex — Advanced Nutrition Architecture
 
-Status: **Phase 0 implemented (schema/contract only)**. No dataset, network
-route, ingredient matching, calculation engine, UI, Apply action, or automatic
-persistence exists yet. Machine application of advanced nutrition remains
-disabled.
+Status: **Phase 0 and Phase 1 implemented (contracts + offline adapter only)**.
+No USDA dataset is bundled, no network route or live API is used, and there is
+no ingredient matching, calculation engine, UI, Apply action, or automatic
+persistence. Machine application of advanced nutrition remains disabled.
+
+Phase 1 adds a trusted, offline, key-free USDA FoodData Central contract: a
+strict release manifest, a defensive adapter for the **actual pinned download
+records**, an exact stable nutrient-ID map, strict fail-closed canonical
+serialization, an immutable exact-ID store, and a bounded in-memory cache — plus
+real official-record fixtures and separate synthetic adversarial fixtures.
+Phase 1 does **not** parse ingredients, match foods, calculate recipe nutrition,
+or touch any production surface (see §13).
 
 This is the canonical architecture document for Advanced Nutrition (target
 v0.10.0). It records the trusted-source plan, the schema-v1 contract, the
@@ -29,6 +37,15 @@ USDA FoodData Central data are **public domain** and published under
 
 Official source: <https://fdc.nal.usda.gov/> (API guide, download datasets, and
 data-type documentation accessed 2026-09-14).
+
+**Phase 1 scope.** Only the three generic FDC data types are in scope:
+`foundation`, `sr_legacy`, and `fndds`. Verified September 2026 baseline:
+Foundation Foods **April 2026**, SR Legacy **final April 2018**, FNDDS
+**2021-2023 (October 2024)**. Downloads are available in JSON and CSV. The live
+FDC API requires a data.gov key and is **not** used in Phase 1: no key, no live
+API, no query-string construction, and no network client. Branded Foods and
+Open Food Facts are deliberately excluded (product-specific matching belongs to
+a later, separately approved phase).
 
 Recipe-website scraping is **not** a source. Client-side API keys are not used.
 
@@ -381,9 +398,17 @@ enable machine-generated nutrition application.
 - **Phase 0 — schema, evidence contract, threat model.** DONE: canonical units,
   nutrient registry, pinned Daily Values, schema-v1 contract, evidence
   validation, codec, fail-closed round-trip. Audit gate: schema review.
-- **Phase 1 — trusted source adapter + bounded cache.** Local slim FDC dataset
-  loader, optional server-proxied FDC enrichment, bounded TTL cache. Audit gate:
-  source license + privacy review.
+- **Phase 1 — trusted USDA adapter + bounded cache.** DONE (offline/contract):
+  release-manifest + bundle-identity contract, a defensive adapter that consumes
+  the **complete pinned Foundation/SR Legacy/FNDDS download records**, an exact
+  stable nutrient-ID map (v2), strict fail-closed canonical serialization, an
+  immutable exact-ID local store, and a bounded in-memory cache, with real
+  official-record fixtures, synthetic adversarial fixtures, focused security
+  tests, and a full-archive compatibility census. No dataset is downloaded or
+  bundled in the repository. **Still future:** a separately audited, explicit
+  local dataset *acquisition/generation* step that turns an official FDC download
+  into a manifest-bound canonical bundle. Audit gate: source license + privacy
+  review.
 - **Phase 2 — deterministic ingredient parsing/matching review.** Reuse the
   existing measurement normalization; deterministic ranking; explicit user
   confirmation for ambiguous matches. Audit gate: matching precision review.
@@ -416,3 +441,346 @@ completeness.
 
 Machine application remains disabled by the centralized
 `canApplyNutritionEstimate` hard-disable (`src/core/nutritionSanity.ts`).
+
+---
+
+## 13. Phase 1 — trusted USDA adapter, manifest, store, and bounded cache
+
+Phase 1 implements an **offline, key-free, contract-and-adapter layer only**. It
+does not download or bundle a USDA dataset, does not call the live API, and is
+not imported by any production surface. Its modules live under
+`src/core/nutritionV2/usda/` and are intentionally **not** re-exported from
+`src/core/nutritionV2/index.ts` or `src/core/index.ts`.
+
+### 13.1 Source, attribution, and verified releases
+
+- Sole authority: **USDA FoodData Central** (FDC).
+- Public domain / **CC0 1.0 Universal**; attribution is requested, not required:
+  *U.S. Department of Agriculture, Agricultural Research Service. FoodData
+  Central, 2019. fdc.nal.usda.gov.*
+- Verified September 2026 baseline: Foundation Foods **April 2026**, SR Legacy
+  **final April 2018**, FNDDS **2021-2023 (October 2024)**. Downloads are JSON
+  and CSV. These are **manifest data**, never timeless constants scattered
+  through production code.
+- The live FDC API requires a data.gov key. Phase 1 uses **no key and no live
+  API**. Branded Foods and Open Food Facts are out of scope.
+
+**Exact pinned archives supported** (downloaded only under `/tmp` for audit;
+never committed or bundled). Their SHA-256 digests were verified before use:
+
+| Data type | Release | Archive (official `fdc-datasets`) | SHA-256 |
+| --- | --- | --- | --- |
+| `foundation` | April 2026 | `FoodData_Central_foundation_food_json_2026-04-30.zip` | `186e988e…c09c77a` |
+| `sr_legacy` | April 2018 | `FoodData_Central_sr_legacy_food_json_2018-04.zip` | `0fe8ae48…6dd338ef` |
+| `fndds` | FNDDS 2021-2023 (October 2024) | `FoodData_Central_survey_food_json_2024-10-31.zip` | `dfb06ae7…2a77f3eb` |
+
+Phase 1 supports **only these pinned downloadable JSON records**. It does not
+claim generic "USDA JSON" or live-API compatibility, does not support Branded
+Foods, and does not auto-discover future releases. A future USDA release requires
+a new manifest and a fresh compatibility audit.
+
+### 13.2 Per-100-g source basis vs. recipe-total persistence basis
+
+Every canonical USDA record is `basis: 'per_100_g'`. This is a **source-food**
+basis, deliberately distinct from the Phase 0 recipe block basis
+`codex_nutrition.basis: 'total'`. Per-100-g values are never serialized directly
+as recipe totals; a test asserts that `encodeCodexNutrition` rejects a canonical
+per-100-g record. Phase 3 will multiply trusted per-100-g values by reviewed
+ingredient mass and persist entire-recipe totals separately.
+
+### 13.3 Release manifest and bundle identity
+
+`manifest.ts` defines a strict, closed `UsdaBundleManifest`:
+
+| Field | Meaning |
+| --- | --- |
+| `manifest_schema` | `1` |
+| `bundle_release` | one bounded (1..64 char) bundle release id |
+| `generator` | bounded `{ name, schema_version }` |
+| `created_at` | bounded ISO timestamp |
+| `data_types` | unique subset of `foundation`/`sr_legacy`/`fndds` |
+| `components[]` | one per data type: `data_type`, `upstream_release`, `source_url`, `source_sha256` |
+| `canonical_record_count` / `rejected_record_count` | bounded non-negative safe integers |
+| `canonical_content_digest` | exact lowercase 64-hex SHA-256 over the canonical records |
+| `nutrient_map_version` / `canonicalization_version` | pinned versions |
+| `warnings[]` | optional bounded `{ code, count }` |
+| `attribution` | required USDA attribution string |
+
+**Bundle identity.** `computeBundleIdentity(manifest)` hashes the authoritative
+inputs (manifest schema, generator schema, data types, each component's release /
+URL / digest, nutrient-map version, canonicalization version). The bundle release
+id is derived from that identity (`usda_fdc_<32 hex>`), so it changes whenever
+any component release, input digest, nutrient mapping, canonicalization rule, or
+generator schema changes, and it always satisfies the 64-character bound. The
+manifest is rejected if the declared `bundle_release` does not match the derived
+identity. Phase 0 allows one release id per source, so
+`source_releases.usda_fdc` is this single bundle release id.
+
+Validation is closed and bounded: unknown/duplicate/missing/contradictory/unsafe
+fields fail; URLs must be `https://fdc.nal.usda.gov/...` with no credentials,
+query, or fragment; SHA-256 values must be exact lowercase 64-hex; counts must be
+safe non-negative integers (rejecting `-0`, negatives, non-integers, and unsafe
+values); oversized manifests fail. **Validation never fetches a URL.**
+
+**SHA-256 caveat.** A SHA-256 digest proves identity/integrity against a pinned
+expected manifest; it does **not** prove USDA authorship without a separately
+trusted acquisition process. Phase 1 makes no such claim.
+
+### 13.4 Raw transport records vs. canonical trusted records
+
+Phase 1 distinguishes three separate shapes and bounds:
+
+1. **Raw USDA transport record** — the complete official download record
+   (`foodClass`, `foodAttributes`, `inputFoods`, `nutrientConversionFactors`,
+   `publicationDate`, nutrient-entry `type`/`id`/`dataPoints`/`foodNutrientDerivation`/
+   `min`/`max`/`median`, Foundation portion `value`/`minYearAcquired`, FNDDS
+   `wweiaFoodCategory`, etc.). Materialized and bounded by `raw.ts` with the RAW
+   bounds (see §13.8).
+2. **Canonical trusted record** — the small closed projection produced by the
+   adapter, bounded by the canonical 64 KiB rule.
+3. **Cache entry** — a canonical record plus its digest, bounded separately.
+
+`types.ts`/`record.ts` define the closed, deep-frozen canonical record:
+
+```
+source: 'usda_fdc' | bundle_release | upstream_release | fdc_id | data_type
+description | food_category? | nutrient_map_version | basis: 'per_100_g'
+nutrients: { [NutrientId]: { nutrient_id, unit, amount_per_100g,
+             usda_nutrient_id, source_unit, converted } }
+portions:   [ { usda_portion_id?, amount?, measure, gram_weight,
+               modifier?, sequence? } ]
+record_digest
+```
+
+Only canonical fields are retained: no raw transport metadata, unused USDA
+metadata, input-supplied URLs, HTML, prompts, notes, paths, credentials, personal
+information, or arbitrary nested extensions. A test asserts no ignored official
+field name survives into canonical output.
+
+### 13.5 Stable nutrient-ID mapping
+
+`nutrientMap.ts` (version `usda_fdc_nutrient_map_v2`) is the single closed mapping
+from verified USDA nutrient ids to Phase 0 `NutrientId`s. It never maps by display
+name. Ids, names, and the single observed `unitName` were verified against the
+**pinned archives themselves** (all three releases), and the official micro sign
+`µg` (U+00B5) is normalized before comparison. Representative mappings:
+1003→protein, 1004→fat, 1005→carbohydrates, 1008→calories (kcal), 1079→fiber,
+1093→sodium, 1106→vitamin_a (`ug_rae`, RAE form), 1114→vitamin_d, 1190→folate
+(`ug_dfe`, DFE form), 1253→cholesterol, 1258→saturated_fat, 2000→total_sugars.
+
+- A mapped id with the wrong source unit is rejected (`unit_mismatch`); it is
+  never converted.
+- IU is never converted, and biological-form nutrients are never merged by
+  similar name: 1104 (Vitamin A, IU), 1105 (Retinol), 1107/1108 (carotenes),
+  1110 (Vitamin D, IU), 1177 (Folate, total — mass, not DFE), and 1167 (Niacin,
+  plain mass) are **not** mapped.
+- **`niacin` and `added_sugars` are deliberately UNMAPPED in Phase 1**: the
+  pinned releases expose no niacin-equivalent component (1169 absent) and no
+  `Sugars, added` (1235 absent). They remain absent rather than being inferred
+  from plain niacin or total sugars. No release-specific override is required
+  because the rule is uniform across all three pinned releases.
+- Unsupported USDA nutrients are ignored only after the whole record passes
+  bounded inert validation, and they never enter the output as authority.
+
+**Energy policy.** Only 1008 (`Energy`, kcal) directly represents kilocalories.
+1062 (`Energy`, kJ) is a documented fallback used only when no 1008 is present,
+converted with the existing exact 4.184 `convertEnergy` helper. Energy components
+are never summed, no arbitrary "first" value is chosen, a duplicate direct kcal
+component is rejected as a conflict, and the fallback never creates a second
+calories entry.
+
+### 13.6 Missing, zero, null, and exact units
+
+- **Missing is absent, never zero.** A supported nutrient with no source value
+  has no entry.
+- **Explicit source-reported zero** is a present entry with `amount_per_100g: 0`.
+- **A `null` amount is absent**, never zero. A mapped nutrient with a present but
+  out-of-contract amount (negative, `-0`, non-finite, over-precise, excessive)
+  fails the record as `invalid_nutrient` (a small number of pinned Foundation
+  records carry negative USDA-derived carbohydrate values; see §13.8).
+- Amounts are finite, non-negative, `<= 1_000_000_000`, at most 6 decimal
+  places, and never `-0`. Values are rejected, never clipped or truncated.
+- Only mathematically identical metric mass conversions (`g`/`mg`/`ug`) and the
+  exact kJ↔kcal equivalence are permitted; there is no volume→mass or count→mass
+  conversion, and no IU conversion.
+
+### 13.7 Portions are unselected evidence only
+
+Optional source-provided gram-weight portions are preserved as bounded evidence
+(stable reference, optional amount, measure, gram weight, optional modifier,
+optional sequence). `amount` is **optional** only when it is genuinely absent:
+FNDDS portions legitimately omit it and it is never invented as `1`.
+
+Presence-sensitive amount policy:
+
+- an **absent** property (or an explicit `null`) is preserved as absent;
+- a **present** amount must satisfy the canonical numeric contract and be
+  strictly positive and bounded — `0`, `-0`, negatives, non-finite values,
+  numeric strings, and over-precise/unsafe/excessive values all fail;
+- a present invalid amount is **never** omitted, normalized, or replaced, and it
+  **never** falls back to `value`;
+- Foundation/SR Legacy's official `value` alternate is used only when `amount` is
+  genuinely absent; when **both** are present they must both be valid and equal,
+  otherwise the contradictory pair fails closed;
+- an invalid gram weight, a missing measure, or a contradictory duplicate portion
+  identity also fails.
+
+Any such failure rejects the **entire food record** as `invalid_portion` — one
+invalid portion is never silently turned into trusted evidence, and Phase 1
+intentionally excludes affected records rather than laundering invalid evidence.
+Phase 1 never selects a portion automatically and never uses a portion to
+calculate anything; a volume or count measure is never converted to mass.
+
+### 13.8 Adapter trust boundary
+
+`adaptUsdaFood(raw, context)` is the **pinned download-record adapter**. It
+accepts one complete official record plus a validated release context and
+returns either one canonical record or a closed, bounded, input-redacted failure.
+The trust sequence is: untrusted value → bounded raw materialization (`raw.ts`,
+single descriptor pass; no getters/proxy traps/`toJSON`/`valueOf`/coercion) →
+exact data-type dispatch on the official transport label (`Foundation`,
+`SR Legacy`, `Survey (FNDDS)`) → closed data-type-specific transport-shape
+validation (`transport.ts`) → read only authoritative fields → exact stable
+nutrient-ID mapping → canonical-unit validation/conversion → canonical record
+construction. The raw object is never exposed or revisited. There are three
+data-type parsers behind one entry point; the prior reduced/API-shaped projection
+is **not** accepted (it is a strict subset only when it also happens to be
+schema-valid, and no ambiguous heuristic selects between shapes).
+
+**Closed transport schemas.** Each pinned record type has a closed allowed-field
+set for the top level and for the read containers (nutrient entry, nutrient
+descriptor, portion, measure unit, category). An unknown field for the pinned
+schema fails. Approved ignored official metadata (`foodClass`, `foodAttributes`,
+`inputFoods`, `nutrientConversionFactors`, `publicationDate`, derivation,
+`dataPoints`, min/max/median, entry `type`/`id`, `minYearAcquired`, …) is still
+bounded and inertly validated before being discarded, and never enters the
+canonical record, extensions, cache, manifest, or provenance.
+
+**Failure classes.** `malformed`, `unsafe`, `oversized`, `unsupported_data_type`,
+`release_mismatch`, `invalid_fdc_id`, `invalid_basis` (reserved — the pinned
+transports carry no basis field), `invalid_nutrient`, `unit_mismatch`,
+`duplicate_nutrient`, `invalid_portion`, `record_too_large`,
+`no_supported_nutrients`, `digest_mismatch`, `validation_error`.
+
+**Bounds (measured from the pinned archives).** Raw transport: max 256 KiB
+serialized, depth 8, 64 keys, 512 array entries, 4096-char strings, 256 nutrients,
+64 portions. Observed maxima: Foundation 87,874 B / 159 nutrients / depth 5 /
+978-char string; SR Legacy 55,622 B / 138 nutrients; FNDDS 17,587 B / 65
+nutrients. The canonical bound (64 KiB) and the cache-entry bound are separate
+and smaller.
+
+**Full-archive census (temporary probe).** All three pinned archives were
+adapted: Foundation 353/395 accepted (32 `null` array placeholders skipped;
+10 rejected `invalid_nutrient` for negative USDA-derived amounts); SR Legacy
+7,775/7,793 accepted (18 rejected `invalid_portion` — 18 portions across 18
+distinct records carry a present `amount: 0`/`value: 0`; see §13.7); FNDDS
+5,431/5,432 accepted (1 rejected `no_supported_nutrients` for the empty
+"Milk, human" profile). The rejections are explained and documented; Phase 1
+does **not** claim complete archive support.
+
+### 13.9 Immutable exact-ID store
+
+`store.ts` builds a read-only store from a validated manifest and canonical
+records. It supports exact lookup by bundle release + FDC id, bounded metadata,
+and nothing else — no fuzzy search, token search, ranking, ingredient matching,
+automatic candidate selection, category guessing, branded fallback, or recipe
+parsing. Construction is all-or-nothing: records must match the manifest's bundle
+release, component release, and nutrient-map version; duplicate FDC ids, count
+mismatches, content-digest mismatches, and any invalid record fail closed. Exact
+misses return a closed `not_found`. Returned records are deeply frozen, so caller
+mutation cannot alter stored authority.
+
+### 13.10 Bounded in-memory cache
+
+`cache.ts` is a performance layer only, never an authority source. Keys include
+the bundle release + FDC id, and each entry stores its canonical digest, which is
+verified on read. It never serves a record across releases, never caches raw
+USDA input or credentials/URLs, clamps configurable entry-count and byte maxima
+to safe hard limits, rejects oversized single entries, uses deterministic LRU
+eviction, accounts total bytes exactly across replacement and eviction, and
+supports release-specific invalidation and explicit clear. There are no timers,
+no hidden persistence (no IndexedDB/localStorage/filesystem/vault), no cross-user
+or cross-vault namespace, and no cache-driven trust upgrade. Negative lookup
+caching is not implemented.
+
+### 13.11 Strict canonical serialization
+
+`digest.ts` provides `canonicalStringify`, a strict, fail-closed serializer used
+for every identity input (bundle identity, canonical record digest, content
+digest). It rejects, without invoking attacker code: `undefined`, `-0`, `NaN`,
+`Infinity`, bigint, symbol, function, accessors, symbol keys, sparse arrays,
+non-enumerable/hidden properties, non-plain prototypes (Date/Map/Set/typed
+arrays/class instances), cycles, dangerous keys, and hostile proxies. It never
+substitutes `null` for an unsupported value, so `{a: undefined}` and `{a: null}`
+can never alias, and `-0` can never alias `0`. `null` serializes only when it was
+explicitly present.
+
+Object keys are sorted by a locale-independent UTF-16 code-unit rule; arrays
+preserve order; object/array and string/number remain distinct. Strings preserve
+exact code units, are escaped exactly as `JSON.stringify` escapes them (lone
+surrogates included), and are **never** implicitly Unicode-normalized (NFC and
+NFD remain distinct). `1` and `1.0` are the same JS number and are not
+distinguished. Digest call sites exclude the digest field itself, include every
+authoritative field, and fail closed when strict serialization fails.
+
+### 13.12 Fixtures: real official records vs. synthetic adversarial data
+
+Two clearly separated fixture sets exist under `tests/` (test-only, never
+imported by production):
+
+- **Real official records** — `tests/fixtures/usdaRealRecords/` holds the
+  complete records for Foundation `321358`, SR Legacy `167512`, FNDDS `2705384`,
+  and the intentionally-rejected SR Legacy `168789`. Each is **deterministically
+  extracted and compact-serialized from the pinned archive**: parse the verified
+  archive JSON, locate the record by exact numeric FDC id (exactly one match),
+  serialize the complete parsed record with native compact `JSON.stringify`
+  (no replacer, no indentation), encode UTF-8, and write exactly those bytes with
+  no added whitespace. The fixtures are therefore byte-identical to that
+  documented compact extraction output and semantically equal to the selected
+  archive entry — they are **not** raw archive byte slices and **not** synthetic.
+  The adjacent closed-schema `PROVENANCE.json` records the FDC id, data type,
+  upstream release, official archive URL, expected archive SHA-256, extraction
+  method/version, expected fixture byte length, expected fixture SHA-256,
+  extraction date, attribution, CC0 status, and the expected adapter outcome.
+- **Synthetic adversarial fixtures** — `tests/fixtures/usdaFixtures.ts` is
+  clearly labelled synthetic and covers explicit zero, missing/null nutrients,
+  unsupported nutrients, valid/absent/invalid portions, duplicate and wrong-unit
+  nutrients, conflicting energy, invalid ids/data types, release mismatch,
+  oversized/deep/hostile input, dangerous keys, negative/`-0`/non-finite/
+  excessive/over-precise values, and malformed portion weights.
+
+No production USDA dataset and no generated bundle is committed. No search,
+matching, calculation, UI, or Apply behavior is added.
+
+### 13.13 Future, separately audited acquisition step
+
+A future controlled step may add a pure, testable build boundary that consumes
+explicitly supplied local input and writes to an explicitly supplied output path
+(never fetching a URL, never discovering "latest" automatically, requiring
+expected input SHA-256 values, deterministic ordering, atomic output, refusing
+root/home/repository/vault targets, and refusing partial trusted output). That
+step is deliberately **not** implemented in Phase 1 and requires separate
+approval. Phase 1 does not claim that the adapter or a SHA-256 digest
+independently proves USDA authenticity, and it does not calculate accurate recipe
+nutrition.
+
+### 13.14 Phase 1 implementation map
+
+| Concern | Module |
+| --- | --- |
+| Pure SHA-256 + strict canonical serialization | `src/core/nutritionV2/usda/digest.ts` |
+| Closed contract, raw/canonical/cache bounds, failure classes | `src/core/nutritionV2/usda/types.ts` |
+| Bounded raw-record materialization | `src/core/nutritionV2/usda/raw.ts` |
+| Pinned per-data-type transport schemas | `src/core/nutritionV2/usda/transport.ts` |
+| Stable USDA nutrient-ID map (v2) | `src/core/nutritionV2/usda/nutrientMap.ts` |
+| Canonical record digest + re-validation | `src/core/nutritionV2/usda/record.ts` |
+| Release manifest + bundle identity | `src/core/nutritionV2/usda/manifest.ts` |
+| Pinned download-record adapter | `src/core/nutritionV2/usda/adapter.ts` |
+| Immutable exact-ID store | `src/core/nutritionV2/usda/store.ts` |
+| Bounded in-memory cache | `src/core/nutritionV2/usda/cache.ts` |
+| Real official-record fixtures (test-only) | `tests/fixtures/usdaRealRecords/` + `tests/fixtures/usdaRealFixtures.ts` |
+| Synthetic adversarial fixtures (test-only) | `tests/fixtures/usdaFixtures.ts` |
+
+Phase 1 is **not** wired into any production surface, and
+`advancedNutritionApplicationAuthorization()` and `canApplyNutritionEstimate`
+remain globally disabled.

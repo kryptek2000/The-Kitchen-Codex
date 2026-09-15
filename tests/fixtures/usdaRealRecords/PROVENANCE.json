@@ -1,0 +1,67 @@
+{
+  "provenance_schema": 1,
+  "note": "Complete official USDA FoodData Central records, deterministically extracted and compact-serialized from the pinned source archives. These are real CC0 public-domain records, NOT synthetic data, and NOT raw archive byte slices. Test-only; never imported by production.",
+  "license": "CC0 1.0 Universal (public domain).",
+  "attribution": "U.S. Department of Agriculture, Agricultural Research Service. FoodData Central, 2019. fdc.nal.usda.gov.",
+  "extraction_method": {
+    "id": "compact_json_stringify_v1",
+    "version": 1,
+    "description": "Parse the verified official archive JSON; locate the record by exact numeric FDC ID (exactly one match); serialize the complete parsed record with native compact JSON.stringify(record) (no replacer, no indentation); encode as UTF-8; write exactly those bytes with no added leading/trailing whitespace or newline; record the SHA-256 of those exact bytes.",
+    "date": "2026-09-15"
+  },
+  "records": [
+    {
+      "file": "foundation_321358.json",
+      "data_type": "foundation",
+      "transport_label": "Foundation",
+      "upstream_release": "2026-04",
+      "fdc_id": 321358,
+      "description": "Hummus, commercial",
+      "source_url": "https://fdc.nal.usda.gov/fdc-datasets/FoodData_Central_foundation_food_json_2026-04-30.zip",
+      "archive_sha256": "186e988ec542e913f51ef62b86a47758e8cdd0d1dc3889e7b055581f3c09c77a",
+      "fixture_bytes": 43679,
+      "fixture_sha256": "c4e8a0fafc5c1d29dd286c4171a55cbe95b5280ba600926009f8267cd453fbb3",
+      "expected_outcome": "accepted"
+    },
+    {
+      "file": "sr_legacy_167512.json",
+      "data_type": "sr_legacy",
+      "transport_label": "SR Legacy",
+      "upstream_release": "2018-04",
+      "fdc_id": 167512,
+      "description": "Pillsbury Golden Layer Buttermilk Biscuits, Artificial Flavor, refrigerated dough",
+      "source_url": "https://fdc.nal.usda.gov/fdc-datasets/FoodData_Central_sr_legacy_food_json_2018-04.zip",
+      "archive_sha256": "0fe8ae486a2c8eb42cb96413f058deb51863a46c8fb8eeb4b1fb45006dd338ef",
+      "fixture_bytes": 6033,
+      "fixture_sha256": "3238bf8798d82037797d79536421129ed0fb62e4e11ea91f7b773c58c0170b8c",
+      "expected_outcome": "accepted"
+    },
+    {
+      "file": "fndds_2705384.json",
+      "data_type": "fndds",
+      "transport_label": "Survey (FNDDS)",
+      "upstream_release": "2021-2023 (2024-10)",
+      "fdc_id": 2705384,
+      "description": "Milk, NFS",
+      "source_url": "https://fdc.nal.usda.gov/fdc-datasets/FoodData_Central_survey_food_json_2024-10-31.zip",
+      "archive_sha256": "dfb06ae7ddc397ccd570b91c14b75438ab2ba39f64f22d321f61d4a52a77f3eb",
+      "fixture_bytes": 12508,
+      "fixture_sha256": "dc1a4df21f145483becf9a1f04770c8639565e34a02a6e40513db7ce9ddaed2f",
+      "expected_outcome": "accepted"
+    },
+    {
+      "file": "sr_legacy_168789.json",
+      "data_type": "sr_legacy",
+      "transport_label": "SR Legacy",
+      "upstream_release": "2018-04",
+      "fdc_id": 168789,
+      "description": "Rennin, chocolate, dry mix, prepared with 2% milk",
+      "source_url": "https://fdc.nal.usda.gov/fdc-datasets/FoodData_Central_sr_legacy_food_json_2018-04.zip",
+      "archive_sha256": "0fe8ae486a2c8eb42cb96413f058deb51863a46c8fb8eeb4b1fb45006dd338ef",
+      "fixture_bytes": 34082,
+      "fixture_sha256": "eb36488ae29563d667d5cb7f4b49a57c3f6443d2374fa4260ab4788bc154cdee",
+      "expected_outcome": "rejected",
+      "expected_failure": "invalid_portion"
+    }
+  ]
+}
