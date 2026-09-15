@@ -323,3 +323,55 @@ export function normalizeIngredientMeasurement(
   const name = input.name || input.raw || input.original || undefined;
   return normalizeMeasurement(input.amount ?? null, input.unit, name);
 }
+
+/**
+ * Thin, calculation-free segmentation of a raw ingredient line into
+ * `{ amount, unit, name }`.
+ *
+ * Reuses the canonical fraction parser (`parseAmount`) and unit normalizer
+ * (`normalizeUnit`). It consumes a LEADING token ONLY when it is a mass/volume
+ * unit; count nouns (egg, clove, slice, can, stick, ...) are intentionally LEFT
+ * in the name so callers can classify them without inventing mass. A leading
+ * "of" after a mass/volume unit is ignored.
+ *
+ * This helper is pure and free of any nutrition/calculation dependency (it does
+ * NOT import the curated food reference or any calculation engine). The working
+ * text is bounded to 300 characters; callers that must reject oversized input
+ * MUST bound it BEFORE calling this helper, so it can never silently truncate an
+ * authoritative query into a different valid ingredient.
+ *
+ * (Relocated verbatim from the legacy deterministic engine so that
+ * calculation-free consumers — e.g. the Phase 2 matching layer — can reuse it
+ * without a transitive calculation dependency.)
+ */
+export function parseRawIngredientMeasurementParts(line: string): {
+  amount: number | null;
+  unit: string | null;
+  name: string;
+} {
+  const trimmed = String(line).trim().slice(0, 300);
+  const match = trimmed.match(
+    /^\s*(\d+\s+\d+\/\d+|\d+\/\d+|\d+\s*[½⅓⅔¼¾⅛⅜⅝⅞]|[½⅓⅔¼¾⅛⅜⅝⅞]|\d+(?:\.\d+)?)/
+  );
+  let amount: number | null = null;
+  let rest = trimmed;
+  if (match) {
+    amount = parseAmount(match[1]);
+    rest = trimmed.slice(match[0].length);
+  }
+  rest = rest.trim();
+
+  const firstToken = rest.match(/^(\S+)/)?.[1];
+  let unit: string | null = null;
+  let name = rest;
+  if (firstToken) {
+    const normalized = normalizeUnit(firstToken);
+    const kind = getMeasurementKind(normalized);
+    if (normalized && (kind === 'mass' || kind === 'volume')) {
+      unit = firstToken;
+      // A leading "of" sits between the unit and the food name ("1 cup of flour").
+      name = rest.slice(firstToken.length).replace(/^\s*of\s+/i, '').trim();
+    }
+  }
+  return { amount, unit, name: name || trimmed };
+}

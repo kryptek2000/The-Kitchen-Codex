@@ -30,9 +30,7 @@
 
 import {
   normalizeIngredientMeasurement,
-  parseAmount,
-  normalizeUnit,
-  getMeasurementKind,
+  parseRawIngredientMeasurementParts,
 } from '../utils/measurements';
 import type {
   NormalizedMeasurement,
@@ -189,44 +187,12 @@ function isQualitative(text: string): boolean {
 }
 
 /**
- * Thin segmentation of a raw ingredient line into { amount, unit, name }.
- *
- * Reuses the canonical fraction parser (`parseAmount`) and unit normalizer
- * (`normalizeUnit`). It consumes a LEADING token ONLY when it is a mass/volume
- * unit; count nouns (egg, clove, slice, can, stick, ...) are intentionally LEFT
- * in the name so Step 2's count-noun inference + Step 3's count weight drive
- * mass resolution (see module docstring for why raw markdown line parsing is
- * avoided here). A leading "of" after the unit is ignored.
+ * Backwards-compatible alias for the relocated, calculation-free raw-line
+ * segmenter (`parseRawIngredientMeasurementParts` in `src/utils/measurements`).
+ * There is ONE implementation; this module no longer owns it, so importing this
+ * engine is not required to parse a raw ingredient line.
  */
-export function normalizeRawIngredientLine(
-  line: string
-): { amount: number | null; unit: string | null; name: string } {
-  const trimmed = String(line).trim().slice(0, 300);
-  const match = trimmed.match(
-    /^\s*(\d+\s+\d+\/\d+|\d+\/\d+|\d+\s*[½⅓⅔¼¾⅛⅜⅝⅞]|[½⅓⅔¼¾⅛⅜⅝⅞]|\d+(?:\.\d+)?)/
-  );
-  let amount: number | null = null;
-  let rest = trimmed;
-  if (match) {
-    amount = parseAmount(match[1]);
-    rest = trimmed.slice(match[0].length);
-  }
-  rest = rest.trim();
-
-  const firstToken = rest.match(/^(\S+)/)?.[1];
-  let unit: string | null = null;
-  let name = rest;
-  if (firstToken) {
-    const normalized = normalizeUnit(firstToken);
-    const kind = getMeasurementKind(normalized);
-    if (normalized && (kind === 'mass' || kind === 'volume')) {
-      unit = firstToken;
-      // A leading "of" sits between the unit and the food name ("1 cup of flour").
-      name = rest.slice(firstToken.length).replace(/^\s*of\s+/i, '').trim();
-    }
-  }
-  return { amount, unit, name: name || trimmed };
-}
+export { parseRawIngredientMeasurementParts as normalizeRawIngredientLine };
 
 /**
  * Derives the single nutrition-relevant "parts" tuple ({ originalText, amount,
@@ -248,7 +214,7 @@ export function toIngredientParts(
 ): { originalText: string; amount: number | null; unit: string | null; name: string } {
   if (typeof item === 'string') {
     const line = item.trim().slice(0, 300);
-    const parts = normalizeRawIngredientLine(line);
+    const parts = parseRawIngredientMeasurementParts(line);
     return { originalText: line, ...parts };
   }
   const originalText = (
@@ -260,11 +226,11 @@ export function toIngredientParts(
   let unit: string | null = item.unit ?? null;
   let name = (item.name ?? '').trim();
   if (!name && (amount === null || !unit) && item.original) {
-    const parsed = normalizeRawIngredientLine(item.original);
+    const parsed = parseRawIngredientMeasurementParts(item.original);
     name = parsed.name || item.original;
   }
   if (!name && item.unit) {
-    const parsed = normalizeRawIngredientLine(originalText);
+    const parsed = parseRawIngredientMeasurementParts(originalText);
     name = parsed.name || originalText;
   }
   if (!name) name = originalText;

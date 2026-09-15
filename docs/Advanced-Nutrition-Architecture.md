@@ -1,8 +1,8 @@
 # The Kitchen Codex — Advanced Nutrition Architecture
 
-Status: **Phase 0 and Phase 1 implemented (contracts + offline adapter only)**.
-No USDA dataset is bundled, no network route or live API is used, and there is
-no ingredient matching, calculation engine, UI, Apply action, or automatic
+Status: **Phase 0, Phase 1, and Phase 2 implemented (offline contracts + isolated
+review layer only)**. No USDA dataset is bundled, no network route or live API is
+used, and there is no calculation engine, UI, Apply action, or automatic
 persistence. Machine application of advanced nutrition remains disabled.
 
 Phase 1 adds a trusted, offline, key-free USDA FoodData Central contract: a
@@ -10,8 +10,13 @@ strict release manifest, a defensive adapter for the **actual pinned download
 records**, an exact stable nutrient-ID map, strict fail-closed canonical
 serialization, an immutable exact-ID store, and a bounded in-memory cache — plus
 real official-record fixtures and separate synthetic adversarial fixtures.
-Phase 1 does **not** parse ingredients, match foods, calculate recipe nutrition,
-or touch any production surface (see §13).
+
+Phase 2 adds an **isolated, review-only** matching layer (§14): defensive
+ingredient parsing, conservative query normalization, a manifest-bound review
+catalog, deterministic ranking, a closed outcome union, and an explicit
+confirmation/rejection boundary. It reuses the Phase 0/1 primitives and the
+existing measurement normalizer; it does **not** calculate recipe nutrition,
+persist, apply, or touch any production surface. Phase 3–6 remain unimplemented.
 
 This is the canonical architecture document for Advanced Nutrition (target
 v0.10.0). It records the trusted-source plan, the schema-v1 contract, the
@@ -409,9 +414,13 @@ enable machine-generated nutrition application.
   local dataset *acquisition/generation* step that turns an official FDC download
   into a manifest-bound canonical bundle. Audit gate: source license + privacy
   review.
-- **Phase 2 — deterministic ingredient parsing/matching review.** Reuse the
-  existing measurement normalization; deterministic ranking; explicit user
-  confirmation for ambiguous matches. Audit gate: matching precision review.
+- **Phase 2 — deterministic ingredient parsing/matching review.** DONE (offline,
+  isolated): defensive ingredient parsing, conservative query normalization, a
+  manifest-bound review catalog, deterministic ranking, a closed outcome union
+  (matched_exact / review_required / unmatched / invalid), and an explicit,
+  cryptographically bound confirmation/rejection boundary. It is review-only —
+  no calculation, persistence, UI, or application. Audit gate: matching
+  precision review.
 - **Phase 3 — calculation engine and serving math.** Totals → per-serving →
   `%DV`, reusing `src/utils/nutrition.ts`. Audit gate: numeric regression review.
 - **Phase 4 — simple card + Advanced Nutrition page.** Full-screen modal,
@@ -784,3 +793,269 @@ nutrition.
 Phase 1 is **not** wired into any production surface, and
 `advancedNutritionApplicationAuthorization()` and `canApplyNutritionEstimate`
 remain globally disabled.
+
+---
+
+## 14. Phase 2 — deterministic ingredient parsing & matching review (isolated)
+
+Phase 2 is an **isolated, pure, offline, review-only** layer under
+`src/core/nutritionV2/matching/`. It answers exactly one question:
+
+> "Which pinned USDA food records are plausible candidates for this ingredient,
+> and does a human need to choose?"
+
+It never answers "what are this recipe's nutrition totals?". It is **not**
+re-exported from `src/core/nutritionV2/index.ts` or `src/core/index.ts`, and no
+production UI, route, provider, estimator, persistence path, or vault path may
+import it. Tests import it directly from its isolated module path.
+
+### 14.1 Implementation map
+
+| Concern | Module |
+| --- | --- |
+| Closed contract, bounds, versions, failure taxonomy | `src/core/nutritionV2/matching/types.ts` |
+| Conservative query normalization + tokenization | `src/core/nutritionV2/matching/normalize.ts` |
+| Defensive ingredient parsing | `src/core/nutritionV2/matching/parse.ts` |
+| Deterministic ranking | `src/core/nutritionV2/matching/rank.ts` |
+| Authority boundary: catalog factory + review + confirmation | `src/core/nutritionV2/matching/review.ts` |
+| Isolated barrel (not re-exported publicly) | `src/core/nutritionV2/matching/index.ts` |
+| Calculation-free raw-line segmenter | `src/utils/measurements.ts` (`parseRawIngredientMeasurementParts`) |
+| Synthetic matching fixtures (test-only) | `tests/fixtures/usdaMatchingFixtures.ts` |
+
+### 14.2 Parsing contract
+
+`parseIngredient(raw)` accepts a bounded raw ingredient string OR the
+repository's structured ingredient shape (`{ original?, amount?, unit?, name?,
+note?, line_ref?, index?, ... }`) as `unknown`. It materializes the value through
+the existing safe inert-value boundary (`toInertValue`) before any field access,
+so accessors, proxies, symbol keys, dangerous keys, cycles, sparse arrays, and
+non-plain objects fail closed with fixed, bounded, input-redacted diagnostics.
+The source object is never mutated and wikilinks are preserved on it.
+
+Derived review fields: `line_ref` (caller-supplied, else `line:<index>`, else the
+original text), `original_text`, `amount` (number or null), `raw_unit`,
+`normalized_unit`, `measurement_kind`, `grams` (direct mass only), `milliliters`
+(volume only), `count` (count classification only), `query` (bounded food name),
+and optional `note`.
+
+Honesty rules: a missing amount stays `null` (never defaulted to 1); volume never
+becomes mass; count never becomes mass; no density or count-weight is invented;
+"pinch"/"dash"/"to taste"/unknown units stay unmeasurable; an oversized line is
+rejected (`oversized_input`), never silently truncated into a different valid
+ingredient. Measurement derivation reuses the canonical `normalizeUnit`,
+`parseAmount`, and `normalizeIngredientMeasurement` primitives and the
+calculation-free `parseRawIngredientMeasurementParts` segmenter — no competing
+parser.
+
+**Calculation-free segmenter.** The raw-line segmenter was relocated from the
+legacy deterministic calculation engine (`src/core/deterministicNutrition.ts`) to
+`src/utils/measurements.ts` as `parseRawIngredientMeasurementParts`. It is pure
+and imports no nutrition/density/count-weight/per-100-g data, so the Phase 2
+matching layer has **no load-time dependency on the calculation layer**. The
+legacy engine re-exports the SAME function as `normalizeRawIngredientLine` (one
+implementation, no behavior change), and a transitive import-graph test proves no
+Phase 2 path reaches `deterministicNutrition.ts` or `foodReference.ts`.
+
+### 14.3 Normalization contract (matching only)
+
+`normalizeQuery(text)` is the single documented matching contract
+(`usda_match_normalize_v1`). In order: Obsidian wikilink label extraction
+(`[[T|Alias]]`→`Alias`, `[[T]]`→`T`, `[[T#H]]`→`T`, `![[T]]`→`T`), Unicode
+**NFC** normalization, non-locale lowercase (`toLowerCase`, never
+`toLocaleLowerCase`), Unicode-aware punctuation/symbol separation
+(`[^\p{L}\p{N}\s]+` → space), whitespace collapse, and bounded tokenization. It
+never stems, singularizes, deletes stop words, uses phonetics, or drops
+nutritionally significant qualifiers (raw/cooked, salted/unsalted,
+sweetened/unsweetened, whole/skim, lean/ground, canned/drained,
+enriched/unenriched, with/without skin, dry/prepared). Queries are bounded:
+empty → `empty_query`; more than 32 tokens or a token longer than 48 characters →
+`invalid_query`.
+
+### 14.4 Catalog construction and bounds
+
+`createReviewCatalog(manifest, records)` builds a review catalog ONLY from a
+validated Phase 1 bundle manifest and caller-supplied canonical Phase 1 records.
+Construction is all-or-nothing: strict manifest validity, derived bundle
+identity, canonical content digest, exact record count, every record's canonical
+digest, bundle-release equality, component/upstream-release equality,
+nutrient-map version, allowed data type, unique FDC ids, and record bounds are all
+verified. One invalid record rejects the entire catalog.
+
+`MAX_CATALOG_RECORDS = 20,000` — at least the combined accepted population of the
+three pinned Phase 1 releases (353 + 7,775 + 5,431 = 13,559). The bound is
+**inclusive**: exactly 20,000 otherwise valid records are accepted and 20,001 are
+rejected (`too_many_records`); a permanent test exercises `createReviewCatalog` at
+both sides of that boundary. An empty catalog is rejected (`empty_catalog`). The
+catalog indexes only bounded review identity (`fdc_id`, `data_type`,
+`description`, normalized description/tokens, `record_digest`) — never nutrient
+values — so it cannot be used as a calculation shortcut. It returns frozen
+metadata and frozen candidates; caller mutation of the input array cannot alter
+its authority. It exposes `metadata()`, `size()`, `search()`, and
+`exactPhraseCount()` — no Phase 1 store surface. The Phase 1 exact-ID store
+remains unchanged and still exposes only `lookup`/`metadata`.
+
+`createReviewCatalog` also registers the returned instance in a module-private
+`WeakMap` authority registry (see §14.7) used only by confirmation; the registry
+is not part of the public barrel and exposes no records, nutrients, or mutable
+state.
+
+### 14.5 Ranking tuple and version
+
+`rankCandidates(query, entries, limit)` (`usda_match_rank_v1`) uses an integer
+comparison tuple (no floating-point scores, no nutrient values, no data-type
+preference):
+
+```
+[class_rank, missing_query_tokens, extra_candidate_tokens,
+ order_disagreement (0 agrees / 1 disagrees), fdc_id]
+```
+
+Closed match classes, most specific first: `exact_phrase`,
+`exact_token_multiset`, `all_query_tokens_present`, `partial_token_overlap`,
+`no_match` (excluded). `order_agreement` is an ordered-subsequence check. The
+numeric `fdc_id` is the only presentation tie-break; it never converts a semantic
+tie into an automatic selection. Results are capped by `DEFAULT_RESULT_LIMIT = 10`
+and `MAX_RESULT_LIMIT = 25`, and are independent of input entry order.
+
+### 14.6 Outcome state machine and automatic-match rule
+
+`reviewIngredient(catalog, raw, options?)` returns a closed outcome union:
+
+```
+invalid          parse/normalize failure (no candidates)
+unmatched        no candidate shares any query token
+review_required  one or more candidates, but not a unique exact identity
+matched_exact    the ONLY automatic identity outcome
+```
+
+`matched_exact` requires ALL of: the normalized ingredient phrase exactly equals
+the normalized USDA description; **exactly one** catalog record has that exact
+normalized description (`exactPhraseCount === 1`); and the result is bound to the
+validated bundle. Token-set equality, token overlap, word reordering, containment,
+and duplicate exact phrases ALWAYS require review. A numeric score or first-ranked
+result never authorizes automatic selection. `matched_exact` is an identity
+statement only — it never authorizes calculation, persistence, display as final
+nutrition, or application.
+
+### 14.7 Confirmation, rejection, and catalog authority
+
+`confirmIngredientReview(currentCatalog, review, selection)` is a pure boundary.
+It requires a **genuine live catalog instance** created by `createReviewCatalog`
+and independently **reconstructs** the authoritative review from that catalog.
+The selection is `{ kind: 'candidate', fdc_id }` or `{ kind: 'none' }` (explicit
+"none of these" rejection), plus a required `review_digest` and optional
+cross-checks (`bundle_release`, `normalized_query`, `line_ref`).
+
+**Catalog authority is lexically private and runtime-authenticated, not
+structural.** The authority registry and its registration/retrieval operations
+live in the SAME lexical module as `createReviewCatalog` and
+`confirmIngredientReview` (`src/core/nutritionV2/matching/review.ts`) as a
+module-local `WeakMap` with non-exported functions. `createReviewCatalog`
+registers the exact catalog instance it returns against the validated internal
+authority state (frozen metadata + frozen normalized review entries);
+`confirmIngredientReview` retrieves authority only for the exact catalog argument
+it is given. Neither the registry nor any registration/retrieval operation is
+exported — **not even via a direct file-path import** — so no other module can
+register an arbitrary object as a genuine catalog or obtain authority state.
+There is no exported registry, symbol, token, brand, key, handle, or
+dependency-injection hook for authority, and the public API exposes behavior, not
+authority state. A structural clone, spread wrapper, proxy, inherited object,
+hand-built lookalike, primitive, or `null` is not registered and is rejected with
+`invalid_catalog`. No getter, method, or proxy trap is invoked on the untrusted
+catalog argument. Structural typing, `instanceof`, a public symbol, a
+caller-visible brand, or a caller-supplied catalog digest are NOT relied upon,
+and the private authority, internal index, canonical records, nutrient values, and
+mutable state are never exposed.
+
+**Current-catalog reconstruction.** Confirmation defensively materializes the
+supplied review, validates its closed schema and bound versions, recomputes its
+snapshot digest and compares it to the supplied digest, then independently reruns
+the authoritative search/ranking/outcome classification from the genuine current
+catalog for the supplied normalized query, line/reference identity, normalization
+version, ranking version, and exact effective `result_limit`. It then requires
+exact canonical equality between the supplied review and the reconstruction —
+including every candidate's FDC id, record digest, match class, complete ranking
+evidence, and deterministic order — requires the reconstructed outcome to be
+genuinely `review_required`, and only then accepts a selection whose FDC id is in
+the **reconstructed** candidate set.
+
+**Digest integrity vs. authority.** The `review_digest` is
+`sha256Hex(canonicalStringify({ normalization_version, ranking_version,
+bundle_release, catalog_digest, line_ref, original_text, query, normalized_query,
+query_tokens, result_limit, candidates: [{fdc_id, data_type, description,
+normalized_description, record_digest, match_class, evidence}] }))` using the
+strict Phase 1 serializer and SHA-256 primitive. SHA-256 is **unkeyed**: it proves
+deterministic review-snapshot integrity, **not authenticity**. A caller may know
+and reproduce the algorithm; a caller-built review that is semantically identical
+to the genuine current-catalog reconstruction may be accepted (it represents the
+same authoritative result), but a review that adds, removes, changes, or
+substitutes any candidate or ranking fact fails even if its digest is recomputed
+correctly — because current-catalog reconstruction differs.
+
+**Failure codes.** `invalid_catalog` (catalog not genuine), `invalid_review`
+(malformed/self-inconsistent review), `unsafe_review` (hostile review object),
+`not_reviewable` (outcome other than `review_required`), `stale_review` (review
+does not match the supplied genuine current catalog: bundle, catalog/content
+digest, record digests, candidate set/description/ranking, query, or versions),
+`candidate_not_in_review_set`, `malformed_digest`, `binding_mismatch`,
+`unknown_field`, `unsafe_selection`, `invalid_selection`, `validation_error`.
+
+**Stale-catalog behavior and honest limitation.** A review created from catalog A
+fails against catalog B when any authoritative component differs (bundle release,
+catalog/content digest, record set, candidate record digest, candidate set,
+ranking output, normalization version, ranking version). `stale_review` is used
+only when comparison with the supplied genuine current catalog establishes
+staleness. Confirmation verifies against the catalog instance the caller supplies;
+it cannot know which catalog is globally "current", so a caller that deliberately
+passes an older genuine catalog cannot be distinguished from one passing the
+intended active catalog. Production composition is deferred and will be
+responsible for supplying the active catalog.
+
+Confirmation is never auto-chosen and is **never persisted** in this phase; it is
+not converted into Phase 0 ingredient evidence, recipe totals, or a
+`codex_nutrition` block, and it authorizes no calculation or application. Phase 3
+and Phase 5 will handle those separately.
+
+### 14.8 Failure classes
+
+- Parsing: `invalid_input`, `unsafe_input`, `oversized_input`, `unknown_field`,
+  `invalid_amount`, `invalid_unit`, `invalid_name`, `invalid_line_ref`,
+  `empty_query`, `invalid_query`, `validation_error`.
+- Catalog: `invalid_manifest`, `invalid_record`, `duplicate_fdc_id`,
+  `release_mismatch`, `count_mismatch`, `content_digest_mismatch`,
+  `too_many_records`, `empty_catalog`, `validation_error`.
+- Confirmation: `invalid_catalog`, `invalid_review`, `unsafe_review`,
+  `not_reviewable`, `candidate_not_in_review_set`, `malformed_digest`,
+  `stale_review`, `binding_mismatch`, `invalid_selection`, `unsafe_selection`,
+  `unknown_field`, `validation_error`.
+
+Every failure carries a fixed, bounded, input-redacted message.
+
+### 14.9 Immutability guarantees
+
+Catalog metadata, catalog candidates, ranking evidence, review results,
+confirmation/rejection results, and parsed review views are deeply frozen or
+defensively isolated. A caller cannot mutate catalog identity, normalized query,
+ranking evidence, candidate ordering, FDC identity, bundle release, confirmation
+binding, or internal index state. Missing information is never converted into
+zero, an empty success, a candidate zero, or an invented default.
+
+### 14.10 Test-fixture limitations and non-goals
+
+Phase 2 tests use the existing official-record fixtures and clearly labeled
+**synthetic** matching fixtures. The checked-in fixtures are **not** a production
+USDA catalog, and no production USDA bundle or dataset is committed. Phase 2 does
+NOT add or enable: a production dataset/bundle, a downloader/generator, automatic
+release discovery, filesystem acquisition, a live API/API key, a network
+route/request, Open Food Facts, branded/barcode matching, AI/provider calls, web
+search, density or count-weight conversion, nutrient multiplication/summation, a
+calculation engine, per-serving nutrition, `%DV` beyond the existing Phase 0
+helper, `codex_nutrition` construction/persistence, frontmatter modification,
+vault reads/writes, UI, an Advanced Nutrition page, Apply, automatic
+confirmation, Vault Intelligence integration, bulk processing, or any change to
+the legacy/simple nutrition engine or deployed behavior. The documentation does
+not claim matching precision beyond what tests demonstrate, and it does not mark
+Phase 3, Phase 4, Phase 5, or Phase 6 as implemented.
+
+`advancedNutritionApplicationAuthorization()` and `canApplyNutritionEstimate`
+remain globally fail-closed.
