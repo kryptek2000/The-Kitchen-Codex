@@ -12,7 +12,9 @@
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:prod": "tsx scripts/verify_prod_serve.ts"
+    "test:prod": "tsx scripts/verify_prod_serve.ts",
+    "generate:usda-bundle": "tsx scripts/usda_bundle/generate.cli.ts",
+    "verify:usda-bundle": "tsx scripts/usda_bundle/verify.cli.ts"
   },
   "dependencies": {
     "@google/genai": "^2.19.0",

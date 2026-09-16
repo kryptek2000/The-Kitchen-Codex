@@ -2,9 +2,11 @@
 
 Status: **Phase 0, Phase 1, Phase 2, Phase 3, and Phase 4 implemented (offline
 contracts, isolated review layer, an isolated advisory calculation layer, and an
-isolated advisory review/display UI layer)**. No USDA dataset is bundled, no
-network route or live API is used, and there is no Apply action or automatic
-persistence. Machine application of advanced nutrition remains disabled.
+isolated advisory review/display UI layer), plus Phase 4.5A (a pinned,
+reproducible canonical USDA bundle artifact generated offline — not yet wired
+into any runtime)**. No network route or live API is used, and there is no Apply
+action or automatic persistence. Machine application of advanced nutrition
+remains disabled.
 
 Phase 1 adds a trusted, offline, key-free USDA FoodData Central contract: a
 strict release manifest, a defensive adapter for the **actual pinned download
@@ -1456,3 +1458,332 @@ bundle exists. Phase 4 does not claim medical accuracy, individualized dietary
 advice, or complete nutritional coverage when coverage is partial. Phase 5
 (explicit Apply/persistence) and Phase 6 (Vault Intelligence integration) remain
 deferred; machine application remains disabled.
+
+---
+
+## 17. Phase 4.5A — trusted local bundle generator and reproducible artifact
+
+Phase 4.5A implements the separately audited local acquisition/generation
+prerequisite identified in §13.13. It is **build-time/offline tooling only**: it
+produces one deterministic canonical bundle artifact and a strict offline
+verifier, but it is **not** wired into `App.tsx`, React, the browser, the plugin,
+or Phase 4 session composition. Phase 4 therefore remains honestly unavailable
+in production until the next separately audited runtime-composition slice.
+
+The generator/verifier are split into reusable implementation modules
+(`generate.ts`, `verify.ts`, no import side effects) and entry-only executables
+(`generate.cli.ts`, `verify.cli.ts`, each unconditionally invoking its runner).
+Package scripts point directly at the entry modules. A separate, immutable,
+source-controlled **release trust lock** (`src/core/nutritionV2/usda/releaseLock.ts`)
+lives outside the generated artifact and makes verification authenticity-bearing
+rather than merely self-consistent.
+
+### 17.1 Source archive identities
+
+Only the three pinned official USDA FoodData Central downloads are consumed.
+Each archive is verified by exact SHA-256 before extraction or parsing:
+
+| Data type | Release | Archive | SHA-256 |
+| --- | --- | --- | --- |
+| `foundation` | April 2026 | `FoodData_Central_foundation_food_json_2026-04-30.zip` | `186e988ec542e913f51ef62b86a47758e8cdd0d1dc3889e7b055581f3c09c77a` |
+| `sr_legacy` | final April 2018 | `FoodData_Central_sr_legacy_food_json_2018-04.zip` | `0fe8ae486a2c8eb42cb96413f058deb51863a46c8fb8eeb4b1fb45006dd338ef` |
+| `fndds` | FNDDS 2021–2023 (2024-10) | `FoodData_Central_survey_food_json_2024-10-31.zip` | `dfb06ae7ddc397ccd570b91c14b75438ab2ba39f64f22d321f61d4a52a77f3eb` |
+
+Official source URLs are exactly the `https://fdc.nal.usda.gov/fdc-datasets/…`
+URLs recorded in the Phase 1 provenance and satisfy the manifest URL policy
+(HTTPS, exact USDA host, no credentials/query/fragment).
+
+### 17.2 Secure local acquisition boundary
+
+The generator is offline and accepts explicit local archive paths
+(`--foundation`, `--sr-legacy`, `--fndds`, `--out`). It never downloads, never
+searches the filesystem, never reads environment archive paths, rejects duplicate
+paths, and rejects directories, non-regular files, and symlinks. A human/auditor
+separately downloads the archives to `/tmp` and passes their exact paths.
+
+Secure ZIP extraction (`scripts/usda_bundle/zip_extract.py`, Python standard
+library only, no new dependency) rejects, with fixed bounded codes: encrypted
+members, symlinks and unusual member types, absolute paths, `..` traversal,
+backslash ambiguity, drive letters, NULs, duplicate/case-colliding member names,
+unexpected members, oversized members, and compression-ratio breaches; it
+validates the member CRC while streaming to EOF, writes only into a freshly
+created directory, refuses overwrite, and removes partial output on failure. No
+Python code performs canonical adaptation, numeric conversion, digest
+construction, or manifest generation.
+
+**Same-open-descriptor ZIP binding (TOCTOU repair).** The exact bytes that are
+hashed are the bytes that are opened as a ZIP archive. The helper opens the
+source archive exactly once with low-level no-follow semantics (`O_NOFOLLOW`
+where available), `fstat`s the open descriptor and requires a regular file, and
+stream-copies that same descriptor (hashing as it copies) into a newly created
+private temporary file inside a private, fresh staging directory — fixed
+private filename, mode `0600`, exclusive creation (`O_CREAT | O_EXCL`), bounded
+archive size. The pinned SHA-256 is compared against the bytes just copied; on
+mismatch the private copy is rejected and deleted. Only that private verified
+copy is ever reopened for `zipfile.ZipFile`; the original caller pathname is
+never reopened for ZIP parsing. Pathname replacement therefore cannot substitute
+extraction bytes: a replacement before staging is either the file that gets
+hashed (and fails the pinned digest) or is rejected, and in-place mutation during
+copying yields a digest mismatch. The private copy is deleted during cleanup. On
+platforms without `O_NOFOLLOW` the authoritative protection is the private
+verified copy, not pathname stability.
+
+### 17.3 Bounded streaming ingestion
+
+`scripts/usda_bundle/stream_json.ts` reads the exact pinned top-level JSON
+envelope (`FoundationFoods`, `SRLegacyFoods`, `SurveyFoods`) and yields one
+complete root-array entry at a time as its exact JSON substring; the archive is
+never parsed into one in-memory object. It correctly handles braces/brackets
+inside strings, escaped quotes/backslashes, Unicode escapes, nested structures,
+and whitespace, and rejects an unexpected/multiple root key, invalid root
+structure, truncation, malformed syntax, trailing garbage, and oversized entries
+(256 KiB bound) with fixed codes. Each entry is `JSON.parse`d once, passed
+immediately into the production Phase 1 adapter, and released.
+
+### 17.4 Deterministic identity and artifact layout
+
+Generator identity is pinned (`the-kitchen-codex-usda-bundle`, schema `1`) and
+the manifest timestamp is pinned to `2026-09-15T00:00:00.000Z` (reproducible
+bundle-build metadata, not a USDA publication time). All ordering is explicit and
+locale-independent. The bundle release is derived only through the existing Phase
+1 manifest identity rules, so it changes whenever any component release, URL,
+archive digest, generator schema, nutrient-map version, or canonicalization
+version changes. The generated artifact is checked into the uncommitted working
+tree at `data/advanced-nutrition/usda/<bundle_release>/` and contains exactly:
+`manifest.json`, `artifact.json`, `records.foundation.json.gz`,
+`records.sr_legacy.json.gz`, `records.fndds.json.gz`. No raw or uncompressed USDA
+dataset is committed.
+
+Each shard is the canonical record array for one data type, sorted by numeric FDC
+id ascending (then record digest), serialized with the strict Phase 1
+`canonicalStringify`, UTF-8 encoded with no BOM/indentation/trailing newline, and
+gzip-compressed at a pinned level with the gzip MTIME zeroed and the OS byte fixed
+to 255. `artifact.json` is a strict closed descriptor (no local paths, host/user,
+timestamps, extensions, or self-digest).
+
+**Why `bundle_release` alone does not bind canonical content.** The bundle
+release is derived only from authoritative *inputs* (manifest schema, generator
+schema, data types, each component release/URL/archive digest, nutrient-map
+version, canonicalization version). It deliberately excludes record content,
+counts, and digests. It therefore proves *which inputs* produced a bundle, not
+*what canonical records* the bundle contains: two artifacts with the same inputs
+but different record content share a `bundle_release`. Binding canonical content
+requires the external release lock below.
+
+### 17.5 Generated artifact (exact bytes and digests)
+
+Bundle release: **`usda_fdc_87c5408a3e98838944a87be74824761e`**.
+
+| File | Bytes | SHA-256 |
+| --- | --- | --- |
+| `manifest.json` | 1,573 | `3b4ee9888bda49ff705e9e38971621beac7a091fe0b53e1187e68d050e70e2ba` |
+| `artifact.json` | 1,604 | `1e525d9423572ab202d80ed78ff05b7ec34899744f62b24664f8d32c4d0efd3b` |
+| `records.foundation.json.gz` | 53,877 | `50bb6999d12b7c68f167509bc2d88d35ad9c2df9d6a03a9a7f89379323399709` |
+| `records.sr_legacy.json.gz` | 1,456,503 | `2fa6be1ebefa1ffd2b70554e082237f15e14ce2c51302fdf00cde97ae6e3a876` |
+| `records.fndds.json.gz` | 981,412 | `1a25a5d8c4e18fbca8e91d80a0b051860bad72aedb27486e8940699ad8158b2b` |
+
+Total compressed: **2,491,792 bytes**; total uncompressed canonical:
+**59,678,264 bytes**; canonical-content digest:
+`dd9740bcf0efb577f0afd5b87ddb70a652384e4d7833947e83b30da8b39f67e4`.
+
+### 17.6 Exact census
+
+| Data type | Array entries | Null placeholders | Accepted | Rejected |
+| --- | --- | --- | --- | --- |
+| `foundation` | 395 | 32 | 353 | 10 `invalid_nutrient` |
+| `sr_legacy` | 7,793 | 0 | 7,775 | 18 `invalid_portion` |
+| `fndds` | 5,432 | 0 | 5,431 | 1 `no_supported_nutrients` |
+
+Combined: **13,559** accepted canonical records, **29** rejected non-null
+records, **32** Foundation null placeholders. The 18 rejected SR Legacy FDC ids
+are exactly `168789, 168790, 168796, 169239, 169617, 169621, 171056, 171062,
+171073, 171300, 171450, 171452, 171453, 171472, 171475, 171492, 172252, 173509`.
+The manifest preserves the census with explicit deterministic warnings
+(`foundation_null_placeholder: 32`, `rejected_invalid_nutrient: 10`,
+`rejected_invalid_portion: 18`, `rejected_no_supported_nutrients: 1`); distinct
+failure classes are never collapsed. The manifest validates with the existing
+Phase 1 validator, and the immutable exact-ID store is constructed from the final
+manifest and complete record set as an end-to-end check.
+
+### 17.7 Reproduction and verification
+
+Reproduce (after a human downloads and verifies the archives under `/tmp`):
+
+```
+bun run generate:usda-bundle -- \
+  --foundation /tmp/FoodData_Central_foundation_food_json_2026-04-30.zip \
+  --sr-legacy  /tmp/FoodData_Central_sr_legacy_food_json_2018-04.zip \
+  --fndds      /tmp/FoodData_Central_survey_food_json_2024-10-31.zip \
+  --out        data/advanced-nutrition/usda/<bundle_release>
+```
+
+The generator exits `0` **only** after it has written its requested output and
+verified that exact output against the release lock. On any failure it removes
+the just-written, unverified output and exits nonzero with a fixed bounded code.
+
+Verify the checked-in artifact against the built-in release lock (no network):
+
+```
+bun run verify:usda-bundle
+```
+
+Verify an explicit directory (documented option):
+
+```
+bun run verify:usda-bundle -- --dir /tmp/<fresh-output>
+```
+
+Three independent real runs were performed and are byte-for-byte identical
+(§17.12). The authenticity-bearing verifier resolves the expected file set from
+the release lock, re-lists the directory (rejecting missing/extra/case-colliding/
+symlinked entries), hashes and measures `artifact.json` **before** trusting it,
+requires its exact locked length and SHA-256, safely parses and validates it,
+requires every authoritative descriptor field to match the lock, hashes and
+measures `manifest.json` against the lock, validates it and compares every
+authoritative field, verifies every compressed shard against **both** the lock and
+the descriptor, bounded-decompresses each shard, verifies uncompressed
+length/hash against both, validates every canonical record and record digest,
+recomputes counts and the canonical-content digest (requiring lock equality),
+reconstructs the exact-ID store, and returns success only when the entire locked
+release matches. It never trusts a filename, count, digest, or uncompressed
+length merely because it appears in `artifact.json`, and it does not accept a
+caller-supplied replacement lock, environment override, query, or CLI flag.
+
+### 17.8 Size budget and licensing
+
+Hard limits: manifest/descriptor ≤ 64 KiB each; compressed shard ≤ 16 MiB; total
+compressed ≤ 32 MiB; uncompressed shard ≤ 128 MiB; total uncompressed ≤ 256 MiB;
+≤ 20,000 records; verifier decompression ratio ≤ 200; ZIP member count ≤ 16,
+member uncompressed ≤ 256 MiB, member compressed ≤ 64 MiB, ZIP ratio ≤ 400. The
+genuine output (2.49 MiB compressed / 59.68 MiB uncompressed) is well within
+budget. No Git LFS is used. USDA FoodData Central data are public domain / CC0
+1.0; the requested attribution is preserved verbatim in the manifest and
+descriptor.
+
+### 17.9 Integrity versus authenticity
+
+These are distinct trust properties, and Phase 4.5A keeps them distinct:
+
+* **Archive authenticity** comes from the separately verified official
+  acquisition process plus the pinned source archive filenames, official HTTPS
+  URLs, releases, and SHA-256 values (§17.1). A SHA-256 digest proves
+  identity/integrity against a pinned expected value; it does **not**, by itself,
+  prove USDA authorship.
+* **Deterministic generation** means the same verified inputs produce the same
+  bytes under the tested toolchain (§17.12).
+* **Artifact internal integrity** is accidental-corruption self-consistency: the
+  artifact's own embedded digests agree with each other. This is what the
+  explicitly-named, non-authoritative `verifyBundleDirectoryIntegrityOnly` checks.
+* **Artifact authenticity** is verified against the source-controlled release
+  lock (§17.10) and is what the exported `verifyBundleDirectory` and the package
+  verifier command do.
+
+**Why a fully recomputed artifact still fails locked verification.** The artifact
+is self-describing: a forger can change a canonical record, recompute the record
+digest, re-canonicalize and recompress the shard, recompute the compressed and
+uncompressed lengths/hashes, the canonical-content digest, the manifest bytes and
+hash, and the artifact descriptor values and hash — producing a *fully
+self-consistent* artifact that passes integrity-only verification. It still fails
+locked verification because the release lock pins the audited exact production
+byte lengths, SHA-256 values, canonical-content digest, record counts, and warning
+counts independently of the artifact. Permanent regressions prove this for both a
+semantically changed canonical description and a nutrient amount changed within
+valid numeric bounds, and for every individual locked comparison (artifact hash,
+manifest hash, canonical-content digest, compressed shard hash, uncompressed shard
+hash, locked count/warnings).
+
+**Deliberate lock updates.** The generator never silently updates the release
+lock. A future USDA release or generator-version change requires a manual,
+reviewed edit of `src/core/nutritionV2/usda/releaseLock.ts` and of the tripwire
+test expectations, followed by a full re-audit and test run. The tripwire test
+fails until that deliberate review happens.
+
+No raw archive, extracted raw JSON, temporary shard, log, or report is committed,
+and no production bundle loader is introduced in this phase. Phase 4 continues to
+report the honest unavailable state, and Phase 5 remains disabled.
+
+### 17.10 Source-controlled release trust lock (exact pinned values)
+
+`src/core/nutritionV2/usda/releaseLock.ts` is immutable, data-only, imports
+nothing (no Node/filesystem/child-process/ZIP/Python/React/application/platform
+module), lives outside the generated artifact directory, is never generated into
+or read from that directory, is never caller-supplied at verification time, and
+accepts no environment/query/CLI overrides. It pins the independently audited
+exact production release:
+
+* lock schema `1`; bundle release `usda_fdc_87c5408a3e98838944a87be74824761e`;
+* generator `the-kitchen-codex-usda-bundle` schema `1`; pinned build timestamp
+  `2026-09-15T00:00:00.000Z`; nutrient-map `usda_fdc_nutrient_map_v2`;
+  canonicalization `usda_canonical_v1`;
+* the three source archive filenames, official URLs, releases, and SHA-256 values
+  from §17.1;
+* exact artifact filename set (`artifact.json`, `manifest.json`,
+  `records.foundation.json.gz`, `records.sr_legacy.json.gz`,
+  `records.fndds.json.gz`);
+* canonical record count `13,559`; rejected non-null `29`; Foundation null
+  placeholders `32`;
+* canonical-content digest
+  `dd9740bcf0efb577f0afd5b87ddb70a652384e4d7833947e83b30da8b39f67e4`;
+* `manifest.json` 1,573 bytes / `3b4ee9888bda49ff705e9e38971621beac7a091fe0b53e1187e68d050e70e2ba`;
+  `artifact.json` 1,604 bytes / `1e525d9423572ab202d80ed78ff05b7ec34899744f62b24664f8d32c4d0efd3b`;
+* per shard (compressed bytes / SHA-256; uncompressed bytes / SHA-256; record
+  count):
+
+  | Shard | Compressed | Compressed SHA-256 | Uncompressed | Uncompressed SHA-256 | Records |
+  | --- | --- | --- | --- | --- | --- |
+  | `records.foundation.json.gz` | 53,877 | `50bb6999d12b7c68f167509bc2d88d35ad9c2df9d6a03a9a7f89379323399709` | 958,025 | `5082031987b75d388880b8d416b4c3cacd3ee4f7c227a2717d1cedfdc6b043e6` | 353 |
+  | `records.sr_legacy.json.gz` | 1,456,503 | `2fa6be1ebefa1ffd2b70554e082237f15e14ce2c51302fdf00cde97ae6e3a876` | 33,695,908 | `e916f71396f4f55db04365e4b622fdfa3ec8006d499ed67789434e4e5d213f35` | 7,775 |
+  | `records.fndds.json.gz` | 981,412 | `1a25a5d8c4e18fbca8e91d80a0b051860bad72aedb27486e8940699ad8158b2b` | 25,024,331 | `426e6e2642bcccfe64c2f86e831ef9c272b3def9829e25a17f179b283a055fc7` | 5,431 |
+
+* totals: compressed `2,491,792`; uncompressed `59,678,264`;
+* exact warning codes/counts (`foundation_null_placeholder: 32`,
+  `rejected_invalid_nutrient: 10`, `rejected_invalid_portion: 18`,
+  `rejected_no_supported_nutrients: 1`);
+* requested USDA attribution (verbatim).
+
+### 17.11 Executable CLI boundary
+
+The published package commands are entry-only modules that unconditionally invoke
+their runners:
+
+```
+bun run generate:usda-bundle -- --foundation <path> --sr-legacy <path> --fndds <path> --out <path>
+bun run verify:usda-bundle
+bun run verify:usda-bundle -- --dir <path>
+```
+
+`generate.ts` and `verify.ts` expose reusable logic with no import side effects
+and are never CLI entry points. Exit code is nonzero on invalid arguments or
+failure and zero only after the requested operation succeeds; rejected promises
+and synchronous exceptions are contained and converted to fixed bounded
+diagnostics that never echo an attacker exception message or a local path. There
+is no successful no-op path. Entry modules are never imported by production code
+or test helpers (tests exercise them as real subprocesses).
+
+### 17.12 Tested reproducibility scope
+
+Three real generation runs were executed and compared:
+
+* **Run A** — repository working directory, default locale/timezone, ordinary
+  named-flag order.
+* **Run B** — working directory outside the repository, absolute entry-script
+  paths, reversed named-flag order, `LC_ALL=C`, `TZ=UTC`, different temporary and
+  output directory names.
+* **Run C** — a different fresh working directory, `TZ=America/New_York`,
+  different output path, repeated generation from the same verified archives.
+
+All three are byte-for-byte identical to each other and to the checked-in
+candidate: same exact filename set, byte lengths, SHA-256 values, gzip headers
+(`1f 8b 08 00 00 00 00 00 02 ff`), and parsed semantic content. Only the `C`
+locale is installed on this host; the matrix used `LC_ALL=C` and did not test
+additional locales. Reproducibility is scoped to the tested runtime/toolchain
+(Bun 1.4.0, Node 22.22.1, Python 3.14.4, zlib via Node `node:zlib`). Cross-platform
+or cross-zlib byte identity is **not** claimed.
+
+### 17.13 Runtime loading
+
+No production runtime imports the generator, verifier, Python, filesystem, child
+process, or ZIP tooling; no artifact is copied to `public/`, `dist/`, or plugin
+output; `App.tsx` injects no Phase 4 session; Phase 4 remains honestly
+unavailable; Phase 5 remains unimplemented; and application gates remain globally
+disabled. No archive or raw extracted JSON remains in the repository.
