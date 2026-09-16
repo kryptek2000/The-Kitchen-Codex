@@ -24,6 +24,12 @@ const USDA_DIR = resolve(ROOT, 'src/core/nutritionV2/usda');
 const PHASE4_DIR = resolve(ROOT, 'src/core/nutritionV2/phase4');
 /** Phase 1 is internal to the advanced-nutrition namespace (Phases 2–4). */
 const ADVANCED_NAMESPACE = resolve(ROOT, 'src/core/nutritionV2');
+/**
+ * The explicit, newly allowed Phase 4.5B browser runtime loader. It imports the
+ * source-controlled release lock (Phase 1) to obtain the exact locked byte
+ * lengths for its bounded same-origin fetch; it does not expose Phase 1 records.
+ */
+const PHASE45B_BROWSER_LOADER = resolve(ROOT, 'src/browser/advancedNutritionBundle.ts');
 
 function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
@@ -133,6 +139,7 @@ describe('usda phase 1 — no network, no keys, no persistence', () => {
     for (const root of productionRoots) {
       for (const file of listFiles(root)) {
         if (file.startsWith(ADVANCED_NAMESPACE)) continue; // Phases 1–4 are internal
+        if (file === PHASE45B_BROWSER_LOADER) continue; // Phase 4.5B runtime loader (audited)
         const source = readFileSync(file, 'utf8');
         let match: RegExpExecArray | null;
         importRe.lastIndex = 0;
@@ -162,6 +169,9 @@ describe('usda phase 1 — no network, no keys, no persistence', () => {
       }
     }
     expect(phase4Importers).toBeGreaterThan(0);
+
+    // Positive control: the audited Phase 4.5B loader DOES import the lock.
+    expect(readFileSync(PHASE45B_BROWSER_LOADER, 'utf8')).toMatch(/USDA_BUNDLE_RELEASE_LOCK/);
   });
 
   it('is not re-exported from the Phase 0 / core barrels', () => {

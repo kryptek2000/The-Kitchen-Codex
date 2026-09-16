@@ -1,10 +1,15 @@
-import React, { useEffect, useMemo, useReducer, useState } from 'react';
-import { Activity, FlaskConical, Lock, ShieldAlert, ShieldCheck } from 'lucide-react';
+import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { Activity, FlaskConical, Loader2, Lock, RefreshCw, ShieldAlert, ShieldCheck } from 'lucide-react';
 import type { ObsidianRecipe } from '../types';
 import {
   INITIAL_PHASE4_STATE,
+  PHASE4_BUNDLE_FAILED_MESSAGE,
+  PHASE4_BUNDLE_RETRY_LABEL,
+  PHASE4_IDLE_MESSAGE,
+  PHASE4_LOADING_MESSAGE,
   PHASE4_UNAVAILABLE_MESSAGE,
   PHASE4_UNREADABLE_MESSAGE,
+  PHASE4_UNSUPPORTED_MESSAGE,
   adaptRecipe,
   basisLabel,
   buildCalculationRequest,
@@ -20,10 +25,21 @@ import {
 } from '../core/nutritionV2/phase4';
 import { AdvancedNutritionModal } from './AdvancedNutritionModal';
 
+export type AdvancedNutritionBundleUiStatus =
+  | 'idle'
+  | 'loading'
+  | 'ready'
+  | 'failed'
+  | 'unsupported';
+
 interface AdvancedNutritionCardProps {
   recipe: ObsidianRecipe;
   session?: AdvancedNutritionSession | null;
   servings?: number;
+  /** Phase 4.5B lazy local-bundle state (absent when no loader is wired). */
+  bundleStatus?: AdvancedNutritionBundleUiStatus;
+  /** Explicit user-triggered load. Absent when no loader is wired. */
+  onLoadBundle?: () => void;
 }
 
 const NO_INGREDIENTS: ReadonlyArray<AdaptedIngredient> = Object.freeze([]);
@@ -31,10 +47,35 @@ const NO_INGREDIENTS: ReadonlyArray<AdaptedIngredient> = Object.freeze([]);
 export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
   recipe,
   session = null,
+  bundleStatus,
+  onLoadBundle,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [calculating, setCalculating] = useState(false);
   const [state, dispatch] = useReducer(phase4Reducer, INITIAL_PHASE4_STATE);
+  const pendingOpen = useRef(false);
+  const openerRef = useRef<HTMLButtonElement | null>(null);
+
+  // When a user-initiated load succeeds, focus the (now-rendered) opener and
+  // open the review UI exactly once, so closing the modal restores focus to it.
+  useEffect(() => {
+    if (session && pendingOpen.current) {
+      pendingOpen.current = false;
+      openerRef.current?.focus();
+      setIsOpen(true);
+    }
+  }, [session]);
+
+  const handleOpenRequest = () => {
+    if (session) {
+      setIsOpen(true);
+      return;
+    }
+    if (onLoadBundle) {
+      pendingOpen.current = true;
+      onLoadBundle();
+    }
+  };
 
   // Materialize the narrow adaptation envelope ONCE, safely, before any recipe
   // or ingredient property is used. The untrusted runtime recipe is never read
@@ -115,7 +156,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
         </div>
       </div>
 
-      {!session && (
+      {!session && !onLoadBundle && (
         <div className="p-3 rounded-xl bg-[#0E0E0E] border border-dashed border-white/10 space-y-2">
           <p className="text-xs text-gray-300">{PHASE4_UNAVAILABLE_MESSAGE}</p>
           <p className="text-[11px] text-gray-500 flex items-center gap-1.5">
@@ -131,6 +172,53 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
             <FlaskConical className="w-3.5 h-3.5" />
             <span>Open Advanced Nutrition</span>
           </button>
+        </div>
+      )}
+
+      {!session && onLoadBundle && (
+        <div className="p-3 rounded-xl bg-[#0E0E0E] border border-dashed border-white/10 space-y-2">
+          <p className="text-xs text-gray-300" role="status" aria-live="polite">
+            {bundleStatus === 'loading'
+              ? PHASE4_LOADING_MESSAGE
+              : bundleStatus === 'failed'
+                ? PHASE4_BUNDLE_FAILED_MESSAGE
+                : bundleStatus === 'unsupported'
+                  ? PHASE4_UNSUPPORTED_MESSAGE
+                  : PHASE4_IDLE_MESSAGE}
+          </p>
+          <p className="text-[11px] text-gray-500 flex items-center gap-1.5">
+            <Lock className="w-3.5 h-3.5" />
+            <span>This is not an error in the recipe.</span>
+          </p>
+          {bundleStatus === 'loading' ? (
+            <button
+              type="button"
+              disabled
+              aria-disabled="true"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-gray-400 bg-white/5 border border-white/10 cursor-wait"
+            >
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              <span>Authenticating…</span>
+            </button>
+          ) : bundleStatus === 'failed' ? (
+            <button
+              type="button"
+              onClick={handleOpenRequest}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-amber-200 bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 transition-colors"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>{PHASE4_BUNDLE_RETRY_LABEL}</span>
+            </button>
+          ) : bundleStatus === 'unsupported' ? null : (
+            <button
+              type="button"
+              onClick={handleOpenRequest}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-indigo-200 bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 transition-colors"
+            >
+              <FlaskConical className="w-3.5 h-3.5" />
+              <span>Open Advanced Nutrition</span>
+            </button>
+          )}
         </div>
       )}
 
@@ -215,6 +303,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
             </span>
             <button
               type="button"
+              ref={openerRef}
               onClick={() => setIsOpen(true)}
               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold text-indigo-200 bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 transition-colors"
             >

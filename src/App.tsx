@@ -58,6 +58,8 @@ import {
 import { saveGeneratedRecipeImageToVault, hashCanonicalMarkdown, type GeneratedImageSaveResult } from './application/recipeImageSave';
 import { hydrateAiSelections } from './application/aiSelection';
 import { getEndpointAccessHeaders } from './application/endpointAccess';
+import { loadProductionAdvancedNutritionSession } from './browser/advancedNutritionBundle';
+import { useAdvancedNutritionBundle } from './application-ui/useAdvancedNutritionBundle';
 import { playTimerChime } from './utils/audioAlert';
 import { APP_VERSION } from './version';
 import ProviderSettings from './application-ui/ProviderSettings';
@@ -193,6 +195,13 @@ export default function App() {
     return createAppServices({ vault, settings: settingsAdapter, network: networkAdapter, secret: secretAdapter });
   }, [vaultStatus.folderHandle, settingsAdapter, networkAdapter, secretAdapter]);
   const vaultAdapter = vaultServices?.adapters.vault ?? null;
+
+  // Phase 4.5B: ONE in-memory Advanced Nutrition bundle load for the page. It is
+  // lazy — nothing is fetched, decoded, or installed at startup. The first
+  // explicit "Open Advanced Nutrition" action begins authentication; the
+  // resulting genuine Phase 4 session is retained in memory across recipe
+  // navigation for the lifetime of the page and is never persisted.
+  const advancedNutritionBundle = useAdvancedNutritionBundle(loadProductionAdvancedNutritionSession);
 
   // Asset save dependencies, supplied BY the browser shell: the binary storage
   // boundary (BrowserAssetAdapter) + the fixed-purpose remote image downloader.
@@ -1347,6 +1356,9 @@ export default function App() {
               setIsVaultIntelligenceOpen(true);
             }}
             network={networkAdapter}
+            advancedNutritionSession={advancedNutritionBundle.session}
+            advancedNutritionBundleStatus={advancedNutritionBundle.status}
+            onLoadAdvancedNutritionBundle={advancedNutritionBundle.load}
           />
         ) : activeTab === 'grid' ? (
           /* Recipe Gallery View */

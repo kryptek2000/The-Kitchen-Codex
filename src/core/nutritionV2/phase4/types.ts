@@ -36,6 +36,19 @@ export const PHASE4_NOT_MEDICAL_ADVICE =
 
 export const PHASE4_UNCONFIGURED_LABEL = 'Source data unavailable';
 
+/**
+ * Phase 4.5B lazy local-bundle copy. Calm product language; the recipe is never
+ * described as defective, no path/URL/exception/digest detail is exposed, and
+ * success is never claimed before the locked bundle and genuine session exist.
+ */
+export const PHASE4_IDLE_MESSAGE = 'Trusted USDA source data are ready to load.';
+export const PHASE4_LOADING_MESSAGE = 'Authenticating local USDA nutrition data…';
+export const PHASE4_BUNDLE_FAILED_MESSAGE =
+  'Advanced Nutrition could not authenticate its local USDA data.';
+export const PHASE4_UNSUPPORTED_MESSAGE =
+  'This browser cannot safely open the local USDA nutrition bundle.';
+export const PHASE4_BUNDLE_RETRY_LABEL = 'Retry';
+
 /** Fixed, bounded copy shown when a hostile/unreadable recipe fails adaptation. */
 export const PHASE4_UNREADABLE_MESSAGE =
   "This recipe's ingredient data could not be read safely, so Advanced Nutrition is unavailable.";

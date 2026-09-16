@@ -16,16 +16,19 @@ export function canonicalToObsidianRecipe(
   canonical: CanonicalRecipe,
   fileHandle?: any
 ): ObsidianRecipe {
+  // Optional ingredient fields are emitted ONLY when present. A present own
+  // property whose value is `undefined` is a distinct (and, for the Phase 4
+  // adaptation boundary, hostile) shape; absent optional fields must be absent.
   const ingredients: ParsedIngredient[] = canonical.ingredients.map((ing) => ({
     original: ing.raw,
-    amount: ing.amount,
-    unit: ing.unit,
+    ...(ing.amount !== undefined ? { amount: ing.amount } : {}),
+    ...(ing.unit !== undefined ? { unit: ing.unit } : {}),
     name: ing.name,
-    wikilink: ing.wikilink,
-    wikilinkTarget: ing.wikilinkTarget,
-    wikilinkAlias: ing.wikilinkAlias,
-    note: ing.preparation,
-    isChecked: ing.isChecked,
+    ...(ing.wikilink !== undefined ? { wikilink: ing.wikilink } : {}),
+    ...(ing.wikilinkTarget !== undefined ? { wikilinkTarget: ing.wikilinkTarget } : {}),
+    ...(ing.wikilinkAlias !== undefined ? { wikilinkAlias: ing.wikilinkAlias } : {}),
+    ...(ing.preparation !== undefined ? { note: ing.preparation } : {}),
+    ...(ing.isChecked !== undefined ? { isChecked: ing.isChecked } : {}),
   }));
 
   const instructions: RecipeStep[] = canonical.instructions.map((step) => ({

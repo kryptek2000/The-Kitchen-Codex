@@ -3,10 +3,11 @@
 Status: **Phase 0, Phase 1, Phase 2, Phase 3, and Phase 4 implemented (offline
 contracts, isolated review layer, an isolated advisory calculation layer, and an
 isolated advisory review/display UI layer), plus Phase 4.5A (a pinned,
-reproducible canonical USDA bundle artifact generated offline — not yet wired
-into any runtime)**. No network route or live API is used, and there is no Apply
-action or automatic persistence. Machine application of advanced nutrition
-remains disabled.
+reproducible canonical USDA bundle artifact generated offline) and Phase 4.5B
+(authenticated, explicit-user-intent browser runtime loading of that exact
+bundle into a genuine Phase 4 session)**. No network route or live API is used,
+and there is no Apply action or automatic persistence. Machine application of
+advanced nutrition remains disabled.
 
 Phase 1 adds a trusted, offline, key-free USDA FoodData Central contract: a
 strict release manifest, a defensive adapter for the **actual pinned download
@@ -1328,15 +1329,23 @@ digest proves deterministic integrity, not authenticity.
 
 ### 16.3 Honest production availability
 
-No production USDA bundle exists in the repository. The UI supports an injected
-genuine session, but production composition does NOT fabricate one. When no
-session is configured, the compact card is shown, the interface clearly states
-that trusted local USDA source data are unavailable in this build, the review/
-calculation controls are unavailable, and no fixture, curated reference, AI
-estimate, empty catalog, or invented preview is substituted. The wording is calm
-and does not describe the recipe as erroneous. The injection boundary lets a
-later separately audited local-bundle acquisition phase supply the session
-without rewriting the React UI.
+**Historical (pre-4.5B).** Before Phase 4.5B, no production USDA bundle was wired
+into the runtime. The UI supported an injected genuine session, but production
+composition did NOT fabricate one: the compact card was shown, trusted local USDA
+source data were reported unavailable in that build, the review/calculation
+controls were unavailable, and no fixture, curated reference, AI estimate, empty
+catalog, or invented preview was substituted.
+
+**Phase 4.5B (current).** The browser application now supplies a genuine session
+from the exact checked-in production bundle, but ONLY after an explicit user
+action authenticates it against the source-controlled release lock (§18). Until
+then the card shows an honest idle state; while loading it shows a calm
+authenticating state; on failure it shows a fixed, bounded failure state with an
+explicit retry; and on an unsupported runtime it reports that safely. The wording
+remains calm and never describes the recipe as erroneous, and no fallback data
+are ever substituted. The Obsidian plugin shell does not expose the full card and
+gains no bundle-loading behavior in this phase. The injection boundary still lets
+a future audited composition supply the session without rewriting the React UI.
 
 ### 16.4 Recipe adaptation, hostile-input materialization, and invalidation
 
@@ -1780,10 +1789,245 @@ additional locales. Reproducibility is scoped to the tested runtime/toolchain
 (Bun 1.4.0, Node 22.22.1, Python 3.14.4, zlib via Node `node:zlib`). Cross-platform
 or cross-zlib byte identity is **not** claimed.
 
-### 17.13 Runtime loading
+### 17.13 Runtime loading (Phase 4.5A scope)
 
-No production runtime imports the generator, verifier, Python, filesystem, child
-process, or ZIP tooling; no artifact is copied to `public/`, `dist/`, or plugin
-output; `App.tsx` injects no Phase 4 session; Phase 4 remains honestly
-unavailable; Phase 5 remains unimplemented; and application gates remain globally
-disabled. No archive or raw extracted JSON remains in the repository.
+This section records the Phase 4.5A state. Phase 4.5B (§18) supersedes the
+runtime-availability statement without changing the 4.5A tooling.
+
+In Phase 4.5A: no production runtime imports the generator, verifier, Python,
+filesystem, child process, or ZIP tooling; no artifact is copied to `public/`,
+`dist/`, or plugin output; `App.tsx` injects no Phase 4 session; Phase 4 remains
+honestly unavailable; Phase 5 remains unimplemented; and application gates remain
+globally disabled. No archive or raw extracted JSON remains in the repository.
+
+Phase 4.5B adds a browser runtime loader that authenticates and composes the
+bundle on explicit user intent (§18). The generator/verifier/Python/ZIP tooling
+still remains build-time/offline only and is never imported by any runtime.
+
+---
+
+## 18. Phase 4.5B — authenticated runtime bundle loading and Phase 4 composition
+
+Phase 4.5B is the separately audited runtime-composition slice that Phase 4.5A
+explicitly deferred. It activates the **full browser application's existing
+Advanced Nutrition card**: on explicit user intent it authenticates the exact
+checked-in production bundle against the source-controlled release lock and
+composes one genuine existing `AdvancedNutritionSession`. It is **not** a
+calculation/Apply/persistence phase. It never writes `codex_nutrition`, never
+modifies Markdown/frontmatter, never writes a vault file, and never enables
+machine application.
+
+The intended user flow is:
+
+```
+Open Advanced Nutrition -> load and authenticate local bundle
+  -> create genuine Phase 4 session -> review matches
+  -> explicitly calculate advisory preview
+```
+
+It is never `open recipe/app -> calculate automatically -> save automatically`.
+
+### 18.1 Implementation map
+
+| Concern | Module |
+| --- | --- |
+| Pure authenticated decoder/composer (platform-neutral) | `src/core/nutritionV2/runtime/bundle.ts` |
+| Pure bounded browser-native gzip + strict UTF-8 | `src/core/nutritionV2/runtime/gzip.ts` |
+| Isolated runtime barrel (not re-exported publicly) | `src/core/nutritionV2/runtime/index.ts` |
+| Fixed compile-time-owned browser asset URL map | `src/application/advancedNutritionBundleAssets.ts` |
+| Fixed no-argument production loader (browser composition) | `src/browser/advancedNutritionBundle.ts` |
+| Bounded same-origin static-asset fetch (browser platform) | `src/platform/browser/advancedNutritionBundleFetch.ts` |
+| Lazy one-session React controller | `src/application-ui/useAdvancedNutritionBundle.ts` |
+| Card loading/ready/failed/unsupported states | `src/components/AdvancedNutritionCard.tsx` |
+
+The runtime composer is intentionally **not** re-exported from
+`src/core/nutritionV2/index.ts` or `src/core/index.ts`. It imports only pure
+Phase 1–4 core modules and the pure gzip helper: no React, application, browser,
+Node, filesystem, child-process, ZIP, Python, server, provider, vault,
+persistence, fixture, or `scripts/usda_bundle/` module.
+
+### 18.2 Pure authenticated runtime decoder/composer
+
+`composeAdvancedNutritionSessionFromBundle(inputs)` consumes a closed set of raw
+byte inputs (`{ files: [{ name, bytes }] }`) through a narrow, testable
+interface. Every supplied byte and every parsed value is untrusted; the
+interface is read with own-data property descriptors only, so hostile getters and
+proxy traps are never invoked. The composer authenticates the bundle
+**exclusively** against the source-controlled `USDA_BUNDLE_RELEASE_LOCK`: no
+caller-supplied lock, environment variable, URL, path, or replacement byte source
+is accepted.
+
+The success result exposes ONLY the genuine session, the bounded immutable
+`session.metadata()`, and the locked USDA attribution. It never returns manifest
+objects, canonical records, shards, stores, indexes, catalogs, or authority
+material. Failures use a closed code vocabulary and fixed, bounded,
+input-redacted messages (`advanced_nutrition_bundle_*`); URLs, paths, response
+bodies, parsed content, and exception messages are never echoed.
+
+Per-shard decoded validation is a **module-private implementation detail** of the
+composer. It is not exported from `bundle.ts`, not re-exported from the runtime
+barrel, and not reachable through any production import path; the runtime barrel
+exposes no canonical-record-returning helper. There is no validator callback,
+release-lock override, dependency injection, debug interface, symbol, or registry,
+and the composer's signature accepts only the raw byte inputs.
+
+### 18.3 Verification order (all-or-nothing, fail closed)
+
+1. Require exactly the five logical inputs; reject missing, duplicate, unknown,
+   and case-colliding logical filenames.
+2. Enforce locked byte bounds while reading (exact locked lengths, not a declared
+   `Content-Length`).
+3. Verify the exact byte length and SHA-256 of `artifact.json` against the lock
+   **before** trusting its contents.
+4. Decode UTF-8 strictly, parse, validate the closed artifact schema, require
+   canonical serialization, and compare every authoritative field with the lock.
+5. Verify the exact byte length and SHA-256 of `manifest.json` against the lock
+   before trusting it; decode strictly, parse, validate with the existing Phase 1
+   manifest contract, require canonical bytes, and compare every authoritative
+   field (including components, data types, warnings, and attribution).
+6. For each shard in locked order: enforce the exact compressed length and
+   SHA-256 **before** decompression; require a valid gzip stream; decompress with
+   an independent incremental output ceiling; reject trailing, concatenated,
+   truncated, and malformed gzip data; enforce the exact locked uncompressed
+   length and SHA-256; decode UTF-8 strictly; parse as a JSON array; require
+   canonical serialization; validate every canonical record; and require the
+   expected data type, bundle release, upstream release, nutrient-map version,
+   record count, and unique positive FDC identity.
+7. Require the exact total count of 13,559 canonical records.
+8. Recompute and compare the canonical-content digest
+   `dd9740bcf0efb577f0afd5b87ddb70a652384e4d7833947e83b30da8b39f67e4`.
+9. Cross-check artifact, manifest, shard, record, component, count, byte, digest,
+   generator, timestamp, version, warning, and attribution identities against one
+   another and the independent lock.
+10. Call the existing Phase 4 session factory only after all authentication
+    succeeds, then verify the resulting session metadata matches the locked
+    release before returning success.
+
+A fully recomputed, internally self-consistent forgery still fails: the
+compressed shard SHA-256 (and, when changed, the artifact/manifest SHA-256) is
+compared to the external lock before any decompression or trust.
+
+**Decoder versus composer enforcement.** Standalone gzip decoder behavior differs
+across runtimes: real Chrome's native `DecompressionStream('gzip')` rejects
+trailing bytes and a concatenated second member, while Bun/Node may decode a
+concatenated member. The authoritative composer therefore does **not** rely on
+standalone decoder behavior. It checks the exact locked compressed length and
+SHA-256 **before** decompression and the exact locked uncompressed length and
+SHA-256 **afterward**, so trailing, concatenated, truncated, altered, or
+substituted input cannot pass the complete locked composition boundary,
+regardless of how a particular runtime's decoder behaves on its own.
+
+### 18.4 Fixed browser asset source and delivery
+
+The browser asset module contains ONLY a compile-time-owned URL map for the five
+checked-in files for the locked release, paired with their logical locked
+filenames. Vite emits each original file as a distinct content-hashed static
+asset (`?url&no-inline`) whose bytes stay byte-identical to the checked-in
+source; the module carries no payload, no base64, and no fetch logic. No
+environment variable, setting, query parameter, local-storage entry, URL
+parameter, API response, server route, user-selected directory, or caller
+argument can replace these URLs, and there is no silent or fixture fallback.
+
+The runtime delivery boundary is:
+
+```
+fixed compile-time URL map -> bounded same-origin fetch -> exact locked bytes
+  -> unchanged authenticated composer -> genuine Phase 4 session
+```
+
+The loader confirms the safe gzip capability before requesting the dataset,
+resolves each fixed URL against the current document, requires same-origin,
+rejects URLs carrying credentials and rejects redirects / changed final URLs,
+fetches with `redirect: 'error'`, `credentials: 'omit'`, and `cache: 'no-store'`,
+and streams each body with a hard incremental ceiling equal to the exact locked
+length (never trusting `Content-Length` alone). The reconstructed bytes are then
+authenticated by the unchanged composer against the source-controlled release
+lock, so a wrong or substituted asset fails closed.
+
+Measured build output: the five original files are emitted as five distinct
+static assets; the original compressed USDA payload totals **2,491,792 bytes**
+and the full authenticated uncompressed data is **59,678,264 bytes**. No shard
+payload or long base64 representation exists in the eager main JavaScript or in
+any lazy JavaScript chunk — the client JavaScript carries only the fixed
+generated asset URLs. No raw USDA archive (`.zip`) or extracted upstream JSON is
+emitted, and the production server serves the app and the five assets as ordinary
+static files; no Vite dev middleware and no server route are added.
+
+### 18.5 Explicit lazy loading, one in-memory session
+
+Loading is **explicit-user-intent only**: nothing is fetched, decoded, or
+installed at application startup, and recipe navigation alone never loads the
+bundle. The React controller owns exactly one in-flight load at a time, installs
+at most one session, ignores results from a superseded request or an unmounted
+owner, and reuses the successful session in memory across recipe navigation for
+the lifetime of the application page. Retry is explicit and genuine: the loader
+uses ordinary same-origin `fetch` (never a cached dynamic module import), so a
+failed attempt's Retry issues new requests and can install exactly one session
+without a page reload. StrictMode does not duplicate the load or session.
+
+The session and the bundle bytes are never written to IndexedDB,
+localStorage/sessionStorage, Cache Storage, a service worker, a vault file,
+settings, Markdown/frontmatter, or a server cache. As each shard is
+authenticated and decoded, the composer drops its reference to that shard's
+compressed bytes, and it drops the decoded JSON string after parsing; those
+values then become eligible for garbage collection, although actual reclamation
+is controlled by the browser runtime. There are no timers, no background refresh,
+and no periodic network activity. The existing record, manifest, digest, catalog,
+context, and session validation is not weakened to reduce memory or startup time.
+
+### 18.6 UI states, wording, and accessibility
+
+The card distinguishes `idle` ("Trusted USDA source data are ready to load."),
+`loading` ("Authenticating local USDA nutrition data…"), `ready` (genuine session
+available), `failed` ("Advanced Nutrition could not authenticate its local USDA
+data."), and `unsupported` ("This browser cannot safely open the local USDA
+nutrition bundle."). Copy is calm, bounded, and input-redacted; success is never
+claimed before the locked bundle and genuine session are ready; a preview is
+never called saved nutrition; advisory/not-medical-advice language is retained.
+Controls are keyboard-operable with accessible names and restrained `aria-live`;
+the modal keeps `role="dialog"`/`aria-modal`, initial focus, focus containment,
+Escape close, and focus restoration. No Apply, Save, Persist, Update Recipe, or
+Write to Vault control appears.
+
+### 18.7 Browser-only runtime; plugin exclusion
+
+Phase 4.5B activates the full browser application only. The minimal Obsidian
+plugin shell does not expose the Advanced Nutrition card and gains no
+filesystem, ZIP, generator, verifier, or bundle-loading behavior; the USDA
+artifact bytes are not embedded in `plugin/main.js`, and the plugin runtime
+imports no browser asset URL. Plugin Advanced Nutrition runtime support is not
+claimed in this phase.
+
+### 18.8 Gates, persistence, and deferred work
+
+`application_authorized` remains `false`,
+`advancedNutritionApplicationAuthorization()` remains fail-closed, and
+`canApplyNutritionEstimate` remains disabled. Phase 4.5B adds no Apply or
+persistence path, no legacy migration, no Vault Intelligence integration, and no
+bulk processing. Phase 5 remains responsible for explicit Apply/persistence and
+legacy compatibility; Phase 6 (Vault Intelligence integration) remains
+separately gated.
+
+### 18.9 Tests
+
+Phase 4.5B tests prove: the exact checked-in bundle loads and yields a genuine
+working Phase 4 session with the locked release, 13,559 records, locked
+nutrient-map version, and all data types; artifact/manifest/shard byte mutations,
+truncation, trailing/concatenated gzip data, decompression beyond the bound,
+uncompressed digest/UTF-8/JSON/canonical/record/duplicate/count/identity
+mismatches, and a fully self-consistent forgery all fail closed with no partial
+session; the input set is closed against missing/duplicate/unknown/case-colliding
+names; the production entry point accepts no caller URL/directory/lock/env/
+replacement byte source; the runtime/asset/loader path imports no Node/fs/ZIP/
+Python/child/server/provider/persistence/vault/fixture module and performs no
+network access beyond the single fixed same-origin bounded static-asset fetch
+(credentials/redirects/changed final URLs rejected; `Content-Length` never
+trusted alone); errors are fixed, bounded, and input-redacted; no bundle material
+is written to browser or vault persistence; the plugin bundle excludes the
+payloads and their locked signatures; loading is explicit and singleton with
+genuine same-page retry and stale-result rejection under StrictMode; and the card
+renders idle / loading / ready / failed / unsupported states truthfully with no
+Apply/Save control. The production build/serve verification proves the five
+emitted static assets are byte-identical to the checked-in sources, that no
+client JavaScript carries the payload, and that the compiled server serves the
+exact locked bytes.

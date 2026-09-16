@@ -40,7 +40,7 @@ import { assessRecipeHealth } from '../utils/vaultIntelligence';
 import { nutritionForRequestedServings } from '../utils/nutrition';
 import { buildRecipeRelationshipIndex, recipeIdentity } from '../utils/recipeRelationships';
 import { RecipeNutritionCard } from './RecipeNutritionCard';
-import { AdvancedNutritionCard } from './AdvancedNutritionCard';
+import { AdvancedNutritionCard, type AdvancedNutritionBundleUiStatus } from './AdvancedNutritionCard';
 import type { AdvancedNutritionSession } from '../core/nutritionV2/phase4';
 import { WikilinkPreviewModal } from './WikilinkPreviewModal';
 import { RecipeRelationshipsPanel } from './RecipeRelationshipsPanel';
@@ -77,6 +77,9 @@ interface RecipeDetailViewProps {
    * Nutrition card honestly reports that no trusted local source data exist.
    */
   advancedNutritionSession?: AdvancedNutritionSession | null;
+  /** Phase 4.5B lazy local-bundle state + explicit load (browser shell only). */
+  advancedNutritionBundleStatus?: AdvancedNutritionBundleUiStatus;
+  onLoadAdvancedNutritionBundle?: () => void;
 }
 
 export function RecipeDetailView({
@@ -97,6 +100,8 @@ export function RecipeDetailView({
   onOpenVaultIntelligence,
   network,
   advancedNutritionSession = null,
+  advancedNutritionBundleStatus,
+  onLoadAdvancedNutritionBundle,
 }: RecipeDetailViewProps) {
   const [currentServings, setCurrentServings] = useState<number>(recipe.servings || 4);
   const [activeViewMode, setActiveViewMode] = useState<'visual' | 'markdown'>('visual');
@@ -613,6 +618,8 @@ export function RecipeDetailView({
                 recipe={recipe}
                 session={advancedNutritionSession}
                 servings={currentServings}
+                bundleStatus={advancedNutritionBundleStatus}
+                onLoadBundle={onLoadAdvancedNutritionBundle}
               />
 
               <div className="bg-[#141414] rounded-2xl border border-white/5 p-5 shadow-xs">

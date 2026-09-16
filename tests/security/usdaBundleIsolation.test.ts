@@ -149,9 +149,16 @@ describe('phase 4.5A isolation — build-time tooling only', () => {
     }
   });
 
-  it('App does not inject a Phase 4 session (production remains honestly unavailable)', () => {
+  it('App wires the Phase 4.5B production loader lazily and never loads at startup', () => {
     const app = readFileSync(resolve(ROOT, 'src', 'App.tsx'), 'utf8');
-    expect(app).not.toMatch(/advancedNutritionSession/);
+    // Production now wires the fixed, compile-time-owned local-bundle loader...
+    expect(app).toMatch(/loadProductionAdvancedNutritionSession/);
+    // ...but it is only passed as a callback (never invoked at startup), and no
+    // session is created eagerly in the shell.
+    expect(app).not.toMatch(/loadProductionAdvancedNutritionSession\s*\(/);
+    expect(app).not.toMatch(/createAdvancedNutritionSession\s*\(/);
+    // The bundle is not fetched/decompressed at startup.
+    expect(app).not.toMatch(/\bfetch\s*\(/);
   });
 
   it('machine application remains globally disabled', () => {

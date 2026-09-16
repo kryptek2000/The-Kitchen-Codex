@@ -2,6 +2,7 @@ import { defineConfig } from 'vitest/config';
 import path from 'path';
 
 export default defineConfig({
+  assetsInclude: ['**/*.gz'],
   test: {
     globals: true,
     environment: 'node',

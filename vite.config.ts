@@ -6,6 +6,10 @@ import {defineConfig} from 'vite';
 export default defineConfig(() => {
   return {
     plugins: [react(), tailwindcss()],
+    // `.gz` files are recognized by Vite and imported with `?url&no-inline`, so
+    // the locked USDA shards are emitted as separate fixed static assets and
+    // fetched only after explicit user action.
+    assetsInclude: ['**/*.gz'],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

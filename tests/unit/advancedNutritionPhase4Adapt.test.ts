@@ -9,6 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import { adaptRecipe } from '../../src/core/nutritionV2/phase4/adapt';
 import { readStoredBlock } from '../../src/core/nutritionV2/phase4/stored';
+import { parseObsidianRecipeMarkdown } from '../../src/utils/markdownParser';
 
 function failureCode(result: ReturnType<typeof adaptRecipe>): string {
   return (result as { ok: false; failure: { code: string; message: string } }).failure.code;
@@ -87,6 +88,46 @@ describe('phase 4 adapt — ordinary recipes', () => {
     expect('amount' in missing.recipe.adapted[0].ingredient).toBe(false);
     expect(Object.is(zero.recipe.adapted[0].ingredient.amount, 0)).toBe(true);
     expect(Object.is(negativeZero.recipe.adapted[0].ingredient.amount, -0)).toBe(true);
+  });
+
+  it('accepts a recipe produced by the canonical Markdown parser (no present-undefined optional fields)', () => {
+    const markdown = [
+      '---',
+      'title: Parser Integration',
+      'servings: 4',
+      '---',
+      '',
+      '# Parser Integration',
+      '',
+      '## Ingredients',
+      '- 100 g flour',
+      '- 2 cups milk',
+      '- Butter',
+      '',
+      '## Instructions',
+      '1. Mix everything.',
+    ].join('\n');
+    const parsed = parseObsidianRecipeMarkdown(markdown, 'parser-integration.md', 'Recipes/parser-integration.md');
+    // The parser must not emit present-undefined optional ingredient fields.
+    for (const ingredient of parsed.ingredients as unknown as Array<Record<string, unknown>>) {
+      for (const key of Object.keys(ingredient)) {
+        expect(ingredient[key], `ingredient.${key}`).not.toBeUndefined();
+      }
+    }
+    // Explicit null is preserved; the canonical contract normalizes an empty
+    // unit to absent (so the mapping correctly omits it rather than emitting '').
+    const butter = (parsed.ingredients as unknown as Array<Record<string, unknown>>).find(
+      (ingredient) => ingredient.original === 'Butter'
+    ) as Record<string, unknown>;
+    expect(butter.amount).toBeNull();
+    expect('unit' in butter).toBe(false);
+    expect('wikilink' in butter).toBe(false);
+    expect('note' in butter).toBe(false);
+    const flour = (parsed.ingredients as unknown as Array<Record<string, unknown>>)[0];
+    expect(flour.amount).toBe(100);
+    expect(flour.unit).toBe('g');
+    const result = adaptRecipe(parsed);
+    expect(result.ok).toBe(true);
   });
 
   it('freezes the adapted result and does not observe later source mutation', () => {
