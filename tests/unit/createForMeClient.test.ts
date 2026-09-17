@@ -95,7 +95,7 @@ describe("create for me client logic (v0.7 2A)", () => {
   it("parses edited ingredient/step lines without generating wikilinks or numbering artifacts", () => {
     const flour = parseGeneratedIngredientLine("2 cups flour");
     expect(flour?.amount).toBe(2);
-    expect(flour?.unit).toBe("cup");
+    expect(flour?.unit).toBe("cups");
     expect(flour?.name).toContain("flour");
     const salt = parseGeneratedIngredientLine("1 tbsp salt");
     expect(salt?.amount).toBe(1);

@@ -106,7 +106,8 @@ describe('phase 4.5B loader — capability and failure mapping', () => {
     const result = await loadProductionAdvancedNutritionSession();
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.session.metadata().record_count).toBe(13559);
+      expect(result.session.metadata().source_record_count).toBe(13559);
+      expect(result.session.metadata().record_count).toBe(12924);
       expect(result.session.metadata().bundle_release).toBe(
         USDA_BUNDLE_RELEASE_LOCK.bundle_release
       );

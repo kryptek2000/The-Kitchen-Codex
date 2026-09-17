@@ -8,6 +8,7 @@
  */
 
 import { parseIngredient } from '../matching/parse';
+import { projectQueryText } from '../matching/query';
 import { candidatePortionCompatibility } from '../calculation/portionSemantics';
 export { candidatePortionCompatibility };
 import type { MeasurementKind } from '../../../utils/measurements';
@@ -32,13 +33,14 @@ interface EvidenceLike {
   readonly order_agreement: boolean;
 }
 
-function evidenceText(matchClass: string, evidence: EvidenceLike): string {
+function evidenceText(matchClass: string, evidence: EvidenceLike, aliasNote?: string): string {
   const matched = evidence.matched_query_token_count;
   const total = matched + evidence.missing_query_token_count;
   const parts = [matchClass, `tokens ${matched}/${total}`];
   if (evidence.exact_phrase) parts.push('exact phrase');
   else if (evidence.exact_token_multiset) parts.push('token set');
   parts.push(evidence.order_agreement ? 'order agrees' : 'order differs');
+  if (aliasNote) parts.push(aliasNote);
   return parts.join(' · ');
 }
 
@@ -99,19 +101,29 @@ export function buildReviewRows(
         evidence: EvidenceLike;
       }>;
       query?: unknown;
+      normalized_query?: unknown;
       review_digest?: unknown;
     };
     const parsed = parseIngredient(entry.ingredient);
     const outcome = classifyOutcome(review, parsed);
     const measurementKind: MeasurementKind = parsed.ok ? parsed.parsed.measurement_kind : 'unknown';
     const needsPortion = measurementKind !== 'mass';
+    // Bounded, understandable alias evidence for the current query.
+    const normalizedForAlias = typeof review.normalized_query === 'string' ? review.normalized_query : '';
+    const aliasNote =
+      normalizedForAlias.length > 0
+        ? (() => {
+            const aliases = projectQueryText(normalizedForAlias).aliases;
+            return aliases.length > 0 ? `alias ${aliases.join(', ')}` : undefined;
+          })()
+        : undefined;
     const candidates: Phase4CandidateView[] = (review.candidates ?? []).map((candidate) =>
       Object.freeze({
         fdc_id: candidate.fdc_id,
         data_type: candidate.data_type,
         description: candidate.description,
         match_class: candidate.match_class,
-        rank_evidence: evidenceText(candidate.match_class, candidate.evidence),
+        rank_evidence: evidenceText(candidate.match_class, candidate.evidence, aliasNote),
         portion_annotation: portionAnnotation(session, candidate.fdc_id, measurementKind, needsPortion),
       })
     );

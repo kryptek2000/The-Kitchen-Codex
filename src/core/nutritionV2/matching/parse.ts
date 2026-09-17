@@ -150,7 +150,7 @@ export function parseIngredient(raw: unknown): IngredientParseResult {
     let query = (name ?? '').trim();
     if (!query) {
       const base = (original ?? '').trim();
-      if (base) query = parseRawIngredientMeasurementParts(base).name.trim();
+      if (base) query = parseRawIngredientMeasurementParts(base, { includeCount: true }).name.trim();
       if (!query) query = base;
     }
     if (query.length === 0) return failure('empty_query');
@@ -184,7 +184,7 @@ function parseRawLine(raw: string): IngredientParseResult {
   if (raw.length > MAX_INGREDIENT_TEXT_LENGTH) return failure('oversized_input');
   const trimmed = raw.trim();
   if (trimmed.length === 0) return failure('empty_query');
-  const parts = parseRawIngredientMeasurementParts(trimmed);
+  const parts = parseRawIngredientMeasurementParts(trimmed, { includeCount: true });
   const query = parts.name.trim();
   if (query.length === 0) return failure('empty_query');
   if (query.length > MAX_INGREDIENT_TEXT_LENGTH) return failure('oversized_input');

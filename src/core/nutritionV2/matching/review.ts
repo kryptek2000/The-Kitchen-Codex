@@ -52,6 +52,12 @@ import {
 } from '../usda/types';
 import { normalizeQuery, normalizeQueryChecked } from './normalize';
 import { parseIngredient } from './parse';
+import { QUERY_PROJECTION_VERSION } from './query';
+import {
+  ELIGIBILITY_POLICY_VERSION,
+  computeEligibilityPolicyDigest,
+  evaluateEligibility,
+} from './eligibility';
 import { clampResultLimit, rankCandidates } from './rank';
 import {
   MATCHING_CATALOG_VERSION,
@@ -163,7 +169,6 @@ export function createReviewCatalog(
   }
 
   const seenIds = new Set<number>();
-  const entries: RankableEntry[] = [];
   for (const record of records) {
     if (record.bundle_release !== manifest.bundle_release) return catalogFailure('release_mismatch');
     if (record.nutrient_map_version !== manifest.nutrient_map_version) {
@@ -175,7 +180,26 @@ export function createReviewCatalog(
     }
     if (seenIds.has(record.fdc_id)) return catalogFailure('duplicate_fdc_id');
     seenIds.add(record.fdc_id);
+  }
 
+  // AUTHENTICATION-BEFORE-FILTERING: the COMPLETE source must pass the count and
+  // content-digest checks before any eligibility filtering is applied. The
+  // eligibility filter can never make a damaged/incomplete/forged artifact look
+  // valid.
+  if (records.length !== manifest.canonical_record_count) return catalogFailure('count_mismatch');
+  if (computeCanonicalContentDigest(records) !== manifest.canonical_content_digest) {
+    return catalogFailure('content_digest_mismatch');
+  }
+
+  // Build the ELIGIBLE home-recipe index. Excluded records are counted but never
+  // indexed, so they can never appear in search results or be confirmed.
+  const entries: RankableEntry[] = [];
+  let excludedRecordCount = 0;
+  for (const record of records) {
+    if (!evaluateEligibility(record).eligible) {
+      excludedRecordCount += 1;
+      continue;
+    }
     const normalized = normalizeQuery(record.description);
     entries.push({
       fdc_id: record.fdc_id,
@@ -186,11 +210,7 @@ export function createReviewCatalog(
       record_digest: record.record_digest,
     });
   }
-
-  if (records.length !== manifest.canonical_record_count) return catalogFailure('count_mismatch');
-  if (computeCanonicalContentDigest(records) !== manifest.canonical_content_digest) {
-    return catalogFailure('content_digest_mismatch');
-  }
+  if (entries.length === 0) return catalogFailure('empty_catalog');
 
   // Deterministic iteration order (input order independence).
   entries.sort((a, b) => a.fdc_id - b.fdc_id);
@@ -200,14 +220,21 @@ export function createReviewCatalog(
     upstreamReleases[component.data_type] = component.upstream_release;
   }
 
+  const eligibilityDigest = computeEligibilityPolicyDigest();
   const catalogDigest = sha256Hex(
     canonicalStringify({
       catalog_version: MATCHING_CATALOG_VERSION,
       normalization_version: MATCHING_NORMALIZATION_VERSION,
       ranking_version: MATCHING_RANKING_VERSION,
+      query_projection_version: QUERY_PROJECTION_VERSION,
+      eligibility_version: ELIGIBILITY_POLICY_VERSION,
+      eligibility_digest: eligibilityDigest,
       bundle_release: manifest.bundle_release,
       nutrient_map_version: manifest.nutrient_map_version,
       canonicalization_version: manifest.canonicalization_version,
+      source_record_count: records.length,
+      eligible_record_count: entries.length,
+      excluded_record_count: excludedRecordCount,
       records: entries.map((entry) => ({
         fdc_id: entry.fdc_id,
         record_digest: entry.record_digest,
@@ -220,7 +247,13 @@ export function createReviewCatalog(
     catalog_version: MATCHING_CATALOG_VERSION,
     normalization_version: MATCHING_NORMALIZATION_VERSION,
     ranking_version: MATCHING_RANKING_VERSION,
+    query_projection_version: QUERY_PROJECTION_VERSION,
+    eligibility_version: ELIGIBILITY_POLICY_VERSION,
+    eligibility_digest: eligibilityDigest,
     bundle_release: manifest.bundle_release,
+    source_record_count: records.length,
+    eligible_record_count: entries.length,
+    excluded_record_count: excludedRecordCount,
     record_count: entries.length,
     data_types: [...manifest.data_types],
     upstream_releases: upstreamReleases,

@@ -408,7 +408,7 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
           <section className="text-[11px] text-gray-400 font-mono">
             <span>Source: USDA FoodData Central · bundle {session.metadata().bundle_release.slice(0, 24)}…</span>
             <span className="mx-2">·</span>
-            <span>{session.metadata().record_count} canonical records</span>
+            <span>{session.metadata().record_count} eligible home-recipe records</span>
           </section>
 
           <section aria-label="Display basis" className="space-y-2">

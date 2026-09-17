@@ -162,6 +162,8 @@ const UNIT_ALIASES: Record<string, NormalizedUnit> = {
   pkg: 'count',
   stick: 'count',
   sticks: 'count',
+  head: 'count',
+  heads: 'count',
   // Recognized culinary measures that are NOT deterministically mass/volume/count.
   // Treated as unmeasurable (unknown) rather than guessed.
   pinch: 'unknown',
@@ -362,14 +364,90 @@ export function normalizeIngredientMeasurement(
 }
 
 /**
+ * Count nouns that are FOODS, not measures. `egg`/`eggs` are deliberately never
+ * consumed as a leading unit: `2 eggs` must keep `eggs` as the food name.
+ */
+const FOOD_COUNT_NOUNS: ReadonlySet<string> = new Set(['egg', 'eggs']);
+
+/** Result of recognizing an exact leading unit token in a bounded text. */
+export interface LeadingUnitMatch {
+  /** The exact original unit token(s) as supplied (e.g. `slices`, `fl oz`). */
+  readonly rawUnit: string;
+  /** The canonical unit id. */
+  readonly canonical: NormalizedUnit;
+  /** The remaining text after the unit, with a leading `of` removed. */
+  readonly rest: string;
+}
+
+/**
+ * Recognizes an EXACT leading unit token — one complete token or one exact
+ * recognized multi-token unit (`fl oz`, `fluid ounce(s)`) — and returns it with
+ * the remaining text. A unit is never matched as a PREFIX of a longer word:
+ * `slice` does not match `slices` (the whole `slices` token matches instead),
+ * `g` does not match `garlic`, `l` does not match `lettuce`, `c` does not match
+ * `cheese`, and `can` does not match `candy`.
+ *
+ * This is the ONE shared leading-unit recognizer used by both the deterministic
+ * raw-line segmenter and the Phase 2 matching parser. It is pure and offline.
+ */
+export function matchLeadingUnit(text: string): LeadingUnitMatch | undefined {
+  const trimmed = String(text).replace(/^\s+/, '');
+  if (!trimmed) return undefined;
+  const tokens = trimmed.split(/\s+/);
+
+  // Exact multi-token fluid-ounce unit (`fl oz`, `fl. oz.`, `fluid ounce(s)`).
+  if (tokens.length >= 2) {
+    const firstClean = tokens[0].toLowerCase().replace(/[.,;:]+$/, '');
+    if (firstClean === 'fl' || firstClean === 'fluid') {
+      const combined = `${tokens[0]} ${tokens[1]}`;
+      if (normalizeUnit(combined) === 'fl_oz') {
+        const consumed = tokens[0].length + 1 + tokens[1].length;
+        const rest = trimmed
+          .slice(consumed)
+          .replace(/^[,\s]+/, '')
+          .replace(/^of\s+/i, '')
+          .trim();
+        return { rawUnit: combined, canonical: 'fl_oz', rest };
+      }
+    }
+  }
+
+  const rawUnit = tokens[0];
+  const cleaned = rawUnit.toLowerCase().replace(/[.,;:]+$/, '');
+  if (!cleaned || FOOD_COUNT_NOUNS.has(cleaned)) return undefined;
+  const canonical = normalizeUnit(cleaned);
+  if (!canonical) return undefined;
+  const rest = trimmed
+    .slice(rawUnit.length)
+    .replace(/^[,\s]+/, '')
+    .replace(/^of\s+/i, '')
+    .trim();
+  // Return the unit token with trailing sentence punctuation stripped (an
+  // explicit, tested rule: `cups,` -> `cups`).
+  return { rawUnit: rawUnit.replace(/[.,;:]+$/, ''), canonical, rest };
+}
+
+export interface RawIngredientPartsOptions {
+  /**
+   * When true, recognized count / culinary measures (`slice`, `clove`, `can`,
+   * `pinch`, `dash`, `bunch`, ...) are consumed from the food name as well. When
+   * false (the deterministic-engine default), only mass/volume units are
+   * consumed and count nouns remain in the name.
+   */
+  readonly includeCount?: boolean;
+}
+
+/**
  * Thin, calculation-free segmentation of a raw ingredient line into
  * `{ amount, unit, name }`.
  *
- * Reuses the canonical fraction parser (`parseAmount`) and unit normalizer
- * (`normalizeUnit`). It consumes a LEADING token ONLY when it is a mass/volume
- * unit; count nouns (egg, clove, slice, can, stick, ...) are intentionally LEFT
- * in the name so callers can classify them without inventing mass. A leading
- * "of" after a mass/volume unit is ignored.
+ * Reuses the canonical fraction parser (`parseAmount`) and the shared exact
+ * leading-unit recognizer (`matchLeadingUnit`). With the default options it
+ * consumes a LEADING token ONLY when it is a mass/volume unit; count nouns
+ * (egg, clove, slice, can, stick, ...) are intentionally LEFT in the name so
+ * callers can classify them without inventing mass. With `{ includeCount: true }`
+ * recognized count / culinary measures are consumed too. A leading "of" after a
+ * unit is ignored.
  *
  * This helper is pure and free of any nutrition/calculation dependency (it does
  * NOT import the curated food reference or any calculation engine). The working
@@ -381,14 +459,18 @@ export function normalizeIngredientMeasurement(
  * calculation-free consumers — e.g. the Phase 2 matching layer — can reuse it
  * without a transitive calculation dependency.)
  */
-export function parseRawIngredientMeasurementParts(line: string): {
+export function parseRawIngredientMeasurementParts(
+  line: string,
+  options: RawIngredientPartsOptions = {}
+): {
   amount: number | null;
   unit: string | null;
   name: string;
 } {
+  const includeCount = options.includeCount === true;
   const trimmed = String(line).trim().slice(0, 300);
   const match = trimmed.match(
-    /^\s*(\d+\s+\d+\/\d+|\d+\/\d+|\d+\s*[½⅓⅔¼¾⅛⅜⅝⅞]|[½⅓⅔¼¾⅛⅜⅝⅞]|\d+(?:\.\d+)?)/
+    /^\s*(\d+\s+\d+\/\d+|\d+\s*-\s*\d+\/\d+|\d+\/\d+|\d+\s*[½⅓⅔¼¾⅛⅜⅝⅞]|[½⅓⅔¼¾⅛⅜⅝⅞]|\d+(?:\.\d+)?)/
   );
   let amount: number | null = null;
   let rest = trimmed;
@@ -398,16 +480,16 @@ export function parseRawIngredientMeasurementParts(line: string): {
   }
   rest = rest.trim();
 
-  const firstToken = rest.match(/^(\S+)/)?.[1];
   let unit: string | null = null;
   let name = rest;
-  if (firstToken) {
-    const normalized = normalizeUnit(firstToken);
-    const kind = getMeasurementKind(normalized);
-    if (normalized && (kind === 'mass' || kind === 'volume')) {
-      unit = firstToken;
-      // A leading "of" sits between the unit and the food name ("1 cup of flour").
-      name = rest.slice(firstToken.length).replace(/^\s*of\s+/i, '').trim();
+  const leading = matchLeadingUnit(rest);
+  if (leading) {
+    const kind = getMeasurementKind(leading.canonical);
+    const consumable =
+      kind === 'mass' || kind === 'volume' || (includeCount && (kind === 'count' || kind === 'unknown'));
+    if (consumable) {
+      unit = leading.rawUnit;
+      name = leading.rest;
     }
   }
   return { amount, unit, name: name || trimmed };

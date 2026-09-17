@@ -35,6 +35,8 @@ export interface MatchingRecordSpec {
   fdcId: number;
   dataType: UsdaDataType;
   description: string;
+  /** Optional canonical food category (Phase 4.5D eligibility). */
+  foodCategory?: string;
   upstreamRelease?: string;
   nutrientMapVersion?: string;
   /** Varies the canonical record digest without changing identity/description. */
@@ -81,6 +83,7 @@ export function makeCanonicalRecord(
     fdc_id: spec.fdcId,
     data_type: spec.dataType,
     description: spec.description,
+    ...(spec.foodCategory !== undefined ? { food_category: spec.foodCategory } : {}),
     nutrient_map_version: spec.nutrientMapVersion ?? USDA_NUTRIENT_MAP_VERSION,
     basis: 'per_100_g',
     nutrients: {

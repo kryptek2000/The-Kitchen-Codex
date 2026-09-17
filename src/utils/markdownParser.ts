@@ -11,6 +11,7 @@ import {
 } from '../types';
 import { obsidianToCanonicalRecipe, canonicalToObsidianRecipe } from '../schema/legacyAdapter';
 import { parseFraction } from '../schema/recipeValidator';
+import { parseRawIngredientMeasurementParts } from './measurements';
 import type { NutritionSource, NutritionConfidence } from '../schema/recipeSchema';
 import {
   CODEX_NUTRITION_FRONTMATTER_KEY,
@@ -381,36 +382,17 @@ export function parseIngredientLine(line: string): ParsedIngredient {
     }
   }
 
-  // Common units regex
-  const units = '(?:tbsp|tablespoon|tablespoons|tsp|teaspoon|teaspoons|cup|cups|oz|ounce|ounces|lb|lbs|pound|pounds|g|gram|grams|kg|kilogram|kilograms|ml|milliliter|milliliters|l|liter|liters|clove|cloves|pinch|pinches|dash|dashes|slice|slices|can|cans|stalk|stalks|bunch|bunches|sprig|sprigs|piece|pieces|head|heads|handful|handfuls)';
-  
-  // Regex to capture (amount) (unit)? (name)
-  const regex = new RegExp(`^(?:(\\d+\\s+\\d+\\/\\d+|\\d+\\/\\d+|\\d+\\s*[½⅓⅔¼¾⅛⅜⅝⅞]|[½⅓⅔¼¾⅛⅜⅝⅞]|\\d+(?:\\.\\d+)?))\\s*(${units})?\\s*(?:of\\s+)?(.*)$`, 'i');
-  const match = cleanLine.match(regex);
-
-  if (match) {
-    const rawAmount = match[1];
-    const unit = match[2] || '';
-    const name = match[3].trim();
-    const amountDec = parseFractionToDecimal(rawAmount);
-
-    return {
-      original: cleanLine,
-      amount: amountDec,
-      unit: unit.toLowerCase(),
-      name: name || cleanLine,
-      wikilink,
-      wikilinkTarget,
-      wikilinkAlias,
-      isChecked,
-    };
-  }
+  // ONE shared leading-unit recognizer (never a prefix match: `slice` never
+  // consumes `slices`, `g` never consumes `garlic`, `can` never consumes
+  // `candy`). Count / culinary measures are consumed so the food name is clean.
+  const parts = parseRawIngredientMeasurementParts(cleanLine, { includeCount: true });
+  const name = parts.name.trim();
 
   return {
     original: cleanLine,
-    amount: null,
-    unit: '',
-    name: cleanLine,
+    amount: parts.amount,
+    unit: (parts.unit ?? '').toLowerCase(),
+    name: name || cleanLine,
     wikilink,
     wikilinkTarget,
     wikilinkAlias,

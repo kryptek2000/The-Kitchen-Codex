@@ -222,7 +222,7 @@ describe('phase 4.5C — cornmeal acceptance cases', () => {
     expect(candidate.effective_amount).toBeNull();
     // A forged selection claiming an amount of 1 must not resolve.
     const forged = {
-      calculation_version: 'usda_advisory_calc_v2',
+      calculation_version: 'usda_advisory_calc_v3',
       portion_semantics_version: 'usda_portion_semantics_v1',
       line_ref: 'a',
       ingredient_identity_digest: 'x',

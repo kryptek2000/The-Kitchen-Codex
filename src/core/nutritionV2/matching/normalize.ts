@@ -16,10 +16,17 @@
  *        `!?[[Target#Heading]]` -> `Target`.
  *   2. Unicode NFC normalization (`String.prototype.normalize('NFC')`).
  *   3. Non-locale lowercase (`String.prototype.toLowerCase()`).
- *   4. Punctuation/symbol separation: runs of non-letter/non-number/non-space
+ *   4. Possessive/apostrophe joining: straight `'` (U+0027) and typographic
+ *      `’` (U+2019) are REMOVED (not replaced by a space), so `McDonald's` ->
+ *      `mcdonalds` and `USDA's` -> `usdas`. This deliberately prevents a
+ *      possessive from producing a meaningless standalone `s` token. It does
+ *      NOT discard any one-letter token and does NOT stem or singularize:
+ *      plural food words (`tomatoes`) and literal single letters (`vitamin c`)
+ *      are untouched.
+ *   5. Punctuation/symbol separation: runs of non-letter/non-number/non-space
  *      code points become a single space (Unicode-aware, `\p{L}`/`\p{N}`).
- *   5. Whitespace collapse + trim.
- *   6. Bounded tokenization on single spaces.
+ *   6. Whitespace collapse + trim.
+ *   7. Bounded tokenization on single spaces.
  *
  * No locale-sensitive case conversion (`toLocaleLowerCase`) is used, and no
  * implicit normalization form other than NFC is applied.
@@ -33,6 +40,8 @@ import {
 
 const WIKILINK_PATTERN = /!?\[\[([^\]]*)\]\]/g;
 const NON_ALPHANUMERIC_RUN = /[^\p{L}\p{N}\s]+/gu;
+/** Straight and typographic apostrophes (NFC-safe, explicit). */
+const APOSTROPHE = /['\u2019]/g;
 
 /** Extracts the display label from one Obsidian wikilink body. */
 function wikilinkLabel(inner: string): string {
@@ -56,6 +65,7 @@ export function normalizeQuery(text: string): NormalizedQuery {
   const normalized = stripped
     .normalize('NFC')
     .toLowerCase()
+    .replace(APOSTROPHE, '')
     .replace(NON_ALPHANUMERIC_RUN, ' ')
     .replace(/\s+/g, ' ')
     .trim();

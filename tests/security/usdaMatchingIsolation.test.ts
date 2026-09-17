@@ -149,7 +149,16 @@ describe('phase 2 matching — isolation and purity', () => {
   it('contains only the expected TypeScript modules (no dataset files)', () => {
     const names = MATCHING_FILES.map((file) => file.slice(MATCHING_DIR.length + 1)).sort();
     expect(names).toEqual(
-      ['index.ts', 'normalize.ts', 'parse.ts', 'rank.ts', 'review.ts', 'types.ts'].sort()
+      [
+        'eligibility.ts',
+        'index.ts',
+        'normalize.ts',
+        'parse.ts',
+        'query.ts',
+        'rank.ts',
+        'review.ts',
+        'types.ts',
+      ].sort()
     );
     for (const file of MATCHING_FILES) expect(file.endsWith('.ts')).toBe(true);
   });

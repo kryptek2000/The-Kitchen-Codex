@@ -20,9 +20,12 @@ export const CALCULATION_SCHEMA = 1;
  * Advisory calculation contract version (part of digests/bindings).
  * v2 (Phase 4.5C) adds volume-compatible source-portion scaling, the
  * `user_mass` mass source, and canonical portion-semantics binding.
+ * v3 (Phase 4.5D) binds the home-recipe-eligible catalog membership and the
+ * eligibility/query-projection versions; stale v2 portion/user-mass selections
+ * and previews are rejected rather than reused.
  */
-export const CALCULATION_VERSION = 'usda_advisory_calc_v2';
-export const CALCULATION_CONTEXT_VERSION = 'usda_calc_context_v1';
+export const CALCULATION_VERSION = 'usda_advisory_calc_v3';
+export const CALCULATION_CONTEXT_VERSION = 'usda_calc_context_v2';
 
 // ---------------------------------------------------------------------------
 // Bounds
@@ -98,7 +101,12 @@ export interface CalculationContextMetadata {
   readonly bundle_release: string;
   readonly catalog_digest: string;
   readonly nutrient_map_version: string;
+  /** Eligible home-recipe records indexed for matching/calculation. */
   readonly record_count: number;
+  /** Complete authenticated source-record count (13,559 for the pinned bundle). */
+  readonly source_record_count: number;
+  /** Authenticated records excluded by the eligibility policy. */
+  readonly excluded_record_count: number;
   readonly data_types: ReadonlyArray<UsdaDataType>;
 }
 

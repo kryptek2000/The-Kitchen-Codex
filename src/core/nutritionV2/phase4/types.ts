@@ -18,8 +18,8 @@ import type { UsdaDataType } from '../usda/types';
 import type { AdvisoryNutritionPreview, CalculationResult, PortionReviewResult } from '../calculation/types';
 import type { ConfirmationResult, IngredientReviewResult } from '../matching/types';
 
-export const PHASE4_SESSION_VERSION = 'usda_phase4_session_v1';
-export const PHASE4_STATE_VERSION = 'usda_phase4_state_v2';
+export const PHASE4_SESSION_VERSION = 'usda_phase4_session_v2';
+export const PHASE4_STATE_VERSION = 'usda_phase4_state_v3';
 
 /** Working bound on adapted recipe ingredients (mirrors Phase 3). */
 export const MAX_PHASE4_INGREDIENTS = 200;
@@ -114,7 +114,12 @@ export interface Phase4SessionMetadata {
   readonly bundle_release: string;
   readonly catalog_digest: string;
   readonly nutrient_map_version: string;
+  /** Eligible home-recipe records available to the matcher. */
   readonly record_count: number;
+  /** Complete authenticated source-record count. */
+  readonly source_record_count: number;
+  /** Authenticated records excluded from home-recipe matching. */
+  readonly excluded_record_count: number;
   readonly data_types: ReadonlyArray<UsdaDataType>;
 }
 

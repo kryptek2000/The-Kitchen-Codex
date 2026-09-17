@@ -5,10 +5,14 @@ contracts, isolated review layer, an isolated advisory calculation layer, and an
 isolated advisory review/display UI layer), plus Phase 4.5A (a pinned,
 reproducible canonical USDA bundle artifact generated offline) and Phase 4.5B
 (authenticated, explicit-user-intent browser runtime loading of that exact
-bundle into a genuine Phase 4 session), plus Phase 4.5C (US customary portion
-resolution and an explicit total-weight fallback)**. No network route or live
-API is used, and there is no Apply action or automatic persistence. Machine
-application of advanced nutrition remains disabled.
+bundle into a genuine Phase 4 session), Phase 4.5C (US customary portion
+resolution and an explicit total-weight fallback), plus Phase 4.5D (a
+home-recipe eligibility boundary, corrected exact-unit parsing, a closed
+query-role projection, anchor/contradiction/qualifier ranking, bounded culinary
+aliases, and the hamburger acceptance corpus)**. No network route or live API is
+used, and there is no Apply action or automatic persistence. Machine application
+of advanced nutrition remains disabled. Phase 4.5D still performs no
+persistence, no Apply, and no count-to-mass calculation.
 
 Phase 1 adds a trusted, offline, key-free USDA FoodData Central contract: a
 strict release manifest, a defensive adapter for the **actual pinned download
@@ -454,9 +458,27 @@ enable machine-generated nutrition application.
   nutrient groups, nutrient-specific coverage, ingredient evidence, and
   accessible/responsive interaction. No persistence/Apply. Audit gate: UX/a11y
   review.
-- **Phase 5 — explicit Apply/persistence and legacy compatibility.** All-or-
-  nothing Apply, provenance bound to applied values, stale invalidation. Audit
-  gate: persistence + migration review.
+- **Phase 4.5D — home-recipe eligibility, exact-unit parsing, and matching
+  correctness.** DONE (offline, isolated, review-only): an authentication-before-
+  filtering home-recipe eligibility boundary (Fast Foods / Restaurant Foods
+  categories plus a closed chain/context marker set), corrected exact-unit
+  parsing, a closed query-role projection with deterministic anchors,
+  contradiction/qualifier policy, bounded culinary aliases, no-padding ranking,
+  and the hamburger acceptance corpus. No persistence, no Apply, no count-to-mass
+  calculation. Audit gate: matching-correctness review.
+- **Phase 4.5E — authenticated count-portion resolution.** Future: resolve
+  count/culinary measures (`slice`, `clove`, `bun`, `piece`, …) to mass from an
+  explicitly reviewed authenticated USDA source portion, using the same
+  portion-semantics authority. Still no density table, no invented count weight,
+  no persistence, no Apply.
+- **Phase 5A — pure persistence construction.** Future: construct an in-memory
+  `codex_nutrition` block from an advisory preview without any write.
+- **Phase 5B — explicit Apply and safe vault writes.** Future: all-or-nothing
+  Apply, provenance bound to applied values, stale invalidation, vault-safe
+  Markdown/frontmatter writes. Audit gate: persistence + migration review.
+- **Phase 5C — consolidation of the existing Nutrition & Macros experience.**
+  Future: fold the existing simple Nutrition & Macros/AI estimator into the
+  Advanced Nutrition model under explicit user intent.
 - **Phase 6 — Vault Intelligence integration (separate explicit approval).**
   Single-recipe review first; bulk remains disabled.
 
@@ -2170,3 +2192,228 @@ The calculation contract version was bumped to `usda_advisory_calc_v2` (the
 portion mass computation, the portion-semantics binding, and the `user_mass`
 source materially changed). The Phase 4 state version was bumped to
 `usda_phase4_state_v2` (new explicit user-weight selections).
+
+---
+
+## 20. Phase 4.5D — home-recipe eligibility and matching correctness
+
+Phase 4.5D is the home-recipe catalog eligibility and matching-correctness slice.
+It is a **review-only** change: it never persists, applies, writes a
+vault/Markdown file, or authorizes machine application, and it still performs
+**no count-to-mass calculation**. Count and culinary measures stay `no_mass`; the
+only fallback remains the explicit user-entered total weight from Phase 4.5C.
+
+### 20.1 The home-recipe eligibility boundary
+
+The Advanced Nutrition ingredient picker is for home-recipe ingredients.
+Restaurant- and fast-food-specific USDA records remain part of the authenticated
+artifact but are **not available** to the matcher.
+
+```
+authenticated complete bundle (13,559 canonical records)
+  -> manifest / record / count / content-digest / release / nutrient-map /
+     component bindings ALL pass
+  -> closed home-recipe eligibility policy
+  -> eligible home-recipe catalog (12,924 records)
+```
+
+**Authentication before filtering.** Eligibility is applied only *after* the
+complete source artifact has passed manifest validation, every canonical-record
+validation, the canonical record count, the canonical content digest, the bundle
+release binding, the nutrient-map version binding, and the component release
+binding. A damaged, incomplete, or forged artifact can never be made to look
+valid by the filter.
+
+**Source count vs. eligible catalog count.** The complete authenticated source is
+**13,559** records. The eligible home-recipe catalog is **12,924** records. The
+policy excludes **635** records:
+
+- `fast_food_category` — every record whose exact canonical food category is
+  `Fast Foods` (312);
+- `restaurant_food_category` — every record whose exact canonical food category
+  is `Restaurant Foods` (113);
+- `restaurant_chain_marker` — a closed, source-controlled set of normalized
+  restaurant-chain markers derived from the complete pinned-bundle census (15
+  records outside the two categories, e.g. `Hamburger (McDonalds)`,
+  `Hamburger (Burger King)`, `Beverages, WENDY'S, tea`);
+- `restaurant_context_marker` — the closed restaurant-context descriptors
+  `restaurant` / `fast food` (195 records, e.g. `Ketchup, restaurant`,
+  `Pizza, cheese, from restaurant or fast food`).
+
+The marker set is closed and source-controlled in `matching/eligibility.ts`; no
+caller input, environment variable, browser storage, network data, or runtime
+configuration can alter it. The policy never keys on uppercase text, on
+apostrophes, or on an unbounded heuristic, and it performs no network lookup and
+no AI classification.
+
+**Retail-brand retention.** Ordinary packaged grocery products stay eligible.
+`Pillsbury`, `Nabisco`, `Kraft`, `CAMPBELL'S`, `HERSHEY'S`, `QUAKER`,
+`Pepperidge Farm`, and `HORMEL` records (and similar) are retained; they are not
+excluded merely because their descriptions contain a brand or uppercase text.
+
+**No direct-ID bypass.** An excluded FDC id cannot become confirmable through
+direct caller construction, a forged review snapshot, a forged candidate, a
+manipulated result limit, capitalization, punctuation, an explicit restaurant-name
+query, a stale pre-4.5D confirmation, a direct-path import, or a synthetic
+structural catalog object. The genuine private catalog reconstruction enforces
+eligibility: the calculation context's record map is built only from eligible
+records, so an excluded record can never be reached for portion review or
+calculation.
+
+### 20.2 Corrected exact-unit parsing
+
+A single shared, pure leading-unit recognizer (`matchLeadingUnit` in
+`utils/measurements.ts`) consumes a recognized unit only as one complete token or
+one exact recognized multi-token unit (`fl oz`, `fluid ounce(s)`). It is shared by
+the deterministic raw-line segmenter and the canonical Markdown ingredient parser
+(`parseIngredientLine`). Singular alternatives never consume prefixes of plurals:
+`slice` matches `slice` (and `slices` matches `slices`), `tablespoon`/`tablespoons`
+likewise, `can` never consumes `candy`, `g` never consumes `garlic`, `l` never
+consumes `lettuce`, and `c` never consumes `cheese`. Punctuation adjacent to a
+valid unit is handled by one explicit tested rule (`cups,` → `cups`). The exact
+original ingredient text is preserved for display/evidence.
+
+This repairs the real defect where `8 slices bacon` parsed to the leftover token
+`s` and matched `McDONALD'S … Bacon`. Count and culinary measures (`slice`,
+`clove`, `pinch`, `bunch`, `can`, `stick`, `head`, …) are removed from the
+food-name query while their raw measurement identity is preserved; `egg`/`eggs`
+stay food names. No count/culinary measure is converted to grams in this phase.
+
+### 20.3 Query roles and the anchor contract
+
+One pure, closed, versioned projection (`matching/query.ts`,
+`usda_query_projection_v1`) turns a normalized food-name query into explicit
+roles: food identity, measurement, size/portion qualifiers (`small`, `medium`,
+`large`, …), a closed preparation set (`sliced`, `shredded`, `chopped`, `diced`,
+`minced`, `grated`, `peeled`, `drained`, `rinsed`, `halved`, `quartered`, …),
+non-authoritative recipe notes (a bounded trailing instruction such as
+`formed into 4 patties`), bounded numeric qualifiers (`80 20`), and deterministic
+matching anchors. The projection never mutates the source ingredient and never
+rewrites a stored recipe.
+
+`ground` is identity-bearing only when a meat species is present (`ground beef`),
+and preparation-only otherwise (`ground black pepper` → identity `black pepper`).
+Nutritionally significant qualifiers (`raw`/`cooked`, `salted`/`unsalted`,
+`sweetened`/`unsweetened`, `whole`/`skim`, `enriched`/`unenriched`,
+`lean`/fat-ratio, skin/no-skin, meat species, `fresh`/`canned`/`dried`) are never
+blindly discarded.
+
+**Anchors.** At least one deterministic anchor is derived from the food identity:
+the head noun = the last identity token not in a closed descriptor stopword set
+(colors, sizes, preparations, preservation/nutrition qualifiers, salt types,
+`ground`). A candidate must contain a token (or an approved bounded morphological
+equivalent) from every required anchor group. A candidate that only shares a
+preparation word is never returned: black-pepper candidates must contain
+`pepper`, lettuce candidates `lettuce`, tomato candidates `tomato`/`tomatoes`,
+mayonnaise `mayonnaise`, bacon `bacon`, and burger-bun candidates a recognized
+`bun`/`roll`. The anchor rule is deterministic, bounded, documented, and is bound
+into review identity through the candidate set that the review digest covers.
+
+### 20.4 Contradiction and qualifier policy
+
+- **Contradictions.** A candidate never receives positive relevance merely
+  because the query food appears in a negated or `with`-prepared phrase
+  (`without salt`, `no salt`, `salt free`, `salt added`, `salt not added in
+  processing`, `made with mayonnaise`). A bounded forward-negation window
+  (`not`/`no`/`never` within two tokens after the matched food token) covers
+  negations that follow the food word. If the query itself explicitly requests
+  the corresponding qualifier, the compatible rule applies instead.
+- **Identity-changing qualifiers.** A closed, tested set (`meatless`, `vegan`,
+  `vegetarian`, `imitation`, `turkey`, `beef`, `canadian`, `bits`, `tofu`,
+  `substitute`, `reduced`, `light`, `diet`, `low`, `free`) and a closed dish-form
+  set (`sandwich`, `salad`, `soup`, `sauce`, `juice`, `patty`, …) lower an
+  unmatched candidate. Nutritionally meaningful composition words that can be
+  identity-bearing (`sweetened`/`unsweetened`, `skim`, `nonfat`, `whole`,
+  `raw`/`cooked`, …) are deliberately **not** treated as generic conflicts; they
+  remain identity tokens and only lower a candidate through normal identity
+  coverage. For plain `bacon`,
+  a generic ordinary bacon record outranks meatless, turkey, beef, Canadian,
+  reduced-sodium, and bacon-bit variants unless the ingredient requests them.
+- **No padding.** The result limit is a maximum, not a quota. Candidates that
+  lack the required anchor, contradict the query, or are a different dish form
+  are excluded rather than used as filler.
+
+### 20.5 Bounded culinary aliases
+
+A small, directional, versioned alias table (visible in ranking evidence) maps
+demonstrated home-recipe language to USDA terminology. The initial case is
+`burger bun(s)` → `hamburger bun` / `roll`, with a required `bun`/`roll` anchor.
+Aliases never silently rewrite the stored recipe, never authorize an automatic
+exact match, and never bypass explicit review.
+
+### 20.6 Possessive normalization
+
+One explicit NFC-safe rule removes straight (`'`) and typographic (`’`)
+apostrophes before punctuation separation, so `McDonald's` → `mcdonalds` and
+`USDA's` → `usdas`. A possessive can never produce a meaningful standalone `s`
+token. No one-letter token is globally discarded, and plural food words
+(`tomatoes`, `pickles`) and literal single letters (`vitamin c`) are preserved.
+
+### 20.7 Versioning and stale invalidation
+
+This phase materially changed parsing, normalization, catalog membership,
+ranking, review digests, and candidate identity. Every affected version was
+bumped: matching normalization `usda_match_normalize_v2`, ranking
+`usda_match_rank_v2`, review catalog `usda_review_catalog_v2`, confirmation
+`usda_match_confirm_v2`, query projection `usda_query_projection_v1`, eligibility
+`usda_home_recipe_eligibility_v1`, calculation `usda_advisory_calc_v3`,
+calculation context `usda_calc_context_v2`, Phase 4 session
+`usda_phase4_session_v2`, and Phase 4 state `usda_phase4_state_v3`. The Phase
+4.5C portion-semantics version (`usda_portion_semantics_v1`) is unchanged because
+its semantics genuinely did not change.
+
+The catalog digest binds the complete authenticated bundle identity, the matching
+normalization version, the ranking version, the query-projection version, the
+eligibility version and policy digest, the source/eligible/excluded counts, and
+the exact eligible record identities. Any pre-4.5D catalog, review, confirmation,
+match selection, portion selection, user-mass selection, calculation request,
+preview, or Phase 4 state is therefore rejected or invalidated rather than reused
+under the new contract.
+
+### 20.8 The hamburger acceptance corpus
+
+The principal acceptance corpus is the real hamburger recipe:
+
+```
+1 pound ground beef (80/20), formed into 4 patties
+1 teaspoon kosher salt
+0.5 teaspoon ground black pepper
+8 slices bacon
+4 slices cheddar cheese
+4 burger buns
+1 cup shredded lettuce
+2 medium tomatoes, sliced
+4 pickles, sliced
+2 tablespoons mayonnaise
+1 tablespoon ketchup
+```
+
+Parsing never presents `slice s` or `tablespoon s`; original lines are unchanged
+for display/evidence; food identities are sensible and bounded; and
+size/preparation/note roles are preserved separately. Ground beef surfaces raw
+80/20 records first and the `formed into 4 patties` instruction is not identity;
+kosher salt surfaces actual salt records first and excludes `without salt` foods;
+black pepper surfaces `Spices, pepper, black` first and never ground meats;
+bacon surfaces generic pork bacon first with no chain or variant outranking it;
+cheddar cheese surfaces generic cheddar first with no USDA-possessive advantage;
+burger buns surface `hamburger bun`/`roll` records with no Burger King record;
+lettuce surfaces lettuce records with no shredded non-lettuce food; tomatoes
+surface `Tomatoes, raw` first with `medium`/`sliced` kept as context; pickles
+surface pickle records first; mayonnaise surfaces `Mayonnaise, regular` first
+with no `McDonald's … without mayonnaise`; and ketchup remains a deterministic
+unique exact match with no restaurant record.
+
+### 20.9 Gates, isolation, and deferred work
+
+Phase 4.5D keeps every Phase 4.5A–C property: the five fixed same-origin asset
+URLs, no arbitrary URL, no USDA/API/provider fallback, no filesystem/Node
+production dependency, bundle authentication before record use, no partial
+session, same-page retry, plugin payload exclusion, no automatic calculation, no
+count-to-mass calculation, no generic density or weight table, no application
+authority, no persistence, and no vault/Markdown/frontmatter/recipe/settings/
+browser-storage/cache-storage/service-worker write. Phase 5 and Phase 6 remain
+unimplemented. The existing simple Nutrition & Macros/AI estimator is not
+consolidated in this phase.
+
+**Phase 4.5D still performs no persistence, no Apply, and no count-to-mass
+calculation.**

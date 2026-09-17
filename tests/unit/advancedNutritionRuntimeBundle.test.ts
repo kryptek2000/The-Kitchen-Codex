@@ -78,7 +78,11 @@ describe('phase 4.5B — the exact checked-in bundle authenticates', () => {
     if (!loaded.ok) return;
     const metadata = loaded.session.metadata();
     expect(metadata.bundle_release).toBe('usda_fdc_87c5408a3e98838944a87be74824761e');
-    expect(metadata.record_count).toBe(13559);
+    // The complete authenticated source is 13,559 records; the home-recipe
+    // eligible catalog excludes restaurant/fast-food records (Phase 4.5D).
+    expect(metadata.source_record_count).toBe(13559);
+    expect(metadata.record_count).toBe(12924);
+    expect(metadata.excluded_record_count).toBe(13559 - 12924);
     expect(metadata.nutrient_map_version).toBe('usda_fdc_nutrient_map_v2');
     expect([...metadata.data_types].sort()).toEqual(['fndds', 'foundation', 'sr_legacy']);
     expect(loaded.attribution).toBe(LOCK.attribution);

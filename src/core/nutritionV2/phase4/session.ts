@@ -122,6 +122,8 @@ export function createAdvancedNutritionSession(
     catalog_digest: contextMetadata.catalog_digest,
     nutrient_map_version: contextMetadata.nutrient_map_version,
     record_count: contextMetadata.record_count,
+    source_record_count: contextMetadata.source_record_count,
+    excluded_record_count: contextMetadata.excluded_record_count,
     data_types: Object.freeze([...contextMetadata.data_types]),
   });
 

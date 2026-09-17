@@ -9,6 +9,8 @@
 
 export * from './types';
 export * from './normalize';
+export * from './query';
+export * from './eligibility';
 export * from './parse';
 export * from './rank';
 export * from './review';

@@ -706,7 +706,12 @@ async function compose(inputs: unknown): Promise<RuntimeBundleResult> {
   const metadata = readSessionMetadata(session);
   if (!metadata) fail('session_metadata_mismatch');
   if (metadata.bundle_release !== lock.bundle_release) fail('session_metadata_mismatch');
-  if (metadata.record_count !== lock.canonical_record_count) fail('session_metadata_mismatch');
+  // The COMPLETE authenticated source count must bind the release lock; the
+  // eligible home-recipe catalog is a strict subset.
+  if (metadata.source_record_count !== lock.canonical_record_count) fail('session_metadata_mismatch');
+  if (metadata.record_count < 1 || metadata.record_count > metadata.source_record_count) {
+    fail('session_metadata_mismatch');
+  }
   if (metadata.nutrient_map_version !== lock.nutrient_map_version) fail('session_metadata_mismatch');
   const metadataTypes = new Set(metadata.data_types);
   if (metadataTypes.size !== lock.sources.length) fail('session_metadata_mismatch');

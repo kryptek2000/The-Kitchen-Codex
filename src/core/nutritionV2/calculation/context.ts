@@ -18,6 +18,7 @@
 
 import { computeCanonicalContentDigest, validateManifest } from '../usda/manifest';
 import { validateCanonicalRecord } from '../usda/record';
+import { evaluateEligibility } from '../matching/eligibility';
 import { createReviewCatalog } from '../matching/review';
 import type { ReviewCatalog } from '../matching/types';
 import type { CanonicalUsdaFoodRecord, UsdaDataType } from '../usda/types';
@@ -86,7 +87,7 @@ export function createNutritionCalculationContext(
     componentByType.set(component.data_type, component.upstream_release);
   }
 
-  const recordMap = new Map<number, CanonicalUsdaFoodRecord>();
+  const seenIds = new Set<number>();
   for (const record of records) {
     if (record.bundle_release !== manifest.bundle_release) return contextFailure();
     if (record.nutrient_map_version !== manifest.nutrient_map_version) return contextFailure();
@@ -94,10 +95,12 @@ export function createNutritionCalculationContext(
     if (expectedUpstream === undefined || expectedUpstream !== record.upstream_release) {
       return contextFailure();
     }
-    if (recordMap.has(record.fdc_id)) return contextFailure();
-    recordMap.set(record.fdc_id, record);
+    if (seenIds.has(record.fdc_id)) return contextFailure();
+    seenIds.add(record.fdc_id);
   }
 
+  // AUTHENTICATION-BEFORE-FILTERING: the complete source must pass count and
+  // content-digest checks before eligibility filtering.
   if (records.length !== manifest.canonical_record_count) return contextFailure();
   if (computeCanonicalContentDigest(records) !== manifest.canonical_content_digest) {
     return contextFailure();
@@ -108,13 +111,23 @@ export function createNutritionCalculationContext(
   if (!catalogResult.ok) return contextFailure();
   const catalog = catalogResult.catalog;
 
+  // The calculation record map contains ONLY eligible home-recipe records, so an
+  // excluded FDC id can never be reached for portions or calculation.
+  const recordMap = new Map<number, CanonicalUsdaFoodRecord>();
+  for (const record of records) {
+    if (!evaluateEligibility(record).eligible) continue;
+    recordMap.set(record.fdc_id, record);
+  }
+
   const metadata: CalculationContextMetadata = Object.freeze({
     context_version: CALCULATION_CONTEXT_VERSION,
     calculation_version: CALCULATION_VERSION,
     bundle_release: manifest.bundle_release,
     catalog_digest: catalog.metadata().catalog_digest,
     nutrient_map_version: manifest.nutrient_map_version,
-    record_count: records.length,
+    record_count: recordMap.size,
+    source_record_count: records.length,
+    excluded_record_count: records.length - recordMap.size,
     data_types: Object.freeze([...manifest.data_types]),
   });
 

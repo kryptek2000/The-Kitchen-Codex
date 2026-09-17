@@ -19,10 +19,10 @@ import type { UsdaDataType } from '../usda/types';
 // Versions (pinned; part of confirmation binding)
 // ---------------------------------------------------------------------------
 
-export const MATCHING_NORMALIZATION_VERSION = 'usda_match_normalize_v1';
-export const MATCHING_RANKING_VERSION = 'usda_match_rank_v1';
-export const MATCHING_CATALOG_VERSION = 'usda_review_catalog_v1';
-export const MATCHING_CONFIRMATION_VERSION = 'usda_match_confirm_v1';
+export const MATCHING_NORMALIZATION_VERSION = 'usda_match_normalize_v2';
+export const MATCHING_RANKING_VERSION = 'usda_match_rank_v2';
+export const MATCHING_CATALOG_VERSION = 'usda_review_catalog_v2';
+export const MATCHING_CONFIRMATION_VERSION = 'usda_match_confirm_v2';
 
 // ---------------------------------------------------------------------------
 // Bounds
@@ -329,13 +329,24 @@ export interface ReviewCatalogMetadata {
   readonly catalog_version: string;
   readonly normalization_version: string;
   readonly ranking_version: string;
+  readonly query_projection_version: string;
+  readonly eligibility_version: string;
+  /** Deterministic digest of the closed eligibility policy. */
+  readonly eligibility_digest: string;
   readonly bundle_release: string;
+  /** Number of authenticated source records (13,559 for the pinned bundle). */
+  readonly source_record_count: number;
+  /** Number of records ELIGIBLE for home-recipe matching. */
+  readonly eligible_record_count: number;
+  /** Number of authenticated records excluded by the eligibility policy. */
+  readonly excluded_record_count: number;
+  /** Eligible indexed record count (equal to `eligible_record_count`). */
   readonly record_count: number;
   readonly data_types: ReadonlyArray<UsdaDataType>;
   readonly upstream_releases: Readonly<Partial<Record<UsdaDataType, string>>>;
   readonly nutrient_map_version: string;
   readonly canonicalization_version: string;
-  /** Deterministic digest over the catalog identity + normalized descriptions. */
+  /** Deterministic digest over the catalog identity + eligible descriptions. */
   readonly catalog_digest: string;
 }
 
