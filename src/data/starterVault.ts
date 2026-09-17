@@ -504,6 +504,48 @@ created: 2026-08-01
 - When sliced, a vibrant green matcha and dark chocolate river flows out!
 `,
   },
+  {
+    fileName: 'Skillet Cornmeal Porridge.md',
+    markdown: `---
+title: Skillet Cornmeal Porridge
+tags:
+  - food/recipes
+  - breakfast
+  - southern
+  - vegetarian
+category: Breakfast
+cuisine: American
+prep_time: 5 mins
+cook_time: 20 mins
+servings: 4
+difficulty: Easy
+rating: 4
+calories: 320
+created: 2026-08-01
+---
+
+# Skillet Cornmeal Porridge
+
+> [!tip] No Lumps
+> Whisk the cornmeal into cold liquid first, then bring it up to a simmer while stirring constantly for a silky, lump-free porridge.
+
+## 🥘 Ingredients
+- [ ] 1 cup Cornmeal
+- [ ] 4 cups Whole Milk
+- [ ] 2 tbsp Unsalted Butter
+- [ ] 1 pinch Fine Sea Salt
+- [ ] 2 tbsp Honey
+
+## 🍳 Instructions
+1. Whisk the cornmeal into the cold milk in a heavy skillet until smooth.
+2. Set over medium heat and cook, stirring constantly, until the porridge thickens and bubbles gently, about 15 minutes.
+3. Stir in the butter and salt, then sweeten with honey to taste.
+4. Serve warm with an extra pat of butter.
+
+## 💡 Notes & Variations
+- A cup of cornmeal weighs about 122 g in this reference; adjust the milk for a looser or thicker porridge.
+`,
+  },
 ];
 
 export function getStarterVaultRecipes(): ObsidianRecipe[] {

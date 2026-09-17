@@ -148,6 +148,7 @@ describe('phase 4 isolation — source purity', () => {
         'state.ts',
         'stored.ts',
         'types.ts',
+        'userMass.ts',
       ].sort()
     );
     for (const file of PHASE4_FILES) expect(file.endsWith('.ts')).toBe(true);

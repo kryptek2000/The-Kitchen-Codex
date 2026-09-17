@@ -201,10 +201,32 @@ export function ingredientEvidenceViews(
         fdc_id: entry.fdc_id,
         mass_source: entry.mass_source,
         resolved_grams: entry.resolved_grams,
+        portion_index: entry.portion_index,
+        user_mass_quantity: entry.user_mass_quantity,
+        user_mass_unit: entry.user_mass_unit,
         contributing_nutrients: entry.contributing_nutrients,
       })
     )
   );
+}
+
+/**
+ * Bounded, user-facing mass-source evidence label. It never mislabels a
+ * user-entered weight as USDA portion evidence.
+ */
+export function massSourceLabel(entry: IngredientEvidenceView): string {
+  switch (entry.mass_source) {
+    case 'direct_mass':
+      return 'direct mass';
+    case 'source_portion':
+      return entry.fdc_id !== undefined ? `USDA source portion · FDC ${entry.fdc_id}` : 'USDA source portion';
+    case 'user_mass':
+      return entry.user_mass_quantity !== undefined && entry.user_mass_unit !== undefined
+        ? `user-entered total weight · ${entry.user_mass_quantity} ${entry.user_mass_unit}`
+        : 'user-entered total weight';
+    default:
+      return 'no mass';
+  }
 }
 
 /** Formats a derived amount for display; `—` for missing, never `0`. */

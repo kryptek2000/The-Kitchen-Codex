@@ -5,9 +5,10 @@ contracts, isolated review layer, an isolated advisory calculation layer, and an
 isolated advisory review/display UI layer), plus Phase 4.5A (a pinned,
 reproducible canonical USDA bundle artifact generated offline) and Phase 4.5B
 (authenticated, explicit-user-intent browser runtime loading of that exact
-bundle into a genuine Phase 4 session)**. No network route or live API is used,
-and there is no Apply action or automatic persistence. Machine application of
-advanced nutrition remains disabled.
+bundle into a genuine Phase 4 session), plus Phase 4.5C (US customary portion
+resolution and an explicit total-weight fallback)**. No network route or live
+API is used, and there is no Apply action or automatic persistence. Machine
+application of advanced nutrition remains disabled.
 
 Phase 1 adds a trusted, offline, key-free USDA FoodData Central contract: a
 strict release manifest, a defensive adapter for the **actual pinned download
@@ -2031,3 +2032,141 @@ Apply/Save control. The production build/serve verification proves the five
 emitted static assets are byte-identical to the checked-in sources, that no
 client JavaScript carries the payload, and that the compiled server serves the
 exact locked bytes.
+
+---
+
+## 19. Phase 4.5C — US customary portion resolution and explicit weight fallback
+
+Phase 4.5C makes ordinary US recipe quantities useful while preserving strict
+provenance and fail-closed behavior. It is a **runtime interpretation and review
+improvement only**: it never persists, applies, writes a vault/Markdown file,
+or authorizes machine application. The authenticated composer, the release lock,
+and the checked-in artifact are unchanged.
+
+The governing rule is:
+
+```
+recognized recipe quantity + explicitly selected authenticated USDA portion
+  -> resolved mass
+```
+
+If no compatible USDA portion exists, the only fallback is an explicit
+user-entered total weight for that ingredient line. Otherwise the ingredient
+remains `no_mass`.
+
+### 19.1 Supported measurements and exact conversions
+
+- **Direct mass** (preferred when present): `g`, `kg`, `oz`, `lb`. US inputs such
+  as `4 oz Cornmeal` resolve directly with no source portion.
+- **Volume**: `tsp`, `tbsp`, `fl oz`, `cup`, `pint`, `quart`, `gallon`, `ml`, `l`
+  (including existing aliases, plurals, abbreviations, ASCII/Unicode fractions,
+  and mixed numbers). Larger US customary units are derived relationally from the
+  single canonical fluid-ounce constant (1 cup = 8 fl oz, 1 pint = 16 fl oz,
+  1 quart = 32 fl oz, 1 gallon = 128 fl oz) so there is no second, contradictory
+  conversion table.
+- Plain `oz` remains **mass**; fluid ounce requires an unambiguous fluid-ounce
+  form.
+- **Counts / packages** (`egg`, `slice`, `piece`, `clove`, `can`, `package`,
+  `stick`, …) are never converted to mass. Descriptors such as `large`/`medium`/
+  `small` are not treated as interchangeable counts. Count-to-mass resolution is
+  not implemented in this phase; such lines stay unresolved and offer the
+  explicit total-weight fallback.
+
+### 19.2 Canonical portion semantics (`usda_portion_semantics_v1`)
+
+One pure, deterministic layer (`calculation/portionSemantics.ts`) understands the
+three canonical USDA portion shapes without altering the artifact:
+
+1. **Foundation** — numeric `amount` + a real `measure` unit (optional
+   descriptive `modifier`).
+2. **SR Legacy** — `measure: "undetermined"`; the real unit is the leading
+   ANCHORED token of `modifier` (e.g. `cup`, `cup, chopped`, `tbsp`, `fl oz`).
+   A unit substring in the middle of a word is never treated as a measure.
+3. **FNDDS** — no `amount`; `measure` embeds an explicit amount + unit (e.g.
+   `1 cup`, `1 fl oz`). The numeric `modifier` is a USDA source code and is never
+   shown as a human descriptor.
+
+A missing amount is **never defaulted to one**. Text such as
+`Quantity not specified`, `Guideline amount …`, `Juice of 1 …`, `Skin from …`,
+`Topping …`, `1 large`, or `1 4 oz container` is `unusable`. The normalized
+representation is closed and versioned (kind, positive finite effective amount,
+normalized unit, exact canonical volume where applicable, gram weight, amount
+source, bounded descriptor, safe display label, and raw identity binding).
+
+### 19.3 Correct source-portion calculation
+
+A source portion resolves mass only when its dimension is **compatible** with the
+recipe measurement:
+
+```
+volume recipe + volume portion: resolved = recipe_ml / portion_ml * portion_gram_weight
+mass   recipe + mass   portion: resolved = recipe_g  / portion_g  * portion_gram_weight
+```
+
+`2 tbsp` against `1 cup = 122 g` resolves to `2 tbsp / 1 cup * 122 g = 15.25 g`
+using the canonical volume system — never numeric-only division. Incompatible
+dimensions (volume recipe + count portion, count recipe + volume portion, …),
+unusable portions, invalid/zero/non-finite amounts, and overflow fail closed.
+The calculator independently recomputes the canonical portion semantics from the
+authenticated raw fields; a caller-supplied normalized amount, unit, volume,
+label, or gram weight is never trusted.
+
+### 19.4 Provenance and invalidation
+
+A selected source portion is bound to the calculation version, portion-semantics
+version, line reference, ingredient identity digest, bundle release, FDC id,
+record digest, candidate-set digest, portion index, raw portion fields, derived
+semantic fields, and the resolved compatibility dimension. A user-entered total
+weight is bound to the calculation version, line reference, ingredient identity
+digest, bundle release, FDC id, record digest, entered quantity/unit, recomputed
+gram value, and a selection digest. Changing the ingredient, selected food,
+bundle, record, candidate set, portion, semantics version, or entered weight
+invalidates the selection and any dependent preview. A portion selection and a
+manual total weight are **mutually exclusive**; a request containing both is
+rejected.
+
+### 19.5 Explicit total-weight fallback (`user_mass`)
+
+After a food is selected, the review offers a visually distinct
+`Enter total weight for this ingredient line` control accepting `g` / `oz` / `lb`.
+It represents the total weight of that recipe ingredient line and is **not a
+density**. It requires a positive finite quantity, a supported explicit unit, a
+deterministic conversion to grams, bounded input, and explicit user confirmation.
+It is never prefilled, inferred, or auto-submitted. The calculator recomputes the
+conversion; caller-supplied grams are never trusted. No fallback value is
+persisted to the recipe, vault, settings, browser storage, or any external
+service.
+
+### 19.6 Evidence and review presentation
+
+Ingredient evidence distinguishes `direct_mass`, `source_portion`, and
+`user_mass` (and `no_mass`). A user-entered weight is never mislabeled as USDA
+portion evidence. Candidate rows show a bounded portion-availability annotation
+relevant to the current ingredient measurement (computed through the semantics
+layer, never merely because a record has some portion). After a food is selected
+for a non-mass ingredient, compatible canonical portions are presented
+immediately with a semantic label such as `1 cup = 122 g`; the SR Legacy
+`undetermined` placeholder is never shown; nothing is auto-selected; and
+incompatible/unusable portions are disabled rather than selectable. The
+annotation never changes food ranking, candidate order, or user-confirmation
+requirements.
+
+### 19.7 Gates, isolation, and deferred work
+
+Phase 4.5C keeps the Phase 4.5B properties: explicit-user-intent loading, five
+fixed build-owned asset URLs, no arbitrary URL, no external USDA/API/provider
+fallback, no filesystem/Node production dependency, no payload in the main UI
+chunk, authenticated bundle verification before record use, no partial session,
+same-page retry, plugin payload exclusion, no automatic calculation, and no
+application/persistence authority. Phase 4.5C adds no persistence, service
+worker, IndexedDB, localStorage, Cache Storage, vault, Markdown, frontmatter,
+settings, telemetry, secret, or server write. `application_authorized` remains
+`false`; `advancedNutritionApplicationAuthorization()` remains fail-closed; and
+`canApplyNutritionEstimate` remains disabled. Phase 5 (explicit Apply/persistence
+and legacy compatibility) and Phase 6 (Vault Intelligence integration) remain
+deferred.
+
+The calculation contract version was bumped to `usda_advisory_calc_v2` (the
+portion mass computation, the portion-semantics binding, and the `user_mass`
+source materially changed). The Phase 4 state version was bumped to
+`usda_phase4_state_v2` (new explicit user-weight selections).

@@ -19,7 +19,7 @@ import type { AdvisoryNutritionPreview, CalculationResult, PortionReviewResult }
 import type { ConfirmationResult, IngredientReviewResult } from '../matching/types';
 
 export const PHASE4_SESSION_VERSION = 'usda_phase4_session_v1';
-export const PHASE4_STATE_VERSION = 'usda_phase4_state_v1';
+export const PHASE4_STATE_VERSION = 'usda_phase4_state_v2';
 
 /** Working bound on adapted recipe ingredients (mirrors Phase 3). */
 export const MAX_PHASE4_INGREDIENTS = 200;
@@ -52,6 +52,17 @@ export const PHASE4_BUNDLE_RETRY_LABEL = 'Retry';
 /** Fixed, bounded copy shown when a hostile/unreadable recipe fails adaptation. */
 export const PHASE4_UNREADABLE_MESSAGE =
   "This recipe's ingredient data could not be read safely, so Advanced Nutrition is unavailable.";
+
+/**
+ * Phase 4.5C explicit total-weight fallback copy. This is a user-entered total
+ * weight for one ingredient line — NOT a density.
+ */
+export const PHASE4_USER_MASS_LABEL = 'Enter total weight for this ingredient line';
+export const PHASE4_USER_MASS_NOTE =
+  'A user-entered total weight applies to this ingredient line only. It is not a density and is never saved.';
+export const PHASE4_USER_MASS_CONFIRM_LABEL = 'Use this weight';
+export const PHASE4_PORTION_SECTION_LABEL = 'USDA source portions';
+export const PHASE4_USER_MASS_SECTION_LABEL = 'Or enter a total weight';
 
 // ---------------------------------------------------------------------------
 // Failure taxonomy
@@ -189,6 +200,8 @@ export interface Phase4CandidateView {
   readonly description: string;
   readonly match_class: string;
   readonly rank_evidence: string;
+  /** Bounded portion-availability annotation for the current ingredient. */
+  readonly portion_annotation: string;
 }
 
 export interface Phase4Row {
@@ -218,6 +231,14 @@ export interface PortionChoice {
   readonly review: unknown;
 }
 
+/** An explicit user-entered total weight for one ingredient line (`user_mass`). */
+export interface UserMassChoice {
+  readonly fdc_id: number;
+  readonly quantity: number;
+  readonly unit: 'g' | 'oz' | 'lb';
+  readonly selection: unknown;
+}
+
 export interface Phase4State {
   readonly version: string;
   readonly status: Phase4Status;
@@ -226,6 +247,7 @@ export interface Phase4State {
   readonly rows: ReadonlyArray<Phase4Row>;
   readonly matches: Readonly<Record<string, MatchChoice>>;
   readonly portions: Readonly<Record<string, PortionChoice>>;
+  readonly userMasses: Readonly<Record<string, UserMassChoice>>;
   readonly basis: BasisMode;
   readonly selectedServings: number;
   readonly preview: AdvisoryNutritionPreview | null;
@@ -245,6 +267,8 @@ export type Phase4Action =
   | { readonly type: 'select_match'; readonly lineRef: string; readonly choice: MatchChoice }
   | { readonly type: 'select_portion'; readonly lineRef: string; readonly choice: PortionChoice }
   | { readonly type: 'clear_portion'; readonly lineRef: string }
+  | { readonly type: 'select_user_mass'; readonly lineRef: string; readonly choice: UserMassChoice }
+  | { readonly type: 'clear_user_mass'; readonly lineRef: string }
   | { readonly type: 'set_basis'; readonly basis: BasisMode }
   | { readonly type: 'set_servings'; readonly value: unknown }
   | {
@@ -292,6 +316,9 @@ export interface IngredientEvidenceView {
   readonly fdc_id: number | undefined;
   readonly mass_source: string | undefined;
   readonly resolved_grams: number | undefined;
+  readonly portion_index: number | undefined;
+  readonly user_mass_quantity: number | undefined;
+  readonly user_mass_unit: string | undefined;
   readonly contributing_nutrients: ReadonlyArray<NutrientId>;
 }
 

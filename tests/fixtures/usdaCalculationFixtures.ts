@@ -112,3 +112,53 @@ export const CALC_FOODS: ReadonlyArray<CalcRecordSpec> = [
     portions: [{ usda_portion_id: 4, measure: 'teaspoon', gram_weight: 6, sequence: 1 }],
   },
 ];
+
+/**
+ * SYNTHETIC Phase 4.5C fixtures exercising the three canonical portion shapes
+ * (Foundation numeric amount, SR Legacy `undetermined` + modifier, FNDDS
+ * embedded measure), plus count and unusable shapes. NOT real nutrition data.
+ */
+export const CUSTOMARY_FOODS: ReadonlyArray<CalcRecordSpec> = [
+  {
+    fdcId: 169697,
+    dataType: 'sr_legacy',
+    description: 'Cornmeal, whole-grain, yellow',
+    nutrients: { calories: 362, protein: 8.12, carbohydrates: 76.89, fat: 3.59 },
+    portions: [
+      { usda_portion_id: 85369, amount: 1, measure: 'undetermined', modifier: 'cup', gram_weight: 122, sequence: 1 },
+    ],
+  },
+  {
+    fdcId: 168867,
+    dataType: 'sr_legacy',
+    description: 'Cornmeal, degermed, enriched, yellow',
+    nutrients: { calories: 370, protein: 7.11, carbohydrates: 79.45, fat: 1.75 },
+    portions: [
+      { usda_portion_id: 83917, amount: 1, measure: 'undetermined', modifier: 'cup', gram_weight: 157, sequence: 1 },
+    ],
+  },
+  {
+    fdcId: 4001,
+    dataType: 'fndds',
+    description: 'Cornmeal, cooked, FNDDS',
+    nutrients: { calories: 100 },
+    // FNDDS embeds the explicit amount in `measure`; `modifier` is a numeric code.
+    portions: [{ usda_portion_id: 5, measure: '1 cup', modifier: '10205', gram_weight: 240, sequence: 1 }],
+  },
+  {
+    fdcId: 4002,
+    dataType: 'foundation',
+    description: 'Egg, whole, raw, fresh',
+    nutrients: { calories: 143, protein: 12.6, fat: 9.5 },
+    portions: [{ usda_portion_id: 6, amount: 1, measure: 'piece', gram_weight: 50, sequence: 1 }],
+  },
+  {
+    fdcId: 4003,
+    dataType: 'fndds',
+    description: 'Mystery, quantity not specified',
+    nutrients: { calories: 50 },
+    portions: [
+      { usda_portion_id: 7, measure: 'Quantity not specified', modifier: '90000', gram_weight: 100, sequence: 1 },
+    ],
+  },
+];

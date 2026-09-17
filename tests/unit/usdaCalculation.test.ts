@@ -44,7 +44,7 @@ describe('phase 3 context — authority and construction', () => {
   it('builds a genuine context with bounded metadata', () => {
     const { context } = buildContext();
     const metadata = context.metadata();
-    expect(metadata.calculation_version).toBe('usda_advisory_calc_v1');
+    expect(metadata.calculation_version).toBe('usda_advisory_calc_v2');
     expect(metadata.bundle_release).toMatch(/^usda_fdc_/);
     expect(metadata.catalog_digest).toMatch(/^[0-9a-f]{64}$/);
     expect(metadata.record_count).toBe(CALC_FOODS.length);
@@ -388,7 +388,8 @@ describe('phase 3 mass — direct mass and source portions', () => {
     if (!portions.ok) return;
     const cup = portions.review.candidates[0];
     const selection = {
-      calculation_version: 'usda_advisory_calc_v1',
+      calculation_version: 'usda_advisory_calc_v2',
+      portion_semantics_version: portions.review.portion_semantics_version,
       line_ref: 'a',
       ingredient_identity_digest: identity.ingredient_identity_digest,
       bundle_release: identityRun.preview.bundle_release,
@@ -396,9 +397,14 @@ describe('phase 3 mass — direct mass and source portions', () => {
       record_digest: identity.record_digest as string,
       candidates_digest: portions.review.candidates_digest,
       portion_index: cup.index,
-      portion_amount: cup.amount as number,
+      portion_amount: cup.effective_amount as number,
       measure: cup.measure,
       gram_weight: cup.gram_weight,
+      semantics_kind: cup.kind,
+      semantics_unit: cup.unit,
+      semantics_volume_ml: cup.volume_ml,
+      semantics_amount: cup.effective_amount,
+      semantics_gram_weight: cup.gram_weight,
     };
     const result = calculateRecipeNutrition(context, {
       servings: 1,
@@ -430,7 +436,8 @@ describe('phase 3 mass — direct mass and source portions', () => {
           line_ref: 'a',
           ingredient: '2 cups Flour, wheat, white',
           portion_selection: {
-            calculation_version: 'usda_advisory_calc_v1',
+            calculation_version: 'usda_advisory_calc_v2',
+            portion_semantics_version: 'usda_portion_semantics_v1',
             line_ref: 'a',
             ingredient_identity_digest: identity.ingredient_identity_digest,
             bundle_release: identityRun.preview.bundle_release,
@@ -441,6 +448,11 @@ describe('phase 3 mass — direct mass and source portions', () => {
             portion_amount: 1,
             measure: 'cup',
             gram_weight: 125,
+            semantics_kind: 'volume',
+            semantics_unit: 'cup',
+            semantics_volume_ml: 236.5882365,
+            semantics_amount: 1,
+            semantics_gram_weight: 125,
           },
         },
       ],

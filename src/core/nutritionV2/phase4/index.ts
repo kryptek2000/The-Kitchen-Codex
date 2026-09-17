@@ -16,4 +16,5 @@ export * from './state';
 export * from './display';
 export * from './stored';
 export * from './portion';
+export * from './userMass';
 export * from './rows';

@@ -23,7 +23,8 @@ import { confirmIngredientReview, reviewIngredient } from '../matching/review';
 import type { ConfirmationResult, ReviewCatalog } from '../matching/types';
 import type { CanonicalUsdaFoodRecord } from '../usda/types';
 import { isQualitativeIngredientText } from '../../../utils/ingredientSemantics';
-import { resolvePortionMassGrams, type PortionMassResolution } from './mass';
+import { resolvePortionMassGrams, resolveUserMassGrams, type PortionMassResolution, type UserMassResolution } from './mass';
+import { PORTION_SEMANTICS_VERSION, type PortionMeasurement } from './portionSemantics';
 import { contributionFor, isWithinCanonicalBound, roundCanonicalTotal, stableSum } from './numeric';
 import { isValidStrictServingCount } from './servings';
 import {
@@ -44,12 +45,14 @@ import {
   type Phase3FailureCode,
   type PortionSelection,
   type UnresolvedIngredient,
+  type UserMassSelection,
 } from './types';
 
 const REQUEST_KEYS = new Set(['servings', 'nutrient_scope', 'ingredients']);
-const INGREDIENT_INPUT_KEYS = new Set(['line_ref', 'ingredient', 'review', 'selection', 'portion_selection']);
+const INGREDIENT_INPUT_KEYS = new Set(['line_ref', 'ingredient', 'review', 'selection', 'portion_selection', 'user_mass_selection']);
 const PORTION_SELECTION_KEYS = new Set([
   'calculation_version',
+  'portion_semantics_version',
   'line_ref',
   'ingredient_identity_digest',
   'bundle_release',
@@ -61,6 +64,23 @@ const PORTION_SELECTION_KEYS = new Set([
   'measure',
   'gram_weight',
   'modifier',
+  'semantics_kind',
+  'semantics_unit',
+  'semantics_volume_ml',
+  'semantics_amount',
+  'semantics_gram_weight',
+]);
+const USER_MASS_SELECTION_KEYS = new Set([
+  'calculation_version',
+  'line_ref',
+  'ingredient_identity_digest',
+  'bundle_release',
+  'fdc_id',
+  'record_digest',
+  'quantity',
+  'unit',
+  'grams',
+  'selection_digest',
 ]);
 
 export interface AdvisoryCalculationInputs {
@@ -107,6 +127,7 @@ interface PreparedIngredient {
   readonly review: unknown;
   readonly selection: unknown;
   readonly portionSelection: unknown;
+  readonly userMassSelection: unknown;
 }
 
 interface EvaluatedIngredient {
@@ -130,6 +151,8 @@ interface EvaluatedIngredient {
   readonly massSource: MassSource | undefined;
   readonly portionIndex: number | undefined;
   readonly portionCandidatesDigest: string | undefined;
+  readonly userMassQuantity: number | undefined;
+  readonly userMassUnit: string | undefined;
   readonly contributions: Partial<Record<NutrientId, number>>;
   readonly contributingNutrients: ReadonlyArray<NutrientId>;
   readonly outcome: IngredientOutcome;
@@ -162,6 +185,8 @@ function fullPayload(e: EvaluatedIngredient) {
     ...(e.portionCandidatesDigest !== undefined
       ? { portion_candidates_digest: e.portionCandidatesDigest }
       : {}),
+    ...(e.userMassQuantity !== undefined ? { user_mass_quantity: e.userMassQuantity } : {}),
+    ...(e.userMassUnit !== undefined ? { user_mass_unit: e.userMassUnit } : {}),
     resolved_grams: e.grams ?? null,
     outcome: e.outcome,
     contributing_nutrients: [...e.contributingNutrients],
@@ -205,6 +230,9 @@ function sanitizePortionSelection(
     if (!PORTION_SELECTION_KEYS.has(key)) return { ok: false, code: 'unknown_field' };
   }
   if (value.calculation_version !== CALCULATION_VERSION) return { ok: false, code: 'invalid_portion_selection' };
+  if (value.portion_semantics_version !== PORTION_SEMANTICS_VERSION) {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
   if (typeof value.line_ref !== 'string' || value.line_ref.length === 0) {
     return { ok: false, code: 'invalid_portion_selection' };
   }
@@ -218,16 +246,37 @@ function sanitizePortionSelection(
   if (!Number.isSafeInteger(value.portion_index) || (value.portion_index as number) < 0) {
     return { ok: false, code: 'invalid_portion_selection' };
   }
-  if (!isFiniteNonNegativeNumber(value.portion_amount)) return { ok: false, code: 'invalid_portion_selection' };
+  if (!isFiniteNonNegativeNumber(value.portion_amount) || !((value.portion_amount as number) > 0)) {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
   if (typeof value.measure !== 'string') return { ok: false, code: 'invalid_portion_selection' };
-  if (!isFiniteNonNegativeNumber(value.gram_weight)) return { ok: false, code: 'invalid_portion_selection' };
+  if (!isFiniteNonNegativeNumber(value.gram_weight) || !((value.gram_weight as number) > 0)) {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
   if (value.modifier !== undefined && typeof value.modifier !== 'string') {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
+  const kind = value.semantics_kind;
+  if (kind !== 'volume' && kind !== 'mass' && kind !== 'count' && kind !== 'unusable') {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
+  if (value.semantics_unit !== null && typeof value.semantics_unit !== 'string') {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
+  if (value.semantics_volume_ml !== null && !isFiniteNonNegativeNumber(value.semantics_volume_ml)) {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
+  if (!isFiniteNonNegativeNumber(value.semantics_amount) || !((value.semantics_amount as number) > 0)) {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
+  if (!isFiniteNonNegativeNumber(value.semantics_gram_weight) || !((value.semantics_gram_weight as number) > 0)) {
     return { ok: false, code: 'invalid_portion_selection' };
   }
   return {
     ok: true,
     selection: {
       calculation_version: CALCULATION_VERSION,
+      portion_semantics_version: PORTION_SEMANTICS_VERSION,
       line_ref: value.line_ref,
       ingredient_identity_digest: value.ingredient_identity_digest,
       bundle_release: value.bundle_release,
@@ -239,6 +288,71 @@ function sanitizePortionSelection(
       measure: value.measure,
       gram_weight: value.gram_weight,
       ...(value.modifier !== undefined ? { modifier: value.modifier as string } : {}),
+      semantics_kind: kind,
+      semantics_unit: (value.semantics_unit ?? null) as string | null,
+      semantics_volume_ml: (value.semantics_volume_ml ?? null) as number | null,
+      semantics_amount: value.semantics_amount,
+      semantics_gram_weight: value.semantics_gram_weight,
+    },
+  };
+}
+
+function sanitizeUserMassSelection(
+  raw: unknown
+): { ok: true; selection: UserMassSelection } | { ok: false; code: Phase3FailureCode } {
+  const materialized = materialize(raw);
+  if (!materialized.ok) {
+    return {
+      ok: false,
+      code: (materialized as { ok: false; unsafe: boolean }).unsafe ? 'unsafe_request' : 'invalid_user_mass',
+    };
+  }
+  if (!isPlainObject(materialized.value)) return { ok: false, code: 'invalid_user_mass' };
+  const value = materialized.value;
+  for (const key of Object.keys(value)) {
+    if (!USER_MASS_SELECTION_KEYS.has(key)) return { ok: false, code: 'unknown_field' };
+  }
+  if (value.calculation_version !== CALCULATION_VERSION) return { ok: false, code: 'invalid_user_mass' };
+  if (typeof value.line_ref !== 'string' || value.line_ref.length === 0) {
+    return { ok: false, code: 'invalid_user_mass' };
+  }
+  if (typeof value.ingredient_identity_digest !== 'string') return { ok: false, code: 'invalid_user_mass' };
+  if (typeof value.bundle_release !== 'string') return { ok: false, code: 'invalid_user_mass' };
+  if (!isSafePositiveInt(value.fdc_id)) return { ok: false, code: 'invalid_user_mass' };
+  if (typeof value.record_digest !== 'string') return { ok: false, code: 'invalid_user_mass' };
+  if (
+    typeof value.quantity !== 'number' ||
+    !Number.isFinite(value.quantity) ||
+    value.quantity <= 0 ||
+    Object.is(value.quantity, -0)
+  ) {
+    return { ok: false, code: 'invalid_user_mass' };
+  }
+  if (value.unit !== 'g' && value.unit !== 'oz' && value.unit !== 'lb') {
+    return { ok: false, code: 'invalid_user_mass' };
+  }
+  if (
+    typeof value.grams !== 'number' ||
+    !Number.isFinite(value.grams) ||
+    value.grams <= 0 ||
+    Object.is(value.grams, -0)
+  ) {
+    return { ok: false, code: 'invalid_user_mass' };
+  }
+  if (typeof value.selection_digest !== 'string') return { ok: false, code: 'invalid_user_mass' };
+  return {
+    ok: true,
+    selection: {
+      calculation_version: CALCULATION_VERSION,
+      line_ref: value.line_ref,
+      ingredient_identity_digest: value.ingredient_identity_digest,
+      bundle_release: value.bundle_release,
+      fdc_id: value.fdc_id,
+      record_digest: value.record_digest,
+      quantity: value.quantity,
+      unit: value.unit,
+      grams: value.grams,
+      selection_digest: value.selection_digest,
     },
   };
 }
@@ -336,6 +450,8 @@ function evaluateIngredient(
     massSource: undefined,
     portionIndex: undefined,
     portionCandidatesDigest: undefined,
+    userMassQuantity: undefined,
+    userMassUnit: undefined,
     contributions: {},
     contributingNutrients: [],
     outcome: 'no_match',
@@ -347,35 +463,65 @@ function evaluateIngredient(
   let massSource: MassSource | undefined;
   let portionIndex: number | undefined;
   let portionCandidatesDigest: string | undefined;
+  let userMassQuantity: number | undefined;
+  let userMassUnit: string | undefined;
 
   if (!qualitative && matched && record) {
+    const hasPortion = prepared.portionSelection !== undefined;
+    const hasUserMass = prepared.userMassSelection !== undefined;
+    // A source portion and an explicit total weight are mutually exclusive.
+    if (hasPortion && hasUserMass) {
+      return { ok: false, code: 'invalid_portion_selection' };
+    }
     if (parsed.measurement_kind === 'mass' && parsed.grams !== undefined) {
       if (!isWithinCanonicalBound(parsed.grams)) return { ok: false, code: 'numeric_overflow' };
       grams = parsed.grams;
       massSource = 'direct_mass';
-    } else if (prepared.portionSelection !== undefined) {
+    } else if (hasUserMass) {
+      const userResult = sanitizeUserMassSelection(prepared.userMassSelection);
+      if (!userResult.ok) return { ok: false, code: (userResult as { ok: false; code: Phase3FailureCode }).code };
+      const resolution: UserMassResolution = resolveUserMassGrams(
+        userResult.selection,
+        record,
+        inputs.bundleRelease,
+        prepared.lineRef,
+        identityDigest
+      );
+      if (resolution.ok) {
+        grams = resolution.grams;
+        massSource = 'user_mass';
+        userMassQuantity = userResult.selection.quantity;
+        userMassUnit = userResult.selection.unit;
+      } else if ((resolution as { ok: false; reason: string }).reason === 'overflow') {
+        return { ok: false, code: 'numeric_overflow' };
+      } else if ((resolution as { ok: false; reason: string }).reason === 'invalid') {
+        return { ok: false, code: 'invalid_user_mass' };
+      }
+    } else if (hasPortion) {
       const selectionResult = sanitizePortionSelection(prepared.portionSelection);
       if (!selectionResult.ok) {
         return { ok: false, code: (selectionResult as { ok: false; code: Phase3FailureCode }).code };
       }
-      const amountForPortion = parsed.amount;
-      if (amountForPortion !== null && isFiniteNonNegativeNumber(amountForPortion)) {
-        const resolution: PortionMassResolution = resolvePortionMassGrams(
-          record,
-          selectionResult.selection,
-          amountForPortion,
-          inputs.bundleRelease,
-          prepared.lineRef,
-          identityDigest
-        );
-        if (resolution.ok) {
-          grams = resolution.grams;
-          massSource = 'source_portion';
-          portionIndex = selectionResult.selection.portion_index;
-          portionCandidatesDigest = selectionResult.selection.candidates_digest;
-        } else if ((resolution as { ok: false; reason: string }).reason === 'overflow') {
-          return { ok: false, code: 'numeric_overflow' };
-        }
+      const measurement: PortionMeasurement = {
+        kind: parsed.measurement_kind,
+        grams: parsed.grams,
+        milliliters: parsed.milliliters,
+      };
+      const resolution: PortionMassResolution = resolvePortionMassGrams(
+        record,
+        selectionResult.selection,
+        measurement,
+        inputs.bundleRelease,
+        prepared.lineRef,
+        identityDigest
+      );
+      if (resolution.ok) {
+        grams = resolution.grams;
+        massSource = 'source_portion';
+        portionIndex = selectionResult.selection.portion_index;
+        portionCandidatesDigest = selectionResult.selection.candidates_digest;
+      } else if ((resolution as { ok: false; reason: string }).reason === 'overflow') {
+        return { ok: false, code: 'numeric_overflow' };
       }
     }
   }
@@ -408,6 +554,8 @@ function evaluateIngredient(
     massSource,
     portionIndex,
     portionCandidatesDigest,
+    userMassQuantity,
+    userMassUnit,
     contributions,
     contributingNutrients,
     outcome,
@@ -462,6 +610,7 @@ export function runAdvisoryCalculation(inputs: AdvisoryCalculationInputs): Calcu
         review: raw.review,
         selection: raw.selection,
         portionSelection: raw.portion_selection,
+        userMassSelection: raw.user_mass_selection,
       });
     }
 
@@ -532,6 +681,9 @@ export function runAdvisoryCalculation(inputs: AdvisoryCalculationInputs): Calcu
         ...(entry.recordDigest !== undefined ? { record_digest: entry.recordDigest } : {}),
         ...(entry.massSource !== undefined ? { mass_source: entry.massSource } : {}),
         ...(entry.grams !== undefined ? { resolved_grams: entry.grams } : {}),
+        ...(entry.portionIndex !== undefined ? { portion_index: entry.portionIndex } : {}),
+        ...(entry.userMassQuantity !== undefined ? { user_mass_quantity: entry.userMassQuantity } : {}),
+        ...(entry.userMassUnit !== undefined ? { user_mass_unit: entry.userMassUnit } : {}),
         ingredient_identity_digest: digestOf(identityPayload(entry)),
         ingredient_digest: digestOf(fullPayload(entry)),
         contributing_nutrients: Object.freeze([...entry.contributingNutrients]),

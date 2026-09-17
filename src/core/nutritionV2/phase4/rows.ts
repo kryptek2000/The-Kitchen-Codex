@@ -8,6 +8,9 @@
  */
 
 import { parseIngredient } from '../matching/parse';
+import { candidatePortionCompatibility } from '../calculation/portionSemantics';
+export { candidatePortionCompatibility };
+import type { MeasurementKind } from '../../../utils/measurements';
 import { isQualitativeIngredientText } from '../../../utils/ingredientSemantics';
 import { NUTRIENT_IDS } from '../nutrients';
 import type {
@@ -56,6 +59,30 @@ function classifyOutcome(
   return 'unmatched';
 }
 
+/**
+ * Bounded portion-availability annotation for one candidate, computed through
+ * the canonical portion-semantics layer. It never changes ranking or selection.
+ */
+function portionAnnotation(
+  session: AdvancedNutritionSession,
+  fdcId: number,
+  measurementKind: MeasurementKind,
+  needsPortion: boolean
+): string {
+  if (!needsPortion) return 'Direct mass; no source portion required';
+  const portions = session.reviewPortions(fdcId);
+  if (!portions.ok) return 'USDA portion data unavailable';
+  const candidates = portions.review.candidates;
+  if (candidates.length === 0) return 'No USDA source portions';
+  const compatible = candidates.filter(
+    (candidate) => candidatePortionCompatibility(candidate, measurementKind) === 'compatible'
+  );
+  if (compatible.length === 0) {
+    return measurementKind === 'volume' ? 'No compatible USDA volume portion' : 'No compatible USDA portion';
+  }
+  return `USDA source portion: ${compatible[0].display_label}`;
+}
+
 /** Builds the authoritative current review row for every adapted ingredient. */
 export function buildReviewRows(
   session: AdvancedNutritionSession,
@@ -76,6 +103,8 @@ export function buildReviewRows(
     };
     const parsed = parseIngredient(entry.ingredient);
     const outcome = classifyOutcome(review, parsed);
+    const measurementKind: MeasurementKind = parsed.ok ? parsed.parsed.measurement_kind : 'unknown';
+    const needsPortion = measurementKind !== 'mass';
     const candidates: Phase4CandidateView[] = (review.candidates ?? []).map((candidate) =>
       Object.freeze({
         fdc_id: candidate.fdc_id,
@@ -83,6 +112,7 @@ export function buildReviewRows(
         description: candidate.description,
         match_class: candidate.match_class,
         rank_evidence: evidenceText(candidate.match_class, candidate.evidence),
+        portion_annotation: portionAnnotation(session, candidate.fdc_id, measurementKind, needsPortion),
       })
     );
     return Object.freeze({
@@ -106,6 +136,12 @@ export function buildReviewRows(
 export function ingredientNeedsPortion(entry: AdaptedIngredient): boolean {
   const parsed = parseIngredient(entry.ingredient);
   return parsed.ok && parsed.parsed.measurement_kind !== 'mass';
+}
+
+/** The deterministic measurement dimension of an adapted ingredient. */
+export function ingredientMeasurementKind(entry: AdaptedIngredient): MeasurementKind {
+  const parsed = parseIngredient(entry.ingredient);
+  return parsed.ok ? parsed.parsed.measurement_kind : 'unknown';
 }
 
 function selectionFor(choice: MatchChoice): unknown {
@@ -132,12 +168,14 @@ export function buildCalculationRequest(
       const row = rowByRef.get(entry.line_ref);
       const choice = state.matches[entry.line_ref];
       const portion = state.portions[entry.line_ref];
+      const userMass = state.userMasses[entry.line_ref];
       const confirmed = row !== undefined && row.outcome === 'review_required' && choice !== undefined;
       return {
         line_ref: entry.line_ref,
         ingredient: entry.ingredient,
         ...(confirmed ? { review: row.review, selection: selectionFor(choice) } : {}),
         ...(portion ? { portion_selection: portion.selection } : {}),
+        ...(userMass ? { user_mass_selection: userMass.selection } : {}),
       };
     }),
   };

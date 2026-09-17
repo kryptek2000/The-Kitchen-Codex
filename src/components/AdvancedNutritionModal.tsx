@@ -3,14 +3,21 @@ import { X, ShieldAlert, FlaskConical, CheckCircle2, AlertTriangle, Info } from 
 import {
   NUTRIENT_GROUPS,
   PHASE4_NOT_MEDICAL_ADVICE,
+  PHASE4_USER_MASS_CONFIRM_LABEL,
+  PHASE4_USER_MASS_LABEL,
+  PHASE4_USER_MASS_NOTE,
   basisLabel,
   buildPortionChoice,
+  buildUserMassChoice,
+  candidatePortionCompatibility,
   coverageSummary,
   deriveDisplayNutrients,
   formatAmount,
   formatDailyValue,
   ingredientEvidenceViews,
+  ingredientMeasurementKind,
   ingredientNeedsPortion,
+  massSourceLabel,
   type AdvancedNutritionSession,
   type AdaptedIngredient,
   type BasisMode,
@@ -94,6 +101,22 @@ function useDialogFocus(isOpen: boolean, onClose: () => void) {
   return { dialogRef, onKeyDown };
 }
 
+interface PortionCandidateView {
+  readonly index: number;
+  readonly measure: string;
+  readonly amount?: number;
+  readonly gram_weight: number;
+  readonly modifier?: string;
+  readonly semantics_version: string;
+  readonly kind: 'volume' | 'mass' | 'count' | 'unusable';
+  readonly unit: string | null;
+  readonly effective_amount: number | null;
+  readonly volume_ml: number | null;
+  readonly amount_source: string;
+  readonly descriptor: string | null;
+  readonly display_label: string;
+}
+
 interface PortionControlsProps {
   row: Phase4Row;
   fdcId: number;
@@ -111,18 +134,17 @@ const PortionControls: React.FC<PortionControlsProps> = ({
   dispatch,
   adapted,
 }) => {
-  const [candidates, setCandidates] = useState<ReadonlyArray<{
-    index: number;
-    measure: string;
-    amount?: number;
-    gram_weight: number;
-    modifier?: string;
-  }> | null>(null);
+  const [candidates, setCandidates] = useState<ReadonlyArray<PortionCandidateView> | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [weightQty, setWeightQty] = useState('');
+  const [weightUnit, setWeightUnit] = useState<'g' | 'oz' | 'lb'>('g');
   const current = state.portions[row.line_ref];
+  const currentUserMass = state.userMasses[row.line_ref];
   const matchChoice = state.matches[row.line_ref];
+  const entry = adapted.find((item) => item.line_ref === row.line_ref);
+  const measurementKind = entry ? ingredientMeasurementKind(entry) : 'unknown';
 
-  const load = () => {
+  const load = useCallback(() => {
     setError(null);
     const result = session.reviewPortions(fdcId);
     if (!result.ok) {
@@ -130,87 +152,172 @@ const PortionControls: React.FC<PortionControlsProps> = ({
       setError('Portion review is unavailable for this food.');
       return;
     }
-    setCandidates(result.review.candidates);
+    setCandidates(result.review.candidates as unknown as ReadonlyArray<PortionCandidateView>);
+  }, [session, fdcId]);
+
+  // Compatible canonical portions are presented immediately after a food is
+  // selected; no second action is required to reveal them. The button remains as
+  // a manual refresh. Nothing is auto-selected.
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const selectionForChoice = () => {
+    if (row.outcome === 'review_required' && matchChoice) {
+      return matchChoice.kind === 'candidate'
+        ? { kind: 'candidate', fdc_id: matchChoice.fdc_id, review_digest: matchChoice.review_digest }
+        : { kind: 'none', review_digest: matchChoice.review_digest };
+    }
+    return undefined;
   };
 
   const choose = (portionIndex: number) => {
     setError(null);
-    const entry = adapted.find((item) => item.line_ref === row.line_ref);
     if (!entry) return;
-    const selection =
-      row.outcome === 'review_required' && matchChoice
-        ? matchChoice.kind === 'candidate'
-          ? { kind: 'candidate', fdc_id: matchChoice.fdc_id, review_digest: matchChoice.review_digest }
-          : { kind: 'none', review_digest: matchChoice.review_digest }
-        : undefined;
     const result = buildPortionChoice(session, {
       lineRef: row.line_ref,
       ingredient: entry.ingredient,
       review: row.outcome === 'review_required' ? row.review : undefined,
-      selection,
+      selection: selectionForChoice(),
       fdcId,
       portionIndex,
     });
     if (!result.ok) {
-      setError('That source portion has no usable amount. No mass can be derived.');
+      setError('That source portion cannot be applied. No mass can be derived from it.');
       return;
     }
     dispatch({ type: 'select_portion', lineRef: row.line_ref, choice: result.choice });
   };
 
+  const confirmUserMass = () => {
+    setError(null);
+    if (!entry) return;
+    const result = buildUserMassChoice(session, {
+      lineRef: row.line_ref,
+      ingredient: entry.ingredient,
+      review: row.outcome === 'review_required' ? row.review : undefined,
+      selection: selectionForChoice(),
+      fdcId,
+      quantity: Number(weightQty),
+      unit: weightUnit,
+    });
+    if (!result.ok) {
+      setError('Enter a positive weight in grams, ounces, or pounds.');
+      return;
+    }
+    dispatch({ type: 'select_user_mass', lineRef: row.line_ref, choice: result.choice });
+  };
+
   return (
-    <div className="mt-2 pl-3 border-l border-white/10 space-y-2">
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={load}
-          className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white/5 hover:bg-white/10 border border-white/10 text-gray-200 transition-colors"
-        >
-          Review source portions
-        </button>
-        {current && (
-          <span className="text-[11px] text-emerald-300 font-medium">
-            Portion selected (index {current.portion_index})
-          </span>
+    <div className="mt-2 pl-3 border-l border-white/10 space-y-3">
+      <div className="space-y-1">
+        <div className="flex items-center gap-2">
+          <h4 className="text-[11px] font-semibold text-gray-300">USDA source portions</h4>
+          <button
+            type="button"
+            onClick={load}
+            className="px-2 py-0.5 rounded-md text-[10px] bg-white/5 hover:bg-white/10 border border-white/10 text-gray-300 transition-colors"
+          >
+            Review source portions
+          </button>
+          {current && (
+            <span className="text-[11px] text-emerald-300 font-medium">Source portion selected</span>
+          )}
+        </div>
+        {error && (
+          <p role="alert" className="text-[11px] text-amber-300">
+            {error}
+          </p>
+        )}
+        {candidates && (
+          <fieldset className="space-y-1">
+            <legend className="text-[11px] text-gray-400">
+              Choose a canonical source portion for {row.original_text}
+            </legend>
+            {candidates.length === 0 && (
+              <p className="text-[11px] text-gray-500">No canonical portions are available.</p>
+            )}
+            {candidates.map((candidate) => {
+              const compatibility = candidatePortionCompatibility(candidate, measurementKind);
+              const disabled = compatibility !== 'compatible';
+              return (
+                <label
+                  key={candidate.index}
+                  className={`flex items-start gap-2 text-[11px] ${disabled ? 'text-gray-500 cursor-not-allowed' : 'text-gray-200 cursor-pointer'}`}
+                >
+                  <input
+                    type="radio"
+                    name={`portion-${row.line_ref}`}
+                    checked={current?.portion_index === candidate.index}
+                    disabled={disabled}
+                    onChange={() => choose(candidate.index)}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    {candidate.display_label}
+                    {disabled && (
+                      <span className="text-amber-300">
+                        {compatibility === 'unusable'
+                          ? ' · unusable source portion'
+                          : ' · not compatible with this measurement'}
+                      </span>
+                    )}
+                  </span>
+                </label>
+              );
+            })}
+          </fieldset>
         )}
       </div>
-      {error && (
-        <p role="alert" className="text-[11px] text-amber-300">
-          {error}
-        </p>
-      )}
-      {candidates && (
-        <fieldset className="space-y-1">
-          <legend className="text-[11px] text-gray-400">
-            Choose a canonical source portion for {row.original_text}
-          </legend>
-          {candidates.length === 0 && (
-            <p className="text-[11px] text-gray-500">No canonical portions are available.</p>
+
+      <div className="space-y-1">
+        <div className="flex items-center gap-2">
+          <h4 className="text-[11px] font-semibold text-gray-300">{PHASE4_USER_MASS_LABEL}</h4>
+          {currentUserMass && (
+            <span className="text-[11px] text-emerald-300 font-medium">
+              Weight entered ({currentUserMass.quantity} {currentUserMass.unit})
+            </span>
           )}
-          {candidates.map((candidate) => (
-            <label
-              key={candidate.index}
-              className="flex items-start gap-2 text-[11px] text-gray-200 cursor-pointer"
+        </div>
+        <p className="text-[10px] text-gray-500">{PHASE4_USER_MASS_NOTE}</p>
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            aria-label="Total weight for this ingredient line"
+            value={weightQty}
+            min={0}
+            step="any"
+            onChange={(event) => setWeightQty(event.target.value)}
+            className="w-24 px-2 py-1 rounded-lg bg-[#0C0C0C] border border-white/10 text-gray-100 text-xs"
+          />
+          <select
+            aria-label="Weight unit"
+            value={weightUnit}
+            onChange={(event) => setWeightUnit(event.target.value as 'g' | 'oz' | 'lb')}
+            className="px-2 py-1 rounded-lg bg-[#0C0C0C] border border-white/10 text-gray-100 text-xs"
+          >
+            <option value="g">g</option>
+            <option value="oz">oz</option>
+            <option value="lb">lb</option>
+          </select>
+          <button
+            type="button"
+            onClick={confirmUserMass}
+            className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white/5 hover:bg-white/10 border border-white/10 text-gray-200 transition-colors"
+          >
+            {PHASE4_USER_MASS_CONFIRM_LABEL}
+          </button>
+          {currentUserMass && (
+            <button
+              type="button"
+              onClick={() => dispatch({ type: 'clear_user_mass', lineRef: row.line_ref })}
+              className="px-2 py-1 rounded-lg text-[11px] text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
             >
-              <input
-                type="radio"
-                name={`portion-${row.line_ref}`}
-                checked={current?.portion_index === candidate.index}
-                onChange={() => choose(candidate.index)}
-                className="mt-0.5"
-              />
-              <span>
-                {candidate.amount !== undefined ? `${candidate.amount} ` : ''}
-                {candidate.measure}
-                {candidate.modifier ? ` (${candidate.modifier})` : ''} · {candidate.gram_weight} g
-                {candidate.amount === undefined && (
-                  <span className="text-amber-300"> · no source amount (unusable)</span>
-                )}
-              </span>
-            </label>
-          ))}
-        </fieldset>
-      )}
+              Clear
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 };
@@ -400,6 +507,11 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                               <span className="text-gray-400">
                                 · {candidate.data_type} · FDC {candidate.fdc_id} · {candidate.rank_evidence}
                               </span>
+                              {candidate.portion_annotation && (
+                                <span className="block text-[10px] text-indigo-300">
+                                  {candidate.portion_annotation}
+                                </span>
+                              )}
                             </span>
                           </label>
                         ))}
@@ -532,8 +644,9 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                       <li key={entry.line_ref} className="text-[11px] text-gray-400">
                         <span className="text-gray-200">{entry.original_text}</span> — {entry.outcome}
                         {entry.fdc_id !== undefined ? ` · FDC ${entry.fdc_id}` : ''}
-                        {entry.mass_source ? ` · ${entry.mass_source}` : ''}
-                        {entry.resolved_grams !== undefined ? ` · ${entry.resolved_grams} g` : ''}
+                        {' · '}
+                        {massSourceLabel(entry)}
+                        {entry.resolved_grams !== undefined ? ` → ${entry.resolved_grams} g` : ''}
                         {entry.user_confirmed ? ' · user-confirmed' : ''}
                       </li>
                     ))}

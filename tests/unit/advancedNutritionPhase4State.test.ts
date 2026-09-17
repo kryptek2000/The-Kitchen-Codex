@@ -233,3 +233,69 @@ describe('phase 4 state — workflow integrity', () => {
     expect(reset.rows).toEqual([]);
   });
 });
+
+describe('phase 4 state — explicit total-weight fallback (user_mass)', () => {
+  const portionChoice = { fdc_id: 3001, portion_index: 0, selection: {}, review: {} };
+  const userMassChoice = { fdc_id: 3001, quantity: 4.3, unit: 'oz' as const, selection: {} };
+
+  it('a user-mass selection clears any portion, invalidates the preview, and is mutually exclusive', () => {
+    let state = withPreview(readyState());
+    state = phase4Reducer(state, { type: 'select_portion', lineRef: 'a', choice: portionChoice });
+    expect(state.portions.a).toBeDefined();
+
+    const withUserMass = phase4Reducer(state, { type: 'select_user_mass', lineRef: 'a', choice: userMassChoice });
+    expect(withUserMass.userMasses.a).toBeDefined();
+    expect(withUserMass.userMasses.a?.quantity).toBe(4.3);
+    expect(withUserMass.portions.a).toBeUndefined();
+    expect(withUserMass.status).toBe('preview_stale');
+  });
+
+  it('a source-portion selection clears any user weight', () => {
+    let state = readyState();
+    state = phase4Reducer(state, { type: 'select_user_mass', lineRef: 'a', choice: userMassChoice });
+    expect(state.userMasses.a).toBeDefined();
+    const withPortion = phase4Reducer(state, { type: 'select_portion', lineRef: 'a', choice: portionChoice });
+    expect(withPortion.portions.a).toBeDefined();
+    expect(withPortion.userMasses.a).toBeUndefined();
+  });
+
+  it('replacing a user weight and clearing it behave deterministically', () => {
+    let state = withPreview(readyState());
+    state = phase4Reducer(state, { type: 'select_user_mass', lineRef: 'a', choice: userMassChoice });
+    state = phase4Reducer(state, {
+      type: 'select_user_mass',
+      lineRef: 'a',
+      choice: { ...userMassChoice, quantity: 100, unit: 'g' },
+    });
+    expect(state.userMasses.a?.quantity).toBe(100);
+    const cleared = phase4Reducer(state, { type: 'clear_user_mass', lineRef: 'a' });
+    expect(cleared.userMasses.a).toBeUndefined();
+    expect(cleared.status).toBe('preview_stale');
+  });
+
+  it('changing the food clears the user weight and the preview', () => {
+    let state = withPreview(readyState());
+    state = phase4Reducer(state, { type: 'select_user_mass', lineRef: 'a', choice: userMassChoice });
+    const changed = phase4Reducer(state, {
+      type: 'select_match',
+      lineRef: 'a',
+      choice: { kind: 'candidate', fdc_id: 3002, review_digest: 'd'.repeat(64) },
+    });
+    expect(changed.userMasses.a).toBeUndefined();
+    expect(changed.status).toBe('preview_stale');
+  });
+
+  it('a recipe change and reset clear all user weights', () => {
+    let state = readyState();
+    state = phase4Reducer(state, { type: 'select_user_mass', lineRef: 'a', choice: userMassChoice });
+    const changed = phase4Reducer(state, {
+      type: 'initialize',
+      recipeKey: 'recipe-B#2',
+      rows: [row('x')],
+      baseServings: 2,
+    });
+    expect(changed.userMasses).toEqual({});
+    const reset = phase4Reducer(state, { type: 'reset' });
+    expect(reset.userMasses).toEqual({});
+  });
+});

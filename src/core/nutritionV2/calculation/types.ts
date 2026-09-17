@@ -16,8 +16,12 @@ import type { CanonicalUnit } from '../units';
 import type { UsdaDataType } from '../usda/types';
 
 export const CALCULATION_SCHEMA = 1;
-/** Phase 3 advisory calculation contract version (part of digests/bindings). */
-export const CALCULATION_VERSION = 'usda_advisory_calc_v1';
+/**
+ * Advisory calculation contract version (part of digests/bindings).
+ * v2 (Phase 4.5C) adds volume-compatible source-portion scaling, the
+ * `user_mass` mass source, and canonical portion-semantics binding.
+ */
+export const CALCULATION_VERSION = 'usda_advisory_calc_v2';
 export const CALCULATION_CONTEXT_VERSION = 'usda_calc_context_v1';
 
 // ---------------------------------------------------------------------------
@@ -52,6 +56,7 @@ export type Phase3FailureCode =
   | 'invalid_nutrient_scope'
   | 'invalid_ingredient_input'
   | 'invalid_portion_selection'
+  | 'invalid_user_mass'
   | 'numeric_overflow'
   | 'validation_error';
 
@@ -69,6 +74,7 @@ export const PHASE3_FAILURE_MESSAGE: Readonly<Record<Phase3FailureCode, string>>
   invalid_nutrient_scope: 'phase3_invalid_nutrient_scope',
   invalid_ingredient_input: 'phase3_invalid_ingredient_input',
   invalid_portion_selection: 'phase3_invalid_portion_selection',
+  invalid_user_mass: 'phase3_invalid_user_mass',
   numeric_overflow: 'phase3_numeric_overflow',
   validation_error: 'phase3_validation_error',
 });
@@ -119,6 +125,8 @@ export interface CalculationIngredientInput {
   readonly selection?: unknown;
   /** Explicitly reviewed source-portion selection (optional). */
   readonly portion_selection?: unknown;
+  /** Explicit user-entered total ingredient-line weight (optional). */
+  readonly user_mass_selection?: unknown;
 }
 
 export interface CalculationRequest {
@@ -141,7 +149,7 @@ export type IngredientOutcome =
 
 export type MatchStatus = 'unique_exact' | 'user_confirmed' | 'none';
 
-export type MassSource = 'direct_mass' | 'source_portion';
+export type MassSource = 'direct_mass' | 'source_portion' | 'user_mass';
 
 export interface IngredientCalculationEvidence {
   readonly line_ref: string;
@@ -155,6 +163,11 @@ export interface IngredientCalculationEvidence {
   readonly record_digest?: string;
   readonly mass_source?: MassSource;
   readonly resolved_grams?: number;
+  /** Canonical portion index for a `source_portion` result. */
+  readonly portion_index?: number;
+  /** Entered total-weight quantity/unit for a `user_mass` result. */
+  readonly user_mass_quantity?: number;
+  readonly user_mass_unit?: string;
   /** Binds the ingredient identity WITHOUT any portion selection. */
   readonly ingredient_identity_digest: string;
   /** Binds the ingredient identity WITH the applied portion selection. */
@@ -211,10 +224,23 @@ export interface PortionCandidate {
   readonly gram_weight: number;
   readonly modifier?: string;
   readonly sequence?: number;
+  /** Canonical portion-semantics binding (recomputed from the raw fields). */
+  readonly semantics_version: string;
+  readonly kind: 'volume' | 'mass' | 'count' | 'unusable';
+  readonly unit: string | null;
+  /** Positive finite effective amount (raw field or explicit measure text). */
+  readonly effective_amount: number | null;
+  readonly volume_ml: number | null;
+  readonly amount_source: string;
+  /** Optional bounded descriptor (never a numeric FNDDS source code). */
+  readonly descriptor: string | null;
+  /** Safe bounded human label (e.g. `1 cup = 122 g`). */
+  readonly display_label: string;
 }
 
 export interface PortionReview {
   readonly calculation_version: string;
+  readonly portion_semantics_version: string;
   readonly bundle_release: string;
   readonly fdc_id: number;
   readonly record_digest: string;
@@ -228,6 +254,7 @@ export type PortionReviewResult =
 
 export interface PortionSelection {
   readonly calculation_version: string;
+  readonly portion_semantics_version: string;
   readonly line_ref: string;
   readonly ingredient_identity_digest: string;
   readonly bundle_release: string;
@@ -235,8 +262,34 @@ export interface PortionSelection {
   readonly record_digest: string;
   readonly candidates_digest: string;
   readonly portion_index: number;
+  /** Effective portion amount (raw field or explicit measure text). */
   readonly portion_amount: number;
   readonly measure: string;
   readonly gram_weight: number;
   readonly modifier?: string;
+  /** Recomputed semantics binding (never trusted from the caller). */
+  readonly semantics_kind: 'volume' | 'mass' | 'count' | 'unusable';
+  readonly semantics_unit: string | null;
+  readonly semantics_volume_ml: number | null;
+  readonly semantics_amount: number;
+  readonly semantics_gram_weight: number;
+}
+
+/**
+ * An explicit user-entered total weight for one recipe ingredient line. It is a
+ * separate, mutually exclusive mass source (`user_mass`); it is NOT a density.
+ * The calculator recomputes grams from `quantity` + `unit`.
+ */
+export interface UserMassSelection {
+  readonly calculation_version: string;
+  readonly line_ref: string;
+  readonly ingredient_identity_digest: string;
+  readonly bundle_release: string;
+  readonly fdc_id: number;
+  readonly record_digest: string;
+  readonly quantity: number;
+  readonly unit: 'g' | 'oz' | 'lb';
+  /** Recomputed gram value (never trusted from the caller). */
+  readonly grams: number;
+  readonly selection_digest: string;
 }

@@ -10,6 +10,7 @@
  */
 
 import { CALCULATION_VERSION } from '../calculation/types';
+import { PORTION_SEMANTICS_VERSION } from '../calculation/portionSemantics';
 import {
   phase4Failure,
   type AdvancedNutritionSession,
@@ -65,12 +66,18 @@ export function buildPortionChoice(
   if (!portions.ok) return { ok: false, failure: phase4Failure('invalid_selection') };
   const candidate = portions.review.candidates.find((entry) => entry.index === params.portionIndex);
   if (!candidate) return { ok: false, failure: phase4Failure('invalid_selection') };
-  if (candidate.amount === undefined || !(candidate.amount > 0)) {
+  if (
+    candidate.kind === 'unusable' ||
+    candidate.effective_amount === null ||
+    !(candidate.effective_amount > 0) ||
+    !(candidate.gram_weight > 0)
+  ) {
     return { ok: false, failure: phase4Failure('not_available') };
   }
 
   const selection = {
     calculation_version: CALCULATION_VERSION,
+    portion_semantics_version: PORTION_SEMANTICS_VERSION,
     line_ref: params.lineRef,
     ingredient_identity_digest: evidence.ingredient_identity_digest,
     bundle_release: dry.preview.bundle_release,
@@ -78,10 +85,15 @@ export function buildPortionChoice(
     record_digest: evidence.record_digest,
     candidates_digest: portions.review.candidates_digest,
     portion_index: candidate.index,
-    portion_amount: candidate.amount,
+    portion_amount: candidate.effective_amount,
     measure: candidate.measure,
     gram_weight: candidate.gram_weight,
     ...(candidate.modifier !== undefined ? { modifier: candidate.modifier } : {}),
+    semantics_kind: candidate.kind,
+    semantics_unit: candidate.unit,
+    semantics_volume_ml: candidate.volume_ml,
+    semantics_amount: candidate.effective_amount,
+    semantics_gram_weight: candidate.gram_weight,
   };
 
   return {

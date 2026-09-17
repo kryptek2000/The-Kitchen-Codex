@@ -38,8 +38,11 @@ export type NormalizedUnit =
   | 'l'
   | 'tsp'
   | 'tbsp'
-  | 'cup'
   | 'fl_oz'
+  | 'cup'
+  | 'pint'
+  | 'quart'
+  | 'gallon'
   | 'count'
   | 'unknown';
 
@@ -73,8 +76,17 @@ export const GRAMS_PER_LB = 453.59237;
 export const ML_PER_L = 1000;
 export const ML_PER_TSP = 4.92892159375;
 export const ML_PER_TBSP = 14.78676478125;
-export const ML_PER_CUP = 236.5882365;
 export const ML_PER_FL_OZ = 29.5735295625;
+export const ML_PER_CUP = 236.5882365;
+/**
+ * US customary larger volume units, derived RELATIONALLY from the single
+ * canonical fluid-ounce constant (1 cup = 8 fl oz, 1 pint = 16 fl oz,
+ * 1 quart = 32 fl oz, 1 gallon = 128 fl oz). There is no second, contradictory
+ * conversion table.
+ */
+export const ML_PER_PINT = 16 * ML_PER_FL_OZ;
+export const ML_PER_QUART = 32 * ML_PER_FL_OZ;
+export const ML_PER_GALLON = 128 * ML_PER_FL_OZ;
 
 /**
  * Alias / plural map: surface unit token -> canonical NormalizedUnit.
@@ -120,6 +132,15 @@ const UNIT_ALIASES: Record<string, NormalizedUnit> = {
   cup: 'cup',
   cups: 'cup',
   c: 'cup',
+  pint: 'pint',
+  pints: 'pint',
+  pt: 'pint',
+  quart: 'quart',
+  quarts: 'quart',
+  qt: 'quart',
+  gallon: 'gallon',
+  gallons: 'gallon',
+  gal: 'gallon',
   fl_oz: 'fl_oz',
   'fl oz': 'fl_oz',
   floz: 'fl_oz',
@@ -160,7 +181,17 @@ const UNIT_ALIASES: Record<string, NormalizedUnit> = {
 };
 
 const MASS_UNITS: ReadonlySet<NormalizedUnit> = new Set(['g', 'kg', 'oz', 'lb']);
-const VOLUME_UNITS: ReadonlySet<NormalizedUnit> = new Set(['ml', 'l', 'tsp', 'tbsp', 'cup', 'fl_oz']);
+const VOLUME_UNITS: ReadonlySet<NormalizedUnit> = new Set([
+  'ml',
+  'l',
+  'tsp',
+  'tbsp',
+  'fl_oz',
+  'cup',
+  'pint',
+  'quart',
+  'gallon',
+]);
 
 /**
  * Recognized count nouns (word-boundary matched so "eggplant"/"canned" do not match).
@@ -207,6 +238,12 @@ export function convertVolumeToMl(
       return amount * ML_PER_CUP;
     case 'fl_oz':
       return amount * ML_PER_FL_OZ;
+    case 'pint':
+      return amount * ML_PER_PINT;
+    case 'quart':
+      return amount * ML_PER_QUART;
+    case 'gallon':
+      return amount * ML_PER_GALLON;
     default:
       return undefined;
   }

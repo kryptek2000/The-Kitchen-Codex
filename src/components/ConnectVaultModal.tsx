@@ -290,7 +290,7 @@ export function ConnectVaultModal({
     });
     setStatusMessage({
       type: 'success',
-      text: `Vault reset to the 8 curated gourmet starter recipes!`,
+      text: `Vault reset to the 9 curated gourmet starter recipes!`,
     });
   };
 

@@ -135,7 +135,7 @@ describe('phase 4 modal — accessibility', () => {
     const load = screen.getByRole('button', { name: /Review source portions/i });
     fireEvent.click(load);
     const portionRadios = (await screen.findAllByRole('radio')).filter((radio) =>
-      /·\s*\d+(\.\d+)?\s*g/.test(radio.closest('label')?.textContent ?? '')
+      /=\s*\d+(\.\d+)?\s*g/.test(radio.closest('label')?.textContent ?? '')
     );
     expect(portionRadios.length).toBeGreaterThan(0);
     expect((portionRadios as HTMLInputElement[]).every((radio) => !radio.checked)).toBe(true);
@@ -188,5 +188,47 @@ describe('phase 4 modal — calculation flow', () => {
     const none = await screen.findByRole('radio', { name: /None of these/i });
     fireEvent.click(none);
     await waitFor(() => expect(screen.getByText(/Stale — recalculate/i)).toBeTruthy());
+  });
+});
+
+describe('phase 4.5C — US customary portions and explicit total weight', () => {
+  it('presents compatible canonical portions immediately with a semantic label', async () => {
+    render(<AdvancedNutritionCard recipe={recipe()} session={genuineSession()} />);
+    fireEvent.click(screen.getByRole('button', { name: /Open Advanced Nutrition/i }));
+    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+
+    // No second action is required to reveal the portions.
+    const portionRadios = (await screen.findAllByRole('radio')).filter((radio) =>
+      /=\s*\d+(\.\d+)?\s*g/.test(radio.closest('label')?.textContent ?? '')
+    );
+    expect(portionRadios.length).toBeGreaterThan(0);
+    // Nothing is auto-selected.
+    expect(portionRadios.every((radio) => !(radio as HTMLInputElement).checked)).toBe(true);
+    // The SR Legacy `undetermined` placeholder is never shown.
+    expect(screen.queryByText(/undetermined/i)).toBeNull();
+  });
+
+  it('offers an explicit total-weight fallback that produces user_mass evidence', async () => {
+    render(<AdvancedNutritionCard recipe={recipe()} session={genuineSession()} />);
+    fireEvent.click(screen.getByRole('button', { name: /Open Advanced Nutrition/i }));
+    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+
+    const weightInput = await screen.findByLabelText('Total weight for this ingredient line');
+    fireEvent.change(weightInput, { target: { value: '100' } });
+    fireEvent.click(screen.getByRole('button', { name: /Use this weight/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Calculate Preview/i }));
+    await screen.findByText('Advisory nutrition preview');
+
+    expect(screen.getAllByText(/user-entered total weight/i).length).toBeGreaterThan(0);
+    // A user-entered weight is never labelled as a USDA portion.
+    expect(screen.queryByText(/user-entered total weight · FDC/i)).toBeNull();
+  });
+
+  it('shows no Apply/Save control for the fallback and keeps advisory copy', async () => {
+    render(<AdvancedNutritionCard recipe={recipe()} session={genuineSession()} />);
+    fireEvent.click(screen.getByRole('button', { name: /Open Advanced Nutrition/i }));
+    const dialog = await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    const labels = Array.from(dialog.querySelectorAll('button')).map((b) => b.textContent ?? '');
+    for (const label of labels) expect(label).not.toMatch(/\bApply\b|\bSave\b|\bPersist\b|\bWrite to Vault\b/i);
   });
 });

@@ -34,6 +34,7 @@ export const INITIAL_PHASE4_STATE: Phase4State = Object.freeze({
   rows: Object.freeze([]),
   matches: Object.freeze({}),
   portions: Object.freeze({}),
+  userMasses: Object.freeze({}),
   basis: 'entire_recipe',
   selectedServings: 1,
   preview: null,
@@ -80,10 +81,13 @@ export function phase4Reducer(state: Phase4State, action: Phase4Action): Phase4S
       const matches = { ...state.matches, [action.lineRef]: action.choice };
       const portions = { ...state.portions };
       delete portions[action.lineRef];
+      const userMasses = { ...state.userMasses };
+      delete userMasses[action.lineRef];
       const next: Phase4State = {
         ...state,
         matches,
         portions,
+        userMasses,
         failure: null,
         operationSeq: state.operationSeq + 1,
       };
@@ -94,9 +98,13 @@ export function phase4Reducer(state: Phase4State, action: Phase4Action): Phase4S
       if (state.recipeKey === null) return state;
       if (!state.rows.some((row) => row.line_ref === action.lineRef)) return state;
       const portions = { ...state.portions, [action.lineRef]: action.choice };
+      // A source portion and an explicit total weight are mutually exclusive.
+      const userMasses = { ...state.userMasses };
+      delete userMasses[action.lineRef];
       const next: Phase4State = {
         ...state,
         portions,
+        userMasses,
         failure: null,
         operationSeq: state.operationSeq + 1,
       };
@@ -108,6 +116,31 @@ export function phase4Reducer(state: Phase4State, action: Phase4Action): Phase4S
       const portions = { ...state.portions };
       delete portions[action.lineRef];
       const next: Phase4State = { ...state, portions, failure: null, operationSeq: state.operationSeq + 1 };
+      return withPreviewStale(next);
+    }
+
+    case 'select_user_mass': {
+      if (state.recipeKey === null) return state;
+      if (!state.rows.some((row) => row.line_ref === action.lineRef)) return state;
+      const userMasses = { ...state.userMasses, [action.lineRef]: action.choice };
+      // Mutually exclusive with a source portion.
+      const portions = { ...state.portions };
+      delete portions[action.lineRef];
+      const next: Phase4State = {
+        ...state,
+        userMasses,
+        portions,
+        failure: null,
+        operationSeq: state.operationSeq + 1,
+      };
+      return withPreviewStale(next);
+    }
+
+    case 'clear_user_mass': {
+      if (!(action.lineRef in state.userMasses)) return state;
+      const userMasses = { ...state.userMasses };
+      delete userMasses[action.lineRef];
+      const next: Phase4State = { ...state, userMasses, failure: null, operationSeq: state.operationSeq + 1 };
       return withPreviewStale(next);
     }
 
