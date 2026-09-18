@@ -43,8 +43,12 @@ function confirmedSelection(review: any, fdcId: number) {
 }
 
 describe('phase 4 session — lexical authority encapsulation', () => {
-  it('the session module exports only the intentional factory', () => {
-    expect(Object.keys(sessionModule).sort()).toEqual(['createAdvancedNutritionSession'].sort());
+  it('the session module exports only the intentional factory and the narrow Phase 5A re-derivation capability', () => {
+    // `recomputeReviewedNutrition` is the single audited Phase 5A boundary that
+    // resolves the private authority; it exposes no registry/authority internals.
+    expect(Object.keys(sessionModule).sort()).toEqual(
+      ['createAdvancedNutritionSession', 'recomputeReviewedNutrition'].sort()
+    );
     for (const key of Object.keys(sessionModule)) {
       expect(key).not.toMatch(/register|authority|registry|retrieve|bless|token/i);
     }

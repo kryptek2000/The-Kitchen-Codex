@@ -24,6 +24,7 @@ import {
   type AdvancedNutritionSession,
   type AdaptedIngredient,
 } from '../core/nutritionV2/phase4';
+import { authorizeNutritionPersistence } from '../core/nutritionV2/phase5';
 import { AdvancedNutritionModal } from './AdvancedNutritionModal';
 
 export type AdvancedNutritionBundleUiStatus =
@@ -113,6 +114,16 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
     [preview, state.basis, state.baseServings, state.selectedServings]
   );
   const coverage = useMemo(() => (preview ? coverageSummary(preview) : null), [preview]);
+
+  // Phase 5A: report whether the current reviewed result is currently eligible
+  // for a future Apply. This NEVER writes anything and NEVER offers an Apply
+  // control; the actual user action belongs to Phase 5B.
+  const applyEligibility = useMemo(() => {
+    if (!session || !adaptation.ok || state.status !== 'preview_current' || state.preview === null) {
+      return null;
+    }
+    return authorizeNutritionPersistence({ session, recipe, state }).ok;
+  }, [session, recipe, adaptation, state]);
 
   const handleCalculate = () => {
     if (!session || !adaptation.ok) return;
@@ -285,6 +296,16 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
               <p className="text-[10px] text-gray-500 mt-1">
                 Advisory only — never presented as saved recipe data.
               </p>
+              {applyEligibility !== null && (
+                <p
+                  data-testid="advanced-nutrition-apply-eligibility"
+                  className={`text-[10px] mt-1 ${applyEligibility ? 'text-emerald-300' : 'text-amber-300'}`}
+                >
+                  {applyEligibility
+                    ? 'This reviewed result is eligible for a future Apply. Nothing is saved automatically.'
+                    : 'This reviewed result is not eligible for Apply yet.'}
+                </p>
+              )}
             </div>
           )}
 

@@ -21,6 +21,7 @@
  * Phase 2 catalog, or any blessing token/symbol/brand/key/callback/constructor.
  */
 
+import { isPlainObject } from '../schema';
 import { validateManifest } from '../usda/manifest';
 import {
   createNutritionCalculationContext,
@@ -28,6 +29,7 @@ import {
   reviewFoodPortions,
   reviewFoodCountPortions,
 } from '../calculation/context';
+import { isValidStrictServingCount } from '../calculation/servings';
 import { confirmIngredientReview, createReviewCatalog, reviewIngredient } from '../matching/review';
 import { normalizeQuery } from '../matching/normalize';
 import { parseIngredient } from '../matching/parse';
@@ -35,13 +37,27 @@ import { projectQueryText } from '../matching/query';
 import { deriveCountRequirement, type CountPortionReviewResult } from '../calculation/countPortion';
 import { phase2Failure } from '../matching/types';
 import type { ConfirmationResult, IngredientReviewResult, ReviewCatalog } from '../matching/types';
-import type { CalculationResult, NutritionCalculationContext, PortionReviewResult } from '../calculation/types';
+import type {
+  AdvisoryNutritionPreview,
+  CalculationResult,
+  NutritionCalculationContext,
+  PortionReviewResult,
+} from '../calculation/types';
+import type { NutrientId } from '../nutrients';
+import { adaptRecipe } from './adapt';
+import { buildCalculationRequest, buildReviewRows } from './rows';
+import { materializeNarrow, readOwnDataField } from './materialize';
 import {
   PHASE4_SESSION_VERSION,
   phase4Failure,
+  phase4SessionIdentity,
+  type AdaptedIngredient,
   type AdvancedNutritionSession,
   type AdvancedNutritionSessionResult,
+  type Phase4Failure,
+  type Phase4FailureCode,
   type Phase4SessionMetadata,
+  type Phase4State,
 } from './types';
 
 interface SessionAuthority {
@@ -203,4 +219,186 @@ function phase3PortionFailure() {
 
 function invalidCalculationFailure() {
   return { code: 'invalid_context' as const, message: 'phase3_invalid_context' };
+}
+
+// ---------------------------------------------------------------------------
+// Genuine authority re-derivation (for the Phase 5A Apply boundary)
+// ---------------------------------------------------------------------------
+
+/**
+ * Trusted output of a genuine Phase 4 re-derivation. It carries only bounded
+ * derived data — never the private catalog/context/records.
+ */
+export interface ReviewedNutritionRecompute {
+  readonly metadata: Phase4SessionMetadata;
+  /** Canonical authority identity of the genuine session. */
+  readonly session_identity: string;
+  readonly recipe_key: string;
+  readonly servings: number;
+  readonly preview: AdvisoryNutritionPreview;
+}
+
+export type ReviewedNutritionRecomputeResult =
+  | { ok: true; result: ReviewedNutritionRecompute }
+  | { ok: false; failure: Phase4Failure };
+
+type SelectionRead = { ok: true; value: unknown } | { ok: false; unsafe: boolean };
+
+function selectionReadFailure(result: SelectionRead): Phase4FailureCode {
+  return (result as { unsafe?: boolean }).unsafe ? 'unsafe_request' : 'invalid_request';
+}
+
+function readSelectionField(state: object, key: string): SelectionRead {
+  const field = readOwnDataField(state, key);
+  if (!field.ok) return { ok: false, unsafe: true };
+  if (!field.present || field.value === null || field.value === undefined) return { ok: true, value: {} };
+  const materialized = materializeNarrow(field.value);
+  if (!materialized.ok) return { ok: false, unsafe: materialized.unsafe };
+  if (!isPlainObject(materialized.value)) return { ok: false, unsafe: false };
+  return { ok: true, value: materialized.value };
+}
+
+/**
+ * Reads the reviewed nutrient scope from the state's preview WITHOUT
+ * materializing the whole preview. The value is an untrusted request parameter;
+ * the calculation engine validates it. Returns undefined when absent/unsafe.
+ */
+function readStateNutrientScope(state: object): unknown {
+  const previewField = readOwnDataField(state, 'preview');
+  if (!previewField.ok || !previewField.present || !isPlainObject(previewField.value)) return undefined;
+  const scopeField = readOwnDataField(previewField.value, 'nutrient_scope');
+  if (!scopeField.ok || !scopeField.present) return undefined;
+  const materialized = materializeNarrow(scopeField.value);
+  if (!materialized.ok) return undefined;
+  return materialized.value;
+}
+
+function mapCalculationCode(code: string): Phase4FailureCode {
+  switch (code) {
+    case 'invalid_servings':
+      return 'invalid_servings';
+    case 'unsafe_request':
+      return 'unsafe_request';
+    case 'invalid_context':
+      return 'invalid_session';
+    case 'validation_error':
+      return 'validation_error';
+    default:
+      return 'invalid_request';
+  }
+}
+
+/**
+ * Genuinely re-derives the current reviewed nutrition result for the EXACT
+ * receiver session. Authority is resolved through the module-private
+ * `SESSION_AUTHORITY` WeakMap, so a structural fake, clone, spread, inherited
+ * object, proxy, wrapper, primitive, or `null` is not registered and fails
+ * closed as `invalid_session` BEFORE any caller-supplied method is invoked.
+ *
+ * The recipe envelope is re-adapted through the hardened Phase 4 adapter; the
+ * state is read through guarded own-data descriptors; the calculation runs on
+ * the genuine session. Only bounded derived data (metadata + preview) is
+ * returned — never the private authority.
+ */
+export function recomputeReviewedNutrition(
+  sessionRaw: unknown,
+  recipeRaw: unknown,
+  stateRaw: unknown
+): ReviewedNutritionRecomputeResult {
+  // Resolve authority FIRST: a forged session never has its methods invoked.
+  const authority = resolveSessionAuthority(sessionRaw);
+  if (!authority) return { ok: false, failure: phase4Failure('invalid_session') };
+
+  try {
+    const session = sessionRaw as AdvancedNutritionSession;
+
+    const adaptation = adaptRecipe(recipeRaw);
+    if (!adaptation.ok) {
+      return { ok: false, failure: (adaptation as { ok: false; failure: Phase4Failure }).failure };
+    }
+    const adapted = adaptation.recipe;
+    if (!isValidStrictServingCount(adapted.base_servings)) {
+      return { ok: false, failure: phase4Failure('invalid_servings') };
+    }
+
+    if (!isPlainObject(stateRaw)) return { ok: false, failure: phase4Failure('invalid_request') };
+    const state = stateRaw;
+
+    const statusField = readOwnDataField(state, 'status');
+    if (!statusField.ok) return { ok: false, failure: phase4Failure('unsafe_request') };
+    if (statusField.value !== 'preview_current') return { ok: false, failure: phase4Failure('stale_binding') };
+
+    const recipeKeyField = readOwnDataField(state, 'recipeKey');
+    if (!recipeKeyField.ok) return { ok: false, failure: phase4Failure('unsafe_request') };
+    if (recipeKeyField.value !== adapted.recipe_key) return { ok: false, failure: phase4Failure('stale_binding') };
+
+    const sessionIdentity = phase4SessionIdentity(authority.metadata);
+    const identityField = readOwnDataField(state, 'sessionIdentity');
+    if (!identityField.ok) return { ok: false, failure: phase4Failure('unsafe_request') };
+    if (identityField.value !== sessionIdentity) {
+      return { ok: false, failure: phase4Failure('stale_binding') };
+    }
+
+    const baseServingsField = readOwnDataField(state, 'baseServings');
+    if (!baseServingsField.ok) return { ok: false, failure: phase4Failure('unsafe_request') };
+    if (baseServingsField.value !== adapted.base_servings) {
+      return { ok: false, failure: phase4Failure('stale_binding') };
+    }
+
+    const matches = readSelectionField(state, 'matches');
+    if (!matches.ok) return { ok: false, failure: phase4Failure(selectionReadFailure(matches)) };
+    const portions = readSelectionField(state, 'portions');
+    if (!portions.ok) return { ok: false, failure: phase4Failure(selectionReadFailure(portions)) };
+    const countPortions = readSelectionField(state, 'countPortions');
+    if (!countPortions.ok) return { ok: false, failure: phase4Failure(selectionReadFailure(countPortions)) };
+    const userMasses = readSelectionField(state, 'userMasses');
+    if (!userMasses.ok) return { ok: false, failure: phase4Failure(selectionReadFailure(userMasses)) };
+
+    const scope = readStateNutrientScope(state);
+
+    const rows = buildReviewRows(session, adapted.adapted as ReadonlyArray<AdaptedIngredient>);
+    const syntheticState = {
+      version: '',
+      status: 'ready',
+      recipeKey: adapted.recipe_key,
+      sessionIdentity,
+      baseServings: adapted.base_servings,
+      rows,
+      matches: matches.value,
+      portions: portions.value,
+      countPortions: countPortions.value,
+      userMasses: userMasses.value,
+      basis: 'entire_recipe',
+      selectedServings: adapted.base_servings,
+      preview: null,
+      previewKey: null,
+      failure: null,
+      operationSeq: 0,
+    } as unknown as Phase4State;
+
+    const baseRequest = buildCalculationRequest(
+      adapted.adapted as ReadonlyArray<AdaptedIngredient>,
+      syntheticState
+    ) as { servings: number; nutrient_scope: ReadonlyArray<NutrientId>; ingredients: unknown };
+    const request = { ...baseRequest, ...(scope !== undefined ? { nutrient_scope: scope } : {}) };
+
+    const calculated = session.calculate(request);
+    if (!calculated.ok) {
+      const code = (calculated as { ok: false; failure: { code: string } }).failure.code;
+      return { ok: false, failure: phase4Failure(mapCalculationCode(code)) };
+    }
+
+    return {
+      ok: true,
+      result: {
+        metadata: authority.metadata,
+        session_identity: sessionIdentity,
+        recipe_key: adapted.recipe_key,
+        servings: adapted.base_servings,
+        preview: calculated.preview,
+      },
+    };
+  } catch {
+    return { ok: false, failure: phase4Failure('validation_error') };
+  }
 }

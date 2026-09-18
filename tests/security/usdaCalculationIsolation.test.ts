@@ -24,8 +24,10 @@ import { buildCalculationBundle, CALC_FOODS } from '../fixtures/usdaCalculationF
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '../..');
 const CALCULATION_DIR = resolve(ROOT, 'src/core/nutritionV2/calculation');
-/** The explicit, newly allowed Phase 4 review/display boundary. */
+/** The explicit, allowed Phase 4 review/display boundary. */
 const PHASE4_DIR = resolve(ROOT, 'src/core/nutritionV2/phase4');
+/** The explicit, allowed Phase 5A Apply-authorization boundary (build-only). */
+const PHASE5_DIR = resolve(ROOT, 'src/core/nutritionV2/phase5');
 
 function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
@@ -223,14 +225,15 @@ describe('phase 3 calculation — isolation and purity', () => {
     }
   });
 
-  it('is imported ONLY by the explicit Phase 4 review/display boundary', () => {
+  it('is imported ONLY by the explicit Phase 4 and Phase 5A boundaries', () => {
     const productionRoots = [resolve(ROOT, 'src'), resolve(ROOT, 'server')];
     const offenders: string[] = [];
     const importRe = /(?:from|import)\s*(?:\(\s*)?\s*['"]([^'"]+)['"]/g;
     for (const root of productionRoots) {
       for (const file of listFiles(root)) {
         if (file.startsWith(CALCULATION_DIR)) continue;
-        if (file.startsWith(PHASE4_DIR)) continue; // the one allowed path
+        if (file.startsWith(PHASE4_DIR)) continue; // allowed Phase 4 review/display path
+        if (file.startsWith(PHASE5_DIR)) continue; // allowed Phase 5A build-only path
         const source = readFileSync(file, 'utf8');
         let match: RegExpExecArray | null;
         importRe.lastIndex = 0;
@@ -260,6 +263,22 @@ describe('phase 3 calculation — isolation and purity', () => {
       }
     }
     expect(phase4Importers).toBeGreaterThan(0);
+
+    // Positive control: the Phase 5A boundary DOES import the Phase 3 contracts.
+    let phase5Importers = 0;
+    for (const file of listFiles(PHASE5_DIR)) {
+      const source = readFileSync(file, 'utf8');
+      let match: RegExpExecArray | null;
+      importRe.lastIndex = 0;
+      while ((match = importRe.exec(source)) !== null) {
+        const resolved = resolveProjectSpecifier(file, match[1]);
+        if (resolved && resolved.startsWith(CALCULATION_DIR)) {
+          phase5Importers += 1;
+          break;
+        }
+      }
+    }
+    expect(phase5Importers).toBeGreaterThan(0);
 
     expect(readFileSync(resolve(ROOT, 'src/core/nutritionV2/index.ts'), 'utf8')).not.toMatch(/calculation/i);
     expect(readFileSync(resolve(ROOT, 'src/core/index.ts'), 'utf8')).not.toMatch(/calculation/i);

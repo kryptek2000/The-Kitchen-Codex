@@ -12,9 +12,14 @@ query-role projection, anchor/contradiction/qualifier ranking, bounded culinary
 aliases, and the hamburger acceptance corpus), plus Phase 4.5E (authenticated
 count-portion resolution: the derived-mass contract, a closed count-identity
 vocabulary, explicit size constraints, ambiguity handling, and full bypass
-resistance)**. No network route or live API is used, and there is no Apply action
-or automatic persistence. Machine application of advanced nutrition remains
-disabled. Phase 4.5E still performs no persistence, no Apply, and never invents a
+resistance), plus Phase 5A (an isolated Apply-authorization boundary that
+reconstructs a canonical schema-v1 `codex_nutrition` persistence candidate from
+genuine current authority and returns a closed AUTHORIZED / NOT AUTHORIZED
+result)**. No network route or live API is used, and there is no Apply action or
+automatic persistence. Phase 5A constructs and validates an in-memory candidate
+only: it writes nothing, offers no Apply control, and machine application of
+advanced nutrition remains disabled pending the explicit Phase 5B write.
+Phase 4.5E still performs no persistence, no Apply, and never invents a
 count-to-mass conversion (it uses only authenticated USDA source portions).
 
 Phase 1 adds a trusted, offline, key-free USDA FoodData Central contract: a
@@ -42,8 +47,10 @@ card, a full-screen review modal, explicit ingredient-match and source-portion
 review, deterministic basis/serving views, nutrient groups, nutrient-specific
 coverage, ingredient evidence, and accessible/responsive interaction. It is a
 DISPLAY layer only: it never writes `codex_nutrition`, modifies frontmatter, or
-authorizes machine application. Phase 5 (explicit Apply/persistence) and Phase 6
-(Vault Intelligence integration) remain unimplemented.
+authorizes machine application. Phase 5A adds an isolated, build-only Apply
+authorization boundary (§22) that constructs and validates the persistence
+candidate without writing it. Phase 5B (explicit Apply/safe vault writes) and
+Phase 6 (Vault Intelligence integration) remain unimplemented.
 
 This is the canonical architecture document for Advanced Nutrition (target
 v0.10.0). It records the trusted-source plan, the schema-v1 contract, the
@@ -477,8 +484,18 @@ enable machine-generated nutrition application.
   explicit selection, deterministic unique resolution, and full bypass
   resistance. Still no density table, no invented count weight, no persistence,
   no Apply. Audit gate: count-portion correctness review.
-- **Phase 5A — pure persistence construction.** Future: construct an in-memory
-  `codex_nutrition` block from an advisory preview without any write.
+- **Phase 5A — Apply authorization and persistence-candidate construction.**
+  DONE (offline, isolated, build-only): a pure, platform-neutral authorization
+  boundary that reconstructs the exact reviewed result from the genuine Phase 4
+  session and current reviewed state, emits a canonical schema-v1
+  `codex_nutrition` candidate (entire-recipe totals only), and returns a closed
+  AUTHORIZED / NOT AUTHORIZED result with bounded, input-redacted failures.
+  Authority is resolved through the module-private Phase 4 `SESSION_AUTHORITY`
+  WeakMap for the exact receiver, so a structurally-complete forged session
+  fails closed before any caller method is invoked. Stale authority fails
+  closed; a caller-supplied nutrition object is never authority; an opaque
+  future schema is never authorized for overwrite. No write, no Apply control.
+  Audit gate: authorization + provenance review.
 - **Phase 5B — explicit Apply and safe vault writes.** Future: all-or-nothing
   Apply, provenance bound to applied values, stale invalidation, vault-safe
   Markdown/frontmatter writes. Audit gate: persistence + migration review.
@@ -2574,3 +2591,233 @@ Nutrition & Macros/AI estimator is not consolidated here.
 
 **Phase 4.5E still performs no persistence, no Apply, and never invents a
 count-to-mass conversion.**
+
+---
+
+## 22. Phase 5A — Apply authorization and persistence-candidate construction
+
+Phase 5A establishes the trusted boundary between the advisory Phase 3/4
+calculation and the future Phase 5B Apply/write. It is **isolated, pure,
+platform-neutral, and build-only**: it constructs and validates an in-memory
+`codex_nutrition` persistence candidate and returns a closed authorization
+result. It writes nothing and exposes no Apply control.
+
+```
+current authenticated authority
+  (genuine Phase 4 session + re-adapted recipe + current reviewed state)
+    -> deterministic re-derivation of the exact reviewed result
+    -> canonical schema-v1 `codex_nutrition` candidate (entire-recipe totals)
+    -> final schema validation + canonical encode gate
+    -> AUTHORIZED { candidate, identity, mode } | NOT AUTHORIZED { bounded reason }
+```
+
+Module: `src/core/nutritionV2/phase5/` (`types.ts`, `authorize.ts`, `index.ts`).
+It is intentionally NOT re-exported from the public `nutritionV2`/`core` barrels.
+
+### 22.1 Trust boundary
+
+A caller-supplied nutrition object is **never** authority, and a caller-supplied
+session object is **never** authenticated structurally. The candidate is
+reconstructed exclusively through the genuine Phase 4 session boundary
+(`recomputeReviewedNutrition`), which resolves the module-private
+`SESSION_AUTHORITY` WeakMap for the exact receiver and fails closed for any
+structural fake, clone, spread, inherited object, proxy, wrapper, primitive, or
+`null` **before invoking any caller-supplied method**. It uses:
+
+- the **genuine Phase 4 session** (lexically private authority; resolved only
+  for the exact receiver);
+- the **raw recipe**, re-adapted through the hardened Phase 4 `adaptRecipe`
+  boundary (never read directly);
+- the **current reviewed state**, read through guarded own-data descriptors; and
+- a **fresh advisory calculation** through the genuine session.
+
+Phase 5A itself never calls `session.metadata()`, `session.calculate()`,
+`session.reviewIngredient()`, `session.reviewPortions()`, or any other method on
+the caller-supplied session object; it only passes the object to the genuine
+Phase 4 capability, which proves possession of the private registration.
+
+The caller's preview is used only as a **stale-detection binding**: it must match
+the fresh re-derivation on every authoritative scalar
+(`calculation_schema`, `calculation_version`, `bundle_release`, `catalog_digest`,
+`nutrient_map_version`, `servings`, `status`, `ingredient_digest`, `basis`, and
+the canonical `nutrient_scope`). Totals are a deterministic function of the
+ingredient digest + scope + servings, so this is a complete staleness proof. The
+emitted block is always built from the **recomputed** preview, never from the
+caller's preview.
+
+### 22.2 Persistence-candidate builder
+
+The builder maps the recomputed `AdvisoryNutritionPreview` onto schema v1:
+
+- `basis` is always `total`; **entire-recipe totals only** (per-serving values
+  remain derived at display time and are never persisted);
+- `status` is the calculation status (`complete` / `partial` / `unresolved`);
+- `computed_at` is set once by the builder from an explicit timestamp seam (or a
+  single default clock read); a caller-supplied block/timestamp is never copied;
+- `servings` is the recipe's authoritative serving denominator (the adapted
+  `base_servings`), validated with the existing strict serving rules;
+- `nutrient_scope` is the exact canonical scope the current calculation
+  attempted (never widened, never zero-filled);
+- `nutrients` carries only present totals; a missing nutrient stays absent, and
+  an explicit source-reported zero stays zero;
+- `sources` is `['usda_fdc']` and `source_releases.usda_fdc` is the
+  authenticated bundle release currently in authority;
+- `ingredients` carries one traceable evidence record per **resolved**
+  ingredient (`source_food_id` = the authenticated FDC id, `source_release` = the
+  authenticated release, `match_status: 'confirmed'`, `resolved: true`,
+  `user_confirmed: true`, and a canonical gram `amount`), with `conversion_basis`
+  `direct_mass` for direct mass, `source_portion` for source/count portions, and
+  omitted for a user-entered total weight (schema v1 has no `user_mass` basis, so
+  it is never mislabelled — see §22.11);
+- `unresolved` carries the calculation's unresolved references with the closed
+  reason vocabulary.
+
+The persisted `match_status: 'confirmed'` / `resolved: true` /
+`user_confirmed: true` triple means **"this evidence was part of the explicit
+reviewed result authorized for a future Apply"**, not necessarily "the original
+Phase 3 match required a manual click". A deterministic unique-exact match and a
+manually confirmed match both become resolved evidence once the user explicitly
+reviews and authorizes the result (§22.12).
+
+### 22.3 Authorization result
+
+A closed union (never throws):
+
+- **AUTHORIZED** — `{ candidate: { identity, block, encoded } }`, where `block`
+  is the canonical validated schema-v1 block, `encoded` is the frontmatter-ready
+  whole-block replacement unit, and `identity` binds the authorization-contract
+  version, recipe key, session identity, calculation/context/bundle/catalog
+  identity, the reviewed `ingredient_digest`, the serving denominator, the
+  create/replace mode, and a `candidate_digest` over the canonical encoded block.
+- **NOT AUTHORIZED** — a fixed, bounded, input-redacted failure code from the
+  closed set `stale_preview`, `invalid_servings`, `unresolved_authority`,
+  `schema_invalid`, `calculation_mismatch`, `unknown_future_schema`,
+  `unsafe_request`, `invalid_request`, `validation_error`. Attacker-controlled
+  values are never echoed.
+
+### 22.4 Stale rejection
+
+Authorization fails closed when any dependency changed since the reviewed
+preview was produced. Because the builder re-derives from current authority and
+requires an exact binding match, a change to ingredient text/order/quantity/unit,
+explicit size, selected food, portion/count-portion/user-mass selection, serving
+denominator, bundle release, catalog identity, eligibility policy, calculation or
+context version, or session identity all yield a different re-derivation and are
+rejected (`stale_preview` / `calculation_mismatch`). A `preview_stale` status, a
+missing preview, or a `recipe_key`/`session_identity`/`baseServings` mismatch is
+rejected directly. Nothing is silently refreshed: a stale result requires a new
+calculation/review cycle.
+
+### 22.5 Whole-block replacement semantics
+
+When the current recipe already carries a recognized schema-v1 block, the
+authorization reports `mode: 'replace'` (an absent block reports `mode: 'create'`)
+so Phase 5B can distinguish create from replace. The candidate is always a
+**whole new block** — nutrient maps are never merged piecemeal — and unrelated
+frontmatter is untouched (Phase 5A performs no write at all).
+
+### 22.6 Unknown-future-schema protection
+
+A stored block with an unknown numeric `schema` is decoded as bounded opaque safe
+data. Phase 5A **fails closed** (`unknown_future_schema`) rather than authorizing
+an overwrite, and never drops or interprets the future-schema data. Malformed
+recognized data also fails closed (`schema_invalid`) rather than being silently
+replaced.
+
+### 22.7 Final schema validation gate
+
+Before returning an authorized candidate, Phase 5A (1) constructs the block from
+the recomputed authority, (2) runs `validateCodexNutritionV1`, (3) canonical
+encodes it with `encodeCodexNutrition` (proving serializability and the 64 KiB
+UTF-8 serialized-byte bound), and (4) computes a canonical `candidate_digest`.
+Any validation failure rejects the candidate. Phase 5B can therefore treat the
+Phase 5A output as the **only** permitted source for `codex_nutrition`.
+
+### 22.8 No-write isolation
+
+Phase 5A contains no path that writes recipe Markdown, YAML/frontmatter, vault
+files, File System Access handles, `localStorage`, `IndexedDB`, Cache Storage,
+service-worker storage, or backend storage. It performs no network call and no
+provider call. The Advanced Nutrition UI may display a bounded "eligible for a
+future Apply" / "not eligible" indicator, but there is **no Apply/Save/Persist
+control** and no automatic persistence. The centralized machine-application
+disable (`canApplyNutritionEstimate` / `advancedNutritionApplicationAuthorization`)
+remains in force.
+
+### 22.9 Deferred Phase 5B responsibilities
+
+Phase 5A deliberately does **not** implement the actual write. Phase 5B still
+owns: the explicit user Apply action; re-proving the candidate identity
+immediately before the write; all-or-nothing vault-safe Markdown/frontmatter
+replacement; preserving unrelated frontmatter; and the create-vs-replace
+decision. Phase 5C (consolidation) and Phase 6 (Vault Intelligence) also remain
+unimplemented.
+
+### 22.10 Genuine session authority (independent-audit repair)
+
+An independent audit found that an earlier Phase 5A draft authenticated the
+Phase 4 session **structurally**: a caller could manufacture a structurally
+complete fake session (plausible `metadata()`, `calculate()`, `reviewIngredient()`,
+…) and obtain `ok: true` with attacker-chosen totals. That is repaired by moving
+the authority-sensitive re-derivation behind the Phase 4 private session
+boundary.
+
+The single audited capability is
+`recomputeReviewedNutrition(session, recipe, state)` in
+`src/core/nutritionV2/phase4/session.ts` — the one lexical module that owns the
+module-private `SESSION_AUTHORITY` WeakMap. It:
+
+1. resolves `SESSION_AUTHORITY.get(session)` for the **exact receiver** and fails
+   closed with `invalid_session` for any fake/clone/spread/inherited
+   object/proxy/wrapper/primitive/`null` — **before** invoking any method on the
+   supplied object;
+2. re-adapts the raw recipe through the hardened Phase 4 adapter;
+3. reads the current reviewed state through guarded own-data descriptors;
+4. runs a fresh advisory calculation on the genuine session; and
+5. returns only bounded derived data (`metadata`, `session_identity`,
+   `recipe_key`, `servings`, `preview`) — never the private catalog, context,
+   records, WeakMap, or a forgeable boolean/token/symbol.
+
+Phase 5A maps a failed re-derivation to `unresolved_authority` (or the
+appropriate closed code) and never mints a candidate or identity. The proof
+derives from **possession of the genuine Phase 4 session object**, not from
+`instanceof`, object shape, method names, symbols, constructor/prototype names,
+metadata consistency, or a recomputable public digest. Proxy wrapping and
+`Object.create(genuineSession)` are deliberately **not** treated as genuine.
+
+### 22.11 `user_mass` provenance — documented schema-v1 limitation
+
+For a `user_mass` line (an explicitly user-entered total ingredient weight),
+Phase 5A persists the resolved gram `amount` with **no `conversion_basis`**. This
+is deliberate:
+
+- schema v1 permits only `direct_mass` and `source_portion`; it cannot faithfully
+  preserve that the mass was explicitly supplied by the user;
+- Phase 5A therefore does not pretend the value is `direct_mass` (which would
+  falsely imply the ingredient text supplied the mass) or `source_portion` (which
+  would falsely imply an authenticated USDA portion supplied it);
+- provenance fidelity for explicit user-entered mass is a **known schema-v1
+  limitation**; a dedicated `user_mass` provenance marker/conversion basis
+  requires a **future schema revision**;
+- Phase 5B must **not** silently reinterpret a missing `conversion_basis` as
+  `direct_mass`, `source_portion`, or USDA-derived.
+
+A focused test asserts the user-mass evidence is never mislabelled.
+
+### 22.12 Audit notes accepted without code change
+
+- **Persisted evidence semantics (NOTE 3).** `match_status: 'confirmed'` +
+  `resolved: true` + `user_confirmed: true` denote "part of the explicit reviewed
+  result authorized for future Apply", not "the original match required a manual
+  click". A deterministic unique-exact match and a manually confirmed match are
+  both persisted this way; the schema-v1 validator requires this shape for
+  resolved evidence, and Phase 5A does not redesign it.
+- **`computedAt` test seam (NOTE 4).** The optional `computedAt` request field is
+  a deterministic timestamp seam. The production UI does not pass it; the builder
+  validates it (bounded ISO-8601, `MAX_TIMESTAMP_LENGTH`) and falls back to a
+  single clock read. It cannot influence authority: the block is rebuilt from the
+  genuine preview and the identity is bound to the canonical candidate digest.
+- **Unknown top-level request fields (NOTE 5).** Extra request fields are ignored
+  (they are never authority); no broad unknown-field rejection was added.
+
+**Phase 5A performs no persistence, no Apply, and no vault/Markdown write.**
