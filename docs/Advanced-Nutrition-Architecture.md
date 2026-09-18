@@ -15,12 +15,15 @@ vocabulary, explicit size constraints, ambiguity handling, and full bypass
 resistance), plus Phase 5A (an isolated Apply-authorization boundary that
 reconstructs a canonical schema-v1 `codex_nutrition` persistence candidate from
 genuine current authority and returns a closed AUTHORIZED / NOT AUTHORIZED
-result)**. No network route or live API is used, and there is no Apply action or
-automatic persistence. Phase 5A constructs and validates an in-memory candidate
-only: it writes nothing, offers no Apply control, and machine application of
-advanced nutrition remains disabled pending the explicit Phase 5B write.
-Phase 4.5E still performs no persistence, no Apply, and never invents a
-count-to-mass conversion (it uses only authenticated USDA source portions).
+result), plus Phase 5B (an explicit, user-triggered Apply that immediately
+re-proves the Phase 5A authorization at the write boundary and performs a
+vault-safe whole-block `codex_nutrition` create/replace through the existing
+recipe write path)**. No network route or live API is used. Phase 5A remains
+pure/build-only (it writes nothing). Phase 5B is the ONLY Advanced Nutrition
+surface permitted to persist, and only on an explicit user Apply: there is no
+automatic, background, or on-open persistence. Phase 4.5E still performs no
+persistence, no Apply, and never invents a count-to-mass conversion (it uses only
+authenticated USDA source portions).
 
 Phase 1 adds a trusted, offline, key-free USDA FoodData Central contract: a
 strict release manifest, a defensive adapter for the **actual pinned download
@@ -496,12 +499,16 @@ enable machine-generated nutrition application.
   closed; a caller-supplied nutrition object is never authority; an opaque
   future schema is never authorized for overwrite. No write, no Apply control.
   Audit gate: authorization + provenance review.
-- **Phase 5B — explicit Apply and safe vault writes.** Future: all-or-nothing
-  Apply, provenance bound to applied values, stale invalidation, vault-safe
-  Markdown/frontmatter writes. Audit gate: persistence + migration review.
+- **Phase 5B — explicit Apply and safe vault writes.** DONE (application-layer,
+  write boundary): one explicit user-triggered Apply that immediately re-proves
+  the Phase 5A authorization at the write boundary, performs a whole-block
+  `codex_nutrition` create/replace through the existing recipe write path,
+  preserves unrelated frontmatter, fails closed on stale/forged/unknown/malformed
+  input, and verifies the persisted block post-write. No automatic/background
+  persistence. Audit gate: persistence + migration review.
 - **Phase 5C — consolidation of the existing Nutrition & Macros experience.**
   Future: fold the existing simple Nutrition & Macros/AI estimator into the
-  Advanced Nutrition model under explicit user intent.
+  Advanced Nutrition model under explicit user intent. [DEFERRED]
 - **Phase 6 — Vault Intelligence integration (separate explicit approval).**
   Single-recipe review first; bulk remains disabled.
 
@@ -2821,3 +2828,157 @@ A focused test asserts the user-mass evidence is never mislabelled.
   (they are never authority); no broad unknown-field rejection was added.
 
 **Phase 5A performs no persistence, no Apply, and no vault/Markdown write.**
+
+---
+
+## 23. Phase 5B — explicit Apply and vault-safe whole-block persistence
+
+Phase 5B is the first Advanced Nutrition phase permitted to write
+`codex_nutrition`. It adds one explicit, user-triggered Apply action and a
+write/commit boundary that consumes the genuine Phase 5A authorization. It is NOT
+a second calculator: it never maps nutrients, provenance, digests, or schema, and
+it never accepts caller-supplied nutrition as authority.
+
+Module: `src/application/advancedNutritionApply.ts` (application layer; no direct
+File System Access / storage / network / provider API). The Phase 5A core
+(`src/core/nutritionV2/phase5/`) stays pure/no-write and is NOT re-exported from
+the public core barrels.
+
+### 23.1 Explicit Apply only
+
+Persistence happens ONLY when the user clicks Apply and then confirms. The
+coordinator is invoked exclusively by that action. There is:
+
+- no automatic persistence on modal/card open, on calculation, or on
+  match/portion/basis/serving changes;
+- no background/timer/observer write surface;
+- no write when the reviewed result is not eligible (the control is disabled);
+- no duplicate write while an Apply is in flight.
+
+### 23.2 Immediate pre-write re-proof (the central rule)
+
+Immediately before the write, the coordinator re-runs
+`authorizeNutritionPersistence` from the CURRENT genuine Phase 4 session + current
+recipe + current reviewed state + current existing block. Only the candidate
+returned by that fresh authorization is written. A cached UI eligibility result
+is never trusted; any authority mutation between the eligibility render and Apply
+fails closed as `stale_authorization`.
+
+The genuine-session repair from §22.10 is preserved end to end: a structurally
+fake session, a Proxy of a genuine session, `Object.create(genuineSession)`,
+copied metadata, or copied method references all fail closed before any write.
+
+### 23.3 TOCTOU protection
+
+The write-time re-authorization plus a create/replace mode cross-check catches
+every dependency mutation between check and use: ingredient text/order/quantity/
+unit/size, servings, selected match, source/count portion, user mass,
+confirmation, bundle/catalog/eligibility identity, calculation/context version,
+session identity, existing block content, and create<->replace mode changes. The
+UI additionally passes the mode it displayed; a change of the stored block's mode
+before the write fails closed. No write occurs on any mismatch.
+
+### 23.4 Create vs. replace (whole-block)
+
+The Phase 5A mode is authoritative:
+
+- **create** — the recipe has no `codex_nutrition`; exactly one canonical
+  schema-v1 block is added;
+- **replace** — the recipe has a recognized valid schema-v1 block; the ENTIRE
+  `codex_nutrition` slot is replaced.
+
+Nutrients, sources, evidence, unresolved entries, and source releases are never
+merged piecemeal. The update is expressed as a whole-block assignment on the
+serialized recipe, so the canonical serializer emits one complete block.
+
+### 23.5 Unknown future schema and malformed existing block
+
+Before authorizing, the coordinator decodes the current raw block:
+
+- an opaque unknown future schema fails closed (`unknown_future_schema`) and is
+  never overwritten, dropped, reinterpreted, or downgraded;
+- a malformed recognized schema-v1 block fails closed (`invalid_existing_block`)
+  and is never silently replaced or "repaired".
+
+No write occurs in either case.
+
+### 23.6 Existing writer reuse
+
+The actual persistence is injected as a `write` port. The browser shell supplies
+the SAME authoritative recipe write path the editor uses
+(`saveRecipeWithVaultAdapter` when a vault is connected; the established
+disconnected download fallback otherwise). Phase 5B does not create a parallel
+file-writing subsystem and never touches File System Access, IndexedDB, or the
+vault directly. Path identity, Markdown serialization, YAML/frontmatter
+handling, live vault sync, and error handling all remain owned by that path.
+
+### 23.7 Atomic / fail-closed semantics
+
+- The updated recipe is serialized BEFORE the write; a serialization failure
+  (`serialization_failed`) never reaches the writer.
+- The in-memory recipe is committed ONLY after the canonical write succeeds.
+- A writer failure returns `write_failed`; the prior canonical state is intact.
+- There is no intentional multi-step partial mutation and no partial nutrient
+  merge. Browser File System Access does not provide true filesystem atomicity;
+  the repository's established write pattern (serialize fully, then
+  create-writable/write/close, with best-effort abort) is preserved, and this
+  limitation is documented honestly.
+
+### 23.8 Post-write success behavior
+
+When a vault is connected, the coordinator re-reads the persisted Markdown and
+verifies it decodes as recognized schema v1 whose canonical encoding matches the
+just-authorized candidate digest (`post_write_verification_failed` otherwise).
+After success the shell commits the updated recipe through the existing canonical
+recipe update/sync mechanism (no second source of truth). The UI reports a
+bounded success message and the recipe reflects the persisted block. A missing or
+unwritable target fails closed (`unavailable_write_target`) without a partial
+write.
+
+### 23.9 Apply result (closed, bounded)
+
+`applyAdvancedNutrition` never throws and returns either
+`{ ok: true, result: { mode, candidate_digest, authorization_version, recipe_key } }`
+or `{ ok: false, failure: { code, message } }` with a closed code from
+`not_authorized`, `stale_authorization`, `unknown_future_schema`,
+`invalid_existing_block`, `serialization_failed`, `write_failed`,
+`post_write_verification_failed`, `unsafe_request`, `unavailable_write_target`.
+Messages are fixed, bounded, and never echo caller/exception content. The result
+makes create/replace, the written candidate digest, the authorization version,
+and the recipe identity auditable; no separate audit log, telemetry, or network
+reporting is added.
+
+### 23.10 UI behavior
+
+The Apply control is a real accessible button inside the Advanced Nutrition
+review surface. It is enabled only when the current reviewed result is eligible;
+it is disabled while ineligible or in flight; it requires an explicit
+confirmation that distinguishes create from replace ("add a saved block" vs
+"replace the existing saved block"); and it shows bounded success/failure
+feedback. It is not visually dominant and does not submit unrelated forms. The
+control is absent when no write handler is wired (e.g. plugin mode).
+
+### 23.11 `user_mass` limitation preserved
+
+Phase 5B writes the Phase 5A candidate EXACTLY. It does not reinterpret a missing
+`conversion_basis` (the accepted user-mass limitation from §22.11) as
+`direct_mass` or `source_portion`, does not add schema-v1 `user_mass`, and does
+not silently upgrade the schema.
+
+### 23.12 Phase 5A purity retained / plugin mode
+
+The Phase 5A core remains pure and write-free; all write authority lives in the
+application coordinator and the existing vault writer. The Obsidian plugin shell
+renders `RecipeWorkspace`, which does not include Advanced Nutrition, so no Apply
+control is exposed there (write integration for the plugin is intentionally
+deferred, not broken). No USDA dataset payload is bundled into the plugin.
+
+### 23.13 Deferred Phase 5C responsibilities
+
+Phase 5C remains out of scope: the existing simple Nutrition & Macros / AI
+estimator is NOT consolidated, legacy/simple nutrition is NOT removed or
+migrated, schema v1 is NOT redesigned, and Vault Intelligence behavior is NOT
+added. An independent audit/release review is still required.
+
+**Phase 5B persists ONLY on an explicit user Apply, re-proves Phase 5A authority
+immediately before the write, and performs a whole-block vault-safe update.**

@@ -17,6 +17,7 @@
  * adapters, or raw platform APIs (vaultFileSystem/vaultAssets/etc.).
  */
 export * from './adapters';
+export * from './advancedNutritionApply';
 export * from './askMyKitchenUi';
 export * from './createAppServices';
 export * from './vaultRecipe';

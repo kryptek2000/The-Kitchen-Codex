@@ -41,7 +41,10 @@ import {
   resumeTimer,
   migrateLegacyTimer,
   upsertTimer,
+  applyAdvancedNutrition,
+  ADVANCED_NUTRITION_APPLY_UI_MESSAGE,
 } from './application';
+import { resolveRecipeVaultPath } from './core/vaultPath';
 import {
   createBrowserSettingsAdapter,
   createBrowserNetworkAdapter,
@@ -79,6 +82,11 @@ import { VaultHeader } from './components/VaultHeader';
 import { RecipeFilterBar } from './components/RecipeFilterBar';
 import { RecipeCard } from './components/RecipeCard';
 import { RecipeDetailView } from './components/RecipeDetailView';
+import type {
+  AdvancedNutritionApplyHandler,
+  AdvancedNutritionApplyHandlerArgs,
+  AdvancedNutritionApplyUiResult,
+} from './components/AdvancedNutritionCard';
 import { DataviewTableView } from './components/DataviewTableView';
 import { MealPlannerView } from './components/MealPlannerView';
 import { ShoppingListView } from './components/ShoppingListView';
@@ -682,6 +690,53 @@ export default function App() {
     }
     setRecipes((prev) => upsertCanonicalRecipe(prev, updatedRecipe));
     setSelectedRecipe((prev) => (prev && sameCanonicalRecipeIdentity(prev, updatedRecipe) ? updatedRecipe : prev));
+  };
+
+  // Phase 5B: explicit Advanced Nutrition Apply. The application write
+  // coordinator re-authorizes from genuine Phase 4 authority immediately before
+  // the write; this shell only supplies the SAME authoritative recipe write path
+  // the editor uses, plus an optional post-write re-read when a vault is connected.
+  const handleApplyAdvancedNutrition: AdvancedNutritionApplyHandler = async (
+    args: AdvancedNutritionApplyHandlerArgs
+  ): Promise<AdvancedNutritionApplyUiResult> => {
+    const result = await applyAdvancedNutrition({
+      session: args.session,
+      recipe: args.recipe,
+      state: args.state,
+      expectedMode: args.expectedMode,
+      write: async (updated: ObsidianRecipe) => {
+        if (vaultAdapter) {
+          await saveRecipeWithVaultAdapter(vaultAdapter, updated);
+        } else {
+          await saveRecipeToVaultFile(updated, undefined);
+        }
+        // Commit in-memory state ONLY after the canonical write succeeded.
+        setRecipes((prev) => upsertCanonicalRecipe(prev, updated));
+        setSelectedRecipe((prev) =>
+          prev && sameCanonicalRecipeIdentity(prev, updated) ? updated : prev
+        );
+      },
+      ...(vaultAdapter
+        ? {
+            readBack: async (updated: ObsidianRecipe) =>
+              vaultAdapter.readText(resolveRecipeVaultPath(updated)),
+          }
+        : {}),
+    });
+
+    if (result.ok) {
+      return {
+        ok: true,
+        mode: result.result.mode,
+        message:
+          result.result.mode === 'replace'
+            ? 'Advanced Nutrition was replaced and saved to your recipe.'
+            : 'Advanced Nutrition was saved to your recipe.',
+      };
+    }
+    const failureCode = (result as { ok: false; failure: { code: keyof typeof ADVANCED_NUTRITION_APPLY_UI_MESSAGE } })
+      .failure.code;
+    return { ok: false, message: ADVANCED_NUTRITION_APPLY_UI_MESSAGE[failureCode] };
   };
 
   // Save or Create a Vault Note (e.g. ingredient or technique created from wikilink modal)
@@ -1359,6 +1414,7 @@ export default function App() {
             advancedNutritionSession={advancedNutritionBundle.session}
             advancedNutritionBundleStatus={advancedNutritionBundle.status}
             onLoadAdvancedNutritionBundle={advancedNutritionBundle.load}
+            onApplyAdvancedNutrition={handleApplyAdvancedNutrition}
           />
         ) : activeTab === 'grid' ? (
           /* Recipe Gallery View */

@@ -30,6 +30,8 @@ const ADVANCED_NAMESPACE = resolve(ROOT, 'src/core/nutritionV2');
  * lengths for its bounded same-origin fetch; it does not expose Phase 1 records.
  */
 const PHASE45B_BROWSER_LOADER = resolve(ROOT, 'src/browser/advancedNutritionBundle.ts');
+/** The audited Phase 5B application write coordinator (reuses the canonical digest). */
+const PHASE5B_APPLY_MODULE = resolve(ROOT, 'src/application/advancedNutritionApply.ts');
 
 function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
@@ -140,6 +142,7 @@ describe('usda phase 1 — no network, no keys, no persistence', () => {
       for (const file of listFiles(root)) {
         if (file.startsWith(ADVANCED_NAMESPACE)) continue; // Phases 1–4 are internal
         if (file === PHASE45B_BROWSER_LOADER) continue; // Phase 4.5B runtime loader (audited)
+        if (file === PHASE5B_APPLY_MODULE) continue; // Phase 5B Apply coordinator (audited)
         const source = readFileSync(file, 'utf8');
         let match: RegExpExecArray | null;
         importRe.lastIndex = 0;
@@ -172,6 +175,11 @@ describe('usda phase 1 — no network, no keys, no persistence', () => {
 
     // Positive control: the audited Phase 4.5B loader DOES import the lock.
     expect(readFileSync(PHASE45B_BROWSER_LOADER, 'utf8')).toMatch(/USDA_BUNDLE_RELEASE_LOCK/);
+
+    // Positive control: the audited Phase 5B coordinator DOES import the
+    // canonical Phase 1 digest (never a private USDA record/store surface).
+    expect(readFileSync(PHASE5B_APPLY_MODULE, 'utf8')).toMatch(/nutritionV2\/usda\/digest/);
+    expect(readFileSync(PHASE5B_APPLY_MODULE, 'utf8')).not.toMatch(/nutritionV2\/usda\/(store|adapter|record|raw)/);
   });
 
   it('is not re-exported from the Phase 0 / core barrels', () => {

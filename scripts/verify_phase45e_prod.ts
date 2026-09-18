@@ -363,8 +363,12 @@ async function main(): Promise<void> {
     // 6. No restaurant-chain candidate anywhere.
     record('no restaurant-chain candidate appears anywhere', !CHAIN_PATTERN.test(dialogText));
 
-    // 7. No Apply/Save/Persist action.
-    record('no Apply/Save/Persist action exists', !/\bApply\b|\bSave\b|\bPersist\b|Write to Vault/i.test(dialogText));
+    // 7. Phase 5B adds an EXPLICIT Apply control; there is still no automatic
+    // Save/Persist/Write action, and no write occurs without an explicit click.
+    record(
+      'an explicit Apply control exists with no automatic Save/Persist action',
+      /\bApply\b/i.test(dialogText) && !/\bSave\b|\bPersist\b|Write to Vault/i.test(dialogText)
+    );
     record('no codex_nutrition is constructed', !(await evaluate(cdp, `document.body.innerText.includes('codex_nutrition')`)));
 
     // 8. No external request; fixed same-origin bundle assets.

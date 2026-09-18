@@ -112,8 +112,12 @@ const WRITE_TOKENS = [
 
 const SECRET_TOKENS = [/api[_-]?key/i, /GEMINI_API_KEY/, /api\.data\.gov/];
 
-/** The UI must never present an Apply/Save/Persist control. */
-const FORBIDDEN_CONTROL_LABELS = /\b(Apply|Save|Persist|Write to Vault|Update Recipe)\b/i;
+/**
+ * Phase 5B intentionally adds ONE explicit "Apply" control. Save/Persist/
+ * Write-to-Vault/Update-Recipe labels remain forbidden; the actual write
+ * authority is proven by the Phase 5B isolation suite.
+ */
+const FORBIDDEN_CONTROL_LABELS = /\b(Save|Persist|Write to Vault|Update Recipe)\b/i;
 
 describe('phase 5A isolation — source purity', () => {
   it('contains no network, secret, or write token', () => {
@@ -225,11 +229,12 @@ describe('phase 5A isolation — dependency graph direction', () => {
   });
 });
 
-describe('phase 5A isolation — no Apply UI and no write authority', () => {
-  it('the Advanced Nutrition UI offers no Apply/Save/Persist control', () => {
+describe('phase 5A isolation — explicit Apply UI with no write authority', () => {
+  it('the Advanced Nutrition UI offers no Save/Persist/Write-to-Vault control', () => {
     for (const { file, source } of COMPONENT_SOURCES) {
       const stripped = stripComments(source);
-      // No control label in button text or aria-label.
+      // No forbidden control label in button text or aria-label. The single
+      // explicit "Apply" control (Phase 5B) is allowed.
       const buttonTexts = [...stripped.matchAll(/<button[\s\S]*?<\/button>/g)].map((m) => m[0]);
       for (const button of buttonTexts) {
         expect(button, `${file} has a forbidden control`).not.toMatch(FORBIDDEN_CONTROL_LABELS);

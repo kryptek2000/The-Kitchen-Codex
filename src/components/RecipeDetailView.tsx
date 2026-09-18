@@ -40,7 +40,11 @@ import { assessRecipeHealth } from '../utils/vaultIntelligence';
 import { nutritionForRequestedServings } from '../utils/nutrition';
 import { buildRecipeRelationshipIndex, recipeIdentity } from '../utils/recipeRelationships';
 import { RecipeNutritionCard } from './RecipeNutritionCard';
-import { AdvancedNutritionCard, type AdvancedNutritionBundleUiStatus } from './AdvancedNutritionCard';
+import {
+  AdvancedNutritionCard,
+  type AdvancedNutritionApplyHandler,
+  type AdvancedNutritionBundleUiStatus,
+} from './AdvancedNutritionCard';
 import type { AdvancedNutritionSession } from '../core/nutritionV2/phase4';
 import { WikilinkPreviewModal } from './WikilinkPreviewModal';
 import { RecipeRelationshipsPanel } from './RecipeRelationshipsPanel';
@@ -80,6 +84,8 @@ interface RecipeDetailViewProps {
   /** Phase 4.5B lazy local-bundle state + explicit load (browser shell only). */
   advancedNutritionBundleStatus?: AdvancedNutritionBundleUiStatus;
   onLoadAdvancedNutritionBundle?: () => void;
+  /** Explicit Phase 5B Apply handler (browser shell only). */
+  onApplyAdvancedNutrition?: AdvancedNutritionApplyHandler;
 }
 
 export function RecipeDetailView({
@@ -102,6 +108,7 @@ export function RecipeDetailView({
   advancedNutritionSession = null,
   advancedNutritionBundleStatus,
   onLoadAdvancedNutritionBundle,
+  onApplyAdvancedNutrition,
 }: RecipeDetailViewProps) {
   const [currentServings, setCurrentServings] = useState<number>(recipe.servings || 4);
   const [activeViewMode, setActiveViewMode] = useState<'visual' | 'markdown'>('visual');
@@ -620,6 +627,7 @@ export function RecipeDetailView({
                 servings={currentServings}
                 bundleStatus={advancedNutritionBundleStatus}
                 onLoadBundle={onLoadAdvancedNutritionBundle}
+                onApplyAdvancedNutrition={onApplyAdvancedNutrition}
               />
 
               <div className="bg-[#141414] rounded-2xl border border-white/5 p-5 shadow-xs">

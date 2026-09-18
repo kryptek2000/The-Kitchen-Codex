@@ -29,6 +29,24 @@ import {
   type Phase4State,
 } from '../core/nutritionV2/phase4';
 
+/** Apply status shown by the explicit Phase 5B control. */
+export type AdvancedNutritionApplyStatus = 'idle' | 'confirming' | 'applying' | 'success' | 'error';
+
+/**
+ * The explicit Apply control state. It is a UI view model only: the actual write
+ * coordinator lives in the application layer and is invoked through the card's
+ * `onApplyAdvancedNutrition` prop. Never an automatic write.
+ */
+export interface AdvancedNutritionApplyUi {
+  readonly eligible: boolean | null;
+  readonly mode: 'create' | 'replace' | null;
+  readonly status: AdvancedNutritionApplyStatus;
+  readonly message: string | null;
+  readonly onRequest: () => void;
+  readonly onConfirm: () => void;
+  readonly onCancel: () => void;
+}
+
 interface AdvancedNutritionModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -40,6 +58,8 @@ interface AdvancedNutritionModalProps {
   dispatch: React.Dispatch<Phase4Action>;
   onCalculate: () => void;
   calculating: boolean;
+  /** Explicit Apply control (Phase 5B). Absent when no write path is wired. */
+  apply?: AdvancedNutritionApplyUi;
 }
 
 const OUTCOME_LABEL: Record<string, string> = {
@@ -449,6 +469,7 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
   dispatch,
   onCalculate,
   calculating,
+  apply,
 }) => {
   const { dialogRef, onKeyDown } = useDialogFocus(isOpen, onClose);
 
@@ -791,10 +812,81 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
               <p className="text-[10px] text-gray-500 flex items-start gap-1.5">
                 <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                 <span>
-                  This advisory preview is derived from a pinned local USDA dataset. It is not saved to
-                  the recipe, is not medical advice, and does not claim complete nutritional coverage.
+                  This advisory preview is derived from a pinned local USDA dataset. It is not saved
+                  unless you explicitly Apply it, is not medical advice, and does not claim complete
+                  nutritional coverage.
                 </span>
               </p>
+
+              {apply && (
+                <section
+                  aria-label="Apply advanced nutrition"
+                  className="space-y-2 border-t border-white/10 pt-3"
+                >
+                  <h3 className="text-xs font-bold text-white">Apply advanced nutrition</h3>
+                  {apply.status === 'success' && apply.message && (
+                    <p role="status" className="text-[11px] text-emerald-300">
+                      {apply.message}
+                    </p>
+                  )}
+                  {apply.status === 'error' && apply.message && (
+                    <p role="alert" className="text-[11px] text-amber-300">
+                      {apply.message}
+                    </p>
+                  )}
+
+                  {apply.status === 'confirming' ? (
+                    <div className="p-3 rounded-xl bg-amber-950/30 border border-amber-800/40 text-[11px] text-amber-100 space-y-2">
+                      <p>
+                        {apply.mode === 'replace'
+                          ? 'Apply will replace the existing saved Advanced Nutrition block on this recipe.'
+                          : 'Apply will add a saved Advanced Nutrition block to this recipe.'}
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={apply.onConfirm}
+                          className="px-3 py-1.5 rounded-lg text-xs font-semibold text-black bg-amber-400 hover:bg-amber-300 transition-colors"
+                        >
+                          Confirm Apply
+                        </button>
+                        <button
+                          type="button"
+                          onClick={apply.onCancel}
+                          className="px-3 py-1.5 rounded-lg text-xs font-medium text-gray-200 bg-white/5 hover:bg-white/10 border border-white/10 transition-colors"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-[10px] text-gray-500">
+                        Writes one canonical Advanced Nutrition block; nothing else is changed.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={apply.onRequest}
+                        disabled={apply.eligible !== true || apply.status === 'applying'}
+                        aria-disabled={apply.eligible !== true || apply.status === 'applying'}
+                        className="px-3.5 py-1.5 rounded-lg text-xs font-semibold text-emerald-200 bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      >
+                        {apply.status === 'applying'
+                          ? 'Applying…'
+                          : apply.mode === 'replace'
+                            ? 'Apply and replace saved nutrition'
+                            : 'Apply to recipe'}
+                      </button>
+                    </div>
+                  )}
+
+                  {apply.eligible !== true && apply.status !== 'applying' && apply.status !== 'confirming' && (
+                    <p className="text-[10px] text-amber-300">
+                      Apply is unavailable until the reviewed result is eligible.
+                    </p>
+                  )}
+                </section>
+              )}
             </section>
           )}
 

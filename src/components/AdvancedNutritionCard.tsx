@@ -23,9 +23,10 @@ import {
   readStoredBlock,
   type AdvancedNutritionSession,
   type AdaptedIngredient,
+  type Phase4State,
 } from '../core/nutritionV2/phase4';
 import { authorizeNutritionPersistence } from '../core/nutritionV2/phase5';
-import { AdvancedNutritionModal } from './AdvancedNutritionModal';
+import { AdvancedNutritionModal, type AdvancedNutritionApplyUi } from './AdvancedNutritionModal';
 
 export type AdvancedNutritionBundleUiStatus =
   | 'idle'
@@ -33,6 +34,29 @@ export type AdvancedNutritionBundleUiStatus =
   | 'ready'
   | 'failed'
   | 'unsupported';
+
+/** Arguments for the explicit Phase 5B Apply handler (owned by the shell). */
+export interface AdvancedNutritionApplyHandlerArgs {
+  readonly session: AdvancedNutritionSession;
+  readonly recipe: ObsidianRecipe;
+  readonly state: Phase4State;
+  readonly expectedMode: 'create' | 'replace';
+}
+
+export interface AdvancedNutritionApplyUiResult {
+  readonly ok: boolean;
+  readonly mode?: 'create' | 'replace';
+  readonly message: string;
+}
+
+/**
+ * The explicit Apply handler. The shell (App) implements it with the application
+ * write coordinator + the existing vault write path. The card only renders the
+ * control and the result; it never writes anything itself.
+ */
+export type AdvancedNutritionApplyHandler = (
+  args: AdvancedNutritionApplyHandlerArgs
+) => Promise<AdvancedNutritionApplyUiResult>;
 
 interface AdvancedNutritionCardProps {
   recipe: ObsidianRecipe;
@@ -42,7 +66,16 @@ interface AdvancedNutritionCardProps {
   bundleStatus?: AdvancedNutritionBundleUiStatus;
   /** Explicit user-triggered load. Absent when no loader is wired. */
   onLoadBundle?: () => void;
+  /** Explicit Phase 5B Apply handler. Absent when no write path is wired. */
+  onApplyAdvancedNutrition?: AdvancedNutritionApplyHandler;
 }
+
+type ApplyUiState =
+  | { readonly kind: 'idle' }
+  | { readonly kind: 'confirming'; readonly mode: 'create' | 'replace' }
+  | { readonly kind: 'applying' }
+  | { readonly kind: 'success'; readonly message: string }
+  | { readonly kind: 'error'; readonly message: string };
 
 const NO_INGREDIENTS: ReadonlyArray<AdaptedIngredient> = Object.freeze([]);
 
@@ -51,9 +84,11 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
   session = null,
   bundleStatus,
   onLoadBundle,
+  onApplyAdvancedNutrition,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [calculating, setCalculating] = useState(false);
+  const [applyState, setApplyState] = useState<ApplyUiState>({ kind: 'idle' });
   const [state, dispatch] = useReducer(phase4Reducer, INITIAL_PHASE4_STATE);
   const pendingOpen = useRef(false);
   const openerRef = useRef<HTMLButtonElement | null>(null);
@@ -116,14 +151,57 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
   const coverage = useMemo(() => (preview ? coverageSummary(preview) : null), [preview]);
 
   // Phase 5A: report whether the current reviewed result is currently eligible
-  // for a future Apply. This NEVER writes anything and NEVER offers an Apply
-  // control; the actual user action belongs to Phase 5B.
+  // for an explicit Apply. This NEVER writes anything. An opaque/malformed
+  // existing block is never eligible (Apply must not replace it).
   const applyEligibility = useMemo(() => {
     if (!session || !adaptation.ok || state.status !== 'preview_current' || state.preview === null) {
       return null;
     }
+    if (stored.kind === 'opaque') return false;
     return authorizeNutritionPersistence({ session, recipe, state }).ok;
-  }, [session, recipe, adaptation, state]);
+  }, [session, recipe, adaptation, state, stored.kind]);
+
+  const applyMode: 'create' | 'replace' | null =
+    stored.kind === 'v1' ? 'replace' : stored.kind === 'none' ? 'create' : null;
+
+  const handleRequestApply = () => {
+    if (!onApplyAdvancedNutrition || applyEligibility !== true || applyMode === null) return;
+    if (applyState.kind === 'applying' || applyState.kind === 'confirming') return;
+    setApplyState({ kind: 'confirming', mode: applyMode });
+  };
+
+  const handleConfirmApply = async () => {
+    if (!onApplyAdvancedNutrition || !session || !adaptation.ok) return;
+    if (applyState.kind !== 'confirming') return;
+    const expectedMode = applyState.mode;
+    setApplyState({ kind: 'applying' });
+    try {
+      const result = await onApplyAdvancedNutrition({ session, recipe, state, expectedMode });
+      setApplyState(
+        result.ok
+          ? { kind: 'success', message: result.message }
+          : { kind: 'error', message: result.message }
+      );
+    } catch {
+      setApplyState({ kind: 'error', message: 'Advanced Nutrition could not be applied.' });
+    }
+  };
+
+  const handleCancelApply = () => {
+    setApplyState((current) => (current.kind === 'confirming' ? { kind: 'idle' } : current));
+  };
+
+  const applyUi: AdvancedNutritionApplyUi | undefined = onApplyAdvancedNutrition
+    ? {
+        eligible: applyEligibility,
+        mode: applyMode,
+        status: applyState.kind,
+        message: applyState.kind === 'success' || applyState.kind === 'error' ? applyState.message : null,
+        onRequest: handleRequestApply,
+        onConfirm: handleConfirmApply,
+        onCancel: handleCancelApply,
+      }
+    : undefined;
 
   const handleCalculate = () => {
     if (!session || !adaptation.ok) return;
@@ -348,6 +426,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
           dispatch={dispatch}
           onCalculate={handleCalculate}
           calculating={calculating}
+          apply={applyUi}
         />
       )}
     </div>
