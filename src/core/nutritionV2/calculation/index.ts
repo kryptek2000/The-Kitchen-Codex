@@ -14,4 +14,5 @@ export * from './numeric';
 export * from './servings';
 export * from './dailyValues';
 export * from './mass';
+export * from './countPortion';
 export * from './context';

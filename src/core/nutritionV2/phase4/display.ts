@@ -202,6 +202,12 @@ export function ingredientEvidenceViews(
         mass_source: entry.mass_source,
         resolved_grams: entry.resolved_grams,
         portion_index: entry.portion_index,
+        count_ingredient_amount: entry.count_ingredient_amount,
+        count_portion_amount: entry.count_portion_amount,
+        count_gram_weight: entry.count_gram_weight,
+        count_unit: entry.count_unit,
+        count_size: entry.count_size,
+        count_deterministic: entry.count_deterministic,
         user_mass_quantity: entry.user_mass_quantity,
         user_mass_unit: entry.user_mass_unit,
         contributing_nutrients: entry.contributing_nutrients,
@@ -220,6 +226,10 @@ export function massSourceLabel(entry: IngredientEvidenceView): string {
       return 'direct mass';
     case 'source_portion':
       return entry.fdc_id !== undefined ? `USDA source portion · FDC ${entry.fdc_id}` : 'USDA source portion';
+    case 'count_portion':
+      return entry.fdc_id !== undefined
+        ? `USDA count portion · FDC ${entry.fdc_id}`
+        : 'USDA count portion';
     case 'user_mass':
       return entry.user_mass_quantity !== undefined && entry.user_mass_unit !== undefined
         ? `user-entered total weight · ${entry.user_mass_quantity} ${entry.user_mass_unit}`
@@ -227,6 +237,27 @@ export function massSourceLabel(entry: IngredientEvidenceView): string {
     default:
       return 'no mass';
   }
+}
+
+/**
+ * Bounded derivation math for an authenticated count-portion result, e.g.
+ * `8 slices × 28 g per slice = 224 g`. Returns undefined for any other source.
+ */
+export function countDerivationLabel(entry: IngredientEvidenceView): string | undefined {
+  if (entry.mass_source !== 'count_portion') return undefined;
+  if (
+    entry.count_ingredient_amount === undefined ||
+    entry.count_portion_amount === undefined ||
+    entry.count_gram_weight === undefined ||
+    entry.resolved_grams === undefined
+  ) {
+    return undefined;
+  }
+  const unit = entry.count_unit ?? entry.count_size ?? 'portion';
+  const ingredientLabel = `${entry.count_ingredient_amount} ${unit}${
+    entry.count_ingredient_amount === 1 ? '' : 's'
+  }`;
+  return `${ingredientLabel} × ${entry.count_gram_weight} g per ${unit} = ${entry.resolved_grams} g`;
 }
 
 /** Formats a derived amount for display; `—` for missing, never `0`. */

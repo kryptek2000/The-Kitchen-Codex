@@ -61,7 +61,14 @@ describe('phase 4 session — lexical authority encapsulation', () => {
     expect(metadata.catalog_digest).toMatch(/^[0-9a-f]{64}$/);
     // The session object exposes only its bounded operations.
     expect(Object.keys(result.session).sort()).toEqual(
-      ['calculate', 'confirmMatch', 'metadata', 'reviewIngredient', 'reviewPortions'].sort()
+      [
+        'calculate',
+        'confirmMatch',
+        'metadata',
+        'reviewCountPortions',
+        'reviewIngredient',
+        'reviewPortions',
+      ].sort()
     );
   });
 
@@ -287,6 +294,7 @@ describe('phase 4 request builder — no implicit selection', () => {
     const state = phase4Reducer(INITIAL_PHASE4_STATE, {
       type: 'initialize',
       recipeKey: 'k#1',
+      sessionIdentity: 'k-session',
       rows,
       baseServings: 1,
     });
@@ -306,6 +314,7 @@ describe('phase 4 request builder — no implicit selection', () => {
     let state = phase4Reducer(INITIAL_PHASE4_STATE, {
       type: 'initialize',
       recipeKey: 'k#1',
+      sessionIdentity: 'k-session',
       rows,
       baseServings: 1,
     });
@@ -329,6 +338,7 @@ describe('phase 4 request builder — no implicit selection', () => {
     const state = phase4Reducer(INITIAL_PHASE4_STATE, {
       type: 'initialize',
       recipeKey: 'k#2',
+      sessionIdentity: 'k-session',
       rows,
       baseServings: 1,
     });

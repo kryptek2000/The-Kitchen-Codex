@@ -19,6 +19,7 @@ import {
   PHASE4_STATE_VERSION,
   phase4Failure,
   type BasisMode,
+  type CountPortionChoice,
   type MatchChoice,
   type Phase4Action,
   type Phase4Row,
@@ -30,10 +31,12 @@ export const INITIAL_PHASE4_STATE: Phase4State = Object.freeze({
   version: PHASE4_STATE_VERSION,
   status: 'unavailable',
   recipeKey: null,
+  sessionIdentity: null,
   baseServings: 1,
   rows: Object.freeze([]),
   matches: Object.freeze({}),
   portions: Object.freeze({}),
+  countPortions: Object.freeze({}),
   userMasses: Object.freeze({}),
   basis: 'entire_recipe',
   selectedServings: 1,
@@ -55,12 +58,22 @@ function isValidBaseServings(value: unknown): value is number {
 export function phase4Reducer(state: Phase4State, action: Phase4Action): Phase4State {
   switch (action.type) {
     case 'initialize': {
-      if (state.recipeKey === action.recipeKey) return state;
+      // Re-initialization is a no-op ONLY when both the recipe identity AND the
+      // authoritative session identity are unchanged. If the session authority
+      // changes while the recipe key stays identical, every selection and the
+      // preview are invalidated.
+      if (
+        state.recipeKey === action.recipeKey &&
+        state.sessionIdentity === action.sessionIdentity
+      ) {
+        return state;
+      }
       const baseServings = isValidBaseServings(action.baseServings) ? action.baseServings : 1;
       return {
         ...INITIAL_PHASE4_STATE,
         status: 'ready',
         recipeKey: action.recipeKey,
+        sessionIdentity: action.sessionIdentity,
         baseServings,
         selectedServings: baseServings,
         rows: action.rows,
@@ -81,12 +94,15 @@ export function phase4Reducer(state: Phase4State, action: Phase4Action): Phase4S
       const matches = { ...state.matches, [action.lineRef]: action.choice };
       const portions = { ...state.portions };
       delete portions[action.lineRef];
+      const countPortions = { ...state.countPortions };
+      delete countPortions[action.lineRef];
       const userMasses = { ...state.userMasses };
       delete userMasses[action.lineRef];
       const next: Phase4State = {
         ...state,
         matches,
         portions,
+        countPortions,
         userMasses,
         failure: null,
         operationSeq: state.operationSeq + 1,
@@ -98,12 +114,15 @@ export function phase4Reducer(state: Phase4State, action: Phase4Action): Phase4S
       if (state.recipeKey === null) return state;
       if (!state.rows.some((row) => row.line_ref === action.lineRef)) return state;
       const portions = { ...state.portions, [action.lineRef]: action.choice };
-      // A source portion and an explicit total weight are mutually exclusive.
+      // Mass sources are mutually exclusive.
+      const countPortions = { ...state.countPortions };
+      delete countPortions[action.lineRef];
       const userMasses = { ...state.userMasses };
       delete userMasses[action.lineRef];
       const next: Phase4State = {
         ...state,
         portions,
+        countPortions,
         userMasses,
         failure: null,
         operationSeq: state.operationSeq + 1,
@@ -119,17 +138,48 @@ export function phase4Reducer(state: Phase4State, action: Phase4Action): Phase4S
       return withPreviewStale(next);
     }
 
+    case 'select_count_portion': {
+      if (state.recipeKey === null) return state;
+      if (!state.rows.some((row) => row.line_ref === action.lineRef)) return state;
+      const countPortions = { ...state.countPortions, [action.lineRef]: action.choice };
+      // Mass sources are mutually exclusive.
+      const portions = { ...state.portions };
+      delete portions[action.lineRef];
+      const userMasses = { ...state.userMasses };
+      delete userMasses[action.lineRef];
+      const next: Phase4State = {
+        ...state,
+        countPortions,
+        portions,
+        userMasses,
+        failure: null,
+        operationSeq: state.operationSeq + 1,
+      };
+      return withPreviewStale(next);
+    }
+
+    case 'clear_count_portion': {
+      if (!(action.lineRef in state.countPortions)) return state;
+      const countPortions = { ...state.countPortions };
+      delete countPortions[action.lineRef];
+      const next: Phase4State = { ...state, countPortions, failure: null, operationSeq: state.operationSeq + 1 };
+      return withPreviewStale(next);
+    }
+
     case 'select_user_mass': {
       if (state.recipeKey === null) return state;
       if (!state.rows.some((row) => row.line_ref === action.lineRef)) return state;
       const userMasses = { ...state.userMasses, [action.lineRef]: action.choice };
-      // Mutually exclusive with a source portion.
+      // Mutually exclusive with the other mass sources.
       const portions = { ...state.portions };
       delete portions[action.lineRef];
+      const countPortions = { ...state.countPortions };
+      delete countPortions[action.lineRef];
       const next: Phase4State = {
         ...state,
         userMasses,
         portions,
+        countPortions,
         failure: null,
         operationSeq: state.operationSeq + 1,
       };
@@ -203,5 +253,6 @@ export type {
   Phase4Row,
   MatchChoice,
   PortionChoice,
+  CountPortionChoice,
   BasisMode,
 };

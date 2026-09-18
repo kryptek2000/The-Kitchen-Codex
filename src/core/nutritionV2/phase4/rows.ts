@@ -156,6 +156,12 @@ export function ingredientMeasurementKind(entry: AdaptedIngredient): Measurement
   return parsed.ok ? parsed.parsed.measurement_kind : 'unknown';
 }
 
+/** The parsed count amount of an adapted ingredient, or null when absent. */
+export function ingredientCountAmount(entry: AdaptedIngredient): number | null {
+  const parsed = parseIngredient(entry.ingredient);
+  return parsed.ok ? parsed.parsed.amount : null;
+}
+
 function selectionFor(choice: MatchChoice): unknown {
   if (choice.kind === 'candidate') {
     return { kind: 'candidate', fdc_id: choice.fdc_id, review_digest: choice.review_digest };
@@ -180,6 +186,7 @@ export function buildCalculationRequest(
       const row = rowByRef.get(entry.line_ref);
       const choice = state.matches[entry.line_ref];
       const portion = state.portions[entry.line_ref];
+      const countPortion = state.countPortions[entry.line_ref];
       const userMass = state.userMasses[entry.line_ref];
       const confirmed = row !== undefined && row.outcome === 'review_required' && choice !== undefined;
       return {
@@ -187,6 +194,7 @@ export function buildCalculationRequest(
         ingredient: entry.ingredient,
         ...(confirmed ? { review: row.review, selection: selectionFor(choice) } : {}),
         ...(portion ? { portion_selection: portion.selection } : {}),
+        ...(countPortion ? { count_portion_selection: countPortion.selection } : {}),
         ...(userMass ? { user_mass_selection: userMass.selection } : {}),
       };
     }),

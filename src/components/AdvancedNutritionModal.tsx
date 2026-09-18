@@ -7,13 +7,16 @@ import {
   PHASE4_USER_MASS_LABEL,
   PHASE4_USER_MASS_NOTE,
   basisLabel,
+  buildCountPortionChoice,
   buildPortionChoice,
   buildUserMassChoice,
   candidatePortionCompatibility,
+  countDerivationLabel,
   coverageSummary,
   deriveDisplayNutrients,
   formatAmount,
   formatDailyValue,
+  ingredientCountAmount,
   ingredientEvidenceViews,
   ingredientMeasurementKind,
   ingredientNeedsPortion,
@@ -117,6 +120,17 @@ interface PortionCandidateView {
   readonly display_label: string;
 }
 
+interface CountPortionCandidateView {
+  readonly index: number;
+  readonly measure: string;
+  readonly modifier?: string;
+  readonly amount: number;
+  readonly gram_weight: number;
+  readonly unit: string | null;
+  readonly size: string | null;
+  readonly display_label: string;
+}
+
 interface PortionControlsProps {
   row: Phase4Row;
   fdcId: number;
@@ -135,14 +149,20 @@ const PortionControls: React.FC<PortionControlsProps> = ({
   adapted,
 }) => {
   const [candidates, setCandidates] = useState<ReadonlyArray<PortionCandidateView> | null>(null);
+  const [countReview, setCountReview] = useState<{
+    readonly applicable: boolean;
+    readonly candidates: ReadonlyArray<CountPortionCandidateView>;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [weightQty, setWeightQty] = useState('');
   const [weightUnit, setWeightUnit] = useState<'g' | 'oz' | 'lb'>('g');
   const current = state.portions[row.line_ref];
+  const currentCount = state.countPortions[row.line_ref];
   const currentUserMass = state.userMasses[row.line_ref];
   const matchChoice = state.matches[row.line_ref];
   const entry = adapted.find((item) => item.line_ref === row.line_ref);
   const measurementKind = entry ? ingredientMeasurementKind(entry) : 'unknown';
+  const countAmount = entry ? ingredientCountAmount(entry) : null;
 
   const load = useCallback(() => {
     setError(null);
@@ -155,12 +175,29 @@ const PortionControls: React.FC<PortionControlsProps> = ({
     setCandidates(result.review.candidates as unknown as ReadonlyArray<PortionCandidateView>);
   }, [session, fdcId]);
 
+  const loadCount = useCallback(() => {
+    if (!entry) {
+      setCountReview({ applicable: false, candidates: [] });
+      return;
+    }
+    const result = session.reviewCountPortions(entry.ingredient, fdcId);
+    if (!result.ok) {
+      setCountReview({ applicable: false, candidates: [] });
+      return;
+    }
+    setCountReview({
+      applicable: result.review.applicable,
+      candidates: result.review.candidates as unknown as ReadonlyArray<CountPortionCandidateView>,
+    });
+  }, [session, fdcId, entry]);
+
   // Compatible canonical portions are presented immediately after a food is
   // selected; no second action is required to reveal them. The button remains as
   // a manual refresh. Nothing is auto-selected.
   useEffect(() => {
     load();
-  }, [load]);
+    loadCount();
+  }, [load, loadCount]);
 
   const selectionForChoice = () => {
     if (row.outcome === 'review_required' && matchChoice) {
@@ -189,6 +226,24 @@ const PortionControls: React.FC<PortionControlsProps> = ({
     dispatch({ type: 'select_portion', lineRef: row.line_ref, choice: result.choice });
   };
 
+  const chooseCount = (portionIndex: number) => {
+    setError(null);
+    if (!entry) return;
+    const result = buildCountPortionChoice(session, {
+      lineRef: row.line_ref,
+      ingredient: entry.ingredient,
+      review: row.outcome === 'review_required' ? row.review : undefined,
+      selection: selectionForChoice(),
+      fdcId,
+      portionIndex,
+    });
+    if (!result.ok) {
+      setError('That count portion cannot be applied. No mass can be derived from it.');
+      return;
+    }
+    dispatch({ type: 'select_count_portion', lineRef: row.line_ref, choice: result.choice });
+  };
+
   const confirmUserMass = () => {
     setError(null);
     if (!entry) return;
@@ -208,8 +263,69 @@ const PortionControls: React.FC<PortionControlsProps> = ({
     dispatch({ type: 'select_user_mass', lineRef: row.line_ref, choice: result.choice });
   };
 
+  const countApplicable = countReview?.applicable === true;
+  const countCandidates = countReview?.candidates ?? [];
+  const countDistinct = new Set(countCandidates.map((candidate) => `${candidate.amount}:${candidate.gram_weight}`));
+  const countDeterministic = countCandidates.length > 0 && countDistinct.size === 1;
+  const deterministicCandidate = countDeterministic ? countCandidates[0] : null;
+  const deterministicUnit = deterministicCandidate?.unit ?? deterministicCandidate?.size ?? 'portion';
+  const deterministicTotal =
+    deterministicCandidate && countAmount !== null
+      ? (countAmount / deterministicCandidate.amount) * deterministicCandidate.gram_weight
+      : undefined;
+
   return (
     <div className="mt-2 pl-3 border-l border-white/10 space-y-3">
+      {countApplicable ? (
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <h4 className="text-[11px] font-semibold text-gray-300">USDA count portions</h4>
+            {currentCount && (
+              <span className="text-[11px] text-emerald-300 font-medium">Count portion selected</span>
+            )}
+          </div>
+          {error && (
+            <p role="alert" className="text-[11px] text-amber-300">
+              {error}
+            </p>
+          )}
+          {countCandidates.length === 0 && (
+            <p className="text-[11px] text-gray-500">
+              No compatible authenticated count portion for this food. Count mass stays unresolved.
+            </p>
+          )}
+          {deterministicCandidate && deterministicTotal !== undefined && countAmount !== null && (
+            <p className="text-[11px] text-emerald-300">
+              {countAmount} {deterministicUnit}
+              {countAmount === 1 ? '' : 's'} × {deterministicCandidate.gram_weight} g per{' '}
+              {deterministicUnit} = {deterministicTotal} g
+              <span className="text-gray-400"> · deterministic (applied automatically)</span>
+            </p>
+          )}
+          {!countDeterministic && countCandidates.length > 0 && (
+            <fieldset className="space-y-1">
+              <legend className="text-[11px] text-gray-400">
+                Choose an authenticated count portion for {row.original_text}
+              </legend>
+              {countCandidates.map((candidate) => (
+                <label
+                  key={candidate.index}
+                  className="flex items-start gap-2 text-[11px] text-gray-200 cursor-pointer"
+                >
+                  <input
+                    type="radio"
+                    name={`count-portion-${row.line_ref}`}
+                    checked={currentCount?.portion_index === candidate.index}
+                    onChange={() => chooseCount(candidate.index)}
+                    className="mt-0.5"
+                  />
+                  <span>{candidate.display_label}</span>
+                </label>
+              ))}
+            </fieldset>
+          )}
+        </div>
+      ) : (
       <div className="space-y-1">
         <div className="flex items-center gap-2">
           <h4 className="text-[11px] font-semibold text-gray-300">USDA source portions</h4>
@@ -269,6 +385,7 @@ const PortionControls: React.FC<PortionControlsProps> = ({
           </fieldset>
         )}
       </div>
+      )}
 
       <div className="space-y-1">
         <div className="flex items-center gap-2">
@@ -647,6 +764,7 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                         {' · '}
                         {massSourceLabel(entry)}
                         {entry.resolved_grams !== undefined ? ` → ${entry.resolved_grams} g` : ''}
+                        {countDerivationLabel(entry) ? ` · ${countDerivationLabel(entry)}` : ''}
                         {entry.user_confirmed ? ' · user-confirmed' : ''}
                       </li>
                     ))}

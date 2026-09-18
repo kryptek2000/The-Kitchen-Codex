@@ -23,9 +23,13 @@ export const CALCULATION_SCHEMA = 1;
  * v3 (Phase 4.5D) binds the home-recipe-eligible catalog membership and the
  * eligibility/query-projection versions; stale v2 portion/user-mass selections
  * and previews are rejected rather than reused.
+ * v4 (Phase 4.5E) adds authenticated count-portion resolution (the
+ * `count_portion` mass source and the count-portion contract version); stale v3
+ * portion/count/user-mass selections and previews are rejected rather than
+ * reused.
  */
-export const CALCULATION_VERSION = 'usda_advisory_calc_v3';
-export const CALCULATION_CONTEXT_VERSION = 'usda_calc_context_v2';
+export const CALCULATION_VERSION = 'usda_advisory_calc_v4';
+export const CALCULATION_CONTEXT_VERSION = 'usda_calc_context_v3';
 
 // ---------------------------------------------------------------------------
 // Bounds
@@ -133,6 +137,8 @@ export interface CalculationIngredientInput {
   readonly selection?: unknown;
   /** Explicitly reviewed source-portion selection (optional). */
   readonly portion_selection?: unknown;
+  /** Explicitly reviewed authenticated count-portion selection (optional). */
+  readonly count_portion_selection?: unknown;
   /** Explicit user-entered total ingredient-line weight (optional). */
   readonly user_mass_selection?: unknown;
 }
@@ -157,7 +163,7 @@ export type IngredientOutcome =
 
 export type MatchStatus = 'unique_exact' | 'user_confirmed' | 'none';
 
-export type MassSource = 'direct_mass' | 'source_portion' | 'user_mass';
+export type MassSource = 'direct_mass' | 'source_portion' | 'count_portion' | 'user_mass';
 
 export interface IngredientCalculationEvidence {
   readonly line_ref: string;
@@ -171,8 +177,16 @@ export interface IngredientCalculationEvidence {
   readonly record_digest?: string;
   readonly mass_source?: MassSource;
   readonly resolved_grams?: number;
-  /** Canonical portion index for a `source_portion` result. */
+  /** Canonical portion index for a `source_portion`/`count_portion` result. */
   readonly portion_index?: number;
+  /** Authenticated count-portion evidence for a `count_portion` result. */
+  readonly count_ingredient_amount?: number;
+  readonly count_portion_amount?: number;
+  readonly count_gram_weight?: number;
+  readonly count_unit?: string;
+  readonly count_size?: string;
+  /** True when the count portion was chosen deterministically (no user choice). */
+  readonly count_deterministic?: boolean;
   /** Entered total-weight quantity/unit for a `user_mass` result. */
   readonly user_mass_quantity?: number;
   readonly user_mass_unit?: string;

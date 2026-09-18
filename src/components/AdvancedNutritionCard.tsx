@@ -19,6 +19,7 @@ import {
   formatAmount,
   phase4Failure,
   phase4Reducer,
+  phase4SessionIdentity,
   readStoredBlock,
   type AdvancedNutritionSession,
   type AdaptedIngredient,
@@ -96,6 +97,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
     dispatch({
       type: 'initialize',
       recipeKey: adaptation.recipe.recipe_key,
+      sessionIdentity: phase4SessionIdentity(session.metadata()),
       rows,
       baseServings: adaptation.recipe.base_servings,
     });

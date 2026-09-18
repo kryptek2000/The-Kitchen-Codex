@@ -9,10 +9,13 @@ bundle into a genuine Phase 4 session), Phase 4.5C (US customary portion
 resolution and an explicit total-weight fallback), plus Phase 4.5D (a
 home-recipe eligibility boundary, corrected exact-unit parsing, a closed
 query-role projection, anchor/contradiction/qualifier ranking, bounded culinary
-aliases, and the hamburger acceptance corpus)**. No network route or live API is
-used, and there is no Apply action or automatic persistence. Machine application
-of advanced nutrition remains disabled. Phase 4.5D still performs no
-persistence, no Apply, and no count-to-mass calculation.
+aliases, and the hamburger acceptance corpus), plus Phase 4.5E (authenticated
+count-portion resolution: the derived-mass contract, a closed count-identity
+vocabulary, explicit size constraints, ambiguity handling, and full bypass
+resistance)**. No network route or live API is used, and there is no Apply action
+or automatic persistence. Machine application of advanced nutrition remains
+disabled. Phase 4.5E still performs no persistence, no Apply, and never invents a
+count-to-mass conversion (it uses only authenticated USDA source portions).
 
 Phase 1 adds a trusted, offline, key-free USDA FoodData Central contract: a
 strict release manifest, a defensive adapter for the **actual pinned download
@@ -466,11 +469,14 @@ enable machine-generated nutrition application.
   contradiction/qualifier policy, bounded culinary aliases, no-padding ranking,
   and the hamburger acceptance corpus. No persistence, no Apply, no count-to-mass
   calculation. Audit gate: matching-correctness review.
-- **Phase 4.5E — authenticated count-portion resolution.** Future: resolve
-  count/culinary measures (`slice`, `clove`, `bun`, `piece`, …) to mass from an
-  explicitly reviewed authenticated USDA source portion, using the same
-  portion-semantics authority. Still no density table, no invented count weight,
-  no persistence, no Apply.
+- **Phase 4.5E — authenticated count-portion resolution.** DONE (offline,
+  isolated, review-only): resolve count/culinary measures (`slice`, `clove`,
+  `bun`, `piece`, …) to mass from an authenticated USDA source portion using the
+  derived-mass contract `count / portionAmount × portionGramWeight`, with a closed
+  count-identity vocabulary, explicit size constraints, ambiguity requiring
+  explicit selection, deterministic unique resolution, and full bypass
+  resistance. Still no density table, no invented count weight, no persistence,
+  no Apply. Audit gate: count-portion correctness review.
 - **Phase 5A — pure persistence construction.** Future: construct an in-memory
   `codex_nutrition` block from an advisory preview without any write.
 - **Phase 5B — explicit Apply and safe vault writes.** Future: all-or-nothing
@@ -2417,3 +2423,154 @@ consolidated in this phase.
 
 **Phase 4.5D still performs no persistence, no Apply, and no count-to-mass
 calculation.**
+
+---
+
+## 21. Phase 4.5E — authenticated count-portion resolution
+
+Phase 4.5E turns an authenticated USDA source portion into mass for a count
+ingredient (e.g. `8 slices bacon`). It is **review-only**: it never persists,
+applies, writes a vault/Markdown file, or authorizes machine application, and it
+never invents a count-to-mass conversion. It uses only authenticated USDA
+evidence.
+
+### 21.1 Trust order
+
+The count-portion path preserves the established trust chain end to end:
+
+```
+authenticated complete bundle (13,559 canonical records)
+  -> manifest / record / count / content-digest / release / nutrient-map /
+     component bindings ALL pass
+  -> Phase 4.5D eligible home-recipe view (12,924 records)
+  -> confirmed, eligible selected food
+  -> the portion is read ONLY from that authenticated selected record
+  -> structural + semantic validation (positive finite amount and gram weight)
+  -> closed count-identity compatibility with the parsed ingredient count
+  -> derived grams
+  -> existing advisory calculation totals / per-serving derivation
+```
+
+Filtering, compatibility checks, or UI state never let a corrupted or substituted
+source record escape bundle authentication. The calculation context's record map
+contains only eligible records, so a restaurant/fast-food record can never supply
+a portion.
+
+### 21.2 Count identity and provenance (`usda_count_portion_v1`)
+
+Every usable count portion has a deterministic closed identity `{ unit, size }`:
+
+- `unit` is a canonical count unit drawn from a **closed** spelling table
+  (`slice`, `piece`, `item`, `serving`, `clove`, `can`, `package`, `stick`,
+  `head`, `egg`, `container`, `bun`, `roll`, `pickle`) extracted from the
+  portion's measure/modifier, where the bounded alias `pkg` canonicalizes to
+  `package` and regular plurals collapse to the singular. No other noun is ever a
+  count unit, and there is no fuzzy or substring matching;
+- `size` is a bounded size qualifier from a **closed** table (`small`, `medium`,
+  `large`, `jumbo`, `mini`, `petite`, `xl`, `xxl`) when the portion identity is a
+  size, where `miniature` canonicalizes to `mini` and `xlarge` / `extra large`
+  canonicalize to `xl`; these are explicit aliases only, never fuzzy matches;
+- an ambiguous description (`any size`, `NFS`, `not specified`, `unspecified`,
+  `quantity`, `guideline`, `variable`, `unknown`) is never a count identity;
+- a mass/volume unit is never a count identity.
+
+A `CountPortionSelection` binds the count-portion version, calculation version,
+line reference, ingredient identity digest, bundle release, catalog identity
+(which itself binds the eligibility policy, normalization, ranking, and eligible
+membership), selected food id, record digest, candidate-set digest, exact portion
+index, authoritative portion amount, authoritative gram weight, the portion
+measure, the count unit/size, and a deterministic selection digest. A portion belonging to one food can never be
+reused with another food, and a caller-supplied gram value is never trusted — the
+calculator recomputes grams from the authenticated record.
+
+### 21.3 Compatibility rules
+
+Compatibility between the parsed ingredient count and an authenticated portion is
+conservative and closed:
+
+- an explicit input size is a **constraint**: the portion size must equal it;
+  `2 medium tomatoes` may use an authenticated `medium` portion and must never
+  silently fall back to small/large/generic/unspecified;
+- an unspecified input size never silently adopts a size-specific portion;
+- an explicit count unit must match, with only two bounded equivalences:
+  `bun ↔ roll` and `item ↔ pickle`;
+- `slice` is never `piece`; `package` is never `serving`; `order`/`recipe` are
+  never `serving`; a volume measure is never a count portion; a prepared
+  restaurant serving is never a home-recipe item;
+- a bare count with no unit/size never matches a slice/piece portion.
+
+A usable count portion must have a finite amount greater than zero, a finite gram
+weight greater than zero, an authenticated association with the selected food,
+and a supported count description. A present-invalid amount or gram weight makes
+the whole portion unusable; a present-invalid value is never replaced with an
+alternate field or a default.
+
+### 21.4 Deterministic selection and ambiguity
+
+If exactly one compatible count portion is valid (or every compatible candidate
+resolves to the same `(amount, gram_weight)`), it becomes the deterministic
+compatible portion and is applied automatically. If multiple compatible portions
+resolve to materially different gram weights, the review UI exposes the choices
+with USDA description and gram weight and **requires explicit selection** before
+calculating. Candidate order never affects compatibility, ambiguity, the chosen
+identity, or the calculated grams; reversing the source portion order leaves the
+result unchanged.
+
+### 21.5 Derived-mass contract
+
+```
+totalGrams = ingredientCount / authoritativePortionAmount
+             × authoritativePortionGramWeight
+```
+
+Examples: `8 slices` using `1 slice = 28 g` → 224 g; `4 slices` using
+`1 slice = 17 g` → 68 g; `6 pieces` using `3 pieces = 45 g` → 90 g. Intermediate
+values are never prematurely rounded; non-finite, non-positive, or overflowing
+results are rejected. The canonical USDA record is never mutated and derived
+grams are never written back into the bundle. The Phase 4.5C direct-mass and
+`user_mass` contracts are unchanged, and the existing recipe-total/per-serving
+derivation is preserved.
+
+### 21.6 Review presentation
+
+For a compatible count portion the review shows the parsed ingredient count, the
+selected USDA food, the authoritative portion, the derivation math, the resulting
+total grams, and whether the choice was deterministic or explicitly selected
+(e.g. `8 slices × 28 g per slice = 224 g · deterministic`). Ambiguous foods show
+the compatible choices; incompatible foods stay unresolved with a bounded
+explanation. No Apply/Save/Persist control exists.
+
+### 21.7 Invalidation
+
+Changing the ingredient text, parsed quantity, count unit, explicit size,
+selected food, selected portion, confirmation, bundle/release/component identity,
+eligibility-policy identity, or any existing session-version dependency
+invalidates the count-portion selection and the derived calculation. Closing and
+reopening Advanced Nutrition never resurrects stale portion authority; nothing is
+persisted (Phase 5 owns persistence).
+
+### 21.8 Bypass resistance
+
+All calculation paths independently re-verify the authenticated bundle, the
+eligible view, the selected food, the portion's exact food association, the
+portion's validity, the ingredient compatibility, and the current state. Direct
+excluded-id access, forged food/portion snapshots, swapping a portion between
+foods, changing gram weight/amount after selection, capitalization/punctuation
+variants, oversized limits, direct calculation-context calls, stale session data,
+stale bundle/release/eligibility identity, and reordered/added/removed source
+records all fail closed.
+
+### 21.9 Gates, isolation, and deferred work
+
+Phase 4.5E keeps every Phase 4.5A–D property: USDA artifacts and the release lock
+are unchanged, the five fixed same-origin asset URLs are unchanged, no arbitrary
+URL, no USDA/API/provider fallback, no filesystem/Node production dependency,
+bundle authentication before record use, no partial session, plugin payload
+exclusion, no automatic calculation, no density or weight table, no application
+authority, no persistence, and no vault/Markdown/frontmatter/recipe/settings/
+browser-storage/cache-storage/service-worker write. Phase 5 (persistence/Apply)
+and Phase 6 (Vault Intelligence) remain unimplemented, and the existing simple
+Nutrition & Macros/AI estimator is not consolidated here.
+
+**Phase 4.5E still performs no persistence, no Apply, and never invents a
+count-to-mass conversion.**

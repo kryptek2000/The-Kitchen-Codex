@@ -22,8 +22,17 @@
  */
 
 import { validateManifest } from '../usda/manifest';
-import { createNutritionCalculationContext, calculateRecipeNutrition, reviewFoodPortions } from '../calculation/context';
+import {
+  createNutritionCalculationContext,
+  calculateRecipeNutrition,
+  reviewFoodPortions,
+  reviewFoodCountPortions,
+} from '../calculation/context';
 import { confirmIngredientReview, createReviewCatalog, reviewIngredient } from '../matching/review';
+import { normalizeQuery } from '../matching/normalize';
+import { parseIngredient } from '../matching/parse';
+import { projectQueryText } from '../matching/query';
+import { deriveCountRequirement, type CountPortionReviewResult } from '../calculation/countPortion';
 import { phase2Failure } from '../matching/types';
 import type { ConfirmationResult, IngredientReviewResult, ReviewCatalog } from '../matching/types';
 import type { CalculationResult, NutritionCalculationContext, PortionReviewResult } from '../calculation/types';
@@ -144,6 +153,27 @@ export function createAdvancedNutritionSession(
         return { ok: false, failure: phase3PortionFailure() };
       }
       return reviewFoodPortions(authority.context, fdcId);
+    },
+    reviewCountPortions(
+      this: AdvancedNutritionSession,
+      ingredient: unknown,
+      fdcId: unknown
+    ): CountPortionReviewResult {
+      const authority = resolveSessionAuthority(this);
+      if (!authority) {
+        return { ok: false, failure: phase3PortionFailure() };
+      }
+      const parsed = parseIngredient(ingredient);
+      if (!parsed.ok) return { ok: false, failure: phase3PortionFailure() };
+      const projection = projectQueryText(normalizeQuery(parsed.parsed.query).text);
+      const requirement = deriveCountRequirement(
+        parsed.parsed.amount,
+        parsed.parsed.raw_unit,
+        projection.food_tokens,
+        projection.size_qualifiers
+      );
+      if (!requirement) return { ok: false, failure: phase3PortionFailure() };
+      return reviewFoodCountPortions(authority.context, fdcId, requirement);
     },
     confirmMatch(this: AdvancedNutritionSession, review: unknown, selection: unknown): ConfirmationResult {
       const authority = resolveSessionAuthority(this);

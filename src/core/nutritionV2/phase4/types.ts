@@ -12,14 +12,43 @@
  * from any public production barrel.
  */
 
+import { canonicalStringify, sha256Hex } from '../usda/digest';
 import type { NutrientId } from '../nutrients';
 import type { CanonicalUnit } from '../units';
 import type { UsdaDataType } from '../usda/types';
 import type { AdvisoryNutritionPreview, CalculationResult, PortionReviewResult } from '../calculation/types';
+import type { CountPortionReviewResult } from '../calculation/countPortion';
 import type { ConfirmationResult, IngredientReviewResult } from '../matching/types';
 
-export const PHASE4_SESSION_VERSION = 'usda_phase4_session_v2';
-export const PHASE4_STATE_VERSION = 'usda_phase4_state_v3';
+export const PHASE4_SESSION_VERSION = 'usda_phase4_session_v3';
+export const PHASE4_STATE_VERSION = 'usda_phase4_state_v4';
+
+/**
+ * Canonical, value-based identity of a Phase 4 session's authority. It is a
+ * deterministic projection of the authoritative `Phase4SessionMetadata`, so two
+ * sessions built from the same manifest/records share an identity and ANY
+ * authoritative change (bundle release, catalog identity/eligibility digest,
+ * session/context/calculation version, nutrient map, membership counts, data
+ * types) yields a different identity. It carries no new authority; it exists so
+ * UI state can invalidate stale selections and previews when the session
+ * authority changes even though the recipe identity is unchanged.
+ */
+export function phase4SessionIdentity(metadata: Phase4SessionMetadata): string {
+  return sha256Hex(
+    canonicalStringify({
+      session_version: metadata.session_version,
+      context_version: metadata.context_version,
+      calculation_version: metadata.calculation_version,
+      bundle_release: metadata.bundle_release,
+      catalog_digest: metadata.catalog_digest,
+      nutrient_map_version: metadata.nutrient_map_version,
+      record_count: metadata.record_count,
+      source_record_count: metadata.source_record_count,
+      excluded_record_count: metadata.excluded_record_count,
+      data_types: [...metadata.data_types],
+    })
+  );
+}
 
 /** Working bound on adapted recipe ingredients (mirrors Phase 3). */
 export const MAX_PHASE4_INGREDIENTS = 200;
@@ -138,6 +167,12 @@ export interface AdvancedNutritionSession {
   reviewIngredient(this: AdvancedNutritionSession, raw: unknown): IngredientReviewResult;
   /** Bounded Phase 3 portion candidates for one matched food. */
   reviewPortions(this: AdvancedNutritionSession, fdcId: unknown): PortionReviewResult;
+  /** Bounded Phase 4.5E authenticated count-portion candidates for one matched food. */
+  reviewCountPortions(
+    this: AdvancedNutritionSession,
+    ingredient: unknown,
+    fdcId: unknown
+  ): CountPortionReviewResult;
   /** User-intent confirmation/rejection against the genuine current catalog. */
   confirmMatch(
     this: AdvancedNutritionSession,
@@ -236,6 +271,14 @@ export interface PortionChoice {
   readonly review: unknown;
 }
 
+/** An explicitly reviewed authenticated count-portion selection (`count_portion`). */
+export interface CountPortionChoice {
+  readonly fdc_id: number;
+  readonly portion_index: number;
+  readonly selection: unknown;
+  readonly review: unknown;
+}
+
 /** An explicit user-entered total weight for one ingredient line (`user_mass`). */
 export interface UserMassChoice {
   readonly fdc_id: number;
@@ -248,10 +291,13 @@ export interface Phase4State {
   readonly version: string;
   readonly status: Phase4Status;
   readonly recipeKey: string | null;
+  /** Canonical authority identity of the session that owns this state. */
+  readonly sessionIdentity: string | null;
   readonly baseServings: number;
   readonly rows: ReadonlyArray<Phase4Row>;
   readonly matches: Readonly<Record<string, MatchChoice>>;
   readonly portions: Readonly<Record<string, PortionChoice>>;
+  readonly countPortions: Readonly<Record<string, CountPortionChoice>>;
   readonly userMasses: Readonly<Record<string, UserMassChoice>>;
   readonly basis: BasisMode;
   readonly selectedServings: number;
@@ -265,6 +311,8 @@ export type Phase4Action =
   | {
       readonly type: 'initialize';
       readonly recipeKey: string;
+      /** Canonical session authority identity (`phase4SessionIdentity`). */
+      readonly sessionIdentity: string;
       readonly rows: ReadonlyArray<Phase4Row>;
       readonly baseServings: number;
     }
@@ -272,6 +320,12 @@ export type Phase4Action =
   | { readonly type: 'select_match'; readonly lineRef: string; readonly choice: MatchChoice }
   | { readonly type: 'select_portion'; readonly lineRef: string; readonly choice: PortionChoice }
   | { readonly type: 'clear_portion'; readonly lineRef: string }
+  | {
+      readonly type: 'select_count_portion';
+      readonly lineRef: string;
+      readonly choice: CountPortionChoice;
+    }
+  | { readonly type: 'clear_count_portion'; readonly lineRef: string }
   | { readonly type: 'select_user_mass'; readonly lineRef: string; readonly choice: UserMassChoice }
   | { readonly type: 'clear_user_mass'; readonly lineRef: string }
   | { readonly type: 'set_basis'; readonly basis: BasisMode }
@@ -322,6 +376,12 @@ export interface IngredientEvidenceView {
   readonly mass_source: string | undefined;
   readonly resolved_grams: number | undefined;
   readonly portion_index: number | undefined;
+  readonly count_ingredient_amount: number | undefined;
+  readonly count_portion_amount: number | undefined;
+  readonly count_gram_weight: number | undefined;
+  readonly count_unit: string | undefined;
+  readonly count_size: string | undefined;
+  readonly count_deterministic: boolean | undefined;
   readonly user_mass_quantity: number | undefined;
   readonly user_mass_unit: string | undefined;
   readonly contributing_nutrients: ReadonlyArray<NutrientId>;

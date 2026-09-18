@@ -19,17 +19,26 @@ import { isNutrientId, NUTRIENT_IDS, NUTRIENT_REGISTRY, type NutrientId } from '
 import { isValidNutrientAmount, MAX_NUTRIENT_AMOUNT, type CanonicalUnit } from '../units';
 import { normalizeQuery } from '../matching/normalize';
 import { parseIngredient } from '../matching/parse';
+import { projectQueryText } from '../matching/query';
 import { confirmIngredientReview, reviewIngredient } from '../matching/review';
 import type { ConfirmationResult, ReviewCatalog } from '../matching/types';
 import type { CanonicalUsdaFoodRecord } from '../usda/types';
 import { isQualitativeIngredientText } from '../../../utils/ingredientSemantics';
 import { resolvePortionMassGrams, resolveUserMassGrams, type PortionMassResolution, type UserMassResolution } from './mass';
 import { PORTION_SEMANTICS_VERSION, type PortionMeasurement } from './portionSemantics';
+import {
+  deriveCountRequirement,
+  resolveCountPortionMassGrams,
+  resolveDeterministicCountPortionGrams,
+  sanitizeCountPortionSelection,
+  type CountPortionMassResolution,
+} from './countPortion';
 import { contributionFor, isWithinCanonicalBound, roundCanonicalTotal, stableSum } from './numeric';
 import { isValidStrictServingCount } from './servings';
 import {
   CALCULATION_SCHEMA,
   CALCULATION_VERSION,
+  MAX_CALCULATION_GRAMS,
   MAX_CALCULATION_INGREDIENTS,
   MAX_CALCULATION_LINE_REF_LENGTH,
   phase3Failure,
@@ -49,7 +58,15 @@ import {
 } from './types';
 
 const REQUEST_KEYS = new Set(['servings', 'nutrient_scope', 'ingredients']);
-const INGREDIENT_INPUT_KEYS = new Set(['line_ref', 'ingredient', 'review', 'selection', 'portion_selection', 'user_mass_selection']);
+const INGREDIENT_INPUT_KEYS = new Set([
+  'line_ref',
+  'ingredient',
+  'review',
+  'selection',
+  'portion_selection',
+  'count_portion_selection',
+  'user_mass_selection',
+]);
 const PORTION_SELECTION_KEYS = new Set([
   'calculation_version',
   'portion_semantics_version',
@@ -127,6 +144,7 @@ interface PreparedIngredient {
   readonly review: unknown;
   readonly selection: unknown;
   readonly portionSelection: unknown;
+  readonly countPortionSelection: unknown;
   readonly userMassSelection: unknown;
 }
 
@@ -151,6 +169,12 @@ interface EvaluatedIngredient {
   readonly massSource: MassSource | undefined;
   readonly portionIndex: number | undefined;
   readonly portionCandidatesDigest: string | undefined;
+  readonly countIngredientAmount: number | undefined;
+  readonly countPortionAmount: number | undefined;
+  readonly countGramWeight: number | undefined;
+  readonly countUnit: string | undefined;
+  readonly countSize: string | undefined;
+  readonly countDeterministic: boolean | undefined;
   readonly userMassQuantity: number | undefined;
   readonly userMassUnit: string | undefined;
   readonly contributions: Partial<Record<NutrientId, number>>;
@@ -184,6 +208,16 @@ function fullPayload(e: EvaluatedIngredient) {
     ...(e.portionIndex !== undefined ? { portion_index: e.portionIndex } : {}),
     ...(e.portionCandidatesDigest !== undefined
       ? { portion_candidates_digest: e.portionCandidatesDigest }
+      : {}),
+    ...(e.countPortionAmount !== undefined
+      ? {
+          count_ingredient_amount: e.countIngredientAmount,
+          count_portion_amount: e.countPortionAmount,
+          count_gram_weight: e.countGramWeight,
+          count_unit: e.countUnit ?? null,
+          count_size: e.countSize ?? null,
+          count_deterministic: e.countDeterministic === true,
+        }
       : {}),
     ...(e.userMassQuantity !== undefined ? { user_mass_quantity: e.userMassQuantity } : {}),
     ...(e.userMassUnit !== undefined ? { user_mass_unit: e.userMassUnit } : {}),
@@ -450,6 +484,12 @@ function evaluateIngredient(
     massSource: undefined,
     portionIndex: undefined,
     portionCandidatesDigest: undefined,
+    countIngredientAmount: undefined,
+    countPortionAmount: undefined,
+    countGramWeight: undefined,
+    countUnit: undefined,
+    countSize: undefined,
+    countDeterministic: undefined,
     userMassQuantity: undefined,
     userMassUnit: undefined,
     contributions: {},
@@ -463,14 +503,22 @@ function evaluateIngredient(
   let massSource: MassSource | undefined;
   let portionIndex: number | undefined;
   let portionCandidatesDigest: string | undefined;
+  let countIngredientAmount: number | undefined;
+  let countPortionAmount: number | undefined;
+  let countGramWeight: number | undefined;
+  let countUnit: string | undefined;
+  let countSize: string | undefined;
+  let countDeterministic: boolean | undefined;
   let userMassQuantity: number | undefined;
   let userMassUnit: string | undefined;
 
   if (!qualitative && matched && record) {
     const hasPortion = prepared.portionSelection !== undefined;
+    const hasCountPortion = prepared.countPortionSelection !== undefined;
     const hasUserMass = prepared.userMassSelection !== undefined;
-    // A source portion and an explicit total weight are mutually exclusive.
-    if (hasPortion && hasUserMass) {
+    // Every mass source is mutually exclusive with every other.
+    const massSourceCount = [hasPortion, hasCountPortion, hasUserMass].filter(Boolean).length;
+    if (massSourceCount > 1) {
       return { ok: false, code: 'invalid_portion_selection' };
     }
     if (parsed.measurement_kind === 'mass' && parsed.grams !== undefined) {
@@ -523,6 +571,61 @@ function evaluateIngredient(
       } else if ((resolution as { ok: false; reason: string }).reason === 'overflow') {
         return { ok: false, code: 'numeric_overflow' };
       }
+    } else {
+      // Phase 4.5E authenticated count-portion resolution. A deterministic unique
+      // compatible portion resolves without a user choice; an ambiguous set
+      // requires an explicit, independently re-verified selection.
+      const projection = projectQueryText(normalizedQuery);
+      const requirement = deriveCountRequirement(
+        parsed.amount,
+        parsed.raw_unit,
+        projection.food_tokens,
+        projection.size_qualifiers
+      );
+      if (requirement) {
+        let resolution: CountPortionMassResolution | undefined;
+        if (hasCountPortion) {
+          const sanitized = sanitizeCountPortionSelection(prepared.countPortionSelection);
+          if (!sanitized.ok) {
+            return {
+              ok: false,
+              code: (sanitized as { ok: false; unsafe: boolean }).unsafe
+                ? 'unsafe_request'
+                : 'invalid_portion_selection',
+            };
+          }
+          resolution = resolveCountPortionMassGrams(
+            record,
+            sanitized.selection,
+            requirement,
+            inputs.bundleRelease,
+            inputs.catalogDigest,
+            prepared.lineRef,
+            identityDigest,
+            CALCULATION_VERSION,
+            MAX_CALCULATION_GRAMS
+          );
+        } else {
+          resolution = resolveDeterministicCountPortionGrams(
+            record,
+            requirement,
+            MAX_CALCULATION_GRAMS
+          );
+        }
+        if (resolution.ok) {
+          grams = resolution.grams;
+          massSource = 'count_portion';
+          portionIndex = resolution.candidate.index;
+          countIngredientAmount = requirement.amount;
+          countPortionAmount = resolution.candidate.amount;
+          countGramWeight = resolution.candidate.gram_weight;
+          countUnit = resolution.candidate.unit ?? undefined;
+          countSize = resolution.candidate.size ?? undefined;
+          countDeterministic = resolution.deterministic;
+        } else if ((resolution as { ok: false; reason: string }).reason === 'overflow') {
+          return { ok: false, code: 'numeric_overflow' };
+        }
+      }
     }
   }
 
@@ -554,6 +657,12 @@ function evaluateIngredient(
     massSource,
     portionIndex,
     portionCandidatesDigest,
+    countIngredientAmount,
+    countPortionAmount,
+    countGramWeight,
+    countUnit,
+    countSize,
+    countDeterministic,
     userMassQuantity,
     userMassUnit,
     contributions,
@@ -610,6 +719,7 @@ export function runAdvisoryCalculation(inputs: AdvisoryCalculationInputs): Calcu
         review: raw.review,
         selection: raw.selection,
         portionSelection: raw.portion_selection,
+        countPortionSelection: raw.count_portion_selection,
         userMassSelection: raw.user_mass_selection,
       });
     }
@@ -682,6 +792,16 @@ export function runAdvisoryCalculation(inputs: AdvisoryCalculationInputs): Calcu
         ...(entry.massSource !== undefined ? { mass_source: entry.massSource } : {}),
         ...(entry.grams !== undefined ? { resolved_grams: entry.grams } : {}),
         ...(entry.portionIndex !== undefined ? { portion_index: entry.portionIndex } : {}),
+        ...(entry.countPortionAmount !== undefined
+          ? {
+              count_ingredient_amount: entry.countIngredientAmount,
+              count_portion_amount: entry.countPortionAmount,
+              count_gram_weight: entry.countGramWeight,
+              ...(entry.countUnit !== undefined ? { count_unit: entry.countUnit } : {}),
+              ...(entry.countSize !== undefined ? { count_size: entry.countSize } : {}),
+              count_deterministic: entry.countDeterministic === true,
+            }
+          : {}),
         ...(entry.userMassQuantity !== undefined ? { user_mass_quantity: entry.userMassQuantity } : {}),
         ...(entry.userMassUnit !== undefined ? { user_mass_unit: entry.userMassUnit } : {}),
         ingredient_identity_digest: digestOf(identityPayload(entry)),

@@ -139,7 +139,12 @@ function genuineContext() {
 describe('phase 3 calculation — lexical authority encapsulation', () => {
   it('the authority boundary module exports only the intentional public operations', () => {
     expect(Object.keys(contextModule).sort()).toEqual(
-      ['calculateRecipeNutrition', 'createNutritionCalculationContext', 'reviewFoodPortions'].sort()
+      [
+        'calculateRecipeNutrition',
+        'createNutritionCalculationContext',
+        'reviewFoodCountPortions',
+        'reviewFoodPortions',
+      ].sort()
     );
     for (const key of Object.keys(contextModule)) {
       expect(key).not.toMatch(/register|authority|registry|contextAuthority|retrieve/i);

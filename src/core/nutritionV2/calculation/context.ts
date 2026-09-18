@@ -18,12 +18,18 @@
 
 import { computeCanonicalContentDigest, validateManifest } from '../usda/manifest';
 import { validateCanonicalRecord } from '../usda/record';
+import { isPlainObject, toInertValue } from '../schema';
 import { evaluateEligibility } from '../matching/eligibility';
 import { createReviewCatalog } from '../matching/review';
 import type { ReviewCatalog } from '../matching/types';
 import type { CanonicalUsdaFoodRecord, UsdaDataType } from '../usda/types';
 import { runAdvisoryCalculation } from './calculate';
 import { buildPortionReview } from './mass';
+import {
+  buildCountPortionReview,
+  type CountPortionReviewResult,
+  type CountRequirement,
+} from './countPortion';
 import {
   CALCULATION_CONTEXT_VERSION,
   CALCULATION_VERSION,
@@ -174,4 +180,65 @@ export function reviewFoodPortions(contextRaw: unknown, fdcIdRaw: unknown): Port
   const record = authority.records.get(fdcIdRaw);
   if (!record) return { ok: false, failure: phase3Failure('invalid_request') };
   return { ok: true, review: buildPortionReview(record, authority.metadata.bundle_release) };
+}
+
+function isPositiveFinite(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 && !Object.is(value, -0);
+}
+
+/**
+ * Materializes an untrusted requirement ONCE through the shared inert-value
+ * mechanism before any property is read, so a hostile throwing getter (or any
+ * other accessor/proxy/non-plain shape) can never run and can never make
+ * `reviewFoodCountPortions` throw. An unsafe requirement fails closed with the
+ * established `invalid_request` result.
+ */
+function sanitizeCountRequirement(raw: unknown): CountRequirement | undefined {
+  const materialized = toInertValue(raw);
+  if (!materialized.ok) return undefined;
+  if (!isPlainObject(materialized.value)) return undefined;
+  const value = materialized.value;
+  if (!isPositiveFinite(value.amount)) return undefined;
+  if (!(value.unit === null || typeof value.unit === 'string')) return undefined;
+  if (!(value.size === null || typeof value.size === 'string')) return undefined;
+  return Object.freeze({
+    amount: value.amount,
+    unit: (value.unit ?? null) as string | null,
+    size: (value.size ?? null) as string | null,
+  });
+}
+
+/**
+ * Bounded authenticated count-portion candidates for one matched food in a
+ * genuine context. The requirement is derived by the session from the parsed
+ * ingredient; it is re-sanitized here and never trusted for grams.
+ */
+export function reviewFoodCountPortions(
+  contextRaw: unknown,
+  fdcIdRaw: unknown,
+  requirementRaw: unknown
+): CountPortionReviewResult {
+  const authority = resolveContextAuthority(contextRaw);
+  if (!authority) return { ok: false, failure: phase3Failure('invalid_context') };
+  if (
+    typeof fdcIdRaw !== 'number' ||
+    !Number.isSafeInteger(fdcIdRaw) ||
+    Object.is(fdcIdRaw, -0) ||
+    fdcIdRaw <= 0
+  ) {
+    return { ok: false, failure: phase3Failure('invalid_request') };
+  }
+  const requirement = sanitizeCountRequirement(requirementRaw);
+  if (!requirement) return { ok: false, failure: phase3Failure('invalid_request') };
+  const record = authority.records.get(fdcIdRaw);
+  if (!record) return { ok: false, failure: phase3Failure('invalid_request') };
+  return {
+    ok: true,
+    review: buildCountPortionReview(
+      record,
+      requirement,
+      authority.metadata.bundle_release,
+      authority.metadata.catalog_digest
+    ),
+  };
 }

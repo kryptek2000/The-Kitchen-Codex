@@ -7,6 +7,7 @@ import {
 } from '../../src/core/nutritionV2/matching/types';
 import { QUERY_PROJECTION_VERSION } from '../../src/core/nutritionV2/matching/query';
 import { ELIGIBILITY_POLICY_VERSION } from '../../src/core/nutritionV2/matching/eligibility';
+import { COUNT_PORTION_VERSION } from '../../src/core/nutritionV2/calculation/countPortion';
 import {
   CALCULATION_CONTEXT_VERSION,
   CALCULATION_VERSION,
@@ -35,10 +36,11 @@ describe('phase 4.5d versioning — explicit bumps', () => {
     expect(MATCHING_CONFIRMATION_VERSION).toBe('usda_match_confirm_v2');
     expect(QUERY_PROJECTION_VERSION).toBe('usda_query_projection_v1');
     expect(ELIGIBILITY_POLICY_VERSION).toBe('usda_home_recipe_eligibility_v1');
-    expect(CALCULATION_VERSION).toBe('usda_advisory_calc_v3');
-    expect(CALCULATION_CONTEXT_VERSION).toBe('usda_calc_context_v2');
-    expect(PHASE4_SESSION_VERSION).toBe('usda_phase4_session_v2');
-    expect(PHASE4_STATE_VERSION).toBe('usda_phase4_state_v3');
+    expect(CALCULATION_VERSION).toBe('usda_advisory_calc_v4');
+    expect(CALCULATION_CONTEXT_VERSION).toBe('usda_calc_context_v3');
+    expect(PHASE4_SESSION_VERSION).toBe('usda_phase4_session_v3');
+    expect(PHASE4_STATE_VERSION).toBe('usda_phase4_state_v4');
+    expect(COUNT_PORTION_VERSION).toBe('usda_count_portion_v1');
   });
 
   it('leaves the Phase 4.5C portion-semantics version unchanged', () => {

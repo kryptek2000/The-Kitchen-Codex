@@ -10,7 +10,15 @@ import {
 } from '../../src/core/nutritionV2/phase4/state';
 import type { AdvisoryNutritionPreview } from '../../src/core/nutritionV2/calculation/types';
 import type { NutrientId } from '../../src/core/nutritionV2/nutrients';
-import type { Phase4Row, Phase4State } from '../../src/core/nutritionV2/phase4/types';
+import {
+  PHASE4_SESSION_VERSION,
+  phase4SessionIdentity,
+} from '../../src/core/nutritionV2/phase4/types';
+import type {
+  Phase4Row,
+  Phase4SessionMetadata,
+  Phase4State,
+} from '../../src/core/nutritionV2/phase4/types';
 
 function row(lineRef: string, outcome: Phase4Row['outcome'] = 'review_required'): Phase4Row {
   return Object.freeze({
@@ -55,10 +63,13 @@ function preview(): AdvisoryNutritionPreview {
   });
 }
 
+const SESSION_ID = 'session-authority-A';
+
 function readyState(): Phase4State {
   return phase4Reducer(INITIAL_PHASE4_STATE, {
     type: 'initialize',
     recipeKey: 'recipe-A#1',
+    sessionIdentity: SESSION_ID,
     rows: [row('a'), row('b', 'matched_exact')],
     baseServings: 4,
   });
@@ -92,6 +103,7 @@ describe('phase 4 state — workflow integrity', () => {
     const again = phase4Reducer(state, {
       type: 'initialize',
       recipeKey: 'recipe-A#1',
+      sessionIdentity: SESSION_ID,
       rows: state.rows,
       baseServings: 4,
     });
@@ -108,6 +120,7 @@ describe('phase 4 state — workflow integrity', () => {
     const changed = phase4Reducer(state, {
       type: 'initialize',
       recipeKey: 'recipe-B#2',
+      sessionIdentity: SESSION_ID,
       rows: [row('x')],
       baseServings: 2,
     });
@@ -124,6 +137,7 @@ describe('phase 4 state — workflow integrity', () => {
     const changed = phase4Reducer(state, {
       type: 'initialize',
       recipeKey: 'recipe-A#2',
+      sessionIdentity: SESSION_ID,
       rows: [row('a'), row('b', 'matched_exact'), row('c')],
       baseServings: 4,
     });
@@ -218,8 +232,8 @@ describe('phase 4 state — workflow integrity', () => {
       lineRef: 'a',
       choice: { kind: 'candidate', fdc_id: 3002, review_digest: 'd'.repeat(64) },
     });
-    const first = phase4Reducer(state, { type: 'initialize', recipeKey: 'recipe-A#1', rows: state.rows, baseServings: 4 });
-    const second = phase4Reducer(first, { type: 'initialize', recipeKey: 'recipe-A#1', rows: state.rows, baseServings: 4 });
+    const first = phase4Reducer(state, { type: 'initialize', recipeKey: 'recipe-A#1', sessionIdentity: SESSION_ID, rows: state.rows, baseServings: 4 });
+    const second = phase4Reducer(first, { type: 'initialize', recipeKey: 'recipe-A#1', sessionIdentity: SESSION_ID, rows: state.rows, baseServings: 4 });
     expect(first).toBe(state);
     expect(second).toBe(state);
   });
@@ -291,11 +305,166 @@ describe('phase 4 state — explicit total-weight fallback (user_mass)', () => {
     const changed = phase4Reducer(state, {
       type: 'initialize',
       recipeKey: 'recipe-B#2',
+      sessionIdentity: SESSION_ID,
       rows: [row('x')],
       baseServings: 2,
     });
     expect(changed.userMasses).toEqual({});
     const reset = phase4Reducer(state, { type: 'reset' });
     expect(reset.userMasses).toEqual({});
+  });
+});
+
+describe('phase 4.5E — same-recipe session identity invalidation', () => {
+  const baseMetadata: Phase4SessionMetadata = {
+    session_version: PHASE4_SESSION_VERSION,
+    context_version: 'usda_calc_context_v3',
+    calculation_version: 'usda_advisory_calc_v4',
+    bundle_release: 'usda_fdc_bundle_a',
+    catalog_digest: 'a'.repeat(64),
+    nutrient_map_version: 'usda_fdc_nutrient_map_v2',
+    record_count: 10,
+    source_record_count: 12,
+    excluded_record_count: 2,
+    data_types: ['foundation', 'sr_legacy', 'fndds'],
+  };
+  const identityA = phase4SessionIdentity(baseMetadata);
+
+  function initialized(sessionIdentity: string, recipeKey = 'recipe-A#1'): Phase4State {
+    return phase4Reducer(INITIAL_PHASE4_STATE, {
+      type: 'initialize',
+      recipeKey,
+      sessionIdentity,
+      rows: [row('a')],
+      baseServings: 4,
+    });
+  }
+
+  const countChoice = { fdc_id: 5001, portion_index: 0, selection: {}, review: {} };
+  const portionChoice = { fdc_id: 5002, portion_index: 0, selection: {}, review: {} };
+  const userMassChoice = { fdc_id: 5001, quantity: 100, unit: 'g' as const, selection: {} };
+
+  function withSelections(): Phase4State {
+    let state = withPreview(initialized(identityA));
+    state = phase4Reducer(state, { type: 'select_count_portion', lineRef: 'a', choice: countChoice });
+    return state;
+  }
+
+  it('derives a stable value-based identity from the authoritative metadata', () => {
+    expect(phase4SessionIdentity(baseMetadata)).toBe(identityA);
+    expect(phase4SessionIdentity({ ...baseMetadata })).toBe(identityA);
+    expect(phase4SessionIdentity({ ...baseMetadata, bundle_release: 'usda_fdc_bundle_b' })).not.toBe(identityA);
+    expect(phase4SessionIdentity({ ...baseMetadata, catalog_digest: 'b'.repeat(64) })).not.toBe(identityA);
+    expect(phase4SessionIdentity({ ...baseMetadata, session_version: 'usda_phase4_session_v4' })).not.toBe(identityA);
+  });
+
+  it('same recipe key + same session identity preserves expected state', () => {
+    const state = withSelections();
+    const again = phase4Reducer(state, {
+      type: 'initialize',
+      recipeKey: 'recipe-A#1',
+      sessionIdentity: identityA,
+      rows: state.rows,
+      baseServings: 4,
+    });
+    expect(again).toBe(state);
+    expect(again.countPortions.a).toEqual(countChoice);
+    expect(again.status).toBe('preview_stale');
+  });
+
+  it('same recipe key + changed bundle release invalidates selections and current preview', () => {
+    const state = withSelections();
+    const changedIdentity = phase4SessionIdentity({ ...baseMetadata, bundle_release: 'usda_fdc_bundle_b' });
+    const changed = phase4Reducer(state, {
+      type: 'initialize',
+      recipeKey: 'recipe-A#1',
+      sessionIdentity: changedIdentity,
+      rows: [row('a')],
+      baseServings: 4,
+    });
+    expect(changed.recipeKey).toBe('recipe-A#1');
+    expect(changed.sessionIdentity).toBe(changedIdentity);
+    expect(changed.countPortions).toEqual({});
+    expect(changed.portions).toEqual({});
+    expect(changed.userMasses).toEqual({});
+    expect(changed.preview).toBeNull();
+    expect(changed.status).toBe('ready');
+  });
+
+  it('same recipe key + changed catalog identity invalidates selections and current preview', () => {
+    const state = withSelections();
+    const changedIdentity = phase4SessionIdentity({ ...baseMetadata, catalog_digest: 'b'.repeat(64) });
+    const changed = phase4Reducer(state, {
+      type: 'initialize',
+      recipeKey: 'recipe-A#1',
+      sessionIdentity: changedIdentity,
+      rows: [row('a')],
+      baseServings: 4,
+    });
+    expect(changed.countPortions).toEqual({});
+    expect(changed.portions).toEqual({});
+    expect(changed.userMasses).toEqual({});
+    expect(changed.preview).toBeNull();
+    expect(changed.status).toBe('ready');
+  });
+
+  it('same recipe key + changed session version invalidates selections and current preview', () => {
+    const state = withSelections();
+    const changedIdentity = phase4SessionIdentity({
+      ...baseMetadata,
+      session_version: 'usda_phase4_session_v4',
+    });
+    const changed = phase4Reducer(state, {
+      type: 'initialize',
+      recipeKey: 'recipe-A#1',
+      sessionIdentity: changedIdentity,
+      rows: [row('a')],
+      baseServings: 4,
+    });
+    expect(changed.countPortions).toEqual({});
+    expect(changed.preview).toBeNull();
+    expect(changed.status).toBe('ready');
+  });
+
+  it('old count-portion authority cannot resurrect after switching away and back', () => {
+    const state = withSelections();
+    const otherIdentity = phase4SessionIdentity({ ...baseMetadata, catalog_digest: 'b'.repeat(64) });
+    const away = phase4Reducer(state, {
+      type: 'initialize',
+      recipeKey: 'recipe-A#1',
+      sessionIdentity: otherIdentity,
+      rows: [row('a')],
+      baseServings: 4,
+    });
+    expect(away.countPortions).toEqual({});
+    const back = phase4Reducer(away, {
+      type: 'initialize',
+      recipeKey: 'recipe-A#1',
+      sessionIdentity: identityA,
+      rows: [row('a')],
+      baseServings: 4,
+    });
+    expect(back.countPortions).toEqual({});
+    expect(back.preview).toBeNull();
+    expect(back.status).toBe('ready');
+  });
+
+  it('does not mutate the recipe/adaptation input and introduces no persistence', () => {
+    const adapted = Object.freeze([
+      Object.freeze({
+        line_ref: 'a',
+        ingredient: Object.freeze({ original: '8 slices bacon', line_ref: 'a' }),
+      }),
+    ]);
+    const snapshot = JSON.stringify(adapted);
+    let state = initialized(identityA);
+    state = phase4Reducer(state, { type: 'select_portion', lineRef: 'a', choice: portionChoice });
+    state = phase4Reducer(state, { type: 'select_user_mass', lineRef: 'a', choice: userMassChoice });
+    state = phase4Reducer(state, { type: 'select_count_portion', lineRef: 'a', choice: countChoice });
+    expect(JSON.stringify(adapted)).toBe(snapshot);
+    expect(Object.isFrozen(adapted[0])).toBe(true);
+    expect(INITIAL_PHASE4_STATE.status).toBe('unavailable');
+    expect(INITIAL_PHASE4_STATE.countPortions).toEqual({});
+    expect(INITIAL_PHASE4_STATE.sessionIdentity).toBeNull();
   });
 });

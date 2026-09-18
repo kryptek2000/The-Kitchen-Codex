@@ -44,7 +44,7 @@ describe('phase 3 context — authority and construction', () => {
   it('builds a genuine context with bounded metadata', () => {
     const { context } = buildContext();
     const metadata = context.metadata();
-    expect(metadata.calculation_version).toBe('usda_advisory_calc_v3');
+    expect(metadata.calculation_version).toBe('usda_advisory_calc_v4');
     expect(metadata.bundle_release).toMatch(/^usda_fdc_/);
     expect(metadata.catalog_digest).toMatch(/^[0-9a-f]{64}$/);
     expect(metadata.record_count).toBe(CALC_FOODS.length);
@@ -388,7 +388,7 @@ describe('phase 3 mass — direct mass and source portions', () => {
     if (!portions.ok) return;
     const cup = portions.review.candidates[0];
     const selection = {
-      calculation_version: 'usda_advisory_calc_v3',
+      calculation_version: 'usda_advisory_calc_v4',
       portion_semantics_version: portions.review.portion_semantics_version,
       line_ref: 'a',
       ingredient_identity_digest: identity.ingredient_identity_digest,
@@ -436,7 +436,7 @@ describe('phase 3 mass — direct mass and source portions', () => {
           line_ref: 'a',
           ingredient: '2 cups Flour, wheat, white',
           portion_selection: {
-            calculation_version: 'usda_advisory_calc_v3',
+            calculation_version: 'usda_advisory_calc_v4',
             portion_semantics_version: 'usda_portion_semantics_v1',
             line_ref: 'a',
             ingredient_identity_digest: identity.ingredient_identity_digest,
