@@ -24,6 +24,8 @@ const MATCHING_DIR = resolve(ROOT, 'src/core/nutritionV2/matching');
 const PHASE4_DIR = resolve(ROOT, 'src/core/nutritionV2/phase4');
 /** Phase 3 legitimately consumes Phase 2 for match rebinding. */
 const CALCULATION_DIR = resolve(ROOT, 'src/core/nutritionV2/calculation');
+/** The audited Phase 5C presentation selector (reuses the canonical parser). */
+const PHASE5C_DIR = resolve(ROOT, 'src/core/nutritionV2/phase5c');
 
 function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
@@ -172,6 +174,7 @@ describe('phase 2 matching — isolation and purity', () => {
         if (file.startsWith(MATCHING_DIR)) continue;
         if (file.startsWith(CALCULATION_DIR)) continue; // Phase 3 rebinds Phase 2
         if (file.startsWith(PHASE4_DIR)) continue; // the one allowed UI path
+        if (file.startsWith(PHASE5C_DIR)) continue; // Phase 5C presentation selector (audited)
         const source = readFileSync(file, 'utf8');
         let match: RegExpExecArray | null;
         importRe.lastIndex = 0;
@@ -201,6 +204,23 @@ describe('phase 2 matching — isolation and purity', () => {
       }
     }
     expect(phase4Importers).toBeGreaterThan(0);
+
+    // Positive control: the audited Phase 5C presentation selector DOES import
+    // the canonical Phase 2 parser (never a private catalog/record surface).
+    let phase5cImporters = 0;
+    for (const file of listFiles(PHASE5C_DIR)) {
+      const source = readFileSync(file, 'utf8');
+      let match: RegExpExecArray | null;
+      importRe.lastIndex = 0;
+      while ((match = importRe.exec(source)) !== null) {
+        const resolved = resolveProjectSpecifier(file, match[1]);
+        if (resolved && resolved.startsWith(MATCHING_DIR)) {
+          phase5cImporters += 1;
+          break;
+        }
+      }
+    }
+    expect(phase5cImporters).toBeGreaterThan(0);
   });
 
   it('is not re-exported from the Phase 0 / core barrels', () => {

@@ -241,7 +241,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
               <span className="text-[10px] font-mono text-indigo-300 font-normal uppercase">Advisory</span>
             </h3>
             <p className="text-[10px] text-gray-500">
-              Reviewed USDA source matching · separate from the simple nutrition card
+              Reviewed USDA source matching · authenticated saved result
             </p>
           </div>
         </div>
@@ -325,7 +325,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
           {stored.kind === 'v1' && (
             <div className="p-3 rounded-xl bg-[#0E0E0E] border border-white/5">
               <p className="text-[10px] font-mono uppercase text-gray-500 mb-1">
-                Saved advanced nutrition{stored.servings ? ` · base ${stored.servings} servings` : ''}
+                Saved Advanced Nutrition{stored.servings ? ` · base ${stored.servings} servings` : ''}
                 {stored.status ? ` · ${stored.status}` : ''}
               </p>
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
@@ -352,7 +352,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
           {preview && compact && (
             <div className="p-3 rounded-xl bg-indigo-950/20 border border-indigo-500/20">
               <p className="text-[10px] font-mono uppercase text-indigo-300 mb-1">
-                In-memory advisory preview · {basisLabel(state.basis, state.selectedServings)}
+                Unsaved review — not applied · {basisLabel(state.basis, state.selectedServings)}
                 {state.status === 'preview_stale' ? ' · stale' : ''}
               </p>
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
@@ -372,7 +372,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
                 </p>
               )}
               <p className="text-[10px] text-gray-500 mt-1">
-                Advisory only — never presented as saved recipe data.
+                Review only — nothing is saved until you Apply.
               </p>
               {applyEligibility !== null && (
                 <p

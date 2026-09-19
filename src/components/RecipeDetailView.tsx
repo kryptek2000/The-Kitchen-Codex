@@ -37,15 +37,17 @@ import { downloadMarkdownFile } from '../utils/vaultFileSystem';
 import { getRecipeImage, DEFAULT_FOOD_IMAGES } from '../utils/imageHelper';
 import { useVaultImage } from '../hooks/useVaultImage';
 import { assessRecipeHealth } from '../utils/vaultIntelligence';
-import { nutritionForRequestedServings } from '../utils/nutrition';
 import { buildRecipeRelationshipIndex, recipeIdentity } from '../utils/recipeRelationships';
-import { RecipeNutritionCard } from './RecipeNutritionCard';
 import {
-  AdvancedNutritionCard,
   type AdvancedNutritionApplyHandler,
   type AdvancedNutritionBundleUiStatus,
 } from './AdvancedNutritionCard';
+import { RecipeNutritionSection } from './RecipeNutritionSection';
 import type { AdvancedNutritionSession } from '../core/nutritionV2/phase4';
+import {
+  resolveNutritionDisplayCalories,
+  resolveRecipeNutritionPresentation,
+} from '../core/nutritionV2/phase5c';
 import { WikilinkPreviewModal } from './WikilinkPreviewModal';
 import { RecipeRelationshipsPanel } from './RecipeRelationshipsPanel';
 import { IngredientUsageModal } from './IngredientUsageModal';
@@ -126,12 +128,23 @@ export function RecipeDetailView({
   const baseServings = recipe.servings || 4;
   const recipeHealth = assessRecipeHealth(recipe);
 
-  // The top recipe-info Calories summary MUST track the currently selected
-  // serving count, using the SAME deterministic serving-scaled contract as the
-  // RecipeNutritionCard. Stored nutrition is the stable base; the displayed
-  // value is a pure local derivation — never a re-estimation or re-fetch.
+  // Phase 5C: ONE pure precedence decision drives both the consolidated
+  // Nutrition surface and the recipe-info Calories summary. A recognized saved
+  // Advanced result is the preferred authority; legacy/simple nutrition is the
+  // fallback only when no recognized Advanced block exists. Nothing is merged,
+  // migrated, or written.
+  const nutritionPresentation = useMemo(
+    () => resolveRecipeNutritionPresentation(recipe),
+    [recipe]
+  );
+
+  // The top recipe-info Calories summary tracks the currently selected serving
+  // count using the SAME deterministic serving-scaled contract as the Nutrition
+  // surface. `resolveNutritionDisplayCalories` is the SINGLE precedence
+  // authority (Advanced total / stored denominator when a recognized block is
+  // preferred, legacy only otherwise); no second calorie fallback is applied here.
   const displayedHeaderCalories: number | string | undefined =
-    nutritionForRequestedServings(recipe.nutrition, currentServings).calories ?? recipe.calories;
+    resolveNutritionDisplayCalories(nutritionPresentation, currentServings);
 
   // Derived relationship data (Step 6). Built from the currently loaded recipe
   // collection, memoized so it is not rebuilt on every render; it recomputes only
@@ -610,23 +623,19 @@ export function RecipeDetailView({
 
             {/* Instructions Column (7 cols) */}
             <div className="lg:col-span-7 space-y-4">
-              {/* Nutrition & Macros Card */}
-              {onUpdateNutrition && (
-                <RecipeNutritionCard
-                  recipe={recipe}
-                  servings={currentServings}
-                  network={network}
-                  onUpdateNutrition={(nut) => onUpdateNutrition(recipe, nut)}
-                />
-              )}
-
-              {/* Advanced Nutrition (Phase 4) — a SEPARATE advisory review/display card */}
-              <AdvancedNutritionCard
+              {/* ONE consolidated Nutrition surface (Phase 5C). Precedence is
+                  centralized in `resolveRecipeNutritionPresentation`: a saved
+                  Advanced result is primary, legacy/simple nutrition is the
+                  fallback, and the two are never shown as equivalent peers. */}
+              <RecipeNutritionSection
                 recipe={recipe}
-                session={advancedNutritionSession}
+                presentation={nutritionPresentation}
                 servings={currentServings}
-                bundleStatus={advancedNutritionBundleStatus}
-                onLoadBundle={onLoadAdvancedNutritionBundle}
+                network={network}
+                onUpdateNutrition={onUpdateNutrition ? (nut) => onUpdateNutrition(recipe, nut) : undefined}
+                advancedNutritionSession={advancedNutritionSession}
+                advancedNutritionBundleStatus={advancedNutritionBundleStatus}
+                onLoadAdvancedNutritionBundle={onLoadAdvancedNutritionBundle}
                 onApplyAdvancedNutrition={onApplyAdvancedNutrition}
               />
 

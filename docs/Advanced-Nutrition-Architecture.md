@@ -18,12 +18,19 @@ genuine current authority and returns a closed AUTHORIZED / NOT AUTHORIZED
 result), plus Phase 5B (an explicit, user-triggered Apply that immediately
 re-proves the Phase 5A authorization at the write boundary and performs a
 vault-safe whole-block `codex_nutrition` create/replace through the existing
-recipe write path)**. No network route or live API is used. Phase 5A remains
-pure/build-only (it writes nothing). Phase 5B is the ONLY Advanced Nutrition
-surface permitted to persist, and only on an explicit user Apply: there is no
-automatic, background, or on-open persistence. Phase 4.5E still performs no
-persistence, no Apply, and never invents a count-to-mass conversion (it uses only
-authenticated USDA source portions).
+recipe write path), plus Phase 5C (a consolidated, non-destructive Nutrition
+presentation that makes a recognized saved Advanced result the preferred display
+authority and the legacy simple/AI estimator the fallback, without merging,
+migrating, or rewriting either representation)**. No network route or live API is
+used. Phase 5A remains pure/build-only (it writes nothing). Phase 5B is the ONLY
+Advanced Nutrition surface permitted to persist, and only on an explicit user
+Apply: there is no automatic, background, or on-open persistence. Phase 4.5E
+still performs no persistence, no Apply, and never invents a count-to-mass
+conversion (it uses only authenticated USDA source portions).
+
+**Phase 5 implementation is complete (5A authorization, 5B explicit Apply, 5C
+consolidation), pending independent Phase 5C audit and the full smoke-test /
+release-control checkpoint.** Phase 6 (Vault Intelligence) has NOT started.
 
 Phase 1 adds a trusted, offline, key-free USDA FoodData Central contract: a
 strict release manifest, a defensive adapter for the **actual pinned download
@@ -507,10 +514,15 @@ enable machine-generated nutrition application.
   input, and verifies the persisted block post-write. No automatic/background
   persistence. Audit gate: persistence + migration review.
 - **Phase 5C — consolidation of the existing Nutrition & Macros experience.**
-  Future: fold the existing simple Nutrition & Macros/AI estimator into the
-  Advanced Nutrition model under explicit user intent. [DEFERRED]
+  DONE (presentation/workflow consolidation, non-destructive): a single pure
+  precedence selector makes a recognized saved Advanced result the preferred
+  display authority, keeps the legacy simple/AI estimator as the fallback for
+  legacy-only recipes, marks a stale saved result without substituting legacy
+  values, and reports unknown/malformed saved blocks while preserving them.
+  Nothing is merged, migrated, or rewritten. Audit gate: presentation +
+  non-destruction review.
 - **Phase 6 — Vault Intelligence integration (separate explicit approval).**
-  Single-recipe review first; bulk remains disabled.
+  Single-recipe review first; bulk remains disabled. [NOT STARTED]
 
 MVP: Phases 0–4 plus a minimal Phase 5 for a single recipe, without claiming
 completeness.
@@ -2975,10 +2987,142 @@ deferred, not broken). No USDA dataset payload is bundled into the plugin.
 
 ### 23.13 Deferred Phase 5C responsibilities
 
-Phase 5C remains out of scope: the existing simple Nutrition & Macros / AI
-estimator is NOT consolidated, legacy/simple nutrition is NOT removed or
-migrated, schema v1 is NOT redesigned, and Vault Intelligence behavior is NOT
-added. An independent audit/release review is still required.
+Phase 5C is implemented in §24. Phase 5B itself does not consolidate the legacy
+estimator, does not remove or migrate legacy/simple nutrition, and does not
+redesign schema v1.
 
 **Phase 5B persists ONLY on an explicit user Apply, re-proves Phase 5A authority
 immediately before the write, and performs a whole-block vault-safe update.**
+
+---
+
+## 24. Phase 5C — consolidated Nutrition experience
+
+Phase 5C is PRESENTATION / WORKFLOW consolidation only. The application still
+contains two storage representations for backward compatibility — the legacy
+simple `nutrition` / top-level `calories`, and the schema-v1 `codex_nutrition`
+block — but they no longer appear as two independent, equally authoritative
+nutrition systems.
+
+Module: `src/core/nutritionV2/phase5c/` (pure selector) +
+`src/components/RecipeNutritionSection.tsx` (single consolidated surface).
+
+### 24.1 Precedence rule
+
+The single pure selector `resolveRecipeNutritionPresentation(recipe)` returns a
+closed kind:
+
+| kind | meaning | primary display |
+| --- | --- | --- |
+| `advanced_saved` | valid recognized schema-v1 block, basis matches the recipe | Advanced |
+| `advanced_stale` | valid block whose serving/ingredient basis no longer matches | Advanced + stale notice |
+| `advanced_unsupported` | opaque unknown FUTURE schema | notice + labelled legacy fallback |
+| `advanced_invalid` | malformed recognized schema-v1 block | notice + labelled legacy fallback |
+| `legacy` | no recognized block, but legacy nutrition / calories exist | legacy fallback |
+| `none` | neither representation exists | empty/legacy fallback state |
+
+When a valid recognized Advanced block exists, **Advanced is the preferred
+display authority**. Legacy/simple nutrition remains stored untouched for
+backward compatibility but never overrides a displayed Advanced nutrient.
+
+### 24.2 Non-destructive by construction
+
+Phase 5C does NOT delete legacy `nutrition` or top-level `calories`, does NOT
+rewrite legacy nutrition, does NOT migrate legacy values into `codex_nutrition`
+(or the reverse), does NOT merge or average conflicting values, and does NOT
+change the schema. The selector is pure, deterministic, read-only, and never
+mutates its input (proven by mutation-sensitive tests). Merely viewing a recipe,
+toggling details, or running a review causes ZERO writes.
+
+### 24.3 Saved Advanced behavior
+
+A recognized saved block is rendered as the primary result. Per-serving values
+are DERIVED at display time from the stored whole-recipe totals and the block's
+stored serving denominator (`total / storedServings × requestedServings`); no
+second nutrient map is persisted. Partial status and unresolved evidence are
+displayed honestly — a partial Advanced result remains primary and is never
+"topped up" from legacy values.
+
+**Single-authority header calories.** While a recognized Advanced block is
+preferred, the recipe header calories are derived ONLY from that block. If the
+block contains no `calories` nutrient, the header shows no value — it NEVER falls
+back to legacy/top-level `calories`. Legacy calorie fallback applies only when
+Advanced is not the preferred authority (`legacy` / `none` /
+`advanced_unsupported` / `advanced_invalid`). The header consumes only the
+centralized resolver result; no second calorie fallback is applied in the view.
+
+### 24.4 Legacy fallback behavior
+
+When no recognized saved Advanced block exists, the existing simple
+Nutrition & Macros values continue to display as the legacy/quick-estimate
+fallback, and the existing AI/simple estimator remains available (unchanged,
+explicitly user-triggered). The hierarchy is explicit: the legacy estimate is a
+fallback, not equivalent to an authenticated saved USDA result. The Advanced
+review/apply affordance stays reachable for every recipe so a legacy/empty recipe
+can still be upgraded.
+
+### 24.5 AI / simple estimator role
+
+The simple/AI estimator is NOT removed. When a valid saved Advanced block exists,
+the legacy estimator is de-emphasized (its card is hidden) so it cannot compete
+with or overwrite the Advanced result; it is not run automatically, its values
+are never presented as the primary result, and its persistence remains isolated
+to the existing legacy `nutrition` fields. For legacy-only recipes it remains the
+supported workflow.
+
+### 24.6 Stale saved result
+
+If the recipe's servings or measurable-ingredient set changes after Advanced was
+saved, the block is reported `advanced_stale` (with the reason). The saved block
+is preserved and remains the display authority with an explicit "may be out of
+date — recalculate and Apply" notice; stored totals are never silently adjusted,
+and the legacy estimator never silently masks the stale state. Detecting
+staleness writes nothing.
+
+**Adaptation failure fails closed.** If the current recipe cannot be adapted
+(empty/unreadable/malformed ingredient structure), the saved basis CANNOT be
+verified, so the saved result is reported `advanced_stale` with the bounded
+`ingredients_changed` reason rather than being silently trusted as current. The
+saved block is never deleted or mutated, no nutrition value is fabricated, and
+the stale/recalculate warning is shown.
+
+### 24.7 Unknown / malformed saved block
+
+An opaque unknown FUTURE schema is preserved untouched and reported
+(`advanced_unsupported`); it is never interpreted, overwritten, migrated, or
+downgraded, and the estimator cannot destroy or replace it. A malformed
+recognized schema-v1 block is reported (`advanced_invalid`) and preserved; Apply
+fails closed (Phase 5A/5B unchanged). In both cases the legacy fallback may be
+shown only with an explicit "Legacy estimate" label so the user is never misled
+into thinking the saved Advanced data disappeared.
+
+### 24.8 Saved vs. unsaved review
+
+A saved block remains the persisted display authority even when an unsaved
+review/preview exists. The Advanced surface labels the saved summary
+("Saved Advanced Nutrition") separately from the in-memory review ("Unsaved
+review — not applied"). Only a successful explicit Apply replaces the saved
+authority; a failed Apply leaves the previously saved result primary and never
+mutates legacy nutrition.
+
+### 24.9 Top-level calories
+
+Existing top-level `calories` is never overwritten or deleted. For display, when
+a valid recognized Advanced block is preferred the consolidated header calories
+use ONLY the Advanced total (derived for the requested servings); a missing
+Advanced calories nutrient shows no value rather than borrowing the top-level
+value. Only when Advanced is not preferred does the existing legacy calorie
+behavior apply. No synchronization write occurs.
+
+### 24.10 Phase 5 completion boundary / Phase 6
+
+Phase 5 implementation is complete: 5A (authorization), 5B (explicit Apply), and
+5C (consolidation). Phase 5C is non-destructive and adds NO Vault Intelligence
+behavior: it does not scan the vault for nutrition completeness, does not add
+nutrition to Vault Intelligence health scores, does not auto-repair or
+auto-recalculate recipes, does not build vault-wide nutrition indexes or graphs,
+and has no bulk migration or bulk Apply. Phase 6 begins only after the independent
+Phase 5C audit and the separate full smoke-test / release-control checkpoint.
+
+**Phase 5C consolidates the nutrition EXPERIENCE without merging, migrating, or
+rewriting either storage representation.**
