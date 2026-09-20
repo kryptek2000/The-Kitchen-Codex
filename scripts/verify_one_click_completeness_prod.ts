@@ -175,7 +175,7 @@ async function createRecipe(cdp: Cdp, title: string, ingredients: ReadonlyArray<
 }
 
 async function openAdvancedAndAnalyze(cdp: Cdp, expectedRows: number): Promise<void> {
-  await evaluate(cdp, `(() => { const b = Array.from(document.querySelectorAll('button')).find((x) => (x.textContent||'').includes('Open Advanced Nutrition')); if (b) b.click(); return !!b; })()`);
+  await evaluate(cdp, `(() => { const b = document.querySelector('[data-testid="advanced-nutrition-open"]') || Array.from(document.querySelectorAll('button')).find((x) => /Open (Saved )?Advanced (Report|Nutrition)|Generate Nutrition/.test((x.textContent||''))); if (b) b.click(); return !!b; })()`);
   const deadline = Date.now() + 120000;
   for (;;) {
     if (await evaluate(cdp, `!!document.querySelector('[role="dialog"]')`)) break;

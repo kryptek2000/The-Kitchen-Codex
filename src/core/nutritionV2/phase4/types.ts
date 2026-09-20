@@ -318,6 +318,22 @@ export interface MatchChoice {
   readonly record_digest?: string;
   readonly catalog_digest?: string;
   /**
+   * Display-only marker: this manual selection was found with AI-assisted
+   * interpretation (the AI suggested a search phrase; the deterministic local
+   * catalog + confidence contract selected the record). It carries NO extra
+   * authority and is never persisted; the calculation re-authenticates the
+   * selection exactly like any other manual choice.
+   */
+  readonly aiAssisted?: boolean;
+  /**
+   * True ONLY for an AI-assisted DETERMINISTIC acceptance: the deterministic
+   * matcher independently accepted the genuine pinned-USDA record after an AI
+   * search phrase. This is an AUTOMATIC match (`auto_confirmed`), NOT
+   * human-reviewed authority (`user_confirmed`). It is not preserved by
+   * Re-analyze as a reviewed decision.
+   */
+  readonly aiAccepted?: boolean;
+  /**
    * Display-only human-readable description for a manual selection. Never
    * authority; the calculation engine resolves the description from the
    * authenticated record it verifies.

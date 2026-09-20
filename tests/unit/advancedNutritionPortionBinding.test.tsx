@@ -110,7 +110,7 @@ function recipe(lines: ReadonlyArray<string>, overrides: Record<string, unknown>
 
 function openAndAnalyze(r: ObsidianRecipe) {
   render(<AdvancedNutritionCard recipe={r} session={session} />);
-  fireEvent.click(screen.getByRole('button', { name: /Open Advanced Nutrition/i }));
+  fireEvent.click(screen.getByRole('button', { name: /Generate Nutrition|Open Advanced Nutrition/i }));
   fireEvent.click(screen.getByTestId('advanced-nutrition-analyze'));
 }
 

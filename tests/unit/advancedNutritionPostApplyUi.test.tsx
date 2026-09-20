@@ -100,7 +100,7 @@ const Harness: React.FC = () => {
 };
 
 async function openAndCalculate(): Promise<void> {
-  fireEvent.click(screen.getByRole('button', { name: /Open Advanced Nutrition/i }));
+  fireEvent.click(screen.getByRole('button', { name: /Generate Nutrition|Open Advanced Nutrition/i }));
   await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
   // One-click analyzer applies the automatic food + portion to live state.
   fireEvent.click(screen.getByTestId('advanced-nutrition-analyze'));

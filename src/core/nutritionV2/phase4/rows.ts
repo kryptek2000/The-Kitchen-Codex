@@ -253,6 +253,9 @@ function selectionFor(choice: MatchChoice, lineRef: string): unknown {
       catalog_digest: choice.catalog_digest,
       line_ref: lineRef,
       review_digest: choice.review_digest,
+      // AI-assisted DETERMINISTIC acceptance only. An explicit user choice
+      // (manual search / "Use this match") omits this marker.
+      ...(choice.aiAccepted === true ? { ai_assisted: true } : {}),
     };
   }
   return { kind: 'none', review_digest: choice.review_digest };

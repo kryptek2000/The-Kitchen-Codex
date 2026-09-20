@@ -5,6 +5,7 @@ import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
 import { RecipeNutritionCard } from './RecipeNutritionCard';
 import {
   AdvancedNutritionCard,
+  type AdvancedNutritionAiResolveHandler,
   type AdvancedNutritionApplyHandler,
   type AdvancedNutritionBundleUiStatus,
 } from './AdvancedNutritionCard';
@@ -22,6 +23,8 @@ interface RecipeNutritionSectionProps {
   advancedNutritionBundleStatus?: AdvancedNutritionBundleUiStatus;
   onLoadAdvancedNutritionBundle?: () => void;
   onApplyAdvancedNutrition?: AdvancedNutritionApplyHandler;
+  /** Optional AI-assisted USDA resolution port (injected by the shell). */
+  onResolveAdvancedNutritionAi?: AdvancedNutritionAiResolveHandler;
 }
 
 /**
@@ -48,6 +51,7 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
   advancedNutritionBundleStatus,
   onLoadAdvancedNutritionBundle,
   onApplyAdvancedNutrition,
+  onResolveAdvancedNutritionAi,
 }) => {
   const advancedPreferred = presentation.advanced_preferred;
   // Compact normal values derived from the saved Advanced block (single
@@ -128,6 +132,7 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
             derivedNutrition={derivedNutrition}
             derivedSourceLabel={derivedNutrition ? 'Advanced Nutrition · USDA reviewed' : undefined}
             advancedIncomplete={advancedIncomplete}
+            hideLegacyEstimator
             onUpdateNutrition={(nut) => onUpdateNutrition?.(nut)}
           />
         </div>
@@ -142,6 +147,7 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
         onLoadBundle={onLoadAdvancedNutritionBundle}
         onApplyAdvancedNutrition={onApplyAdvancedNutrition}
         savedAdvancedBlock={presentation.advanced}
+        onResolveWithAi={onResolveAdvancedNutritionAi}
       />
     </section>
   );

@@ -60,6 +60,7 @@ import {
 } from './application/recipeImageRecovery';
 import { saveGeneratedRecipeImageToVault, hashCanonicalMarkdown, type GeneratedImageSaveResult } from './application/recipeImageSave';
 import { hydrateAiSelections } from './application/aiSelection';
+import { resolveUnresolvedRowsWithAi } from './application/nutritionAiResolve';
 import { getEndpointAccessHeaders } from './application/endpointAccess';
 import { loadProductionAdvancedNutritionSession } from './browser/advancedNutritionBundle';
 import { useAdvancedNutritionBundle } from './application-ui/useAdvancedNutritionBundle';
@@ -84,6 +85,7 @@ import { RecipeFilterBar } from './components/RecipeFilterBar';
 import { RecipeCard } from './components/RecipeCard';
 import { RecipeDetailView } from './components/RecipeDetailView';
 import type {
+  AdvancedNutritionAiResolveHandler,
   AdvancedNutritionApplyHandler,
   AdvancedNutritionApplyHandlerArgs,
   AdvancedNutritionApplyUiResult,
@@ -828,6 +830,16 @@ export default function App() {
     return { ok: false, message: ADVANCED_NUTRITION_APPLY_UI_MESSAGE[failureCode] };
   };
 
+  // Optional AI-assisted USDA resolution port. This shell owns the network +
+  // application layer; the Advanced Nutrition UI receives ONLY this bounded port
+  // (it never imports the application layer). Advisory only: the resolver sends
+  // bounded unresolved-ingredient text and returns deterministic local candidates.
+  const handleResolveAdvancedNutritionAi: AdvancedNutritionAiResolveHandler = async ({
+    session,
+    rows,
+    adapted,
+  }) => resolveUnresolvedRowsWithAi({ network: networkAdapter, session, rows, adapted });
+
   // Save or Create a Vault Note (e.g. ingredient or technique created from wikilink modal)
   const handleSaveNoteToVault = async (note: VaultNote) => {
     setNotes((prev) => {
@@ -1504,6 +1516,7 @@ export default function App() {
             advancedNutritionBundleStatus={advancedNutritionBundle.status}
             onLoadAdvancedNutritionBundle={advancedNutritionBundle.load}
             onApplyAdvancedNutrition={handleApplyAdvancedNutrition}
+            onResolveAdvancedNutritionAi={handleResolveAdvancedNutritionAi}
           />
         ) : activeTab === 'grid' ? (
           /* Recipe Gallery View */

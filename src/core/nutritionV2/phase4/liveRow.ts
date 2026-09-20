@@ -52,7 +52,12 @@ export type LiveRowStatus =
 export type LiveRowMassSource = 'source_portion' | 'count_portion' | 'user_mass' | 'direct_mass';
 
 /** The live food-identity authority of a resolved row. */
-export type LiveRowFoodAuthority = 'automatic' | 'unique_exact' | 'user_confirmed' | 'none';
+export type LiveRowFoodAuthority =
+  | 'automatic'
+  | 'unique_exact'
+  | 'ai_assisted'
+  | 'user_confirmed'
+  | 'none';
 
 export interface LiveRowState {
   readonly line_ref: string;
@@ -206,9 +211,11 @@ export function projectLiveRow(input: LiveRowProjectionInput): LiveRowState {
       : 'none'
     : uniqueExact && !hasMatchChoice
       ? 'unique_exact'
-      : matchChoice?.automatic === true
-        ? 'automatic'
-        : 'user_confirmed';
+      : matchChoice?.aiAccepted === true
+        ? 'ai_assisted'
+        : matchChoice?.automatic === true
+          ? 'automatic'
+          : 'user_confirmed';
 
   const measurement: IngredientMeasurementView | undefined = entry
     ? ingredientMeasurement(entry)

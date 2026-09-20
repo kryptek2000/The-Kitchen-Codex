@@ -22,3 +22,4 @@ export * from './rows';
 export * from './analyzer';
 export * from './liveRow';
 export * from './hydrate';
+export * from './aiResolve';

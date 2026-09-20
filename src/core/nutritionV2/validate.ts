@@ -602,14 +602,22 @@ function validateInertCodexNutritionV1(raw: Record<string, unknown>): AdvancedNu
       if (hasFoodId !== hasRelease) {
         diag.add('invalid_unresolved_food_evidence');
       } else if (hasFoodId) {
+        // A USDA FDC id is a bounded positive INTEGER string. A non-numeric
+        // `source_food_id` can never authenticate against the pinned catalog and
+        // is rejected here (fail closed) rather than carried as inert prose.
         if (
           typeof entry.source_food_id !== 'string' ||
-          entry.source_food_id.trim().length === 0 ||
+          !/^\d+$/.test(entry.source_food_id) ||
           entry.source_food_id.length > MAX_SOURCE_ID_LENGTH
         ) {
           diag.add('invalid_unresolved_source_food_id');
         } else {
-          unresolvedFoodId = entry.source_food_id;
+          const numeric = Number(entry.source_food_id);
+          if (!Number.isSafeInteger(numeric) || numeric <= 0) {
+            diag.add('invalid_unresolved_source_food_id');
+          } else {
+            unresolvedFoodId = entry.source_food_id;
+          }
         }
         if (
           typeof entry.source_release !== 'string' ||

@@ -139,6 +139,7 @@ describe('phase 4 isolation — source purity', () => {
     expect(names).toEqual(
       [
         'adapt.ts',
+        'aiResolve.ts',
         'analyzer.ts',
         'countPortion.ts',
         'display.ts',

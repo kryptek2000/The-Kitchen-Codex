@@ -128,6 +128,51 @@ export function nutritionEstimateRateLimiter(req: Request, res: Response, next: 
 }
 
 /**
+ * Express middleware for rate limiting on the AI-assisted USDA resolution
+ * endpoint. Configurable via `NUTRITION_RESOLVE_RATE_LIMIT` (default 20 requests
+ * per minute). Separate bucket from the legacy estimator so a resolver storm can
+ * never starve estimator calls (and vice versa).
+ */
+export function nutritionResolveRateLimiter(req: Request, res: Response, next: NextFunction) {
+  const parsedLimit = parseInt(process.env.NUTRITION_RESOLVE_RATE_LIMIT || "20", 10);
+  const maxRequestsPerWindow = isNaN(parsedLimit) || parsedLimit <= 0 ? 20 : parsedLimit;
+  const windowMs = 60 * 1000; // 1 minute window
+
+  const clientIp = getClientIp(req);
+  const now = Date.now();
+
+  let entry = clientIpStore.get(`nutr_resolve_${clientIp}`);
+
+  if (!entry || entry.resetTime <= now) {
+    entry = {
+      count: 1,
+      resetTime: now + windowMs,
+    };
+    clientIpStore.set(`nutr_resolve_${clientIp}`, entry);
+  } else {
+    entry.count += 1;
+  }
+
+  const remaining = Math.max(0, maxRequestsPerWindow - entry.count);
+  const resetSeconds = Math.ceil((entry.resetTime - now) / 1000);
+
+  res.setHeader("RateLimit-Limit", maxRequestsPerWindow);
+  res.setHeader("RateLimit-Remaining", remaining);
+  res.setHeader("RateLimit-Reset", resetSeconds);
+
+  if (entry.count > maxRequestsPerWindow) {
+    res.setHeader("Retry-After", resetSeconds);
+    return res.status(429).json({
+      ok: false,
+      error: "Too many nutrition resolution requests. Please wait a moment before trying again.",
+      retryAfterSeconds: resetSeconds,
+    });
+  }
+
+  next();
+}
+
+/**
  * Express middleware for rate limiting on AI metadata recovery endpoints.
  * Configurable via `METADATA_RECOVERY_RATE_LIMIT` (default 25 requests per minute).
  */

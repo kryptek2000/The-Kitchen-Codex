@@ -52,6 +52,14 @@ interface RecipeNutritionCardProps {
    * nutrient values masquerading as whole-recipe totals.
    */
   advancedIncomplete?: { resolved: number; total: number };
+  /**
+   * Hides the legacy AI estimator controls. The consolidated nutrition surface
+   * now uses the unified "Generate Nutrition" flow (deterministic USDA analysis
+   * first, optional AI-assisted USDA resolution). The legacy endpoint remains
+   * dormant for compatibility but is no longer offered as a competing nutrition
+   * system.
+   */
+  hideLegacyEstimator?: boolean;
 }
 
 /** Human-readable provenance label; null when provenance is absent. */
@@ -85,6 +93,7 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
   derivedNutrition,
   derivedSourceLabel,
   advancedIncomplete,
+  hideLegacyEstimator = false,
 }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -233,21 +242,24 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Estimate AI Trigger Button */}
-          <button
-            id="estimate-nutrition-ai-btn"
-            onClick={handleEstimate}
-            disabled={isLoading}
-            className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold text-amber-300 bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 transition-all disabled:opacity-50 shadow-xs"
-            title="Estimate nutritional values per serving using server-side Gemini AI"
-          >
-            {isLoading ? (
-              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-            ) : (
-              <Sparkles className="w-3.5 h-3.5" />
-            )}
-            <span>{isLoading ? 'Analyzing...' : currentNutrition ? 'Re-estimate' : 'Estimate Nutrition (AI)'}</span>
-          </button>
+          {/* Legacy AI estimator is hidden when the unified Advanced Nutrition
+              flow is wired; "Generate Nutrition" lives on the Advanced card. */}
+          {!hideLegacyEstimator && (
+            <button
+              id="estimate-nutrition-ai-btn"
+              onClick={handleEstimate}
+              disabled={isLoading}
+              className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold text-amber-300 bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 transition-all disabled:opacity-50 shadow-xs"
+              title="Estimate nutritional values per serving using server-side Gemini AI"
+            >
+              {isLoading ? (
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Sparkles className="w-3.5 h-3.5" />
+              )}
+              <span>{isLoading ? 'Analyzing...' : currentNutrition ? 'Re-estimate' : 'Estimate Nutrition (AI)'}</span>
+            </button>
+          )}
 
           <button
             onClick={() => setIsExpanded(!isExpanded)}
@@ -276,7 +288,7 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
       )}
 
       {/* Pending Estimate Review Dialog */}
-      {pendingEstimate && (
+      {!hideLegacyEstimator && pendingEstimate && (
         <div className="mb-4 p-4 rounded-xl bg-[#1A1A1A] border border-amber-500/30 space-y-3 animate-in fade-in">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 text-amber-300 text-xs font-bold">
@@ -516,17 +528,32 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
             </>
           ) : (
             <div className="text-center py-5 px-4 rounded-xl bg-[#0E0E0E] border border-dashed border-white/10 space-y-2">
-              <p className="text-xs text-gray-400">
-                No nutrition metadata is recorded in this recipe's frontmatter yet.
-              </p>
-              <button
-                onClick={handleEstimate}
-                disabled={isLoading}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 transition-colors"
-              >
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>Estimate with Gemini AI</span>
-              </button>
+              {hideLegacyEstimator ? (
+                <>
+                  <p className="text-xs text-gray-400">
+                    No nutrition is recorded for this recipe yet.
+                  </p>
+                  <p className="text-[11px] text-gray-500">
+                    Use <span className="text-indigo-300 font-medium">Generate Nutrition</span> in the
+                    Advanced Nutrition card below: deterministic USDA analysis first, with optional
+                    AI-assisted USDA resolution for difficult ingredients.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-xs text-gray-400">
+                    No nutrition metadata is recorded in this recipe's frontmatter yet.
+                  </p>
+                  <button
+                    onClick={handleEstimate}
+                    disabled={isLoading}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 transition-colors"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>Estimate with Gemini AI</span>
+                  </button>
+                </>
+              )}
             </div>
           )}
         </div>

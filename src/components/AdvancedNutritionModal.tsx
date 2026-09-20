@@ -31,6 +31,7 @@ import {
   type FoodSearchResult,
   type LiveRowState,
   type LiveRowStatus,
+  type MatchChoice,
   type Phase4Action,
   type Phase4Row,
   type Phase4State,
@@ -53,6 +54,31 @@ export interface AdvancedNutritionApplyUi {
   readonly onRequest: () => void;
   readonly onConfirm: () => void;
   readonly onCancel: () => void;
+}
+
+/** One advisory AI-assisted candidate shown for a specific unresolved row. */
+export interface AdvancedNutritionAiSuggestion {
+  readonly line_ref: string;
+  readonly fdc_id: number;
+  readonly description: string;
+  readonly auto: boolean;
+  readonly choice: MatchChoice;
+}
+
+/**
+ * Optional AI-assisted USDA resolution UI (advisory only). The AI suggests search
+ * phrases; the deterministic local catalog + confidence contract select the
+ * record. Absent when the shell does not wire the resolver.
+ */
+export interface AdvancedNutritionAiUi {
+  readonly available: boolean;
+  readonly running: boolean;
+  readonly message: string | null;
+  readonly suggestions: Readonly<Record<string, AdvancedNutritionAiSuggestion>>;
+  readonly unresolvedCount: number;
+  readonly onResolve: (lineRef?: string) => void;
+  readonly onUseSuggestion: (lineRef: string) => void;
+  readonly onDismissMessage: () => void;
 }
 
 interface AdvancedNutritionModalProps {
@@ -78,6 +104,8 @@ interface AdvancedNutritionModalProps {
   hydratedFromSaved?: boolean;
   /** Explicit Apply control (Phase 5B). Absent when no write path is wired. */
   apply?: AdvancedNutritionApplyUi;
+  /** Optional AI-assisted USDA resolution (advisory only). */
+  ai?: AdvancedNutritionAiUi;
 }
 
 const OUTCOME_LABEL: Record<string, string> = {
@@ -752,6 +780,7 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
   workingDirty = false,
   hydratedFromSaved = false,
   apply,
+  ai,
 }) => {
   const { dialogRef, onKeyDown } = useDialogFocus(isOpen, onClose);
   const [expandedLineRef, setExpandedLineRef] = useState<string | null>(null);
@@ -862,6 +891,60 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                   : 'Nothing is written until Apply.'}
             </p>
           </div>
+
+          {/* AI-ASSISTED USDA RESOLUTION (advisory only; optional). AI suggests
+              search phrases; the pinned USDA catalog + deterministic matcher
+              still decide every match. */}
+          {ai && (ai.unresolvedCount > 0 || ai.message !== null) && (
+            <div
+              data-testid="advanced-nutrition-ai"
+              className="p-3 rounded-xl bg-[#0E0E0E] border border-white/10 space-y-2"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-[11px] font-semibold text-gray-200">
+                    Resolve unresolved ingredients with AI
+                  </p>
+                  <p className="text-[10px] text-gray-500">
+                    AI suggests USDA search phrases only. The pinned USDA catalog and the
+                    deterministic matcher decide every match.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  data-testid="advanced-nutrition-ai-resolve"
+                  disabled={!ai.available || ai.running || ai.unresolvedCount === 0}
+                  aria-disabled={!ai.available || ai.running || ai.unresolvedCount === 0}
+                  onClick={() => ai.onResolve()}
+                  className="shrink-0 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-400/30 text-indigo-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {ai.running ? 'Resolving with AI…' : 'Resolve with AI'}
+                </button>
+              </div>
+              {!ai.available && (
+                <p className="text-[10px] text-gray-500">
+                  AI assistance is not configured in this build. Manual USDA search is always
+                  available.
+                </p>
+              )}
+              {ai.message && (
+                <p
+                  data-testid="advanced-nutrition-ai-message"
+                  role="status"
+                  className="text-[11px] text-indigo-200 flex items-start justify-between gap-2"
+                >
+                  <span>{ai.message}</span>
+                  <button
+                    type="button"
+                    onClick={ai.onDismissMessage}
+                    className="text-gray-500 hover:text-gray-300 text-[10px] shrink-0"
+                  >
+                    Dismiss
+                  </button>
+                </p>
+              )}
+            </div>
+          )}
 
           <p id="advanced-nutrition-desc" className="text-[11px] text-gray-400">
             {PHASE4_NOT_MEDICAL_ADVICE}
@@ -993,6 +1076,16 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                                 {rowAmount !== null && rowUnit ? ` (recipe ${rowAmount} ${rowUnit})` : ''}
                               </span>
                             )}
+                            {choice?.aiAssisted === true && (
+                              <span
+                                data-testid="advanced-nutrition-ai-badge"
+                                className="text-indigo-300"
+                                title="Food discovered with AI-assisted interpretation; the pinned USDA catalog and deterministic matcher accepted it."
+                              >
+                                {' '}
+                                · {choice?.aiAccepted === true ? 'AI-assisted USDA match' : 'AI-assisted'}
+                              </span>
+                            )}
                           </p>
                         ) : (
                           <p className="text-[11px] text-gray-500">
@@ -1043,8 +1136,14 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                               <span className="text-emerald-300 font-medium">
                                 {description ?? 'Selected source'}
                               </span>
-                              {choice?.kind === 'manual' && (
+                              {choice?.kind === 'manual' && choice?.aiAssisted !== true && (
                                 <span className="text-gray-400"> · user-selected from USDA search</span>
+                              )}
+                              {choice?.aiAssisted === true && (
+                                <span className="text-indigo-300">
+                                  {' '}
+                                  · {choice?.aiAccepted === true ? 'AI-assisted USDA match' : 'AI-assisted · user-confirmed'}
+                                </span>
                               )}
                             </p>
                             {row.outcome === 'review_required' && (
@@ -1142,6 +1241,42 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                               ? 'No USDA source candidate shares this ingredient automatically. Search USDA below to choose one, or it contributes nothing.'
                               : 'This ingredient line could not be parsed safely. It contributes nothing.'}
                           </p>
+                        )}
+
+                        {ai && (row.outcome === 'unmatched' || row.outcome === 'invalid') && (
+                          <div className="space-y-1" data-testid="advanced-nutrition-ai-row">
+                            <button
+                              type="button"
+                              data-testid="advanced-nutrition-ai-help"
+                              disabled={!ai.available || ai.running}
+                              aria-disabled={!ai.available || ai.running}
+                              onClick={() => ai.onResolve(row.line_ref)}
+                              className="px-2 py-0.5 rounded-md text-[10px] bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-400/30 text-indigo-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                              {ai.running ? 'Asking AI…' : 'Ask AI for help'}
+                            </button>
+                            {ai.suggestions[row.line_ref] && (
+                              <div
+                                data-testid="advanced-nutrition-ai-suggestion"
+                                className="p-2 rounded-lg bg-indigo-950/20 border border-indigo-500/25 space-y-1"
+                              >
+                                <p className="text-[11px] text-gray-200">
+                                  AI-suggested USDA match:{' '}
+                                  <span className="text-emerald-300">
+                                    {ai.suggestions[row.line_ref].description}
+                                  </span>
+                                </p>
+                                <button
+                                  type="button"
+                                  data-testid="advanced-nutrition-ai-use"
+                                  onClick={() => ai.onUseSuggestion(row.line_ref)}
+                                  className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-400/30 text-emerald-100 transition-colors"
+                                >
+                                  Use this match
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         )}
                         {row.outcome === 'qualitative' && (
                           <p className="text-[11px] text-gray-400">

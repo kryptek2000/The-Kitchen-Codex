@@ -82,7 +82,7 @@ describe('phase 4.5B card — lazy load states', () => {
     const load = vi.fn();
     render(<AdvancedNutritionCard recipe={recipe()} session={null} bundleStatus="idle" onLoadBundle={load} />);
     expect(screen.getByText(PHASE4_IDLE_MESSAGE)).toBeTruthy();
-    const button = screen.getByRole('button', { name: /Open Advanced Nutrition/i });
+    const button = screen.getByRole('button', { name: /Generate Nutrition|Open Advanced Nutrition/i });
     expect(button.hasAttribute('disabled')).toBe(false);
     fireEvent.click(button);
     expect(load).toHaveBeenCalledTimes(1);
@@ -108,14 +108,14 @@ describe('phase 4.5B card — lazy load states', () => {
   it('renders the unsupported state without offering a load control', () => {
     render(<AdvancedNutritionCard recipe={recipe()} session={null} bundleStatus="unsupported" onLoadBundle={() => {}} />);
     expect(screen.getByText(PHASE4_UNSUPPORTED_MESSAGE)).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /Open Advanced Nutrition/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Generate Nutrition|Open Advanced Nutrition/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /Retry/i })).toBeNull();
   });
 
   it('keeps the honest unavailable state when no loader is wired', () => {
     render(<AdvancedNutritionCard recipe={recipe()} session={null} />);
     expect(screen.getByText(PHASE4_UNAVAILABLE_MESSAGE)).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Open Advanced Nutrition/i }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: /Generate Nutrition|Open Advanced Nutrition/i }).hasAttribute('disabled')).toBe(true);
   });
 
   it('does not load on mount and opens the review UI only after explicit load succeeds', async () => {
@@ -124,7 +124,7 @@ describe('phase 4.5B card — lazy load states', () => {
     expect(loader).not.toHaveBeenCalled();
     expect(screen.queryByRole('dialog')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: /Open Advanced Nutrition/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Generate Nutrition|Open Advanced Nutrition/i }));
     const dialog = await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
     expect(dialog).toBeTruthy();
     expect(loader).toHaveBeenCalledTimes(1);
@@ -133,7 +133,7 @@ describe('phase 4.5B card — lazy load states', () => {
   it('requires an explicit action before calculating and never offers Apply/Save', async () => {
     const loader = vi.fn(async () => successResult());
     render(<Harness loader={loader} />);
-    fireEvent.click(screen.getByRole('button', { name: /Open Advanced Nutrition/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Generate Nutrition|Open Advanced Nutrition/i }));
     const dialog = await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
 
     // No preview until the explicit Calculate action.

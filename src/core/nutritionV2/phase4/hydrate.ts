@@ -45,7 +45,7 @@ import type {
   UserMassChoice,
 } from './types';
 
-/** Relative tolerance for re-matching a persisted gram amount to a portion. */
+/** ABSOLUTE tolerance (grams) for re-matching a persisted gram amount to a portion. */
 const GRAMS_EPSILON = 0.02;
 
 export interface HydratedWorkingReview {

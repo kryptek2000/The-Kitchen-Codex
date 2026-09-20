@@ -28,6 +28,7 @@ import {
   type CountPortionChoice,
   type MatchChoice,
   type Phase4Action,
+  type Phase4Row,
   type Phase4State,
   type PortionChoice,
   type RecipeAnalysis,
@@ -35,7 +36,11 @@ import {
 } from '../core/nutritionV2/phase4';
 import { authorizeNutritionPersistence } from '../core/nutritionV2/phase5';
 import type { CodexNutritionV1 } from '../core/nutritionV2/schema';
-import { AdvancedNutritionModal, type AdvancedNutritionApplyUi } from './AdvancedNutritionModal';
+import {
+  aiResolutionEligibleRows,
+  type AiResolveOutcome,
+} from '../core/nutritionV2/phase4';
+import { AdvancedNutritionModal, type AdvancedNutritionApplyUi, type AdvancedNutritionAiUi, type AdvancedNutritionAiSuggestion } from './AdvancedNutritionModal';
 import { AdvancedNutritionSavedReport } from './AdvancedNutritionSavedReport';
 
 export type AdvancedNutritionBundleUiStatus =
@@ -84,7 +89,27 @@ interface AdvancedNutritionCardProps {
    * session is required. Absent for recipes without a recognized saved result.
    */
   savedAdvancedBlock?: CodexNutritionV1;
+  /**
+   * Optional AI-assisted USDA resolution port, injected by the shell (the shell
+   * owns the network + application layer; the UI never imports the application
+   * layer directly). Advisory only: it returns deterministic local candidates.
+   */
+  onResolveWithAi?: AdvancedNutritionAiResolveHandler;
 }
+
+/**
+ * Injected AI-resolution port. The shell sends the bounded unresolved rows to the
+ * server resolver and resolves the advisory phrases against the genuine session.
+ */
+export type AdvancedNutritionAiResolveHandler = (args: {
+  readonly session: AdvancedNutritionSession;
+  readonly rows: ReadonlyArray<Phase4Row>;
+  readonly adapted: ReadonlyArray<AdaptedIngredient>;
+}) => Promise<{
+  readonly ok: boolean;
+  readonly message?: string;
+  readonly outcome: AiResolveOutcome;
+}>;
 
 type ApplyUiState =
   | { readonly kind: 'idle' }
@@ -102,6 +127,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
   onLoadBundle,
   onApplyAdvancedNutrition,
   savedAdvancedBlock,
+  onResolveWithAi,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [isSavedReportOpen, setIsSavedReportOpen] = useState(false);
@@ -109,26 +135,111 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
   const [applyState, setApplyState] = useState<ApplyUiState>({ kind: 'idle' });
   const [analysisRuns, setAnalysisRuns] = useState(0);
   const [state, dispatch] = useReducer(phase4Reducer, INITIAL_PHASE4_STATE);
-  const pendingOpen = useRef(false);
+  /**
+   * Recipe-bound pending open intent. A Generate/Edit click that triggers a lazy
+   * bundle load records the recipe key AT CLICK TIME; when the session arrives it
+   * opens the editor ONLY if the same recipe is still current. A pending intent
+   * from Recipe A can therefore never auto-open Recipe B.
+   */
+  const pendingOpenRecipeKey = useRef<string | null>(null);
   const openerRef = useRef<HTMLButtonElement | null>(null);
   // Hydration/dirty tracking for the working review.
   const hydratedKeyRef = useRef<string | null>(null);
   const [workingTouched, setWorkingTouched] = useState(false);
   const [hydratedFromSaved, setHydratedFromSaved] = useState(false);
+  // AI-assisted USDA resolution (advisory only; never authority).
+  const [aiRunning, setAiRunning] = useState(false);
+  const [aiMessage, setAiMessage] = useState<string | null>(null);
+  const [aiSuggestions, setAiSuggestions] = useState<Record<string, AdvancedNutritionAiSuggestion>>({});
+  const aiRequestSeq = useRef(0);
+  /**
+   * Monotonic AI lifecycle generation. Bumped on every recipe-identity change so
+   * an in-flight response created for a previous recipe can never land.
+   */
+  const aiGeneration = useRef(0);
+  /** Synchronous re-entry guard (a rapid double-click must make ONE request). */
+  const aiRunningRef = useRef(false);
+  /** Latest recipe/session identity, readable from async callbacks. */
+  const identityRef = useRef<{ recipeKey: string | null; sessionIdentity: string | null }>({
+    recipeKey: null,
+    sessionIdentity: null,
+  });
+  /** Latest editor-open state, readable from async callbacks. */
+  const isOpenRef = useRef(false);
+  /**
+   * Set by the explicit Generate Nutrition action (bound to the recipe key at
+   * click time) so the deterministic analyzer runs immediately once the working
+   * editor opens for THAT recipe (one click, not two). It is consumed once and
+   * NEVER set by viewing or by Edit / Re-analyze.
+   */
+  const [pendingGenerateRecipeKey, setPendingGenerateRecipeKey] = useState<string | null>(null);
 
   // The saved report renders from this ALREADY-VALIDATED block alone; no USDA
   // session, catalog authentication, or matcher initialization is required.
   const savedBlock = savedAdvancedBlock;
 
-  // When a user-initiated load succeeds, focus the (now-rendered) opener and
-  // open the review UI exactly once, so closing the modal restores focus to it.
+  // Materialize the narrow adaptation envelope ONCE, safely, before any recipe
+  // or ingredient property is used. The untrusted runtime recipe is never read
+  // directly.
+  const adaptation = useMemo(() => adaptRecipe(recipe), [recipe]);
+  const adapted = adaptation.ok ? adaptation.recipe.adapted : NO_INGREDIENTS;
+  const rows = useMemo(
+    () => (session && adaptation.ok ? buildReviewRows(session, adapted) : []),
+    [session, adaptation, adapted]
+  );
+  const currentRecipeKey = adaptation.ok ? adaptation.recipe.recipe_key : null;
+  const currentSessionIdentity = session ? phase4SessionIdentity(session.metadata()) : null;
+  // Latest identity/open state for async callbacks (never a render-scope stale).
+  identityRef.current = { recipeKey: currentRecipeKey, sessionIdentity: currentSessionIdentity };
+  isOpenRef.current = isOpen;
+
+  /**
+   * RECIPE-IDENTITY RESET. When the working recipe changes, every transient
+   * AI/Generate intent is cleared and the AI generation is invalidated so a
+   * response created for Recipe A can never land in Recipe B. Saved Advanced
+   * Nutrition and hydration state for the NEW recipe are untouched.
+   */
   useEffect(() => {
-    if (session && pendingOpen.current) {
-      pendingOpen.current = false;
-      openerRef.current?.focus();
-      setIsOpen(true);
-    }
-  }, [session]);
+    aiGeneration.current += 1;
+    aiRequestSeq.current += 1;
+    aiRunningRef.current = false;
+    pendingOpenRecipeKey.current = null;
+    setPendingGenerateRecipeKey(null);
+    setAiSuggestions({});
+    setAiMessage(null);
+    setAiRunning(false);
+    setIsOpen(false);
+    setIsSavedReportOpen(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentRecipeKey]);
+
+  /**
+   * SESSION-AUTHORITY RESET. A different pinned session (bundle authority)
+   * invalidates in-flight AI responses too, but must NOT cancel a recipe-bound
+   * Generate intent that is waiting for the SAME recipe's lazy load to finish.
+   */
+  useEffect(() => {
+    aiGeneration.current += 1;
+    aiRequestSeq.current += 1;
+    aiRunningRef.current = false;
+    setAiSuggestions({});
+    setAiMessage(null);
+    setAiRunning(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSessionIdentity]);
+
+  // When a user-initiated load succeeds, focus the (now-rendered) opener and
+  // open the review UI exactly once — ONLY when the SAME recipe that requested
+  // the load is still current (a mid-load recipe switch cancels the intent).
+  useEffect(() => {
+    if (!session) return;
+    const captured = pendingOpenRecipeKey.current;
+    if (captured === null) return;
+    pendingOpenRecipeKey.current = null;
+    if (!adaptation.ok || adaptation.recipe.recipe_key !== captured) return;
+    openerRef.current?.focus();
+    setIsOpen(true);
+  }, [session, adaptation]);
 
   /** Opens the WORKING analyzer/editor, initializing the USDA bundle if needed. */
   const openWorkingEditor = () => {
@@ -137,7 +248,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
       return;
     }
     if (onLoadBundle) {
-      pendingOpen.current = true;
+      pendingOpenRecipeKey.current = currentRecipeKey;
       onLoadBundle();
     }
   };
@@ -154,16 +265,6 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
     }
     openWorkingEditor();
   };
-
-  // Materialize the narrow adaptation envelope ONCE, safely, before any recipe
-  // or ingredient property is used. The untrusted runtime recipe is never read
-  // directly.
-  const adaptation = useMemo(() => adaptRecipe(recipe), [recipe]);
-  const adapted = adaptation.ok ? adaptation.recipe.adapted : NO_INGREDIENTS;
-  const rows = useMemo(
-    () => (session && adaptation.ok ? buildReviewRows(session, adapted) : []),
-    [session, adaptation, adapted]
-  );
 
   useEffect(() => {
     if (!session || !adaptation.ok) {
@@ -367,7 +468,10 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
     for (const row of state.rows) {
       const choice = state.matches[row.line_ref];
       if (!choice) continue;
-      const userDecision = choice.kind === 'manual' || choice.automatic !== true;
+      // An AI-assisted AUTOMATIC acceptance is NOT a reviewed decision; only an
+      // explicit manual/user choice (no aiAccepted marker) is preserved.
+      const userDecision =
+        choice.aiAccepted !== true && (choice.kind === 'manual' || choice.automatic !== true);
       if (!userDecision) continue;
       matches[row.line_ref] = choice;
       const userMass = state.userMasses[row.line_ref];
@@ -413,6 +517,11 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
     // Visible transition/feedback: the analyzer run is observable even when the
     // deterministic result is identical to a previous run.
     setAnalysisRuns((runs) => runs + 1);
+    // AI suggestions/messages are EPHEMERAL advisory working state: a fresh
+    // deterministic Re-analyze invalidates them (they are never reviewed
+    // decisions and must not linger against a new review identity).
+    setAiSuggestions({});
+    setAiMessage(null);
   };
 
   const compact = display
@@ -421,6 +530,181 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
         return row;
       })
     : null;
+
+  /**
+   * GENERATE NUTRITION — the single recipe-facing entry and an EXPLICIT user
+   * action that authorizes the deterministic analysis. It loads the USDA
+   * analyzer lazily (viewing a recipe still never loads it), opens the working
+   * review, and immediately runs the EXISTING deterministic analyzer. AI is NOT
+   * called here: it remains an optional secondary action for rows the
+   * deterministic pass cannot resolve. Nothing is written until Apply.
+   */
+  const handleGenerate = () => {
+    if (savedBlock) {
+      setIsSavedReportOpen(true);
+      return;
+    }
+    // Bind the intent to the recipe CURRENT at click time; it is consumed only if
+    // that same recipe is still current once the editor is ready.
+    setPendingGenerateRecipeKey(currentRecipeKey);
+    openWorkingEditor();
+  };
+
+  // ONE-CLICK GENERATE: run the deterministic analyzer exactly once, once the
+  // working editor is READY for the SAME recipe that requested Generate. Waiting
+  // for `state.recipeKey` to match guarantees the analyzer runs against the
+  // initialized rows (never a stale pre-initialize snapshot), and the recipe-key
+  // binding means a mid-load recipe switch cancels the intent.
+  useEffect(() => {
+    if (pendingGenerateRecipeKey === null) return;
+    if (!session || !adaptation.ok) return;
+    if (pendingGenerateRecipeKey !== adaptation.recipe.recipe_key) {
+      setPendingGenerateRecipeKey(null);
+      return;
+    }
+    if (state.recipeKey !== adaptation.recipe.recipe_key) return;
+    setPendingGenerateRecipeKey(null);
+    handleAnalyze();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingGenerateRecipeKey, state.recipeKey, session, adaptation]);
+
+  /**
+   * AI-ASSISTED USDA RESOLUTION (optional, explicit). Sends ONLY the bounded
+   * unresolved-ingredient text to the server resolver, then resolves the advisory
+   * search phrases against the genuine pinned catalog + the SAME deterministic
+   * confidence contract. Auto-eligible candidates are selected; the rest are
+   * offered for user review. The AI never grants authority and never writes.
+   */
+  const handleResolveWithAi = useCallback(
+    async (lineRefs?: ReadonlyArray<string>) => {
+      if (!session || !adaptation.ok) return;
+      if (!onResolveWithAi) {
+        setAiMessage('AI assistance is unavailable. You can continue with USDA search manually.');
+        return;
+      }
+      const eligible = aiResolutionEligibleRows(state.rows);
+      const targets =
+        lineRefs && lineRefs.length > 0
+          ? eligible.filter((row) => lineRefs.includes(row.line_ref))
+          : eligible;
+      if (targets.length === 0) {
+        setAiMessage('No unresolved ingredients need AI assistance.');
+        return;
+      }
+      // SYNCHRONOUS RE-ENTRY GUARD: a rapid double-click must create exactly ONE
+      // request (the server rate limiter is only a backstop).
+      if (aiRunningRef.current) return;
+      aiRunningRef.current = true;
+      // RECIPE-BOUND REQUEST TOKEN. Captured at request creation; the response is
+      // accepted only while the SAME recipe + session authority are current, the
+      // AI lifecycle generation is unchanged, and the editor is still open.
+      const capturedRecipeKey = identityRef.current.recipeKey;
+      const capturedSessionIdentity = identityRef.current.sessionIdentity;
+      const capturedGeneration = aiGeneration.current;
+      const seq = aiRequestSeq.current + 1;
+      aiRequestSeq.current = seq;
+      setAiRunning(true);
+      setAiMessage(null);
+      const stillCurrent = (): boolean => {
+        if (aiRequestSeq.current !== seq) return false;
+        if (aiGeneration.current !== capturedGeneration) return false;
+        const current = identityRef.current;
+        if (current.recipeKey !== capturedRecipeKey) return false;
+        if (current.sessionIdentity !== capturedSessionIdentity) return false;
+        // A closed editor must never later receive AI state.
+        return isOpenRef.current === true;
+      };
+      try {
+        const result = await onResolveWithAi({
+          session,
+          rows: targets,
+          adapted,
+        });
+        // STALE-RESPONSE PROTECTION: a response for a different recipe/session,
+        // an older generation, a superseded request, or a closed editor is
+        // discarded BEFORE any dispatch/UI mutation.
+        if (!stillCurrent()) return;
+        if (!result.ok) {
+          setAiMessage(
+            result.message ?? 'AI assistance is unavailable. You can continue with USDA search manually.'
+          );
+          return;
+        }
+        const suggestions: Record<string, AdvancedNutritionAiSuggestion> = {};
+        for (const candidate of result.outcome.candidates) {
+          if (candidate.auto) {
+            // AI-assisted DETERMINISTIC acceptance: automatic authority, never
+            // user-confirmed (the choice carries aiAssisted + aiAccepted).
+            setWorkingTouched(true);
+            dispatch({
+              type: 'select_match',
+              lineRef: candidate.line_ref,
+              choice: Object.freeze({ ...candidate.choice }),
+            });
+          } else {
+            suggestions[candidate.line_ref] = Object.freeze({
+              line_ref: candidate.line_ref,
+              fdc_id: candidate.fdc_id,
+              description: candidate.description,
+              auto: false,
+              choice: candidate.choice,
+            });
+          }
+        }
+        setAiSuggestions(suggestions);
+        const reviewCount = result.outcome.candidates.length - result.outcome.auto_count;
+        setAiMessage(
+          result.outcome.candidates.length === 0
+            ? 'AI could not find a confident USDA match. Continue with USDA search.'
+            : `AI-assisted resolution: ${result.outcome.auto_count} selected, ${reviewCount} suggested for review.`
+        );
+      } catch {
+        if (stillCurrent()) {
+          setAiMessage('AI assistance is unavailable. You can continue with USDA search manually.');
+        }
+      } finally {
+        if (aiRequestSeq.current === seq) {
+          aiRunningRef.current = false;
+          setAiRunning(false);
+        }
+      }
+    },
+    [session, adaptation, onResolveWithAi, state.rows, adapted]
+  );
+
+  const handleUseAiSuggestion = (lineRef: string) => {
+    const suggestion = aiSuggestions[lineRef];
+    if (!suggestion) return;
+    // Explicit user confirmation: the offered (below-threshold) candidate
+    // becomes a genuine manual/user-confirmed choice (no aiAccepted marker).
+    setWorkingTouched(true);
+    dispatch({
+      type: 'select_match',
+      lineRef,
+      choice: Object.freeze({ ...suggestion.choice }),
+    });
+    setAiSuggestions((prev) => {
+      const next = { ...prev };
+      delete next[lineRef];
+      return next;
+    });
+  };
+
+  const aiUi: AdvancedNutritionAiUi | undefined =
+    session && adaptation.ok && onResolveWithAi
+      ? {
+          available: true,
+          running: aiRunning,
+          message: aiMessage,
+          suggestions: aiSuggestions,
+          unresolvedCount: aiResolutionEligibleRows(state.rows).length,
+          onResolve: (lineRef?: string) => {
+            void handleResolveWithAi(lineRef ? [lineRef] : undefined);
+          },
+          onUseSuggestion: handleUseAiSuggestion,
+          onDismissMessage: () => setAiMessage(null),
+        }
+      : undefined;
 
   return (
     <div
@@ -471,7 +755,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
             }`}
           >
             <FlaskConical className="w-3.5 h-3.5" />
-            <span>{savedBlock ? 'Open Saved Advanced Report' : 'Open Advanced Nutrition'}</span>
+            <span>{savedBlock ? 'Open Saved Advanced Report' : 'Generate Nutrition'}</span>
           </button>
         </div>
       )}
@@ -537,11 +821,11 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
             <button
               type="button"
               data-testid="advanced-nutrition-open"
-              onClick={handleOpenRequest}
+              onClick={savedBlock ? handleOpenRequest : handleGenerate}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-indigo-200 bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 transition-colors"
             >
               <FlaskConical className="w-3.5 h-3.5" />
-              <span>{savedBlock ? 'Open Saved Advanced Report' : 'Open Advanced Nutrition'}</span>
+              <span>{savedBlock ? 'Open Saved Advanced Report' : 'Generate Nutrition'}</span>
             </button>
           )}
         </div>
@@ -657,11 +941,11 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
               type="button"
               ref={openerRef}
               data-testid="advanced-nutrition-open"
-              onClick={handleOpenRequest}
+              onClick={savedBlock ? handleOpenRequest : handleGenerate}
               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold text-indigo-200 bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 transition-colors"
             >
               <FlaskConical className="w-3.5 h-3.5" />
-              <span>{savedBlock ? 'Open Saved Advanced Report' : 'Open Advanced Nutrition'}</span>
+              <span>{savedBlock ? 'Open Saved Advanced Report' : 'Generate Nutrition'}</span>
             </button>
           </div>
         </div>
@@ -684,6 +968,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
           apply={applyUi}
           workingDirty={workingDirty}
           hydratedFromSaved={hydratedFromSaved}
+          ai={aiUi}
         />
       )}
 

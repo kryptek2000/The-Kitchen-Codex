@@ -42,17 +42,24 @@ export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReport
 }) => {
   const [basis, setBasis] = useState<BasisMode>('entire_recipe');
   const [selectedServings, setSelectedServings] = useState<number>(block.servings);
+  // CLAMP the user-entered selected-serving count into the documented safe range
+  // (positive integer 1..1000) BEFORE any derivation; an invalid/negative/NaN
+  // input falls back to the stored denominator rather than producing a
+  // non-finite display value.
+  const effectiveSelectedServings =
+    typeof selectedServings === 'number' &&
+    Number.isFinite(selectedServings) &&
+    selectedServings > 0
+      ? Math.min(Math.round(selectedServings), 1000)
+      : block.servings;
   const meta = useMemo(() => savedReportMeta(block), [block]);
   const nutrients = useMemo(
-    () => deriveSavedReportNutrients(block, basis, selectedServings),
-    [block, basis, selectedServings]
+    () => deriveSavedReportNutrients(block, basis, effectiveSelectedServings),
+    [block, basis, effectiveSelectedServings]
   );
   const groups = useMemo(() => savedReportGroups(), []);
 
   if (!isOpen) return null;
-
-  const selectedServingsValid =
-    Number.isFinite(selectedServings) && selectedServings > 0 && selectedServings <= 1000;
 
   return (
     <div
@@ -149,7 +156,7 @@ export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReport
               </label>
             )}
             <span className="text-[11px] text-gray-500" data-testid="saved-advanced-basis-label">
-              {basisLabel(basis, selectedServingsValid ? selectedServings : block.servings)}
+              {basisLabel(basis, effectiveSelectedServings)}
             </span>
           </div>
 

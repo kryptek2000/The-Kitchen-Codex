@@ -10,10 +10,12 @@
 import express from "express";
 import { grabRecipeFromWeb } from "./recipeGrabber.js";
 import { estimateRecipeNutrition } from "./nutritionEstimator.js";
+import { resolveIngredientFoodsOnServer } from "./nutritionResolve.js";
 import { recoverRecipeMetadata } from "./metadataRecovery.js";
 import {
   recipeImportRateLimiter,
   nutritionEstimateRateLimiter,
+  nutritionResolveRateLimiter,
   metadataRecoveryRateLimiter,
   kitchenInterpretRateLimiter,
   kitchenRankRateLimiter,
@@ -598,6 +600,65 @@ export function createApp(opts: CreateAppOptions): express.Express {
 
       return res.status(500).json({
         error: "An unexpected error occurred during nutrition estimation. Please try again.",
+      });
+    }
+  });
+
+  // AI-assisted USDA resolution endpoint (advisory only) with rate limiting &
+  // input validation. The client sends ONLY bounded unresolved-ingredient text;
+  // the response carries advisory interpretation + USDA search phrases and NO
+  // authority (no FDC id, nutrient amount, mass, portion, digest, or Apply
+  // token). The client feeds the phrases back through the pinned local USDA
+  // catalog + the existing deterministic confidence contract.
+  app.post("/api/nutrition/resolve-ingredients", requireAiAccessToken, textPricingGuard, nutritionResolveRateLimiter, async (req, res) => {
+    const clientIp = getClientIp(req);
+
+    try {
+      if (!req.body || typeof req.body !== "object") {
+        return res.status(400).json({ ok: false, error: "Invalid request payload." });
+      }
+      if (!Array.isArray(req.body.ingredients) || req.body.ingredients.length === 0) {
+        return res.status(400).json({ ok: false, error: '"ingredients" must be a non-empty array.' });
+      }
+      if (req.body.ingredients.length > 25) {
+        return res.status(400).json({ ok: false, error: '"ingredients" exceeds maximum length (25).' });
+      }
+
+      const userSelection = parseTextSelectionHeader(req.headers);
+      const result = await resolveIngredientFoodsOnServer(req.body.ingredients, userSelection);
+
+      if (result.ok !== true) {
+        const failure = result as {
+          readonly ok: false;
+          readonly code: string;
+          readonly aiAttempted: boolean;
+          readonly aiFailed: boolean;
+        };
+        if (failure.code === "invalid_request") {
+          return res.status(400).json({ ok: false, error: "Invalid resolution request." });
+        }
+        // AI is an optional assistant: an unavailable/failed resolver is a
+        // degradable service state, never a hard failure of the nutrition flow.
+        return res.status(503).json({
+          ok: false,
+          aiAttempted: failure.aiAttempted === true,
+          aiFailed: failure.aiFailed === true,
+          error: "AI assistance is unavailable. You can continue with USDA search manually.",
+        });
+      }
+
+      return res.json({
+        ok: true,
+        version: result.version,
+        suggestions: result.suggestions,
+        aiAttempted: true,
+      });
+    } catch (error: any) {
+      const errorMsg = error?.message || "";
+      console.error(`[${new Date().toISOString()}] [Client: ${clientIp}] Nutrition Resolve Error:`, errorMsg);
+      return res.status(500).json({
+        ok: false,
+        error: "An unexpected error occurred during ingredient resolution.",
       });
     }
   });

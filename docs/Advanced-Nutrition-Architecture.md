@@ -59,8 +59,11 @@ coverage, ingredient evidence, and accessible/responsive interaction. It is a
 DISPLAY layer only: it never writes `codex_nutrition`, modifies frontmatter, or
 authorizes machine application. Phase 5A adds an isolated, build-only Apply
 authorization boundary (§22) that constructs and validates the persistence
-candidate without writing it. Phase 5B (explicit Apply/safe vault writes) and
-Phase 6 (Vault Intelligence integration) remain unimplemented.
+candidate without writing it. Phase 5B (explicit Apply/safe vault writes) is
+implemented: a single explicit user Apply re-proves the authorization at the
+write boundary and performs a vault-safe whole-block `codex_nutrition`
+create/replace through the existing recipe write path. Phase 6 (Vault
+Intelligence integration) remains unimplemented and requires separate approval.
 
 This is the canonical architecture document for Advanced Nutrition (target
 v0.10.0). It records the trusted-source plan, the schema-v1 contract, the
@@ -153,15 +156,20 @@ calculation attempted to establish. It is validated as a nonempty, unique,
 bounded list of known nutrient ids; unknown ids are rejected. Every key in
 `nutrients` must appear in `nutrient_scope`.
 
-**`status: complete`** requires all of the following:
+**`status: complete`** requires:
 
 - `nutrient_scope` is nonempty;
-- every scoped nutrient has a **present** nutrient result;
-- every scoped nutrient result has `status: complete`;
-- every scoped nutrient has **exact complete coverage** (`covered === measurable`
-  **and** `coverage === 1`, with no epsilon comparison);
-- there are **no unresolved entries**;
+- there are **no unresolved entries** (every measurable ingredient line
+  resolved);
+- the provenance coherence rules below hold;
 - an empty nutrient map can never claim complete.
+
+**Completeness is INGREDIENT-LINE resolution, not nutrient-list breadth.** Zero
+unresolved measurable ingredient lines means the whole-recipe result is COMPLETE
+even when an individual USDA record does not enumerate every nutrient in scope.
+Each nutrient independently reports its own `status`/`coverage` (it may be
+`partial` or absent), so a COMPLETE recipe can legitimately carry a partial
+nutrient. An absent scoped nutrient is never synthesized as zero.
 
 **Provenance is classified before completeness.** For a complete record:
 
@@ -453,11 +461,12 @@ enable machine-generated nutrition application.
   stable nutrient-ID map (v2), strict fail-closed canonical serialization, an
   immutable exact-ID local store, and a bounded in-memory cache, with real
   official-record fixtures, synthetic adversarial fixtures, focused security
-  tests, and a full-archive compatibility census. No dataset is downloaded or
-  bundled in the repository. **Still future:** a separately audited, explicit
-  local dataset *acquisition/generation* step that turns an official FDC download
-  into a manifest-bound canonical bundle. Audit gate: source license + privacy
-  review.
+  tests, and a full-archive compatibility census. The adapter itself downloads
+  nothing; the audited acquisition/generation step (Phase 4.5A) has since been
+  implemented and its manifest-bound canonical bundle IS committed under
+  `data/advanced-nutrition/usda/` (release
+  `usda_fdc_87c5408a3e98838944a87be74824761e`). Audit gate: source license +
+  privacy review.
 - **Phase 2 — deterministic ingredient parsing/matching review.** DONE (offline,
   isolated): defensive ingredient parsing, conservative query normalization, a
   manifest-bound review catalog, deterministic ranking, a closed outcome union
@@ -851,8 +860,9 @@ imported by production):
   oversized/deep/hostile input, dangerous keys, negative/`-0`/non-finite/
   excessive/over-precise values, and malformed portion weights.
 
-No production USDA dataset and no generated bundle is committed. No search,
-matching, calculation, UI, or Apply behavior is added.
+The pinned production USDA bundle IS committed under
+`data/advanced-nutrition/usda/` (Phase 4.5A); no raw upstream archive is
+committed.
 
 ### 13.13 Future, separately audited acquisition step
 
@@ -2022,7 +2032,10 @@ static files; no Vite dev middleware and no server route are added.
 
 Loading is **explicit-user-intent only**: nothing is fetched, decoded, or
 installed at application startup, and recipe navigation alone never loads the
-bundle. The React controller owns exactly one in-flight load at a time, installs
+bundle. A recipe's SAVED Advanced report renders from the validated persisted
+block alone (no bundle load); only the explicit Edit / Re-analyze or Generate
+Nutrition action initializes the working analyzer, which then loads the bundle
+lazily. The React controller owns exactly one in-flight load at a time, installs
 at most one session, ignores results from a superseded request or an unmounted
 owner, and reuses the successful session in memory across recipe navigation for
 the lifetime of the application page. Retry is explicit and genuine: the loader
@@ -2067,7 +2080,8 @@ claimed in this phase.
 
 `application_authorized` remains `false`,
 `advancedNutritionApplicationAuthorization()` remains fail-closed, and
-`canApplyNutritionEstimate` remains disabled. Phase 4.5B adds no Apply or
+`canApplyNutritionEstimate` remains disabled (historical Phase 4.5B scope; a
+later Phase 5B added the explicit user Apply described in §22–§23). Phase 4.5B adds no Apply or
 persistence path, no legacy migration, no Vault Intelligence integration, and no
 bulk processing. Phase 5 remains responsible for explicit Apply/persistence and
 legacy compatibility; Phase 6 (Vault Intelligence integration) remains
@@ -2605,8 +2619,8 @@ bundle authentication before record use, no partial session, plugin payload
 exclusion, no automatic calculation, no density or weight table, no application
 authority, no persistence, and no vault/Markdown/frontmatter/recipe/settings/
 browser-storage/cache-storage/service-worker write. Phase 5 (persistence/Apply)
-and Phase 6 (Vault Intelligence) remain unimplemented, and the existing simple
-Nutrition & Macros/AI estimator is not consolidated here.
+is implemented (5A authorization + 5B explicit Apply + 5C consolidation), while
+Phase 6 (Vault Intelligence) remains unimplemented.
 
 **Phase 4.5E still performs no persistence, no Apply, and never invents a
 count-to-mass conversion.**
@@ -4087,3 +4101,111 @@ a user choice, not only `review_required` rows. A manual full-catalog selection 
 an `unmatched` (or `matched_exact`) line therefore reaches the calculation (and
 persistence); the calculator independently re-authenticates it and fails closed if
 invalid.
+
+
+---
+
+## 34. AI-assisted USDA resolution
+
+The nutrition system is ONE system:
+
+    USDA = numeric authority
+    deterministic Kitchen Codex logic = calculation authority
+    AI = interpretation / resolution assistant
+    user = final authority for ambiguous choices
+
+AI may understand language and suggest a canonical food meaning and useful USDA
+search phrases. AI NEVER owns FDC existence, nutrient values, record/catalog
+digests, portions, masses, calculated totals, or Apply authorization.
+
+### 34.1 Unified entry and deterministic-first flow
+
+`Generate Nutrition` is the single recipe-facing entry (when no saved Advanced
+result exists) and is an EXPLICIT user action that authorizes the deterministic
+analysis: one click loads the USDA analyzer lazily, opens the working review, and
+IMMEDIATELY runs the EXISTING deterministic analyzer. Viewing/opening a recipe
+still calculates nothing; the Generate click is the authorization. AI is NOT
+called by Generate. When a saved Advanced result exists, the entry is
+`View Advanced Nutrition` (the saved report, no bundle load, no analysis) with
+`Edit / Re-analyze` as the secondary working action (it opens without running
+analysis). The legacy `Estimate Nutrition (AI)` contribution to the compact card
+is hidden; the legacy `/api/estimate-nutrition` route is retained dormant for
+compatibility but is no longer a competing nutrition system.
+
+The deterministic analyzer ALWAYS runs first (via the explicit Generate click).
+AI assistance is offered ONLY for the rows the deterministic pass left unresolved
+(`NEEDS MATCH`); a fully resolved recipe never contacts AI at all. Watching a
+saved recipe never calls AI.
+
+### 34.2 Server contract (`POST /api/nutrition/resolve-ingredients`)
+
+- Server-side only, behind the existing `requireAiAccessToken`,
+  `textPricingGuard`, and a dedicated `nutritionResolveRateLimiter`.
+- Uses the existing provider abstraction (`runWithAiFallback` +
+  `resolveRoleCandidates("nutrition")`) with `structuredOutput`, temperature 0.
+- Request: bounded rows `{ line_ref, ingredient_text, normalized_text?, amount?,
+  unit?, qualifiers?, reason? }` (max 25 rows, 300-char text). A CLOSED request
+  shape: any unknown field (including attempted FDC/nutrient/mass fields) rejects
+  the whole request. Only unresolved rows are sent.
+- Response (advisory only): `{ version, suggestions: [{ line_ref,
+  interpreted_food_name, suggested_usda_queries[], notes?, confidence? }] }`.
+  `src/core/nutritionV2/aiResolution.ts` strictly sanitizes the model output:
+  exact allowed keys, bounded strings/arrays, known line_refs, no duplicates. Any
+  forbidden/unknown field (FDC id, nutrient amount, mass, portion, digest, Apply
+  token) rejects the WHOLE response. The client re-sanitizes (defense in depth).
+- Prompt-injection resistance: the system prompt declares ingredient text as
+  untrusted DATA; the strict output shape is enforced server-side regardless.
+
+### 34.3 USDA verification chain
+
+AI suggestion -> `phase4/aiResolve.ts` ->
+`session.reviewIngredient({ name: query })` (the genuine pinned catalog) ->
+`selectAutomaticMatch` / `selectBestEffortMatch` (the SAME deterministic
+confidence contract as the one-click analyzer) -> an ordinary `kind: 'manual'`
+selection bound to the ORIGINAL row's review digest + the authenticated record
+digest. AI grants no authority: if the deterministic matcher does not accept a
+candidate, the row stays for user review / manual full-catalog search. The
+AI-assisted manual choice is display-marked `aiAssisted` and carries NO mass.
+
+### 34.3a Provenance: AI-assisted deterministic != user-confirmed
+
+Three provenances are kept distinct:
+
+- **automatic deterministic** — the original analyzer independently accepted the
+  record (`match_status: unique_exact` / `auto_confirmed`; `user_confirmed: false`);
+- **AI-assisted deterministic** — AI supplied an advisory search phrase, but the
+  EXISTING deterministic matcher independently accepted the genuine pinned-USDA
+  record (`match_status: auto_confirmed`; `user_confirmed: FALSE`). The working
+  match carries `aiAssisted` (display badge "AI-assisted USDA match") and
+  `aiAccepted` (automatic authority, never reviewed authority). Re-analyze does
+  NOT preserve it as a reviewed decision;
+- **explicit user choice** — a manual full-catalog selection or "Use this match"
+  on an offered (below-threshold) AI candidate (`match_status: user_confirmed`;
+  `user_confirmed: true`). Only this creates human-reviewed food authority, and
+  only this is preserved by Re-analyze.
+
+AI assistance never elevates an automatic match into human-reviewed authority.
+The provenance marker (`aiAssisted`/`aiAccepted`, and the request-level
+`ai_assisted` selection marker) is working-state/display only: it is NEVER
+persisted into `codex_nutrition` (no schema change), never part of Apply
+authorization, and the existing Apply-level evidence semantics are unchanged. A
+saved block may carry an ordinary automatic authority status
+(`auto_confirmed`-derived resolved evidence) for a food AI helped discover; that
+is normal automatic evidence, not human review, and is intentionally not
+memorialized as AI provenance. The calculator
+independently re-authenticates the record, catalog, line, and review bindings, so
+a forged `aiAssisted`/`aiAccepted` marker grants no authority.
+
+### 34.4 Session, failure, and cost discipline
+
+- One batched request for the unresolved rows; no per-ingredient request storm.
+- A monotonic request sequence ignores a stale AI response after a newer request
+  (stale-response protection); results are never applied to a newer review state.
+- AI unavailable / provider error / timeout / malformed response: a bounded
+  message is shown and the deterministic USDA + manual full-catalog search
+  workflow continues untouched. No fake nutrition is generated, no data is lost.
+- AI mass estimation is NOT part of this phase. A confirmed food without a
+  resolved mass remains `NEEDS AMOUNT` (the food-vs-mass persistence contract is
+  unchanged).
+- No schema change: AI assistance is working-state discovery only and is never
+  persisted into `codex_nutrition` or used in Apply authorization.

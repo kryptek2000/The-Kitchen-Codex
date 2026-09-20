@@ -51,7 +51,7 @@ function recipe(overrides: Partial<ObsidianRecipe> = {}): ObsidianRecipe {
 afterEach(() => cleanup());
 
 async function openAndCalculate(): Promise<HTMLElement> {
-  fireEvent.click(screen.getByRole('button', { name: /Open Advanced Nutrition/i }));
+  fireEvent.click(screen.getByRole('button', { name: /Generate Nutrition|Open Advanced Nutrition/i }));
   const dialog = await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
   fireEvent.click(screen.getByRole('button', { name: /Calculate Preview/i }));
   await screen.findByText('Advisory nutrition preview');

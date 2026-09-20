@@ -271,7 +271,7 @@ async function main(): Promise<void> {
       return true;
     })()`);
     await waitFor(cdp, `document.body.innerText.includes('Advanced Nutrition')`, 15000);
-    await evaluate(cdp, `(() => { const b = Array.from(document.querySelectorAll('button')).find((x) => (x.textContent||'').includes('Open Advanced Nutrition')); if (b) b.click(); return !!b; })()`);
+    await evaluate(cdp, `(() => { const b = document.querySelector('[data-testid="advanced-nutrition-open"]') || Array.from(document.querySelectorAll('button')).find((x) => /Open (Saved )?Advanced (Report|Nutrition)|Generate Nutrition/.test((x.textContent||''))); if (b) b.click(); return !!b; })()`);
     let dialogOpened = false;
     const dialogDeadline = Date.now() + 120000;
     while (Date.now() < dialogDeadline) {

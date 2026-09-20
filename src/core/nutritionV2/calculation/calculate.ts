@@ -403,6 +403,7 @@ const MANUAL_SELECTION_KEYS = new Set([
   'catalog_digest',
   'line_ref',
   'review_digest',
+  'ai_assisted',
 ]);
 
 interface ManualFoodSelection {
@@ -411,16 +412,26 @@ interface ManualFoodSelection {
   readonly catalog_digest: string;
   readonly line_ref: string;
   readonly review_digest: string;
+  /**
+   * True ONLY for an AI-assisted DETERMINISTIC acceptance (AI supplied an
+   * advisory search phrase; the deterministic matcher independently accepted the
+   * genuine pinned-USDA record). Such a selection is authoritative as an
+   * AUTOMATIC match (`auto_confirmed`), NEVER as human-reviewed authority. An
+   * explicit user choice (manual search / "Use this match") leaves this false and
+   * yields `user_confirmed`.
+   */
+  readonly aiAssisted: boolean;
 }
 
 /**
  * Bounded, fail-closed sanitization of a USER-DIRECTED manual USDA food
- * selection (manual search). Returns undefined for anything that is not exactly
- * a well-formed manual selection, so a forged/partial object can never be
- * interpreted as a manual choice. Authority still requires the referenced
- * record to exist in the authenticated pinned bundle with a matching digest and
- * the selection to bind the CURRENT review digest and catalog digest; those
- * checks happen at the call site where the record store is available.
+ * selection (manual search) or an AI-assisted deterministic acceptance. Returns
+ * undefined for anything that is not exactly a well-formed selection, so a
+ * forged/partial object can never be interpreted as a choice. Authority still
+ * requires the referenced record to exist in the authenticated pinned bundle
+ * with a matching digest and the selection to bind the CURRENT review digest and
+ * catalog digest; those checks happen at the call site where the record store is
+ * available.
  */
 function sanitizeManualSelection(raw: unknown): ManualFoodSelection | undefined {
   if (!isPlainObject(raw)) return undefined;
@@ -434,12 +445,14 @@ function sanitizeManualSelection(raw: unknown): ManualFoodSelection | undefined 
   if (typeof value.catalog_digest !== 'string' || !SHA256_HEX.test(value.catalog_digest)) return undefined;
   if (typeof value.line_ref !== 'string' || value.line_ref.length === 0) return undefined;
   if (typeof value.review_digest !== 'string' || !SHA256_HEX.test(value.review_digest)) return undefined;
+  if (value.ai_assisted !== undefined && typeof value.ai_assisted !== 'boolean') return undefined;
   return {
     fdc_id: value.fdc_id,
     record_digest: value.record_digest,
     catalog_digest: value.catalog_digest,
     line_ref: value.line_ref,
     review_digest: value.review_digest,
+    aiAssisted: value.ai_assisted === true,
   };
 }
 
@@ -496,7 +509,10 @@ function evaluateIngredient(
     ) {
       matched = true;
       ambiguous = false;
-      matchStatus = 'user_confirmed';
+      // PROVENANCE: an AI-assisted deterministic acceptance is an AUTOMATIC
+      // match (`auto_confirmed`), never human-reviewed authority. Only an
+      // explicit user selection yields `user_confirmed`.
+      matchStatus = manual.aiAssisted ? 'auto_confirmed' : 'user_confirmed';
       fdcId = manual.fdc_id;
       recordDigest = manualRecord.record_digest;
       confirmationDigest = currentReview.review_digest;

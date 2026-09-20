@@ -39,6 +39,7 @@ import { useVaultImage } from '../hooks/useVaultImage';
 import { assessRecipeHealth } from '../utils/vaultIntelligence';
 import { buildRecipeRelationshipIndex, recipeIdentity } from '../utils/recipeRelationships';
 import {
+  type AdvancedNutritionAiResolveHandler,
   type AdvancedNutritionApplyHandler,
   type AdvancedNutritionBundleUiStatus,
 } from './AdvancedNutritionCard';
@@ -88,6 +89,8 @@ interface RecipeDetailViewProps {
   onLoadAdvancedNutritionBundle?: () => void;
   /** Explicit Phase 5B Apply handler (browser shell only). */
   onApplyAdvancedNutrition?: AdvancedNutritionApplyHandler;
+  /** Optional AI-assisted USDA resolution port (browser shell only). */
+  onResolveAdvancedNutritionAi?: AdvancedNutritionAiResolveHandler;
 }
 
 export function RecipeDetailView({
@@ -111,6 +114,7 @@ export function RecipeDetailView({
   advancedNutritionBundleStatus,
   onLoadAdvancedNutritionBundle,
   onApplyAdvancedNutrition,
+  onResolveAdvancedNutritionAi,
 }: RecipeDetailViewProps) {
   const [currentServings, setCurrentServings] = useState<number>(recipe.servings || 4);
   const [activeViewMode, setActiveViewMode] = useState<'visual' | 'markdown'>('visual');
@@ -638,6 +642,7 @@ export function RecipeDetailView({
                 advancedNutritionBundleStatus={advancedNutritionBundleStatus}
                 onLoadAdvancedNutritionBundle={onLoadAdvancedNutritionBundle}
                 onApplyAdvancedNutrition={onApplyAdvancedNutrition}
+                onResolveAdvancedNutritionAi={onResolveAdvancedNutritionAi}
               />
 
               <div className="bg-[#141414] rounded-2xl border border-white/5 p-5 shadow-xs">
