@@ -3001,29 +3001,41 @@ immediately before the write, and performs a whole-block vault-safe update.**
 Phase 5C is PRESENTATION / WORKFLOW consolidation only. The application still
 contains two storage representations for backward compatibility — the legacy
 simple `nutrition` / top-level `calories`, and the schema-v1 `codex_nutrition`
-block — but they no longer appear as two independent, equally authoritative
-nutrition systems.
+block — but a recognized Advanced block is the single numeric authority.
+
+**TWO SEPARATE EXPERIENCES (hands-on smoke repair).** The ordinary compact
+`Nutrition & Macros` card is ALWAYS visible. Advanced Nutrition is a SEPARATE
+secondary card for the reviewed USDA match/portion/Apply workflow. A saved
+Advanced result NEVER hides or replaces the normal card; instead the normal card
+DERIVES its compact calories/protein/carbs/fat/fiber/sodium from the saved
+Advanced block (`deriveAdvancedCompactNutrition`). There is no second competing
+stored dataset, and a nutrient absent from the Advanced block is never "topped
+up" from legacy values.
 
 Module: `src/core/nutritionV2/phase5c/` (pure selector) +
-`src/components/RecipeNutritionSection.tsx` (single consolidated surface).
+`src/components/RecipeNutritionSection.tsx` (two-card surface) +
+`src/components/RecipeNutritionCard.tsx` (normal compact card) +
+`src/components/AdvancedNutritionCard.tsx` / `AdvancedNutritionModal.tsx`
+(separate Advanced workflow).
 
 ### 24.1 Precedence rule
 
 The single pure selector `resolveRecipeNutritionPresentation(recipe)` returns a
 closed kind:
 
-| kind | meaning | primary display |
-| --- | --- | --- |
-| `advanced_saved` | valid recognized schema-v1 block, basis matches the recipe | Advanced |
-| `advanced_stale` | valid block whose serving/ingredient basis no longer matches | Advanced + stale notice |
-| `advanced_unsupported` | opaque unknown FUTURE schema | notice + labelled legacy fallback |
-| `advanced_invalid` | malformed recognized schema-v1 block | notice + labelled legacy fallback |
-| `legacy` | no recognized block, but legacy nutrition / calories exist | legacy fallback |
-| `none` | neither representation exists | empty/legacy fallback state |
+| kind | meaning | normal card values | Advanced card |
+| --- | --- | --- | --- |
+| `advanced_saved` | valid recognized schema-v1 block, basis matches the recipe | derived from Advanced | shown separately |
+| `advanced_stale` | valid block whose serving/ingredient basis no longer matches | derived from Advanced + stale notice | shown separately |
+| `advanced_unsupported` | opaque unknown FUTURE schema | labelled legacy fallback | notice + preserved |
+| `advanced_invalid` | malformed recognized schema-v1 block | labelled legacy fallback | notice + preserved |
+| `legacy` | no recognized block, but legacy nutrition / calories exist | legacy values | upgrade affordance |
+| `none` | neither representation exists | empty/legacy fallback state | upgrade affordance |
 
 When a valid recognized Advanced block exists, **Advanced is the preferred
-display authority**. Legacy/simple nutrition remains stored untouched for
-backward compatibility but never overrides a displayed Advanced nutrient.
+numeric authority** for the compact normal card. Legacy/simple nutrition remains
+stored untouched for backward compatibility but never overrides a displayed
+Advanced nutrient. The Advanced card is always separately reachable.
 
 ### 24.2 Non-destructive by construction
 
@@ -3036,20 +3048,32 @@ toggling details, or running a review causes ZERO writes.
 
 ### 24.3 Saved Advanced behavior
 
-A recognized saved block is rendered as the primary result. Per-serving values
-are DERIVED at display time from the stored whole-recipe totals and the block's
-stored serving denominator (`total / storedServings × requestedServings`); no
-second nutrient map is persisted. Partial status and unresolved evidence are
-displayed honestly — a partial Advanced result remains primary and is never
-"topped up" from legacy values.
+A recognized saved block feeds the normal compact card (derived) AND remains
+available in the separate Advanced card. Per-serving values are DERIVED at
+display time from the stored whole-recipe totals and the block's stored serving
+denominator (`total / storedServings × requestedServings`); no second nutrient
+map is persisted. Partial status and unresolved evidence are displayed honestly —
+a partial Advanced result is never "topped up" from legacy values.
 
-**Single-authority header calories.** While a recognized Advanced block is
-preferred, the recipe header calories are derived ONLY from that block. If the
-block contains no `calories` nutrient, the header shows no value — it NEVER falls
+**Single-authority normal calories.** While a recognized Advanced block is
+preferred, the normal card's calories are derived ONLY from that block. If the
+block contains no `calories` nutrient, the card shows no value — it NEVER falls
 back to legacy/top-level `calories`. Legacy calorie fallback applies only when
 Advanced is not the preferred authority (`legacy` / `none` /
-`advanced_unsupported` / `advanced_invalid`). The header consumes only the
-centralized resolver result; no second calorie fallback is applied in the view.
+`advanced_unsupported` / `advanced_invalid`). The header calories use the same
+centralized resolver.
+
+**Partial vs complete (whole-surface authority).** A recognized Advanced block
+is projected into the normal card ONLY when it is COMPLETE
+(`status === 'complete'` and no unresolved ingredient lines). A recognized but
+INCOMPLETE block is NEVER shown as isolated partial nutrients (e.g. `Fat 91.3 g`
+while calories/protein are `—`). Instead the normal card shows an explicit
+incomplete state (`Advanced nutrition incomplete · N of M ingredient lines
+resolved · Open Advanced Nutrition to finish review`) and the separate Advanced
+card shows `Advanced Nutrition saved — partial` (or `saved · Complete coverage`
+when complete). There is NO per-nutrient legacy top-up and NO merging — the
+authority decision is whole-surface. Partial nutrient detail remains available
+inside Advanced, which communicates coverage/unresolved/provenance explicitly.
 
 ### 24.4 Legacy fallback behavior
 
@@ -3126,3 +3150,940 @@ Phase 5C audit and the separate full smoke-test / release-control checkpoint.
 
 **Phase 5C consolidates the nutrition EXPERIENCE without merging, migrating, or
 rewriting either storage representation.**
+
+## 25. Post-Phase-5 smoke-test remediation — automatic analyzer + exception-only review
+
+This slice fixes real-user workflow problems found by smoke testing. It is NOT
+Phase 6. It adds NO Vault Intelligence behavior, NO vault scan, NO bulk analysis,
+NO bulk Apply, NO auto-repair, NO nutrition health scores, NO vault indexing, and
+NO background migration. It does not redesign schema v1.
+
+Core rule:
+
+> `ANALYZE AUTOMATICALLY -> REVIEW EXCEPTIONS -> EDIT ANYTHING`
+
+### 25.1 Problem
+
+Phase 5A/5B/5C were safe but the workflow was too burdensome. Every ordinary
+ingredient (`cottage cheese`, `unsalted butter`, `salt`, `ketchup`, ...) exposed
+a long USDA candidate list and a source-portion list, so the user acted as a USDA
+database curator. Smoke testing also exposed poor partial-match ranking: `flakes`
+and prose tokens (`and`, `total`, `about`, `grams`) could become the required
+matching anchor, so `0.5 cup unsalted butter, chilled and cubed` surfaced
+peanut butter / bread-and-butter pickles and `3 to 4 slices provolone (about 75 to
+100 grams in total)` surfaced quail / pheasant / salmon.
+
+### 25.2 Root cause
+
+The Phase 4.5D projection chose the required anchor as the LAST non-stopword
+identity token. Preparation words (`chilled`), form words (`flakes`, `powder`),
+and prose/conjunction words (`and`, `total`, `about`, `grams`) were not part of a
+closed non-identity vocabulary, so they could become the anchor. Ranking also
+counted `missing identity tokens` over the whole identity token list, so a
+nutritionally significant qualifier (`unsalted`) penalised the correct plain food
+and let a compound (`peanut butter`) win on a smaller extra-token count.
+
+### 25.3 Core food identity (projection v2)
+
+`projectQueryText` now separates:
+
+- **core food identity** — the food-name tokens (the anchor is the last core
+  token). This is what must match.
+- **qualifiers** — nutritionally significant state/variant words (`unsalted`,
+  `salted`, `raw`, `cooked`, `whole`, `skim`, `low`, `reduced`, `nonfat`,
+  `sweetened`, `unsweetened`, `canned`, `dried`, ...). Preserved as
+  agreement/opposition evidence, never the anchor.
+- **forms** — food-FORM words (`powder`, `flakes`, `sauce`, `juice`, `paste`, ...).
+  Preserved as requested-form evidence, never the anchor.
+- **preparation / size / count-unit / noise** — `sliced`, `chilled`, `thinly`,
+  `and`, `or`, `about`, `total`, `grams`, `to`, ... removed from identity.
+
+Parenthetical asides (`(about 75 to 100 grams in total)`) and trailing
+preparation clauses (`butter, chilled and cubed`, `onions, chopped`) are stripped
+before tokenization. Preparation state words (`cold`, `chilled`, `room
+temperature`, `softened`, `melted`, `cubed`, `diced`, `sliced`, `chopped`, ...)
+never replace food identity. Punctuation is normalized BEFORE semantic-role
+assignment, so a trailing comma can never attach to a token (`butter,` ->
+`butter`) and a hyphenated word can never collapse into one token
+(`gluten-free` -> `gluten free`). Generic non-identity words (`form`, `type`,
+`style`, `variety`, `blend`, `product`, `food`, `item`, `include(s)`) are removed
+from identity and, unlike descriptors, do NOT suppress compound demotion, so a
+generic tail token cannot dominate (`Cheese, Mexican blend`).
+`QUERY_PROJECTION_VERSION` is `usda_query_projection_v2`.
+
+### 25.4 Ranking v6
+
+The integer ordering tuple now includes, in order:
+
+```
+[class_rank,
+ missing_core_identity_tokens,
+ family_mismatch,
+ qualifier_conflicts,
+ qualifier_opposition,
+ -qualifier_agreement,
+ missing_qualifier_tokens,
+ missing_form_tokens,
+ unrequested_material_variants,
+ unrequested_variety,
+ compound_penalty,
+ unrequested_subtype,            // level/type + zero-padded numeric subtypes
+ contradiction,
+ extra_candidate_tokens,
+ -generic_marker,
+ order_disagreement,
+ fdc_id]
+```
+
+The display tuple is NOT the auto-authority key (see §25.5 and §25.13). The
+presentation dimensions (`extra_candidate_tokens`, `order_disagreement`) and the
+display-only `unrequested_subtype` demotion never convert a materially ambiguous
+sibling into an automatic selection.
+
+- **core-identity coverage** dominates: the plain food beats a candidate that
+  merely shares the head noun as part of a different compound.
+- **qualifier opposition** uses a closed opposite-pair table (`salted`/`unsalted`,
+  `sweetened`/`unsweetened`, `enriched`/`unenriched`, `raw`/`cooked`,
+  `whole`/`skim`).
+- **compound penalty** counts candidate tokens that are not requested, are not
+  recognised descriptors/qualifiers/forms, and are adjacent to the matched anchor
+  (`peanut` in `peanut butter`), demoting compound foods without penalising
+  `Butter, stick, unsalted`. A closed `COMPOUND_PREFIX_TOKENS` set overrides the
+  category-head exemption so a category-looking prefix that is a real food
+  (`Bread, rice`, `Flour, rice`, `Apple butter`) is still penalised.
+- **unrequested material variants** demote a candidate carrying an unrequested
+  preservation/state qualifier (`dried`, `canned`, `smoked`, ...), so `Apple,
+  raw` ranks above `Apple, dried`.
+- The stable FDC-id tie-break remains a presentation tie-break only; it can NEVER
+  convert a semantic tie into an automatic selection.
+
+`MATCHING_RANKING_VERSION` is `usda_match_rank_v7`. No network, no AI, no
+nutrient values, and no floating-point ML-style scores are used. Determinism and
+hostile-input guards are unchanged.
+
+### 25.5 Deterministic confidence / automatic-selection contract
+
+Module `src/core/nutritionV2/matching/confidence.ts` is the ONE authority for
+auto-selection. Confidence is `high` / `review` / `unresolved`, derived ONLY from
+explicit evidence (exact phrase, exact token multiset, full core-identity
+coverage, qualifier agreement/opposition, form coverage, compound penalty,
+unrequested material variants). A candidate is `high` (safe to auto-select) only
+when it is an exact phrase / exact token multiset, or it contains every
+core-identity token with no qualifier opposition, no qualifier/form conflict, no
+absent requested qualifier/form, no compound demotion, and no unrequested
+material variant. One-token partial overlaps among unrelated foods, FDC-id
+tie-break winners, form mismatches, compound foods, and unrequested altered
+variants are never auto-selected.
+
+**Runner-up ambiguity (v4).** Before returning an automatic selection, the
+runner-up set is inspected against the AUTO-AUTHORITY key (the identity and
+requested-specificity tuple EXCLUDING the presentation-only FDC-id tie-break,
+`extra_candidate_token_count`, `order_agreement`, and the display-only
+`unrequested_subtype` demotion). If a runner-up ties the top on that key and
+differs in an UNREQUESTED MATERIAL SUBTYPE (`whole`/`nonfat`/`heavy`/`half`/
+`salted`/`dried`/`enriched`/zero-padded numeric grind, ...), NO automatic
+selection is authorized. Benign descriptive differences (verbose USDA wording,
+extra descriptors, cooking method, color, `whole` as the ordinary member, and
+health-claim modifiers such as `lowfat`/`reduced`/`light`) do NOT make two
+records ambiguous. FDC id, shard order, input order, and `data_type` never create
+semantic authority.
+
+**Fail-closed by construction.** `classifyReviewConfidence`,
+`selectAutomaticMatch`, `isDeterministicAutomaticSelection`, and
+`explainCandidate` return closed outcomes for null/undefined/malformed input
+rather than throwing. If the contract does not authorize an automatic choice, the
+row is `matched_check` (review suggested) when a credible candidate exists, or
+`needs_match`/`unresolved` otherwise; the user reviews it.
+
+### 25.6 Automatic authenticated portion resolution
+
+After a food is safely selected, `analyzeRecipe` resolves a source portion
+deterministically, in priority order:
+
+1. an exact compatible requested unit identity (`tsp`, `cup`, ...);
+2. within that, a requested preparation/qualifier descriptor (`tsp, ground` for
+   `ground black pepper`);
+3. otherwise a uniquely compatible set whose compatible portions all resolve to
+   the SAME authoritative mass.
+
+Differing authoritative gram weights are ambiguous and are NOT auto-chosen. No
+averaging, no density guess, no invented conversion. Authenticated count portions
+keep their existing Phase 4.5E deterministic resolution. A row whose mass cannot
+be resolved fails closed to `Needs amount`. An explicit mass RANGE in the source
+text (`about 75 to 100 grams in total`) suppresses automatic resolution and
+requires review rather than inventing one number.
+
+### 25.7 Compact analyzer UI + Edit
+
+The modal now presents a compact per-ingredient analysis: original ingredient,
+selected USDA food, resolved mass (when known), a concise status badge
+(`Matched`, `Review suggested`, `Needs amount`, `Needs match`, `Qualitative`,
+`Unresolved`), and an `Edit` control. Candidate lists and portion/weight tools
+are hidden by default and appear ONLY for the row being edited. `Edit` exposes the
+existing detailed review tools (USDA candidates, `None of these`, source
+portions, count portions, manual total weight). `Analyze Nutrition` is the primary
+one-click action: it applies the deterministic selections, auto-portions, and the
+advisory preview atomically. Internal match-class jargon is not the primary UX.
+
+### 25.8 Truthful automatic vs user semantics
+
+An analyzer selection is recorded in the Phase 4 state with an `automatic: true`
+marker. The calculation engine honours that marker ONLY when the deterministic
+confidence contract independently confirms the chosen candidate is the automatic
+choice. If a caller claims `automatic_selection: true` and the claim does not
+validate, the calculation FAILS CLOSED (`invalid_ingredient_input`); an invalid
+automatic claim is NEVER reinterpreted as a literal user confirmation. Manual
+confirmation requires the genuine manual path (no `automatic` marker). In the LIVE
+Phase 3 calculation evidence, an analyzer selection is `match_status:
+'auto_confirmed'`
+with `user_confirmed: false`; an explicit user choice is `user_confirmed` with
+`user_confirmed: true`; a unique exact match is `unique_exact` with
+`user_confirmed: false`. That is the truthful, in-memory distinction.
+
+Persistence keeps the ESTABLISHED schema-v1 persisted-review semantics
+(§22.2 / §22.12): a resolved evidence record is `match_status: 'confirmed'` +
+`resolved: true` + `user_confirmed: true`, meaning "this evidence was part of the
+explicit reviewed result the user authorized for Apply". The schema-v1 validator
+requires exactly that shape for resolved evidence, and this slice does NOT
+redesign schema v1. The automatic-vs-user distinction is not lost: it remains in
+the live review state and the Phase 3 evidence the authorization is derived from;
+it is simply not a separate persisted field, because schema v1 has no bounded
+representation for "resolved but not user-confirmed" and inventing one would be a
+schema redesign.
+
+### 25.9 No persistence until Apply
+
+Analysis, auto-selection, auto-portions, and the preview are all in-memory and
+advisory. Nothing is written to the recipe or vault. Phase 5B Apply remains
+explicit and whole-block, and Phase 5A recomputation / candidate digest / stale
+authorization / unknown-future-schema protection are unchanged.
+
+### 25.10 Not AI
+
+This is deterministic offline matching. It does not call AI, does not use
+nutrient values to choose a food, does not use the network, and does not expose
+secrets. The same input plus the same authenticated USDA bundle produces the same
+analysis.
+
+### 25.11 Consolidated independent audit repair
+
+A consolidated audit of the automatic analyzer found deterministic wrong-food
+automatic selections. They are repaired in place; the one-click analyzer and the
+explicit Apply architecture are unchanged.
+
+| Finding | Repair |
+| --- | --- |
+| `1 cup rice` auto-selected `Bread, rice` | `COMPOUND_PREFIX_TOKENS` overrides the category-head exemption; `Bread, rice` is demoted and never auto-selected. |
+| `1 cup cream` auto-selected cream-style corn | Generic `style`/`blend` no longer suppress compound demotion; corn is demoted below real cream. |
+| `1 stick unsalted butter, cold` corrupted identity | Punctuation is normalized before role assignment; `cold`/`room`/`temperature` are preparation words; identity stays `unsalted butter`. |
+| `1 cup butter` semantic tie became auto via FDC id | Runner-up ambiguity contract: a materially different semantic tie fails the whole auto-selection. |
+| `1 apple` auto-selected `Apple, dried` | Unrequested material-variant penalty + HIGH eligibility requires zero unrequested variants; `Apple, raw` ranks first. |
+| `2 eggs` auto-selected `Egg, whole, dried` | Same policy; `Egg, whole, raw` is preferred. |
+| `1 cup milk whole` dry milk could win | Same policy; `Milk, whole` wins. |
+| `200 g gluten-free flour blend` recommended `Cheese, Mexican blend` | `blend` is a generic non-identity token, so the anchor is `flour` and cheese-blend records are excluded. |
+| Forged `automatic_selection: true` degraded to `user_confirmed` | Calculation fails closed (`invalid_ingredient_input`) when an automatic claim does not validate. |
+| Confidence helpers could throw on null/malformed input | `classifyReviewConfidence` / `selectAutomaticMatch` / `isDeterministicAutomaticSelection` / `explainCandidate` return closed outcomes for null/undefined/malformed input. |
+
+The compound-food policy is unchanged in spirit: a token inside a compound food
+never implies identity (`rice != rice bread`, `cream != cream-style corn`,
+`butter != peanut butter`, `pepper != pepper steak`, `tomato != tomato sauce`
+unless sauce is requested). Explicitly requested forms remain valid
+(`tomato sauce` -> tomato sauce, `peanut butter` -> peanut butter).
+
+### 25.12 Generic-family / variety-bias repair
+
+A final independent audit found a shared generic-vs-specific bias: the
+extra-token count and benign treatment of variety tokens let a specific variety
+outrank the generic/NFS family member, and material-state words such as
+`powdered` could match unrelated literal descriptions outside the requested
+family.
+
+**Food family.** Family is derived from CORE IDENTITY tokens (the anchor is the
+last core token). A candidate whose HEAD token is a composed PRODUCT/DISH head
+(`PRODUCT_HEAD_TOKENS`: `dessert`, `candies`, `snacks`, `soup`, `salad`,
+`dressing`, `granola`, `head`, `bar`, ...) is a `family_mismatch` and can never
+be the automatic choice for a raw-food-family query (`Dessert topping, powdered,
+... milk` for `powdered milk`, `Candies, SYMPHONY Milk Chocolate Bar` for
+`milk chocolate`, `Head cheese` for `cheese`).
+
+**Generic / NFS preference.** A closed `VARIETY_TOKENS` set (colors, cultivars,
+cheese types, rice/flour types) marks a specific variety. An UNREQUESTED variety
+token makes a candidate ineligible for automatic selection and demotes it below
+the generic family member (`Cheese, blue` for `cheese`, `Tomato, roma` for
+`tomato`, `Rice, black` for `raw rice`, `Flour, whole wheat` for `flour`).
+`GENERIC_MARKER_TOKENS` (`nfs`, `ns`, `unspecified`) is a tie-break preference
+for the plain family member, applied AFTER the extra-token count so it can never
+override a state or variety preference (it never turns `Tomatoes, NS as to form,
+cooked` into an auto choice over `Tomatoes, raw`).
+
+**Requested specificity still wins.** An explicitly requested variety remains
+authoritative: `blue cheese` -> `Cheese, blue`, `cheddar cheese` -> `Cheese,
+cheddar`, `roma tomato` -> `Tomato, roma`, `black rice` -> `Rice, black`,
+`whole wheat flour` -> `Flour, whole wheat`.
+
+**Material state refines family.** `STATE_EQUIVALENCE_GROUPS` treats
+`powdered`/`powder`/`dry`/`dried`/`dehydrated` as equivalent, so `powdered milk`
+is satisfied by `Milk, dry, ...` (a milk-family record) and never by an
+unrelated `... powdered ...` product. `evaporated milk` -> `Milk, evaporated,
+...`; `condensed milk` -> `Milk, condensed, sweetened`.
+
+**Brand / product specificity.** A brand/product record cannot become HIGH from a
+generic query: the product-head family mismatch plus the unrequested-variety gate
+exclude it, and a generic query with no safe generic family record fails closed
+to review (`milk chocolate` -> review).
+
+Ranking (`usda_match_rank_v5`) and the confidence contract
+(`usda_match_confidence_v3`) add `family_mismatch` and `unrequested_variety` as
+hard auto-eligibility gates, and `generic_marker` as a post-extra tie-break. The
+projection version is `usda_query_projection_v4`. FDC id remains presentation-
+only; input order remains irrelevant; no nutrient-value ranking, AI, ML, or
+network is used. Explicitly requested variety and state always beat generic.
+
+### 25.13 Final automatic-authority repair (food family vs derived component)
+
+A final independent audit found one BLOCKING and four IMPORTANT systemic
+automatic-authority defects. They are repaired structurally, not with one-off
+foods. The core rule is:
+
+> A candidate may be AUTO-selected only when it is clearly in the requested food
+> family AND does not invent an unrequested material subtype. If either is
+> uncertain: REVIEW > WRONG AUTO.
+
+**Auto-authority key vs display ranking.** Display ranking may use
+`extra_candidate_token_count` and `order_agreement`; auto authority MUST NOT. The
+auto-authority equivalence key (§25.5) contains only identity and
+requested-specificity dimensions, so verbose USDA siblings can no longer fail to
+tie and let the lowest-FDC-id materially different candidate gain HIGH authority.
+
+**Food family vs derived component.** A closed `DERIVED_COMPONENT_TOKENS` set
+(`fat`, `tallow`, `suet`, `lard`, `dripping(s)`, `butterfat`, `skin`, `rind`,
+`crackling(s)`) marks a component derived from a food. When the token is the
+candidate HEAD (`Fat, chicken`) or immediately follows a requested food token
+(`Chicken skin`) and the query did not request it, the candidate is a
+`family_mismatch`. `chicken != chicken fat`; `pork != pork fat`; `beef != beef
+tallow`; `milk != milk fat`. Explicit `chicken fat` still resolves. The token
+`fat` is NOT globally banned: `Beef, ground, 80% lean meat / 20% fat` is a
+composition descriptor, not a component.
+
+**Composed / coated eligibility.** A candidate whose HEAD is a foreign food token
+(`Chicken, ..., fried, flour` for `flour`, `Eggplant with cheese and tomato sauce`
+for `tomato sauce`) or that is prepared `with <other food>` (`Rice, cooked, with
+milk`, `Egg omelet with cheese and tomatoes`, `Cheese, cottage, with vegetables`)
+is a `family_mismatch` and can never be the automatic choice for a bare family
+query. Explicit compound queries still work because an exact token-multiset match
+is authorized independently (`chicken soup`, `cream cheese`, `tomato sauce`,
+`egg noodles`).
+
+**Unrequested material subtype.** `MATERIAL_QUALIFIER_TOKENS` now also carries
+`heavy`/`half`/`whipping`/`whipped`. `unrequestedSubtypeCount` demotes a
+candidate carrying an unrequested level/type subtype (`whole wheat`, `00`,
+`heavy`) below the ordinary generic/all-purpose family record, so a specific
+sibling can no longer be crowned merely because its USDA description is short.
+
+**Generic preference.** `genericMarkerCount` is now applied BEFORE the
+presentation-only extra-token/order dimensions, and an explicit `NS`/`NFS`
+candidate is never penalised for the variant options it enumerates (`Cream, NS
+as to light, heavy, or half and half`) — the "conflict qualifier bookkeeping"
+repair. `all`, `purpose`, and `wheat` are no longer variety tokens, so
+all-purpose flour is no longer pushed below floured-chicken dishes.
+
+**Version bumps.** `QUERY_PROJECTION_VERSION` = `usda_query_projection_v5`,
+`MATCHING_RANKING_VERSION` = `usda_match_rank_v8` (later bumped from v7 by the
+prepared-product demotion below), `MATCH_CONFIDENCE_VERSION` =
+`usda_match_confidence_v7` (later bumped from v6 by the same repair).
+
+Permanent regression tests cover `1 cup chicken` (never rendered fat / fried /
+soup), `1 cup flour` (never `00`/whole wheat), `1 cup cream` (no invented fat
+class), `1 cup powdered milk` (milk family, no invented fat class),
+`whole`/`nonfat`/`heavy`/`light` explicit variants, `all-purpose`/`00` flour,
+`chicken fat`, and `chicken soup`. FDC id remains presentation-only; input order
+remains irrelevant; no nutrient-value ranking, AI, ML, or network is used.
+
+### Final authority edge-case repair (egg state / derived component / cultivar)
+
+Three remaining authority edge cases were repaired without redesigning the
+matcher. The core rule is unchanged: AUTO only when the correct family is
+matched, every requested state/form/subtype is honored, no unrequested material
+state/subtype/cultivar is invented, and no materially plausible runner-up remains
+ambiguous. REVIEW is always preferred to a wrong AUTO.
+
+**Bare egg must not invent a cooking state.** `COOKING_METHOD_TOKENS` is a closed
+set of cooking/preparation states (`fried`, `baked`, `boiled`, `scrambled`,
+`poached`, `roasted`, `grilled`, `steamed`, `sauteed`, `braised`, `stewed`,
+`microwaved`, `toasted`, and the generic `cooked`).
+`unrequestedCookingMethodCount` disqualifies a candidate that names an
+unrequested method, so a bare `egg`/`eggs` can never auto-select `Egg, whole,
+fried, NS as to fat` merely because the record carries NS/NFS wording. An
+explicitly requested specific method also satisfies the generic `cooked` state
+(`2 boiled eggs` -> `Egg, whole, cooked, hard-boiled`); explicit `raw`/`cooked`
+and specific-method queries remain authoritative. This is what makes `fried`
+visible to authority instead of being an invisible descriptor.
+
+**Explicit derived components are core identity.** When the query requests a
+derived component (`beef fat`, `pork fat`, `chicken skin`, `beef tallow`), the
+component is satisfied ONLY by a structural component — the candidate HEAD
+(`Fat, chicken`, `Fat, beef tallow`) or a token immediately after the requested
+food (`Chicken skin`). A composition descriptor (`Beef, steak, ribeye, lean and
+fat eaten`, `... / 20% fat`) is a `family_mismatch` and can never auto-satisfy
+`beef fat`. The token `fat` is still NOT globally banned: `80/20 ground beef`
+and composition descriptions containing `% fat` remain valid, and explicit
+`chicken fat`/`chicken skin` still resolve.
+
+**Bare/dry beans must not invent a cultivar.** The pinned USDA dry-bean records
+are ALL named cultivars and there is NO generic dry-bean record. The bounded
+`VARIETY_TOKENS` vocabulary now carries a representative bean-cultivar set
+(`tan`, `carioca`, `cranberry`, `navy`, `pinto`, `cannellini`, `kidney`,
+`northern`, `flor`, `mayo`; the color/size cultivars are already covered), so a
+bare or `dry beans` query cannot auto-select `Beans, Dry, Tan` purely from
+rank/FDC order. Explicit cultivar queries still resolve (`pinto beans` ->
+`Pinto beans, NFS`, `dry pinto beans` -> `Beans, Dry, Pinto`).
+
+Mutation-sensitive tests prove that removing the cooking-state authority, the
+derived-component request identity, or the cultivar ambiguity handling each
+causes a failing test.
+
+### Scrambled-egg material prepared/storage-state repair
+
+An explicit `scrambled eggs` query auto-selected `Eggs, scrambled, frozen
+mixture` over the ordinary `Egg, whole, cooked, scrambled`. The unrequested
+`frozen` storage state and `mixture` prepared-product form were not authority
+dimensions, so the two candidates tied on the semantic authority key and
+display/FDC ordering crowned the frozen product.
+
+**Fix.** `MATERIAL_STATE_TOKENS` now also carries the unrequested material
+prepared/storage/prepared-product states `frozen`, `mixture`, and `omelet`/
+`omelette`. `unrequestedMaterialVariantCount` (which is NOT exempted by an
+`NS`/`NFS` generic marker, unlike `FORM_TOKENS`) therefore disqualifies such a
+candidate from automatic authority and demotes it in ranking. Consequently:
+
+- `scrambled eggs`, `2 scrambled eggs`, and `egg, scrambled` auto-select the
+  ordinary `Egg, whole, cooked, scrambled` and never the frozen mixture (the
+  frozen mixture remains a review candidate only);
+- `frozen scrambled eggs` surfaces the frozen mixture as the suggested top and
+  never auto-selects the plain non-frozen egg;
+- `1 apple` now auto-selects the generic `Apple, raw` instead of a frozen apple
+  record, and no dried variant is ever auto-selected.
+
+This is a bounded, vocabulary-level expansion of an existing authority
+dimension, not an egg-only string special-case and not a global penalty on
+benign descriptive prose. Because it changes the `unrequested material
+variants` ranking dimension, `MATCHING_RANKING_VERSION` was bumped to
+`usda_match_rank_v7` and `MATCH_CONFIDENCE_VERSION` to
+`usda_match_confidence_v6` (both superseded by the prepared-product demotion
+below). Mutation-sensitive tests prove that removing the prepared/storage-state
+rule lets a lone frozen mixture regain AUTO authority.
+
+### Hands-on smoke integration repair (amount/unit UX, two-card presentation, Analyze)
+
+Real-user smoke testing found integration defects that were repaired without
+weakening any authority or security invariant:
+
+**Amount/unit binding.** The recipe's parsed quantity/unit flows into Advanced
+Nutrition through the Phase 4 boundary (`ingredientMeasurement`, so the UI never
+imports the Phase 2 parser directly). The Edit surface shows the recipe amount
+(`1.5 cup`) and, for every compatible authenticated USDA portion, the
+deterministic total grams for that amount (`1 cup = 122 g → 183 g for 1.5 cup`).
+Selecting a portion binds it and the calculator derives the mass by exact
+canonical volume (no density invention, no averaging, no guessed conversion).
+When multiple materially different compatible portions exist the amount stays
+review-required and the user chooses; when the selected food has no
+authenticated portion the UI says so and the manual total weight remains a
+fallback. `tsp`/`tbsp`/`cup`/`slice`/count bindings are regression-covered.
+
+**Two-card presentation.** The ordinary compact `Nutrition & Macros` card is
+always visible; a saved Advanced block feeds its values
+(`deriveAdvancedCompactNutrition`) while Advanced Nutrition remains a separate
+secondary card. Applying Advanced never hides or replaces the normal card, and a
+page refresh/reopen restores both.
+
+**Analyze control.** `Analyze Nutrition` always executes a fresh deterministic
+analysis (falling back to an on-demand computation if the memoized analysis is
+unavailable) and provides a visible run state; it never becomes a dead button
+after a saved-state reopen, and it never persists.
+
+### Final hands-on integration repair: central live row state + staple/prepared matching
+
+A second hands-on pass found that automatic analyzer suggestions, explicit user
+food confirmations, authenticated source portions, authenticated count portions,
+manual total weights, and calculation readiness were not always projected into
+ONE coherent CURRENT row state. The collapsed row could keep showing a stale
+`Review suggested` (or `Needs match`) after the user had explicitly resolved the
+row, and the preview could disagree with the row.
+
+**Central live row-state projection.** `src/core/nutritionV2/phase4/liveRow.ts`
+is the ONE authority for the current effective state of an Advanced Nutrition
+ingredient row. `projectLiveRow`/`projectLiveRows` derive the row status and mass
+ONLY from current authoritative live session state:
+
+- the current authoritative Phase 2 review row (candidate identities/outcome);
+- the current food selection (`state.matches`, automatic OR user-confirmed);
+- the current authenticated source-portion selection (`state.portions`);
+- the current authenticated count-portion selection (`state.countPortions`);
+- the current user-entered total weight (`state.userMasses`);
+- the current advisory-preview evidence for the SAME food.
+
+The analyzer's recomputed suggestion is used ONLY as a fallback before anything
+is applied/confirmed; a live resolution always wins. The explicit status
+contract is `needs_match` / `review_suggested` / `needs_amount` / `matched` /
+`qualitative`:
+
+```
+REVIEW SUGGESTED -> user confirms food        -> NEEDS AMOUNT
+NEEDS AMOUNT     -> authenticated portion     -> MATCHED
+NEEDS AMOUNT     -> authenticated count        -> MATCHED
+NEEDS AMOUNT     -> valid manual total weight  -> MATCHED
+MATCHED          -> food selection changes     -> amount invalidated -> NEEDS AMOUNT
+re-analysis      -> clears stale live overrides -> fresh analyzer state
+```
+
+A user-selected authenticated volume portion scales by exact canonical volume
+(`recipe volume / USDA portion volume × USDA gram weight`, e.g. `0.25 cup ×
+150 g/cup = 37.5 g`); a manual total weight uses the existing deterministic mass
+conversion (`g`/`oz`/`lb`); an automatic count resolves deterministically
+(`count / portion_amount × gram_weight`, e.g. `5 slices × 8.1 g = 40.5 g`). No
+density, no averaging, no guessed conversion. The calculator remains the final
+numerical authority; the projection is display-only and never persists. Portion
+provenance is tracked with a display-only `automatic` flag, and food authority
+(`automatic` / `unique_exact` / `user_confirmed`) is shown SEPARATELY from the
+mass source, so a user-entered weight is never conflated with a USDA portion.
+
+**Edit hierarchy.** When a food is resolved the Edit surface leads with the
+current food and an explicit `Change food` control; the full candidate list is
+revealed only when the user asks to change it. While a row is still
+`Review suggested`, food-choice review is primary. Amount resolution (compatible
+USDA portions, then the manual total-weight fallback) is primary once the food is
+confirmed.
+
+**Staple vs prepared-product matching.** For a bare staple query (`1 cup
+Cornmeal`) a SURVEY (FNDDS) prepared dish built from the staple (`Cornmeal
+stick, Puerto Rican style`, `Cornmeal mush, fat added`) could outrank the plain
+staple records because it carried no color/variety token while every plain
+record did. `preparedProductFormCount` is a bounded, structural ranking signal:
+an unrequested prepared-dish form modifier (`stick`, `mush`, `fritter`,
+`porridge`, `cake`, `pudding`, `loaf`) adjacent to a matched anchor demotes a
+SURVEY (FNDDS) record. Foundational/SR-Legacy forms are unaffected, so
+`Butter, stick, unsalted` remains the ordinary form of butter. Explicit requests
+(`cornmeal stick`, `cornmeal mush`, `1 stick butter`) are honored because the
+form word is part of the query. Because this changes ranking and automatic
+eligibility, `MATCHING_RANKING_VERSION` is bumped to `usda_match_rank_v8` and
+`MATCH_CONFIDENCE_VERSION` to `usda_match_confidence_v7`. The bare `1 cup
+Cornmeal` query now surfaces plain cornmeal records (`Cornmeal, whole-grain,
+yellow` binding `1 cup = 122 g`) and never auto-selects a prepared stick/mush.
+
+### One-click best-effort auto-selection policy
+
+The analyzer's original posture was "review ordinary ambiguity before
+calculating": any unrequested variety (yellow vs white cornmeal, ordinary
+jalapeno color/variant records) made a row `REVIEW SUGGESTED`, so an ordinary
+home recipe could return `0 matched / 8 review suggested / 5 need amount` and
+force the user to perform USDA taxonomy review.
+
+The policy is now:
+
+> BEST REASONABLE SAME-FAMILY DEFAULT beats UNNECESSARY USER REVIEW, but
+> FOOD-FAMILY SAFETY beats FORCED AUTO-SELECTION.
+
+**Three levels of ambiguity.**
+
+- **Level 1 — trivial same-food variation** (yellow/white cornmeal, ordinary
+  jalapeno records, close generic records, generic duplicates, unstated variety):
+  auto-select the best default, calculate, let the user edit.
+- **Level 2 — same family, nutritionally material subtype** (whole vs skim milk,
+  salted vs unsalted butter, whole vs nonfat powdered milk, heavy vs light cream,
+  enriched vs unenriched flour): explicit recipe wording first; otherwise review.
+  No hidden arbitrary default is created.
+- **Level 3 — different food / preparation / product** (cornmeal vs mush/stick,
+  chicken meat vs chicken fat, plain food vs composed dish, plain rice vs a
+  prepared rice dish): never cross; review or need-match.
+
+**Implementation.** `confidence.ts` gains a second, bounded authority beside the
+strict `selectAutomaticMatch`:
+
+- `explainCandidate(...).same_family_default_eligible` — identical to the strict
+  contract except it tolerates benign ordinary variety/level variation; it still
+  requires full core identity, same family, no requested qualifier/form missing,
+  no contradiction, and no unrequested material state / cooking / prepared /
+  composed product / unrequested FORM.
+- `bestEffortDefaultCandidates(review)` — the ranked same-family default set.
+  It returns empty when a named MATERIAL cultivar is present among the otherwise
+  benign candidates (`Beans, Dry, Tan` for `dry beans`) or when a materially
+  different subtype sibling ties the best candidate (`milk` whole/skim, `cream`
+  heavy/light, `butter` salted/unsalted).
+- `selectBestEffortMatch(review)` — a STRICT automatic selection is always
+  preferred and never relaxed; best-effort only fills the gap where ordinary
+  variation would otherwise force review.
+- `isDeterministicAutomaticSelection(review, fdcId)` — accepts the strict choice
+  OR any bounded same-family default, so the calculation engine can validate the
+  analyzer's automatic marker without accepting a materially different food.
+
+**Portion-aware tie-breaking.** `analyzer.ts` may prefer an otherwise-equivalent
+same-family sibling that can satisfy the recipe measurement with an authenticated
+volume/count portion (`chooseBestEffortFood`), but only within
+`bestEffortPortionTieCandidates` (no unrequested FORM) and never for a strict
+selection. This is what makes bare `1 cup Cornmeal` choose the portion-bearing
+`Cornmeal, whole-grain, yellow` (`1 cup = 122 g`) over an equally-plain sibling
+with no usable portion. Portion availability can never promote a different food
+family or a composed product.
+
+**Freshness.** `fresh` moved from the nutritionally-significant `QUALIFIER_TOKENS`
+to the ordinary `PREPARATION_QUALIFIERS` (freshness is the default state, not a
+required state). `chopped fresh jalapeno` therefore no longer fails with
+`missing_requested_qualifier`; fresh vs frozen/canned is still enforced by the
+material-state vocabulary on the candidate.
+
+**Result.** Bare `1 cup Cornmeal` auto-selects a plain cornmeal record and
+resolves `122 g` (`183 g` for `1.5 cup`); `0.25 cup chopped fresh jalapeno`
+auto-selects `Peppers, jalapenos` and resolves `37.5 g`; celery/green onions
+auto-select the plain raw record and remain `NEEDS AMOUNT` (manual fallback);
+cheddar/bacon/honey/buttermilk/chicken keep their prior behavior. Material
+boundaries remain review: milk/cream/butter/powdered-milk subtype ambiguity, dry
+beans cultivars, rice-with-gravy / cheese-sandwich composed forms, milk
+chocolate, and bare-egg cooked preparations.
+
+**Version bumps.** `QUERY_PROJECTION_VERSION` = `usda_query_projection_v6`,
+`MATCH_CONFIDENCE_VERSION` = `usda_match_confidence_v8`,
+`ANALYZER_VERSION` = `usda_auto_analyzer_v2` (ranking tuple unchanged at
+`usda_match_rank_v8`). The live row projection, manual/source/count mass binding,
+stale invalidation, Phase 5 Apply authorization, and the canonical
+`codex_nutrition` schema are untouched.
+
+### Final one-click completeness + Apply-state repair
+
+Hands-on use found that the analyzer was still too conservative for ordinary
+Level-2 ingredients, that a one-line fully-resolved recipe was mislabeled
+PARTIAL, and that after Apply the just-saved result was duplicated as an
+"UNSAVED REVIEW".
+
+**Level-2 defaults auto-select.** `same_family_default_eligible` no longer
+blocks on a material subtype/variety; a normal ingredient whose leading
+candidates are the same food gets a deterministic, editable default
+(all-purpose flour, generic rice, common milk, cream, generic butter, dry beans,
+powdered milk). `fresh` was moved to the ordinary preparation vocabulary.
+`compound` (a non-food modifier such as `double-acting`) still demotes but no
+longer blocks a same-family default, while a genuine FOOD compound (`Rice milk`,
+`Rice pilaf`) and an unrequested FORM (`Rice, white, with gravy`) still block.
+A named MATERIAL cultivar (`Rice, black`, `Wild rice`, `Beans, Dry, Tan`) is
+never the ordinary default (explicit `black rice` / `pinto beans` are honored).
+
+**One-food coherence + portion-aware selection.** `bestEffortDefaultCandidates`
+now keeps only candidates whose head noun mutually overlaps the best candidate's
+tokens (`Flour, wheat, ...` / `Wheat flour, ...`; `Yogurt, ... milk` is not
+`milk`). When the default cannot satisfy the recipe measurement,
+`chooseBestEffortFood` prefers the same-food sibling with a compatible
+authenticated portion that is MOST SIMILAR to the default's description, so
+`2.5 cups all-purpose flour` chooses another all-purpose record (125 g/cup ->
+312.5 g) rather than a whole-grain one. Portion availability is a tie-breaker
+inside the safe food family and can never override identity.
+
+**Generic-first ranking.** An unrequested cooking/preparation state and a FOOD
+compound are demoted before variety, and a named material cultivar after variety,
+so plain/raw/white members outrank cooked/composed/cultivar records.
+
+**Eggs / count size.** `countIdentityCompatible` lets a generic (size-null)
+authenticated count portion satisfy an explicit size request when no
+size-specific portion exists (`2 large eggs` -> `1 egg = 50 g`), while an
+unspecified size still never binds a size-specific portion.
+
+**Single completeness authority.** The whole-recipe `status` is now derived from
+INGREDIENT-LINE resolution, not nutrient-list breadth: zero unresolved measurable
+ingredient lines means COMPLETE even when a USDA record does not enumerate every
+nutrient in scope (each nutrient still reports its own status/coverage). This
+invariant is enforced by the calculation engine, Phase 5 Apply, the persisted
+`codex_nutrition` block, and both nutrition surfaces. A block with an unresolved
+line is PARTIAL. The schema v1 structure/version is unchanged; only the
+status-coherence rule is aligned to the invariant.
+
+**Post-Apply reconciliation.** `readStoredBlock` now exposes the saved
+`ingredient_digest`; the Advanced card suppresses the
+`UNSAVED REVIEW — NOT APPLIED` panel when the live review's canonical
+`ingredient_digest` equals the saved block's (a deterministic digest comparison,
+never a formatted-string comparison). A genuine change re-surfaces the panel.
+
+**Version bumps.** `QUERY_PROJECTION_VERSION` = `usda_query_projection_v8`,
+`MATCHING_RANKING_VERSION` = `usda_match_rank_v10`,
+`MATCH_CONFIDENCE_VERSION` = `usda_match_confidence_v10`,
+`COUNT_PORTION_VERSION` = `usda_count_portion_v2`,
+`ANALYZER_VERSION` = `usda_auto_analyzer_v4`. The live row projection, manual
+mass binding, source/count portion binding, stale invalidation, Phase 5 Apply
+authorization, and the canonical `codex_nutrition` schema are otherwise
+untouched.
+
+---
+
+## 30. Real-world ingredient understanding, manual USDA search, and recipe-route persistence
+
+This pass stays upstream of the calculation engine: parsing, candidate
+generation, ranking, manual search, and navigation persistence. It does not
+change calculation semantics, the complete/partial rule, Phase 5 persistence, the
+compact presentation, Apply authorization, the nutrient schema, or the USDA
+bundle.
+
+### 30.1 Ingredient canonicalization (query projection v8)
+
+`projectQueryText` separates four roles before candidate generation: FOOD
+IDENTITY, meaningful SUBTYPE/MATERIAL modifiers, MEASUREMENT tokens, and
+PREPARATION/INSTRUCTION noise.
+
+- **Parenthetical numeric ratios** (`(80/20)`, `(85 / 15)`) are preserved as two
+  numeric qualifier tokens; other parentheticals remain asides.
+- **Preparation/procedural noise** (`kept`, `cold`, `loose`, `four`, `freshly`,
+  `divided into`, `plus more`, ...) is removed from identity, and trailing
+  procedural clauses (`kept cold and divided into four loose 4-ounce balls`) are
+  trimmed. Nutritionally significant state (`fried`, `cooked`, `baked`, `raw`)
+  is deliberately NOT noise: it remains required identity.
+- **Optional culinary refinements** (`kosher`, `sea`, `fine`, `coarse`) are
+  recorded as `refinement_tokens`. They are a ranking PREFERENCE, never required
+  identity, because the pinned bundle has no `Salt, sea`/`Salt, kosher` record.
+  A real refinement record (e.g. `Spices, pepper, black`) is surfaced ahead of
+  the generic sibling; otherwise the deterministic generic same-food fallback is
+  used. The modifier is never treated as absent.
+- **OR alternatives** (`brioche or potato burger buns`) are decomposed into
+  `alternative_groups` branches with a shared head. The shared head is the
+  required identity, so a generic fallback (`Roll, white, hamburger bun`) remains
+  reachable when no subtype record exists; a real subtype record is preferred by
+  the `alternativeAgreement` ranking dimension.
+- **Bounded culinary aliases** now include `neutral oil` -> the bounded neutral
+  family (`Vegetable oil, NFS`), and aliases are re-projected onto the
+  qualifier/form roles so `burger buns` -> `hamburger bun` matches `hamburger`.
+
+### 30.2 Ranking v10
+
+`rankCandidates` adds `refinementAgreement` and `alternativeAgreement`
+preferences and an `unrequestedForms` demotion, so a composed product
+(`Double hamburger, ..., 2 patties`) ranks below the plain component
+(`Roll, ..., hamburger bun`) for a `burger buns` query.
+
+### 30.3 Direct recipe mass authority
+
+`projectLiveRow` resolves a direct recipe mass (`g`/`kg`/`oz`/`lb`) as
+`direct_mass` BEFORE any source/count portion, so `1 lb ground beef` resolves to
+453.6 g with no USDA portion. A food change preserves direct recipe mass (only
+food-dependent portion/count state is invalidated).
+
+### 30.4 Manual USDA search
+
+`AdvancedNutritionSession.searchFoods(query, limit)` performs a deterministic,
+local, bounded search over the SAME pinned bundle (no network, no AI). It returns
+bounded discovery results (FDC id, data type, description, record digest, portion
+availability). A selection built from a result is a `kind: 'manual'` match choice
+carrying the record digest and catalog digest.
+
+The calculation engine authenticates a manual selection against the pinned
+bundle: the FDC id must exist, the record digest and catalog digest must match,
+the line ref must match, and the selection must bind the CURRENT review digest.
+A forged/stale/wrong-bundle selection fails closed (it is never granted
+authority). Manual search is available on matched, review-suggested, needs-amount,
+and needs-match rows.
+
+### 30.4a TRUE full-catalog manual search (`usda_manual_search_v1`)
+
+Manual search is a **full-database discovery tool**, deliberately SEPARATE from
+the automatic candidate generator. It does NOT use anchors, food-family
+authority, confidence, eligibility reasoning, or review status. It searches
+every eligible record in the pinned catalog (12,924 eligible records at the
+current pinned release; 13,559 authenticated source records).
+
+`matching/manualSearch.ts` owns the deterministic ranking:
+
+1. exact FDC id (`169697` / `fdc 169697`) — ranked first;
+2. exact normalized description;
+3. phrase/prefix agreement;
+4. plain/common food preference (a bounded composed/dish-token penalty);
+5. compactness (fewer extra tokens);
+6. token-order agreement;
+7. stable `fdc_id` tie-breaker.
+
+A query matches a record only when EVERY query token is present (morphologically
+tolerant, token-order independent) — honest AND semantics, so manual search never
+silently substitutes a different food. A small bounded synonym map (`burger` ->
+`hamburger`) improves recall. When no record matches, the UI states
+"No matching USDA record found in this pinned dataset."
+
+An inverted token index is built ONCE per catalog (lazily, in the catalog
+closure in `review.ts`, never exported) and reused for every search, so
+interactive searches do not rebuild structures. The pure `searchManualCatalog`
+receives the index; it holds no authority and no global state. Results are
+bounded (`MANUAL_SEARCH_DEFAULT_LIMIT` 20, `MANUAL_SEARCH_MAX_LIMIT` 100) with a
+`total` count and a `Load more` continuation. Discovery hits expose safe fields
+only (no nutrients, no authority, no selection).
+
+### 30.5 Recipe-detail route persistence
+
+`src/utils/recipeRoute.ts` defines the stable route grammar
+(`#/` gallery, `#/recipe/<encoded-id>` recipe). `App` resolves the routed
+canonical recipe id once the recipe collection is loaded (waiting for the vault
+loading state), restores the same detail view on hard refresh, fails safely to
+the gallery for an invalid/missing route, and supports browser back/forward.
+
+
+---
+
+## 31. Persistent saved report + re-analyze workflow + per-serving presentation
+
+This pass separates Advanced Nutrition into three layers and closes the
+saved/working lifecycle: the recipe-facing compact card, the persistent saved
+report, and the temporary working analyzer/editor.
+
+### 31.1 Saved Advanced report (no analyzer required)
+
+`phase5c/savedReport.ts` (`usda_phase5c_saved_report_v1`) projects an
+already-validated canonical schema-v1 block into the detailed saved report
+WITHOUT any Phase 2/3/4 session, catalog authentication, USDA bundle
+reconstruction, candidate generation, or re-calculation. `AdvancedNutritionSavedReport`
+renders it read-only with the three display bases (entire recipe / per serving /
+selected servings), nutrient groups, per-nutrient partial markers, resolved vs
+unresolved line counts, provenance, and the USDA bundle release.
+
+`AdvancedNutritionCard` receives the validated block as `savedAdvancedBlock`
+(passed by `RecipeNutritionSection`) and opens the SAVED REPORT first when one
+exists. Only the explicit `Edit / Re-analyze Nutrition` action initializes the
+USDA analyzer (lazily, through the existing bundle loader). Viewing persisted
+nutrition therefore never waits on catalog authentication.
+
+### 31.2 Working-review hydration
+
+`phase4/hydrate.ts` reconstructs the previously reviewed working state for an
+UNCHANGED recipe. Binding is per canonical `line_ref` (index + content digest), so
+a changed line never reuses stale evidence. The canonical block stores the FDC id,
+bundle release, resolved grams, and optional `conversion_basis`
+(`direct_mass` | `source_portion`); it does NOT persist record/catalog/review
+digests, the portion index, the count identity, or the manual mass unit. Those are
+RE-DERIVED from the genuine current session (the FDC id is looked up through the
+full-catalog manual search to obtain the authenticated record digest). Every mass
+binding is rebuilt through the genuine session builders
+(`buildPortionChoice` / `buildCountPortionChoice` / `buildUserMassChoice`), which
+independently re-authenticate the manual food selection. When a saved
+`source_portion` cannot be reproduced exactly, the reviewed grams are recovered as
+an explicit user-entered total weight; if that fails, the row stays unresolved and
+no authority is invented. No schema change was made or required.
+
+### 31.3 Saved vs working state
+
+The working editor is a temporary draft: it shows a "Working Advanced Nutrition
+review" banner and distinguishes hydrated-but-clean from "Unsaved changes"
+(deterministic: a genuine user edit, a stale preview, or a preview whose
+`ingredient_digest` differs from the saved block). `Close without saving`
+discards the draft and the saved report is untouched; Apply rebases the working
+state cleanly against the newly saved digest.
+
+### 31.4 Serving-scaled recipe-facing presentation
+
+The canonical saved block remains ENTIRE-RECIPE totals for its own base serving
+denominator. The compact `Nutrition & Macros` card and the recipe header Calories
+follow the CURRENT recipe serving scale:
+
+    displayed = savedEntireRecipeTotals × (currentServings / savedBaseServings)
+
+so at the base count they show the base entire-recipe totals, at 4/8 they show
+0.5×, and at 16/8 they show 2×. All six compact fields (calories, protein, carbs,
+fat, fiber, sodium) use the same basis and the existing shared serving contract
+(`nutritionForRequestedServings`), so there is no cumulative drift and macro
+percentages are scale-invariant. Changing servings is presentation scaling only:
+the canonical `codex_nutrition` block is never rewritten. A PARTIAL saved result
+still shows the incomplete state at every scale. The saved report retains its
+three explicit display bases (entire recipe / per serving / selected servings)
+over the canonical saved denominator.
+
+### 31.5 Post-Apply live sync
+
+A successful Apply immediately makes the newly applied result THE saved Advanced
+result on every surface (Advanced summary card, saved report, compact card, and
+recipe header) with no reload/reopen. The application write callback commits the
+updated recipe to the authoritative in-memory collection + selected recipe, and
+then invalidates any vault scan that started BEFORE the write, so a later-
+resolving stale scan can never overwrite the new saved result with the old one.
+
+
+---
+
+## 32. Manual review persistence + partial compact display
+
+### 32.1 Re-analysis preserves reviewed decisions
+
+Re-analysis is a GAP-FILLING pass, never a destructive reset. `apply_analysis`
+accepts optional preserved `userMasses`, and the card's Re-analyze merges the
+fresh analyzer result with every explicit user decision:
+
+- a manual / USDA-search selection (`kind: 'manual'`),
+- a user-confirmed candidate (`automatic !== true`),
+- a selected authenticated source/count portion,
+- a user-entered total weight.
+
+For each such line the reviewed choice and its mass binding are carried through,
+and the advisory preview is RECOMPUTED from the merged state. The analyzer only
+supplies the lines the user has not already decided. This is what makes a
+manually reviewed `4 cup broccoli florets` / `2 g garlic, minced` survive
+reopen + Re-analyze instead of reverting to NEEDS MATCH / NEEDS AMOUNT.
+
+Hydration already reconstructs reviewed evidence for an unchanged recipe:
+per-line `line_ref` binding, the FDC re-derived from the pinned catalog, and the
+mass rebuilt through the genuine session builders. For a resolved row, schema v1
+already stores the FDC id, bundle release, resolved grams, and optional
+`conversion_basis`. A manual selection whose mass never resolved is now preserved
+by the backward-compatible unresolved-food extension (§33).
+
+### 32.2 Partial compact nutrition display
+
+A recognized PARTIAL saved Advanced result is now surfaced in the standard
+Nutrition & Macros card instead of being hidden:
+
+- `deriveAdvancedCompactNutrition` returns the partial values (the sum over the
+  RESOLVED ingredient lines only);
+- the card shows the values with the same current-recipe serving-scale projection
+  as a complete result;
+- the card always renders a prominent "Partial estimate" badge plus
+  "Advanced nutrition incomplete — N of M ingredient lines resolved" and states
+  that unresolved lines are excluded;
+- the values are never labelled complete, and no legacy value is topped up.
+
+The recipe-header Calories stays deliberately BLANK for a partial Advanced
+result (`resolveNutritionDisplayCalories` returns undefined while Advanced is
+preferred but incomplete), so a partial total is never headlined as complete.
+The detailed saved report continues to show partial values with partial-coverage
+markers.
+
+
+---
+
+## 33. Independent food-identity persistence for unresolved-mass rows
+
+Food identity and mass resolution are independent concerns. A user-confirmed USDA
+food must survive Apply even when the line's mass is still unresolved, while the
+line contributes ZERO nutrients.
+
+### 33.1 Schema extension (backward-compatible; schema stays 1)
+
+`UnresolvedIngredientRef` gains two OPTIONAL fields:
+
+```
+source_food_id?: string;   // the user-confirmed USDA FDC id
+source_release?: string;   // must equal the declared `usda_fdc` release
+```
+
+- Both are present together or absent together; a lone field fails validation.
+- They are written ONLY for a user-confirmed selection (never an automatic
+  candidate) and only when the line is unresolved.
+- They carry NO amount and NO nutrient contribution.
+- Legacy blocks that omit them remain valid and hydrate as NEEDS MATCH.
+- A new block carrying them is rejected as `malformed` (preserved, never
+  interpreted) by an older reader that predates the fields — the documented
+  fail-closed behavior for forward-added fields.
+- No schema version bump: `CODEX_NUTRITION_SCHEMA_V1` remains `1`; totals,
+  nutrients, serving denominator, and Apply authorization are unchanged.
+
+### 33.2 Persistence and hydration
+
+`phase5/authorize.ts` attaches the FDC + bundle release to an `unresolved` entry
+when the reviewed preview shows a user-confirmed match with no resolved mass.
+`phase4/hydrate.ts` restores that entry as a `kind: 'manual'` reviewed choice
+(re-derived record/catalog/review digests) WITHOUT any mass binding, so the row
+projects NEEDS AMOUNT (never NEEDS MATCH). The FDC is re-authenticated against the
+active pinned catalog; an absent/forged id fails closed and does not bind.
+
+### 33.3 Manual selection on an unmatched row
+
+`buildCalculationRequest` now supplies an explicit user selection for ANY row with
+a user choice, not only `review_required` rows. A manual full-catalog selection on
+an `unmatched` (or `matched_exact`) line therefore reaches the calculation (and
+persistence); the calculator independently re-authenticates it and fails closed if
+invalid.

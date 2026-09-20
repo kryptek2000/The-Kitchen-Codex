@@ -180,30 +180,79 @@ const SYNTHETIC_VAULT = `(() => {
   return true;
 })()`;
 
-function selectCandidateExpression(ingredientLine: string, fdcId: number): string {
-  return `(() => {
-    const li = Array.from(document.querySelectorAll('[aria-label="Ingredient matching review"] li')).find((node) => (node.innerText || '').includes(${JSON.stringify(ingredientLine)}));
-    if (!li) return false;
-    const label = Array.from(li.querySelectorAll('label')).find((node) => (node.innerText || '').includes('FDC ${fdcId}'));
-    if (!label) return false;
-    const input = label.querySelector('input[type="radio"]');
-    if (!input) return false;
-    input.click();
+/** Opens a row's compact Edit expansion (detailed tools are hidden by default). */
+async function openRowEdit(cdp: Cdp, ingredientLine: string): Promise<boolean> {
+  const opened = await evaluate(cdp, `(() => {
+    const row = Array.from(document.querySelectorAll('[data-testid="advanced-nutrition-row"]')).find((node) => (node.innerText || '').includes(${JSON.stringify(ingredientLine)}));
+    if (!row) return false;
+    const btn = row.querySelector('[data-testid="advanced-nutrition-edit"]');
+    if (!btn) return false;
+    if (btn.getAttribute('aria-expanded') !== 'true') btn.click();
     return true;
-  })()`;
+  })()`);
+  if (opened !== true) return false;
+  await sleep(150);
+  return true;
 }
 
-function selectOtherCandidateExpression(ingredientLine: string): string {
-  return `(() => {
-    const li = Array.from(document.querySelectorAll('[aria-label="Ingredient matching review"] li')).find((node) => (node.innerText || '').includes(${JSON.stringify(ingredientLine)}));
-    if (!li) return false;
-    const inputs = Array.from(li.querySelectorAll('label input[type="radio"]'));
-    const checked = inputs.find((i) => i.checked);
-    const target = inputs.find((i) => i !== checked);
-    if (!target) return false;
-    target.click();
-    return true;
-  })()`;
+async function selectCandidate(cdp: Cdp, ingredientLine: string, fdcId: number): Promise<boolean> {
+  if (!(await openRowEdit(cdp, ingredientLine))) return false;
+  await sleep(200);
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const result: string = await evaluate(cdp, `(() => {
+      const row = Array.from(document.querySelectorAll('[data-testid="advanced-nutrition-row"]')).find((node) => (node.innerText || '').includes(${JSON.stringify(ingredientLine)}));
+      if (!row) return 'no-row';
+      const label = Array.from(row.querySelectorAll('label')).find((node) => (node.innerText || '').includes('FDC ${fdcId}'));
+      if (label) {
+        const input = label.querySelector('input[type="radio"]');
+        if (!input) return 'no-input';
+        input.click();
+        return 'ok';
+      }
+      const change = row.querySelector('[data-testid="advanced-nutrition-change-food"]');
+      if (change) {
+        change.click();
+        return 'expanding';
+      }
+      return 'no-label';
+    })()`);
+    if (result === 'ok') return true;
+    await sleep(200);
+  }
+  return false;
+}
+
+async function selectOtherCandidate(cdp: Cdp, ingredientLine: string): Promise<boolean> {
+  if (!(await openRowEdit(cdp, ingredientLine))) return false;
+  await sleep(200);
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const result: string = await evaluate(cdp, `(() => {
+      const row = Array.from(document.querySelectorAll('[data-testid="advanced-nutrition-row"]')).find((node) => (node.innerText || '').includes(${JSON.stringify(ingredientLine)}));
+      if (!row) return 'no-row';
+      // Only FOOD candidates (labels annotated with an FDC id) are authority
+      // mutations; portion radios must never be mistaken for a match change.
+      const inputs = Array.from(row.querySelectorAll('label'))
+        .filter((label) => (label.innerText || '').includes('FDC '))
+        .map((label) => label.querySelector('input[type="radio"]'))
+        .filter((input) => input !== null);
+      if (inputs.length === 0) {
+        const change = row.querySelector('[data-testid="advanced-nutrition-change-food"]');
+        if (change) {
+          change.click();
+          return 'expanding';
+        }
+        return 'no-inputs';
+      }
+      const checked = inputs.find((i) => i.checked);
+      const target = inputs.find((i) => i !== checked);
+      if (!target) return 'no-target';
+      target.click();
+      return 'ok';
+    })()`);
+    if (result === 'ok') return true;
+    await sleep(200);
+  }
+  return false;
 }
 
 async function main(): Promise<void> {
@@ -347,7 +396,7 @@ async function main(): Promise<void> {
       await sleep(1000);
     }
     if (!dialogOpened) throw new Error('Advanced Nutrition dialog did not open');
-    await waitFor(cdp, `document.querySelectorAll('[aria-label="Ingredient matching review"] li').length >= 11`, 30000);
+    await waitFor(cdp, `document.querySelectorAll('[data-testid="advanced-nutrition-row"]').length >= 11`, 30000);
     record('Advanced Nutrition opened and all eleven ingredient sections rendered', true);
 
     const selections: ReadonlyArray<[string, number]> = [
@@ -358,13 +407,13 @@ async function main(): Promise<void> {
       ['4 pickles, sliced', 2710078],
     ];
     for (const [line, fdcId] of selections) {
-      const ok = await evaluate(cdp, selectCandidateExpression(line, fdcId));
+      const ok = await selectCandidate(cdp, line, fdcId);
       record(`selected USDA food FDC ${fdcId} for "${line}"`, ok === true);
       await sleep(200);
     }
 
     // 4. Calculate the advisory preview (explicit user action).
-    await evaluate(cdp, `(() => { const b = Array.from(document.querySelectorAll('button')).find((x) => (x.textContent||'').includes('Calculate Preview')); if (b) b.click(); return !!b; })()`);
+    await evaluate(cdp, `(() => { const b = Array.from(document.querySelectorAll('button')).find((x) => (x.textContent||'').includes('Calculate Preview') || (x.textContent||'').includes('Recalculate Preview')); if (b) b.click(); return !!b; })()`);
     await waitFor(cdp, `document.body.innerText.includes('Advisory nutrition preview')`, 30000);
 
     const applyButtonEnabled = await evaluate(cdp, `(() => {
@@ -381,7 +430,7 @@ async function main(): Promise<void> {
 
     // 5. TOCTOU: mutate an authority dependency (change a selected match) after
     //    eligibility, and prove Apply disables and nothing is written.
-    const mutated = await evaluate(cdp, selectOtherCandidateExpression('1 cup shredded lettuce'));
+    const mutated = await selectOtherCandidate(cdp, '1 cup shredded lettuce');
     record('a match mutation is applied to an unresolved row', mutated === true);
     await sleep(300);
     const applyDisabledAfterMutation = await evaluate(cdp, `(() => {
@@ -396,9 +445,9 @@ async function main(): Promise<void> {
     );
 
     // Re-select the original match and recalculate to restore eligibility.
-    await evaluate(cdp, selectCandidateExpression('1 cup shredded lettuce', 2709789));
+    await selectCandidate(cdp, '1 cup shredded lettuce', 2709789);
     await sleep(200);
-    await evaluate(cdp, `(() => { const b = Array.from(document.querySelectorAll('button')).find((x) => (x.textContent||'').includes('Calculate Preview')); if (b) b.click(); return !!b; })()`);
+    await evaluate(cdp, `(() => { const b = Array.from(document.querySelectorAll('button')).find((x) => (x.textContent||'').includes('Calculate Preview') || (x.textContent||'').includes('Recalculate Preview')); if (b) b.click(); return !!b; })()`);
     await waitFor(cdp, `document.body.innerText.includes('Advisory nutrition preview')`, 30000);
 
     // 6. Explicit Apply with confirmation.

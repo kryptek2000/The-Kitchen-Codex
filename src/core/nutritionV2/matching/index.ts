@@ -13,4 +13,5 @@ export * from './query';
 export * from './eligibility';
 export * from './parse';
 export * from './rank';
+export * from './confidence';
 export * from './review';

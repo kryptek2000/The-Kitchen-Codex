@@ -48,6 +48,20 @@ function recipe(overrides: Partial<ObsidianRecipe> = {}): ObsidianRecipe {
 
 afterEach(() => cleanup());
 
+/**
+ * Post-Phase-5 remediation: the detailed candidate/portion/weight tools are
+ * compact by default and appear ONLY for the row being edited. Opens the Edit
+ * expansion for the row at `index` (adaptation order).
+ */
+async function openEdit(index: number): Promise<void> {
+  const buttons = await screen.findAllByRole('button', { name: /^Edit$/ });
+  fireEvent.click(buttons[index]);
+}
+
+const ROW_MASS_FLOUR = 0;
+const ROW_VOLUME_FLOUR = 1;
+const ROW_BUTTER = 2;
+
 describe('phase 4 card — honest availability', () => {
   it('reports unavailable without fabricating data when no session is configured', () => {
     render(<AdvancedNutritionCard recipe={recipe()} session={null} />);
@@ -111,7 +125,9 @@ describe('phase 4 modal — accessibility', () => {
     expect(screen.getByRole('radio', { name: 'Entire recipe' })).toBeTruthy();
     expect(screen.getByRole('radio', { name: 'Per serving' })).toBeTruthy();
 
-    // The ambiguous "Butter" row requires an explicit choice; nothing is preselected.
+    // The ambiguous "Butter" row requires an explicit choice; nothing is
+    // preselected. Its detailed tools are behind Edit.
+    await openEdit(ROW_BUTTER);
     const none = await screen.findByRole('radio', { name: /None of these/i });
     expect((none as HTMLInputElement).checked).toBe(false);
   });
@@ -120,6 +136,7 @@ describe('phase 4 modal — accessibility', () => {
     render(<AdvancedNutritionCard recipe={recipe()} session={genuineSession()} />);
     fireEvent.click(screen.getByRole('button', { name: /Open Advanced Nutrition/i }));
     await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await openEdit(ROW_BUTTER);
 
     const radios = screen.getAllByRole('radio') as HTMLInputElement[];
     const matchRadios = radios.filter((radio) => /FDC|None of these/.test(radio.closest('label')?.textContent ?? ''));
@@ -131,6 +148,7 @@ describe('phase 4 modal — accessibility', () => {
     render(<AdvancedNutritionCard recipe={recipe()} session={genuineSession()} />);
     fireEvent.click(screen.getByRole('button', { name: /Open Advanced Nutrition/i }));
     await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await openEdit(ROW_VOLUME_FLOUR);
 
     const load = screen.getByRole('button', { name: /Review source portions/i });
     fireEvent.click(load);
@@ -145,6 +163,7 @@ describe('phase 4 modal — accessibility', () => {
     render(<AdvancedNutritionCard recipe={recipe()} session={genuineSession()} />);
     fireEvent.click(screen.getByRole('button', { name: /Open Advanced Nutrition/i }));
     const dialog = await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await openEdit(ROW_MASS_FLOUR);
     expect(dialog.textContent).toMatch(/not\s+manually confirmed by you/i);
   });
 
@@ -185,6 +204,7 @@ describe('phase 4 modal — calculation flow', () => {
     await screen.findByText('Advisory nutrition preview');
 
     // Select "None of these" for the ambiguous row -> preview becomes stale.
+    await openEdit(ROW_BUTTER);
     const none = await screen.findByRole('radio', { name: /None of these/i });
     fireEvent.click(none);
     await waitFor(() => expect(screen.getByText(/Stale — recalculate/i)).toBeTruthy());
@@ -196,6 +216,7 @@ describe('phase 4.5C — US customary portions and explicit total weight', () =>
     render(<AdvancedNutritionCard recipe={recipe()} session={genuineSession()} />);
     fireEvent.click(screen.getByRole('button', { name: /Open Advanced Nutrition/i }));
     await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await openEdit(ROW_VOLUME_FLOUR);
 
     // No second action is required to reveal the portions.
     const portionRadios = (await screen.findAllByRole('radio')).filter((radio) =>
@@ -212,6 +233,7 @@ describe('phase 4.5C — US customary portions and explicit total weight', () =>
     render(<AdvancedNutritionCard recipe={recipe()} session={genuineSession()} />);
     fireEvent.click(screen.getByRole('button', { name: /Open Advanced Nutrition/i }));
     await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await openEdit(ROW_VOLUME_FLOUR);
 
     const weightInput = await screen.findByLabelText('Total weight for this ingredient line');
     fireEvent.change(weightInput, { target: { value: '100' } });

@@ -117,7 +117,10 @@ describe('phase 3 calculation — golden totals and coverage', () => {
     expect(totals.sodium?.status).toBe('partial');
     expect(totals.calories?.status).toBe('complete');
     expect(result.preview.basis).toBe('total');
-    expect(result.preview.status).toBe('partial');
+    // BLOCK completeness = every ingredient line resolved. Sodium coverage is
+    // partial (its own nutrient status), but the whole-recipe result is complete.
+    expect(result.preview.unresolved.length).toBe(0);
+    expect(result.preview.status).toBe('complete');
     expect(result.preview.advisory_only).toBe(true);
     expect(result.preview.application_authorized).toBe(false);
   });
@@ -133,7 +136,9 @@ describe('phase 3 calculation — golden totals and coverage', () => {
     if (!result.ok) return;
     expect('sodium' in result.preview.totals).toBe(false);
     expect(result.preview.totals.calories?.status).toBe('complete');
-    expect(result.preview.status).toBe('partial');
+    // The single ingredient line is fully resolved, so the block is complete
+    // even though `sodium` is absent (never synthesized as zero).
+    expect(result.preview.status).toBe('complete');
   });
 
   it('preserves an explicit USDA zero as a present contribution', () => {

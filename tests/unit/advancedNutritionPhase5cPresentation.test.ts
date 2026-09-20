@@ -95,6 +95,27 @@ function advancedBlock(
   };
 }
 
+/** A recognized COMPLETE block (all lines resolved, complete nutrient coverage). */
+function completeBlock(
+  target: ObsidianRecipe,
+  overrides: Partial<CodexNutritionV1> = {}
+): CodexNutritionV1 {
+  return advancedBlock(target, {
+    status: 'complete',
+    nutrients: {
+      calories: {
+        amount: 364,
+        unit: 'kcal',
+        status: 'complete',
+        coverage: 1,
+        covered_ingredient_count: 2,
+        measurable_ingredient_count: 2,
+      },
+    },
+    ...overrides,
+  });
+}
+
 const FLOUR = '100 g Flour, wheat, white';
 const SUGAR = '50 g Sugar, granulated';
 
@@ -131,7 +152,7 @@ describe('phase 5C — presentation precedence', () => {
   it('4. conflicting both -> Advanced value wins, legacy preserved', () => {
     const base = recipe([FLOUR]);
     const r = recipe([FLOUR], {
-      codexNutrition: advancedBlock(base) as never,
+      codexNutrition: completeBlock(base) as never,
       nutrition: { calories: 9999 } as never,
       calories: '9999',
     });
@@ -144,7 +165,7 @@ describe('phase 5C — presentation precedence', () => {
     expect(p.legacy_calories).toBe('9999');
   });
 
-  it('5. partial Advanced + legacy -> partial Advanced remains primary', () => {
+  it('5. partial Advanced + legacy -> partial Advanced remains primary; header stays blank', () => {
     const base = recipe([FLOUR]);
     const block = advancedBlock(base, { status: 'partial' });
     const r = recipe([FLOUR], { codexNutrition: block as never, nutrition: { calories: 100 } as never });
@@ -152,12 +173,15 @@ describe('phase 5C — presentation precedence', () => {
     expect(p.kind).toBe('advanced_saved');
     expect(p.advanced?.status).toBe('partial');
     expect(p.advanced_preferred).toBe(true);
-    expect(resolveNutritionDisplayCalories(p, 4)).toBe(364);
+    // A PARTIAL result is never headlined as a complete calorie total; the
+    // partial values are surfaced (labelled) in the compact card instead.
+    expect(resolveNutritionDisplayCalories(p, 4)).toBeUndefined();
+    expect(resolveNutritionDisplayCalories(p, 4)).not.toBe(100);
   });
 
   it('6. stale Advanced + legacy -> advanced_stale, not silent legacy replacement', () => {
     const base = recipe([FLOUR], { servings: 2 });
-    const block = advancedBlock(base, { servings: 2 });
+    const block = completeBlock(base, { servings: 2 });
     const edited = recipe([FLOUR, SUGAR], { servings: 4, codexNutrition: block as never, nutrition: { calories: 100 } as never });
     const p = resolveRecipeNutritionPresentation(edited);
     expect(p.kind).toBe('advanced_stale');
@@ -208,9 +232,9 @@ describe('phase 5C — presentation precedence', () => {
     expect(resolveNutritionDisplayCalories(p, 4)).toBe('450');
   });
 
-  it('derives Advanced per-serving display from the stored denominator', () => {
+  it('derives the Advanced header value from the stored denominator at the requested count', () => {
     const base = recipe([FLOUR], { servings: 4 });
-    const block = advancedBlock(base, { servings: 4 });
+    const block = completeBlock(base, { servings: 4 });
     const p = resolveRecipeNutritionPresentation(recipe([FLOUR], { servings: 4, codexNutrition: block as never }));
     expect(resolveNutritionDisplayCalories(p, 4)).toBe(364);
     expect(resolveNutritionDisplayCalories(p, 8)).toBe(728);
@@ -314,7 +338,7 @@ describe('phase 5C H1 — header calories never fall back to legacy while Advanc
   it('1. valid Advanced with calories + legacy 9999 -> Advanced calories', () => {
     const base = recipe([FLOUR]);
     const r = recipe([FLOUR], {
-      codexNutrition: advancedBlock(base) as never,
+      codexNutrition: completeBlock(base) as never,
       nutrition: { calories: 9999, servings: 4 } as never,
       calories: '9999',
     });
@@ -395,7 +419,7 @@ describe('phase 5C H1 — header calories never fall back to legacy while Advanc
 describe('phase 5C H2 — adaptation failure marks the saved result stale', () => {
   it('a recipe with no measurable ingredients -> advanced_stale, block preserved', () => {
     const base = recipe([FLOUR]);
-    const block = advancedBlock(base);
+    const block = completeBlock(base);
     const broken = recipe([], { codexNutrition: block as never, nutrition: { calories: 9999, servings: 4 } as never });
     const before = JSON.stringify(broken);
     const p = resolveRecipeNutritionPresentation(broken);

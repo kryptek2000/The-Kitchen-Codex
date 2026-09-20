@@ -150,7 +150,7 @@ function advancedBlockFor(target: ObsidianRecipe, overrides: Partial<CodexNutrit
     schema: 1,
     basis: 'total',
     servings: adaptation.ok ? adaptation.recipe.base_servings : 4,
-    status: 'partial',
+    status: 'complete',
     computed_at: '2026-09-14T00:00:00.000Z',
     ingredient_digest: `sha256:${'a'.repeat(64)}`,
     dv_standard: DV_STANDARD_ID,
@@ -161,9 +161,9 @@ function advancedBlockFor(target: ObsidianRecipe, overrides: Partial<CodexNutrit
       calories: {
         amount: 364,
         unit: 'kcal',
-        status: 'partial',
-        coverage: 0.5,
-        covered_ingredient_count: 1,
+        status: 'complete',
+        coverage: 1,
+        covered_ingredient_count: 2,
         measurable_ingredient_count: 2,
       },
     },
@@ -178,6 +178,37 @@ function advancedBlockFor(target: ObsidianRecipe, overrides: Partial<CodexNutrit
     })),
     unresolved: [],
     ...overrides,
+  };
+}
+
+/** A recognized but INCOMPLETE saved block (partial coverage + unresolved line). */
+function partialBlockFor(target: ObsidianRecipe): CodexNutritionV1 {
+  const block = advancedBlockFor(target, {
+    status: 'partial',
+    nutrient_scope: ['calories', 'fat'],
+    nutrients: {
+      calories: {
+        amount: 364,
+        unit: 'kcal',
+        status: 'partial',
+        coverage: 0.5,
+        covered_ingredient_count: 1,
+        measurable_ingredient_count: 2,
+      },
+      fat: {
+        amount: 91.3,
+        unit: 'g',
+        status: 'partial',
+        coverage: 0.5,
+        covered_ingredient_count: 1,
+        measurable_ingredient_count: 2,
+      },
+    },
+  });
+  return {
+    ...block,
+    ingredients: block.ingredients.slice(0, 1),
+    unresolved: [{ line_ref: 'ing:1:unresolved', reason: 'no_match' }],
   };
 }
 
@@ -230,6 +261,17 @@ function seedVaultFiles(): Record<string, string> {
       nutrition: { calories: 9999, protein: 1, servings: 4 } as never,
       calories: '9999',
       codexNutrition: noCalBlock as never,
+    })
+  );
+
+  // H. Recognized but INCOMPLETE Advanced block + conflicting legacy.
+  const partialBase = baseRecipe('Partial Recipe');
+  const partialBlock = partialBlockFor(partialBase);
+  files['Partial Recipe.md'] = serializeRecipeToObsidianMarkdown(
+    baseRecipe('Partial Recipe', {
+      nutrition: { calories: 9999, protein: 1, servings: 4 } as never,
+      calories: '9999',
+      codexNutrition: partialBlock as never,
     })
   );
 
@@ -292,7 +334,7 @@ const OPEN_DETAIL = (title: string) => `(() => {
 })()`;
 
 const HEADER_CALORIES = `(() => {
-  const label = Array.from(document.querySelectorAll('span')).find((s) => (s.textContent||'').trim() === 'Calories');
+  const label = Array.from(document.querySelectorAll('span')).find((s) => (s.textContent||'').trim().startsWith('Calories'));
   const value = label && label.parentElement ? (label.parentElement.querySelector('.text-sm')?.textContent || '') : '';
   return value.trim();
 })()`;
@@ -321,17 +363,38 @@ const HAMBURGER_INGREDIENTS = [
   '1 tablespoon ketchup',
 ];
 
-function selectCandidateExpression(ingredientLine: string, fdcId: number): string {
-  return `(() => {
-    const li = Array.from(document.querySelectorAll('[aria-label="Ingredient matching review"] li')).find((node) => (node.innerText || '').includes(${JSON.stringify(ingredientLine)}));
-    if (!li) return false;
-    const label = Array.from(li.querySelectorAll('label')).find((node) => (node.innerText || '').includes('FDC ${fdcId}'));
-    if (!label) return false;
-    const input = label.querySelector('input[type="radio"]');
-    if (!input) return false;
-    input.click();
+/** Clicks the one-click deterministic analyzer. */
+async function clickAnalyze(cdp: Cdp): Promise<boolean> {
+  return (await evaluate(cdp, `(() => {
+    const b = document.querySelector('[data-testid="advanced-nutrition-analyze"]');
+    if (!b) return false;
+    b.click();
     return true;
-  })()`;
+  })()`)) === true;
+}
+
+/**
+ * Opens the Advanced Nutrition WORKING EDITOR. When a saved Advanced block
+ * exists, the card opens the SAVED REPORT first (no USDA authentication); this
+ * helper then clicks Edit / Re-analyze to initialize the working analyzer.
+ */
+async function openAdvancedEditor(cdp: Cdp): Promise<boolean> {
+  const clicked = (await evaluate(cdp, `(() => {
+    const b = document.querySelector('[data-testid="advanced-nutrition-open"]')
+      || Array.from(document.querySelectorAll('button')).find((x) => /Open (Saved )?Advanced (Report|Nutrition)/.test((x.textContent||'')));
+    if (!b) return false;
+    b.click();
+    return true;
+  })()`)) === true;
+  if (!clicked) return false;
+  await waitFor(cdp, `!!document.querySelector('[role="dialog"]')`, 120000);
+  // If the SAVED REPORT opened, explicitly enter the working editor.
+  const hasSavedReport = await evaluate(cdp, `!!document.querySelector('[data-testid="saved-advanced-edit"]')`);
+  if (hasSavedReport) {
+    await evaluate(cdp, `(() => { const b = document.querySelector('[data-testid="saved-advanced-edit"]'); if (b) b.click(); return !!b; })()`);
+  }
+  await waitFor(cdp, `!!document.querySelector('[data-testid="advanced-nutrition-analyze"]')`, 120000);
+  return true;
 }
 
 async function main(): Promise<void> {
@@ -417,10 +480,11 @@ async function main(): Promise<void> {
     // B. Conflicting: Advanced + legacy.
     await evaluate(cdp, OPEN_DETAIL('Conflict Recipe'));
     await waitFor(cdp, `!!document.getElementById('recipe-nutrition-section')`, 15000);
-    record('B. conflict: Advanced surface is primary', await evaluate(cdp, `!!document.getElementById('advanced-nutrition-card')`));
-    record('B. conflict: legacy surface is not a competing peer', !(await evaluate(cdp, `!!document.getElementById('recipe-nutrition-card')`)));
+    record('B. conflict: Advanced surface present', await evaluate(cdp, `!!document.getElementById('advanced-nutrition-card')`));
+    record('B. conflict: normal Nutrition & Macros card remains visible', await evaluate(cdp, `!!document.getElementById('recipe-nutrition-card')`));
+    record('B. conflict: normal card derives from Advanced at current scale (364), not legacy (9999)', await evaluate(cdp, `(() => { const t = document.getElementById('recipe-nutrition-card')?.innerText || ''; return t.includes('364') && !t.includes('9999'); })()`));
     const conflictCalories = await evaluate(cdp, HEADER_CALORIES);
-    record('B. conflict: header calories use Advanced (364), not legacy (9999)', conflictCalories.startsWith('364'), conflictCalories);
+    record('B. conflict: header calories use Advanced at current scale (364), not legacy (9999)', conflictCalories.startsWith('364'), conflictCalories);
     await evaluate(cdp, `(() => { const b = document.getElementById('back-to-vault-btn'); if (b) b.click(); return !!b; })()`);
     await waitFor(cdp, `!document.getElementById('back-to-vault-btn')`, 10000);
     await sleep(200);
@@ -429,8 +493,8 @@ async function main(): Promise<void> {
     await evaluate(cdp, OPEN_DETAIL('Stale Recipe'));
     await waitFor(cdp, `!!document.getElementById('recipe-nutrition-section')`, 15000);
     record('C. stale: stale notice shown', /may be out of date/i.test(await evaluate(cdp, `document.getElementById('recipe-nutrition-section').innerText`)));
-    record('C. stale: Advanced remains primary', await evaluate(cdp, `!!document.getElementById('advanced-nutrition-card')`));
-    record('C. stale: legacy does not silently replace Advanced', !(await evaluate(cdp, `!!document.getElementById('recipe-nutrition-card')`)));
+    record('C. stale: Advanced card remains available', await evaluate(cdp, `!!document.getElementById('advanced-nutrition-card')`));
+    record('C. stale: normal Nutrition & Macros card remains visible', await evaluate(cdp, `!!document.getElementById('recipe-nutrition-card')`));
     await evaluate(cdp, `(() => { const b = document.getElementById('back-to-vault-btn'); if (b) b.click(); return !!b; })()`);
     await waitFor(cdp, `!document.getElementById('back-to-vault-btn')`, 10000);
     await sleep(200);
@@ -448,12 +512,33 @@ async function main(): Promise<void> {
     // G. Recognized Advanced WITHOUT a calories nutrient + conflicting legacy.
     await evaluate(cdp, OPEN_DETAIL('No Calories Recipe'));
     await waitFor(cdp, `!!document.getElementById('recipe-nutrition-section')`, 15000);
-    record('G. no-Advanced-calories: Advanced remains primary', await evaluate(cdp, `!!document.getElementById('advanced-nutrition-card')`));
-    record('G. no-Advanced-calories: legacy is not a competing peer', !(await evaluate(cdp, `!!document.getElementById('recipe-nutrition-card')`)));
+    record('G. no-Advanced-calories: Advanced card remains available', await evaluate(cdp, `!!document.getElementById('advanced-nutrition-card')`));
+    record('G. no-Advanced-calories: normal card remains visible', await evaluate(cdp, `!!document.getElementById('recipe-nutrition-card')`));
     const noCalHeader = String(await evaluate(cdp, HEADER_CALORIES));
     record('G. no-Advanced-calories: header does not fall back to legacy 9999', !noCalHeader.includes('9999'), noCalHeader);
     const noCalSection = String(await evaluate(cdp, `document.getElementById('recipe-nutrition-section').innerText`));
     record('G. no-Advanced-calories: legacy 9999 is not presented as primary', !noCalSection.includes('9999'));
+    await evaluate(cdp, `(() => { const b = document.getElementById('back-to-vault-btn'); if (b) b.click(); return !!b; })()`);
+    await waitFor(cdp, `!document.getElementById('back-to-vault-btn')`, 10000);
+    await sleep(200);
+
+    // H. Partial saved Advanced: the normal compact card must show an incomplete
+    // state, never isolated partial nutrients as whole-recipe totals.
+    await evaluate(cdp, OPEN_DETAIL('Partial Recipe'));
+    await waitFor(cdp, `!!document.getElementById('recipe-nutrition-section')`, 15000);
+    const partialNormal = String(await evaluate(cdp, `document.getElementById('recipe-nutrition-card')?.innerText || ''`));
+    record('H. partial: normal card shows incomplete state', /Advanced nutrition incomplete/i.test(partialNormal), partialNormal.slice(0, 200));
+    record('H. partial: normal card shows the partial values with a partial label', /Partial estimate/i.test(partialNormal) && partialNormal.includes('364') && partialNormal.includes('91.3') && !partialNormal.includes('9999'), partialNormal.slice(0, 240));
+    record('H. partial: separate Advanced card shows saved — partial', /Advanced Nutrition saved — partial/i.test(await evaluate(cdp, `document.getElementById('advanced-nutrition-card')?.innerText || ''`)));
+    record('H. partial: unresolved review remains recoverable', await evaluate(cdp, `!!Array.from(document.querySelectorAll('button')).find((b) => /Open (Saved )?Advanced (Report|Nutrition)/.test((b.textContent||'')))`));
+    // Reopen (SPA) preserves the partial semantic state.
+    await evaluate(cdp, `(() => { const b = document.getElementById('back-to-vault-btn'); if (b) b.click(); return !!b; })()`);
+    await waitFor(cdp, `!document.getElementById('back-to-vault-btn')`, 10000);
+    await sleep(200);
+    await evaluate(cdp, OPEN_DETAIL('Partial Recipe'));
+    await waitFor(cdp, `!!document.getElementById('recipe-nutrition-section')`, 15000);
+    record('H. partial reopen: incomplete state preserved', /Advanced nutrition incomplete/i.test(await evaluate(cdp, `document.getElementById('recipe-nutrition-card')?.innerText || ''`)));
+    record('H. partial reopen: saved — partial preserved', /Advanced Nutrition saved — partial/i.test(await evaluate(cdp, `document.getElementById('advanced-nutrition-card')?.innerText || ''`)));
     await evaluate(cdp, `(() => { const b = document.getElementById('back-to-vault-btn'); if (b) b.click(); return !!b; })()`);
     await waitFor(cdp, `!document.getElementById('back-to-vault-btn')`, 10000);
     await sleep(200);
@@ -485,23 +570,18 @@ async function main(): Promise<void> {
 
     await evaluate(cdp, OPEN_DETAIL(HAMBURGER_TITLE));
     await waitFor(cdp, `!!document.getElementById('back-to-vault-btn')`, 15000);
-    await evaluate(cdp, `(() => { const b = Array.from(document.querySelectorAll('button')).find((x) => (x.textContent||'').includes('Open Advanced Nutrition')); if (b) b.click(); return !!b; })()`);
-    await waitFor(cdp, `!!document.querySelector('[role="dialog"]')`, 120000);
-    await waitFor(cdp, `document.querySelectorAll('[aria-label="Ingredient matching review"] li').length >= 11`, 30000);
-    const hamburgerSelections: ReadonlyArray<[string, number]> = [
-      ['8 slices bacon', 168277],
-      ['4 slices cheddar cheese', 328637],
-      ['4 burger buns', 2707657],
-      ['2 medium tomatoes, sliced', 2709719],
-      ['4 pickles, sliced', 2710078],
-    ];
-    for (const [line, fdcId] of hamburgerSelections) {
-      await evaluate(cdp, selectCandidateExpression(line, fdcId));
-      await sleep(150);
-    }
-    await evaluate(cdp, `(() => { const b = Array.from(document.querySelectorAll('button')).find((x) => (x.textContent||'').includes('Calculate Preview')); if (b) b.click(); return !!b; })()`);
+    await openAdvancedEditor(cdp);
+    await waitFor(cdp, `document.querySelectorAll('[data-testid="advanced-nutrition-row"]').length >= 11`, 30000);
+    // One-click deterministic analyzer: it auto-selects the high-confidence
+    // foods, auto-resolves authenticated portions, and produces the preview.
+    await clickAnalyze(cdp);
     await waitFor(cdp, `document.body.innerText.includes('Advisory nutrition preview')`, 30000);
     record('F. advanced recipe: reviewed before Apply', true);
+    const applyReady = await evaluate(cdp, `(() => {
+      const b = Array.from(document.querySelectorAll('button')).find((x) => (x.textContent||'').includes('Apply to recipe'));
+      return b ? { found: true, disabled: !!b.disabled } : { found: false };
+    })()`);
+    record('F. advanced recipe: Apply control is enabled after Analyze', applyReady.found === true && applyReady.disabled === false, JSON.stringify(applyReady));
     await evaluate(cdp, `(() => { const b = Array.from(document.querySelectorAll('button')).find((x) => (x.textContent||'').includes('Apply to recipe')); if (b) b.click(); return !!b; })()`);
     await waitFor(cdp, `document.body.innerText.includes('will add a saved Advanced Nutrition block')`, 15000);
     await evaluate(cdp, `(() => { const b = Array.from(document.querySelectorAll('button')).find((x) => (x.textContent||'').trim() === 'Confirm Apply'); if (b) b.click(); return !!b; })()`);
@@ -526,9 +606,25 @@ async function main(): Promise<void> {
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
     await waitFor(cdp, `!document.querySelector('[role="dialog"]')`, 10000);
     await waitFor(cdp, `!!document.getElementById('recipe-nutrition-section')`, 10000);
-    record('F. advanced recipe: consolidated surface is Advanced-primary', await evaluate(cdp, `!!document.getElementById('advanced-nutrition-card')`));
-    record('F. advanced recipe: legacy surface not a competing peer', !(await evaluate(cdp, `!!document.getElementById('recipe-nutrition-card')`)));
-    record('F. advanced recipe: saved Advanced summary shown', /Saved Advanced Nutrition/i.test(await evaluate(cdp, `document.getElementById('advanced-nutrition-card').innerText`)));
+    record('F. advanced recipe: Advanced card present', await evaluate(cdp, `!!document.getElementById('advanced-nutrition-card')`));
+    record('F. advanced recipe: normal Nutrition & Macros card remains visible', await evaluate(cdp, `!!document.getElementById('recipe-nutrition-card')`));
+    record('F. advanced recipe: saved Advanced partial summary shown', /Advanced Nutrition saved — partial/i.test(await evaluate(cdp, `document.getElementById('advanced-nutrition-card').innerText`)));
+
+    // Reopen the recipe (SPA) and verify BOTH experiences survive, and that the
+    // Analyze control still works after a saved-state reopen.
+    await evaluate(cdp, `(() => { const b = document.getElementById('back-to-vault-btn'); if (b) b.click(); return !!b; })()`);
+    await waitFor(cdp, `!document.getElementById('back-to-vault-btn')`, 10000);
+    await sleep(200);
+    await evaluate(cdp, OPEN_DETAIL(HAMBURGER_TITLE));
+    await waitFor(cdp, `!!document.getElementById('recipe-nutrition-section')`, 15000);
+    record('F. reopen: normal Nutrition & Macros card visible', await evaluate(cdp, `!!document.getElementById('recipe-nutrition-card')`));
+    record('F. reopen: Advanced card present with saved partial summary', await evaluate(cdp, `(() => { const el = document.getElementById('advanced-nutrition-card'); return !!el && /Advanced Nutrition saved — partial/i.test(el.innerText); })()`));
+    await openAdvancedEditor(cdp);
+    await waitFor(cdp, `document.querySelectorAll('[data-testid="advanced-nutrition-row"]').length >= 1`, 30000);
+    record('F. reopen: Analyze control is enabled', await evaluate(cdp, `(() => { const b = document.querySelector('[data-testid="advanced-nutrition-analyze"]'); return !!b && !b.disabled; })()`));
+    await clickAnalyze(cdp);
+    await waitFor(cdp, `!!document.querySelector('[data-testid="advanced-nutrition-analysis-runs"]')`, 30000);
+    record('F. reopen: Analyze re-ran after saved-state reopen', await evaluate(cdp, `(() => { const el = document.querySelector('[data-testid="advanced-nutrition-analysis-runs"]'); return !!el && /run \\d+/i.test(el.textContent || ''); })()`));
 
     record('no console error occurred', consoleErrors.length === 0, consoleErrors.join(' | '));
     console.log(`\n${passed} passed, ${failed} failed`);

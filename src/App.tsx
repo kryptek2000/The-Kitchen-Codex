@@ -64,6 +64,7 @@ import { getEndpointAccessHeaders } from './application/endpointAccess';
 import { loadProductionAdvancedNutritionSession } from './browser/advancedNutritionBundle';
 import { useAdvancedNutritionBundle } from './application-ui/useAdvancedNutritionBundle';
 import { playTimerChime } from './utils/audioAlert';
+import { buildGalleryRoute, buildRecipeRoute, parseRecipeRoute } from './utils/recipeRoute';
 import { APP_VERSION } from './version';
 import ProviderSettings from './application-ui/ProviderSettings';
 import { CreateForMeModal } from './components/CreateForMeModal';
@@ -299,6 +300,20 @@ export default function App() {
   const [selectedRecipe, setSelectedRecipe] = useState<ObsidianRecipe | null>(null);
   const [cookingRecipe, setCookingRecipe] = useState<{ recipe: ObsidianRecipe; servings: number } | null>(null);
 
+  // Stable recipe-detail route restoration. The canonical recipe id from the
+  // browser fragment is resolved once the recipe collection is loaded, so a hard
+  // refresh on a recipe detail page restores that recipe (never the gallery).
+  const [routeRecipeId, setRouteRecipeId] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const parsed = parseRecipeRoute(window.location.hash);
+    return parsed.kind === 'recipe' ? parsed.id : null;
+  });
+  const suppressHashSyncRef = useRef(false);
+  // True once the initial IndexedDB vault-reconnect attempt has settled, so an
+  // unresolved route is only treated as not-found AFTER loading has finished
+  // (never prematurely while the vault is still being scanned).
+  const [vaultRestoreSettled, setVaultRestoreSettled] = useState(false);
+
   // Modals
   const [isConnectVaultOpen, setIsConnectVaultOpen] = useState(false);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
@@ -401,10 +416,75 @@ export default function App() {
         console.warn('Auto-reconnect vault check:', err);
       }
     }
-    restoreVaultConnection();
+    restoreVaultConnection().finally(() => {
+      if (isMounted) setVaultRestoreSettled(true);
+    });
     return () => {
       isMounted = false;
     };
+  }, []);
+
+  // Stable recipe-detail route restoration. On mount the fragment is the
+  // authority: once the recipe collection contains the routed id, the same
+  // detail view is restored. This waits for the vault/recipe loading state and
+  // only falls back to the gallery AFTER loading has settled and the id is
+  // genuinely absent.
+  useEffect(() => {
+    if (routeRecipeId === null) return;
+    const match = recipes.find((recipe) => recipe.id === routeRecipeId);
+    if (match) {
+      setRouteRecipeId(null);
+      if (activeRefs.current.selectedRecipe?.id === match.id) return;
+      suppressHashSyncRef.current = true;
+      setSelectedRecipe(match);
+      return;
+    }
+    if (vaultRestoreSettled) {
+      // Invalid/missing recipe route: fail safely back to the gallery.
+      setRouteRecipeId(null);
+      suppressHashSyncRef.current = true;
+      setSelectedRecipe(null);
+    }
+  }, [recipes, routeRecipeId, vaultRestoreSettled]);
+
+  // Keep the browser fragment in sync with the selected recipe. A popstate /
+  // route-restoration driven change suppresses this sync so back/forward
+  // navigation is not clobbered.
+  useEffect(() => {
+    const desired = selectedRecipe ? buildRecipeRoute(selectedRecipe.id) : buildGalleryRoute();
+    if (suppressHashSyncRef.current) {
+      suppressHashSyncRef.current = false;
+      return;
+    }
+    if (typeof window === 'undefined' || window.location.hash === desired) return;
+    window.history.pushState(null, '', desired);
+  }, [selectedRecipe]);
+
+  // Browser back/forward. A recipe fragment restores that recipe; the gallery
+  // fragment returns to the gallery.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onPopState = () => {
+      const parsed = parseRecipeRoute(window.location.hash);
+      if (parsed.kind === 'recipe') {
+        setRouteRecipeId(parsed.id);
+        return;
+      }
+      suppressHashSyncRef.current = true;
+      setSelectedRecipe(null);
+      setRouteRecipeId(null);
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  // Normalize an empty fragment to the gallery route once on mount so the first
+  // user navigation does not create a spurious history entry.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (window.location.hash === '') {
+      window.history.replaceState(null, '', buildGalleryRoute());
+    }
   }, []);
 
   // 2. Background Re-Sync on Window Focus: Live updates from Obsidian desktop
@@ -710,11 +790,20 @@ export default function App() {
         } else {
           await saveRecipeToVaultFile(updated, undefined);
         }
-        // Commit in-memory state ONLY after the canonical write succeeded.
+        // Commit in-memory state ONLY after the canonical write succeeded. The
+        // new saved result immediately becomes THE current recipe on every
+        // surface (Advanced summary, saved report, compact card, header).
         setRecipes((prev) => upsertCanonicalRecipe(prev, updated));
         setSelectedRecipe((prev) =>
           prev && sameCanonicalRecipeIdentity(prev, updated) ? updated : prev
         );
+        // AUTHORITATIVE HANDOFF: invalidate any vault scan that STARTED before
+        // this write. Such a scan may have read the pre-Apply Markdown and would
+        // otherwise still be considered "current", letting a later-resolving
+        // stale scan overwrite the just-applied result. The committed in-memory
+        // recipe is authoritative until a scan that began AFTER this write
+        // completes.
+        vaultScanGeneration.current.begin();
       },
       ...(vaultAdapter
         ? {

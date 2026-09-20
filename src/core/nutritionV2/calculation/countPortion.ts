@@ -49,7 +49,7 @@ import { parseAmount } from '../../../utils/measurements';
 import { CALCULATION_VERSION, type Phase3Failure } from './types';
 
 /** Explicit count-portion contract version (part of selection bindings). */
-export const COUNT_PORTION_VERSION = 'usda_count_portion_v1';
+export const COUNT_PORTION_VERSION = 'usda_count_portion_v2';
 
 /** Bounded ingredient count requirement derived from the parsed ingredient. */
 export interface CountRequirement {
@@ -374,7 +374,12 @@ function countIdentityCompatible(
   identity: CountPortionIdentity
 ): boolean {
   if (requirement.size !== null) {
-    if (identity.size !== requirement.size) return false;
+    // An explicit size is satisfied by a size-specific portion OR by the generic
+    // (size-unspecified) portion of the same count unit when the pinned USDA
+    // record exposes no size-specific portion (e.g. `2 large eggs` ->
+    // `1 egg = 50 g`). The reverse is NOT allowed: an unspecified size never
+    // silently binds a size-specific portion.
+    if (identity.size !== null && identity.size !== requirement.size) return false;
   } else if (identity.size !== null) {
     return false;
   }

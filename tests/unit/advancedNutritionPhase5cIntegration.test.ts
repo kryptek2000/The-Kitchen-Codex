@@ -162,7 +162,9 @@ describe('phase 5C — consolidated display across Apply', () => {
     const original = recipe({ frontmatter: { codex_nutrition: savedBlockFor(recipe()) } });
     const before = resolveRecipeNutritionPresentation(original);
     expect(before.kind).toBe('advanced_saved');
-    expect(resolveNutritionDisplayCalories(before, 2)).toBe(364);
+    // The saved block is PARTIAL, so the header is deliberately blank (partial
+    // values are surfaced in the compact card instead of being headlined).
+    expect(resolveNutritionDisplayCalories(before, 2)).toBeUndefined();
     const snapshot = JSON.stringify(original);
 
     const result = await applyAdvancedNutrition({
@@ -181,7 +183,7 @@ describe('phase 5C — consolidated display across Apply', () => {
     expect(JSON.stringify(original)).toBe(snapshot);
     const after = resolveRecipeNutritionPresentation(original);
     expect(after.kind).toBe('advanced_saved');
-    expect(resolveNutritionDisplayCalories(after, 2)).toBe(364);
+    expect(resolveNutritionDisplayCalories(after, 2)).toBeUndefined();
   });
 
   it('an unsaved review does not replace the saved Advanced display authority', () => {

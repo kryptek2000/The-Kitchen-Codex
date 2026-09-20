@@ -157,6 +157,7 @@ describe('phase 2 confirmation — genuine catalog authority', () => {
       size: () => CATALOG.size(),
       search: (q: unknown, l: number) => CATALOG.search(q as never, l),
       exactPhraseCount: (q: unknown) => CATALOG.exactPhraseCount(q as never),
+      manualSearch: (q: unknown, l: number) => CATALOG.manualSearch(q as never, l),
     };
     expect(failureOf(confirmIngredientReview(fake, review, { kind: 'none', review_digest: digest }))).toBe('invalid_catalog');
   });
@@ -184,7 +185,7 @@ describe('phase 2 confirmation — genuine catalog authority', () => {
   });
 
   it('does not expose the private authority capability', () => {
-    expect(Object.keys(CATALOG).sort()).toEqual(['exactPhraseCount', 'metadata', 'search', 'size']);
+    expect(Object.keys(CATALOG).sort()).toEqual(['exactPhraseCount', 'manualSearch', 'metadata', 'search', 'size']);
     expect((CATALOG as unknown as Record<string, unknown>).authority).toBeUndefined();
     expect((CATALOG as unknown as Record<string, unknown>).entries).toBeUndefined();
   });

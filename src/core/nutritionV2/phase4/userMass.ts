@@ -24,6 +24,8 @@ export interface UserMassChoiceParams {
   readonly ingredient: unknown;
   readonly review?: unknown;
   readonly selection?: unknown;
+  /** True when the bound match was an automatic analyzer selection. */
+  readonly automaticSelection?: boolean;
   readonly fdcId: number;
   readonly quantity: number;
   readonly unit: 'g' | 'oz' | 'lb';
@@ -66,6 +68,7 @@ export function buildUserMassChoice(
         ingredient: params.ingredient,
         ...(params.review !== undefined ? { review: params.review } : {}),
         ...(params.selection !== undefined ? { selection: params.selection } : {}),
+        ...(params.automaticSelection === true ? { automatic_selection: true } : {}),
       },
     ],
   });

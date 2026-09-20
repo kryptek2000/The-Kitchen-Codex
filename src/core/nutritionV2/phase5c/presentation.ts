@@ -70,6 +70,16 @@ export interface NutritionPresentation {
   readonly has_malformed_block: boolean;
   /** True when a recognized Advanced result is the preferred display authority. */
   readonly advanced_preferred: boolean;
+  /**
+   * True ONLY when the recognized Advanced block represents complete trustworthy
+   * recipe coverage (status `complete` and no unresolved ingredient lines). A
+   * partial/incomplete block must NOT be presented as whole-recipe totals.
+   */
+  readonly advanced_complete: boolean;
+  /** Resolved measurable ingredient-line count of the saved Advanced block. */
+  readonly advanced_resolved_count: number;
+  /** Total measurable ingredient-line count (resolved + unresolved). */
+  readonly advanced_ingredient_count: number;
 }
 
 function readField(object: object, key: string): { ok: true; present: boolean; value: unknown } | { ok: false } {
@@ -174,6 +184,9 @@ export function resolveRecipeNutritionPresentation(recipe: unknown): NutritionPr
       has_opaque_block: false,
       has_malformed_block: false,
       advanced_preferred: false,
+      advanced_complete: false,
+      advanced_resolved_count: 0,
+      advanced_ingredient_count: 0,
     });
 
   if (!isPlainObject(recipe)) return base('none');
@@ -194,6 +207,10 @@ export function resolveRecipeNutritionPresentation(recipe: unknown): NutritionPr
     const reasons = detectAdvancedStale(recipe, block);
     const stale = reasons.length > 0;
     const calories = block.nutrients.calories?.amount;
+    const resolvedCount = block.ingredients.length;
+    const unresolvedCount = block.unresolved.length;
+    const ingredientCount = resolvedCount + unresolvedCount;
+    const complete = block.status === 'complete' && unresolvedCount === 0;
     return Object.freeze({
       version: NUTRITION_PRESENTATION_VERSION,
       kind: stale ? 'advanced_stale' : 'advanced_saved',
@@ -207,6 +224,9 @@ export function resolveRecipeNutritionPresentation(recipe: unknown): NutritionPr
       has_opaque_block: false,
       has_malformed_block: false,
       advanced_preferred: true,
+      advanced_complete: complete,
+      advanced_resolved_count: resolvedCount,
+      advanced_ingredient_count: ingredientCount,
     });
   }
 
@@ -236,6 +256,42 @@ export function resolveRecipeNutritionPresentation(recipe: unknown): NutritionPr
 }
 
 /**
+ * Derives the ordinary compact `Nutrition & Macros` values from a recognized
+ * saved Advanced block, so the NORMAL recipe presentation can stay visible and
+ * authoritative without maintaining a second competing stored dataset.
+ *
+ * It returns the values whenever a recognized Advanced result is the preferred
+ * authority — COMPLETE or PARTIAL. A PARTIAL block's values are the sum over the
+ * RESOLVED ingredient lines only; the caller must label them as a partial
+ * estimate (the presentation exposes `advanced_complete` and the resolved/
+ * unresolved counts). It NEVER writes, never migrates, and never falls back to
+ * legacy values — the compact numbers come ONLY from the saved Advanced block.
+ * A nutrient absent from the block is left absent (never topped up from legacy).
+ */
+export function deriveAdvancedCompactNutrition(
+  presentation: NutritionPresentation
+): RecipeNutrition | undefined {
+  if (!presentation.advanced_preferred || !presentation.advanced) {
+    return undefined;
+  }
+  const block = presentation.advanced;
+  const out: RecipeNutrition = { servings: block.servings };
+  const calories = block.nutrients.calories?.amount;
+  const protein = block.nutrients.protein?.amount;
+  const carbohydrates = block.nutrients.carbohydrates?.amount;
+  const fat = block.nutrients.fat?.amount;
+  const fiber = block.nutrients.fiber?.amount;
+  const sodium = block.nutrients.sodium?.amount;
+  if (typeof calories === 'number' && Number.isFinite(calories)) out.calories = calories;
+  if (typeof protein === 'number' && Number.isFinite(protein)) out.protein = protein;
+  if (typeof carbohydrates === 'number' && Number.isFinite(carbohydrates)) out.carbohydrates = carbohydrates;
+  if (typeof fat === 'number' && Number.isFinite(fat)) out.fat = fat;
+  if (typeof fiber === 'number' && Number.isFinite(fiber)) out.fiber = fiber;
+  if (typeof sodium === 'number' && Number.isFinite(sodium)) out.sodium = sodium;
+  return Object.freeze(out);
+}
+
+/**
  * Deterministic primary calories for a requested serving count. A recognized
  * Advanced block ALWAYS wins over legacy values; legacy is used only as the
  * fallback. Never writes or mutates.
@@ -247,7 +303,12 @@ export function resolveNutritionDisplayCalories(
   // SINGLE-AUTHORITY RULE: while a recognized Advanced result is preferred,
   // calories come ONLY from that block. A missing Advanced `calories` nutrient
   // yields `undefined` — it is NEVER "topped up" from legacy/top-level calories.
+  // CONSERVATIVE PARTIAL RULE: an INCOMPLETE (partial) Advanced result must not
+  // be presented in the recipe header as though it were a complete calorie total.
+  // The partial values are surfaced in the standard Nutrition & Macros card with
+  // an explicit partial label instead.
   if (presentation.advanced_preferred) {
+    if (!presentation.advanced_complete) return undefined;
     if (
       presentation.advanced_calories_total !== undefined &&
       presentation.advanced_servings !== undefined &&

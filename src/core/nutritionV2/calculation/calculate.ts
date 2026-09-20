@@ -21,6 +21,7 @@ import { normalizeQuery } from '../matching/normalize';
 import { parseIngredient } from '../matching/parse';
 import { projectQueryText } from '../matching/query';
 import { confirmIngredientReview, reviewIngredient } from '../matching/review';
+import { isDeterministicAutomaticSelection } from '../matching/confidence';
 import type { ConfirmationResult, ReviewCatalog } from '../matching/types';
 import type { CanonicalUsdaFoodRecord } from '../usda/types';
 import { isQualitativeIngredientText } from '../../../utils/ingredientSemantics';
@@ -63,6 +64,7 @@ const INGREDIENT_INPUT_KEYS = new Set([
   'ingredient',
   'review',
   'selection',
+  'automatic_selection',
   'portion_selection',
   'count_portion_selection',
   'user_mass_selection',
@@ -143,6 +145,8 @@ interface PreparedIngredient {
   readonly ingredient: unknown;
   readonly review: unknown;
   readonly selection: unknown;
+  /** True when the UI analyzer (not the user) chose this match. */
+  readonly automaticSelection: unknown;
   readonly portionSelection: unknown;
   readonly countPortionSelection: unknown;
   readonly userMassSelection: unknown;
@@ -391,6 +395,54 @@ function sanitizeUserMassSelection(
   };
 }
 
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+const MANUAL_SELECTION_KEYS = new Set([
+  'kind',
+  'fdc_id',
+  'record_digest',
+  'catalog_digest',
+  'line_ref',
+  'review_digest',
+]);
+
+interface ManualFoodSelection {
+  readonly fdc_id: number;
+  readonly record_digest: string;
+  readonly catalog_digest: string;
+  readonly line_ref: string;
+  readonly review_digest: string;
+}
+
+/**
+ * Bounded, fail-closed sanitization of a USER-DIRECTED manual USDA food
+ * selection (manual search). Returns undefined for anything that is not exactly
+ * a well-formed manual selection, so a forged/partial object can never be
+ * interpreted as a manual choice. Authority still requires the referenced
+ * record to exist in the authenticated pinned bundle with a matching digest and
+ * the selection to bind the CURRENT review digest and catalog digest; those
+ * checks happen at the call site where the record store is available.
+ */
+function sanitizeManualSelection(raw: unknown): ManualFoodSelection | undefined {
+  if (!isPlainObject(raw)) return undefined;
+  for (const key of Object.keys(raw)) {
+    if (!MANUAL_SELECTION_KEYS.has(key)) return undefined;
+  }
+  const value = raw;
+  if (value.kind !== 'manual') return undefined;
+  if (!isSafePositiveInt(value.fdc_id)) return undefined;
+  if (typeof value.record_digest !== 'string' || !SHA256_HEX.test(value.record_digest)) return undefined;
+  if (typeof value.catalog_digest !== 'string' || !SHA256_HEX.test(value.catalog_digest)) return undefined;
+  if (typeof value.line_ref !== 'string' || value.line_ref.length === 0) return undefined;
+  if (typeof value.review_digest !== 'string' || !SHA256_HEX.test(value.review_digest)) return undefined;
+  return {
+    fdc_id: value.fdc_id,
+    record_digest: value.record_digest,
+    catalog_digest: value.catalog_digest,
+    line_ref: value.line_ref,
+    review_digest: value.review_digest,
+  };
+}
+
 function evaluateIngredient(
   inputs: AdvisoryCalculationInputs,
   prepared: PreparedIngredient,
@@ -420,12 +472,45 @@ function evaluateIngredient(
   let fdcId: number | undefined;
   let recordDigest: string | undefined;
   let confirmationDigest: string | undefined;
+  let manualRecordId: number | undefined;
+  let manualRecordDigest: string | undefined;
 
-  if (currentReview.outcome === 'matched_exact') {
+  // USER-DIRECTED MANUAL SELECTION (manual USDA search) is explicit
+  // user-confirmed authority available for ANY review outcome, but it is still
+  // authenticated: the referenced FDC id must exist in the pinned bundle with a
+  // matching record digest, the catalog digest must match the active bundle, the
+  // line ref must match, and the selection must bind the CURRENT review digest.
+  // A forged/stale/wrong-bundle selection fails closed (falls through to the
+  // ordinary outcome) and is NEVER granted authority.
+  const manual = sanitizeManualSelection(prepared.selection);
+  let manualApplied = false;
+  if (manual) {
+    const manualRecord = inputs.records.get(manual.fdc_id);
+    if (
+      manual.line_ref === prepared.lineRef &&
+      manual.review_digest === currentReview.review_digest &&
+      manual.catalog_digest === inputs.catalogDigest &&
+      manualRecord !== undefined &&
+      manualRecord.record_digest === manual.record_digest &&
+      manualRecord.bundle_release === inputs.bundleRelease
+    ) {
+      matched = true;
+      ambiguous = false;
+      matchStatus = 'user_confirmed';
+      fdcId = manual.fdc_id;
+      recordDigest = manualRecord.record_digest;
+      confirmationDigest = currentReview.review_digest;
+      manualRecordId = manual.fdc_id;
+      manualRecordDigest = manual.record_digest;
+      manualApplied = true;
+    }
+  }
+
+  if (!manualApplied && currentReview.outcome === 'matched_exact') {
     matched = true;
     matchStatus = 'unique_exact';
     fdcId = currentReview.selected_fdc_id;
-  } else if (currentReview.outcome === 'review_required') {
+  } else if (!manualApplied && currentReview.outcome === 'review_required') {
     ambiguous = true;
     if (prepared.review !== undefined && prepared.selection !== undefined) {
       const suppliedDigest = isPlainObject(prepared.review) ? prepared.review.review_digest : undefined;
@@ -436,11 +521,26 @@ function evaluateIngredient(
           prepared.selection
         );
         if (confirmation.outcome === 'confirmed') {
-          matched = true;
-          ambiguous = false;
-          matchStatus = 'user_confirmed';
-          fdcId = confirmation.fdc_id;
-          confirmationDigest = currentReview.review_digest;
+          // An automatic-selection claim is honored ONLY when the deterministic
+          // confidence contract independently confirms that this exact candidate
+          // is the automatic choice. A forged/invalid automatic claim FAILS
+          // CLOSED — it is never reinterpreted as a literal user confirmation.
+          if (prepared.automaticSelection === true) {
+            if (!isDeterministicAutomaticSelection(currentReview, confirmation.fdc_id)) {
+              return { ok: false, code: 'invalid_ingredient_input' };
+            }
+            matched = true;
+            ambiguous = false;
+            matchStatus = 'auto_confirmed';
+            fdcId = confirmation.fdc_id;
+            confirmationDigest = currentReview.review_digest;
+          } else {
+            matched = true;
+            ambiguous = false;
+            matchStatus = 'user_confirmed';
+            fdcId = confirmation.fdc_id;
+            confirmationDigest = currentReview.review_digest;
+          }
         } else if (confirmation.outcome === 'invalid') {
           const code = confirmation.failure.code;
           if (code === 'unsafe_selection' || code === 'unknown_field' || code === 'validation_error') {
@@ -454,10 +554,16 @@ function evaluateIngredient(
   // Resolve the current canonical record for a matched identity.
   let record: CanonicalUsdaFoodRecord | undefined;
   if (matched && fdcId !== undefined) {
-    const candidate = currentReview.candidates.find((entry) => entry.fdc_id === fdcId);
     record = inputs.records.get(fdcId);
-    if (!candidate || !record || record.record_digest !== candidate.record_digest) {
-      return { ok: false, code: 'invalid_ingredient_input' };
+    if (manualRecordId !== undefined && manualRecordId === fdcId) {
+      if (!record || record.record_digest !== manualRecordDigest) {
+        return { ok: false, code: 'invalid_ingredient_input' };
+      }
+    } else {
+      const candidate = currentReview.candidates.find((entry) => entry.fdc_id === fdcId);
+      if (!candidate || !record || record.record_digest !== candidate.record_digest) {
+        return { ok: false, code: 'invalid_ingredient_input' };
+      }
     }
     recordDigest = record.record_digest;
   }
@@ -718,6 +824,7 @@ export function runAdvisoryCalculation(inputs: AdvisoryCalculationInputs): Calcu
         ingredient: raw.ingredient,
         review: raw.review,
         selection: raw.selection,
+        automaticSelection: raw.automatic_selection,
         portionSelection: raw.portion_selection,
         countPortionSelection: raw.count_portion_selection,
         userMassSelection: raw.user_mass_selection,
@@ -767,17 +874,22 @@ export function runAdvisoryCalculation(inputs: AdvisoryCalculationInputs): Calcu
       }
     }
 
+    // SINGLE COMPLETENESS AUTHORITY. Completion is about INGREDIENT-LINE
+    // resolution, not nutrient-list breadth: once every measurable ingredient
+    // line has an authenticated mass, the whole-recipe result is COMPLETE even
+    // when a USDA record does not enumerate every nutrient in scope (individual
+    // nutrients still report their own `coverage`). A line that could not be
+    // resolved keeps the result PARTIAL. This is the invariant shared by the
+    // live preview, Phase 5 Apply, and the persisted block.
+    const unresolved: UnresolvedIngredient[] = evidence
+      .filter((entry) => entry.outcome !== 'calculated' && entry.outcome !== 'qualitative')
+      .map((entry) => Object.freeze({ line_ref: entry.lineRef, outcome: entry.outcome }));
+
     const totalKeys = Object.keys(totals) as NutrientId[];
     let status: CalculationStatus;
     if (measurable === 0 || totalKeys.length === 0) status = 'unresolved';
-    else if (
-      totalKeys.length === scope.length &&
-      totalKeys.every((key) => totals[key]?.status === 'complete')
-    ) {
-      status = 'complete';
-    } else {
-      status = 'partial';
-    }
+    else if (unresolved.length === 0) status = 'complete';
+    else status = 'partial';
 
     const ingredientEvidence: IngredientCalculationEvidence[] = evidence.map((entry) =>
       Object.freeze({
@@ -809,10 +921,6 @@ export function runAdvisoryCalculation(inputs: AdvisoryCalculationInputs): Calcu
         contributing_nutrients: Object.freeze([...entry.contributingNutrients]),
       })
     );
-
-    const unresolved: UnresolvedIngredient[] = evidence
-      .filter((entry) => entry.outcome !== 'calculated' && entry.outcome !== 'qualitative')
-      .map((entry) => Object.freeze({ line_ref: entry.lineRef, outcome: entry.outcome }));
 
     const preview: AdvisoryNutritionPreview = Object.freeze({
       calculation_schema: CALCULATION_SCHEMA,

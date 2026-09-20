@@ -20,6 +20,7 @@ import { USDA_NUTRIENT_MAP_VERSION } from '../../src/core/nutritionV2/usda/nutri
 import {
   USDA_ATTRIBUTION,
   USDA_CANONICALIZATION_VERSION,
+  type CanonicalPortionRecord,
   type CanonicalUsdaFoodRecord,
   type UsdaBundleManifest,
   type UsdaDataType,
@@ -41,6 +42,8 @@ export interface MatchingRecordSpec {
   nutrientMapVersion?: string;
   /** Varies the canonical record digest without changing identity/description. */
   proteinAmount?: number;
+  /** Optional authenticated source portions (e.g. `1 cup = 122 g`). */
+  portions?: ReadonlyArray<CanonicalPortionRecord>;
 }
 
 /** Adversarial qualifier pairs that must stay distinct through normalization. */
@@ -96,7 +99,7 @@ export function makeCanonicalRecord(
         converted: false,
       },
     },
-    portions: [],
+    portions: spec.portions ?? [],
   };
   return withCanonicalRecordDigest(content);
 }

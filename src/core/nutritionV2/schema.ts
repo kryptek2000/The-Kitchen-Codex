@@ -104,6 +104,20 @@ export type UnresolvedReason = 'no_match' | 'ambiguous' | 'no_mass' | 'no_nutrit
 export interface UnresolvedIngredientRef {
   line_ref: string;
   reason: UnresolvedReason;
+  /**
+   * Optional USER-CONFIRMED reviewed FOOD IDENTITY for a line whose MASS is still
+   * unresolved (e.g. the user selected `Broccoli, raw` but no authenticated
+   * portion reproduces the recipe amount and no manual weight was entered yet).
+   *
+   * Food identity and mass resolution are independent: this evidence restores the
+   * selected USDA food on reopen WITHOUT contributing any nutrient total. It is
+   * written ONLY when the user explicitly reviewed the line (never for an
+   * automatic candidate), and a restored value is re-authenticated against the
+   * active pinned catalog. Both fields are present together or absent together;
+   * legacy blocks simply omit them.
+   */
+  source_food_id?: string;
+  source_release?: string;
 }
 
 export interface ManualOverrideMetadata {

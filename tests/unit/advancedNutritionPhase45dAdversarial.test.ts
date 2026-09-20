@@ -79,6 +79,7 @@ describe('phase 4.5d adversarial — synthetic catalog and empty eligible set', 
       size: () => 2,
       search: () => [],
       exactPhraseCount: () => 0,
+      manualSearch: () => ({ hits: [], total: 0 }),
     };
     const result = confirmIngredientReview(synthetic, review, {
       kind: 'candidate',

@@ -277,7 +277,7 @@ describe('schema v1 — totals-only basis, coverage, missing vs zero', () => {
     expect(result.errors).toContain('nutrient_partial_with_full_coverage:protein');
   });
 
-  it('a complete recipe status cannot contain a validly-partial nutrient', () => {
+  it('a complete block may carry a validly-partial nutrient (nutrient coverage is independent)', () => {
     const value = validV1();
     value.nutrients.protein = {
       amount: 10,
@@ -287,9 +287,9 @@ describe('schema v1 — totals-only basis, coverage, missing vs zero', () => {
       covered_ingredient_count: 1,
       measurable_ingredient_count: 2,
     };
-    const result = validateCodexNutritionV1(value);
-    expect(result.ok).toBe(false);
-    expect(result.errors.some((e) => e.startsWith('complete_with_partial_nutrient'))).toBe(true);
+    // BLOCK completeness is ingredient-line resolution; per-nutrient coverage
+    // is reported independently by each nutrient.
+    expect(validateCodexNutritionV1(value).ok).toBe(true);
   });
 
   it('rejects an unknown authoritative nutrient id', () => {
@@ -436,23 +436,24 @@ describe('nutrient_scope and the complete/partial contract (Finding 1)', () => {
       validV1({ nutrient_scope: ['calories'], nutrients: {}, ingredients: [] })
     );
     expect(result.ok).toBe(false);
-    expect(result.errors).toContain('complete_missing_scoped_nutrient:calories');
+    // Completion is ingredient-line resolution, so an empty evidence set with a
+    // declared dataset source is the authority error.
     expect(result.errors).toContain('dataset_source_without_resolved_evidence:usda_fdc');
   });
 
-  it('2. a complete record with calories only but a broader scope is rejected', () => {
+  it('2. a complete block with calories only but a broader scope is accepted (absent nutrient stays absent)', () => {
     expect(validateCodexNutritionV1(validV1()).ok).toBe(true);
     const value = validV1({ nutrient_scope: ['calories', 'protein'] });
     delete (value.nutrients as Record<string, unknown>).protein;
     const result = validateCodexNutritionV1(value);
-    expect(result.ok).toBe(false);
-    expect(result.errors).toContain('complete_missing_scoped_nutrient:protein');
+    expect(result.ok).toBe(true);
+    expect(result.value?.nutrients.protein).toBeUndefined();
   });
 
-  it('3. every scoped nutrient is required for complete', () => {
+  it('3. an absent scoped nutrient is allowed when every ingredient line is resolved', () => {
     const result = validateCodexNutritionV1(validV1({ nutrient_scope: ['calories', 'protein', 'fat'] }));
-    expect(result.ok).toBe(false);
-    expect(result.errors).toContain('complete_missing_scoped_nutrient:fat');
+    expect(result.ok).toBe(true);
+    expect(result.value?.nutrients.fat).toBeUndefined();
   });
 
   it('rejects an empty, unknown, duplicate, or oversized scope', () => {

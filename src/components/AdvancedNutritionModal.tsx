@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { X, ShieldAlert, FlaskConical, CheckCircle2, AlertTriangle, Info } from 'lucide-react';
+import { X, ShieldAlert, FlaskConical, CheckCircle2, AlertTriangle, Info, Search } from 'lucide-react';
+import { convertMassToGrams, type NormalizedUnit } from '../utils/measurements';
 import {
   NUTRIENT_GROUPS,
   PHASE4_NOT_MEDICAL_ADVICE,
@@ -18,15 +19,22 @@ import {
   formatDailyValue,
   ingredientCountAmount,
   ingredientEvidenceViews,
+  ingredientMeasurement,
   ingredientMeasurementKind,
-  ingredientNeedsPortion,
+  LIVE_ROW_STATUS_LABEL,
   massSourceLabel,
+  projectLiveRows,
   type AdvancedNutritionSession,
   type AdaptedIngredient,
+  type AnalyzedRow,
   type BasisMode,
+  type FoodSearchResult,
+  type LiveRowState,
+  type LiveRowStatus,
   type Phase4Action,
   type Phase4Row,
   type Phase4State,
+  type RecipeAnalysis,
 } from '../core/nutritionV2/phase4';
 
 /** Apply status shown by the explicit Phase 5B control. */
@@ -58,6 +66,16 @@ interface AdvancedNutritionModalProps {
   dispatch: React.Dispatch<Phase4Action>;
   onCalculate: () => void;
   calculating: boolean;
+  /** Deterministic automatic analysis result (post-Phase-5 remediation). */
+  analysis: RecipeAnalysis | null;
+  /** Runs the one-click automatic analyzer. */
+  onAnalyze: () => void;
+  /** Number of analyzer runs in this modal session (visible feedback). */
+  analysisRuns?: number;
+  /** True when the working review diverges from the saved Advanced result. */
+  workingDirty?: boolean;
+  /** True when the working review was hydrated from the saved Advanced result. */
+  hydratedFromSaved?: boolean;
   /** Explicit Apply control (Phase 5B). Absent when no write path is wired. */
   apply?: AdvancedNutritionApplyUi;
 }
@@ -70,6 +88,33 @@ const OUTCOME_LABEL: Record<string, string> = {
   invalid: 'Invalid ingredient line',
   none_selected: 'None of these selected',
 };
+
+/** Live row-status badge styling (the CURRENT effective state, not the snapshot). */
+const LIVE_STATUS_CLASS: Record<LiveRowStatus, string> = {
+  matched: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/25',
+  review_suggested: 'bg-indigo-500/10 text-indigo-300 border-indigo-500/25',
+  needs_amount: 'bg-amber-500/10 text-amber-300 border-amber-500/25',
+  needs_match: 'bg-amber-500/10 text-amber-300 border-amber-500/25',
+  qualitative: 'bg-white/5 text-gray-400 border-white/10',
+};
+
+/** Bounded, user-facing live mass-source text for the collapsed row. */
+function liveMassText(live: LiveRowState): string | undefined {
+  if (live.resolved_grams === undefined) return undefined;
+  const grams = Math.round(live.resolved_grams * 10) / 10;
+  switch (live.mass_source) {
+    case 'user_mass':
+      return `${grams} g · user-entered`;
+    case 'source_portion':
+      return `${grams} g · ${live.source_portion_automatic ? 'auto-selected' : 'selected'} USDA portion`;
+    case 'count_portion':
+      return `${grams} g · USDA count portion`;
+    case 'direct_mass':
+      return `${grams} g`;
+    default:
+      return `${grams} g`;
+  }
+}
 
 const FOCUSABLE =
   'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
@@ -184,6 +229,38 @@ const PortionControls: React.FC<PortionControlsProps> = ({
   const measurementKind = entry ? ingredientMeasurementKind(entry) : 'unknown';
   const countAmount = entry ? ingredientCountAmount(entry) : null;
 
+  // The recipe's own parsed quantity/unit flows into the amount UI. The row
+  // binds it to an authenticated USDA portion deterministically; the manual
+  // total weight stays a fallback.
+  const parsedEntry = entry ? ingredientMeasurement(entry) : undefined;
+  const recipeAmount = parsedEntry ? parsedEntry.amount : null;
+  const recipeUnit = parsedEntry ? parsedEntry.raw_unit : undefined;
+  const recipeMl = parsedEntry ? parsedEntry.milliliters : undefined;
+  const recipeGrams = parsedEntry ? parsedEntry.grams : undefined;
+
+  /**
+   * Deterministic total grams for a compatible authenticated portion applied to
+   * the recipe's own quantity/unit. Volume scales by exact canonical volume;
+   * mass scales by the portion's own mass. Never a density, never an average.
+   */
+  const derivedTotalFor = (candidate: PortionCandidateView): number | undefined => {
+    if (measurementKind === 'volume' && candidate.kind === 'volume') {
+      if (recipeMl === undefined || !(candidate.volume_ml !== null && candidate.volume_ml > 0)) return undefined;
+      const grams = (recipeMl / candidate.volume_ml) * candidate.gram_weight;
+      return Number.isFinite(grams) && grams > 0 ? grams : undefined;
+    }
+    if (measurementKind === 'mass' && candidate.kind === 'mass') {
+      if (recipeGrams === undefined || candidate.effective_amount === null) return undefined;
+      const portionMass = candidate.unit
+        ? convertMassToGrams(candidate.effective_amount, candidate.unit as NormalizedUnit)
+        : undefined;
+      if (portionMass === undefined || !(portionMass > 0)) return undefined;
+      const grams = (recipeGrams / portionMass) * candidate.gram_weight;
+      return Number.isFinite(grams) && grams > 0 ? grams : undefined;
+    }
+    return undefined;
+  };
+
   const load = useCallback(() => {
     setError(null);
     const result = session.reviewPortions(fdcId);
@@ -220,7 +297,18 @@ const PortionControls: React.FC<PortionControlsProps> = ({
   }, [load, loadCount]);
 
   const selectionForChoice = () => {
-    if (row.outcome === 'review_required' && matchChoice) {
+    if (!matchChoice) return undefined;
+    if (matchChoice.kind === 'manual') {
+      return {
+        kind: 'manual',
+        fdc_id: matchChoice.fdc_id,
+        record_digest: matchChoice.record_digest,
+        catalog_digest: matchChoice.catalog_digest,
+        line_ref: row.line_ref,
+        review_digest: matchChoice.review_digest,
+      };
+    }
+    if (row.outcome === 'review_required') {
       return matchChoice.kind === 'candidate'
         ? { kind: 'candidate', fdc_id: matchChoice.fdc_id, review_digest: matchChoice.review_digest }
         : { kind: 'none', review_digest: matchChoice.review_digest };
@@ -236,6 +324,7 @@ const PortionControls: React.FC<PortionControlsProps> = ({
       ingredient: entry.ingredient,
       review: row.outcome === 'review_required' ? row.review : undefined,
       selection: selectionForChoice(),
+      automaticSelection: matchChoice?.automatic === true,
       fdcId,
       portionIndex,
     });
@@ -254,6 +343,7 @@ const PortionControls: React.FC<PortionControlsProps> = ({
       ingredient: entry.ingredient,
       review: row.outcome === 'review_required' ? row.review : undefined,
       selection: selectionForChoice(),
+      automaticSelection: matchChoice?.automatic === true,
       fdcId,
       portionIndex,
     });
@@ -272,6 +362,7 @@ const PortionControls: React.FC<PortionControlsProps> = ({
       ingredient: entry.ingredient,
       review: row.outcome === 'review_required' ? row.review : undefined,
       selection: selectionForChoice(),
+      automaticSelection: matchChoice?.automatic === true,
       fdcId,
       quantity: Number(weightQty),
       unit: weightUnit,
@@ -360,6 +451,11 @@ const PortionControls: React.FC<PortionControlsProps> = ({
             <span className="text-[11px] text-emerald-300 font-medium">Source portion selected</span>
           )}
         </div>
+        {recipeAmount !== null && recipeUnit && (
+          <p data-testid="advanced-nutrition-recipe-amount" className="text-[11px] text-gray-300">
+            Recipe amount: <span className="font-mono text-white">{recipeAmount} {recipeUnit}</span>
+          </p>
+        )}
         {error && (
           <p role="alert" className="text-[11px] text-amber-300">
             {error}
@@ -368,38 +464,48 @@ const PortionControls: React.FC<PortionControlsProps> = ({
         {candidates && (
           <fieldset className="space-y-1">
             <legend className="text-[11px] text-gray-400">
-              Choose a canonical source portion for {row.original_text}
+              Choose an authenticated source portion for {row.original_text}
             </legend>
             {candidates.length === 0 && (
-              <p className="text-[11px] text-gray-500">No canonical portions are available.</p>
+              <p className="text-[11px] text-gray-500">
+                This source food has no authenticated portion. Choose a different source food above, or
+                enter the total weight below.
+              </p>
             )}
             {candidates.map((candidate) => {
               const compatibility = candidatePortionCompatibility(candidate, measurementKind);
               const disabled = compatibility !== 'compatible';
+              const total = disabled ? undefined : derivedTotalFor(candidate);
               return (
-                <label
-                  key={candidate.index}
-                  className={`flex items-start gap-2 text-[11px] ${disabled ? 'text-gray-500 cursor-not-allowed' : 'text-gray-200 cursor-pointer'}`}
-                >
-                  <input
-                    type="radio"
-                    name={`portion-${row.line_ref}`}
-                    checked={current?.portion_index === candidate.index}
-                    disabled={disabled}
-                    onChange={() => choose(candidate.index)}
-                    className="mt-0.5"
-                  />
-                  <span>
-                    {candidate.display_label}
-                    {disabled && (
-                      <span className="text-amber-300">
-                        {compatibility === 'unusable'
-                          ? ' · unusable source portion'
-                          : ' · not compatible with this measurement'}
-                      </span>
-                    )}
-                  </span>
-                </label>
+                <div key={candidate.index} className="flex items-start gap-2">
+                  <label
+                    className={`flex items-start gap-2 text-[11px] ${disabled ? 'text-gray-500 cursor-not-allowed' : 'text-gray-200 cursor-pointer'}`}
+                  >
+                    <input
+                      type="radio"
+                      name={`portion-${row.line_ref}`}
+                      checked={current?.portion_index === candidate.index}
+                      disabled={disabled}
+                      onChange={() => choose(candidate.index)}
+                      className="mt-0.5"
+                    />
+                    <span>
+                      {candidate.display_label}
+                      {disabled && (
+                        <span className="text-amber-300">
+                          {compatibility === 'unusable'
+                            ? ' · unusable source portion'
+                            : ' · not compatible with this measurement'}
+                        </span>
+                      )}
+                    </span>
+                  </label>
+                  {total !== undefined && (
+                    <span className="text-[11px] text-indigo-300">
+                      → {Math.round(total * 10) / 10} g for {recipeAmount} {recipeUnit}
+                    </span>
+                  )}
+                </div>
               );
             })}
           </fieldset>
@@ -459,6 +565,177 @@ const PortionControls: React.FC<PortionControlsProps> = ({
   );
 };
 
+interface FoodSearchPanelProps {
+  row: Phase4Row;
+  session: AdvancedNutritionSession;
+  dispatch: React.Dispatch<Phase4Action>;
+  onApplied: () => void;
+}
+
+/**
+ * User-directed manual USDA search. Deterministic and local to the SAME pinned
+ * bundle as Advanced Nutrition (no network, no AI). Discovery only — the chosen
+ * record is re-authenticated by the calculation engine.
+ */
+const FoodSearchPanel: React.FC<FoodSearchPanelProps> = ({ row, session, dispatch, onApplied }) => {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<ReadonlyArray<FoodSearchResult> | null>(null);
+  const [total, setTotal] = useState(0);
+  const [limit, setLimit] = useState(20);
+  const [error, setError] = useState<string | null>(null);
+  const [searched, setSearched] = useState(false);
+  const catalogDigest = useMemo(() => session.metadata().catalog_digest, [session]);
+  const prefill = row.query || row.original_text;
+
+  const run = useCallback(
+    (requestedLimit: number) => {
+      setError(null);
+      const q = (query.trim().length > 0 ? query.trim() : prefill).slice(0, 300);
+      if (q.length === 0) {
+        setError('Enter a food to search.');
+        setResults([]);
+        setTotal(0);
+        setSearched(true);
+        return;
+      }
+      const result = session.searchFoods(q, requestedLimit);
+      if (!result.ok) {
+        setError('USDA search is unavailable for this session.');
+        setResults([]);
+        setTotal(0);
+        setSearched(true);
+        return;
+      }
+      setResults(result.results);
+      setTotal(result.total);
+      setLimit(result.limit);
+      setSearched(true);
+    },
+    [query, prefill, session]
+  );
+
+  const use = (result: FoodSearchResult) => {
+    dispatch({
+      type: 'select_match',
+      lineRef: row.line_ref,
+      choice: {
+        kind: 'manual',
+        fdc_id: result.fdc_id,
+        review_digest: row.review_digest ?? '',
+        record_digest: result.record_digest,
+        catalog_digest: catalogDigest,
+        description: result.description,
+      },
+    });
+    onApplied();
+  };
+
+  const canLoadMore = results !== null && results.length < total && limit < 100;
+
+  return (
+    <div className="space-y-1" data-testid="advanced-nutrition-usda-search">
+      <button
+        type="button"
+        data-testid="advanced-nutrition-search-usda"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] bg-white/5 hover:bg-white/10 border border-white/10 text-gray-300 transition-colors"
+      >
+        <Search className="w-3 h-3" aria-hidden="true" />
+        {open ? 'Close search' : 'Search USDA database'}
+      </button>
+      {open && (
+        <div className="mt-1 space-y-2 p-2 rounded-lg bg-[#0C0C0C] border border-white/10">
+          <label className="block text-[10px] text-gray-400" htmlFor={`usda-search-${row.line_ref}`}>
+            Search all USDA foods (full pinned dataset)
+          </label>
+          <div className="flex items-center gap-2">
+            <input
+              id={`usda-search-${row.line_ref}`}
+              data-testid="advanced-nutrition-search-input"
+              type="text"
+              value={query}
+              placeholder={prefill}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  run(20);
+                }
+              }}
+              className="flex-1 px-2 py-1 rounded-lg bg-[#141414] border border-white/10 text-gray-100 text-xs"
+            />
+            <button
+              type="button"
+              data-testid="advanced-nutrition-search-run"
+              onClick={() => run(20)}
+              className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-400/30 text-indigo-100 transition-colors"
+            >
+              Search
+            </button>
+          </div>
+          {error && (
+            <p role="alert" className="text-[11px] text-amber-300">
+              {error}
+            </p>
+          )}
+          {searched && results !== null && results.length === 0 && !error && (
+            <p data-testid="advanced-nutrition-search-empty" className="text-[11px] text-gray-500">
+              No matching USDA record found in this pinned dataset.
+            </p>
+          )}
+          {results !== null && results.length > 0 && (
+            <>
+              <p className="text-[10px] text-gray-500">
+                {total} matching USDA record{total === 1 ? '' : 's'}
+                {results.length < total ? ` · showing first ${results.length}` : ''}
+              </p>
+              <ul className="space-y-1 max-h-64 overflow-y-auto">
+                {results.map((result) => (
+                  <li
+                    key={result.fdc_id}
+                    className="flex items-start justify-between gap-2 p-1.5 rounded-md bg-[#141414] border border-white/5"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-[11px] text-gray-100">{result.description}</p>
+                      <p className="text-[10px] text-gray-400">
+                        {result.data_type} · FDC {result.fdc_id}
+                        {result.exact_fdc_id ? ' · exact FDC match' : ''}
+                        {result.portion_summary
+                          ? ` · ${result.portion_summary}`
+                          : ' · no authenticated portion'}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      data-testid={`advanced-nutrition-use-usda-${result.fdc_id}`}
+                      onClick={() => use(result)}
+                      className="shrink-0 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-400/30 text-emerald-100 transition-colors"
+                    >
+                      Use this USDA food
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              {canLoadMore && (
+                <button
+                  type="button"
+                  data-testid="advanced-nutrition-search-load-more"
+                  onClick={() => run(Math.min(limit + 20, 100))}
+                  className="px-2 py-0.5 rounded-md text-[10px] bg-white/5 hover:bg-white/10 border border-white/10 text-gray-300 transition-colors"
+                >
+                  Load more
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
   isOpen,
   onClose,
@@ -469,9 +746,16 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
   dispatch,
   onCalculate,
   calculating,
+  analysis,
+  onAnalyze,
+  analysisRuns = 0,
+  workingDirty = false,
+  hydratedFromSaved = false,
   apply,
 }) => {
   const { dialogRef, onKeyDown } = useDialogFocus(isOpen, onClose);
+  const [expandedLineRef, setExpandedLineRef] = useState<string | null>(null);
+  const [changeFoodFor, setChangeFoodFor] = useState<string | null>(null);
 
   const preview = state.preview;
   const display = useMemo(
@@ -484,13 +768,35 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
   const evidence = useMemo(() => (preview ? ingredientEvidenceViews(preview) : null), [preview]);
   const coverage = useMemo(() => (preview ? coverageSummary(preview) : null), [preview]);
 
-  if (!isOpen) return null;
+  const analyzedByRef = useMemo(() => {
+    const map = new Map<string, AnalyzedRow>();
+    if (analysis) for (const row of analysis.rows) map.set(row.line_ref, row);
+    return map;
+  }, [analysis]);
 
-  const currentFdcId = (row: Phase4Row): number | undefined => {
-    if (row.outcome === 'matched_exact') return row.selected_fdc_id;
-    const choice = state.matches[row.line_ref];
-    return choice && choice.kind === 'candidate' ? choice.fdc_id : undefined;
-  };
+  // The ONE central projection of every row's CURRENT effective state. It is
+  // derived from live session state (food/portion/count/user-mass selections),
+  // never from the analyzer snapshot or a memoized suggestion.
+  const liveRows = useMemo(
+    () =>
+      projectLiveRows(
+        state,
+        analyzedByRef,
+        adapted,
+        session,
+        evidence,
+        analysis?.portions,
+        analysis?.countPortions
+      ),
+    [state, analyzedByRef, adapted, session, evidence, analysis]
+  );
+  const liveByRef = useMemo(() => {
+    const map = new Map<string, LiveRowState>();
+    for (const live of liveRows) map.set(live.line_ref, live);
+    return map;
+  }, [liveRows]);
+
+  if (!isOpen) return null;
 
   const stale = state.status === 'preview_stale';
 
@@ -521,17 +827,42 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
               Advisory
             </span>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close Advanced Nutrition"
-            className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              data-testid="advanced-nutrition-close-without-saving"
+              onClick={onClose}
+              className="px-2.5 py-1 rounded-lg text-[11px] font-medium text-gray-300 bg-white/5 hover:bg-white/10 border border-white/10 transition-colors"
+            >
+              Close without saving
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close Advanced Nutrition"
+              className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         <div className="px-5 py-4 space-y-5">
+          {/* SAVED vs WORKING distinction: the editor is a temporary draft. */}
+          <div
+            data-testid="advanced-nutrition-working-banner"
+            className="p-3 rounded-xl bg-indigo-950/25 border border-indigo-500/25 space-y-0.5"
+          >
+            <p className="text-[11px] font-semibold text-indigo-200">Working Advanced Nutrition review</p>
+            <p className="text-[10px] text-gray-400">
+              {workingDirty
+                ? 'Unsaved changes · nothing is written until Apply.'
+                : hydratedFromSaved
+                  ? 'Hydrated from the saved review · nothing is written until Apply.'
+                  : 'Nothing is written until Apply.'}
+            </p>
+          </div>
+
           <p id="advanced-nutrition-desc" className="text-[11px] text-gray-400">
             {PHASE4_NOT_MEDICAL_ADVICE}
           </p>
@@ -589,111 +920,247 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
             )}
           </section>
 
-          <section aria-label="Ingredient matching review" className="space-y-3">
-            <h3 className="text-xs font-bold text-white">Ingredient matching review</h3>
-            <ul className="space-y-3">
+          <section
+            aria-label="Automatic ingredient analysis"
+            data-testid="advanced-nutrition-analysis"
+            className="space-y-3"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-xl bg-indigo-950/20 border border-indigo-500/20">
+              <div>
+                <p className="text-xs font-bold text-white">Analyze automatically</p>
+                <p className="text-[10px] text-gray-400">
+                  Deterministic USDA selection and authenticated portions. Review only exceptions.
+                  Nothing is saved.
+                </p>
+              </div>
+              <button
+                type="button"
+                data-testid="advanced-nutrition-analyze"
+                onClick={onAnalyze}
+                disabled={calculating || (analysis === null && !session)}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-400 text-black disabled:opacity-50 transition-colors"
+              >
+                {analysisRuns > 0 ? 'Re-analyze Nutrition' : 'Analyze Nutrition'}
+              </button>
+            </div>
+
+            {analysis && (
+              <p
+                data-testid="advanced-nutrition-analysis-runs"
+                className="text-[10px] font-mono uppercase text-gray-400"
+              >
+                {analysisRuns > 0 ? `Analysis applied · run ${analysisRuns} · ` : ''}
+                {analysis.summary.matched} matched · {analysis.summary.matched_check} review suggested ·{' '}
+                {analysis.summary.needs_amount} need amount · {analysis.summary.needs_match} need match ·{' '}
+                {analysis.summary.qualitative} qualitative
+              </p>
+            )}
+
+            <ul className="space-y-2">
               {state.rows.map((row) => {
                 const choice = state.matches[row.line_ref];
-                const fdcId = currentFdcId(row);
+                const live = liveByRef.get(row.line_ref);
+                const status: LiveRowStatus = live?.status ?? 'needs_match';
+                const fdcId = live?.selected_fdc_id;
                 const entry = adapted.find((item) => item.line_ref === row.line_ref);
-                const needsPortion = entry ? ingredientNeedsPortion(entry) : false;
+                const expanded = expandedLineRef === row.line_ref;
+                const parsedRow = entry ? ingredientMeasurement(entry) : undefined;
+                const rowAmount = parsedRow ? parsedRow.amount : null;
+                const rowUnit = parsedRow ? parsedRow.raw_unit : undefined;
+                const description = live?.selected_description;
+                const massText = live ? liveMassText(live) : undefined;
+                const changingFood = changeFoodFor === row.line_ref;
+                const showCandidates =
+                  row.outcome === 'review_required' && (fdcId === undefined || changingFood);
                 return (
-                  <li key={row.line_ref} className="p-3 rounded-xl bg-[#141414] border border-white/5">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-xs text-gray-100">{row.original_text || row.query}</span>
-                      <span className="text-[10px] font-mono uppercase text-gray-400">
-                        {OUTCOME_LABEL[row.outcome] ?? row.outcome}
-                      </span>
+                  <li
+                    key={row.line_ref}
+                    data-testid="advanced-nutrition-row"
+                    className="p-3 rounded-xl bg-[#141414] border border-white/5 space-y-2"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-xs text-gray-100">{row.original_text || row.query}</p>
+                        {description ? (
+                          <p className="text-[11px] text-emerald-300 truncate">
+                            {description}
+                            {massText !== undefined ? (
+                              <span className="text-gray-400"> · {massText}</span>
+                            ) : (
+                              <span className="text-gray-500">
+                                {' '}
+                                · amount —
+                                {rowAmount !== null && rowUnit ? ` (recipe ${rowAmount} ${rowUnit})` : ''}
+                              </span>
+                            )}
+                          </p>
+                        ) : (
+                          <p className="text-[11px] text-gray-500">
+                            {status === 'review_suggested'
+                              ? 'Best candidate needs your confirmation.'
+                              : status === 'needs_match'
+                                ? 'No confident source match.'
+                                : status === 'qualitative'
+                                  ? 'Qualitative — not measurable.'
+                                  : 'Not analyzed yet.'}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span
+                          data-testid="advanced-nutrition-row-status"
+                          className={`text-[10px] font-mono uppercase px-2 py-0.5 rounded-full border ${LIVE_STATUS_CLASS[status]}`}
+                        >
+                          {LIVE_ROW_STATUS_LABEL[status]}
+                        </span>
+                        <button
+                          type="button"
+                          data-testid="advanced-nutrition-edit"
+                          onClick={() =>
+                            setExpandedLineRef(expanded ? null : row.line_ref)
+                          }
+                          aria-expanded={expanded}
+                          className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white/5 hover:bg-white/10 border border-white/10 text-gray-200 transition-colors"
+                        >
+                          {expanded ? 'Close' : 'Edit'}
+                        </button>
+                      </div>
                     </div>
 
-                    {row.outcome === 'matched_exact' && (
-                      <p className="mt-1 text-[11px] text-emerald-300">
-                        Matched automatically as the single exact source description. This was not
-                        manually confirmed by you.
-                      </p>
-                    )}
+                    {expanded && (
+                      <div className="pt-1 border-t border-white/5 space-y-2">
+                        {row.outcome === 'matched_exact' && (
+                          <p className="text-[11px] text-emerald-300">
+                            Matched automatically as the single exact source description. This was not
+                            manually confirmed by you.
+                          </p>
+                        )}
 
-                    {row.outcome === 'review_required' && (
-                      <fieldset className="mt-2 space-y-1">
-                        <legend className="text-[11px] text-gray-400">
-                          Choose the source food for {row.original_text}
-                        </legend>
-                        {row.candidates.map((candidate) => (
-                          <label
-                            key={candidate.fdc_id}
-                            className="flex items-start gap-2 text-[11px] text-gray-200 cursor-pointer"
-                          >
-                            <input
-                              type="radio"
-                              name={`match-${row.line_ref}`}
-                              checked={choice?.kind === 'candidate' && choice.fdc_id === candidate.fdc_id}
-                              onChange={() =>
-                                dispatch({
-                                  type: 'select_match',
-                                  lineRef: row.line_ref,
-                                  choice: {
-                                    kind: 'candidate',
-                                    fdc_id: candidate.fdc_id,
-                                    review_digest: row.review_digest ?? '',
-                                  },
-                                })
-                              }
-                              className="mt-0.5"
-                            />
-                            <span>
-                              {candidate.description}{' '}
-                              <span className="text-gray-400">
-                                · {candidate.data_type} · FDC {candidate.fdc_id} · {candidate.rank_evidence}
+                        {fdcId !== undefined && (
+                          <div className="space-y-1" data-testid="advanced-nutrition-food-summary">
+                            <p className="text-[11px] text-gray-300">
+                              Food:{' '}
+                              <span className="text-emerald-300 font-medium">
+                                {description ?? 'Selected source'}
                               </span>
-                              {candidate.portion_annotation && (
-                                <span className="block text-[10px] text-indigo-300">
-                                  {candidate.portion_annotation}
-                                </span>
+                              {choice?.kind === 'manual' && (
+                                <span className="text-gray-400"> · user-selected from USDA search</span>
                               )}
-                            </span>
-                          </label>
-                        ))}
-                        <label className="flex items-start gap-2 text-[11px] text-gray-200 cursor-pointer">
-                          <input
-                            type="radio"
-                            name={`match-${row.line_ref}`}
-                            checked={choice?.kind === 'none'}
-                            onChange={() =>
-                              dispatch({
-                                type: 'select_match',
-                                lineRef: row.line_ref,
-                                choice: { kind: 'none', review_digest: row.review_digest ?? '' },
-                              })
-                            }
-                            className="mt-0.5"
+                            </p>
+                            {row.outcome === 'review_required' && (
+                              <button
+                                type="button"
+                                data-testid="advanced-nutrition-change-food"
+                                onClick={() =>
+                                  setChangeFoodFor(changingFood ? null : row.line_ref)
+                                }
+                                className="px-2 py-0.5 rounded-md text-[10px] bg-white/5 hover:bg-white/10 border border-white/10 text-gray-300 transition-colors"
+                              >
+                                {changingFood ? 'Cancel change' : 'Change food'}
+                              </button>
+                            )}
+                          </div>
+                        )}
+                        {row.outcome === 'review_required' && showCandidates && (
+                          <fieldset className="space-y-1">
+                            <legend className="text-[11px] text-gray-400">
+                              Choose the source food for {row.original_text}
+                            </legend>
+                            {row.candidates.map((candidate) => (
+                              <label
+                                key={candidate.fdc_id}
+                                className="flex items-start gap-2 text-[11px] text-gray-200 cursor-pointer"
+                              >
+                                <input
+                                  type="radio"
+                                  name={`match-${row.line_ref}`}
+                                  checked={
+                                    choice?.kind === 'candidate' && choice.fdc_id === candidate.fdc_id
+                                  }
+                                  onChange={() => {
+                                    dispatch({
+                                      type: 'select_match',
+                                      lineRef: row.line_ref,
+                                      choice: {
+                                        kind: 'candidate',
+                                        fdc_id: candidate.fdc_id,
+                                        review_digest: row.review_digest ?? '',
+                                      },
+                                    });
+                                    setChangeFoodFor(null);
+                                  }}
+                                  className="mt-0.5"
+                                />
+                                <span>
+                                  {candidate.description}{' '}
+                                  <span className="text-gray-400">
+                                    · {candidate.data_type} · FDC {candidate.fdc_id} ·{' '}
+                                    {candidate.rank_evidence}
+                                  </span>
+                                  {candidate.portion_annotation && (
+                                    <span className="block text-[10px] text-indigo-300">
+                                      {candidate.portion_annotation}
+                                    </span>
+                                  )}
+                                </span>
+                              </label>
+                            ))}
+                            <label className="flex items-start gap-2 text-[11px] text-gray-200 cursor-pointer">
+                              <input
+                                type="radio"
+                                name={`match-${row.line_ref}`}
+                                checked={choice?.kind === 'none'}
+                                onChange={() => {
+                                  dispatch({
+                                    type: 'select_match',
+                                    lineRef: row.line_ref,
+                                    choice: { kind: 'none', review_digest: row.review_digest ?? '' },
+                                  });
+                                  setChangeFoodFor(null);
+                                }}
+                                className="mt-0.5"
+                              />
+                              <span>None of these</span>
+                            </label>
+                          </fieldset>
+                        )}
+
+                        {(row.outcome === 'matched_exact' ||
+                          row.outcome === 'review_required' ||
+                          row.outcome === 'unmatched') && (
+                          <FoodSearchPanel
+                            row={row}
+                            session={session}
+                            dispatch={dispatch}
+                            onApplied={() => setChangeFoodFor(null)}
                           />
-                          <span>None of these</span>
-                        </label>
-                      </fieldset>
-                    )}
+                        )}
 
-                    {(row.outcome === 'unmatched' || row.outcome === 'invalid') && (
-                      <p className="mt-1 text-[11px] text-amber-300">
-                        {row.outcome === 'unmatched'
-                          ? 'No USDA source candidate shares this ingredient. It contributes nothing.'
-                          : 'This ingredient line could not be parsed safely. It contributes nothing.'}
-                      </p>
-                    )}
-                    {row.outcome === 'qualitative' && (
-                      <p className="mt-1 text-[11px] text-gray-400">
-                        Qualitative ingredient — it is not treated as measurable and contributes no mass.
-                      </p>
-                    )}
+                        {(row.outcome === 'unmatched' || row.outcome === 'invalid') && (
+                          <p className="text-[11px] text-amber-300">
+                            {row.outcome === 'unmatched'
+                              ? 'No USDA source candidate shares this ingredient automatically. Search USDA below to choose one, or it contributes nothing.'
+                              : 'This ingredient line could not be parsed safely. It contributes nothing.'}
+                          </p>
+                        )}
+                        {row.outcome === 'qualitative' && (
+                          <p className="text-[11px] text-gray-400">
+                            Qualitative ingredient — it is not treated as measurable and contributes no
+                            mass.
+                          </p>
+                        )}
 
-                    {fdcId !== undefined && needsPortion && (
-                      <PortionControls
-                        row={row}
-                        fdcId={fdcId}
-                        session={session}
-                        state={state}
-                        dispatch={dispatch}
-                        adapted={adapted}
-                      />
+                        {fdcId !== undefined && (
+                          <PortionControls
+                            row={row}
+                            fdcId={fdcId}
+                            session={session}
+                            state={state}
+                            dispatch={dispatch}
+                            adapted={adapted}
+                          />
+                        )}
+                      </div>
                     )}
                   </li>
                 );
@@ -701,14 +1168,14 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
             </ul>
           </section>
 
-          <div className="flex items-center justify-end">
+          <div className="flex items-center justify-end gap-2">
             <button
               type="button"
               onClick={onCalculate}
               disabled={calculating}
               className="px-4 py-2 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-400 text-black disabled:opacity-50 transition-colors"
             >
-              {calculating ? 'Calculating…' : 'Calculate Preview'}
+              {calculating ? 'Calculating…' : preview ? 'Recalculate Preview' : 'Calculate Preview'}
             </button>
           </div>
 
@@ -778,17 +1245,36 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                     Ingredient evidence
                   </h4>
                   <ul className="space-y-1">
-                    {evidence.map((entry) => (
-                      <li key={entry.line_ref} className="text-[11px] text-gray-400">
-                        <span className="text-gray-200">{entry.original_text}</span> — {entry.outcome}
-                        {entry.fdc_id !== undefined ? ` · FDC ${entry.fdc_id}` : ''}
-                        {' · '}
-                        {massSourceLabel(entry)}
-                        {entry.resolved_grams !== undefined ? ` → ${entry.resolved_grams} g` : ''}
-                        {countDerivationLabel(entry) ? ` · ${countDerivationLabel(entry)}` : ''}
-                        {entry.user_confirmed ? ' · user-confirmed' : ''}
-                      </li>
-                    ))}
+                    {evidence.map((entry) => {
+                      const live = liveByRef.get(entry.line_ref);
+                      const foodAuthority =
+                        live?.food_authority === 'automatic'
+                          ? 'automatic food'
+                          : live?.food_authority === 'unique_exact'
+                            ? 'unique-exact food'
+                            : live?.food_authority === 'user_confirmed' || entry.user_confirmed
+                              ? 'user-confirmed food'
+                              : undefined;
+                      // Mass provenance is INDEPENDENT of food authority.
+                      const portionAuthority =
+                        entry.mass_source === 'source_portion'
+                          ? live?.source_portion_automatic
+                            ? 'auto-selected portion'
+                            : 'user-selected portion'
+                          : undefined;
+                      return (
+                        <li key={entry.line_ref} className="text-[11px] text-gray-400">
+                          <span className="text-gray-200">{entry.original_text}</span> — {entry.outcome}
+                          {entry.fdc_id !== undefined ? ` · FDC ${entry.fdc_id}` : ''}
+                          {' · '}
+                          {massSourceLabel(entry)}
+                          {portionAuthority ? ` · ${portionAuthority}` : ''}
+                          {entry.resolved_grams !== undefined ? ` → ${entry.resolved_grams} g` : ''}
+                          {countDerivationLabel(entry) ? ` · ${countDerivationLabel(entry)}` : ''}
+                          {foodAuthority ? ` · ${foodAuthority}` : ''}
+                        </li>
+                      );
+                    })}
                   </ul>
                 </div>
               )}

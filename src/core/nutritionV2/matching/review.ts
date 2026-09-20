@@ -53,6 +53,7 @@ import {
 import { normalizeQuery, normalizeQueryChecked } from './normalize';
 import { parseIngredient } from './parse';
 import { QUERY_PROJECTION_VERSION } from './query';
+import { searchManualCatalog, createManualSearchIndex, type ManualSearchIndex } from './manualSearch';
 import {
   ELIGIBILITY_POLICY_VERSION,
   computeEligibilityPolicyDigest,
@@ -264,6 +265,17 @@ export function createReviewCatalog(
 
   const frozenEntries = deepFreeze(entries);
 
+  // Per-catalog manual-search index, built lazily on the first manual search and
+  // reused thereafter. It carries no authority and is scoped to this catalog
+  // closure (never exported, never global).
+  let manualSearchIndex: ManualSearchIndex | undefined;
+  const manualIndex = (): ManualSearchIndex => {
+    if (manualSearchIndex === undefined) {
+      manualSearchIndex = createManualSearchIndex(frozenEntries);
+    }
+    return manualSearchIndex;
+  };
+
   const catalog: ReviewCatalog = Object.freeze({
     metadata(): ReviewCatalogMetadata {
       return metadata;
@@ -291,6 +303,17 @@ export function createReviewCatalog(
         if (entry.normalized_description === normalized.text) count += 1;
       }
       return count;
+    },
+    manualSearch(normalized: NormalizedQuery, limit: number) {
+      if (
+        !normalized ||
+        typeof normalized.text !== 'string' ||
+        !Array.isArray(normalized.tokens) ||
+        normalized.text.length === 0
+      ) {
+        return Object.freeze({ hits: Object.freeze([]), total: 0 });
+      }
+      return searchManualCatalog(normalized, frozenEntries, manualIndex(), limit);
     },
   });
 

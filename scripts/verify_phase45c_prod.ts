@@ -179,15 +179,36 @@ async function main(): Promise<void> {
     // Explicit user action opens Advanced Nutrition and loads the bundle.
     await evaluate(cdp, `(() => { const b = Array.from(document.querySelectorAll('button')).find((x) => (x.textContent||'').includes('Open Advanced Nutrition')); if (b) b.click(); return !!b; })()`);
     await waitFor(cdp, `!!document.querySelector('[role="dialog"]')`, 60000);
+    await waitFor(cdp, `document.querySelectorAll('[data-testid="advanced-nutrition-row"]').length >= 1`, 30000);
 
-    // The `1 cup Cornmeal` row is ambiguous -> select FDC 169697 explicitly.
-    await waitFor(cdp, `!!Array.from(document.querySelectorAll('input[type="radio"]')).find((r) => (r.closest('label')?.textContent||'').includes('169697'))`, 20000);
-    await evaluate(cdp, `(() => {
-      const radio = Array.from(document.querySelectorAll('input[type="radio"]')).find((r) => (r.closest('label')?.textContent||'').includes('169697'));
-      if (!radio) return false;
-      radio.click();
-      return true;
-    })()`);
+    // Post-Phase-5 remediation: detailed candidate/portion tools are compact by
+    // default and live behind the row's Edit control; when a food is already
+    // resolved the candidate list is behind `Change food`. Open the cornmeal row
+    // and ensure FDC 169697 is selected (the one-click analyzer already chooses
+    // it; this verifies the explicit user path as well).
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const result: string = await evaluate(cdp, `(() => {
+        const row = Array.from(document.querySelectorAll('[data-testid="advanced-nutrition-row"]')).find((n) => /cornmeal/i.test(n.innerText || ''));
+        if (!row) return 'no-row';
+        const btn = row.querySelector('[data-testid="advanced-nutrition-edit"]');
+        if (btn && btn.getAttribute('aria-expanded') !== 'true') btn.click();
+        const label = Array.from(row.querySelectorAll('label')).find((l) => (l.innerText||'').includes('FDC 169697'));
+        if (label) {
+          const radio = label.querySelector('input[type="radio"]');
+          if (!radio) return 'no-input';
+          radio.click();
+          return 'ok';
+        }
+        const change = row.querySelector('[data-testid="advanced-nutrition-change-food"]');
+        if (change) {
+          change.click();
+          return 'expanding';
+        }
+        return 'no-label';
+      })()`);
+      if (result === 'ok') break;
+      await sleep(250);
+    }
 
     // The compatible canonical cup portion is presented immediately with a
     // semantic label (never the `undetermined` placeholder).
@@ -205,14 +226,16 @@ async function main(): Promise<void> {
     })()`);
     // Wait for React to commit the explicit portion selection before calculating.
     await waitFor(cdp, `document.body.innerText.includes('Source portion selected')`, 10000);
-    await evaluate(cdp, `(() => { const b = Array.from(document.querySelectorAll('button')).find((x) => (x.textContent||'').includes('Calculate Preview')); if (b) b.click(); return !!b; })()`);
+    await evaluate(cdp, `(() => { const b = Array.from(document.querySelectorAll('button')).find((x) => (x.textContent||'').includes('Calculate Preview') || (x.textContent||'').includes('Recalculate Preview')); if (b) b.click(); return !!b; })()`);
     await waitFor(cdp, `!!document.querySelector('[aria-label="Advisory nutrition preview"]')`, 20000);
 
     const evidenceText = await evaluate(cdp, `(document.querySelector('[aria-label="Advisory nutrition preview"]')?.innerText || '')`);
     record('calculation produces USDA source-portion evidence', /USDA source portion · FDC 169697/.test(evidenceText), evidenceText.slice(0, 200));
     record('resolved source-portion mass is 122 g', /122 g/.test(evidenceText));
     record('preview is advisory and not medical advice', /not medical advice/i.test(evidenceText));
-    record('no Apply/Save/Persist control is present', !/\bApply\b|\bSave\b|\bPersist\b|\bWrite to Vault\b/i.test(evidenceText));
+    // Phase 5B adds an EXPLICIT Apply control; there is still no automatic
+    // Save/Persist/Write action.
+    record('no automatic Save/Persist control is present', !/\bSave\b|\bPersist\b|\bWrite to Vault\b/i.test(evidenceText));
     record('no codex_nutrition is constructed', !(await evaluate(cdp, `document.body.innerText.includes('codex_nutrition')`)));
     record('the five USDA bundle assets are requested same-origin', bundleAssetRequests.length === 5 && bundleAssetRequests.every((u) => u.startsWith(`http://127.0.0.1:${APP_PORT}/assets/`)));
     record('no external nutrition/USDA/API request occurred', externalNutritionRequests.length === 0, externalNutritionRequests.join(','));

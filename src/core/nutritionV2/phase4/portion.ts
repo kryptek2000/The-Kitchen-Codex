@@ -23,6 +23,12 @@ export interface PortionChoiceParams {
   readonly ingredient: unknown;
   readonly review?: unknown;
   readonly selection?: unknown;
+  /**
+   * True when the bound match was an automatic analyzer selection. It must be
+   * carried into the identity-binding dry run so the portion's identity digest
+   * matches the `auto_confirmed` calculation.
+   */
+  readonly automaticSelection?: boolean;
   readonly fdcId: number;
   readonly portionIndex: number;
 }
@@ -49,6 +55,7 @@ export function buildPortionChoice(
         ingredient: params.ingredient,
         ...(params.review !== undefined ? { review: params.review } : {}),
         ...(params.selection !== undefined ? { selection: params.selection } : {}),
+        ...(params.automaticSelection === true ? { automatic_selection: true } : {}),
       },
     ],
   });

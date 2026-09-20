@@ -72,6 +72,7 @@ describe('phase 4 session — lexical authority encapsulation', () => {
         'reviewCountPortions',
         'reviewIngredient',
         'reviewPortions',
+        'searchFoods',
       ].sort()
     );
   });

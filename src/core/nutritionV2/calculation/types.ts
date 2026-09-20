@@ -161,7 +161,7 @@ export type IngredientOutcome =
   | 'no_mass'
   | 'no_nutrition';
 
-export type MatchStatus = 'unique_exact' | 'user_confirmed' | 'none';
+export type MatchStatus = 'unique_exact' | 'user_confirmed' | 'auto_confirmed' | 'none';
 
 export type MassSource = 'direct_mass' | 'source_portion' | 'count_portion' | 'user_mass';
 

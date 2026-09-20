@@ -88,6 +88,21 @@ export function phase4Reducer(state: Phase4State, action: Phase4Action): Phase4S
       };
     }
 
+    case 'hydrate': {
+      // Reconstruct the working review from a saved Advanced result for an
+      // unchanged recipe. This is NOT a user edit: the working state is not
+      // marked dirty, and no preview is invalidated (none exists yet).
+      if (state.recipeKey === null) return state;
+      return {
+        ...state,
+        matches: action.matches,
+        portions: action.portions,
+        countPortions: action.countPortions,
+        userMasses: action.userMasses,
+        failure: null,
+      };
+    }
+
     case 'select_match': {
       if (state.recipeKey === null) return state;
       if (!state.rows.some((row) => row.line_ref === action.lineRef)) return state;
@@ -208,6 +223,30 @@ export function phase4Reducer(state: Phase4State, action: Phase4Action): Phase4S
       if (state.selectedServings === action.value) return state;
       // Display-only: derived from the immutable total baseline.
       return { ...state, selectedServings: action.value, failure: null };
+    }
+
+    case 'apply_analysis': {
+      if (state.recipeKey === null) return state;
+      const next: Phase4State = {
+        ...state,
+        matches: action.matches,
+        portions: action.portions,
+        countPortions: action.countPortions,
+        // A plain analyzer run clears user masses; a Re-analyze that preserves
+        // reviewed user-entered weights carries them through explicitly.
+        userMasses: action.userMasses ?? Object.freeze({}),
+        failure: null,
+        operationSeq: state.operationSeq + 1,
+      };
+      if (action.preview) {
+        return {
+          ...next,
+          status: 'preview_current',
+          preview: action.preview,
+          previewKey: state.recipeKey,
+        };
+      }
+      return { ...next, status: 'ready' };
     }
 
     case 'preview_succeeded': {

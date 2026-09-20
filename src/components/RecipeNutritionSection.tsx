@@ -9,7 +9,7 @@ import {
   type AdvancedNutritionBundleUiStatus,
 } from './AdvancedNutritionCard';
 import type { AdvancedNutritionSession } from '../core/nutritionV2/phase4';
-import type { NutritionPresentation } from '../core/nutritionV2/phase5c';
+import { deriveAdvancedCompactNutrition, type NutritionPresentation } from '../core/nutritionV2/phase5c';
 
 interface RecipeNutritionSectionProps {
   recipe: ObsidianRecipe;
@@ -25,15 +25,18 @@ interface RecipeNutritionSectionProps {
 }
 
 /**
- * The SINGLE consolidated Nutrition surface. Precedence is decided by the pure
- * `resolveRecipeNutritionPresentation` selector:
- *   - a recognized saved Advanced result is the primary surface;
- *   - a stale saved Advanced result stays primary with an explicit stale notice
- *     (the legacy estimator never silently masks it);
- *   - an unknown/malformed saved block is reported and preserved, with the legacy
- *     estimate shown only as a clearly-labelled fallback;
- *   - otherwise the existing simple Nutrition & Macros / estimator is the
- *     fallback for legacy-only or empty recipes.
+ * The consolidated Nutrition surface.
+ *
+ * TWO SEPARATE EXPERIENCES (product contract):
+ *   - the ordinary compact `Nutrition & Macros` card is ALWAYS visible; when a
+ *     recognized saved Advanced result exists its compact values are DERIVED
+ *     from that saved block (single authority, no second stored dataset);
+ *   - Advanced Nutrition is a SEPARATE secondary card for the reviewed USDA
+ *     match/portion/Apply workflow.
+ *
+ * A saved Advanced result never hides or replaces the normal card. Stale,
+ * unsupported, and malformed saved blocks are still surfaced explicitly, and the
+ * Advanced workflow never writes on view.
  */
 export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
   recipe,
@@ -46,11 +49,21 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
   onLoadAdvancedNutritionBundle,
   onApplyAdvancedNutrition,
 }) => {
-  const advancedPrimary = presentation.advanced_preferred;
-  // The Advanced review/apply surface stays reachable for every recipe (so a
-  // legacy/empty recipe can still be upgraded); it is a secondary affordance
-  // unless a recognized saved block makes it the primary authority.
-  const legacyVisible = !advancedPrimary && onUpdateNutrition !== undefined;
+  const advancedPreferred = presentation.advanced_preferred;
+  // Compact normal values derived from the saved Advanced block (single
+  // authority). Undefined when no recognized Advanced result exists, in which
+  // case the normal card shows the recipe's own stored nutrition.
+  const derivedNutrition = deriveAdvancedCompactNutrition(presentation);
+  // A recognized but INCOMPLETE Advanced result must not be shown as
+  // whole-recipe compact totals; the normal card shows an incomplete state.
+  const advancedIncomplete =
+    advancedPreferred && !presentation.advanced_complete
+      ? {
+          resolved: presentation.advanced_resolved_count,
+          total: presentation.advanced_ingredient_count,
+        }
+      : undefined;
+  const legacyVisible = onUpdateNutrition !== undefined;
   const legacyFallbackNote =
     presentation.kind === 'advanced_unsupported' || presentation.kind === 'advanced_invalid';
 
@@ -97,6 +110,9 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
         </div>
       )}
 
+      {/* The ordinary compact Nutrition & Macros presentation ALWAYS remains
+          visible. When a recognized Advanced result exists its values are
+          derived from that saved block. */}
       {legacyVisible && (
         <div className="space-y-2">
           {legacyFallbackNote && (
@@ -109,17 +125,15 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
             recipe={recipe}
             servings={servings}
             network={network}
+            derivedNutrition={derivedNutrition}
+            derivedSourceLabel={derivedNutrition ? 'Advanced Nutrition · USDA reviewed' : undefined}
+            advancedIncomplete={advancedIncomplete}
             onUpdateNutrition={(nut) => onUpdateNutrition?.(nut)}
           />
         </div>
       )}
 
-      {!advancedPrimary && (
-        <p className="text-[10px] text-gray-500 flex items-center gap-1.5">
-          <Info className="w-3.5 h-3.5" />
-          <span>Authenticated USDA nutrition — review and Apply to save a verified result.</span>
-        </p>
-      )}
+      {/* Advanced Nutrition stays a SEPARATE secondary card. */}
       <AdvancedNutritionCard
         recipe={recipe}
         session={advancedNutritionSession}
@@ -127,6 +141,7 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
         bundleStatus={advancedNutritionBundleStatus}
         onLoadBundle={onLoadAdvancedNutritionBundle}
         onApplyAdvancedNutrition={onApplyAdvancedNutrition}
+        savedAdvancedBlock={presentation.advanced}
       />
     </section>
   );

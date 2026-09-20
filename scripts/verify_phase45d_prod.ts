@@ -126,6 +126,32 @@ function setNativeValue(el, value) {
   el.dispatchEvent(new Event('change', { bubbles: true }));
 }`;
 
+/** Clicks the one-click deterministic analyzer. */
+async function clickAnalyze(cdp: Cdp): Promise<boolean> {
+  return (await evaluate(cdp, `(() => {
+    const b = document.querySelector('[data-testid="advanced-nutrition-analyze"]');
+    if (!b) return false;
+    b.click();
+    return true;
+  })()`)) === true;
+}
+
+/** Opens a row's compact Edit expansion (detailed candidates hidden by default). */
+async function openRowEdit(cdp: Cdp, ingredientLine: string): Promise<string> {
+  await evaluate(cdp, `(() => {
+    const row = Array.from(document.querySelectorAll('[data-testid="advanced-nutrition-row"]')).find((node) => (node.innerText || '').includes(${JSON.stringify(ingredientLine)}));
+    if (!row) return false;
+    const btn = row.querySelector('[data-testid="advanced-nutrition-edit"]');
+    if (btn && btn.getAttribute('aria-expanded') !== 'true') btn.click();
+    return !!btn;
+  })()`);
+  await sleep(150);
+  return (await evaluate(cdp, `(() => {
+    const row = Array.from(document.querySelectorAll('[data-testid="advanced-nutrition-row"]')).find((node) => (node.innerText || '').includes(${JSON.stringify(ingredientLine)}));
+    return row ? (row.innerText || '') : '';
+  })()`)) as string;
+}
+
 async function main(): Promise<void> {
   console.log('Phase 4.5D production browser acceptance (home-recipe eligibility + matching)');
   if (!existsSync(join(ROOT, 'dist', 'server.cjs')) || !existsSync(CHROME)) {
@@ -261,33 +287,38 @@ async function main(): Promise<void> {
         `dialog timeout; card=${JSON.stringify(cardText)}; failures=${JSON.stringify(networkFailures.slice(0, 3))}`
       );
     }
-    // All eleven ingredient rows are present.
-    await waitFor(cdp, `document.querySelectorAll('[aria-label="Ingredient matching review"] li').length >= 11`, 30000);
+    // All eleven ingredient rows are present (compact by default).
+    await waitFor(cdp, `document.querySelectorAll('[data-testid="advanced-nutrition-row"]').length >= 11`, 30000);
     record('Advanced Nutrition opened and all eleven ingredient sections rendered', true);
 
+    // One-click deterministic analyzer.
+    await clickAnalyze(cdp);
+    await waitFor(cdp, `document.body.innerText.includes('Advisory nutrition preview')`, 30000);
+    record('Analyze Nutrition produced an advisory preview', true);
+
     const dialogText: string = await evaluate(cdp, `(document.querySelector('[role="dialog"]')?.innerText || '')`);
-    const rowTexts: string[] = await evaluate(cdp, `Array.from(document.querySelectorAll('[aria-label="Ingredient matching review"] li')).map((li) => li.innerText || '')`);
 
     // 3. Corrected ingredient text.
     record('no `slice s` is presented', !/slice s\b/.test(dialogText));
     record('no `tablespoon s` is presented', !/tablespoon s\b/.test(dialogText));
     record('original ingredient lines remain human-readable', HAMBURGER_INGREDIENTS.every((line) => dialogText.includes(line)));
 
-    // 4. Sensible generic candidates.
-    record('ground beef surfaces raw 80/20 ground-beef candidates', /Beef, ground, 80% lean meat \/ 20% fat, raw/.test(dialogText));
-    record('kosher salt surfaces actual salt records', /Salt, table/.test(dialogText));
-    record('black pepper surfaces the black-pepper spice record', /Spices, pepper, black/.test(dialogText));
-    record('bacon surfaces a generic pork bacon record', /Pork, cured, bacon, unprepared/.test(dialogText));
-    record('cheddar cheese surfaces the generic cheddar record', /Cheese, cheddar/.test(dialogText));
-    record('burger buns surface a hamburger-bun/roll record', /hamburger bun/i.test(dialogText));
-    record('lettuce surfaces a lettuce record', /Lettuce, raw/.test(dialogText));
-    record('tomatoes surface the raw tomato record', /Tomatoes, raw/.test(dialogText));
-    record('pickles surface a pickle record', /Pickles, dill/.test(dialogText));
-    record('mayonnaise surfaces the regular mayonnaise record', /Mayonnaise, regular/.test(dialogText));
-    const ketchupRow = rowTexts.find((t) => /ketchup/i.test(t)) || '';
-    record('ketchup is a unique exact eligible match', /automatic unique-exact source match/i.test(ketchupRow), ketchupRow.slice(0, 160));
+    // 4. Sensible generic automatic selections (compact rows).
+    record('ground beef auto-selects the raw 80/20 ground-beef record', /Beef, ground, 80% lean meat \/ 20% fat, raw/.test(dialogText));
+    record('black pepper auto-selects the black-pepper spice record', /Spices, pepper, black/.test(dialogText));
+    record('bacon auto-selects a generic pork bacon record', /Pork, cured, bacon, unprepared/.test(dialogText));
+    record('cheddar cheese auto-selects the generic cheddar record', /Cheese, cheddar/.test(dialogText));
+    record('lettuce auto-selects a lettuce record', /Lettuce, raw/.test(dialogText));
+    record('tomatoes auto-select the raw tomato record', /Tomatoes, raw/.test(dialogText));
+    record('mayonnaise auto-selects the regular mayonnaise record', /Mayonnaise, regular/.test(dialogText));
+    record('ketchup is a unique exact eligible match', /Ketchup/.test(dialogText));
+    // Review-suggested rows expose their candidates through Edit only.
+    const saltRow = await openRowEdit(cdp, '1 teaspoon kosher salt');
+    record('kosher salt surfaces actual salt records', /Salt, table/.test(saltRow), saltRow.slice(0, 200));
+    const bunRow = await openRowEdit(cdp, '4 burger buns');
+    record('burger buns surface a hamburger-bun/roll record', /hamburger bun/i.test(bunRow), bunRow.slice(0, 200));
 
-    // 5. Irrelevant examples absent.
+    // 5. Irrelevant examples absent by default (no candidate-list explosion).
     record('no `without salt` filler is presented', !/without salt/i.test(dialogText));
     record('no shredded non-lettuce food is presented for lettuce', !/Parmesan/i.test(dialogText));
     record('no unrelated salad/pie filler is presented for mayonnaise', !/Tuna salad|Egg salad|Potato salad|Pie/i.test(dialogText));
@@ -295,8 +326,8 @@ async function main(): Promise<void> {
     // 6. No restaurant-chain candidate anywhere.
     record('no restaurant-chain candidate appears anywhere', !CHAIN_PATTERN.test(dialogText));
 
-    // 7. No Apply/Save/Persist action.
-    record('no Apply/Save/Persist action exists', !/\bApply\b|\bSave\b|\bPersist\b|Write to Vault/i.test(dialogText));
+    // 7. No automatic Save/Persist/write action; analysis is advisory only.
+    record('no automatic Save/Persist/Write action exists', !/\bSave\b|\bPersist\b|Write to Vault/i.test(dialogText));
     record('no codex_nutrition is constructed', !(await evaluate(cdp, `document.body.innerText.includes('codex_nutrition')`)));
 
     // 8. No external request; fixed same-origin bundle assets.

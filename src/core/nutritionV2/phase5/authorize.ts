@@ -285,6 +285,14 @@ function buildPersistenceBlock(preview: AdvisoryNutritionPreview, computedAt: st
     if (entry.outcome !== 'calculated') continue;
     if (entry.fdc_id === undefined || entry.resolved_grams === undefined) continue;
     const conversion = conversionBasisFor(entry.mass_source);
+    // ESTABLISHED Phase 5 persisted-review semantics (see §22.2 / §22.12): the
+    // `confirmed` / `resolved: true` / `user_confirmed: true` triple means "this
+    // evidence was part of the explicit reviewed result the user authorized for
+    // Apply" — not "the original match required a manual click". A unique-exact
+    // match, an explicit user confirmation, and a deterministic ANALYZER
+    // selection (`auto_confirmed`) are all resolved evidence once the user
+    // explicitly Applies. The automatic-vs-user distinction is preserved in the
+    // live Phase 3 calculation evidence (`match_status`), never lost.
     ingredients.push({
       line_ref: entry.line_ref,
       source: 'usda_fdc',
@@ -299,10 +307,33 @@ function buildPersistenceBlock(preview: AdvisoryNutritionPreview, computedAt: st
   }
 
   const unresolved: UnresolvedIngredientRef[] = [];
+  const evidenceByRef = new Map(preview.ingredients.map((entry) => [entry.line_ref, entry]));
   for (const entry of preview.unresolved) {
     const reason = mapUnresolvedReason(entry.outcome);
     if (!reason) continue;
-    unresolved.push({ line_ref: entry.line_ref, reason });
+    // FOOD-VS-MASS INDEPENDENCE: when the user explicitly confirmed a USDA food
+    // for a line whose MASS is still unresolved, persist that reviewed food
+    // identity so the selection survives reopen (the line still contributes ZERO
+    // to nutrient totals). Only a user-confirmed choice is persisted; an
+    // automatic candidate is never promoted to reviewed evidence.
+    const evidence = evidenceByRef.get(entry.line_ref);
+    const reviewedFood =
+      evidence !== undefined &&
+      evidence.user_confirmed === true &&
+      evidence.match_status === 'user_confirmed' &&
+      typeof evidence.fdc_id === 'number' &&
+      Number.isSafeInteger(evidence.fdc_id) &&
+      evidence.fdc_id > 0;
+    unresolved.push({
+      line_ref: entry.line_ref,
+      reason,
+      ...(reviewedFood
+        ? {
+            source_food_id: String((evidence as { fdc_id: number }).fdc_id),
+            source_release: preview.bundle_release,
+          }
+        : {}),
+    });
   }
 
   const block: CodexNutritionV1 = {

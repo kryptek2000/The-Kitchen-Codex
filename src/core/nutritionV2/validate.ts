@@ -142,7 +142,7 @@ const EVIDENCE_KEYS = new Set([
   'conversion_basis',
 ]);
 const EVIDENCE_AMOUNT_KEYS = new Set(['value', 'unit']);
-const UNRESOLVED_KEYS = new Set(['line_ref', 'reason']);
+const UNRESOLVED_KEYS = new Set(['line_ref', 'reason', 'source_food_id', 'source_release']);
 const MANUAL_OVERRIDE_KEYS = new Set(['overridden_at', 'note']);
 
 /**
@@ -592,9 +592,43 @@ function validateInertCodexNutritionV1(raw: Record<string, unknown>): AdvancedNu
       if (typeof entry.reason !== 'string' || !UNRESOLVED_REASONS.includes(entry.reason as UnresolvedIngredientRef['reason'])) {
         diag.add('invalid_unresolved_reason');
       }
+      // Optional USER-CONFIRMED food identity for an unresolved-mass row. The two
+      // fields are present together or absent together, and the release must match
+      // the declared `usda_fdc` release. This never contributes a nutrient total.
+      let unresolvedFoodId: string | undefined;
+      let unresolvedRelease: string | undefined;
+      const hasFoodId = hasOwn(entry, 'source_food_id');
+      const hasRelease = hasOwn(entry, 'source_release');
+      if (hasFoodId !== hasRelease) {
+        diag.add('invalid_unresolved_food_evidence');
+      } else if (hasFoodId) {
+        if (
+          typeof entry.source_food_id !== 'string' ||
+          entry.source_food_id.trim().length === 0 ||
+          entry.source_food_id.length > MAX_SOURCE_ID_LENGTH
+        ) {
+          diag.add('invalid_unresolved_source_food_id');
+        } else {
+          unresolvedFoodId = entry.source_food_id;
+        }
+        if (
+          typeof entry.source_release !== 'string' ||
+          entry.source_release.trim().length === 0 ||
+          entry.source_release.length > MAX_SOURCE_RELEASE_LENGTH
+        ) {
+          diag.add('invalid_ingredient_source_release');
+        } else {
+          const declaredUsda = sourceReleases.usda_fdc;
+          if (declaredUsda === undefined) diag.add('ingredient_release_missing');
+          else if (declaredUsda !== entry.source_release) diag.add('ingredient_release_mismatch');
+          else unresolvedRelease = entry.source_release;
+        }
+      }
       unresolved.push({
         line_ref: typeof lineRef === 'string' ? lineRef : '',
         reason: entry.reason as UnresolvedIngredientRef['reason'],
+        ...(unresolvedFoodId !== undefined ? { source_food_id: unresolvedFoodId } : {}),
+        ...(unresolvedRelease !== undefined ? { source_release: unresolvedRelease } : {}),
       });
     }
   }
@@ -647,23 +681,16 @@ function validateInertCodexNutritionV1(raw: Record<string, unknown>): AdvancedNu
   );
   const isManualOnly = sources.length === 1 && sources[0] === 'user_manual';
 
-  // Status coherence.
+  // Status coherence. BLOCK completeness is about INGREDIENT-LINE resolution:
+  // zero unresolved ingredient lines means the whole-recipe result is COMPLETE,
+  // even when a USDA record does not enumerate every nutrient in scope (each
+  // nutrient still reports its own status/coverage independently). This is the
+  // single completion derivation shared by the live preview, Phase 5 Apply, the
+  // persisted block, and both nutrition surfaces.
   const nutrientValues = Object.values(nutrients);
   if (status === 'complete') {
     if (unresolved.length > 0) diag.add('complete_with_unresolved');
     if (nutrientScope.length === 0) diag.add('complete_without_scope');
-    for (const id of nutrientScope) {
-      const result = nutrients[id];
-      if (!result) {
-        diag.add(`complete_missing_scoped_nutrient:${id}`);
-        continue;
-      }
-      if (result.status !== 'complete') diag.add(`complete_with_partial_nutrient:${id}`);
-      if (result.coverage !== 1) diag.add(`complete_scoped_coverage_not_one:${id}`);
-      if (result.covered_ingredient_count !== result.measurable_ingredient_count) {
-        diag.add(`complete_scoped_counts_unequal:${id}`);
-      }
-    }
 
     if (datasetSources.length > 0) {
       // Dataset provenance: every declared dataset source needs matching

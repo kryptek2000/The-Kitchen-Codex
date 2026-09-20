@@ -38,6 +38,20 @@ interface RecipeNutritionCardProps {
   onUpdateNutrition: (nutrition: RecipeNutrition) => Promise<boolean | void> | void;
   servings?: number;
   network: NetworkAdapter;
+  /**
+   * Compact nutrition derived from a recognized saved Advanced block. When
+   * present it is the display authority for this normal card (single authority,
+   * no competing stored dataset). Absent for legacy-only/empty recipes.
+   */
+  derivedNutrition?: RecipeNutrition;
+  /** Provenance label shown when `derivedNutrition` is used. */
+  derivedSourceLabel?: string;
+  /**
+   * Set when a recognized saved Advanced block is INCOMPLETE. The compact card
+   * must then clearly show an incomplete state rather than isolated partial
+   * nutrient values masquerading as whole-recipe totals.
+   */
+  advancedIncomplete?: { resolved: number; total: number };
 }
 
 /** Human-readable provenance label; null when provenance is absent. */
@@ -68,6 +82,9 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
   onUpdateNutrition,
   servings,
   network,
+  derivedNutrition,
+  derivedSourceLabel,
+  advancedIncomplete,
 }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -79,11 +96,17 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
   const currentServings = normalizeServings(servings ?? recipe.servings, recipeBaseServings);
   const currentNutrition = recipe.nutrition;
 
-  // Stored nutrition is the stable recipe-total baseline. The displayed value is
-  // always the deterministic requested-serving result, produced by the SAME
-  // shared display contract used by the top recipe-info Calories summary (via
-  // nutritionForRequestedServings) so the two can never drift apart.
-  const displayedNutrition = nutritionForRequestedServings(currentNutrition, currentServings);
+  // The display authority is the Advanced-derived compact nutrition when a
+  // recognized saved Advanced block exists; otherwise the recipe's own stored
+  // nutrition. Never merged, never topped up from the other source.
+  const effectiveNutrition = derivedNutrition ?? currentNutrition;
+
+  // CURRENT-RECIPE-SCALE BASIS: the displayed values are the canonical saved
+  // entire-recipe totals scaled by `currentServings / savedBaseServings` (the
+  // shared serving contract), so changing the recipe serving control rescales
+  // nutrition exactly like the ingredient quantities. The canonical saved block
+  // is never mutated.
+  const displayedNutrition = nutritionForRequestedServings(effectiveNutrition, currentServings);
 
   // A freshly estimated value from the backend is TOTAL nutrition for the base
   // batch. Scale it deterministically to the currently requested servings for
@@ -99,9 +122,9 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
   const currentConfidenceLabel = nutritionConfidenceLabel(currentNutrition?.confidence);
   const pendingSourceLabel = nutritionSourceLabel(pendingEstimate?.source);
   const pendingConfidenceLabel = nutritionConfidenceLabel(pendingEstimate?.confidence);
-  const provenanceText = [currentSourceLabel, currentConfidenceLabel]
-    .filter(Boolean)
-    .join(' · ');
+  const provenanceText = derivedNutrition
+    ? (derivedSourceLabel ?? 'Advanced Nutrition · USDA reviewed')
+    : [currentSourceLabel, currentConfidenceLabel].filter(Boolean).join(' · ');
 
   // FAIL CLOSED: a pending machine estimate may only be applied when the
   // centralized applicability contract authorizes it. The contract requires an
@@ -203,7 +226,7 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
             <h3 className="text-sm font-serif font-bold text-white flex items-center gap-1.5">
               <span>Nutrition & Macros</span>
               <span className="text-[10px] font-mono text-gray-400 font-normal">
-                (for {currentServings} servings)
+                ({derivedNutrition ? `current recipe: ${currentServings} serving${currentServings === 1 ? '' : 's'}` : `for ${currentServings} servings`})
               </span>
             </h3>
           </div>
@@ -379,7 +402,30 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
       {/* Main Nutrition Visual Display */}
       {isExpanded && (
         <div className="space-y-4">
-          {currentNutrition || (recipe.calories !== undefined && recipe.calories !== null) ? (
+          {advancedIncomplete && (
+            <div
+              data-testid="nutrition-advanced-incomplete"
+              className="p-3 rounded-xl bg-amber-950/25 border border-amber-800/40 space-y-1"
+            >
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-200">
+                  Partial estimate
+                </span>
+                <p className="text-xs font-semibold text-amber-200">Advanced nutrition incomplete</p>
+              </div>
+              <p className="text-[11px] text-amber-200/90">
+                {advancedIncomplete.resolved} of {advancedIncomplete.total} ingredient line
+                {advancedIncomplete.total === 1 ? '' : 's'} resolved.
+              </p>
+              <p className="text-[11px] text-gray-400">
+                Partial estimate — {Math.max(0, advancedIncomplete.total - advancedIncomplete.resolved)}{' '}
+                unresolved ingredient line
+                {Math.max(0, advancedIncomplete.total - advancedIncomplete.resolved) === 1 ? '' : 's'} are
+                excluded from these values. Open Advanced Nutrition to finish review.
+              </p>
+            </div>
+          )}
+          {effectiveNutrition || (recipe.calories !== undefined && recipe.calories !== null) ? (
             <>
               {/* Provenance (subtle; omitted when absent) */}
               {provenanceText && (
@@ -394,7 +440,7 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
                 <div className="p-2.5 rounded-xl bg-[#0E0E0E] border border-white/5">
                   <span className="text-[10px] text-gray-500 uppercase font-mono block">Calories</span>
                   <span className="text-base font-serif font-bold text-white">
-                    {displayedNutrition?.calories ?? recipe.calories ?? '—'}
+                    {displayedNutrition?.calories ?? (derivedNutrition ? undefined : recipe.calories) ?? '—'}
                   </span>
                   <span className="text-[10px] text-gray-500 block">kcal</span>
                 </div>

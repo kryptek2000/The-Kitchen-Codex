@@ -175,7 +175,8 @@ describe('phase 4.5d hamburger — candidate correctness', () => {
     expect(result.outcome).toBe('review_required');
     expect(result.candidates[0].description).toMatch(/^Pickles/);
     for (const description of descriptions(result)) {
-      expect(description).not.toMatch(/ham|cheese|strawberr|peach/i);
+      // `\bham\b` excludes sliced ham while allowing `Pickle relish, hamburger`.
+      expect(description).not.toMatch(/\bham\b|cheese|strawberr|peach/i);
     }
   });
 

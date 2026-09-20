@@ -20,7 +20,7 @@ import type { UsdaDataType } from '../usda/types';
 // ---------------------------------------------------------------------------
 
 export const MATCHING_NORMALIZATION_VERSION = 'usda_match_normalize_v2';
-export const MATCHING_RANKING_VERSION = 'usda_match_rank_v2';
+export const MATCHING_RANKING_VERSION = 'usda_match_rank_v10';
 export const MATCHING_CATALOG_VERSION = 'usda_review_catalog_v2';
 export const MATCHING_CONFIRMATION_VERSION = 'usda_match_confirm_v2';
 
@@ -54,6 +54,14 @@ export const MAX_CATALOG_RECORDS = 20_000;
 export const DEFAULT_RESULT_LIMIT = 10;
 /** Hard maximum number of ranked candidates returned for review. */
 export const MAX_RESULT_LIMIT = 25;
+
+/**
+ * Manual (full-catalog) USDA search bounds. Manual search is a discovery tool
+ * over the entire eligible pinned catalog, so it is bounded separately from the
+ * automatic review candidate limit.
+ */
+export const MANUAL_SEARCH_DEFAULT_LIMIT = 20;
+export const MANUAL_SEARCH_MAX_LIMIT = 100;
 
 /** Exact lowercase hexadecimal SHA-256 format (shared with Phase 1). */
 export const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/;
@@ -233,6 +241,32 @@ export interface RankableEntry {
   readonly record_digest: string;
 }
 
+/**
+ * One FULL-CATALOG manual-search hit. This is DISCOVERY data only: it carries no
+ * automatic authority and may include records the automatic analyzer would never
+ * auto-select. The user decides what to select; the calculation engine
+ * independently re-authenticates any selection made from it.
+ */
+export interface ManualSearchHit {
+  readonly fdc_id: number;
+  readonly data_type: UsdaDataType;
+  readonly description: string;
+  readonly normalized_description: string;
+  readonly record_digest: string;
+  /** Number of query tokens matched (equals `query_token_count` for a hit). */
+  readonly matched_token_count: number;
+  readonly query_token_count: number;
+  readonly exact_description: boolean;
+  readonly exact_fdc_id: boolean;
+}
+
+export interface ManualSearchOutcome {
+  /** Bounded ranked hits (at most the requested limit). */
+  readonly hits: ReadonlyArray<ManualSearchHit>;
+  /** Total number of full-catalog records that matched the query (before the limit). */
+  readonly total: number;
+}
+
 // ---------------------------------------------------------------------------
 // Review outcome
 // ---------------------------------------------------------------------------
@@ -357,6 +391,13 @@ export interface ReviewCatalog {
   size(): number;
   /** Deterministic bounded ranked candidates for one normalized query. */
   search(normalized: NormalizedQuery, limit: number): ReadonlyArray<RankedCandidate>;
+  /**
+   * Deterministic FULL-CATALOG manual search for one normalized query. Unlike
+   * `search`, this does NOT apply the automatic anchor/family/eligibility
+   * authority — it ranks every eligible record for DISCOVERY so a user can find
+   * a food even when automatic matching failed. Results are bounded by `limit`.
+   */
+  manualSearch(normalized: NormalizedQuery, limit: number): ManualSearchOutcome;
   /**
    * Number of catalog records whose normalized description EXACTLY equals the
    * normalized query phrase. Bounded, deterministic metadata used to decide the

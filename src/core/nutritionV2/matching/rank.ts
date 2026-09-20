@@ -24,9 +24,35 @@
  * negation.
  *
  * ORDERING TUPLE (ascending):
- *   [class_rank, missing_identity_tokens, qualifier_conflicts,
- *    -qualifier_agreement, contradiction(0/1), extra_candidate_tokens,
- *    order_disagreement (0 agrees / 1 disagrees), fdc_id]
+ *   [class_rank,
+ *    missing_core_identity_tokens,
+ *    family_mismatch,                // candidate head is a composed product/dish
+ *    prepared_product_forms,         // survey dish built from the food (stick/mush)
+ *    unrequested_cooking_methods,    // cooked/fried/baked not requested (prefer raw)
+ *    qualifier_conflicts,            // candidate variant/form tokens not requested
+ *    qualifier_opposition,           // candidate contradicts a requested qualifier
+ *    -qualifier_agreement,           // requested qualifier/form/numeric present
+ *    missing_qualifier_tokens,       // requested qualifier absent
+ *    missing_form_tokens,            // requested form absent
+ *    unrequested_variety,            // specific variety not requested (blue/roma)
+ *    compound_penalty,               // adjacent unknown compound modifier
+ *    unrequested_material_variants,  // candidate state not requested (dried/canned)
+ *    -generic_marker,                // prefer the plain/unspecified family member
+ *    contradiction(0/1),
+ *    extra_candidate_tokens,
+ *    order_disagreement (0 agrees / 1 disagrees),
+ *    fdc_id]
+ *
+ * v3 (post-Phase-5 smoke-test remediation) adds core-identity coverage, qualifier
+ * opposition, requested qualifier/form coverage, and the bounded compound-food
+ * penalty. `flakes`/`powder`/`and`/`total` can no longer become the required
+ * anchor, and `peanut butter` no longer outranks plain butter.
+ *
+ * v4 adds the bounded prepared-product demotion: a SURVEY (FNDDS) dish built
+ * from a staple (`Cornmeal stick`, `Cornmeal mush`) no longer outranks plain
+ * staple records merely because the staple name appears in the record. A
+ * foundational/SR-Legacy form of the same food (`Butter, stick, unsalted`) is
+ * unaffected.
  */
 
 import {
@@ -39,11 +65,29 @@ import {
   type RankingEvidence,
 } from './types';
 import {
+  alternativeAgreementCount,
   candidateContradicts,
+  compoundPenaltyCount,
+  familyMismatchCount,
+  genericMarkerCount,
+  missingCoreTokenCount,
+  missingFormTokenCount,
+  missingQualifierTokenCount,
+  preparedProductFormCount,
   projectQueryText,
+  qualifierAgreementCount,
   qualifierConflictCount,
+  qualifierOppositionCount,
   queryRequestsNegation,
+  refinementAgreementCount,
+  tokensEquivalent,
   tokensMatch,
+  unrequestedCookingMethodCount,
+  unrequestedFormTokenCount,
+  unrequestedMaterialVariantCount,
+  unrequestedMaterialVarietyCount,
+  unrequestedSubtypeCount,
+  unrequestedVarietyCount,
   type IngredientQueryProjection,
 } from './query';
 
@@ -83,7 +127,7 @@ function isSubsequence(query: ReadonlyArray<string>, candidate: ReadonlyArray<st
 
 function candidateHasToken(candidate: ReadonlyArray<string>, wanted: string): boolean {
   for (const token of candidate) {
-    if (tokensMatch(token, wanted)) return true;
+    if (tokensEquivalent(token, wanted)) return true;
   }
   return false;
 }
@@ -110,8 +154,24 @@ interface Evaluated {
   readonly entry: RankableEntry;
   readonly matchClass: MatchClass;
   readonly evidence: RankingEvidence;
+  readonly missingCoreTokens: number;
+  readonly familyMismatch: number;
+  readonly preparedProduct: number;
+  readonly unrequestedCooking: number;
   readonly qualifierConflicts: number;
+  readonly qualifierOpposition: number;
   readonly qualifierAgreement: number;
+  readonly missingQualifierTokens: number;
+  readonly missingFormTokens: number;
+  readonly unrequestedForms: number;
+  readonly refinementAgreement: number;
+  readonly alternativeAgreement: number;
+  readonly unrequestedVariety: number;
+  readonly materialVariety: number;
+  readonly unrequestedSubtype: number;
+  readonly compoundPenalty: number;
+  readonly unrequestedMaterialVariants: number;
+  readonly genericMarker: number;
   readonly contradiction: boolean;
 }
 
@@ -126,8 +186,24 @@ const NO_MATCH: Evaluated = Object.freeze({
     extra_candidate_token_count: 0,
     order_agreement: false,
   }),
+  missingCoreTokens: 0,
+  familyMismatch: 0,
+  preparedProduct: 0,
+  unrequestedCooking: 0,
   qualifierConflicts: 0,
+  qualifierOpposition: 0,
   qualifierAgreement: 0,
+  missingQualifierTokens: 0,
+  missingFormTokens: 0,
+  unrequestedForms: 0,
+  refinementAgreement: 0,
+  alternativeAgreement: 0,
+  unrequestedVariety: 0,
+  materialVariety: 0,
+  unrequestedSubtype: 0,
+  compoundPenalty: 0,
+  unrequestedMaterialVariants: 0,
+  genericMarker: 0,
   contradiction: false,
 });
 
@@ -172,6 +248,7 @@ function evaluate(
   for (const numeric of projection.numeric_qualifiers) {
     if ((candidateCounts.get(numeric) ?? 0) > 0) qualifierAgreement += 1;
   }
+  qualifierAgreement += qualifierAgreementCount(candidateTokens, projection);
 
   return {
     entry,
@@ -184,8 +261,24 @@ function evaluate(
       extra_candidate_token_count: extra,
       order_agreement: isSubsequence(identityTokens, candidateTokens),
     },
+    missingCoreTokens: missingCoreTokenCount(candidateTokens, projection),
+    familyMismatch: familyMismatchCount(candidateTokens, projection),
+    preparedProduct: preparedProductFormCount(candidateTokens, projection, entry.data_type),
+    unrequestedCooking: unrequestedCookingMethodCount(candidateTokens, projection),
     qualifierConflicts: qualifierConflictCount(candidateTokens, projection),
+    qualifierOpposition: qualifierOppositionCount(candidateTokens, projection),
     qualifierAgreement,
+    missingQualifierTokens: missingQualifierTokenCount(candidateTokens, projection),
+    missingFormTokens: missingFormTokenCount(candidateTokens, projection),
+    unrequestedForms: unrequestedFormTokenCount(candidateTokens, projection),
+    refinementAgreement: refinementAgreementCount(candidateTokens, projection),
+    alternativeAgreement: alternativeAgreementCount(candidateTokens, projection),
+    unrequestedVariety: unrequestedVarietyCount(candidateTokens, projection),
+    materialVariety: unrequestedMaterialVarietyCount(candidateTokens, projection),
+    unrequestedSubtype: unrequestedSubtypeCount(candidateTokens, projection),
+    compoundPenalty: compoundPenaltyCount(candidateTokens, projection),
+    unrequestedMaterialVariants: unrequestedMaterialVariantCount(candidateTokens, projection),
+    genericMarker: genericMarkerCount(candidateTokens),
     contradiction: false,
   };
 }
@@ -201,18 +294,91 @@ export function clampResultLimit(limit: unknown): number {
 function compareEvaluated(a: Evaluated, b: Evaluated): number {
   const classDelta = CLASS_RANK[a.matchClass] - CLASS_RANK[b.matchClass];
   if (classDelta !== 0) return classDelta;
-  const missingDelta =
-    a.evidence.missing_query_token_count - b.evidence.missing_query_token_count;
-  if (missingDelta !== 0) return missingDelta;
+  // CORE FOOD IDENTITY coverage dominates: the plain food beats a candidate
+  // that merely shares the head noun as part of a different compound.
+  const coreDelta = a.missingCoreTokens - b.missingCoreTokens;
+  if (coreDelta !== 0) return coreDelta;
+  // A composed product/dish head is not the requested raw food family.
+  const familyDelta = a.familyMismatch - b.familyMismatch;
+  if (familyDelta !== 0) return familyDelta;
+  // A PREPARED PRODUCT built from the food (`Cornmeal stick`, `Cornmeal mush`)
+  // is not the plain staple family and must not outrank it merely because the
+  // staple name appears in the record. Ranked before variety/material so the
+  // plain (possibly color-qualified) family member wins.
+  const preparedDelta = a.preparedProduct - b.preparedProduct;
+  if (preparedDelta !== 0) return preparedDelta;
+  // An UNREQUESTED cooking/preparation state (`Rice, cooked` for a bare `rice`,
+  // `Egg, whole, fried` for a bare `egg`) is demoted below the raw/plain state,
+  // so the one-click default surfaces the base food. An explicitly requested
+  // method contributes 0 and is unaffected.
+  const cookingDelta = a.unrequestedCooking - b.unrequestedCooking;
+  if (cookingDelta !== 0) return cookingDelta;
   const conflictDelta = a.qualifierConflicts - b.qualifierConflicts;
   if (conflictDelta !== 0) return conflictDelta;
+  // A candidate that contradicts a requested qualifier (`salted` for
+  // `unsalted`) loses to one that does not.
+  const oppositionDelta = a.qualifierOpposition - b.qualifierOpposition;
+  if (oppositionDelta !== 0) return oppositionDelta;
   const agreementDelta = b.qualifierAgreement - a.qualifierAgreement;
   if (agreementDelta !== 0) return agreementDelta;
+  // A requested qualifier/form that is simply absent is demoted after a
+  // contradicted one, so `garlic salt` never silently becomes plain `salt`.
+  const missingQualifierDelta = a.missingQualifierTokens - b.missingQualifierTokens;
+  if (missingQualifierDelta !== 0) return missingQualifierDelta;
+  const missingFormDelta = a.missingFormTokens - b.missingFormTokens;
+  if (missingFormDelta !== 0) return missingFormDelta;
+  // An OPTIONAL refinement the query requested (`sea`/`kosher`/`fine`/`coarse`)
+  // is a PREFERENCE: a real refinement record outranks the generic sibling, but
+  // its absence never blocks the deterministic generic fallback.
+  const refinementDelta = b.refinementAgreement - a.refinementAgreement;
+  if (refinementDelta !== 0) return refinementDelta;
+  // An OR-alternative branch the candidate satisfies (`brioche bun` for
+  // `brioche or potato burger buns`) is preferred over the generic shared-head
+  // fallback, without making the fallback unreachable.
+  const alternativeDelta = b.alternativeAgreement - a.alternativeAgreement;
+  if (alternativeDelta !== 0) return alternativeDelta;
+  // A candidate carrying an UNREQUESTED prepared/dish FORM (`Double hamburger,
+  // ..., 2 patties` for `burger buns`, `Cheese sandwich` for `cheese`) is a
+  // composed product, not the requested component; it is demoted below the plain
+  // component even when it contains the component word.
+  const unrequestedFormDelta = a.unrequestedForms - b.unrequestedForms;
+  if (unrequestedFormDelta !== 0) return unrequestedFormDelta;
+  // A materially altered unrequested variant (`Apple, dried` for `apple`) is
+  // demoted below the ordinary food, but is never excluded from review.
+  const variantDelta = a.unrequestedMaterialVariants - b.unrequestedMaterialVariants;
+  if (variantDelta !== 0) return variantDelta;
+  // A composed/compound candidate (`Rice pilaf` / `Rice milk` for `rice`,
+  // `Bread, NS as to major flour` for `flour`) is demoted below the plain family
+  // member BEFORE variety, so a plain but color-qualified staple (`Rice, white,
+  // long-grain, raw`) outranks a prepared/compound product.
+  const compoundDelta = a.compoundPenalty - b.compoundPenalty;
+  if (compoundDelta !== 0) return compoundDelta;
+  // A specific unrequested variety (`Cheese, blue` for `cheese`) is demoted
+  // below the generic family member.
+  const varietyDelta = a.unrequestedVariety - b.unrequestedVariety;
+  if (varietyDelta !== 0) return varietyDelta;
+  // A named MATERIAL cultivar (`Rice, black`, `Wild rice`, `Beans, Dry, Tan`)
+  // is a different food within the family and is demoted below the ordinary
+  // plain/white/brown family member.
+  const materialVarietyDelta = a.materialVariety - b.materialVariety;
+  if (materialVarietyDelta !== 0) return materialVarietyDelta;
+  // GENERIC / PLAIN PREFERENCE. An unrequested level/type subtype (`Flour, 00`,
+  // `Flour, whole wheat`, `Cream, heavy`, `Milk, dry, whole`) is demoted below
+  // the plain/generic family record BEFORE the presentation-only extra-token and
+  // order dimensions. This is the systemic "generic preference occurs too late"
+  // repair: verbose or awkward USDA wording can never push the genuine
+  // generic/all-purpose/plain candidate behind a specific sibling.
+  const subtypeDelta = a.unrequestedSubtype - b.unrequestedSubtype;
+  if (subtypeDelta !== 0) return subtypeDelta;
   const contradictionDelta = (a.contradiction ? 1 : 0) - (b.contradiction ? 1 : 0);
   if (contradictionDelta !== 0) return contradictionDelta;
   const extraDelta =
     a.evidence.extra_candidate_token_count - b.evidence.extra_candidate_token_count;
   if (extraDelta !== 0) return extraDelta;
+  // The explicit generic/unspecified marker (NFS/NS) is the final semantic
+  // preference, so it can never override a state/variety/subtype preference.
+  const genericDelta = b.genericMarker - a.genericMarker;
+  if (genericDelta !== 0) return genericDelta;
   const orderDelta =
     (a.evidence.order_agreement ? 0 : 1) - (b.evidence.order_agreement ? 0 : 1);
   if (orderDelta !== 0) return orderDelta;

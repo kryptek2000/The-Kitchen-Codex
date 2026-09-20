@@ -152,8 +152,10 @@ describe('phase 2 matching — isolation and purity', () => {
     const names = MATCHING_FILES.map((file) => file.slice(MATCHING_DIR.length + 1)).sort();
     expect(names).toEqual(
       [
+        'confidence.ts',
         'eligibility.ts',
         'index.ts',
+        'manualSearch.ts',
         'normalize.ts',
         'parse.ts',
         'query.ts',

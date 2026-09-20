@@ -27,6 +27,8 @@ export interface CountPortionChoiceParams {
   readonly ingredient: unknown;
   readonly review?: unknown;
   readonly selection?: unknown;
+  /** True when the bound match was an automatic analyzer selection. */
+  readonly automaticSelection?: boolean;
   readonly fdcId: number;
   readonly portionIndex: number;
 }
@@ -52,6 +54,7 @@ export function buildCountPortionChoice(
         ingredient: params.ingredient,
         ...(params.review !== undefined ? { review: params.review } : {}),
         ...(params.selection !== undefined ? { selection: params.selection } : {}),
+        ...(params.automaticSelection === true ? { automatic_selection: true } : {}),
       },
     ],
   });

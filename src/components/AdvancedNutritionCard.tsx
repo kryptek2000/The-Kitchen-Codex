@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { Activity, FlaskConical, Loader2, Lock, RefreshCw, ShieldAlert, ShieldCheck } from 'lucide-react';
 import type { ObsidianRecipe } from '../types';
 import {
@@ -11,22 +11,32 @@ import {
   PHASE4_UNREADABLE_MESSAGE,
   PHASE4_UNSUPPORTED_MESSAGE,
   adaptRecipe,
+  analyzeRecipe,
   basisLabel,
   buildCalculationRequest,
   buildReviewRows,
   coverageSummary,
   deriveDisplayNutrients,
   formatAmount,
+  hydrateWorkingReview,
   phase4Failure,
   phase4Reducer,
   phase4SessionIdentity,
   readStoredBlock,
   type AdvancedNutritionSession,
   type AdaptedIngredient,
+  type CountPortionChoice,
+  type MatchChoice,
+  type Phase4Action,
   type Phase4State,
+  type PortionChoice,
+  type RecipeAnalysis,
+  type UserMassChoice,
 } from '../core/nutritionV2/phase4';
 import { authorizeNutritionPersistence } from '../core/nutritionV2/phase5';
+import type { CodexNutritionV1 } from '../core/nutritionV2/schema';
 import { AdvancedNutritionModal, type AdvancedNutritionApplyUi } from './AdvancedNutritionModal';
+import { AdvancedNutritionSavedReport } from './AdvancedNutritionSavedReport';
 
 export type AdvancedNutritionBundleUiStatus =
   | 'idle'
@@ -68,6 +78,12 @@ interface AdvancedNutritionCardProps {
   onLoadBundle?: () => void;
   /** Explicit Phase 5B Apply handler. Absent when no write path is wired. */
   onApplyAdvancedNutrition?: AdvancedNutritionApplyHandler;
+  /**
+   * The ALREADY-VALIDATED saved Advanced block, supplied by the consolidated
+   * nutrition section. The saved report renders from this alone; no USDA
+   * session is required. Absent for recipes without a recognized saved result.
+   */
+  savedAdvancedBlock?: CodexNutritionV1;
 }
 
 type ApplyUiState =
@@ -85,13 +101,24 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
   bundleStatus,
   onLoadBundle,
   onApplyAdvancedNutrition,
+  savedAdvancedBlock,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const [isSavedReportOpen, setIsSavedReportOpen] = useState(false);
   const [calculating, setCalculating] = useState(false);
   const [applyState, setApplyState] = useState<ApplyUiState>({ kind: 'idle' });
+  const [analysisRuns, setAnalysisRuns] = useState(0);
   const [state, dispatch] = useReducer(phase4Reducer, INITIAL_PHASE4_STATE);
   const pendingOpen = useRef(false);
   const openerRef = useRef<HTMLButtonElement | null>(null);
+  // Hydration/dirty tracking for the working review.
+  const hydratedKeyRef = useRef<string | null>(null);
+  const [workingTouched, setWorkingTouched] = useState(false);
+  const [hydratedFromSaved, setHydratedFromSaved] = useState(false);
+
+  // The saved report renders from this ALREADY-VALIDATED block alone; no USDA
+  // session, catalog authentication, or matcher initialization is required.
+  const savedBlock = savedAdvancedBlock;
 
   // When a user-initiated load succeeds, focus the (now-rendered) opener and
   // open the review UI exactly once, so closing the modal restores focus to it.
@@ -103,7 +130,8 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
     }
   }, [session]);
 
-  const handleOpenRequest = () => {
+  /** Opens the WORKING analyzer/editor, initializing the USDA bundle if needed. */
+  const openWorkingEditor = () => {
     if (session) {
       setIsOpen(true);
       return;
@@ -112,6 +140,19 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
       pendingOpen.current = true;
       onLoadBundle();
     }
+  };
+
+  /**
+   * The single opener contract. A saved Advanced block means the SAVED REPORT
+   * opens immediately (no USDA authentication); only the explicit
+   * Edit / Re-analyze action initializes the working analyzer.
+   */
+  const handleOpenRequest = () => {
+    if (savedBlock) {
+      setIsSavedReportOpen(true);
+      return;
+    }
+    openWorkingEditor();
   };
 
   // Materialize the narrow adaptation envelope ONCE, safely, before any recipe
@@ -130,6 +171,10 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
       return;
     }
     if (adapted.length === 0) return;
+    if (state.recipeKey !== adaptation.recipe.recipe_key) {
+      setWorkingTouched(false);
+      setHydratedFromSaved(false);
+    }
     dispatch({
       type: 'initialize',
       recipeKey: adaptation.recipe.recipe_key,
@@ -138,6 +183,52 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
       baseServings: adaptation.recipe.base_servings,
     });
   }, [session, adaptation, adapted.length, rows]);
+
+  // HYDRATE the working review from the saved result when the recipe is
+  // unchanged. Every choice is rebuilt through the genuine session, so hydrated
+  // evidence is never trusted merely because it was persisted.
+  useEffect(() => {
+    if (!session || !adaptation.ok || !savedBlock) return;
+    if (state.recipeKey !== adaptation.recipe.recipe_key) return;
+    if (state.rows.length === 0) return;
+    const key = `${phase4SessionIdentity(session.metadata())}|${savedBlock.ingredient_digest}`;
+    if (hydratedKeyRef.current === key) return;
+    hydratedKeyRef.current = key;
+    let hydrated: ReturnType<typeof hydrateWorkingReview>;
+    try {
+      hydrated = hydrateWorkingReview({
+        session,
+        adapted,
+        rows: state.rows,
+        savedBlock,
+      });
+    } catch {
+      return;
+    }
+    if (!hydrated) return;
+    dispatch({
+      type: 'hydrate',
+      matches: hydrated.matches,
+      portions: hydrated.portions,
+      countPortions: hydrated.countPortions,
+      userMasses: hydrated.userMasses,
+    });
+    setHydratedFromSaved(true);
+    setWorkingTouched(false);
+  }, [session, adaptation, adapted, savedBlock, state.recipeKey, state.rows]);
+
+  /** Dispatch wrapper that records a genuine user edit as dirty. */
+  const workingDispatch: React.Dispatch<Phase4Action> = useCallback((action: Phase4Action) => {
+    if (
+      action.type !== 'hydrate' &&
+      action.type !== 'initialize' &&
+      action.type !== 'reset' &&
+      action.type !== 'preview_succeeded'
+    ) {
+      setWorkingTouched(true);
+    }
+    dispatch(action);
+  }, []);
 
   const stored = useMemo(() => readStoredBlock(recipe), [recipe]);
   const preview = state.preview;
@@ -149,6 +240,31 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
     [preview, state.basis, state.baseServings, state.selectedServings]
   );
   const coverage = useMemo(() => (preview ? coverageSummary(preview) : null), [preview]);
+
+  // Deterministic live-vs-saved equality using the canonical ingredient digest
+  // (never a formatted-string comparison). When the current live review result
+  // is byte-for-byte the result that is already saved, there is no unsaved
+  // divergence and the "UNSAVED REVIEW — NOT APPLIED" panel must not be shown.
+  const liveMatchesSaved = useMemo(
+    () =>
+      preview !== null &&
+      stored.kind === 'v1' &&
+      typeof stored.ingredientDigest === 'string' &&
+      stored.ingredientDigest === preview.ingredient_digest,
+    [preview, stored.kind, stored.ingredientDigest]
+  );
+
+  // DETERMINISTIC dirty state. A hydrated working review is clean; it becomes an
+  // unsaved working change after a genuine user edit (or when a preview diverges
+  // from the saved ingredient digest). Never a formatted-string comparison.
+  const workingDirty =
+    workingTouched || state.status === 'preview_stale' || (preview !== null && !liveMatchesSaved);
+
+  // After a successful Apply the parent updates the recipe, so the live preview
+  // matches the saved digest: the working review rebases cleanly.
+  useEffect(() => {
+    if (liveMatchesSaved) setWorkingTouched(false);
+  }, [liveMatchesSaved]);
 
   // Phase 5A: report whether the current reviewed result is currently eligible
   // for an explicit Apply. This NEVER writes anything. An opaque/malformed
@@ -218,6 +334,87 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
     }
   };
 
+  // Deterministic automatic analysis. Pure/offline; it never persists and never
+  // mutates the recipe. Recomputed whenever the adaptation or session changes.
+  const analysis = useMemo<RecipeAnalysis | null>(
+    () =>
+      session && adaptation.ok
+        ? analyzeRecipe(session, adapted, adaptation.recipe.base_servings)
+        : null,
+    [session, adaptation, adapted]
+  );
+
+  const handleAnalyze = () => {
+    if (!session || !adaptation.ok) return;
+    // Always execute a fresh analysis on click. Fall back to an on-demand
+    // computation if the memoized analysis is unavailable, so the control can
+    // never become a dead button after a saved-state reopen.
+    const current =
+      analysis ?? analyzeRecipe(session, adapted, adaptation.recipe.base_servings);
+    if (!current) return;
+
+    // REVIEWED-DECISION PRESERVATION. Re-analysis is a gap-filling pass, never a
+    // destructive reset: every explicit user choice (a manual/USDA-search
+    // selection, a hydrated reviewed decision, or a mass the user entered) is
+    // preserved for its line, and the analyzer only supplies the lines the user
+    // has not already decided. Without this, reopening and clicking Re-analyze
+    // discarded a user's manually selected foods and weights, reverting rows to
+    // NEEDS MATCH / NEEDS AMOUNT.
+    const matches: Record<string, MatchChoice> = { ...current.matches };
+    const portions: Record<string, PortionChoice> = { ...current.portions };
+    const countPortions: Record<string, CountPortionChoice> = { ...current.countPortions };
+    const userMasses: Record<string, UserMassChoice> = { ...state.userMasses };
+    for (const row of state.rows) {
+      const choice = state.matches[row.line_ref];
+      if (!choice) continue;
+      const userDecision = choice.kind === 'manual' || choice.automatic !== true;
+      if (!userDecision) continue;
+      matches[row.line_ref] = choice;
+      const userMass = state.userMasses[row.line_ref];
+      const portion = state.portions[row.line_ref];
+      const countPortion = state.countPortions[row.line_ref];
+      if (userMass) {
+        userMasses[row.line_ref] = userMass;
+        delete portions[row.line_ref];
+        delete countPortions[row.line_ref];
+      } else if (portion) {
+        portions[row.line_ref] = portion;
+        delete userMasses[row.line_ref];
+        delete countPortions[row.line_ref];
+      } else if (countPortion) {
+        countPortions[row.line_ref] = countPortion;
+        delete userMasses[row.line_ref];
+        delete portions[row.line_ref];
+      }
+    }
+
+    // Recompute the advisory preview from the MERGED state so the preview the
+    // user sees reflects the preserved reviewed decisions, not just the
+    // analyzer's automatic picks.
+    const mergedState = {
+      ...state,
+      matches,
+      portions,
+      countPortions,
+      userMasses,
+    } as Phase4State;
+    let preview = current.preview;
+    const calculated = session.calculate(buildCalculationRequest(adapted, mergedState));
+    if (calculated.ok) preview = calculated.preview;
+
+    dispatch({
+      type: 'apply_analysis',
+      matches,
+      portions,
+      countPortions,
+      userMasses,
+      preview,
+    });
+    // Visible transition/feedback: the analyzer run is observable even when the
+    // deterministic result is identical to a previous run.
+    setAnalysisRuns((runs) => runs + 1);
+  };
+
   const compact = display
     ? (['calories', 'protein', 'carbohydrates', 'fat'] as const).map((id) => {
         const row = display.find((entry) => entry.nutrient === id);
@@ -249,34 +446,70 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
 
       {!session && !onLoadBundle && (
         <div className="p-3 rounded-xl bg-[#0E0E0E] border border-dashed border-white/10 space-y-2">
-          <p className="text-xs text-gray-300">{PHASE4_UNAVAILABLE_MESSAGE}</p>
+          {savedBlock ? (
+            <p className="text-[11px] text-gray-400" data-testid="advanced-saved-readonly-note">
+              Saved Advanced Nutrition is available to view. Editing requires the USDA review tools,
+              which are unavailable in this build.
+            </p>
+          ) : (
+            <p className="text-xs text-gray-300">{PHASE4_UNAVAILABLE_MESSAGE}</p>
+          )}
           <p className="text-[11px] text-gray-500 flex items-center gap-1.5">
             <Lock className="w-3.5 h-3.5" />
             <span>This is not an error in the recipe.</span>
           </p>
           <button
             type="button"
-            disabled
-            aria-disabled="true"
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-gray-500 bg-white/5 border border-white/10 cursor-not-allowed"
+            data-testid="advanced-nutrition-open"
+            onClick={handleOpenRequest}
+            disabled={!savedBlock}
+            aria-disabled={!savedBlock}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+              savedBlock
+                ? 'text-indigo-200 bg-indigo-500/15 hover:bg-indigo-500/25 border-indigo-500/30'
+                : 'text-gray-500 bg-white/5 border-white/10 cursor-not-allowed'
+            }`}
           >
             <FlaskConical className="w-3.5 h-3.5" />
-            <span>Open Advanced Nutrition</span>
+            <span>{savedBlock ? 'Open Saved Advanced Report' : 'Open Advanced Nutrition'}</span>
           </button>
         </div>
       )}
 
       {!session && onLoadBundle && (
         <div className="p-3 rounded-xl bg-[#0E0E0E] border border-dashed border-white/10 space-y-2">
-          <p className="text-xs text-gray-300" role="status" aria-live="polite">
-            {bundleStatus === 'loading'
-              ? PHASE4_LOADING_MESSAGE
-              : bundleStatus === 'failed'
-                ? PHASE4_BUNDLE_FAILED_MESSAGE
-                : bundleStatus === 'unsupported'
-                  ? PHASE4_UNSUPPORTED_MESSAGE
-                  : PHASE4_IDLE_MESSAGE}
-          </p>
+          {bundleStatus === 'loading' ||
+          bundleStatus === 'failed' ||
+          bundleStatus === 'unsupported' ||
+          stored.kind !== 'v1' ? (
+            <p className="text-xs text-gray-300" role="status" aria-live="polite">
+              {bundleStatus === 'loading'
+                ? PHASE4_LOADING_MESSAGE
+                : bundleStatus === 'failed'
+                  ? PHASE4_BUNDLE_FAILED_MESSAGE
+                  : bundleStatus === 'unsupported'
+                    ? PHASE4_UNSUPPORTED_MESSAGE
+                    : PHASE4_IDLE_MESSAGE}
+            </p>
+          ) : stored.status === 'complete' && stored.unresolvedCount === 0 ? (
+            <div data-testid="advanced-saved-complete" role="status" aria-live="polite" className="space-y-0.5">
+              <p className="text-xs font-semibold text-emerald-300">Advanced Nutrition saved</p>
+              <p className="text-[11px] text-gray-400">
+                USDA reviewed · Complete coverage
+                {stored.servings ? ` · base ${stored.servings} servings` : ''}
+              </p>
+            </div>
+          ) : (
+            <div data-testid="advanced-saved-partial" role="status" aria-live="polite" className="space-y-0.5">
+              <p className="text-xs font-semibold text-amber-300">Advanced Nutrition saved — partial</p>
+              <p className="text-[11px] text-gray-400">
+                {stored.resolvedCount} of {stored.resolvedCount + stored.unresolvedCount} ingredient line
+                {stored.resolvedCount + stored.unresolvedCount === 1 ? '' : 's'} resolved
+                {stored.servings ? ` · base ${stored.servings} servings` : ''}. Open Advanced Nutrition to
+                finish review.
+              </p>
+            </div>
+          )}
           <p className="text-[11px] text-gray-500 flex items-center gap-1.5">
             <Lock className="w-3.5 h-3.5" />
             <span>This is not an error in the recipe.</span>
@@ -303,11 +536,12 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
           ) : bundleStatus === 'unsupported' ? null : (
             <button
               type="button"
+              data-testid="advanced-nutrition-open"
               onClick={handleOpenRequest}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-indigo-200 bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 transition-colors"
             >
               <FlaskConical className="w-3.5 h-3.5" />
-              <span>Open Advanced Nutrition</span>
+              <span>{savedBlock ? 'Open Saved Advanced Report' : 'Open Advanced Nutrition'}</span>
             </button>
           )}
         </div>
@@ -324,11 +558,28 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
         <div className="space-y-3">
           {stored.kind === 'v1' && (
             <div className="p-3 rounded-xl bg-[#0E0E0E] border border-white/5">
-              <p className="text-[10px] font-mono uppercase text-gray-500 mb-1">
-                Saved Advanced Nutrition{stored.servings ? ` · base ${stored.servings} servings` : ''}
-                {stored.status ? ` · ${stored.status}` : ''}
-              </p>
-              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+              {stored.status === 'complete' && stored.unresolvedCount === 0 ? (
+                <div data-testid="advanced-saved-complete" className="space-y-0.5">
+                  <p className="text-[11px] font-semibold text-emerald-300">Advanced Nutrition saved</p>
+                  <p className="text-[10px] text-gray-400">
+                    USDA reviewed · Complete coverage
+                    {stored.servings ? ` · base ${stored.servings} servings` : ''}
+                  </p>
+                </div>
+              ) : (
+                <div data-testid="advanced-saved-partial" className="space-y-0.5">
+                  <p className="text-[11px] font-semibold text-amber-300">
+                    Advanced Nutrition saved — partial
+                  </p>
+                  <p className="text-[10px] text-gray-400">
+                    {stored.resolvedCount} of {stored.resolvedCount + stored.unresolvedCount} ingredient line
+                    {stored.resolvedCount + stored.unresolvedCount === 1 ? '' : 's'} resolved
+                    {stored.servings ? ` · base ${stored.servings} servings` : ''}. Open Advanced Nutrition to
+                    finish review.
+                  </p>
+                </div>
+              )}
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs mt-1.5">
                 {(stored.values ?? []).map((value) => (
                   <span key={value.label} className="text-gray-300">
                     {value.label}: <span className="font-mono text-white">{value.amount}</span> {value.unit}
@@ -349,7 +600,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
             </div>
           )}
 
-          {preview && compact && (
+          {preview && compact && !liveMatchesSaved && (
             <div className="p-3 rounded-xl bg-indigo-950/20 border border-indigo-500/20">
               <p className="text-[10px] font-mono uppercase text-indigo-300 mb-1">
                 Unsaved review — not applied · {basisLabel(state.basis, state.selectedServings)}
@@ -405,11 +656,12 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
             <button
               type="button"
               ref={openerRef}
-              onClick={() => setIsOpen(true)}
+              data-testid="advanced-nutrition-open"
+              onClick={handleOpenRequest}
               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold text-indigo-200 bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 transition-colors"
             >
               <FlaskConical className="w-3.5 h-3.5" />
-              <span>Open Advanced Nutrition</span>
+              <span>{savedBlock ? 'Open Saved Advanced Report' : 'Open Advanced Nutrition'}</span>
             </button>
           </div>
         </div>
@@ -423,10 +675,28 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
           session={session}
           adapted={adapted}
           state={state}
-          dispatch={dispatch}
+          dispatch={workingDispatch}
           onCalculate={handleCalculate}
           calculating={calculating}
+          analysis={analysis}
+          onAnalyze={handleAnalyze}
+          analysisRuns={analysisRuns}
           apply={applyUi}
+          workingDirty={workingDirty}
+          hydratedFromSaved={hydratedFromSaved}
+        />
+      )}
+
+      {savedBlock && (
+        <AdvancedNutritionSavedReport
+          isOpen={isSavedReportOpen}
+          onClose={() => setIsSavedReportOpen(false)}
+          title={adaptation.ok ? adaptation.recipe.title : ''}
+          block={savedBlock}
+          onEdit={() => {
+            setIsSavedReportOpen(false);
+            openWorkingEditor();
+          }}
         />
       )}
     </div>

@@ -181,11 +181,51 @@ export interface AdvancedNutritionSession {
   ): ConfirmationResult;
   /** Explicit advisory calculation (never automatic). */
   calculate(this: AdvancedNutritionSession, request: unknown): CalculationResult;
+  /**
+   * User-directed manual USDA search over the SAME pinned bundle. Deterministic,
+   * local, no network/AI. Returns bounded discovery results only; a selection
+   * made from them is authenticated by the calculation engine.
+   */
+  searchFoods(
+    this: AdvancedNutritionSession,
+    rawQuery: unknown,
+    limit?: unknown
+  ): FoodSearchResultUnion;
 }
 
 export type AdvancedNutritionSessionResult =
   | { ok: true; session: AdvancedNutritionSession }
   | { ok: false; failure: Phase4Failure };
+
+/**
+ * One bounded result of a USER-DIRECTED manual USDA search. This is discovery
+ * only: it never grants authority by itself. A selection built from it is
+ * re-authenticated against the pinned bundle by the calculation engine.
+ */
+export interface FoodSearchResult {
+  readonly fdc_id: number;
+  readonly data_type: string;
+  readonly description: string;
+  readonly record_digest: string;
+  readonly match_class: string;
+  readonly has_portion: boolean;
+  readonly portion_summary: string | undefined;
+  readonly exact_fdc_id: boolean;
+  readonly exact_description: boolean;
+}
+
+export type FoodSearchResultUnion =
+  | {
+      readonly ok: true;
+      readonly query: string;
+      readonly results: ReadonlyArray<FoodSearchResult>;
+      /** Total full-catalog matches before the bounded limit. */
+      readonly total: number;
+      /** True when more matches exist than the returned bounded set. */
+      readonly truncated: boolean;
+      readonly limit: number;
+    }
+  | { readonly ok: false; readonly failure: Phase4Failure };
 
 // ---------------------------------------------------------------------------
 // Recipe adaptation
@@ -259,9 +299,30 @@ export interface Phase4Row {
 }
 
 export interface MatchChoice {
-  readonly kind: 'candidate' | 'none';
+  readonly kind: 'candidate' | 'none' | 'manual';
   readonly fdc_id?: number;
   readonly review_digest: string;
+  /**
+   * True ONLY when the choice was made by the deterministic automatic analyzer
+   * (`analyzeRecipe`), never by an explicit user edit. It is re-validated against
+   * the deterministic confidence contract by the calculation engine, so it can
+   * never forge automatic authority. Absent/false means an explicit user choice.
+   */
+  readonly automatic?: boolean;
+  /**
+   * Present ONLY for a `kind: 'manual'` selection (explicit user-directed manual
+   * USDA search). The record digest and catalog digest bind the chosen record to
+   * the authenticated pinned bundle; the calculation engine verifies them and
+   * fails closed on a forged/stale/wrong-bundle selection.
+   */
+  readonly record_digest?: string;
+  readonly catalog_digest?: string;
+  /**
+   * Display-only human-readable description for a manual selection. Never
+   * authority; the calculation engine resolves the description from the
+   * authenticated record it verifies.
+   */
+  readonly description?: string;
 }
 
 export interface PortionChoice {
@@ -269,6 +330,13 @@ export interface PortionChoice {
   readonly portion_index: number;
   readonly selection: unknown;
   readonly review: unknown;
+  /**
+   * True ONLY when the deterministic analyzer auto-selected this authenticated
+   * portion. Display-only provenance; it carries no authority (the calculator
+   * independently re-verifies the selection). Absent/false means an explicit
+   * user selection.
+   */
+  readonly automatic?: boolean;
 }
 
 /** An explicitly reviewed authenticated count-portion selection (`count_portion`). */
@@ -277,6 +345,8 @@ export interface CountPortionChoice {
   readonly portion_index: number;
   readonly selection: unknown;
   readonly review: unknown;
+  /** True ONLY when the deterministic analyzer auto-selected this count portion. */
+  readonly automatic?: boolean;
 }
 
 /** An explicit user-entered total weight for one ingredient line (`user_mass`). */
@@ -330,6 +400,36 @@ export type Phase4Action =
   | { readonly type: 'clear_user_mass'; readonly lineRef: string }
   | { readonly type: 'set_basis'; readonly basis: BasisMode }
   | { readonly type: 'set_servings'; readonly value: unknown }
+  | {
+      /**
+       * Reconstructs the working review from a saved Advanced result for an
+       * unchanged recipe. Unlike `select_*`, this does not mark the working
+       * review dirty and does not invalidate a preview (there is none yet).
+       */
+      readonly type: 'hydrate';
+      readonly matches: Readonly<Record<string, MatchChoice>>;
+      readonly portions: Readonly<Record<string, PortionChoice>>;
+      readonly countPortions: Readonly<Record<string, CountPortionChoice>>;
+      readonly userMasses: Readonly<Record<string, UserMassChoice>>;
+    }
+  | {
+      /**
+       * Applies the deterministic analyzer result atomically: every automatic
+       * match/portion selection plus the advisory preview it produced. The
+       * preview was computed by the analyzer through the genuine session, so no
+       * separate calculation round-trip is required.
+       */
+      readonly type: 'apply_analysis';
+      readonly matches: Readonly<Record<string, MatchChoice>>;
+      readonly portions: Readonly<Record<string, PortionChoice>>;
+      readonly countPortions: Readonly<Record<string, CountPortionChoice>>;
+      /**
+       * User-entered total weights preserved across a Re-analyze. Absent for a
+       * plain analyzer run (the reducer then clears them).
+       */
+      readonly userMasses?: Readonly<Record<string, UserMassChoice>>;
+      readonly preview: AdvisoryNutritionPreview | undefined;
+    }
   | {
       readonly type: 'preview_succeeded';
       readonly seq: number;

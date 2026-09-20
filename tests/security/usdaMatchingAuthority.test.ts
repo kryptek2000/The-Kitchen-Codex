@@ -104,6 +104,7 @@ describe('phase 2 authority — deep-import authority exploit is rejected', () =
       size: () => catalog.size(),
       search: (q: unknown, l: number) => catalog.search(q as never, l),
       exactPhraseCount: (q: unknown) => catalog.exactPhraseCount(q as never),
+      manualSearch: (q: unknown, l: number) => catalog.manualSearch(q as never, l),
     };
     expect(failureOf(confirmIngredientReview(fake, review, selection))).toBe('invalid_catalog');
 
@@ -138,6 +139,7 @@ describe('phase 2 authority — deep-import authority exploit is rejected', () =
       size: () => catalog.size(),
       search: () => Object.freeze([]),
       exactPhraseCount: () => 0,
+      manualSearch: () => Object.freeze({ hits: Object.freeze([]), total: 0 }),
     };
 
     for (const name of MODULE_NAMES) {
@@ -165,6 +167,7 @@ describe('phase 2 authority — deep-import authority exploit is rejected', () =
       size: () => catalog.size(),
       search: (q: unknown, l: number) => catalog.search(q as never, l),
       exactPhraseCount: (q: unknown) => catalog.exactPhraseCount(q as never),
+      manualSearch: (q: unknown, l: number) => catalog.manualSearch(q as never, l),
     };
     const review = reviewIngredient(fake, { name: 'milk' });
     if (review.outcome !== 'review_required') throw new Error('expected review_required');

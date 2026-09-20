@@ -31,16 +31,16 @@ import { buildMatchingBundle } from '../fixtures/usdaMatchingFixtures';
 describe('phase 4.5d versioning — explicit bumps', () => {
   it('bumps every affected matching/calculation/phase version', () => {
     expect(MATCHING_NORMALIZATION_VERSION).toBe('usda_match_normalize_v2');
-    expect(MATCHING_RANKING_VERSION).toBe('usda_match_rank_v2');
+    expect(MATCHING_RANKING_VERSION).toBe('usda_match_rank_v10');
     expect(MATCHING_CATALOG_VERSION).toBe('usda_review_catalog_v2');
     expect(MATCHING_CONFIRMATION_VERSION).toBe('usda_match_confirm_v2');
-    expect(QUERY_PROJECTION_VERSION).toBe('usda_query_projection_v1');
+    expect(QUERY_PROJECTION_VERSION).toBe('usda_query_projection_v8');
     expect(ELIGIBILITY_POLICY_VERSION).toBe('usda_home_recipe_eligibility_v1');
     expect(CALCULATION_VERSION).toBe('usda_advisory_calc_v4');
     expect(CALCULATION_CONTEXT_VERSION).toBe('usda_calc_context_v3');
     expect(PHASE4_SESSION_VERSION).toBe('usda_phase4_session_v3');
     expect(PHASE4_STATE_VERSION).toBe('usda_phase4_state_v4');
-    expect(COUNT_PORTION_VERSION).toBe('usda_count_portion_v1');
+    expect(COUNT_PORTION_VERSION).toBe('usda_count_portion_v2');
   });
 
   it('leaves the Phase 4.5C portion-semantics version unchanged', () => {

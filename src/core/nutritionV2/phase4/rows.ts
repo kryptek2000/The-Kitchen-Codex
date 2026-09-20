@@ -11,7 +11,11 @@ import { parseIngredient } from '../matching/parse';
 import { projectQueryText } from '../matching/query';
 import { candidatePortionCompatibility } from '../calculation/portionSemantics';
 export { candidatePortionCompatibility };
-import type { MeasurementKind } from '../../../utils/measurements';
+import {
+  convertMassToGrams,
+  type MeasurementKind,
+  type NormalizedUnit,
+} from '../../../utils/measurements';
 import { isQualitativeIngredientText } from '../../../utils/ingredientSemantics';
 import { NUTRIENT_IDS } from '../nutrients';
 import type {
@@ -162,9 +166,94 @@ export function ingredientCountAmount(entry: AdaptedIngredient): number | null {
   return parsed.ok ? parsed.parsed.amount : null;
 }
 
-function selectionFor(choice: MatchChoice): unknown {
+/**
+ * The deterministic parsed measurement of an adapted ingredient, projected
+ * through the canonical Phase 2 parser at the Phase 4 boundary so the UI never
+ * imports the matching module directly. `amount`/`raw_unit` are the recipe's own
+ * quantity/unit; `milliliters`/`grams` are the deterministic canonical values
+ * used to bind an authenticated USDA portion.
+ */
+export interface IngredientMeasurementView {
+  readonly amount: number | null;
+  readonly raw_unit: string | undefined;
+  readonly measurement_kind: MeasurementKind;
+  readonly milliliters: number | undefined;
+  readonly grams: number | undefined;
+}
+
+export function ingredientMeasurement(entry: AdaptedIngredient): IngredientMeasurementView {
+  const parsed = parseIngredient(entry.ingredient);
+  if (!parsed.ok) {
+    return Object.freeze({
+      amount: null,
+      raw_unit: undefined,
+      measurement_kind: 'unknown' as MeasurementKind,
+      milliliters: undefined,
+      grams: undefined,
+    });
+  }
+  const p = parsed.parsed;
+  return Object.freeze({
+    amount: p.amount,
+    raw_unit: p.raw_unit,
+    measurement_kind: p.measurement_kind,
+    milliliters: p.milliliters,
+    grams: p.grams,
+  });
+}
+
+/**
+ * Deterministic total grams for a selected authenticated source portion applied
+ * to the recipe's own quantity/unit. This mirrors the calculator's exact
+ * canonical-volume / mass ratio (no density, no average, no guess) so the UI can
+ * show the resolved mass IMMEDIATELY after a portion is selected, without
+ * waiting for a full preview recalculation. The calculator remains the
+ * authority for the preview.
+ */
+export function derivedSourcePortionGrams(
+  selection: unknown,
+  measurement: IngredientMeasurementView
+): number | undefined {
+  if (typeof selection !== 'object' || selection === null) return undefined;
+  const value = selection as Record<string, unknown>;
+  const kind = value.semantics_kind;
+  const gramWeight = value.semantics_gram_weight;
+  if (typeof gramWeight !== 'number' || !Number.isFinite(gramWeight) || gramWeight <= 0) return undefined;
+  if (kind === 'volume') {
+    const volumeMl = value.semantics_volume_ml;
+    if (typeof volumeMl !== 'number' || !(volumeMl > 0) || measurement.milliliters === undefined) {
+      return undefined;
+    }
+    const grams = (measurement.milliliters / volumeMl) * gramWeight;
+    return Number.isFinite(grams) && grams >= 0 ? grams : undefined;
+  }
+  if (kind === 'mass') {
+    const amount = value.semantics_amount;
+    const unit = value.semantics_unit;
+    if (typeof amount !== 'number' || typeof unit !== 'string' || measurement.grams === undefined) {
+      return undefined;
+    }
+    const massGrams = convertMassToGrams(amount, unit as NormalizedUnit);
+    if (massGrams === undefined || !(massGrams > 0)) return undefined;
+    const grams = (measurement.grams / massGrams) * gramWeight;
+    return Number.isFinite(grams) && grams >= 0 ? grams : undefined;
+  }
+  return undefined;
+}
+
+function selectionFor(choice: MatchChoice, lineRef: string): unknown {
   if (choice.kind === 'candidate') {
     return { kind: 'candidate', fdc_id: choice.fdc_id, review_digest: choice.review_digest };
+  }
+  if (choice.kind === 'manual') {
+    return {
+      kind: 'manual',
+      fdc_id: choice.fdc_id,
+      record_digest: choice.record_digest,
+      catalog_digest: choice.catalog_digest,
+      line_ref: lineRef,
+      review_digest: choice.review_digest,
+    };
   }
   return { kind: 'none', review_digest: choice.review_digest };
 }
@@ -188,11 +277,17 @@ export function buildCalculationRequest(
       const portion = state.portions[entry.line_ref];
       const countPortion = state.countPortions[entry.line_ref];
       const userMass = state.userMasses[entry.line_ref];
-      const confirmed = row !== undefined && row.outcome === 'review_required' && choice !== undefined;
+      // Any explicit user decision is supplied, not only a `review_required` row:
+      // a user can manually select a USDA food for an `unmatched` (or
+      // `matched_exact`) line via the full-catalog manual search, and that
+      // selection must reach the calculation (and therefore persistence) — the
+      // calculator independently re-authenticates it and fails closed if invalid.
+      const confirmed = row !== undefined && choice !== undefined;
       return {
         line_ref: entry.line_ref,
         ingredient: entry.ingredient,
-        ...(confirmed ? { review: row.review, selection: selectionFor(choice) } : {}),
+        ...(confirmed ? { review: row.review, selection: selectionFor(choice, entry.line_ref) } : {}),
+        ...(confirmed && choice?.automatic === true ? { automatic_selection: true } : {}),
         ...(portion ? { portion_selection: portion.selection } : {}),
         ...(countPortion ? { count_portion_selection: countPortion.selection } : {}),
         ...(userMass ? { user_mass_selection: userMass.selection } : {}),

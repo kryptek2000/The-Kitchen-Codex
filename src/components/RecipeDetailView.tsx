@@ -138,11 +138,10 @@ export function RecipeDetailView({
     [recipe]
   );
 
-  // The top recipe-info Calories summary tracks the currently selected serving
-  // count using the SAME deterministic serving-scaled contract as the Nutrition
-  // surface. `resolveNutritionDisplayCalories` is the SINGLE precedence
-  // authority (Advanced total / stored denominator when a recognized block is
-  // preferred, legacy only otherwise); no second calorie fallback is applied here.
+  // The top recipe-info Calories summary tracks the CURRENT recipe serving count
+  // using the SAME deterministic serving-scaled contract as the Nutrition
+  // surface: canonical saved entire-recipe totals × (current / saved base).
+  // `resolveNutritionDisplayCalories` is the SINGLE precedence authority.
   const displayedHeaderCalories: number | string | undefined =
     resolveNutritionDisplayCalories(nutritionPresentation, currentServings);
 
@@ -490,7 +489,9 @@ export function RecipeDetailView({
                 <Utensils className="w-5 h-5" />
               </div>
               <div>
-                <span className="text-[11px] text-gray-500 block font-medium">Calories</span>
+                <span className="text-[11px] text-gray-500 block font-medium">
+                  Calories
+                </span>
                 <span className="text-sm font-bold text-white">
                   {displayedHeaderCalories !== undefined && displayedHeaderCalories !== null && String(displayedHeaderCalories).trim()
                     ? `${displayedHeaderCalories}${String(displayedHeaderCalories).toLowerCase().includes('cal') ? '' : ' kcal'}`

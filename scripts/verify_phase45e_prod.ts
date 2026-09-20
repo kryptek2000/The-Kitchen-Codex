@@ -126,22 +126,52 @@ function setNativeValue(el, value) {
   el.dispatchEvent(new Event('change', { bubbles: true }));
 }`;
 
-function selectCandidateExpression(ingredientLine: string, fdcId: number): string {
-  return `(() => {
-    const li = Array.from(document.querySelectorAll('[aria-label="Ingredient matching review"] li')).find((node) => (node.innerText || '').includes(${JSON.stringify(ingredientLine)}));
-    if (!li) return false;
-    const label = Array.from(li.querySelectorAll('label')).find((node) => (node.innerText || '').includes('FDC ${fdcId}'));
-    if (!label) return false;
-    const input = label.querySelector('input[type="radio"]');
-    if (!input) return false;
-    input.click();
+/**
+ * Post-Phase-5 remediation: detailed candidate/portion tools are compact by
+ * default and live behind each row's Edit control. This opens the row's Edit
+ * expansion, then selects the requested candidate radio.
+ */
+async function selectCandidate(cdp: Cdp, ingredientLine: string, fdcId: number): Promise<boolean> {
+  const opened = await evaluate(cdp, `(() => {
+    const row = Array.from(document.querySelectorAll('[data-testid="advanced-nutrition-row"]')).find((node) => (node.innerText || '').includes(${JSON.stringify(ingredientLine)}));
+    if (!row) return false;
+    const btn = row.querySelector('[data-testid="advanced-nutrition-edit"]');
+    if (!btn) return false;
+    if (btn.getAttribute('aria-expanded') !== 'true') btn.click();
     return true;
-  })()`;
+  })()`);
+  if (opened !== true) return false;
+  await sleep(200);
+  // The candidate list is collapsed behind the explicit Change food control
+  // whenever a food is already resolved (auto-suggested OR user-selected). Each
+  // attempt either expands it (async React render) or selects the target radio.
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const result: string = await evaluate(cdp, `(() => {
+      const row = Array.from(document.querySelectorAll('[data-testid="advanced-nutrition-row"]')).find((node) => (node.innerText || '').includes(${JSON.stringify(ingredientLine)}));
+      if (!row) return 'no-row';
+      const label = Array.from(row.querySelectorAll('label')).find((node) => (node.innerText || '').includes('FDC ${fdcId}'));
+      if (label) {
+        const input = label.querySelector('input[type="radio"]');
+        if (!input) return 'no-input';
+        input.click();
+        return 'ok';
+      }
+      const change = row.querySelector('[data-testid="advanced-nutrition-change-food"]');
+      if (change) {
+        change.click();
+        return 'expanding';
+      }
+      return 'no-label';
+    })()`);
+    if (result === 'ok') return true;
+    await sleep(200);
+  }
+  return false;
 }
 
 function rowTextExpression(ingredientLine: string): string {
   return `(() => {
-    const li = Array.from(document.querySelectorAll('[aria-label="Ingredient matching review"] li')).find((node) => (node.innerText || '').includes(${JSON.stringify(ingredientLine)}));
+    const li = Array.from(document.querySelectorAll('[data-testid="advanced-nutrition-row"]')).find((node) => (node.innerText || '').includes(${JSON.stringify(ingredientLine)}));
     return li ? (li.innerText || '') : '';
   })()`;
 }
@@ -280,7 +310,7 @@ async function main(): Promise<void> {
         `dialog timeout; card=${JSON.stringify(cardText)}; failures=${JSON.stringify(networkFailures.slice(0, 3))}`
       );
     }
-    await waitFor(cdp, `document.querySelectorAll('[aria-label="Ingredient matching review"] li').length >= 11`, 30000);
+    await waitFor(cdp, `document.querySelectorAll('[data-testid="advanced-nutrition-row"]').length >= 11`, 30000);
     record('Advanced Nutrition opened and all eleven ingredient sections rendered', true);
 
     const initialText: string = await evaluate(cdp, `(document.querySelector('[role="dialog"]')?.innerText || '')`);
@@ -296,37 +326,41 @@ async function main(): Promise<void> {
       ['2 medium tomatoes, sliced', 2709719],
       ['4 pickles, sliced', 2710078],
     ];
+    // Only one row's detailed tools are expanded at a time, so each row's text
+    // is captured immediately after its selection.
+    const rowTexts: Record<string, string> = {};
     for (const [line, fdcId] of selections) {
-      const ok = await evaluate(cdp, selectCandidateExpression(line, fdcId));
+      const ok = await selectCandidate(cdp, line, fdcId);
       record(`selected USDA food FDC ${fdcId} for "${line}"`, ok === true);
       await sleep(250);
+      rowTexts[line] = await evaluate(cdp, rowTextExpression(line));
     }
 
-    const baconRow: string = await evaluate(cdp, rowTextExpression('8 slices bacon'));
+    const baconRow = rowTexts['8 slices bacon'] ?? '';
     record(
       'bacon shows the deterministic count derivation (8 slices × 28 g per slice = 224 g)',
       /8 slices × 28 g per slice = 224 g/.test(baconRow),
       baconRow.slice(0, 240)
     );
-    const cheddarRow: string = await evaluate(cdp, rowTextExpression('4 slices cheddar cheese'));
+    const cheddarRow = rowTexts['4 slices cheddar cheese'] ?? '';
     record(
       'cheddar shows the deterministic count derivation (4 slices × 17 g per slice = 68 g)',
       /4 slices × 17 g per slice = 68 g/.test(cheddarRow),
       cheddarRow.slice(0, 240)
     );
-    const bunRow: string = await evaluate(cdp, rowTextExpression('4 burger buns'));
+    const bunRow = rowTexts['4 burger buns'] ?? '';
     record(
       'burger buns show the deterministic count derivation (4 buns × 52 g per bun = 208 g)',
       /4 buns × 52 g per bun = 208 g/.test(bunRow),
       bunRow.slice(0, 240)
     );
-    const tomatoRow: string = await evaluate(cdp, rowTextExpression('2 medium tomatoes, sliced'));
+    const tomatoRow = rowTexts['2 medium tomatoes, sliced'] ?? '';
     record(
       'tomatoes honestly report no compatible authenticated count portion',
       /No compatible authenticated count portion/.test(tomatoRow),
       tomatoRow.slice(0, 240)
     );
-    const pickleRow: string = await evaluate(cdp, rowTextExpression('4 pickles, sliced'));
+    const pickleRow = rowTexts['4 pickles, sliced'] ?? '';
     record(
       'pickles honestly report no compatible authenticated count portion',
       /No compatible authenticated count portion/.test(pickleRow),
@@ -335,7 +369,7 @@ async function main(): Promise<void> {
 
     // 4. Calculate the advisory preview (explicit user action).
     await evaluate(cdp, `(() => {
-      const b = Array.from(document.querySelectorAll('button')).find((x) => (x.textContent||'').includes('Calculate Preview'));
+      const b = Array.from(document.querySelectorAll('button')).find((x) => (x.textContent||'').includes('Calculate Preview') || (x.textContent||'').includes('Recalculate Preview'));
       if (!b) return false;
       b.click();
       return true;

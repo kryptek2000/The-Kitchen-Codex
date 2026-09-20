@@ -243,10 +243,27 @@ describe('phase 5A — valid authorization', () => {
   });
 
   it('authorizes a current partial calculation as a schema-valid partial block', () => {
-    const setup = calculatePreview(SESSION, recipeWith([structured(FLOUR_LINE)]), ['calories', 'protein', 'fat']);
+    // `1 cup sugar` matches a food but has NO authenticated mass -> one
+    // unresolved ingredient line -> the whole result is PARTIAL.
+    const setup = calculatePreview(
+      SESSION,
+      recipeWith([structured(FLOUR_LINE), structured('1 cup sugar')]),
+      ['calories', 'protein', 'fat']
+    );
     expect(setup.preview.status).toBe('partial');
+    expect(setup.preview.unresolved.length).toBeGreaterThan(0);
     const candidate = candidateOf(authorize(setup));
     expect(candidate.block.status).toBe('partial');
+    expect(candidate.block.nutrients.fat).toBeUndefined();
+    expect(validateCodexNutritionV1(candidate.block).ok).toBe(true);
+  });
+
+  it('a fully-resolved calculation is a schema-valid COMPLETE block even when a scoped nutrient is absent', () => {
+    const setup = calculatePreview(SESSION, recipeWith([structured(FLOUR_LINE)]), ['calories', 'protein', 'fat']);
+    expect(setup.preview.unresolved.length).toBe(0);
+    expect(setup.preview.status).toBe('complete');
+    const candidate = candidateOf(authorize(setup));
+    expect(candidate.block.status).toBe('complete');
     expect(candidate.block.nutrients.fat).toBeUndefined();
     expect(validateCodexNutritionV1(candidate.block).ok).toBe(true);
   });

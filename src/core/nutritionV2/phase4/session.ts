@@ -31,11 +31,12 @@ import {
 } from '../calculation/context';
 import { isValidStrictServingCount } from '../calculation/servings';
 import { confirmIngredientReview, createReviewCatalog, reviewIngredient } from '../matching/review';
-import { normalizeQuery } from '../matching/normalize';
+import { normalizeQuery, normalizeQueryChecked } from '../matching/normalize';
 import { parseIngredient } from '../matching/parse';
 import { projectQueryText } from '../matching/query';
+import { clampManualSearchLimit } from '../matching/manualSearch';
 import { deriveCountRequirement, type CountPortionReviewResult } from '../calculation/countPortion';
-import { phase2Failure } from '../matching/types';
+import { phase2Failure, MAX_INGREDIENT_TEXT_LENGTH } from '../matching/types';
 import type { ConfirmationResult, IngredientReviewResult, ReviewCatalog } from '../matching/types';
 import type {
   AdvisoryNutritionPreview,
@@ -54,6 +55,8 @@ import {
   type AdaptedIngredient,
   type AdvancedNutritionSession,
   type AdvancedNutritionSessionResult,
+  type FoodSearchResult,
+  type FoodSearchResultUnion,
   type Phase4Failure,
   type Phase4FailureCode,
   type Phase4SessionMetadata,
@@ -81,6 +84,64 @@ function resolveSessionAuthority(receiver: unknown): SessionAuthority | undefine
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Bounded, deterministic USER-DIRECTED manual USDA search over the ENTIRE
+ * eligible pinned catalog. Unlike automatic matching, this does NOT use
+ * anchors/family/confidence/eligibility authority — it is a local database
+ * discovery tool. A selection built from a result is independently
+ * authenticated by the calculation engine. No network/AI.
+ */
+function searchFoodsInAuthority(
+  authority: SessionAuthority,
+  rawQuery: unknown,
+  rawLimit: unknown
+): FoodSearchResultUnion {
+  if (typeof rawQuery !== 'string') return { ok: false, failure: phase4Failure('invalid_request') };
+  const bounded = rawQuery.length > MAX_INGREDIENT_TEXT_LENGTH
+    ? rawQuery.slice(0, MAX_INGREDIENT_TEXT_LENGTH)
+    : rawQuery;
+  const normalizedResult = normalizeQueryChecked(bounded);
+  if (!normalizedResult.ok) return { ok: false, failure: phase4Failure('invalid_request') };
+  const limit = clampManualSearchLimit(rawLimit);
+  const outcome = authority.catalog.manualSearch(normalizedResult.query, limit);
+  const results: FoodSearchResult[] = [];
+  for (const hit of outcome.hits) {
+    let hasPortion = false;
+    let portionSummary: string | undefined;
+    const portions = reviewFoodPortions(authority.context, hit.fdc_id);
+    if (portions.ok) {
+      const usable = portions.review.candidates.filter((entry) => entry.gram_weight > 0);
+      hasPortion = usable.length > 0;
+      if (usable.length > 0) portionSummary = usable[0].display_label;
+    }
+    results.push(
+      Object.freeze({
+        fdc_id: hit.fdc_id,
+        data_type: hit.data_type,
+        description: hit.description,
+        record_digest: hit.record_digest,
+        match_class: hit.exact_fdc_id
+          ? 'exact_fdc_id'
+          : hit.exact_description
+            ? 'exact_phrase'
+            : 'all_query_tokens_present',
+        has_portion: hasPortion,
+        portion_summary: portionSummary,
+        exact_fdc_id: hit.exact_fdc_id,
+        exact_description: hit.exact_description,
+      })
+    );
+  }
+  return {
+    ok: true,
+    query: normalizedResult.query.text,
+    results: Object.freeze(results),
+    total: outcome.total,
+    truncated: outcome.total > results.length,
+    limit,
+  };
 }
 
 function invalidReviewResult(): IngredientReviewResult {
@@ -204,6 +265,17 @@ export function createAdvancedNutritionSession(
         return { ok: false, failure: invalidCalculationFailure() };
       }
       return calculateRecipeNutrition(authority.context, request);
+    },
+    searchFoods(
+      this: AdvancedNutritionSession,
+      rawQuery: unknown,
+      limit?: unknown
+    ): FoodSearchResultUnion {
+      const authority = resolveSessionAuthority(this);
+      if (!authority) {
+        return { ok: false, failure: phase4Failure('invalid_session') };
+      }
+      return searchFoodsInAuthority(authority, rawQuery, limit);
     },
   } as AdvancedNutritionSession;
 
