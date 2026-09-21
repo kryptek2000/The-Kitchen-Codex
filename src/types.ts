@@ -175,7 +175,22 @@ export interface ShoppingCategoryGroup {
   }[];
 }
 
-export type ThemeId = 'obsidian' | 'parchment' | 'nordic';
+/**
+ * Stable theme identifiers. This array is the single source of truth for which
+ * theme IDs are valid — used by the picker, the CSS `data-theme` boundary, and
+ * persisted-preference hydration. Order is NOT a default; see DEFAULT_THEME_ID.
+ */
+export const THEME_IDS = ['obsidian', 'parchment', 'nordic', 'blood-moon'] as const;
+
+export type ThemeId = (typeof THEME_IDS)[number];
+
+/** The default theme. Blood Moon must never become the default. */
+export const DEFAULT_THEME_ID: ThemeId = 'obsidian';
+
+/** Narrowing guard for persisted/unknown values (e.g. legacy localStorage). */
+export function isThemeId(value: unknown): value is ThemeId {
+  return typeof value === 'string' && (THEME_IDS as readonly string[]).includes(value);
+}
 
 export interface AppThemeConfig {
   id: ThemeId;
@@ -195,6 +210,12 @@ export interface AppThemeConfig {
   };
   highlights: string[];
   vibe: string;
+  /**
+   * Optional short descriptor rendered as smaller secondary copy on the theme
+   * card (e.g. "Developer's Edition"). Purely descriptive branding — it must
+   * never gate features or behavior.
+   */
+  badge?: string;
 }
 
 export type MetadataHealthStatus = 'complete' | 'mostly_complete' | 'incomplete' | 'legacy';

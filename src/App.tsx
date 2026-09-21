@@ -8,6 +8,8 @@ import {
   MealPlanSlot,
   ShoppingCategoryGroup,
   ThemeId,
+  DEFAULT_THEME_ID,
+  isThemeId,
   VaultNote,
   RecipeNutrition,
 } from './types';
@@ -93,7 +95,7 @@ import type {
 import { DataviewTableView } from './components/DataviewTableView';
 import { MealPlannerView } from './components/MealPlannerView';
 import { ShoppingListView } from './components/ShoppingListView';
-import { ThemesView } from './components/ThemesView';
+import { ThemesView, themeBackgroundColor } from './components/ThemesView';
 import { ActiveTimersBar } from './components/ActiveTimersBar';
 import { ConnectVaultModal } from './components/ConnectVaultModal';
 import { RecipeGrabberModal } from './components/RecipeGrabberModal';
@@ -294,7 +296,7 @@ export default function App() {
   const clearVaultError = () => setVaultError(null);
 
   // Theme State (persisted via SettingsAdapter; hydrated on mount)
-  const [theme, setTheme] = useState<ThemeId>('obsidian');
+  const [theme, setTheme] = useState<ThemeId>(DEFAULT_THEME_ID);
 
   // Navigation & View State (persisted via SettingsAdapter; hydrated on mount)
   const [activeTab, setActiveTab] = useState<'grid' | 'dataview' | 'mealplan' | 'shopping' | 'themes' | 'providers'>('grid');
@@ -530,8 +532,8 @@ export default function App() {
           mergeHydratedSetting(
             cur,
             savedTheme,
-            (t) => t === 'obsidian',
-            (t) => t === 'obsidian' || t === 'parchment' || t === 'nordic'
+            (t) => t === DEFAULT_THEME_ID,
+            (t): t is ThemeId => isThemeId(t)
           )
         );
         setActiveTab((cur) =>
@@ -587,6 +589,10 @@ export default function App() {
   // 3. UI Preferences to the SettingsAdapter (localStorage-backed)
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
+    // Keep the browser chrome (theme-color) in sync with the active theme so it
+    // is never stuck on another theme's color. Sourced from the theme config.
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', themeBackgroundColor(theme));
     if (settingsHydrated) {
       settingsAdapter.set('obsidian_vault_theme', theme).catch((err) => warnPersist('theme', err));
     }

@@ -1,6 +1,5 @@
 import React, { useRef } from 'react';
 import {
-  FolderGit2,
   FolderOpen,
   Upload,
   Plus,
@@ -22,6 +21,7 @@ import {
 } from 'lucide-react';
 import { VaultSyncStatus } from '../types';
 import { APP_VERSION } from '../version';
+import { KitchenCodexMark } from './BrandMark';
 
 interface VaultHeaderProps {
   vaultStatus: VaultSyncStatus;
@@ -116,23 +116,23 @@ export function VaultHeader({
       {/* Main Action Bar */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3.5 flex flex-col md:flex-row md:items-center justify-between gap-3">
         {/* App Title & Branding */}
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-amber-500/20 text-amber-500 flex items-center justify-center border border-amber-500/30">
-            <FolderGit2 className="w-5 h-5" />
-          </div>
-          <div>
+        <div className="flex items-center gap-4">
+          <KitchenCodexMark size={74} decorative className="shrink-0" />
+          <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h1 className="text-lg font-serif font-bold text-white tracking-tight">The Kitchen Codex</h1>
-              <span className="text-[10px] uppercase tracking-widest px-1.5 py-0.5 rounded bg-white/5 text-gray-400 border border-white/5 font-medium">
-                Obsidian Culinary Vault
-              </span>
+              <h1 className="text-lg font-serif font-bold text-white tracking-tight leading-tight">The Kitchen Codex</h1>
               <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-medium">
                 {APP_VERSION}
               </span>
             </div>
-            <p className="text-xs text-gray-500">
-              Markdown-native kitchen companion &amp; culinary note system for Obsidian
-            </p>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
+              <span className="text-[10px] uppercase tracking-widest px-1.5 py-0.5 rounded bg-white/5 text-gray-400 border border-white/5 font-medium">
+                Obsidian Culinary Vault
+              </span>
+              <p className="text-xs text-gray-500 leading-tight">
+                Markdown-native kitchen companion &amp; culinary note system for Obsidian
+              </p>
+            </div>
           </div>
         </div>
 

@@ -5,19 +5,11 @@ import {
   Sparkles,
   Sun,
   Moon,
-  Compass,
-  FileText,
-  Clock,
-  Flame,
-  Star,
   Tag,
-  BookOpen,
-  Info,
-  CheckCircle2,
-  Layers,
   Eye,
 } from 'lucide-react';
 import { ThemeId, AppThemeConfig } from '../types';
+import { KitchenCodexBrand, KitchenCodexMark } from './BrandMark';
 
 interface ThemesViewProps {
   currentTheme: ThemeId;
@@ -82,7 +74,36 @@ export const APP_THEMES: AppThemeConfig[] = [
     highlights: ['Botanical Pine & Mint', 'Herb Garden Accents', 'Calm Scandinavian Studio'],
     vibe: 'Minimalist Nordic aesthetics with fresh mint herbs, muted pine tones, and crisp emerald accents.',
   },
+  {
+    id: 'blood-moon',
+    name: 'The Blood Moon',
+    subtitle: 'Oxblood, Ember & Warm Ivory',
+    description:
+      'A near-black soot and graphite canvas lit by deep oxblood, ember crimson, and warm ivory type. A dark, precise, handcrafted field-journal mood for late-night cooking — deliberate and quiet, never gaudy.',
+    mode: 'dark',
+    palette: {
+      bgRoot: '#0B090A',
+      bgSurface: '#131011',
+      bgElevated: '#1A1416',
+      accent: '#B72A3A',
+      accentSecondary: '#C14B3A',
+      textPrimary: '#F2ECE7',
+      textSecondary: '#A79A95',
+      border: 'rgba(242, 236, 231, 0.09)',
+    },
+    highlights: ['Oxblood & Ember Crimson', 'Warm Near-Black Graphite', 'Warm Ivory Type'],
+    vibe: 'A dark, mysterious, precise culinary field journal with restrained blood-moon crimson accents.',
+    badge: "Developer's Edition",
+  },
 ];
+
+/**
+ * Root/background color for a theme, used for the browser `theme-color` chrome.
+ * Derived from the single theme config (never a hard-coded per-theme literal).
+ */
+export function themeBackgroundColor(id: ThemeId): string {
+  return (APP_THEMES.find((t) => t.id === id) ?? APP_THEMES[0]).palette.bgRoot;
+}
 
 export function ThemesView({ currentTheme, onSelectTheme }: ThemesViewProps) {
   const [previewTheme, setPreviewTheme] = useState<ThemeId>(currentTheme);
@@ -94,14 +115,12 @@ export function ThemesView({ currentTheme, onSelectTheme }: ThemesViewProps) {
       {/* Top Banner */}
       <div className="p-5 sm:p-6 rounded-2xl bg-[#141414] border border-white/10 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-xl">
         <div className="flex items-start sm:items-center gap-3.5">
-          <div className="w-11 h-11 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center shrink-0 shadow-sm">
-            <Palette className="w-5 h-5" />
-          </div>
+          <KitchenCodexBrand variant="icon" size="lg" />
           <div>
             <div className="flex items-center gap-2">
               <h2 className="text-lg font-serif font-bold text-white tracking-tight">Themes &amp; Appearance</h2>
               <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-white/5 border border-white/10 text-gray-300">
-                3 Handcrafted Palettes
+                {APP_THEMES.length} Handcrafted Palettes
               </span>
             </div>
             <p className="text-xs text-gray-400 mt-0.5">
@@ -122,8 +141,8 @@ export function ThemesView({ currentTheme, onSelectTheme }: ThemesViewProps) {
         </div>
       </div>
 
-      {/* 3 Themes Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-5">
+      {/* Handcrafted Palettes Grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 sm:gap-5">
         {APP_THEMES.map((theme) => {
           const isActive = currentTheme === theme.id;
           const isInspected = previewTheme === theme.id;
@@ -138,13 +157,13 @@ export function ThemesView({ currentTheme, onSelectTheme }: ThemesViewProps) {
               }}
               className={`rounded-2xl border p-5 flex flex-col justify-between transition-all duration-200 cursor-pointer relative overflow-hidden group ${
                 isActive
-                  ? 'bg-[#181818] border-amber-500/80 shadow-lg ring-1 ring-amber-500/40'
+                  ? 'bg-[#181818] border-[color:var(--accent)] shadow-lg ring-1 ring-[color:var(--accent-subtle)]'
                   : 'bg-[#141414] border-white/10 hover:border-white/20 hover:bg-[#161616]'
               }`}
             >
-              {/* Active Badge */}
+              {/* Active Badge — card-level layer above the preview panel */}
               {isActive && (
-                <div className="absolute top-3 right-3 flex items-center gap-1 bg-amber-500 text-black px-2 py-0.5 rounded-full text-[10px] font-bold shadow-xs">
+                <div className="absolute top-3 right-3 z-10 flex items-center gap-1 bg-amber-500 text-black px-2 py-0.5 rounded-full text-[10px] font-bold shadow-xs">
                   <Check className="w-3 h-3 stroke-[3]" />
                   <span>ACTIVE</span>
                 </div>
@@ -218,11 +237,14 @@ export function ThemesView({ currentTheme, onSelectTheme }: ThemesViewProps) {
 
                 {/* Title & Info */}
                 <div className="space-y-1 mb-3">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-base font-serif font-bold text-white group-hover:text-amber-400 transition-colors">
-                      {theme.name}
-                    </h3>
-                  </div>
+                  <h3 className="text-base font-serif font-bold text-white group-hover:text-amber-400 transition-colors">
+                    {theme.name}
+                  </h3>
+                  {theme.badge ? (
+                    <span className="kc-brand-badge inline-block text-[9px] uppercase tracking-widest px-1.5 py-0.5 rounded border font-medium">
+                      {theme.badge}
+                    </span>
+                  ) : null}
                   <p className="text-xs font-medium text-amber-400/90">{theme.subtitle}</p>
                   <p className="text-xs text-gray-400 leading-relaxed pt-1">{theme.description}</p>
                 </div>
@@ -302,13 +324,13 @@ export function ThemesView({ currentTheme, onSelectTheme }: ThemesViewProps) {
           >
             <div className="flex items-center gap-2.5">
               <div
-                className="w-7 h-7 rounded-lg flex items-center justify-center font-bold text-xs"
+                className="w-7 h-7 rounded-lg flex items-center justify-center"
                 style={{
-                  backgroundColor: activeThemeConfig.palette.accent,
-                  color: activeThemeConfig.mode === 'light' ? '#ffffff' : '#000000',
+                  backgroundColor: activeThemeConfig.palette.bgElevated,
+                  border: `1px solid ${activeThemeConfig.palette.border}`,
                 }}
               >
-                <BookOpen className="w-4 h-4" />
+                <KitchenCodexMark size={18} decorative />
               </div>
               <div>
                 <h4

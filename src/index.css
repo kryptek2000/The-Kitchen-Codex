@@ -30,10 +30,19 @@
   --text-secondary: #9CA3AF;
   --text-muted: #6B7280;
   --accent: #F59E0B;
+  --accent-text: #F59E0B;
   --accent-hover: #D97706;
   --accent-subtle: rgba(245, 158, 11, 0.15);
   --border-subtle: rgba(255, 255, 255, 0.08);
   --border-focus: rgba(245, 158, 11, 0.4);
+}
+
+/* Explicit default-theme hover so amber buttons brighten consistently in every
+   theme (matching the per-theme remaps below). Unlayered, so it wins over the
+   layered Tailwind utility without needing !important here. */
+:root .hover\:bg-amber-500\/20:hover,
+[data-theme="obsidian"] .hover\:bg-amber-500\/20:hover {
+  background-color: rgba(245, 158, 11, 0.20);
 }
 
 /* =========================================================================
@@ -48,6 +57,7 @@
   --text-secondary: #57534E;
   --text-muted: #78716C;
   --accent: #C2410C;
+  --accent-text: #C2410C;
   --accent-hover: #9A3412;
   --accent-subtle: rgba(194, 65, 12, 0.12);
   --border-subtle: rgba(40, 30, 20, 0.12);
@@ -146,6 +156,12 @@
   background-color: rgba(194, 65, 12, 0.10) !important;
 }
 
+/* Hover must visibly brighten: the resting !important remap would otherwise
+   suppress Tailwind's hover background entirely for amber buttons. */
+[data-theme="parchment"] .hover\:bg-amber-500\/20:hover {
+  background-color: rgba(194, 65, 12, 0.20) !important;
+}
+
 [data-theme="parchment"] .border-amber-500\/30,
 [data-theme="parchment"] .border-amber-500\/40 {
   border-color: rgba(194, 65, 12, 0.35) !important;
@@ -163,6 +179,7 @@
   --text-secondary: #A7F3D0;
   --text-muted: #6EE7B7;
   --accent: #10B981;
+  --accent-text: #34D399;
   --accent-hover: #059669;
   --accent-subtle: rgba(16, 185, 129, 0.15);
   --border-subtle: rgba(52, 211, 153, 0.14);
@@ -214,6 +231,12 @@
   background-color: rgba(16, 185, 129, 0.14) !important;
 }
 
+/* Hover must visibly brighten: the resting !important remap would otherwise
+   suppress Tailwind's hover background entirely for amber buttons. */
+[data-theme="nordic"] .hover\:bg-amber-500\/20:hover {
+  background-color: rgba(16, 185, 129, 0.26) !important;
+}
+
 [data-theme="nordic"] .border-amber-500\/30,
 [data-theme="nordic"] .border-amber-500\/40 {
   border-color: rgba(16, 185, 129, 0.35) !important;
@@ -222,6 +245,160 @@
 [data-theme="nordic"] .border-white\/5,
 [data-theme="nordic"] .border-white\/10 {
   border-color: rgba(52, 211, 153, 0.12) !important;
+}
+
+/* =========================================================================
+   THEME 4: The Blood Moon — Developer's Edition
+   (Near-black soot & graphite with deep oxblood / ember crimson accents)
+   ========================================================================= */
+[data-theme="blood-moon"] {
+  --bg-root: #0B090A;
+  --bg-surface: #131011;
+  --bg-elevated: #1A1416;
+  --bg-header: #0E0B0C;
+  --text-primary: #F2ECE7;
+  --text-secondary: #A79A95;
+  --text-muted: #8A7B76;
+  --accent: #B72A3A;
+  /* Brighter ember-leaning crimson for accent TEXT (AA on dark surfaces). */
+  --accent-text: #D9665A;
+  --accent-hover: #9A2432;
+  --accent-subtle: rgba(183, 42, 58, 0.16);
+  --border-subtle: rgba(242, 236, 231, 0.09);
+  --border-focus: rgba(217, 102, 90, 0.5);
+}
+
+[data-theme="blood-moon"] body {
+  background-color: #0B090A;
+  color: #F2ECE7;
+}
+
+[data-theme="blood-moon"] .bg-\[\#0C0C0C\] {
+  background-color: #0B090A !important;
+}
+
+[data-theme="blood-moon"] .bg-\[\#141414\] {
+  background-color: #131011 !important;
+}
+
+[data-theme="blood-moon"] .bg-\[\#181818\] {
+  background-color: #1A1416 !important;
+}
+
+[data-theme="blood-moon"] .bg-\[\#111111\] {
+  background-color: #0E0B0C !important;
+}
+
+[data-theme="blood-moon"] .bg-\[\#0F0F0F\] {
+  background-color: #100D0E !important;
+}
+
+[data-theme="blood-moon"] .bg-\[\#080808\] {
+  background-color: #0E0B0C !important;
+}
+
+[data-theme="blood-moon"] .text-white {
+  color: #F2ECE7 !important;
+}
+
+[data-theme="blood-moon"] .text-gray-200 {
+  color: #E4DAD4 !important;
+}
+
+[data-theme="blood-moon"] .text-gray-300 {
+  color: #CFC2BB !important;
+}
+
+[data-theme="blood-moon"] .text-gray-400 {
+  color: #A79A95 !important;
+}
+
+[data-theme="blood-moon"] .text-gray-500 {
+  color: #8A7B76 !important;
+}
+
+[data-theme="blood-moon"] .text-gray-600 {
+  color: #6E615C !important;
+}
+
+/* Accent text uses the brighter ember crimson for readable contrast. */
+[data-theme="blood-moon"] .text-amber-400,
+[data-theme="blood-moon"] .text-amber-300,
+[data-theme="blood-moon"] .text-amber-500,
+[data-theme="blood-moon"] .text-amber-400\/90 {
+  color: #D9665A !important;
+}
+
+[data-theme="blood-moon"] .bg-amber-500 {
+  background-color: #B72A3A !important;
+  color: #FFFFFF !important;
+}
+
+[data-theme="blood-moon"] .hover\:bg-amber-400:hover {
+  background-color: #9A2432 !important;
+}
+
+[data-theme="blood-moon"] .bg-amber-500\/10,
+[data-theme="blood-moon"] .bg-amber-500\/20 {
+  background-color: rgba(183, 42, 58, 0.16) !important;
+}
+
+/* Hover must visibly brighten: the resting !important remap would otherwise
+   suppress Tailwind's hover background entirely for amber buttons. */
+[data-theme="blood-moon"] .hover\:bg-amber-500\/20:hover {
+  background-color: rgba(183, 42, 58, 0.30) !important;
+}
+
+[data-theme="blood-moon"] .border-amber-500\/30,
+[data-theme="blood-moon"] .border-amber-500\/40 {
+  border-color: rgba(183, 42, 58, 0.45) !important;
+}
+
+/* Cards and panels stay neutral graphite — red is reserved for accent/state. */
+[data-theme="blood-moon"] .border-white\/5 {
+  border-color: rgba(242, 236, 231, 0.06) !important;
+}
+
+[data-theme="blood-moon"] .border-white\/10,
+[data-theme="blood-moon"] .border-white\/20 {
+  border-color: rgba(242, 236, 231, 0.10) !important;
+}
+
+[data-theme="blood-moon"] .bg-white\/5 {
+  background-color: rgba(242, 236, 231, 0.05) !important;
+}
+
+[data-theme="blood-moon"] .bg-white\/10 {
+  background-color: rgba(242, 236, 231, 0.09) !important;
+}
+
+[data-theme="blood-moon"] .hover\:bg-white\/5:hover {
+  background-color: rgba(242, 236, 231, 0.07) !important;
+}
+
+[data-theme="blood-moon"] .hover\:bg-white\/10:hover {
+  background-color: rgba(242, 236, 231, 0.12) !important;
+}
+
+/* =========================================================================
+   BRAND MARK — theme-aware source of truth (see src/components/BrandMark.tsx)
+   Body follows the theme foreground; steam follows the theme accent.
+   ========================================================================= */
+.kc-brand-mark__body {
+  color: var(--text-primary, #F3F4F6);
+}
+
+.kc-brand-mark__accent {
+  color: var(--accent-text, var(--accent, #F59E0B));
+}
+
+.kc-brand-wordmark {
+  color: var(--text-primary, #F3F4F6);
+}
+
+.kc-brand-badge {
+  color: var(--accent-text, var(--accent, #F59E0B));
+  border-color: var(--border-subtle, rgba(255, 255, 255, 0.1));
 }
 
 /* Custom theme scrollbars */
