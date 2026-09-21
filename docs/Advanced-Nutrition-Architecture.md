@@ -4133,9 +4133,23 @@ is hidden; the legacy `/api/estimate-nutrition` route is retained dormant for
 compatibility but is no longer a competing nutrition system.
 
 The deterministic analyzer ALWAYS runs first (via the explicit Generate click).
-AI assistance is offered ONLY for the rows the deterministic pass left unresolved
-(`NEEDS MATCH`); a fully resolved recipe never contacts AI at all. Watching a
-saved recipe never calls AI.
+AI assistance is a SECONDARY, explicit action offered for ANY actionable
+exception row: `NEEDS MATCH`, `REVIEW SUGGESTED`, or `NEEDS AMOUNT`. A fully
+resolved recipe never contacts AI at all, and the user never has to understand
+the internal exception taxonomy to know whether AI can help. Watching a saved
+recipe never calls AI.
+
+#### 34.1a Single live status authority
+
+The ingredient list, the analysis summary, and AI eligibility all derive from
+the ONE pure live-row projection (`phase4/liveRow.ts`):
+`projectLiveRows` -> `summarizeLiveRows` -> `actionableExceptionRows`. The
+summary is never computed from the analyzer snapshot, from a memoized automatic
+suggestion, or from a separately maintained mutable counter, so the rendered
+rows and the counts can never disagree. `actionableExceptionRows` returns exactly
+the current `needs_match` + `review_suggested` + `needs_amount` rows (in state
+order) and is the only eligibility source for both the bulk and row-level AI
+actions.
 
 ### 34.2 Server contract (`POST /api/nutrition/resolve-ingredients`)
 
@@ -4144,28 +4158,49 @@ saved recipe never calls AI.
 - Uses the existing provider abstraction (`runWithAiFallback` +
   `resolveRoleCandidates("nutrition")`) with `structuredOutput`, temperature 0.
 - Request: bounded rows `{ line_ref, ingredient_text, normalized_text?, amount?,
-  unit?, qualifiers?, reason? }` (max 25 rows, 300-char text). A CLOSED request
-  shape: any unknown field (including attempted FDC/nutrient/mass fields) rejects
-  the whole request. Only unresolved rows are sent.
+  unit?, qualifiers?, reason?, issue_kind? }` (max 25 rows, 300-char text). The
+  optional `issue_kind` is a CLOSED, TRUSTED application enum (`needs_match` |
+  `review_suggested` | `needs_amount`) supplied from the live row projection — the
+  model is never asked to infer internal application state from prose. A CLOSED
+  request shape: any unknown field (including attempted FDC/nutrient/mass fields)
+  rejects the whole request. Only currently actionable exception rows are sent.
 - Response (advisory only): `{ version, suggestions: [{ line_ref,
-  interpreted_food_name, suggested_usda_queries[], notes?, confidence? }] }`.
-  `src/core/nutritionV2/aiResolution.ts` strictly sanitizes the model output:
-  exact allowed keys, bounded strings/arrays, known line_refs, no duplicates. Any
-  forbidden/unknown field (FDC id, nutrient amount, mass, portion, digest, Apply
-  token) rejects the WHOLE response. The client re-sanitizes (defense in depth).
+  interpreted_food_name, suggested_usda_queries[], notes?, confidence?,
+  normalized_food_query?, preparation_hint?, quantity_value?,
+  quantity_unit_hint?, count_descriptor_hint?, portion_search_hint?,
+  explanation? }] }`. `src/core/nutritionV2/aiResolution.ts` strictly sanitizes the
+  model output: exact allowed keys, bounded strings/arrays/quantity (max 1e6),
+  known line_refs, no duplicates. Any forbidden/unknown field (FDC id,
+  `source_food_id`, nutrient amount, `grams`/`mass_g`, portion index/gram weight,
+  record/catalog digest, `source_release`, Apply token) rejects the WHOLE
+  response. The client re-sanitizes (defense in depth).
+- The advisory amount fields are LANGUAGE interpretations, not authority:
+  `quantity_value` must be consistent with the recipe's own parsed count (a
+  material disagreement leaves the row unresolved), and the count/portion hints
+  are restricted to the closed canonical count vocabulary. There is deliberately
+  no field that can carry a gram weight.
 - Prompt-injection resistance: the system prompt declares ingredient text as
   untrusted DATA; the strict output shape is enforced server-side regardless.
 
 ### 34.3 USDA verification chain
 
-AI suggestion -> `phase4/aiResolve.ts` ->
+Food identity: AI suggestion -> `phase4/aiResolve.ts` ->
 `session.reviewIngredient({ name: query })` (the genuine pinned catalog) ->
 `selectAutomaticMatch` / `selectBestEffortMatch` (the SAME deterministic
 confidence contract as the one-click analyzer) -> an ordinary `kind: 'manual'`
 selection bound to the ORIGINAL row's review digest + the authenticated record
 digest. AI grants no authority: if the deterministic matcher does not accept a
-candidate, the row stays for user review / manual full-catalog search. The
-AI-assisted manual choice is display-marked `aiAssisted` and carries NO mass.
+candidate, the row stays for user review / manual full-catalog search.
+
+Amount/count identity: AI count-identity hint -> `phase4/aiAmountResolve.ts` ->
+`session.reviewCountPortions(ingredient, fdcId, hint)` (the genuine authenticated
+USDA portions) -> only when every compatible candidate yields the SAME resolved
+mass for the recipe's OWN parsed count is a `CountPortionChoice` built and
+offered; the Phase 3 calculator independently re-derives the mass from the
+authenticated portion (`count_requirement_hint` rides alongside the digest-bound
+selection). The AI never supplies the gram weight, and the hint may only FILL a
+missing unit/size — it can never override an explicit recipe identity or supply
+the amount.
 
 ### 34.3a Provenance: AI-assisted deterministic != user-confirmed
 
@@ -4173,39 +4208,55 @@ Three provenances are kept distinct:
 
 - **automatic deterministic** — the original analyzer independently accepted the
   record (`match_status: unique_exact` / `auto_confirmed`; `user_confirmed: false`);
-- **AI-assisted deterministic** — AI supplied an advisory search phrase, but the
-  EXISTING deterministic matcher independently accepted the genuine pinned-USDA
-  record (`match_status: auto_confirmed`; `user_confirmed: FALSE`). The working
-  match carries `aiAssisted` (display badge "AI-assisted USDA match") and
-  `aiAccepted` (automatic authority, never reviewed authority). Re-analyze does
-  NOT preserve it as a reviewed decision;
-- **explicit user choice** — a manual full-catalog selection or "Use this match"
-  on an offered (below-threshold) AI candidate (`match_status: user_confirmed`;
-  `user_confirmed: true`). Only this creates human-reviewed food authority, and
-  only this is preserved by Re-analyze.
+- **AI-assisted deterministic** — AI supplied an advisory search phrase or count
+  identity, but the EXISTING deterministic matcher/portion contract independently
+  authenticated the genuine pinned-USDA record (`match_status: auto_confirmed`;
+  `user_confirmed: FALSE`). The working match carries `aiAssisted` (display badge
+  "AI-assisted USDA match") and `aiAccepted`; an AI-assisted count resolution
+  carries `aiAssisted` plus `countRequirementHint` on the working
+  `CountPortionChoice`. Re-analyze does NOT preserve them as reviewed decisions;
+- **explicit user choice** — a manual full-catalog selection, "Use this match" on
+  an offered (below-threshold) AI candidate, or an explicitly chosen AI-offered
+  authenticated count portion (`match_status: user_confirmed`;
+  `user_confirmed: true`). Only this creates human-reviewed authority, and only
+  this is preserved by Re-analyze.
 
 AI assistance never elevates an automatic match into human-reviewed authority.
-The provenance marker (`aiAssisted`/`aiAccepted`, and the request-level
-`ai_assisted` selection marker) is working-state/display only: it is NEVER
-persisted into `codex_nutrition` (no schema change), never part of Apply
-authorization, and the existing Apply-level evidence semantics are unchanged. A
-saved block may carry an ordinary automatic authority status
-(`auto_confirmed`-derived resolved evidence) for a food AI helped discover; that
-is normal automatic evidence, not human review, and is intentionally not
-memorialized as AI provenance. The calculator
-independently re-authenticates the record, catalog, line, and review bindings, so
-a forged `aiAssisted`/`aiAccepted` marker grants no authority.
+The provenance markers (`aiAssisted`/`aiAccepted`, `countRequirementHint`, and the
+request-level `ai_assisted` selection marker) are working-state/display only:
+they are NEVER persisted into `codex_nutrition` (no schema change), never part of
+Apply authorization, and the existing Apply-level evidence semantics are
+unchanged. `countRequirementHint` is a bounded working-state input to the
+calculator (closed count vocabulary, no amount/gram field); it is not persisted
+and a forged/unknown value fails the calculation closed. A saved block may carry
+an ordinary automatic authority status for a food/portion AI helped discover;
+that is normal automatic evidence, not human review. The calculator independently
+re-authenticates the record, catalog, line, review, and portion bindings, so a
+forged AI marker grants no authority.
 
-### 34.4 Session, failure, and cost discipline
+### 34.4 Session, failure, cost, and lifecycle discipline
 
-- One batched request for the unresolved rows; no per-ingredient request storm.
-- A monotonic request sequence ignores a stale AI response after a newer request
-  (stale-response protection); results are never applied to a newer review state.
+- One batched request for the actionable exception rows; no per-ingredient
+  request storm. Row-level "Ask AI for help" reuses the same bounded request path.
+- STALE-RESPONSE BINDING is not merely sequence-based. Every AI request captures
+  and re-checks: the monotonic request `seq`, the monotonic AI lifecycle
+  `generation` (bumped on any recipe-identity or session-authority change), the
+  current `recipeKey`, the current `sessionIdentity`, and whether the analyzer is
+  still open. A response is discarded BEFORE any state mutation when any binding
+  changed; Re-analyze and recipe/session switches also clear all transient AI
+  working state (messages, suggestions, amount offers).
+- A synchronous re-entry guard ensures a rapid bulk or row-level double-click
+  creates exactly ONE request (the server rate limiter is only a backstop).
 - AI unavailable / provider error / timeout / malformed response: a bounded
   message is shown and the deterministic USDA + manual full-catalog search
   workflow continues untouched. No fake nutrition is generated, no data is lost.
-- AI mass estimation is NOT part of this phase. A confirmed food without a
-  resolved mass remains `NEEDS AMOUNT` (the food-vs-mass persistence contract is
-  unchanged).
+- AI mass estimation is NOT part of this phase. The AI never supplies a gram
+  weight; when the authenticated USDA portions are absent or materially differ
+  (e.g. small/medium/large), the row remains NEEDS AMOUNT / REVIEW SUGGESTED and
+  the authenticated candidates are shown to the user as an explicit choice.
+  Accuracy beats completion theater.
+- When an AI-assisted deterministic resolution changes live rows, the card
+  recomputes the advisory preview in the SAME step and dispatches it through the
+  ordinary reducer path; nothing is written to the vault.
 - No schema change: AI assistance is working-state discovery only and is never
   persisted into `codex_nutrition` or used in Apply authorization.

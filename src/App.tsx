@@ -844,7 +844,19 @@ export default function App() {
     session,
     rows,
     adapted,
-  }) => resolveUnresolvedRowsWithAi({ network: networkAdapter, session, rows, adapted });
+    issueKinds,
+    liveRows,
+    state,
+  }) =>
+    resolveUnresolvedRowsWithAi({
+      network: networkAdapter,
+      session,
+      rows,
+      adapted,
+      issueKinds,
+      liveRows,
+      state,
+    });
 
   // Save or Create a Vault Note (e.g. ingredient or technique created from wikilink modal)
   const handleSaveNoteToVault = async (note: VaultNote) => {

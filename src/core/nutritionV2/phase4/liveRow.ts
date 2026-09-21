@@ -32,6 +32,7 @@ import {
   type IngredientMeasurementView,
 } from './rows';
 import type { AnalyzedRow } from './analyzer';
+import type { AiResolutionIssueKind } from '../aiResolution';
 import type {
   AdvancedNutritionSession,
   AdaptedIngredient,
@@ -394,3 +395,98 @@ export const LIVE_ROW_STATUS_LABEL: Readonly<Record<LiveRowStatus, string>> = Ob
   matched: 'Matched',
   qualitative: 'Qualitative',
 });
+
+/**
+ * The actionable exception kinds an AI exception-resolution pass may help with.
+ * This is the SAME bounded vocabulary the resolver receives as trusted issue
+ * state, so the user never needs to understand the internal taxonomy.
+ */
+export type LiveRowExceptionKind = AiResolutionIssueKind;
+
+/** Maps a live row status to its actionable exception kind, or undefined. */
+export function liveExceptionKind(status: LiveRowStatus): LiveRowExceptionKind | undefined {
+  switch (status) {
+    case 'needs_match':
+      return 'needs_match';
+    case 'review_suggested':
+      return 'review_suggested';
+    case 'needs_amount':
+      return 'needs_amount';
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * The ONE deterministic status summary of the CURRENT live rows. The ingredient
+ * list and every summary/count surface derive from this single projection, so a
+ * separately maintained mutable counter can never disagree with the rendered
+ * rows.
+ */
+export interface LiveRowStatusSummary {
+  readonly total: number;
+  readonly matched: number;
+  readonly review_suggested: number;
+  readonly needs_amount: number;
+  readonly needs_match: number;
+  readonly qualitative: number;
+  /** needs_match + review_suggested + needs_amount. */
+  readonly actionable: number;
+}
+
+export function summarizeLiveRows(
+  rows: ReadonlyArray<LiveRowState>
+): LiveRowStatusSummary {
+  let matched = 0;
+  let reviewSuggested = 0;
+  let needsAmount = 0;
+  let needsMatch = 0;
+  let qualitative = 0;
+  for (const row of rows) {
+    switch (row.status) {
+      case 'matched':
+        matched += 1;
+        break;
+      case 'review_suggested':
+        reviewSuggested += 1;
+        break;
+      case 'needs_amount':
+        needsAmount += 1;
+        break;
+      case 'needs_match':
+        needsMatch += 1;
+        break;
+      case 'qualitative':
+        qualitative += 1;
+        break;
+      default:
+        break;
+    }
+  }
+  return Object.freeze({
+    total: rows.length,
+    matched,
+    review_suggested: reviewSuggested,
+    needs_amount: needsAmount,
+    needs_match: needsMatch,
+    qualitative,
+    actionable: needsMatch + reviewSuggested + needsAmount,
+  });
+}
+
+/**
+ * The actionable exception rows (in `state.rows` order) derived from the SAME
+ * live projection that renders the ingredient list. MATCHED and QUALITATIVE rows
+ * are never included, so the AI resolver receives only the genuine remaining
+ * work.
+ */
+export function actionableExceptionRows(
+  rows: ReadonlyArray<Phase4Row>,
+  liveRows: ReadonlyArray<LiveRowState>
+): ReadonlyArray<Phase4Row> {
+  const actionableRefs = new Set<string>();
+  for (const live of liveRows) {
+    if (liveExceptionKind(live.status) !== undefined) actionableRefs.add(live.line_ref);
+  }
+  return Object.freeze(rows.filter((row) => actionableRefs.has(row.line_ref)));
+}

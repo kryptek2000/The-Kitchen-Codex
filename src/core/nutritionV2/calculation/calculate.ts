@@ -32,7 +32,9 @@ import {
   resolveCountPortionMassGrams,
   resolveDeterministicCountPortionGrams,
   sanitizeCountPortionSelection,
+  sanitizeCountRequirementHint,
   type CountPortionMassResolution,
+  type CountRequirementHint,
 } from './countPortion';
 import { contributionFor, isWithinCanonicalBound, roundCanonicalTotal, stableSum } from './numeric';
 import { isValidStrictServingCount } from './servings';
@@ -67,6 +69,7 @@ const INGREDIENT_INPUT_KEYS = new Set([
   'automatic_selection',
   'portion_selection',
   'count_portion_selection',
+  'count_requirement_hint',
   'user_mass_selection',
 ]);
 const PORTION_SELECTION_KEYS = new Set([
@@ -149,6 +152,12 @@ interface PreparedIngredient {
   readonly automaticSelection: unknown;
   readonly portionSelection: unknown;
   readonly countPortionSelection: unknown;
+  /**
+   * Bounded advisory count-identity hint (closed vocabulary). It may only fill a
+   * MISSING unit/size of the recipe's own parsed count requirement; the amount
+   * always comes from the parsed ingredient.
+   */
+  readonly countRequirementHint: CountRequirementHint | undefined;
   readonly userMassSelection: unknown;
 }
 
@@ -702,7 +711,8 @@ function evaluateIngredient(
         parsed.amount,
         parsed.raw_unit,
         projection.food_tokens,
-        projection.size_qualifiers
+        projection.size_qualifiers,
+        prepared.countRequirementHint
       );
       if (requirement) {
         let resolution: CountPortionMassResolution | undefined;
@@ -835,6 +845,11 @@ export function runAdvisoryCalculation(inputs: AdvisoryCalculationInputs): Calcu
       }
       if (seenRefs.has(lineRef)) return fail('duplicate_line_ref');
       seenRefs.add(lineRef);
+      // The bounded count-identity hint is validated here (defense in depth): a
+      // malformed/forged hint fails the WHOLE calculation closed rather than
+      // being silently ignored. It never supplies the count amount.
+      const hintResult = sanitizeCountRequirementHint(raw.count_requirement_hint);
+      if (!hintResult.ok) return fail('invalid_portion_selection');
       prepared.push({
         lineRef,
         ingredient: raw.ingredient,
@@ -843,6 +858,7 @@ export function runAdvisoryCalculation(inputs: AdvisoryCalculationInputs): Calcu
         automaticSelection: raw.automatic_selection,
         portionSelection: raw.portion_selection,
         countPortionSelection: raw.count_portion_selection,
+        countRequirementHint: hintResult.hint,
         userMassSelection: raw.user_mass_selection,
       });
     }

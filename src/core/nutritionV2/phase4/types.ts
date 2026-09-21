@@ -167,11 +167,17 @@ export interface AdvancedNutritionSession {
   reviewIngredient(this: AdvancedNutritionSession, raw: unknown): IngredientReviewResult;
   /** Bounded Phase 3 portion candidates for one matched food. */
   reviewPortions(this: AdvancedNutritionSession, fdcId: unknown): PortionReviewResult;
-  /** Bounded Phase 4.5E authenticated count-portion candidates for one matched food. */
+  /**
+   * Bounded Phase 4.5E authenticated count-portion candidates for one matched
+   * food. The optional `requirementHint` (closed count vocabulary) may only FILL
+   * a missing unit/size of the recipe's own parsed count requirement; it never
+   * supplies the amount.
+   */
   reviewCountPortions(
     this: AdvancedNutritionSession,
     ingredient: unknown,
-    fdcId: unknown
+    fdcId: unknown,
+    requirementHint?: unknown
   ): CountPortionReviewResult;
   /** User-intent confirmation/rejection against the genuine current catalog. */
   confirmMatch(
@@ -363,6 +369,20 @@ export interface CountPortionChoice {
   readonly review: unknown;
   /** True ONLY when the deterministic analyzer auto-selected this count portion. */
   readonly automatic?: boolean;
+  /**
+   * Display-only marker: the count IDENTITY (e.g. `clove`) was interpreted with
+   * AI assistance, but the mass comes exclusively from the authenticated USDA
+   * portion the deterministic calculator independently re-verifies. It carries
+   * NO extra authority, is never persisted, and does NOT make the choice
+   * user-confirmed.
+   */
+  readonly aiAssisted?: boolean;
+  /**
+   * Bounded advisory count-identity hint that accompanied this selection (closed
+   * count vocabulary). It is working-state input to the calculator so the
+   * candidate-set digest can be re-derived; it never contains an amount/mass.
+   */
+  readonly countRequirementHint?: { readonly unit: string | null; readonly size: string | null };
 }
 
 /** An explicit user-entered total weight for one ingredient line (`user_mass`). */

@@ -21,9 +21,11 @@ import {
   ingredientEvidenceViews,
   ingredientMeasurement,
   ingredientMeasurementKind,
+  liveExceptionKind,
   LIVE_ROW_STATUS_LABEL,
   massSourceLabel,
   projectLiveRows,
+  summarizeLiveRows,
   type AdvancedNutritionSession,
   type AdaptedIngredient,
   type AnalyzedRow,
@@ -66,18 +68,38 @@ export interface AdvancedNutritionAiSuggestion {
 }
 
 /**
- * Optional AI-assisted USDA resolution UI (advisory only). The AI suggests search
- * phrases; the deterministic local catalog + confidence contract select the
- * record. Absent when the shell does not wire the resolver.
+ * One AI-interpreted, LOCALLY AUTHENTICATED count portion that remains the
+ * user's explicit choice (materially different weights are never auto-chosen).
+ * `hint` is a bounded count-identity hint (closed vocabulary), never a mass.
+ */
+export interface AdvancedNutritionAiAmountOffer {
+  readonly line_ref: string;
+  readonly fdc_id: number;
+  readonly portion_index: number;
+  readonly display_label: string;
+  readonly resolved_grams: number;
+  readonly hint: { readonly unit: string | null; readonly size: string | null };
+}
+
+/**
+ * Optional AI-assisted exception-resolution UI (advisory only). The AI suggests
+ * food search phrases and bounded amount/count interpretations; the deterministic
+ * local catalog, confidence contract, and authenticated USDA portions decide
+ * every resolution. Available for ANY actionable exception (needs match, review
+ * suggested, needs amount), not merely needs match. Absent when the shell does
+ * not wire the resolver.
  */
 export interface AdvancedNutritionAiUi {
   readonly available: boolean;
   readonly running: boolean;
   readonly message: string | null;
   readonly suggestions: Readonly<Record<string, AdvancedNutritionAiSuggestion>>;
-  readonly unresolvedCount: number;
+  readonly amountOffers: Readonly<Record<string, ReadonlyArray<AdvancedNutritionAiAmountOffer>>>;
+  /** Actionable rows (needs_match + review_suggested + needs_amount). */
+  readonly exceptionCount: number;
   readonly onResolve: (lineRef?: string) => void;
   readonly onUseSuggestion: (lineRef: string) => void;
+  readonly onUseAmountOffer: (lineRef: string, portionIndex: number) => void;
   readonly onDismissMessage: () => void;
 }
 
@@ -824,6 +846,9 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
     for (const live of liveRows) map.set(live.line_ref, live);
     return map;
   }, [liveRows]);
+  // The SINGLE live-status authority: the summary below and every row badge
+  // derive from this exact projection, so they can never disagree.
+  const liveSummary = useMemo(() => summarizeLiveRows(liveRows), [liveRows]);
 
   if (!isOpen) return null;
 
@@ -892,10 +917,12 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
             </p>
           </div>
 
-          {/* AI-ASSISTED USDA RESOLUTION (advisory only; optional). AI suggests
-              search phrases; the pinned USDA catalog + deterministic matcher
-              still decide every match. */}
-          {ai && (ai.unresolvedCount > 0 || ai.message !== null) && (
+          {/* AI-ASSISTED EXCEPTION RESOLUTION (advisory only; optional and
+              SECONDARY). AI suggests food search phrases and bounded amount/count
+              interpretations; the pinned USDA catalog, the deterministic matcher,
+              and authenticated USDA portions decide every resolution. Available
+              for ANY actionable exception, not merely NEEDS MATCH. */}
+          {ai && (ai.exceptionCount > 0 || ai.message !== null) && (
             <div
               data-testid="advanced-nutrition-ai"
               className="p-3 rounded-xl bg-[#0E0E0E] border border-white/10 space-y-2"
@@ -903,22 +930,23 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="min-w-0">
                   <p className="text-[11px] font-semibold text-gray-200">
-                    Resolve unresolved ingredients with AI
+                    ✨ Resolve remaining with AI
                   </p>
                   <p className="text-[10px] text-gray-500">
-                    AI suggests USDA search phrases only. The pinned USDA catalog and the
-                    deterministic matcher decide every match.
+                    AI interprets food wording and count/portion language only. The pinned USDA
+                    catalog, the deterministic matcher, and authenticated USDA portions decide every
+                    resolution. Nothing is saved.
                   </p>
                 </div>
                 <button
                   type="button"
                   data-testid="advanced-nutrition-ai-resolve"
-                  disabled={!ai.available || ai.running || ai.unresolvedCount === 0}
-                  aria-disabled={!ai.available || ai.running || ai.unresolvedCount === 0}
+                  disabled={!ai.available || ai.running || ai.exceptionCount === 0}
+                  aria-disabled={!ai.available || ai.running || ai.exceptionCount === 0}
                   onClick={() => ai.onResolve()}
                   className="shrink-0 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-400/30 text-indigo-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                  {ai.running ? 'Resolving with AI…' : 'Resolve with AI'}
+                  {ai.running ? 'Resolving remaining ingredients…' : 'Resolve remaining with AI'}
                 </button>
               </div>
               {!ai.available && (
@@ -1033,9 +1061,12 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                 className="text-[10px] font-mono uppercase text-gray-400"
               >
                 {analysisRuns > 0 ? `Analysis applied · run ${analysisRuns} · ` : ''}
-                {analysis.summary.matched} matched · {analysis.summary.matched_check} review suggested ·{' '}
-                {analysis.summary.needs_amount} need amount · {analysis.summary.needs_match} need match ·{' '}
-                {analysis.summary.qualitative} qualitative
+                {/* LIVE STATUS SUMMARY: exact counts of the CURRENT rendered rows. */}
+                <span data-testid="advanced-nutrition-live-summary">
+                  {liveSummary.matched} matched · {liveSummary.review_suggested} review suggested ·{' '}
+                  {liveSummary.needs_amount} need amount · {liveSummary.needs_match} need match ·{' '}
+                  {liveSummary.qualitative} qualitative
+                </span>
               </p>
             )}
 
@@ -1084,6 +1115,16 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                               >
                                 {' '}
                                 · {choice?.aiAccepted === true ? 'AI-assisted USDA match' : 'AI-assisted'}
+                              </span>
+                            )}
+                            {state.countPortions[row.line_ref]?.aiAssisted === true && (
+                              <span
+                                data-testid="advanced-nutrition-ai-amount-badge"
+                                className="text-indigo-300"
+                                title="The count identity was AI-interpreted; the mass comes from one authenticated USDA count portion that the deterministic calculator re-verified."
+                              >
+                                {' '}
+                                · AI-assisted USDA count portion
                               </span>
                             )}
                           </p>
@@ -1243,7 +1284,7 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                           </p>
                         )}
 
-                        {ai && (row.outcome === 'unmatched' || row.outcome === 'invalid') && (
+                        {ai && liveExceptionKind(status) !== undefined && (
                           <div className="space-y-1" data-testid="advanced-nutrition-ai-row">
                             <button
                               type="button"
@@ -1274,6 +1315,30 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                                 >
                                   Use this match
                                 </button>
+                              </div>
+                            )}
+                            {ai.amountOffers[row.line_ref] && ai.amountOffers[row.line_ref].length > 0 && (
+                              <div
+                                data-testid="advanced-nutrition-ai-amount-offers"
+                                className="p-2 rounded-lg bg-indigo-950/20 border border-indigo-500/25 space-y-1"
+                              >
+                                <p className="text-[11px] text-gray-200">
+                                  AI interpreted “{row.original_text || row.query}”; choose an
+                                  authenticated USDA portion:
+                                </p>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {ai.amountOffers[row.line_ref].map((offer) => (
+                                    <button
+                                      key={offer.portion_index}
+                                      type="button"
+                                      data-testid="advanced-nutrition-ai-amount-use"
+                                      onClick={() => ai.onUseAmountOffer(row.line_ref, offer.portion_index)}
+                                      className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-400/30 text-emerald-100 transition-colors"
+                                    >
+                                      Use {offer.display_label} → {Math.round(offer.resolved_grams * 10) / 10} g
+                                    </button>
+                                  ))}
+                                </div>
                               </div>
                             )}
                           </div>

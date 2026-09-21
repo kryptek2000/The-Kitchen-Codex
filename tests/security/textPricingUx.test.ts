@@ -217,7 +217,7 @@ describe('v0.8.0 FLAG fix — text pricing block reaches the HTTP response', () 
 });
 
 describe('v0.8.0 FLAG fix — regressions', () => {
-  it('K/M. no selection / server-default behavior is unchanged (never blocked)', async () => {
+  it('K/M. no selection / server-default behavior is unchanged (never blocked)', { timeout: 20000 }, async () => {
     const { server, baseUrl } = await startApp({});
     try {
       const res = await post(

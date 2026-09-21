@@ -23,3 +23,5 @@ export * from './analyzer';
 export * from './liveRow';
 export * from './hydrate';
 export * from './aiResolve';
+export * from './aiAmountResolve';
+export type { AiResolutionIssueKind } from '../aiResolution';

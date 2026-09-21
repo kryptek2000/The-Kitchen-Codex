@@ -32,6 +32,32 @@ export const MAX_AI_RESOLUTION_QUERIES = 4;
 export const MAX_AI_RESOLUTION_QUERY_LENGTH = 120;
 export const MAX_AI_RESOLUTION_NOTE_LENGTH = 300;
 export const MAX_AI_RESOLUTION_NAME_LENGTH = 120;
+export const MAX_AI_RESOLUTION_HINT_LENGTH = 60;
+export const MAX_AI_RESOLUTION_PORTION_HINT_LENGTH = 120;
+export const MAX_AI_RESOLUTION_QUANTITY = 1_000_000;
+
+/**
+ * Bounded, trusted issue classification supplied by the APPLICATION (never
+ * inferred by the model from prose). It tells the resolver WHY a row was sent so
+ * the model can focus its interpretation:
+ *   - needs_match:        no confident food identity at all
+ *   - review_suggested:   a credible food candidate needs confirmation
+ *   - needs_amount:       food identity resolved; amount/count/portion unknown
+ */
+export type AiResolutionIssueKind = 'needs_match' | 'review_suggested' | 'needs_amount';
+
+export const AI_RESOLUTION_ISSUE_KINDS: ReadonlyArray<AiResolutionIssueKind> = Object.freeze([
+  'needs_match',
+  'review_suggested',
+  'needs_amount',
+]);
+
+function isAiResolutionIssueKind(value: unknown): value is AiResolutionIssueKind {
+  return (
+    typeof value === 'string' &&
+    (AI_RESOLUTION_ISSUE_KINDS as ReadonlyArray<string>).includes(value)
+  );
+}
 
 /** One bounded unresolved-ingredient row sent to the resolver. */
 export interface AiResolutionRequestRow {
@@ -42,17 +68,39 @@ export interface AiResolutionRequestRow {
   readonly unit?: string;
   readonly qualifiers?: ReadonlyArray<string>;
   readonly reason?: string;
+  /** Trusted application state; never inferred by the model. */
+  readonly issue_kind?: AiResolutionIssueKind;
 }
 
 export type AiResolutionConfidence = 'high' | 'medium' | 'low';
 
-/** One validated advisory suggestion. Carries NO authority. */
+/**
+ * One validated advisory suggestion. Carries NO authority: the food fields are
+ * interpretation/search wording only; the amount fields are bounded
+ * interpretations of the recipe's OWN quantity/count language. There is
+ * deliberately NO field for a gram weight, FDC id, nutrient, portion index,
+ * digest, or Apply token.
+ */
 export interface AiResolutionSuggestion {
   readonly line_ref: string;
   readonly interpreted_food_name: string;
   readonly suggested_usda_queries: ReadonlyArray<string>;
   readonly notes?: string;
   readonly confidence?: AiResolutionConfidence;
+  /** Optional normalized food search wording (no FDC identity). */
+  readonly normalized_food_query?: string;
+  /** Optional preparation interpretation (e.g. `minced`). */
+  readonly preparation_hint?: string;
+  /** Optional echo/interpretation of the recipe's own count value. */
+  readonly quantity_value?: number;
+  /** Optional count unit wording (e.g. `cloves`); never a gram value. */
+  readonly quantity_unit_hint?: string;
+  /** Optional count descriptor (e.g. `clove`, `slice`). */
+  readonly count_descriptor_hint?: string;
+  /** Optional authenticated-USDA portion search wording (e.g. `clove`). */
+  readonly portion_search_hint?: string;
+  /** Optional bounded short explanation. */
+  readonly explanation?: string;
 }
 
 export type AiResolutionFailureCode =
@@ -79,6 +127,13 @@ const SUGGESTION_KEYS = new Set([
   'suggested_usda_queries',
   'notes',
   'confidence',
+  'normalized_food_query',
+  'preparation_hint',
+  'quantity_value',
+  'quantity_unit_hint',
+  'count_descriptor_hint',
+  'portion_search_hint',
+  'explanation',
 ]);
 const ENVELOPE_KEYS = new Set(['version', 'suggestions']);
 const CONFIDENCE_VALUES: ReadonlyArray<AiResolutionConfidence> = ['high', 'medium', 'low'];
@@ -88,6 +143,24 @@ function boundedString(value: unknown, max: number): string | undefined {
   const trimmed = value.trim();
   if (trimmed.length === 0 || trimmed.length > max) return undefined;
   return trimmed;
+}
+
+/**
+ * Bounded positive quantity interpretation. It NEVER participates in mass
+ * authority (the calculator derives mass only from the recipe's own parsed
+ * quantity plus an authenticated USDA portion).
+ */
+function boundedQuantity(value: unknown): number | undefined {
+  if (
+    typeof value !== 'number' ||
+    !Number.isFinite(value) ||
+    value <= 0 ||
+    Object.is(value, -0) ||
+    value > MAX_AI_RESOLUTION_QUANTITY
+  ) {
+    return undefined;
+  }
+  return value;
 }
 
 /**
@@ -174,6 +247,24 @@ export function sanitizeAiResolutionResponse(
       confidence = entry.confidence as AiResolutionConfidence;
     }
 
+    const normalizedFoodQuery = optionalField(entry, 'normalized_food_query', MAX_AI_RESOLUTION_NAME_LENGTH);
+    if (normalizedFoodQuery.malformed) return { ok: false, code: 'invalid_response' };
+    const preparationHint = optionalField(entry, 'preparation_hint', MAX_AI_RESOLUTION_HINT_LENGTH);
+    if (preparationHint.malformed) return { ok: false, code: 'invalid_response' };
+    const quantityUnitHint = optionalField(entry, 'quantity_unit_hint', MAX_AI_RESOLUTION_HINT_LENGTH);
+    if (quantityUnitHint.malformed) return { ok: false, code: 'invalid_response' };
+    const countDescriptorHint = optionalField(entry, 'count_descriptor_hint', MAX_AI_RESOLUTION_HINT_LENGTH);
+    if (countDescriptorHint.malformed) return { ok: false, code: 'invalid_response' };
+    const portionSearchHint = optionalField(entry, 'portion_search_hint', MAX_AI_RESOLUTION_PORTION_HINT_LENGTH);
+    if (portionSearchHint.malformed) return { ok: false, code: 'invalid_response' };
+    const explanation = optionalField(entry, 'explanation', MAX_AI_RESOLUTION_NOTE_LENGTH);
+    if (explanation.malformed) return { ok: false, code: 'invalid_response' };
+    let quantityValue: number | undefined;
+    if (entry.quantity_value !== undefined && entry.quantity_value !== null) {
+      quantityValue = boundedQuantity(entry.quantity_value);
+      if (quantityValue === undefined) return { ok: false, code: 'invalid_response' };
+    }
+
     out.push(
       Object.freeze({
         line_ref: lineRef,
@@ -181,11 +272,34 @@ export function sanitizeAiResolutionResponse(
         suggested_usda_queries: Object.freeze(queries),
         ...(notes !== undefined ? { notes } : {}),
         ...(confidence !== undefined ? { confidence } : {}),
+        ...(normalizedFoodQuery.value !== undefined ? { normalized_food_query: normalizedFoodQuery.value } : {}),
+        ...(preparationHint.value !== undefined ? { preparation_hint: preparationHint.value } : {}),
+        ...(quantityValue !== undefined ? { quantity_value: quantityValue } : {}),
+        ...(quantityUnitHint.value !== undefined ? { quantity_unit_hint: quantityUnitHint.value } : {}),
+        ...(countDescriptorHint.value !== undefined ? { count_descriptor_hint: countDescriptorHint.value } : {}),
+        ...(portionSearchHint.value !== undefined ? { portion_search_hint: portionSearchHint.value } : {}),
+        ...(explanation.value !== undefined ? { explanation: explanation.value } : {}),
       })
     );
   }
 
   return { ok: true, suggestions: Object.freeze(out) };
+}
+
+/**
+ * Optional bounded string field. Absent/null -> `{ ok: true, value: undefined }`;
+ * a present malformed value (wrong type, empty, or oversized) -> `malformed`.
+ */
+function optionalField(
+  entry: Record<string, unknown>,
+  key: string,
+  max: number
+): { readonly malformed: boolean; readonly value?: string } {
+  const raw = entry[key];
+  if (raw === undefined || raw === null) return { malformed: false };
+  const bounded = boundedString(raw, max);
+  if (bounded === undefined) return { malformed: true };
+  return { malformed: false, value: bounded };
 }
 
 /**
@@ -213,6 +327,13 @@ export function buildAiResolutionSchema(): {
             suggested_usda_queries: { type: 'array', items: { type: 'string' } },
             notes: { type: 'string' },
             confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+            normalized_food_query: { type: 'string' },
+            preparation_hint: { type: 'string' },
+            quantity_value: { type: 'number' },
+            quantity_unit_hint: { type: 'string' },
+            count_descriptor_hint: { type: 'string' },
+            portion_search_hint: { type: 'string' },
+            explanation: { type: 'string' },
           },
           required: ['line_ref', 'interpreted_food_name', 'suggested_usda_queries'],
         },
@@ -236,6 +357,7 @@ export function buildAiResolutionRequestRows(
     readonly unit?: string;
     readonly qualifiers?: ReadonlyArray<string>;
     readonly reason?: string;
+    readonly issue_kind?: AiResolutionIssueKind;
   }>
 ): ReadonlyArray<AiResolutionRequestRow> {
   const bounded: AiResolutionRequestRow[] = [];
@@ -273,6 +395,9 @@ export function buildAiResolutionRequestRows(
         ...(unit !== undefined ? { unit } : {}),
         ...(qualifiers !== undefined && qualifiers.length > 0 ? { qualifiers: Object.freeze(qualifiers) } : {}),
         ...(reason !== undefined ? { reason } : {}),
+        // Trusted application state only; an unrecognized value is omitted
+        // (the server independently re-validates the closed enum).
+        ...(isAiResolutionIssueKind(row.issue_kind) ? { issue_kind: row.issue_kind } : {}),
       })
     );
   }

@@ -60,6 +60,14 @@ function recipe(): ObsidianRecipe {
   } as ObsidianRecipe;
 }
 
+const EMPTY_AMOUNTS = {
+  resolved: [],
+  offers: [],
+  unresolved: [],
+  inconsistent: [],
+  auto_count: 0,
+};
+
 function fakeHandler(auto: boolean) {
   return vi.fn(async ({ rows }: { rows: ReadonlyArray<{ line_ref: string; review_digest?: string }> }) => ({
     ok: true,
@@ -87,6 +95,7 @@ function fakeHandler(auto: boolean) {
       unresolved: [],
       auto_count: auto ? 1 : 0,
     },
+    amounts: EMPTY_AMOUNTS,
   }));
 }
 
@@ -115,9 +124,16 @@ describe('AI-assisted resolution UI', () => {
 
     fireEvent.click(screen.getByTestId('advanced-nutrition-ai-resolve'));
     await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    // A food-only suggestion does NOT resolve the row: the live needs_amount
+    // state is unchanged, so the truthful count is ZERO automatic resolutions.
     await waitFor(() => {
       expect(screen.getByTestId('advanced-nutrition-ai-message').textContent).toMatch(
-        /0 selected, 1 suggested/i
+        /No additional ingredients could be resolved automatically/i
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('advanced-nutrition-ai-message').textContent).toMatch(
+        /1 still needs review/i
       );
     });
 
@@ -140,14 +156,18 @@ describe('AI-assisted resolution UI', () => {
     expect(screen.queryByTestId('advanced-nutrition-ai-suggestion')).toBeNull();
   });
 
-  it('auto-applies a deterministic candidate and reports the selection count', async () => {
+  it('auto-applies a deterministic food candidate WITHOUT claiming an amount resolution', async () => {
     const handler = fakeHandler(true);
     render(<AdvancedNutritionCard recipe={recipe()} session={session} onResolveWithAi={handler} />);
     fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
     await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
     fireEvent.click(screen.getByTestId('advanced-nutrition-ai-resolve'));
+    // The food identity is accepted, but the row is still NEEDS AMOUNT: truth
+    // comes from the post-operation live row, never from the accepted candidate.
     await waitFor(() => {
-      expect(screen.getByTestId('advanced-nutrition-ai-message').textContent).toMatch(/1 selected/i);
+      expect(screen.getByTestId('advanced-nutrition-ai-message').textContent).toMatch(
+        /No additional ingredients could be resolved automatically/i
+      );
     });
     const row = document.querySelector('[data-testid="advanced-nutrition-row"]') as HTMLElement;
     expect(row.textContent).toMatch(/Mystery, raw/);
@@ -184,6 +204,7 @@ describe('AI-assisted resolution UI', () => {
       ok: false,
       message: 'AI assistance is unavailable. You can continue with USDA search manually.',
       outcome: { candidates: [], unresolved: [], auto_count: 0 },
+      amounts: EMPTY_AMOUNTS,
     }));
     render(<AdvancedNutritionCard recipe={recipe()} session={session} onResolveWithAi={handler} />);
     fireEvent.click(screen.getByTestId('advanced-nutrition-open'));

@@ -216,23 +216,72 @@ async function main(): Promise<void> {
     let aiMode: 'suggest' | 'unavailable' = 'suggest';
     let aiRequestCount = 0;
     let holdMode = false;
-    let held: { requestId: string; lineRef: string } | null = null;
+    let held: { requestId: string; lines: ReadonlyArray<ResolveLine> } | null = null;
 
-    const fulfillSuggestion = async (requestId: string, lineRef: string) => {
+    interface ResolveLine {
+      readonly line_ref?: string;
+      readonly ingredient_text?: string;
+      readonly amount?: number;
+      readonly issue_kind?: string;
+    }
+
+    const suggestionFor = (line: ResolveLine): Record<string, unknown> => {
+      const text = String(line.ingredient_text ?? '').toLowerCase();
+      const base = { line_ref: line.line_ref };
+      if (/garlic/.test(text)) {
+        return {
+          ...base,
+          interpreted_food_name: 'Garlic, raw',
+          suggested_usda_queries: ['garlic raw'],
+          quantity_value: line.amount,
+          quantity_unit_hint: 'cloves',
+          count_descriptor_hint: 'clove',
+          portion_search_hint: 'clove',
+          explanation: 'Three cloves, minced.',
+        };
+      }
+      if (/onion/.test(text)) {
+        return {
+          ...base,
+          interpreted_food_name: 'Onions, yellow, raw',
+          suggested_usda_queries: ['onions yellow raw'],
+          quantity_value: line.amount,
+          quantity_unit_hint: 'onion',
+          count_descriptor_hint: 'onion',
+          portion_search_hint: 'onion',
+        };
+      }
+      if (/zucchini/.test(text)) {
+        return {
+          ...base,
+          interpreted_food_name: 'Zucchini',
+          suggested_usda_queries: ['zucchini raw'],
+        };
+      }
+      if (/vegetable broth/.test(text)) {
+        return {
+          ...base,
+          interpreted_food_name: 'Vegetable broth',
+          suggested_usda_queries: ['vegetable broth', 'vegetable stock'],
+        };
+      }
+      return {
+        ...base,
+        interpreted_food_name: 'Broccoli, raw',
+        suggested_usda_queries: ['broccoli raw'],
+        notes: 'The recipe wording refers to raw broccoli.',
+        confidence: 'high',
+      };
+    };
+
+    const fulfillSuggestion = async (
+      requestId: string,
+      lines: ReadonlyArray<ResolveLine>
+    ) => {
       const payload = {
         ok: true,
         version: 'nutrition_ai_resolution_v1',
-        suggestions: lineRef
-          ? [
-              {
-                line_ref: lineRef,
-                interpreted_food_name: 'Broccoli, raw',
-                suggested_usda_queries: ['broccoli raw'],
-                notes: 'The recipe wording refers to raw broccoli.',
-                confidence: 'high',
-              },
-            ]
-          : [],
+        suggestions: lines.map((line) => suggestionFor(line)),
       };
       await cdp!.send('Fetch.fulfillRequest', {
         requestId,
@@ -248,15 +297,15 @@ async function main(): Promise<void> {
     cdp.on('Fetch.requestPaused', (params: any) => {
       void (async () => {
         aiRequestCount += 1;
-        let lineRef = '';
+        let lines: ReadonlyArray<ResolveLine> = [];
         try {
           const body = JSON.parse(String(params.request?.postData ?? '{}'));
-          lineRef = body?.ingredients?.[0]?.line_ref ?? '';
+          lines = Array.isArray(body?.ingredients) ? body.ingredients : [];
         } catch {
           // ignore
         }
         if (holdMode) {
-          held = { requestId: params.requestId, lineRef };
+          held = { requestId: params.requestId, lines };
           return;
         }
         if (aiMode === 'unavailable') {
@@ -268,7 +317,7 @@ async function main(): Promise<void> {
           });
           return;
         }
-        await fulfillSuggestion(params.requestId, lineRef);
+        await fulfillSuggestion(params.requestId, lines);
       })();
     });
 
@@ -363,7 +412,11 @@ async function main(): Promise<void> {
       unresolvedAfter.slice(0, 220)
     );
     const aiMessage = String(await evaluate(cdp, `document.querySelector('[data-testid="advanced-nutrition-ai-message"]')?.innerText || ''`));
-    record('AI resolution reports a bounded advisory outcome', /selected|suggested|could not find/i.test(aiMessage), aiMessage.slice(0, 160));
+    record(
+      'AI resolution reports a bounded advisory outcome',
+      /resolved automatically|still need|could not find|no authenticated USDA resolution/i.test(aiMessage),
+      aiMessage.slice(0, 160)
+    );
     record(
       'the AI-assisted match is labelled as an AI-assisted USDA match (never user-selected)',
       /AI-assisted USDA match/i.test(unresolvedAfter) && !/user-selected from USDA search/i.test(unresolvedAfter),
@@ -403,8 +456,8 @@ async function main(): Promise<void> {
     await openRecipeByTitle(B2);
 
     // Fulfill A's held response now that B is current.
-    const heldRequest = held as { requestId: string; lineRef: string } | null;
-    if (heldRequest) await fulfillSuggestion(heldRequest.requestId, heldRequest.lineRef);
+    const heldRequest = held as { requestId: string; lines: ReadonlyArray<ResolveLine> } | null;
+    if (heldRequest) await fulfillSuggestion(heldRequest.requestId, heldRequest.lines);
     await sleep(500);
 
     // B must show NO AI state from A.
@@ -443,6 +496,279 @@ async function main(): Promise<void> {
       aiRequestCount === beforeDouble + 1,
       `before=${beforeDouble} after=${aiRequestCount}`
     );
+
+    // === UNIFIED AI EXCEPTION RESOLUTION SCENARIOS (A-F) =====================
+    // The same REAL built application + REAL pinned USDA catalog; only the
+    // external provider boundary is mocked.
+
+    const closeModalAndGoToGallery = async (): Promise<void> => {
+      await evaluate(cdp!, `(() => { const b = document.querySelector('[data-testid="advanced-nutrition-close-without-saving"]'); if (b) b.click(); return !!b; })()`);
+      await waitFor(cdp!, `!document.querySelector('[role="dialog"]')`, 10000);
+      await goToGallery();
+    };
+
+    const openWorkingFor = async (recipeTitle: string, expectedRowCount: number): Promise<void> => {
+      await openRecipeByTitle(recipeTitle);
+      await evaluate(cdp!, `(() => { const b = document.querySelector('[data-testid="advanced-nutrition-open"]'); if (b) b.click(); return !!b; })()`);
+      await waitFor(cdp!, `!!document.querySelector('[data-testid="advanced-nutrition-analyze"]')`, 120000);
+      await waitFor(cdp!, `document.querySelectorAll('[data-testid="advanced-nutrition-row"]').length >= ${expectedRowCount}`, 30000);
+      await waitFor(cdp!, `document.body.innerText.includes('Advisory nutrition preview')`, 60000);
+      await sleep(300);
+    };
+
+    const summaryExpression = `(document.querySelector('[data-testid="advanced-nutrition-live-summary"]')?.innerText || '')`;
+
+    /** Parses the live summary line into bounded status counts. */
+    const parseSummary = (text: string) => {
+      const read = (pattern: RegExp): number => {
+        const match = text.match(pattern);
+        return match ? Number(match[1]) : -1;
+      };
+      return {
+        matched: read(/(\d+)\s+matched/i),
+        review: read(/(\d+)\s+review suggested/i),
+        amount: read(/(\d+)\s+need amount/i),
+        match: read(/(\d+)\s+need match/i),
+        qualitative: read(/(\d+)\s+qualitative/i),
+      };
+    };
+
+    const renderedStatusCounts = async (): Promise<Record<string, number>> => {
+      const raw = await evaluate(cdp, `(() => Array.from(document.querySelectorAll('[data-testid="advanced-nutrition-row-status"]')).map((n) => (n.innerText || '').trim().toLowerCase()))()`);
+      // Keys are the RENDERED badge labels, lowercased.
+      const counts: Record<string, number> = { matched: 0, 'review suggested': 0, 'needs amount': 0, 'needs match': 0, qualitative: 0 };
+      for (const status of raw as ReadonlyArray<string>) {
+        if (status in counts) counts[status] += 1;
+      }
+      return counts;
+    };
+
+    /** The rendered row statuses IN ROW ORDER (transitions are computed on it). */
+    const renderedStatusList = async (): Promise<ReadonlyArray<string>> =>
+      (await evaluate(cdp, `(() => Array.from(document.querySelectorAll('[data-testid="advanced-nutrition-row-status"]')).map((n) => (n.innerText || '').trim().toLowerCase()))()`)) as ReadonlyArray<string>;
+
+    /** Parses `N of M ingredient lines unresolved` from the preview text. */
+    const unresolvedLineCount = (text: string): number => {
+      const match = text.match(/(\d+)\s+of\s+(\d+)\s+ingredient lines unresolved/i);
+      return match ? Number(match[1]) : -1;
+    };
+
+    // --- Scenario A: needs_amount only, zero needs_match -> AI available ---
+    await closeModalAndGoToGallery();
+    await createRecipe(cdp, 'AI Amount', ['3 garlic cloves, minced']);
+    await openWorkingFor('AI Amount', 1);
+    const amountRowBefore = String(await evaluate(cdp, rowTextExpression('garlic')));
+    record(
+      'A. needs_amount-only row shows NEEDS AMOUNT',
+      /needs amount/i.test(amountRowBefore),
+      amountRowBefore.slice(0, 160)
+    );
+    const summaryBefore = String(await evaluate(cdp, summaryExpression));
+    record('A. summary reports zero need-match rows', /0 need match/i.test(summaryBefore), summaryBefore);
+    record('A. summary reports one need-amount row', /1 need amount/i.test(summaryBefore), summaryBefore);
+    record(
+      'A. bulk "Resolve remaining with AI" is visible and enabled (0 NEEDS MATCH)',
+      await evaluate(cdp, `(() => { const b = document.querySelector('[data-testid="advanced-nutrition-ai-resolve"]'); return !!b && b.disabled !== true; })()`)
+    );
+    await evaluate(cdp, `(() => {
+      const row = Array.from(document.querySelectorAll('[data-testid="advanced-nutrition-row"]')).find((n) => (n.innerText||'').includes('garlic'));
+      const b = row && row.querySelector('[data-testid="advanced-nutrition-edit"]');
+      if (b && b.getAttribute('aria-expanded') !== 'true') b.click();
+      return !!b;
+    })()`);
+    await sleep(200);
+    record(
+      'A. row-level "Ask AI for help" is offered on the needs_amount row',
+      await evaluate(cdp, `!!document.querySelector('[data-testid="advanced-nutrition-ai-help"]')`)
+    );
+
+    // --- Scenario C: AI-assisted local USDA count resolution ---------------
+    await evaluate(cdp, `(() => { const b = document.querySelector('[data-testid="advanced-nutrition-ai-resolve"]'); if (b) b.click(); return !!b; })()`);
+    await waitFor(cdp, `!!document.querySelector('[data-testid="advanced-nutrition-ai-message"]')`, 20000);
+    await sleep(500);
+    const amountRowAfter = String(await evaluate(cdp, rowTextExpression('garlic')));
+    record(
+      'C. garlic resolves to MATCHED via an authenticated USDA count portion',
+      /matched/i.test(amountRowAfter) && /9 g/.test(amountRowAfter) && !/needs amount/i.test(amountRowAfter),
+      amountRowAfter.slice(0, 220)
+    );
+    record(
+      'C. the count resolution is labelled AI-assisted (never user-confirmed)',
+      /AI-assisted USDA count portion/i.test(amountRowAfter) && !/user-confirmed/i.test(amountRowAfter),
+      amountRowAfter.slice(0, 220)
+    );
+    const previewAfter = String(await evaluate(cdp, `document.querySelector('[aria-label="Advisory nutrition preview"]')?.innerText || ''`));
+    record(
+      'C. the preview recalculated automatically (no unresolved lines)',
+      /0 of 1 ingredient lines unresolved/i.test(previewAfter),
+      previewAfter.slice(0, 200)
+    );
+    record(
+      'C. nothing was persisted (no Apply, no saved block)',
+      !(await evaluate(cdp, `!!document.querySelector('[data-testid="advanced-saved-complete"]')`)) &&
+        !/was saved to your recipe|was replaced and saved/i.test(String(await evaluate(cdp, `document.body.innerText`)))
+    );
+
+    // --- Scenario E: live summary matches rendered row statuses ------------
+    const summaryAfter = String(await evaluate(cdp, summaryExpression));
+    const statuses = await renderedStatusCounts();
+    record(
+      'E. summary equals the rendered live row statuses',
+      parseSummary(summaryAfter).matched === statuses['matched'] &&
+        parseSummary(summaryAfter).review === statuses['review suggested'] &&
+        parseSummary(summaryAfter).amount === statuses['needs amount'] &&
+        parseSummary(summaryAfter).match === statuses['needs match'] &&
+        parseSummary(summaryAfter).qualitative === statuses.qualitative,
+      `summary=${summaryAfter} statuses=${JSON.stringify(statuses)}`
+    );
+
+    // --- Scenario F: Apply remains explicit --------------------------------
+    record(
+      'F. Apply exists and remains an explicit, un-triggered action',
+      (await evaluate(cdp, `document.body.innerText.includes('Apply advanced nutrition')`)) &&
+        !(await evaluate(cdp, `document.body.innerText.includes('Advanced Nutrition was saved to your recipe.')`))
+    );
+
+    // --- Scenario D: unresolvable amount -> no invented grams --------------
+    await closeModalAndGoToGallery();
+    await createRecipe(cdp, 'AI NoPortion', ['1 yellow onion, diced']);
+    await openWorkingFor('AI NoPortion', 1);
+    await evaluate(cdp, `(() => { const b = document.querySelector('[data-testid="advanced-nutrition-ai-resolve"]'); if (b) b.click(); return !!b; })()`);
+    await waitFor(cdp, `!!document.querySelector('[data-testid="advanced-nutrition-ai-message"]')`, 20000);
+    await sleep(500);
+    const onionRow = String(await evaluate(cdp, rowTextExpression('onion')));
+    record(
+      'D. an unresolvable amount stays NEEDS AMOUNT with NO invented grams',
+      /needs amount/i.test(onionRow) && !/needs match/i.test(onionRow) && !/\d+(\.\d+)?\s*g\b/i.test(onionRow),
+      onionRow.slice(0, 220)
+    );
+    const onionPreview = String(await evaluate(cdp, `document.querySelector('[aria-label="Advisory nutrition preview"]')?.innerText || ''`));
+    record(
+      'D. the advisory preview still reports the unresolved line',
+      /1 of 1 ingredient lines unresolved/i.test(onionPreview),
+      onionPreview.slice(0, 200)
+    );
+
+    // --- Scenario G: realistic multi-line live-state application ------------
+    // THE PRODUCTION REGRESSION. The same REAL app + pinned catalog; only the
+    // provider boundary is mocked. A large recipe whose baseline request is near
+    // the serialization bound: every accepted AI resolution must land in the SAME
+    // live state that renders the badges/evidence/preview, and the reported
+    // success count must equal the ACTUAL row transitions.
+    await closeModalAndGoToGallery();
+    const LARGE = [
+      '2 cups cooked long-grain rice (cooled)',
+      '1.5 lb ground beef',
+      '1 tbsp Worcestershire sauce',
+      '1 egg',
+      '1 yellow onion, diced',
+      '2 tbsp fresh parsley, chopped',
+      '3 cloves garlic, minced',
+      '1 tsp salt',
+      '1/2 tsp black pepper',
+      '1 tsp dried dill',
+      '1 tsp onion powder',
+      '1/4-1/2 tsp chili flakes (optional)',
+      '3 cans tomato sauce',
+      '1 medium head green cabbage',
+      '1/2 cup water',
+      'fresh dill for garnish',
+    ];
+    await createRecipe(cdp, 'AI Large Live', LARGE);
+    await openWorkingFor('AI Large Live', LARGE.length);
+    const statusesBeforeG = await renderedStatusList();
+    const previewBeforeG = String(await evaluate(cdp, `document.querySelector('[aria-label="Advisory nutrition preview"]')?.innerText || ''`));
+    const garlicBeforeG = String(await evaluate(cdp, rowTextExpression('garlic')));
+    record(
+      'G. multi-line: garlic starts NEEDS AMOUNT',
+      /needs amount/i.test(garlicBeforeG),
+      garlicBeforeG.slice(0, 160)
+    );
+    record(
+      'G. multi-line: preview reports unresolved lines before AI',
+      unresolvedLineCount(previewBeforeG) > 0,
+      previewBeforeG.slice(0, 160)
+    );
+
+    await evaluate(cdp, `(() => { const b = document.querySelector('[data-testid="advanced-nutrition-ai-resolve"]'); if (b) b.click(); return !!b; })()`);
+    await waitFor(cdp, `!!document.querySelector('[data-testid="advanced-nutrition-ai-message"]')`, 30000);
+    await sleep(500);
+    const statusesAfterG = await renderedStatusList();
+    const garlicAfterG = String(await evaluate(cdp, rowTextExpression('garlic')));
+    const previewAfterG = String(await evaluate(cdp, `document.querySelector('[aria-label="Advisory nutrition preview"]')?.innerText || ''`));
+    record(
+      'G. multi-line: rendered garlic row becomes MATCHED with 9 g',
+      /matched/i.test(garlicAfterG) && /9 g/.test(garlicAfterG) && !/needs amount/i.test(garlicAfterG),
+      garlicAfterG.slice(0, 220)
+    );
+    record(
+      'G. multi-line: the count resolution is labelled AI-assisted (never user-confirmed)',
+      /AI-assisted USDA count portion/i.test(garlicAfterG) && !/user-confirmed/i.test(garlicAfterG),
+      garlicAfterG.slice(0, 220)
+    );
+    record(
+      'G. multi-line: the preview recalculated DOWN from the new live state',
+      unresolvedLineCount(previewAfterG) >= 0 &&
+        unresolvedLineCount(previewAfterG) < unresolvedLineCount(previewBeforeG),
+      `before=${unresolvedLineCount(previewBeforeG)} after=${unresolvedLineCount(previewAfterG)}`
+    );
+
+    // The reported automatic resolutions must equal the ACTUAL rendered-row
+    // transitions (actionable -> matched); never the number of proposals.
+    let transitionsG = 0;
+    for (let i = 0; i < Math.min(statusesBeforeG.length, statusesAfterG.length); i += 1) {
+      if (statusesBeforeG[i] !== 'matched' && statusesAfterG[i] === 'matched') transitionsG += 1;
+    }
+    const messageG = String(await evaluate(cdp, `document.querySelector('[data-testid="advanced-nutrition-ai-message"]')?.innerText || ''`));
+    const reportedResolvedG = (() => {
+      const match = messageG.match(/(\d+) resolved automatically/i);
+      return match ? Number(match[1]) : 0;
+    })();
+    record(
+      'G. the reported automatic-resolution count equals the real row transitions',
+      transitionsG >= 1 && reportedResolvedG === transitionsG,
+      `message="${messageG}" transitions=${transitionsG} before=[${statusesBeforeG.join(',')}] after=[${statusesAfterG.join(',')}]`
+    );
+    const summaryAfterG = parseSummary(String(await evaluate(cdp, summaryExpression)));
+    const actionableAfterG = summaryAfterG.amount + summaryAfterG.review + summaryAfterG.match;
+    console.log(
+      `  NOTE  Scenario G observed: message="${messageG}" transitions=${transitionsG} actionable-after=${actionableAfterG}`
+    );
+    const reportedStillG = (() => {
+      const match = messageG.match(/(\d+) still needs? review/i);
+      return match ? Number(match[1]) : -1;
+    })();
+    record(
+      'G. the reported "still need review" count equals the post-operation actionable live rows',
+      reportedStillG === actionableAfterG,
+      `message="${messageG}" actionable=${actionableAfterG} summary=${JSON.stringify(summaryAfterG)}`
+    );
+    record(
+      'G. the live summary still equals the rendered row statuses after AI application',
+      statusesAfterG.filter((status) => status === 'matched').length === summaryAfterG.matched &&
+        statusesAfterG.filter((status) => status === 'needs amount').length === summaryAfterG.amount &&
+        statusesAfterG.filter((status) => status === 'review suggested').length === summaryAfterG.review &&
+        statusesAfterG.filter((status) => status === 'needs match').length === summaryAfterG.match,
+      `summary=${JSON.stringify(summaryAfterG)} statuses=[${statusesAfterG.join(',')}]`
+    );
+
+    // --- Scenario B: review_suggested only, zero needs_match -> AI available
+    await closeModalAndGoToGallery();
+    await createRecipe(cdp, 'AI Review', ['1 zucchini, chopped']);
+    await openWorkingFor('AI Review', 1);
+    const reviewRow = String(await evaluate(cdp, rowTextExpression('zucchini')));
+    record(
+      'B. review_suggested-only row shows REVIEW SUGGESTED',
+      /review suggested/i.test(reviewRow),
+      reviewRow.slice(0, 180)
+    );
+    const reviewSummary = String(await evaluate(cdp, summaryExpression));
+    record('B. summary reports zero need-match rows', /0 need match/i.test(reviewSummary), reviewSummary);
+    record(
+      'B. bulk "Resolve remaining with AI" is visible and enabled (0 NEEDS MATCH)',
+      await evaluate(cdp, `(() => { const b = document.querySelector('[data-testid="advanced-nutrition-ai-resolve"]'); return !!b && b.disabled !== true; })()`)
+    );
+    await closeModalAndGoToGallery();
 
     record('no console error occurred', consoleErrors.length === 0, consoleErrors.join(' | '));
     console.log(`\n${passed} passed, ${failed} failed`);

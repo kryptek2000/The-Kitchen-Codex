@@ -241,6 +241,15 @@ export function derivedSourcePortionGrams(
   return undefined;
 }
 
+/**
+ * The explicit Phase 3 selection object for a working match choice. Exported so
+ * the AI-assisted amount binder can build a count-portion choice that binds the
+ * SAME authenticated food selection as the live row.
+ */
+export function selectionFromMatchChoice(choice: MatchChoice, lineRef: string): unknown {
+  return selectionFor(choice, lineRef);
+}
+
 function selectionFor(choice: MatchChoice, lineRef: string): unknown {
   if (choice.kind === 'candidate') {
     return { kind: 'candidate', fdc_id: choice.fdc_id, review_digest: choice.review_digest };
@@ -259,6 +268,31 @@ function selectionFor(choice: MatchChoice, lineRef: string): unknown {
     };
   }
   return { kind: 'none', review_digest: choice.review_digest };
+}
+
+/**
+ * A BOUNDED review reference for the calculation request. The calculator
+ * independently re-derives the genuine current review from the pinned catalog
+ * and reads ONLY `review_digest` from the supplied object, so embedding the full
+ * candidate evidence is unnecessary — and for a realistic multi-line recipe it
+ * pushed the serialized request past the 64 KiB materialization bound, failing
+ * the WHOLE calculation closed and silently discarding every accepted
+ * resolution. The digest reference preserves every authentication check while
+ * keeping the request small. A row without a review digest keeps its original
+ * value (fail closed: the calculator still refuses to confirm it).
+ */
+function reviewReference(row: Phase4Row): unknown {
+  let digest: string | undefined =
+    typeof row.review_digest === 'string' ? row.review_digest : undefined;
+  if (digest === undefined) {
+    const review = row.review;
+    if (review !== null && typeof review === 'object') {
+      const value = (review as { review_digest?: unknown }).review_digest;
+      if (typeof value === 'string') digest = value;
+    }
+  }
+  if (digest === undefined) return row.review;
+  return Object.freeze({ review_digest: digest });
 }
 
 /**
@@ -289,10 +323,21 @@ export function buildCalculationRequest(
       return {
         line_ref: entry.line_ref,
         ingredient: entry.ingredient,
-        ...(confirmed ? { review: row.review, selection: selectionFor(choice, entry.line_ref) } : {}),
+        ...(confirmed
+          ? { review: reviewReference(row), selection: selectionFor(choice, entry.line_ref) }
+          : {}),
         ...(confirmed && choice?.automatic === true ? { automatic_selection: true } : {}),
         ...(portion ? { portion_selection: portion.selection } : {}),
-        ...(countPortion ? { count_portion_selection: countPortion.selection } : {}),
+        ...(countPortion
+          ? {
+              count_portion_selection: countPortion.selection,
+              // The bounded count-identity hint (when present) accompanies the
+              // selection so the calculator re-derives the SAME candidate set.
+              ...(countPortion.countRequirementHint !== undefined
+                ? { count_requirement_hint: countPortion.countRequirementHint }
+                : {}),
+            }
+          : {}),
         ...(userMass ? { user_mass_selection: userMass.selection } : {}),
       };
     }),

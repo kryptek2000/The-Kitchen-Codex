@@ -35,7 +35,11 @@ import { normalizeQuery, normalizeQueryChecked } from '../matching/normalize';
 import { parseIngredient } from '../matching/parse';
 import { projectQueryText } from '../matching/query';
 import { clampManualSearchLimit } from '../matching/manualSearch';
-import { deriveCountRequirement, type CountPortionReviewResult } from '../calculation/countPortion';
+import {
+  deriveCountRequirement,
+  sanitizeCountRequirementHint,
+  type CountPortionReviewResult,
+} from '../calculation/countPortion';
 import { phase2Failure, MAX_INGREDIENT_TEXT_LENGTH } from '../matching/types';
 import type { ConfirmationResult, IngredientReviewResult, ReviewCatalog } from '../matching/types';
 import type {
@@ -234,12 +238,18 @@ export function createAdvancedNutritionSession(
     reviewCountPortions(
       this: AdvancedNutritionSession,
       ingredient: unknown,
-      fdcId: unknown
+      fdcId: unknown,
+      requirementHint?: unknown
     ): CountPortionReviewResult {
       const authority = resolveSessionAuthority(this);
       if (!authority) {
         return { ok: false, failure: phase3PortionFailure() };
       }
+      // A bounded advisory hint may only FILL a missing count unit/size (e.g.
+      // `3 garlic cloves` -> `clove`); a malformed hint fails closed and the
+      // count amount always comes from the parsed ingredient.
+      const hintResult = sanitizeCountRequirementHint(requirementHint);
+      if (!hintResult.ok) return { ok: false, failure: phase3PortionFailure() };
       const parsed = parseIngredient(ingredient);
       if (!parsed.ok) return { ok: false, failure: phase3PortionFailure() };
       const projection = projectQueryText(normalizeQuery(parsed.parsed.query).text);
@@ -247,7 +257,8 @@ export function createAdvancedNutritionSession(
         parsed.parsed.amount,
         parsed.parsed.raw_unit,
         projection.food_tokens,
-        projection.size_qualifiers
+        projection.size_qualifiers,
+        hintResult.hint
       );
       if (!requirement) return { ok: false, failure: phase3PortionFailure() };
       return reviewFoodCountPortions(authority.context, fdcId, requirement);

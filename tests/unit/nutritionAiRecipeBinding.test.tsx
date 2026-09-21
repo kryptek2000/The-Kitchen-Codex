@@ -106,6 +106,13 @@ function aiOutcome(row: { line_ref: string; review_digest?: string }, auto: bool
       unresolved: [],
       auto_count: auto ? 1 : 0,
     },
+    amounts: {
+      resolved: [],
+      offers: [],
+      unresolved: [],
+      inconsistent: [],
+      auto_count: 0,
+    },
   };
 }
 

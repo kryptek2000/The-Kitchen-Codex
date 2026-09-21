@@ -31,6 +31,13 @@ export interface CountPortionChoiceParams {
   readonly automaticSelection?: boolean;
   readonly fdcId: number;
   readonly portionIndex: number;
+  /**
+   * Bounded advisory count-identity hint (closed vocabulary) that FILLS a
+   * missing unit/size of the recipe's own parsed count requirement. It is
+   * carried into the identity-binding dry run so the candidate-set digest
+   * matches the calculator's re-derivation. Never an amount or gram value.
+   */
+  readonly countRequirementHint?: { readonly unit: string | null; readonly size: string | null };
 }
 
 export type CountPortionChoiceResult =
@@ -55,6 +62,9 @@ export function buildCountPortionChoice(
         ...(params.review !== undefined ? { review: params.review } : {}),
         ...(params.selection !== undefined ? { selection: params.selection } : {}),
         ...(params.automaticSelection === true ? { automatic_selection: true } : {}),
+        ...(params.countRequirementHint !== undefined
+          ? { count_requirement_hint: params.countRequirementHint }
+          : {}),
       },
     ],
   });
@@ -68,7 +78,11 @@ export function buildCountPortionChoice(
     return { ok: false, failure: phase4Failure('stale_binding') };
   }
 
-  const review = session.reviewCountPortions(params.ingredient, params.fdcId);
+  const review = session.reviewCountPortions(
+    params.ingredient,
+    params.fdcId,
+    params.countRequirementHint
+  );
   if (!review.ok) return { ok: false, failure: phase4Failure('invalid_selection') };
   const candidate = review.review.candidates.find((entry) => entry.index === params.portionIndex);
   if (!candidate) return { ok: false, failure: phase4Failure('invalid_selection') };

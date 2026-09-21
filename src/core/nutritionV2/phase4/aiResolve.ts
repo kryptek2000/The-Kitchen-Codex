@@ -50,6 +50,23 @@ export interface AiResolveParams {
   readonly suggestions: ReadonlyArray<AiResolutionSuggestion>;
 }
 
+/**
+ * Converts an OFFERED (below-threshold) AI suggestion into the genuine
+ * user-confirmed choice produced by an explicit "Use this match" click.
+ *
+ * EXPLICIT CLICK = USER CONFIRMED. Every automatic-authority marker is stripped:
+ * the deterministic calculator re-authenticates the manual selection against the
+ * pinned bundle and reports `user_confirmed` (never `auto_confirmed`). The
+ * display-only `aiAssisted` provenance is retained so the UI can still say the
+ * suggestion originated from AI; it carries no authority.
+ */
+export function userConfirmedChoiceFromAiSuggestion(choice: MatchChoice): MatchChoice {
+  const candidate: MatchChoice = { ...choice };
+  delete (candidate as { aiAccepted?: boolean }).aiAccepted;
+  delete (candidate as { automatic?: boolean }).automatic;
+  return Object.freeze({ ...candidate, aiAssisted: true });
+}
+
 /** Working rows eligible for AI assistance: those the analyzer did not resolve. */
 export function aiResolutionEligibleRows(
   rows: ReadonlyArray<Phase4Row>

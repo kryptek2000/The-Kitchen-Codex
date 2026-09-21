@@ -58,6 +58,38 @@ export interface CountRequirement {
   readonly size: string | null;
 }
 
+/**
+ * Bounded advisory count-identity hint. It may fill a MISSING unit/size of the
+ * recipe's own parsed count requirement (e.g. `3 garlic cloves` -> unit
+ * `clove`), but it can never supply the amount, a gram weight, an FDC id, or
+ * override an explicit recipe identity. Values are the CLOSED canonical count
+ * vocabulary only.
+ */
+export interface CountRequirementHint {
+  readonly unit: string | null;
+  readonly size: string | null;
+}
+
+/**
+ * Strictly sanitizes an untrusted count-requirement hint. Absent/null is simply
+ * no hint; a present malformed value (non-plain object, unknown keys, or a token
+ * outside the closed count vocabulary) fails closed.
+ */
+export function sanitizeCountRequirementHint(
+  raw: unknown
+): { ok: true; hint?: CountRequirementHint } | { ok: false } {
+  if (raw === undefined || raw === null) return { ok: true };
+  if (!isPlainObject(raw)) return { ok: false };
+  for (const key of Object.keys(raw)) {
+    if (key !== 'unit' && key !== 'size') return { ok: false };
+  }
+  const unit = raw.unit === undefined || raw.unit === null ? null : canonicalCountUnit(String(raw.unit));
+  if (raw.unit !== undefined && raw.unit !== null && unit === null) return { ok: false };
+  const size = raw.size === undefined || raw.size === null ? null : canonicalSize(String(raw.size));
+  if (raw.size !== undefined && raw.size !== null && size === null) return { ok: false };
+  return { ok: true, hint: Object.freeze({ unit, size }) };
+}
+
 /** The closed count identity of one authenticated USDA portion. */
 export interface CountPortionIdentity {
   readonly unit: string | null;
@@ -350,17 +382,23 @@ function inferUnitFromIdentityTokens(tokens: ReadonlyArray<string>): string | nu
  * Derives the closed count requirement from a parsed ingredient's amount, raw
  * unit, and the query's bounded size qualifiers. Returns null when the ingredient
  * is not a usable count (no amount, or neither a count unit nor a size).
+ *
+ * The optional `hint` (bounded, closed vocabulary) may only FILL a missing
+ * unit/size; it never supplies or overrides the amount, and the recipe's own
+ * explicit identity always wins.
  */
 export function deriveCountRequirement(
   amount: number | null,
   rawUnit: string | null | undefined,
   identityTokens: ReadonlyArray<string>,
-  sizeQualifiers: ReadonlyArray<string>
+  sizeQualifiers: ReadonlyArray<string>,
+  hint?: CountRequirementHint
 ): CountRequirement | null {
   if (amount === null || !isPositiveFinite(amount)) return null;
   const explicitUnit = canonicalCountUnit(rawUnit ?? null);
-  const unit = explicitUnit ?? inferUnitFromIdentityTokens(identityTokens);
-  const size = sizeQualifiers.length > 0 ? canonicalSize(sizeQualifiers[0]) : null;
+  const unit = explicitUnit ?? inferUnitFromIdentityTokens(identityTokens) ?? hint?.unit ?? null;
+  const explicitSize = sizeQualifiers.length > 0 ? canonicalSize(sizeQualifiers[0]) : null;
+  const size = explicitSize ?? hint?.size ?? null;
   return Object.freeze({ amount, unit, size });
 }
 

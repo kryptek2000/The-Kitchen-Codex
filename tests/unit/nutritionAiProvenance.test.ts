@@ -12,6 +12,7 @@ import { buildCalculationBundle, type CalcRecordSpec } from '../fixtures/usdaCal
 import { createAdvancedNutritionSession } from '../../src/core/nutritionV2/phase4/session';
 import { adaptRecipe } from '../../src/core/nutritionV2/phase4/adapt';
 import { buildCalculationRequest, buildReviewRows } from '../../src/core/nutritionV2/phase4/rows';
+import { userConfirmedChoiceFromAiSuggestion } from '../../src/core/nutritionV2/phase4/aiResolve';
 import { parseIngredientLine } from '../../src/utils/markdownParser';
 import type { AdvancedNutritionSession, MatchChoice, Phase4State } from '../../src/core/nutritionV2/phase4';
 import type { ObsidianRecipe } from '../../src/types';
@@ -150,6 +151,28 @@ describe('food-match provenance', () => {
     (state.matches as Record<string, MatchChoice>)[row.line_ref] = manualChoice(row.line_ref, 6002, row.review_digest ?? '', {
       aiAssisted: true,
     });
+    const result = SESSION.calculate(buildCalculationRequest(adapted, state));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.preview.ingredients[0].match_status).toBe('user_confirmed');
+    expect(result.preview.ingredients[0].user_confirmed).toBe(true);
+  });
+
+  it('D. an explicit "Use this match" click strips automatic markers and is user-confirmed', () => {
+    const { adapted, rows, state } = setup(['1 cup Zzz']);
+    const row = rows[0];
+    // Even if a forged/stale automatic marker were present, the explicit click
+    // converts the choice into a genuine user decision BEFORE it is stored.
+    const offered = manualChoice(row.line_ref, 6002, row.review_digest ?? '', {
+      aiAssisted: true,
+      aiAccepted: true,
+      automatic: true,
+    });
+    const confirmed = userConfirmedChoiceFromAiSuggestion(offered);
+    expect(confirmed.aiAccepted).toBeUndefined();
+    expect(confirmed.automatic).toBeUndefined();
+    expect(confirmed.aiAssisted).toBe(true);
+    (state.matches as Record<string, MatchChoice>)[row.line_ref] = confirmed;
     const result = SESSION.calculate(buildCalculationRequest(adapted, state));
     expect(result.ok).toBe(true);
     if (!result.ok) return;

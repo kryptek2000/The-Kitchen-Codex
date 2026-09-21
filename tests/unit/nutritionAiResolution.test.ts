@@ -155,9 +155,16 @@ describe('AI resolution contract — strict sanitization', () => {
     const item = (schema.properties.suggestions as { items: { properties: Record<string, unknown> } }).items;
     expect(Object.keys(item.properties).sort()).toEqual([
       'confidence',
+      'count_descriptor_hint',
+      'explanation',
       'interpreted_food_name',
       'line_ref',
+      'normalized_food_query',
       'notes',
+      'portion_search_hint',
+      'preparation_hint',
+      'quantity_unit_hint',
+      'quantity_value',
       'suggested_usda_queries',
     ]);
   });
