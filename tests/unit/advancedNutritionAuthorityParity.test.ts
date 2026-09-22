@@ -465,17 +465,42 @@ describe('phase 0B — effective-mass authority parity (real bundle)', () => {
 // ---------------------------------------------------------------------------
 
 describe('phase 0B — canonical count-hint projection parity (real bundle)', () => {
-  it('no-hint path: candidate set and digest are unchanged', () => {
-    const flow = setup('3 garlic cloves');
+  it('no-hint path: a line with no count identity yields no candidates', () => {
+    // `1 garlic` declares no count unit and carries no hint: the no-hint context
+    // is inapplicable, so nothing can be bound.
+    const flow = setup('1 garlic');
     const fdcId = matchChoiceOf(flow).fdc_id;
     const review = session.reviewCountPortions(flow.adapted[0].ingredient, fdcId);
     expect(review.ok).toBe(true);
     if (!review.ok) return;
     expect(review.review.applicable).toBe(false);
     expect(review.review.candidates).toHaveLength(0);
-    expect(review.review.candidates_digest).toBe(
-      '6c1cc2934dfe8a069bc84ef9fc1fd99fe6f7b4a733acca1490cf080b03c2dde8'
-    );
+    // Deterministic: the no-hint context is content-addressed and stable.
+    const again = session.reviewCountPortions(flow.adapted[0].ingredient, fdcId);
+    expect(again.ok).toBe(true);
+    if (!again.ok) return;
+    expect(again.review.candidates_digest).toBe(review.review.candidates_digest);
+  });
+
+  it('phase 1: a recipe-declared trailing count unit drives the no-hint context itself', () => {
+    // `3 garlic cloves` now carries its own count unit (noun after the food), so
+    // the authenticated clove candidate set binds WITHOUT any hint. The hint is
+    // redundant for this line; it can never change the outcome.
+    const flow = setup('3 garlic cloves');
+    const fdcId = matchChoiceOf(flow).fdc_id;
+    const review = session.reviewCountPortions(flow.adapted[0].ingredient, fdcId);
+    expect(review.ok).toBe(true);
+    if (!review.ok) return;
+    expect(review.review.applicable).toBe(true);
+    expect(review.review.requirement).toEqual({ amount: 3, unit: 'clove', size: null });
+    expect(review.review.candidates).toHaveLength(2);
+    const hinted = session.reviewCountPortions(flow.adapted[0].ingredient, fdcId, {
+      unit: 'clove',
+      size: null,
+    });
+    expect(hinted.ok).toBe(true);
+    if (!hinted.ok) return;
+    expect(hinted.review.candidates_digest).toBe(review.review.candidates_digest);
   });
 
   it('valid hint path: review, canonical context, request, and calculator share one digest', () => {
@@ -544,7 +569,9 @@ describe('phase 0B — canonical count-hint projection parity (real bundle)', ()
   });
 
   it('unsupported or forged hints fail closed and never bind mass', () => {
-    const flow = setup('3 garlic cloves');
+    // `3 garlic` is genuinely hint-dependent (no recipe count unit), so a forged
+    // hint cannot silently bind mass.
+    const flow = setup('3 garlic');
     const fdcId = matchChoiceOf(flow).fdc_id;
     // Closed-vocabulary rejection at the review boundary.
     expect(session.reviewCountPortions(flow.adapted[0].ingredient, fdcId, { unit: 'bogus' }).ok).toBe(false);

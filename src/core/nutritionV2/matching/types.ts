@@ -12,7 +12,13 @@
  * re-exported from any public production barrel.
  */
 
-import type { MeasurementKind, NormalizedUnit } from '../../../utils/measurements';
+import type {
+  CanonicalPackageNetMass,
+  CanonicalQuantityKind,
+  CanonicalUnitKind,
+  MeasurementKind,
+  NormalizedUnit,
+} from '../../../utils/measurements';
 import type { UsdaDataType } from '../usda/types';
 
 // ---------------------------------------------------------------------------
@@ -189,6 +195,23 @@ export interface ParsedIngredientReview {
   readonly query: string;
   /** Non-authoritative preparation/note text when already present. */
   readonly note: string | undefined;
+  /** Canonical Phase 1 parse contract version (`CANONICAL_INGREDIENT_PARSE_VERSION`). */
+  readonly parse_version: string;
+  /**
+   * Canonical quantity classification. `amount` is populated ONLY for an exact
+   * quantity: a true range never collapses to one endpoint.
+   */
+  readonly quantity_kind: CanonicalQuantityKind;
+  /** Range endpoints when `quantity_kind === 'range'`; undefined otherwise. */
+  readonly quantity_range: { readonly lower: number; readonly upper: number } | undefined;
+  /** Canonical unit classification: mass, volume, count, container, unknown. */
+  readonly unit_kind: CanonicalUnitKind;
+  /** Canonical count noun (leading or after the food), when recognized. */
+  readonly count_noun: string | undefined;
+  /** Canonical container noun, when recognized. */
+  readonly container: string | undefined;
+  /** Explicit package net mass, when the source declares one. Never mass authority. */
+  readonly package_net_mass: CanonicalPackageNetMass | undefined;
 }
 
 export type IngredientParseResult =

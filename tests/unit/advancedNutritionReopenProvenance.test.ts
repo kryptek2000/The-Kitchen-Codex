@@ -187,7 +187,10 @@ function cloveSuggestion(lineRef: string): AiResolutionSuggestion {
 
 describe('phase 0B final parity — Apply→reopen provenance (I-2)', () => {
   it('hint-dependent garlic: Apply persists truthfully; reopen restores food only, keeps mass NEEDS AMOUNT, and blocks re-Apply', () => {
-    const f = flow('3 garlic cloves');
+    // `3 garlic` has no recipe-declared count unit, so the applied count basis is
+    // genuinely hint-dependent (Phase 1: `3 garlic cloves` would carry its own
+    // unit and re-authenticate without a hint).
+    const f = flow('3 garlic');
     const outcome = resolveAmountsFromAiSuggestions({
       session,
       rows: f.rows,

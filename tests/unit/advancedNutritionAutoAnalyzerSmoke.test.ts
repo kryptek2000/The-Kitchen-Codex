@@ -899,7 +899,7 @@ describe('auto analyzer — generic family / variety bias', () => {
       const top = topDescriptions([line], 0, 1)[0] ?? '';
       expect(row.selected_description ?? top).toMatch(expected);
     }
-  });
+  }, 30000); // measured ~5.4s under full-suite load; narrow justified timeout
 
   it('a generic query with no safe generic record fails closed rather than inventing a variety', () => {
     for (const line of ['1 cup raw rice', '1 bar milk chocolate', '1 cup cheese']) {

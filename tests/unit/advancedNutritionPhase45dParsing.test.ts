@@ -140,9 +140,13 @@ describe('phase 4.5d parsing — exact leading-unit consumption', () => {
     expect(parsed.name).toBe('[[Mayonnaise]]');
   });
 
-  it('keeps count nouns that are foods in the name', () => {
+  it('keeps food count nouns in the name and extracts trailing measure nouns', () => {
+    // `egg` is a FOOD count noun: it stays the food name.
     expect(parseIngredientLine('2 eggs').name).toBe('eggs');
-    expect(parseIngredientLine('3 garlic cloves').name).toBe('garlic cloves');
+    // Phase 1: a trailing household measure noun is amount metadata.
+    const garlic = parseIngredientLine('3 garlic cloves');
+    expect(garlic.name).toBe('garlic');
+    expect(garlic.unit).toBe('cloves');
   });
 });
 

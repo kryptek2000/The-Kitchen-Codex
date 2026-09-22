@@ -22,12 +22,18 @@
 
 import { isPlainObject, toInertValue } from '../schema';
 import {
+  CANONICAL_INGREDIENT_PARSE_VERSION,
+  getMeasurementKind,
   normalizeIngredientMeasurement,
+  normalizeUnit,
   parseAmount,
-  parseRawIngredientMeasurementParts,
+  parseCanonicalIngredientParts,
+  type CanonicalQuantityKind,
+  type CanonicalUnitKind,
   type MeasurementKind,
   type NormalizedUnit,
 } from '../../../utils/measurements';
+import { canonicalHouseholdUnit } from '../../../utils/householdUnits';
 import {
   MAX_INGREDIENT_LINE_REF_LENGTH,
   MAX_INGREDIENT_NOTE_LENGTH,
@@ -58,6 +64,34 @@ function failure(code: Parameters<typeof phase2Failure>[0]): IngredientParseResu
 function boundedText(value: unknown, max: number): string | undefined {
   if (typeof value !== 'string') return undefined;
   return value.length > max ? undefined : value;
+}
+
+interface StructuredUnitClassification {
+  readonly kind: CanonicalUnitKind;
+  readonly countNoun: string | undefined;
+  readonly container: string | undefined;
+}
+
+/**
+ * Classifies an explicit structured `unit` field through the ONE canonical
+ * vocabulary: mass/volume ids, household count nouns, and containers. Never
+ * assigns mass.
+ */
+function classifyStructuredUnit(unit: string | undefined): StructuredUnitClassification {
+  if (unit === undefined) return { kind: 'unknown', countNoun: undefined, container: undefined };
+  const normalized = normalizeUnit(unit);
+  const kind = normalized ? getMeasurementKind(normalized) : 'unknown';
+  if (kind === 'mass' || kind === 'volume') {
+    return { kind, countNoun: undefined, container: undefined };
+  }
+  const household = canonicalHouseholdUnit(unit);
+  if (household?.kind === 'count') {
+    return { kind: 'count', countNoun: household.noun, container: undefined };
+  }
+  if (household?.kind === 'container') {
+    return { kind: 'container', countNoun: undefined, container: household.noun };
+  }
+  return { kind: 'unknown', countNoun: undefined, container: undefined };
 }
 
 /**
@@ -146,11 +180,20 @@ export function parseIngredient(raw: unknown): IngredientParseResult {
       lineRef = original ?? name ?? '';
     }
 
+    // The canonical Phase 1 parse of the source text is the authority for the
+    // quantity-kind, unit classification, count noun, container, and package
+    // net mass. A true range never collapses to an amount.
+    const canonical = parseCanonicalIngredientParts(
+      (original ?? '').trim() ||
+        `${amount ?? ''} ${unit ?? ''} ${name ?? ''}`.replace(/\s+/g, ' ').trim(),
+      { includeCount: true }
+    );
+
     // Derive the food-name query. Never invent a food name.
     let query = (name ?? '').trim();
     if (!query) {
       const base = (original ?? '').trim();
-      if (base) query = parseRawIngredientMeasurementParts(base, { includeCount: true }).name.trim();
+      if (base) query = parseCanonicalIngredientParts(base, { includeCount: true }).foodText.trim();
       if (!query) query = base;
     }
     if (query.length === 0) return failure('empty_query');
@@ -158,7 +201,25 @@ export function parseIngredient(raw: unknown): IngredientParseResult {
 
     const originalText = (original ?? name ?? query).trim();
 
-    const measurement = normalizeIngredientMeasurement({ amount, unit, name: query });
+    // A stored range never keeps a single endpoint amount, even when the
+    // structured `amount` field was authored against the older parse.
+    const rangeQuantity =
+      canonical.quantity.kind === 'range' &&
+      canonical.quantity.lower !== null &&
+      canonical.quantity.upper !== null
+        ? { lower: canonical.quantity.lower, upper: canonical.quantity.upper }
+        : undefined;
+    const effectiveAmount = rangeQuantity !== undefined ? null : amount;
+
+    const measurement = normalizeIngredientMeasurement({ amount: effectiveAmount, unit, name: query });
+    const structuredUnit = classifyStructuredUnit(unit ?? undefined);
+    const quantityKind: CanonicalQuantityKind = rangeQuantity
+      ? 'range'
+      : effectiveAmount !== null
+        ? 'exact'
+        : canonical.quantity.kind === 'invalid'
+          ? 'invalid'
+          : canonical.quantity.kind;
     return {
       ok: true,
       parsed: {
@@ -173,6 +234,13 @@ export function parseIngredient(raw: unknown): IngredientParseResult {
         count: measurement.kind === 'count',
         query,
         note,
+        parse_version: CANONICAL_INGREDIENT_PARSE_VERSION,
+        quantity_kind: quantityKind,
+        quantity_range: rangeQuantity,
+        unit_kind: canonical.unitKind !== 'unknown' ? canonical.unitKind : structuredUnit.kind,
+        count_noun: canonical.countNoun ?? structuredUnit.countNoun,
+        container: canonical.container ?? structuredUnit.container,
+        package_net_mass: canonical.packageNetMass ?? undefined,
       },
     };
   } catch {
@@ -184,16 +252,22 @@ function parseRawLine(raw: string): IngredientParseResult {
   if (raw.length > MAX_INGREDIENT_TEXT_LENGTH) return failure('oversized_input');
   const trimmed = raw.trim();
   if (trimmed.length === 0) return failure('empty_query');
-  const parts = parseRawIngredientMeasurementParts(trimmed, { includeCount: true });
-  const query = parts.name.trim();
+  const canonical = parseCanonicalIngredientParts(trimmed, { includeCount: true });
+  const query = canonical.foodText.trim();
   if (query.length === 0) return failure('empty_query');
   if (query.length > MAX_INGREDIENT_TEXT_LENGTH) return failure('oversized_input');
 
   const measurement = normalizeIngredientMeasurement({
-    amount: parts.amount,
-    unit: parts.unit,
+    amount: canonical.quantity.kind === 'exact' ? canonical.quantity.amount : null,
+    unit: canonical.rawUnit,
     name: query,
   });
+  const quantityKind: CanonicalQuantityKind =
+    canonical.quantity.kind === 'range'
+      ? 'range'
+      : canonical.quantity.kind === 'exact' && canonical.quantity.amount !== null
+        ? 'exact'
+        : canonical.quantity.kind;
   return {
     ok: true,
     parsed: {
@@ -208,6 +282,18 @@ function parseRawLine(raw: string): IngredientParseResult {
       count: measurement.kind === 'count',
       query,
       note: undefined,
+      parse_version: CANONICAL_INGREDIENT_PARSE_VERSION,
+      quantity_kind: quantityKind,
+      quantity_range:
+        canonical.quantity.kind === 'range' &&
+        canonical.quantity.lower !== null &&
+        canonical.quantity.upper !== null
+          ? { lower: canonical.quantity.lower, upper: canonical.quantity.upper }
+          : undefined,
+      unit_kind: canonical.unitKind,
+      count_noun: canonical.countNoun ?? undefined,
+      container: canonical.container ?? undefined,
+      package_net_mass: canonical.packageNetMass ?? undefined,
     },
   };
 }

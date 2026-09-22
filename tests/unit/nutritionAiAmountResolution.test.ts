@@ -316,8 +316,11 @@ describe('AI amount interpretation — local verification', () => {
   });
 
   it('leaves the line unresolved when no authenticated compatible portion exists', () => {
-    // The garlic identity is resolved, but a celery hint cannot bind a portion.
-    const { adapted, rows, state, liveRows } = setup('3 garlic cloves, minced');
+    // The garlic identity is resolved, but the recipe line declares no count
+    // unit and a `stalk` hint cannot bind a compatible garlic portion.
+    // (Phase 1: `stalk` is now a closed household count noun, so this proves the
+    // no-compatible-portion path rather than a rejected-hint path.)
+    const { adapted, rows, state, liveRows } = setup('3 garlic, minced');
     const outcome = resolveAmountsFromAiSuggestions({
       session,
       rows,

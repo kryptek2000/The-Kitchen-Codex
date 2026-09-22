@@ -2612,6 +2612,131 @@ authenticates every candidate.
 household gram values, no new mass source, and no parsing or amount vocabulary. A
 vetted household-portion registry remains future work and is not implemented.
 
+### 20.12 Phase 1 — canonical ingredient parsing completeness
+
+Phase 1 makes deterministic parsing understand the quantity and household-unit
+language real recipes use, WITHOUT adding any mass authority. It introduces no
+household gram registry, no guessed grams, no new AI authority, no schema v2, no
+saved-hint persistence, and no automatic persistence. `parseCanonicalIngredientParts`
+(`src/utils/measurements.ts`) is the ONE canonical parse, and
+`parseRawIngredientMeasurementParts` is its legacy projection (there is no second
+parser).
+
+**Canonical quantity (exact vs range).** The parse exposes
+`quantity.kind ∈ {exact, range, absent, invalid}`, an exact `amount` populated
+ONLY for an exact quantity, and `lower`/`upper` endpoints for a true range
+(`1-2`, `1–2`, `1—2`, `1 to 2`, `1/4-1/2`, `1 1/2-2`). A range is NEVER collapsed
+to one endpoint: `amount` stays null, no grams are derived from a bound, and the
+complete range (including its unit) is removed from the food phrase with no
+fragments. Malformed ranges are unresolved (`invalid`): missing endpoints,
+reversed or non-positive endpoints, chained ranges (`1-2-3`), mixed-unit ranges
+(`1 cup-2 tbsp`), excessive endpoints (`MAX_CANONICAL_RANGE_QUANTITY`), dates
+(`2024-01-02`), negative signs, model numbers, and hyphenated food words. The
+pre-existing closed mixed-fraction contract is preserved: `2-1/2` is the mixed
+number `2 1/2`, never a reversed range. The canonical parse contract is versioned
+(`CANONICAL_INGREDIENT_PARSE_VERSION`); the query-normalization and projection
+version ids are unchanged because normalized-query semantics did not change —
+only the parsed food phrase does, and every digest binds the phrase it actually
+used, so stale selections fail closed.
+
+**Household count vocabulary (one owner).** `src/utils/householdUnits.ts` is the
+ONE canonical owner of the Phase 1 classifications: count nouns (clove, slice,
+piece, stick, head, stalk, sprig, bunch, leaf, fillet, breast, thigh, rib, strip,
+link, scoop, item) and containers (can, package, jar, box, bag, bottle), with
+closed singular/plural aliases. The legacy unit map and the calculation
+count-portion vocabulary derive from it (there is no fifth vocabulary). Count
+nouns are classified as count metadata and NEVER assigned mass. Newly recognized
+count units may enter the existing authenticated USDA count-portion path only
+when a compatible authenticated USDA portion exists and every existing
+digest/session binding passes; ambiguity still fails to review and otherwise the
+line stays `NEEDS AMOUNT`. No fallback gram table exists, and `jar`/`box`/`bag`/
+`bottle` are deliberately NOT count conversion units.
+
+**Count nouns after the food.** A trailing count noun whose grammatical role is
+unambiguous becomes amount metadata (`2 garlic cloves, minced` → unit `clove`,
+food `garlic, minced`; `2 celery stalks` → `celery`; `4 bacon slices` → `bacon`).
+Identity-bearing count nouns (`3 chicken breasts`, `4 spare ribs`, `2 bay
+leaves`, `2 salmon fillets`, `2 fish sticks`, `2 sausage links`, `2 lemon strips`)
+are still recorded as amount metadata but are deliberately RETAINED in the food
+phrase, because removing them would erase a true food head. Classification
+requires an explicit quantity and uses token-boundary/grammatical-position logic
+only: `bottle gourd`, `head cheese`, `spare ribs`, `bagel`, `breadstick`, and
+`chicken-fried` are never split by substring replacement.
+
+**Compound-food collision policy.** A leading household unit must never erase a
+true food head. `src/utils/householdUnits.ts` owns a closed, bounded collision
+map of unit nouns that also begin a legitimate compound food name —
+`bottle gourd`, `head cheese`, `leaf lettuce` (singular and plural heads) — with
+each entry documented. A collision head immediately after the unit (without an
+explicit `of` separator) leaves the unit token in the food identity: `1 bottle
+gourd` / `2 bottle gourds` keep food `bottle gourd(s)` with no container
+classification and no mass, and `1 head cheese` keeps `head cheese`. An explicit
+separator is unambiguous container grammar (`1 bottle of hot sauce` classifies
+`bottle`), and ordinary container lines are unaffected (`1 bottle hot sauce`,
+`1 jar marinara sauce`, `1 box pasta`, `1 bag spinach`, `1 can black beans`,
+`1 head cabbage`). This is deliberately NOT a broad food lexicon, and collision
+detection is token-boundary based. Substring safety is unchanged: `bagel`,
+`breadstick`, `chicken-fried`, `spring roll`, `fish sticks`, `spare ribs`,
+`sausage links`, `bay leaves`, and `lemon strips` are never split.
+
+**Container/state cleanup never widens authority.** Cleaning a package or
+container expression may only restore an identity that the equivalent ordinary
+line already has. `chickpeas`, `1 can chickpeas`, `drained chickpeas`, and
+`1 can drained chickpeas` share the established automatic identity
+`Chickpeas, NFS` (a state-neutral record that asserts no raw/cooked/canned/
+drained claim); the package forms `1 400 g can chickpeas`, `1 can (400 g)
+chickpeas`, and `1 (400 g) can chickpeas` bind exactly that same identity and
+never a stronger one. State-ambiguous or non-matching wording withholds
+automatic authority and stays reviewable: `canned chickpeas`, `garbanzo beans`,
+and `1 can garbanzo beans` bind nothing automatically, and `canned` is retained
+in the food phrase. No package net mass is calculation authority, and no false
+state claim is ever produced.
+
+**Package net mass.** An explicit package net mass is extracted and represented
+truthfully and separately from the outer count: `(15 oz) can`, `400 g can`,
+`can (15 ounces)`, with `per_container` vs `total` scope only where the grammar
+is deterministic. The outer count quantity, container, net-mass quantity/unit,
+scope, core food phrase, and original text are retained independently. The parse
+NEVER multiplies package count by package mass, never converts the net mass into
+mass authority, and never treats it as a generic container mass; no manufacturer
+lookup, web lookup, AI interpretation, or package-size table is involved.
+
+**State / size / variety preservation.** Preparation, state, size, variety, and
+preparation words are retained for later projection (`2 medium potatoes`, `1 red
+bell pepper`, `1 can diced tomatoes`, `1 lb ground beef`, `2 cups cooked rice`,
+`1 cup dry rice`, `fresh thyme`, `dried thyme`). Classifying a count/container
+token never discards them.
+
+**Matching and calculation boundaries (unchanged authority).** Parsing cleanup
+may improve the food text used by matching, but automatic-match safety
+thresholds, the Phase 0A secondary-component veto, the Phase 0B effective-mass
+authority, direct recipe mass, and the authenticated-only mass rules are all
+unchanged. Ranges do not calculate from an endpoint; package net mass is not
+generic mass; newly recognized household units derive grams only from
+authenticated USDA portions; otherwise a line remains reviewable or
+`NEEDS AMOUNT`. AI still cannot supply range endpoints, package mass, FDC ids,
+grams, portion indices, digests, or authorization.
+
+**Count-vocabulary differential (measured).** Against the real pinned bundle
+(13,559 eligible records), the Phase 1 count vocabulary adds 648 newly
+classified portions (fillet 169, breast 114, thigh 107, scoop 78, leaf 48,
+link 46, strip 39, rib 21, sprig 11, stalk 10, bunch 5) and reclassifies 339
+portions from a bare-size or compound wording to the correct unit (for example
+`strip large`, `breast medium`, `bun-size … link`); no portion lost a
+classification, and 669 records changed count-candidate membership for the
+closed probe set (571 gained a new-unit candidate, 150 narrowed their
+size-only candidates). Every change is a candidate-membership change; there
+were zero digest-only changes, no lost authenticated match, and no generic
+weight. `3 large carrots` now resolves only the authenticated whole-large-carrot
+portion (72 g) because the record's `strip large (3" long)` portion is
+correctly a strip (verified as a 7 g strip candidate under a strip
+requirement), and calculation and live projection agree at 3 x 72 g.
+
+**Not implemented.** Phase 2 food-class projection/ranking redesign, a household
+gram registry, density conversions, generic package weights, AI-authored grams
+or ids, schema v2, saved-hint persistence, and the source-portion
+catalog-digest revision remain future work and do not exist.
+
 ---
 
 ## 21. Phase 4.5E — authenticated count-portion resolution

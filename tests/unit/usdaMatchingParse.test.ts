@@ -86,12 +86,18 @@ describe('phase 2 parse — structured and raw ingredients', () => {
   });
 
   it('keeps unknown / pinch / dash / to-taste unmeasurable', () => {
-    for (const line of ['a pinch of salt', '1 dash cinnamon', 'salt to taste', '1 bunch parsley']) {
+    for (const line of ['a pinch of salt', '1 dash cinnamon', 'salt to taste']) {
       const result = parsed(line);
       expect(result.measurement_kind, line).toBe('unknown');
       expect(result.grams, line).toBeUndefined();
       expect(result.milliliters, line).toBeUndefined();
     }
+    // Phase 1: `bunch` is a household count noun (count, never mass).
+    const bunch = parsed('1 bunch parsley');
+    expect(bunch.measurement_kind).toBe('count');
+    expect(bunch.count_noun).toBe('bunch');
+    expect(bunch.grams).toBeUndefined();
+    expect(bunch.milliliters).toBeUndefined();
   });
 
   it('never defaults a missing amount to 1', () => {

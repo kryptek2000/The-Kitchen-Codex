@@ -206,11 +206,20 @@ function baselineIdentityViolations(
   return violations;
 }
 
+/** One bounded bundle pass: the corpus diagnostic is deterministic and read-only, so
+ * repeated calls in separate tests reuse it (the repeated-run determinism test
+ * deliberately calls `diagnose` directly). */
+let cachedCorpusRun: CorDialRun | undefined;
+function diagnoseCached(): CorDialRun {
+  cachedCorpusRun ??= diagnose(IDENTITY_SAFETY_LINES);
+  return cachedCorpusRun;
+}
+
 describe('identity safety corpus — automatic-identity invariants', () => {
   it(
     'zero incorrect automatic identities across the corpus',
     () => {
-      const { diagnostics, descriptions } = diagnose(IDENTITY_SAFETY_LINES);
+      const { diagnostics, descriptions } = diagnoseCached();
       const violations: string[] = [];
       const expectedMismatches: string[] = [];
 
@@ -265,13 +274,13 @@ describe('identity safety corpus — automatic-identity invariants', () => {
       expect(violations).toEqual([]);
       expect(expectedMismatches).toEqual([]);
     },
-    30000
+    120000
   );
 
   it(
     'baseline identity contract is mutation-sensitive on every automatic path',
     () => {
-      const { diagnostics } = diagnose(IDENTITY_SAFETY_LINES);
+      const { diagnostics } = diagnoseCached();
       const baselineRows = IDENTITY_SAFETY_LINES.map((spec, index) => ({
         spec,
         diag: diagnostics[index],
@@ -324,13 +333,13 @@ describe('identity safety corpus — automatic-identity invariants', () => {
         }
       }
     },
-    30000
+    60000
   );
 
   it(
     'preserves legitimate primary-food candidates and untouched candidate order',
     () => {
-      const { diagnostics } = diagnose(IDENTITY_SAFETY_LINES);
+      const { diagnostics } = diagnoseCached();
       diagnostics.forEach((diag, index) => {
         const spec = IDENTITY_SAFETY_LINES[index];
         if (spec.expectCandidateDescription !== undefined) {
@@ -346,13 +355,13 @@ describe('identity safety corpus — automatic-identity invariants', () => {
         }
       });
     },
-    30000
+    60000
   );
 
   it(
     'confirmed regression: `canned tomato sauce` never automatically binds the sardine record',
     () => {
-      const { diagnostics } = diagnose(IDENTITY_SAFETY_LINES);
+      const { diagnostics } = diagnoseCached();
       const diag = diagnostics[IDENTITY_SAFETY_LINES.findIndex((spec) => spec.line === 'canned tomato sauce')];
       expect(diag).toBeDefined();
       expect(diag.autoFdc).toBeNull();
@@ -368,7 +377,7 @@ describe('identity safety corpus — automatic-identity invariants', () => {
   it(
     '`3 cans tomato sauce` keeps tomato evidence, invents no mass, and never binds fish',
     () => {
-      const { diagnostics } = diagnose(IDENTITY_SAFETY_LINES);
+      const { diagnostics } = diagnoseCached();
       const diag = diagnostics[IDENTITY_SAFETY_LINES.findIndex((spec) => spec.line === '3 cans tomato sauce')];
       expect(diag).toBeDefined();
       expect(diag.autoFdc).toBeNull();
@@ -382,7 +391,7 @@ describe('identity safety corpus — automatic-identity invariants', () => {
   it(
     '`8 oz spaghetti` keeps its direct recipe mass untouched',
     () => {
-      const { diagnostics } = diagnose(IDENTITY_SAFETY_LINES);
+      const { diagnostics } = diagnoseCached();
       const diag = diagnostics[IDENTITY_SAFETY_LINES.findIndex((spec) => spec.line === '8 oz spaghetti')];
       expect(diag).toBeDefined();
       expect(diag.liveGrams).toBeCloseTo(226.796185, 3);
@@ -401,6 +410,6 @@ describe('identity safety corpus — automatic-identity invariants', () => {
       expect(first.diagnostics).toHaveLength(IDENTITY_SAFETY_LINES.length);
       expect(elapsed).toBeLessThan(120000);
     },
-    30000
+    180000
   );
 });

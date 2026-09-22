@@ -46,6 +46,11 @@ import { isPlainObject, toInertValue } from '../schema';
 import { canonicalStringify, sha256Hex } from '../usda/digest';
 import type { CanonicalPortionRecord, CanonicalUsdaFoodRecord } from '../usda/types';
 import { parseAmount } from '../../../utils/measurements';
+import {
+  canonicalHouseholdUnit,
+  householdCountNouns,
+  householdUnitAliases,
+} from '../../../utils/householdUnits';
 import { CALCULATION_VERSION, type Phase3Failure } from './types';
 
 /** Explicit count-portion contract version (part of selection bindings). */
@@ -157,27 +162,17 @@ export interface CountPortionSelection {
 /**
  * Canonical count-unit spellings. `normalizeCountToken` collapses regular plurals
  * and the closed synonym set; no other noun is ever a count unit.
+ *
+ * The Phase 1 household count nouns (clove, slice, piece, stick, head, stalk,
+ * sprig, bunch, leaf, fillet, breast, thigh, rib, strip, link, scoop, item) are
+ * derived from the ONE vocabulary owner (`src/utils/householdUnits.ts`) plus the
+ * pre-existing calculation-layer extras (serving, egg, container, bun/roll,
+ * pickle). Containers (can/package are pre-existing here; jar/box/bag/bottle are
+ * deliberately NOT count units) never gain a count conversion from Phase 1.
  */
-const COUNT_UNIT_TOKENS: Readonly<Record<string, string>> = Object.freeze({
-  slice: 'slice',
-  slices: 'slice',
-  piece: 'piece',
-  pieces: 'piece',
-  item: 'item',
-  items: 'item',
+const BASE_COUNT_UNIT_TOKENS: Readonly<Record<string, string>> = Object.freeze({
   serving: 'serving',
   servings: 'serving',
-  clove: 'clove',
-  cloves: 'clove',
-  can: 'can',
-  cans: 'can',
-  package: 'package',
-  packages: 'package',
-  pkg: 'package',
-  stick: 'stick',
-  sticks: 'stick',
-  head: 'head',
-  heads: 'head',
   egg: 'egg',
   eggs: 'egg',
   container: 'container',
@@ -188,7 +183,22 @@ const COUNT_UNIT_TOKENS: Readonly<Record<string, string>> = Object.freeze({
   rolls: 'roll',
   pickle: 'pickle',
   pickles: 'pickle',
+  can: 'can',
+  cans: 'can',
+  package: 'package',
+  packages: 'package',
+  pkg: 'package',
 });
+
+const COUNT_UNIT_TOKENS: Readonly<Record<string, string>> = (() => {
+  const out: Record<string, string> = { ...BASE_COUNT_UNIT_TOKENS };
+  for (const token of householdUnitAliases()) {
+    const unit = canonicalHouseholdUnit(token);
+    if (unit?.kind === 'count') out[token] = unit.noun;
+  }
+  for (const noun of householdCountNouns()) out[noun] ??= noun;
+  return Object.freeze(out);
+})();
 
 /** Bounded, symmetric equivalences only where real culinary identity holds. */
 const COUNT_UNIT_EQUIVALENCES: ReadonlyArray<readonly [string, string]> = Object.freeze([
