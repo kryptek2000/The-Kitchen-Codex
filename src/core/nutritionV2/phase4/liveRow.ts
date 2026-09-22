@@ -23,14 +23,17 @@
  * The Phase 3 calculator remains the final numerical authority.
  */
 
-import { convertMassToGrams, type NormalizedUnit } from '../../../utils/measurements';
+import { resolveEffectiveMassDecision } from '../calculation/effectiveMass';
+import type { CountRequirementHint } from '../calculation/countPortion';
 import {
   derivedSourcePortionGrams,
   ingredientCountAmount,
   ingredientMeasurement,
   ingredientMeasurementKind,
+  lineCalculationInput,
   type IngredientMeasurementView,
 } from './rows';
+import { canonicalCountRequirementHint } from './countContext';
 import type { AnalyzedRow } from './analyzer';
 import type { AiResolutionIssueKind } from '../aiResolution';
 import type {
@@ -108,9 +111,10 @@ function deterministicCountGrams(
   session: AdvancedNutritionSession,
   entry: AdaptedIngredient,
   fdcId: number,
-  countAmount: number
+  countAmount: number,
+  hint?: CountRequirementHint
 ): number | undefined {
-  const review = session.reviewCountPortions(entry.ingredient, fdcId);
+  const review = session.reviewCountPortions(entry.ingredient, fdcId, hint);
   if (!review.ok) return undefined;
   const candidates = review.review.candidates;
   if (candidates.length === 0) return undefined;
@@ -226,6 +230,29 @@ export function projectLiveRow(input: LiveRowProjectionInput): LiveRowState {
   const count = state.countPortions[lineRef];
   const userMass = state.userMasses[lineRef];
 
+  // The recipe's own declared direct mass (g/kg/oz/lb), when the line declares
+  // one. It is food-independent and survives a food change.
+  const directMassGrams =
+    measurement !== undefined &&
+    measurement.measurement_kind === 'mass' &&
+    typeof measurement.grams === 'number' &&
+    Number.isFinite(measurement.grams) &&
+    !Object.is(measurement.grams, -0) &&
+    measurement.grams >= 0
+      ? measurement.grams
+      : undefined;
+
+  // THE ONE effective-mass authority, shared with the calculator. A conflict
+  // (direct mass + explicit user total, or more than one non-direct source)
+  // fails closed here exactly as it fails the calculation request: no mass and
+  // no source are displayed.
+  const authority = resolveEffectiveMassDecision({
+    directMassGrams,
+    hasUserMass: userMass !== undefined,
+    hasSourcePortion: portion !== undefined,
+    hasCountPortion: count !== undefined,
+  });
+
   let resolvedGrams: number | undefined;
   let massSource: LiveRowMassSource | undefined;
   let portionIndex: number | undefined;
@@ -233,54 +260,64 @@ export function projectLiveRow(input: LiveRowProjectionInput): LiveRowState {
   let userMassUnit: string | undefined;
   let sourcePortionAutomatic = false;
 
-  if (userMass) {
-    const grams = convertMassToGrams(userMass.quantity, userMass.unit as NormalizedUnit);
-    if (grams !== undefined && grams > 0) {
-      resolvedGrams = grams;
-      massSource = 'user_mass';
-    }
-    userMassQuantity = userMass.quantity;
-    userMassUnit = userMass.unit;
-  } else if (
-    // DIRECT RECIPE MASS IS AUTHORITATIVE. When the recipe line already supplies
-    // a direct mass (g / kg / oz / lb), that mass resolves the row WITHOUT any
-    // USDA source portion, and it survives a food change (only food-dependent
-    // portion/count state is invalidated). This is checked before source
-    // portions/counts so a direct mass is never dependent on a portion.
-    measurement !== undefined &&
-    measurement.measurement_kind === 'mass' &&
-    measurement.grams !== undefined &&
-    Number.isFinite(measurement.grams) &&
-    measurement.grams > 0
-  ) {
-    resolvedGrams = measurement.grams;
+  if (authority.kind === 'direct_mass') {
+    resolvedGrams = authority.grams;
     massSource = 'direct_mass';
-  } else if (portion) {
-    const grams = derivedSourcePortionGrams(portion.selection, measurement ?? {
-      amount: null,
-      raw_unit: undefined,
-      measurement_kind: 'unknown',
-      milliliters: undefined,
-      grams: undefined,
+  } else if (
+    (authority.kind === 'user_mass' ||
+      authority.kind === 'source_portion' ||
+      authority.kind === 'count_portion') &&
+    entry !== undefined
+  ) {
+    // FULL-BINDING DISPLAY VERIFICATION. For every explicit non-direct mass
+    // choice the display derives its grams and source from the ONE calculation
+    // engine itself: a bounded per-line dry-run through the genuine session,
+    // built from the SAME shared per-line input the calculation request uses.
+    // The calculator independently re-verifies every binding (ingredient
+    // identity digest, line, FDC/record, bundle, catalog, candidate-set
+    // digest, canonical hint, portion binding, quantity, and the selection
+    // digest) — so the display can never claim a mass, source, or provenance
+    // the calculator rejects, and a stale/forged/hand-built selection fails
+    // closed on both surfaces identically.
+    const dry = session.calculate({
+      servings: 1,
+      nutrient_scope: ['calories'],
+      ingredients: [lineCalculationInput(entry, state, row)],
     });
-    if (grams !== undefined) {
-      resolvedGrams = grams;
-      massSource = 'source_portion';
-      portionIndex = portion.portion_index;
-      sourcePortionAutomatic = portion.automatic === true;
+    if (dry.ok) {
+      const evidence = dry.preview.ingredients[0];
+      if (
+        evidence.resolved_grams !== undefined &&
+        evidence.mass_source !== undefined &&
+        (evidence.mass_source === 'user_mass' ||
+          evidence.mass_source === 'source_portion' ||
+          evidence.mass_source === 'count_portion')
+      ) {
+        resolvedGrams = evidence.resolved_grams;
+        massSource = evidence.mass_source;
+        portionIndex = evidence.portion_index;
+        if (evidence.mass_source === 'user_mass') {
+          userMassQuantity = evidence.user_mass_quantity;
+          userMassUnit = evidence.user_mass_unit;
+        }
+        if (evidence.mass_source === 'source_portion') {
+          sourcePortionAutomatic = portion?.automatic === true;
+        }
+      }
     }
-  } else if (count) {
-    const grams = derivedCountPortionGrams(count.selection, countAmount);
-    if (grams !== undefined) {
-      resolvedGrams = grams;
-      massSource = 'count_portion';
-      portionIndex = count.portion_index;
-    }
-  } else if (selectedFdcId !== undefined && entry) {
+  } else if (authority.kind === 'none' && selectedFdcId !== undefined && entry) {
     // Automatic count resolution (the calculator resolves a unique authenticated
-    // count identity without an explicit selection). Display-only derivation.
+    // count identity without an explicit selection). Display-only derivation
+    // through the canonical count-hint context (no stored choice here, so the
+    // hint is absent, exactly as in the calculation request).
     if (ingredientMeasurementKind(entry) === 'count' && countAmount !== null) {
-      const grams = deterministicCountGrams(session, entry, selectedFdcId, countAmount);
+      const grams = deterministicCountGrams(
+        session,
+        entry,
+        selectedFdcId,
+        countAmount,
+        canonicalCountRequirementHint(state, lineRef)
+      );
       if (grams !== undefined) {
         resolvedGrams = grams;
         massSource = 'count_portion';

@@ -156,8 +156,7 @@ function resolvePersistenceMode(
   }
 }
 
-/** Maps a genuine Phase 4 re-derivation failure onto the closed Phase 5A set. */
-function mapPhase4Failure(code: string): Phase5AuthorizationFailureCode {
+/** Maps a genuine Phase 4 re-derivation failure onto the closed Phase 5A set. */function mapPhase4Failure(code: string): Phase5AuthorizationFailureCode {
   switch (code) {
     case 'invalid_session':
       return 'unresolved_authority';
@@ -422,6 +421,35 @@ export function authorizeNutritionPersistence(requestRaw: unknown): Phase5Author
 
     // --- Build the canonical block from the GENUINE result ------------------
     const built = buildPersistenceBlock(trusted.preview, computedAt.value);
+
+    // --- REPLACE-MODE REGRESSION GATE ---------------------------------------
+    // An explicit re-Apply must never silently downgrade a previously applied
+    // and reviewed ingredient line from resolved mass to unresolved. When the
+    // existing block binds a line that the freshly derived result can no
+    // longer resolve (for example a hint-dependent count portion the current
+    // context cannot re-authenticate), authorization fails closed until the
+    // user resolves that mass again — the saved applied report stays
+    // untouched and no provenance downgrade is ever written. Lines whose
+    // line_ref no longer exists in the derived result (edited recipe lines)
+    // are not comparable and never block.
+    if (existingField.present) {
+      // The existing block may be stored in its encoded frontmatter form; use
+      // the SAME decoding the mode resolution already performed.
+      const decodedExisting = decodeCodexNutrition(existingField.value);
+      if (decodedExisting.kind === 'v1') {
+        const derivedResolved = new Set(
+          built.block.ingredients.filter((entry) => entry.resolved === true).map((entry) => entry.line_ref)
+        );
+        for (const applied of decodedExisting.value.ingredients) {
+          if (applied.resolved !== true) continue;
+          if (derivedResolved.has(applied.line_ref)) continue;
+          const stillInRecipe = trusted.preview.ingredients.some(
+            (entry) => entry.line_ref === applied.line_ref
+          );
+          if (stillInRecipe) return fail('applied_line_unresolved');
+        }
+      }
+    }
 
     // --- Final schema validation gate (never bypass) ------------------------
     const validation = validateCodexNutritionV1(built.block);

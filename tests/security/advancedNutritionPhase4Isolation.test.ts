@@ -142,6 +142,7 @@ describe('phase 4 isolation — source purity', () => {
         'aiAmountResolve.ts',
         'aiResolve.ts',
         'analyzer.ts',
+        'countContext.ts',
         'countPortion.ts',
         'display.ts',
         'hydrate.ts',

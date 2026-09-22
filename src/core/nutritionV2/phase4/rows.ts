@@ -11,6 +11,7 @@ import { parseIngredient } from '../matching/parse';
 import { projectQueryText } from '../matching/query';
 import { candidatePortionCompatibility } from '../calculation/portionSemantics';
 export { candidatePortionCompatibility };
+import { canonicalCountRequirementHint } from './countContext';
 import {
   convertMassToGrams,
   type MeasurementKind,
@@ -152,6 +153,25 @@ export function buildReviewRows(
 export function ingredientNeedsPortion(entry: AdaptedIngredient): boolean {
   const parsed = parseIngredient(entry.ingredient);
   return parsed.ok && parsed.parsed.measurement_kind !== 'mass';
+}
+
+/**
+ * True when the ingredient line itself declares a usable direct recipe mass
+ * (g/kg/oz/lb). Such a line already has COMPLETE mass authority: the ONE
+ * shared creation gate — every core mass-choice builder calls this — refuses
+ * to create any alternate mass choice (user total, source portion, or count
+ * portion) for it, and the effective-mass decision fails any conflicting
+ * hand-built state closed.
+ */
+export function hasDirectRecipeMass(ingredient: unknown): boolean {
+  const parsed = parseIngredient(ingredient);
+  return (
+    parsed.ok &&
+    parsed.parsed.measurement_kind === 'mass' &&
+    typeof parsed.parsed.grams === 'number' &&
+    Number.isFinite(parsed.parsed.grams) &&
+    parsed.parsed.grams >= 0
+  );
 }
 
 /** The deterministic measurement dimension of an adapted ingredient. */
@@ -296,9 +316,57 @@ function reviewReference(row: Phase4Row): unknown {
 }
 
 /**
- * Builds the explicit Phase 3 calculation request from the current review state.
+ * Builds the explicit Phase 3 calculation input for ONE adapted ingredient from
+ * the current review state. This is the ONE construction shared by the full
+ * request builder and the live projection's bounded per-line verification
+ * dry-run, so the calculator and the display always re-derive the identical
+ * identity digest and selection context for the same line and working state.
  * Only explicitly user-confirmed matches and portions are supplied; ambiguous
  * rows remain unresolved (never auto-selected).
+ */
+export function lineCalculationInput(
+  entry: AdaptedIngredient,
+  state: Phase4State,
+  row: Phase4Row | undefined
+): Record<string, unknown> {
+  const choice = state.matches[entry.line_ref];
+  const portion = state.portions[entry.line_ref];
+  const countPortion = state.countPortions[entry.line_ref];
+  const userMass = state.userMasses[entry.line_ref];
+  // The ONE canonical count-identity context for this line: the sanitized
+  // bounded hint bound to the stored count-portion choice. The calculator
+  // re-derives the SAME candidate set/digest the live projection displays.
+  const countRequirementHint = canonicalCountRequirementHint(state, entry.line_ref);
+  // Any explicit user decision is supplied, not only a `review_required` row:
+  // a user can manually select a USDA food for an `unmatched` (or
+  // `matched_exact`) line via the full-catalog manual search, and that
+  // selection must reach the calculation (and therefore persistence) — the
+  // calculator independently re-authenticates it and fails closed if invalid.
+  const confirmed = row !== undefined && choice !== undefined;
+  return {
+    line_ref: entry.line_ref,
+    ingredient: entry.ingredient,
+    ...(confirmed
+      ? { review: reviewReference(row), selection: selectionFor(choice, entry.line_ref) }
+      : {}),
+    ...(confirmed && choice?.automatic === true ? { automatic_selection: true } : {}),
+    ...(portion ? { portion_selection: portion.selection } : {}),
+    ...(countPortion
+      ? {
+          count_portion_selection: countPortion.selection,
+          // The canonical bounded count-identity hint accompanies the
+          // selection so the calculator re-derives the SAME candidate set.
+          ...(countRequirementHint !== undefined
+            ? { count_requirement_hint: countRequirementHint }
+            : {}),
+        }
+      : {}),
+    ...(userMass ? { user_mass_selection: userMass.selection } : {}),
+  };
+}
+
+/**
+ * Builds the explicit Phase 3 calculation request from the current review state.
  */
 export function buildCalculationRequest(
   adapted: ReadonlyArray<AdaptedIngredient>,
@@ -308,38 +376,6 @@ export function buildCalculationRequest(
   return {
     servings: state.baseServings,
     nutrient_scope: [...NUTRIENT_IDS],
-    ingredients: adapted.map((entry) => {
-      const row = rowByRef.get(entry.line_ref);
-      const choice = state.matches[entry.line_ref];
-      const portion = state.portions[entry.line_ref];
-      const countPortion = state.countPortions[entry.line_ref];
-      const userMass = state.userMasses[entry.line_ref];
-      // Any explicit user decision is supplied, not only a `review_required` row:
-      // a user can manually select a USDA food for an `unmatched` (or
-      // `matched_exact`) line via the full-catalog manual search, and that
-      // selection must reach the calculation (and therefore persistence) — the
-      // calculator independently re-authenticates it and fails closed if invalid.
-      const confirmed = row !== undefined && choice !== undefined;
-      return {
-        line_ref: entry.line_ref,
-        ingredient: entry.ingredient,
-        ...(confirmed
-          ? { review: reviewReference(row), selection: selectionFor(choice, entry.line_ref) }
-          : {}),
-        ...(confirmed && choice?.automatic === true ? { automatic_selection: true } : {}),
-        ...(portion ? { portion_selection: portion.selection } : {}),
-        ...(countPortion
-          ? {
-              count_portion_selection: countPortion.selection,
-              // The bounded count-identity hint (when present) accompanies the
-              // selection so the calculator re-derives the SAME candidate set.
-              ...(countPortion.countRequirementHint !== undefined
-                ? { count_requirement_hint: countPortion.countRequirementHint }
-                : {}),
-            }
-          : {}),
-        ...(userMass ? { user_mass_selection: userMass.selection } : {}),
-      };
-    }),
+    ingredients: adapted.map((entry) => lineCalculationInput(entry, state, rowByRef.get(entry.line_ref))),
   };
 }

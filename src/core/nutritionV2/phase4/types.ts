@@ -90,6 +90,14 @@ export const PHASE4_USER_MASS_LABEL = 'Enter total weight for this ingredient li
 export const PHASE4_USER_MASS_NOTE =
   'A user-entered total weight applies to this ingredient line only. It is not a density and is never saved.';
 export const PHASE4_USER_MASS_CONFIRM_LABEL = 'Use this weight';
+/**
+ * Phase 0B direct-mass note. A line that already declares its own recipe mass
+ * (g/kg/oz/lb) uses that authoritative recipe mass; the manual total-weight
+ * fallback is deliberately not offered for it (the calculator refuses the
+ * conflicting state closed rather than silently preferring one source).
+ */
+export const PHASE4_DIRECT_MASS_NOTE =
+  'This ingredient line already declares a recipe weight, so the recipe weight is used. A manual total weight is not needed.';
 export const PHASE4_PORTION_SECTION_LABEL = 'USDA source portions';
 export const PHASE4_USER_MASS_SECTION_LABEL = 'Or enter a total weight';
 

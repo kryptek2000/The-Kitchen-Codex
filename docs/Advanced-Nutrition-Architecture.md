@@ -2528,6 +2528,90 @@ marked `knownIssue` and only forbid a NEW automatic identity; they do not bless
 the current one. The corpus is a diagnostic baseline for later phases, not an
 approval of any household-portion or parsing design.
 
+### 20.11 Phase 0B — effective-mass authority + count-hint projection parity
+
+Phase 0B removes two authority/presentation inconsistencies that let a row display
+one mass source while the calculator used another, or display a count-portion
+candidate set the calculator would not authenticate. No new mass source, no
+threshold, ranking, parsing, amount, persistence, or AI-authority change is made.
+
+**ONE effective-mass authority.** `resolveEffectiveMassDecision` in
+`src/core/nutritionV2/calculation/effectiveMass.ts` is the single decision used by
+BOTH the calculator and the live projection. The effective source is exactly one
+of: the declared direct recipe mass (g/kg/oz/lb, highest), an explicit
+user-entered total mass, an authenticated USDA source portion, or an
+authenticated USDA count portion. More than one non-direct selection is a
+CONFLICT (`multiple_sources`), and a direct recipe mass is EXCLUSIVE with EVERY
+alternate mass choice: direct + user total
+(`direct_mass_with_user_mass`), direct + source portion
+(`direct_mass_with_source_portion`), direct + count portion
+(`direct_mass_with_count_portion`), and direct + several alternates
+(`direct_mass_with_multiple_alternates`) are all conflicts. A conflicting state
+yields NO authoritative mass: the calculation request fails closed
+(`invalid_portion_selection`), the live row reports no mass and no source, and
+Apply is refused, so the UI can never display one source while the calculator
+uses another. A direct-mass line therefore offers NO alternate mass choice at
+all: the ONE shared creation gate (`hasDirectRecipeMass`) makes
+`buildUserMassChoice`, `buildPortionChoice`, and `buildCountPortionChoice` refuse
+to create any alternate choice for such a line, and the working review renders
+only the bounded informational note that the recipe-declared mass is used (no
+selectable source/count portion radio, no manual total weight, no `selected`
+chip for an ignored alternate). Re-analysis clears stale invalid alternates,
+after which the direct mass becomes authoritative again.
+
+**ONE canonical count-hint context.**
+`src/core/nutritionV2/phase4/countContext.ts` owns the bounded advisory
+count-identity hint for one working line: the sanitized hint bound to its stored
+count-portion choice. Candidate review (modal), the calculation request, the
+calculator's independent re-derivation, the live projection, and AI-assisted
+deterministic resolution all use this same context, so the normalized
+requirement, candidate set, deterministic ordering, candidate-set digest, and
+selected portion binding are identical across consumers. A selection built
+through `buildCountPortionChoice` preserves its hint. A malformed stored hint is
+ignored fail-closed for display and dropped by the canonical context; a hint for
+one line, quantity, or food never binds another (the reducer clears the count
+choice on a food change, and the calculator rejects stale-digest, cross-line, and
+cross-quantity selections). Hydration's canonical context is the no-hint context
+(schema v1 does not persist a hint) and the deterministic analyzer runs before any
+hint exists; neither invents one.
+
+**Full live-display binding verification.** For every explicit non-direct mass
+choice the live projection derives its displayed grams and source from the ONE
+calculation engine itself: a bounded per-line calculation dry-run built from the
+SAME shared per-line input (`lineCalculationInput`) the calculation request uses.
+The calculator independently re-verifies the full binding contract (ingredient
+identity digest, line reference, FDC id, bundle release, catalog digest where the
+contract carries one, record digest, candidate-set digest, canonical hint,
+portion binding, quantity, and the selection digest), so the display can never
+claim a mass, source, or provenance the calculator rejects; a stale, forged,
+cross-bound, or hand-built selection fails closed identically on both surfaces.
+Source-portion selections deliberately carry no `catalog_digest` today (the
+calculator does not verify one either); closing that gap is recorded as a later
+contract revision, not done here.
+
+**Truthful Apply→reopen provenance.** Apply persists the calculator's own
+evidence, and the persisted schema-v1 block remains numerically and historically
+truthful at Apply time. On reopen, a saved line whose basis is OMITTED (the
+schema-v1 user-mass contract) hydrates as `user_mass`; a saved line whose basis
+declares a USDA portion basis (`source_portion`) that the current context cannot
+re-authenticate (for example a hint-dependent count portion, since schema v1
+cannot persist the hint) restores only the reviewed FOOD identity: no user mass
+is fabricated, no `user-entered` label is shown, the line stays NEEDS AMOUNT,
+and the saved applied report is preserved unchanged. A replace-mode re-Apply
+whose result would leave a previously applied line unresolved is REFUSED
+(`applied_line_unresolved`) until that mass is resolved again, so no provenance
+downgrade is ever written. Schema v2 (preserving hint-dependent count
+provenance) remains future work and does not exist.
+
+**Hint authority.** The hint remains interpretation-only: it may fill a missing
+count unit/size from the closed vocabulary and never supplies an amount, FDC id,
+gram weight, portion index, or digest. Local deterministic code regenerates and
+authenticates every candidate.
+
+**No household registry.** Phase 0B adds no household-portion registry, no
+household gram values, no new mass source, and no parsing or amount vocabulary. A
+vetted household-portion registry remains future work and is not implemented.
+
 ---
 
 ## 21. Phase 4.5E — authenticated count-portion resolution

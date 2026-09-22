@@ -20,8 +20,12 @@
  * is built through the genuine session (`buildPortionChoice`,
  * `buildCountPortionChoice`, `buildUserMassChoice`), which independently
  * re-authenticates the manual food selection against the pinned bundle. If any
- * piece cannot be re-authenticated, that row is left unresolved — no authority is
- * invented.
+ * piece cannot be re-authenticated, that row is left unresolved — no authority
+ * is invented. In particular, a saved line whose basis declares a USDA portion
+ * basis (`source_portion`) that cannot be re-authenticated NEVER hydrates as a
+ * user-entered mass: the reviewed food identity is restored and the mass stays
+ * unresolved (truthful fail-closed degradation; schema v1 cannot preserve
+ * hint-dependent count provenance).
  *
  * HYDRATION IS PER-LINE_BOUND: only a saved evidence line whose `line_ref`
  * exactly equals the CURRENT adapted line reference hydrates. The line reference
@@ -214,10 +218,17 @@ export function hydrateWorkingReview(
       }
     }
 
-    if (!bound) {
-      // Explicit recovery of the reviewed total as a user-entered weight. The
+    if (!bound && evidence.conversion_basis === undefined) {
+      // ONLY a saved line whose basis is OMITTED — the existing schema-v1
+      // user-mass contract — may hydrate as a user-entered total weight. The
       // builder re-authenticates the manual food selection through the genuine
-      // session; if it fails, the row stays unresolved rather than inventing mass.
+      // session; if it fails, the row stays unresolved rather than inventing
+      // mass. A saved line whose basis declares a USDA portion basis
+      // (`source_portion`) is NEVER converted into user mass when its portion
+      // cannot be re-authenticated: the saved grams never become a
+      // "user-entered" mass the user never entered (truthful fail-closed
+      // degradation until the later persistence phase can preserve
+      // hint-dependent count provenance).
       const userMass = buildUserMassChoice(session, {
         lineRef,
         ingredient: entry.ingredient,
@@ -229,6 +240,9 @@ export function hydrateWorkingReview(
       });
       if (userMass.ok) userMasses[lineRef] = userMass.choice;
     }
+    // A `source_portion` basis that could not be re-authenticated stays
+    // unresolved for mass (the reviewed food identity above is still restored):
+    // no user mass, no `user-entered` label, no invented authority.
   }
 
   // 2. FOOD IDENTITY ONLY from reviewed evidence whose mass is still unresolved

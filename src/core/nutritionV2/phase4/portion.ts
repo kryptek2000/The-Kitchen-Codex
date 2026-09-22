@@ -11,6 +11,7 @@
 
 import { CALCULATION_VERSION } from '../calculation/types';
 import { PORTION_SEMANTICS_VERSION } from '../calculation/portionSemantics';
+import { hasDirectRecipeMass } from './rows';
 import {
   phase4Failure,
   type AdvancedNutritionSession,
@@ -46,6 +47,13 @@ export function buildPortionChoice(
   session: AdvancedNutritionSession,
   params: PortionChoiceParams
 ): PortionChoiceResult {
+  // The ONE shared direct-mass creation gate: a line that already declares its
+  // own recipe mass has complete mass authority, so no source-portion choice
+  // is ever created for it (the effective-mass decision fails any conflicting
+  // state closed instead of silently ignoring the choice).
+  if (hasDirectRecipeMass(params.ingredient)) {
+    return { ok: false, failure: phase4Failure('invalid_selection') };
+  }
   const dry = session.calculate({
     servings: 1,
     nutrient_scope: ['calories'],

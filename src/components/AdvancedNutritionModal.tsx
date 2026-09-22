@@ -3,6 +3,7 @@ import { X, ShieldAlert, FlaskConical, CheckCircle2, AlertTriangle, Info, Search
 import { convertMassToGrams, type NormalizedUnit } from '../utils/measurements';
 import {
   NUTRIENT_GROUPS,
+  PHASE4_DIRECT_MASS_NOTE,
   PHASE4_NOT_MEDICAL_ADVICE,
   PHASE4_USER_MASS_CONFIRM_LABEL,
   PHASE4_USER_MASS_LABEL,
@@ -11,6 +12,7 @@ import {
   buildCountPortionChoice,
   buildPortionChoice,
   buildUserMassChoice,
+  canonicalCountRequirementHint,
   candidatePortionCompatibility,
   countDerivationLabel,
   coverageSummary,
@@ -25,6 +27,7 @@ import {
   LIVE_ROW_STATUS_LABEL,
   massSourceLabel,
   projectLiveRows,
+  reviewCanonicalLineCountPortions,
   summarizeLiveRows,
   type AdvancedNutritionSession,
   type AdaptedIngredient,
@@ -327,7 +330,10 @@ const PortionControls: React.FC<PortionControlsProps> = ({
       setCountReview({ applicable: false, candidates: [] });
       return;
     }
-    const result = session.reviewCountPortions(entry.ingredient, fdcId);
+    // ONE canonical count context for the line: the candidate review uses the
+    // SAME bounded hint the calculation request and live projection use, so the
+    // candidate set/digest can never differ between display and authority.
+    const result = reviewCanonicalLineCountPortions(session, state, row.line_ref, entry.ingredient, fdcId);
     if (!result.ok) {
       setCountReview({ applicable: false, candidates: [] });
       return;
@@ -336,15 +342,17 @@ const PortionControls: React.FC<PortionControlsProps> = ({
       applicable: result.review.applicable,
       candidates: result.review.candidates as unknown as ReadonlyArray<CountPortionCandidateView>,
     });
-  }, [session, fdcId, entry]);
+  }, [session, state, row.line_ref, fdcId, entry]);
 
   // Compatible canonical portions are presented immediately after a food is
   // selected; no second action is required to reveal them. The button remains as
-  // a manual refresh. Nothing is auto-selected.
+  // a manual refresh. Nothing is auto-selected. A direct-mass line offers no
+  // alternate mass choice at all, so no review is loaded for it.
   useEffect(() => {
+    if (measurementKind === 'mass') return;
     load();
     loadCount();
-  }, [load, loadCount]);
+  }, [load, loadCount, measurementKind]);
 
   const selectionForChoice = () => {
     if (!matchChoice) return undefined;
@@ -396,6 +404,9 @@ const PortionControls: React.FC<PortionControlsProps> = ({
       automaticSelection: matchChoice?.automatic === true,
       fdcId,
       portionIndex,
+      // The stored selection preserves the SAME canonical hint its candidate
+      // review used, so the calculator re-derives an identical digest.
+      countRequirementHint: canonicalCountRequirementHint(state, row.line_ref),
     });
     if (!result.ok) {
       setError('That count portion cannot be applied. No mass can be derived from it.');
@@ -437,6 +448,16 @@ const PortionControls: React.FC<PortionControlsProps> = ({
 
   return (
     <div className="mt-2 pl-3 border-l border-white/10 space-y-3">
+      {measurementKind === 'mass' ? (
+        // DIRECT-MASS EXCLUSIVITY: a line that already declares its own recipe
+        // mass has complete mass authority. No alternate mass choice (source
+        // portion, count portion, or manual total weight) is offered, retained,
+        // or displayed as active; the bounded note is the only content.
+        <p data-testid="advanced-nutrition-direct-mass-note" className="text-[10px] text-gray-500">
+          {PHASE4_DIRECT_MASS_NOTE}
+        </p>
+      ) : (
+        <>
       {countApplicable ? (
         <div className="space-y-1">
           <div className="flex items-center gap-2">
@@ -564,53 +585,55 @@ const PortionControls: React.FC<PortionControlsProps> = ({
       )}
 
       <div className="space-y-1">
-        <div className="flex items-center gap-2">
-          <h4 className="text-[11px] font-semibold text-gray-300">{PHASE4_USER_MASS_LABEL}</h4>
-          {currentUserMass && (
-            <span className="text-[11px] text-emerald-300 font-medium">
-              Weight entered ({currentUserMass.quantity} {currentUserMass.unit})
-            </span>
-          )}
-        </div>
-        <p className="text-[10px] text-gray-500">{PHASE4_USER_MASS_NOTE}</p>
-        <div className="flex items-center gap-2">
-          <input
-            type="number"
-            aria-label="Total weight for this ingredient line"
-            value={weightQty}
-            min={0}
-            step="any"
-            onChange={(event) => setWeightQty(event.target.value)}
-            className="w-24 px-2 py-1 rounded-lg bg-[#0C0C0C] border border-white/10 text-gray-100 text-xs"
-          />
-          <select
-            aria-label="Weight unit"
-            value={weightUnit}
-            onChange={(event) => setWeightUnit(event.target.value as 'g' | 'oz' | 'lb')}
-            className="px-2 py-1 rounded-lg bg-[#0C0C0C] border border-white/10 text-gray-100 text-xs"
-          >
-            <option value="g">g</option>
-            <option value="oz">oz</option>
-            <option value="lb">lb</option>
-          </select>
-          <button
-            type="button"
-            onClick={confirmUserMass}
-            className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white/5 hover:bg-white/10 border border-white/10 text-gray-200 transition-colors"
-          >
-            {PHASE4_USER_MASS_CONFIRM_LABEL}
-          </button>
-          {currentUserMass && (
+          <div className="flex items-center gap-2">
+            <h4 className="text-[11px] font-semibold text-gray-300">{PHASE4_USER_MASS_LABEL}</h4>
+            {currentUserMass && (
+              <span className="text-[11px] text-emerald-300 font-medium">
+                Weight entered ({currentUserMass.quantity} {currentUserMass.unit})
+              </span>
+            )}
+          </div>
+          <p className="text-[10px] text-gray-500">{PHASE4_USER_MASS_NOTE}</p>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              aria-label="Total weight for this ingredient line"
+              value={weightQty}
+              min={0}
+              step="any"
+              onChange={(event) => setWeightQty(event.target.value)}
+              className="w-24 px-2 py-1 rounded-lg bg-[#0C0C0C] border border-white/10 text-gray-100 text-xs"
+            />
+            <select
+              aria-label="Weight unit"
+              value={weightUnit}
+              onChange={(event) => setWeightUnit(event.target.value as 'g' | 'oz' | 'lb')}
+              className="px-2 py-1 rounded-lg bg-[#0C0C0C] border border-white/10 text-gray-100 text-xs"
+            >
+              <option value="g">g</option>
+              <option value="oz">oz</option>
+              <option value="lb">lb</option>
+            </select>
             <button
               type="button"
-              onClick={() => dispatch({ type: 'clear_user_mass', lineRef: row.line_ref })}
-              className="px-2 py-1 rounded-lg text-[11px] text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
+              onClick={confirmUserMass}
+              className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white/5 hover:bg-white/10 border border-white/10 text-gray-200 transition-colors"
             >
-              Clear
+              {PHASE4_USER_MASS_CONFIRM_LABEL}
             </button>
-          )}
+            {currentUserMass && (
+              <button
+                type="button"
+                onClick={() => dispatch({ type: 'clear_user_mass', lineRef: row.line_ref })}
+                className="px-2 py-1 rounded-lg text-[11px] text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
+              >
+                Clear
+              </button>
+            )}
+          </div>
         </div>
-      </div>
+        </>
+      )}
     </div>
   );
 };

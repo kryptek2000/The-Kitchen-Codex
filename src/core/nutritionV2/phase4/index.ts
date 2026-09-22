@@ -17,6 +17,7 @@ export * from './display';
 export * from './stored';
 export * from './portion';
 export * from './countPortion';
+export * from './countContext';
 export * from './userMass';
 export * from './rows';
 export * from './analyzer';

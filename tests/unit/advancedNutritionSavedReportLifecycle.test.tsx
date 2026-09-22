@@ -51,7 +51,10 @@ function recipe(): ObsidianRecipe {
     rating: 4,
     servings: 4,
     ingredients: [
-      { original: '57 g unsalted butter', amount: 57, unit: 'g', name: 'unsalted butter' },
+      // A volume line: a user-entered total weight is a valid fallback here.
+      // (Phase 0B: a line that already declares a direct recipe mass never
+      // carries a user mass; that conflicting state is refused at creation.)
+      { original: '2 tbsp unsalted butter', amount: 2, unit: 'tbsp', name: 'unsalted butter' },
       { original: '1/2 teaspoon salt', amount: 0.5, unit: 'teaspoon', name: 'salt' },
     ] as never,
     instructions: [],

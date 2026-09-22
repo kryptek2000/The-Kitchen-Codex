@@ -15,6 +15,7 @@ import {
   COUNT_PORTION_VERSION,
   computeCountPortionSelectionDigest,
 } from '../calculation/countPortion';
+import { hasDirectRecipeMass } from './rows';
 import {
   phase4Failure,
   type AdvancedNutritionSession,
@@ -52,6 +53,13 @@ export function buildCountPortionChoice(
   session: AdvancedNutritionSession,
   params: CountPortionChoiceParams
 ): CountPortionChoiceResult {
+  // The ONE shared direct-mass creation gate: a line that already declares its
+  // own recipe mass has complete mass authority, so no count-portion choice is
+  // ever created for it (the effective-mass decision fails any conflicting
+  // state closed instead of silently ignoring the choice).
+  if (hasDirectRecipeMass(params.ingredient)) {
+    return { ok: false, failure: phase4Failure('invalid_selection') };
+  }
   const dry = session.calculate({
     servings: 1,
     nutrient_scope: ['calories'],
@@ -113,6 +121,12 @@ export function buildCountPortionChoice(
       portion_index: candidate.index,
       selection,
       review: review.review,
+      // The bounded advisory hint is part of the working selection so the
+      // calculation request re-derives the SAME candidate set/digest. It never
+      // contains an amount or mass and carries no authority by itself.
+      ...(params.countRequirementHint !== undefined
+        ? { countRequirementHint: params.countRequirementHint }
+        : {}),
     }),
   };
 }

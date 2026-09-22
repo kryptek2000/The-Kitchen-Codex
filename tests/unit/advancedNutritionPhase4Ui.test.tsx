@@ -11,7 +11,49 @@ import type { AdvancedNutritionSession } from '../../src/core/nutritionV2/phase4
 import { PHASE4_UNAVAILABLE_MESSAGE } from '../../src/core/nutritionV2/phase4/types';
 import { PHASE4_UNREADABLE_MESSAGE } from '../../src/core/nutritionV2/phase4/types';
 import type { ObsidianRecipe } from '../../src/types';
-import { buildCalculationBundle, CALC_FOODS } from '../fixtures/usdaCalculationFixtures';
+import { buildCalculationBundle, CALC_FOODS, type CalcRecordSpec } from '../fixtures/usdaCalculationFixtures';
+
+/** A food with a MASS-kind portion: the old UI offered it on direct-mass lines. */
+const MASS_PORTION_SPECS: ReadonlyArray<CalcRecordSpec> = [
+  {
+    fdcId: 9001,
+    dataType: 'foundation',
+    description: 'Beef, ground',
+    nutrients: { calories: 250, protein: 26, carbohydrates: 0, fat: 15 },
+    portions: [{ usda_portion_id: 1, amount: 1, measure: 'oz', gram_weight: 20, sequence: 1 }],
+  },
+];
+
+function massPortionSession(): AdvancedNutritionSession {
+  const bundle = buildCalculationBundle(MASS_PORTION_SPECS);
+  const result = createAdvancedNutritionSession(bundle.manifest, bundle.records);
+  if (!result.ok) throw new Error('session failed');
+  return result.session;
+}
+
+function directMassRecipe(): ObsidianRecipe {
+  return {
+    id: 'dm1',
+    fileName: 'dm1.md',
+    filePath: 'Recipes/dm1.md',
+    rawMarkdown: '',
+    title: 'Direct Mass',
+    tags: [],
+    category: 'Dinner',
+    cuisine: 'Test',
+    difficulty: 'Easy',
+    rating: 4,
+    servings: 1,
+    ingredients: [
+      { original: '1 lb ground beef', amount: 1, unit: 'lb', name: 'ground beef' },
+    ] as never,
+    instructions: [],
+    callouts: [],
+    dataviewFields: {},
+    wikilinks: [],
+    frontmatter: {},
+  } as unknown as ObsidianRecipe;
+}
 
 function genuineSession(): AdvancedNutritionSession {
   const bundle = buildCalculationBundle(CALC_FOODS);
@@ -199,6 +241,18 @@ describe('phase 4 modal — accessibility', () => {
     expect(dialog.textContent).toMatch(/not\s+manually confirmed by you/i);
   });
 
+  it('uses the recipe weight for a direct-mass line and never offers the manual fallback', async () => {
+    render(<AdvancedNutritionCard recipe={recipe()} session={genuineSession()} />);
+    fireEvent.click(screen.getByRole('button', { name: /Generate Nutrition|Open Advanced Nutrition/i }));
+    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await openEdit(ROW_MASS_FLOUR);
+    // The direct recipe mass is authoritative; the conflicting manual fallback
+    // control is not presented at all.
+    expect(await screen.findByTestId('advanced-nutrition-direct-mass-note')).toBeTruthy();
+    expect(screen.queryByLabelText('Total weight for this ingredient line')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Use this weight/i })).toBeNull();
+  });
+
   it('offers no Apply or Save control and never constructs codex_nutrition', async () => {
     render(<AdvancedNutritionCard recipe={recipe()} session={genuineSession()} />);
     fireEvent.click(screen.getByRole('button', { name: /Generate Nutrition|Open Advanced Nutrition/i }));
@@ -287,5 +341,44 @@ describe('phase 4.5C — US customary portions and explicit total weight', () =>
     const dialog = await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
     const labels = Array.from(dialog.querySelectorAll('button')).map((b) => b.textContent ?? '');
     for (const label of labels) expect(label).not.toMatch(/\bApply\b|\bSave\b|\bPersist\b|\bWrite to Vault\b/i);
+  });
+});
+
+describe('phase 0B final parity — direct-mass exclusivity in the working review', () => {
+  it('offers NO selectable source-portion radio on a direct-mass line (even when the food has one)', async () => {
+    render(<AdvancedNutritionCard recipe={directMassRecipe()} session={massPortionSession()} />);
+    fireEvent.click(screen.getByRole('button', { name: /Generate Nutrition|Open Advanced Nutrition/i }));
+    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await openEdit(0);
+
+    // The bounded informational note is the only amount content.
+    expect(await screen.findByTestId('advanced-nutrition-direct-mass-note')).toBeTruthy();
+    // No source-portion radios exist at all (previously an enabled radio was
+    // selectable while calculation silently used the recipe mass).
+    const portionRadios = screen
+      .getAllByRole('radio')
+      .filter((radio) => /=\s*\d+(\.\d+)?\s*g/.test(radio.closest('label')?.textContent ?? ''));
+    expect(portionRadios).toHaveLength(0);
+    expect(screen.queryByText('Source portion selected')).toBeNull();
+    expect(screen.queryByText(/USDA source portions/)).toBeNull();
+  });
+
+  it('offers no manual total weight and no count-portion chooser on a direct-mass line', async () => {
+    render(<AdvancedNutritionCard recipe={directMassRecipe()} session={massPortionSession()} />);
+    fireEvent.click(screen.getByRole('button', { name: /Generate Nutrition|Open Advanced Nutrition/i }));
+    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await openEdit(0);
+    await screen.findByTestId('advanced-nutrition-direct-mass-note');
+    expect(screen.queryByLabelText('Total weight for this ingredient line')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Use this weight/i })).toBeNull();
+    expect(screen.queryByText('USDA count portions')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Review source portions/i })).toBeNull();
+
+    // Calculating keeps the line MATCHED on the recipe's own direct mass with
+    // no alternate-choice chip anywhere.
+    fireEvent.click(screen.getByRole('button', { name: /Calculate Preview/i }));
+    await screen.findByText('Advisory nutrition preview');
+    expect(screen.queryByText('Source portion selected')).toBeNull();
+    expect(screen.queryByText('Count portion selected')).toBeNull();
   });
 });

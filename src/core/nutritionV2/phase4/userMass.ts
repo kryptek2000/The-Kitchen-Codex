@@ -11,6 +11,7 @@
 
 import { CALCULATION_VERSION } from '../calculation/types';
 import { computeUserMassSelectionDigest } from '../calculation/mass';
+import { hasDirectRecipeMass } from './rows';
 import { convertMassToGrams, type NormalizedUnit } from '../../../utils/measurements';
 import {
   phase4Failure,
@@ -56,6 +57,15 @@ export function buildUserMassChoice(
   }
   const grams = convertMassToGrams(params.quantity, params.unit as NormalizedUnit);
   if (grams === undefined || !Number.isFinite(grams) || grams <= 0 || Object.is(grams, -0)) {
+    return { ok: false, failure: phase4Failure('invalid_selection') };
+  }
+
+  // The ONE shared direct-mass creation gate: a line that already declares its
+  // own recipe mass (g/kg/oz/lb) has complete mass authority, so an explicit
+  // total weight must never be created for it (the effective-mass decision
+  // fails the conflicting state closed). The direct recipe mass remains
+  // authoritative and is never overridden by this fallback.
+  if (hasDirectRecipeMass(params.ingredient)) {
     return { ok: false, failure: phase4Failure('invalid_selection') };
   }
 

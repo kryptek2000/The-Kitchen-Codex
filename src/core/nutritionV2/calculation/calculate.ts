@@ -26,6 +26,7 @@ import type { ConfirmationResult, ReviewCatalog } from '../matching/types';
 import type { CanonicalUsdaFoodRecord } from '../usda/types';
 import { isQualitativeIngredientText } from '../../../utils/ingredientSemantics';
 import { resolvePortionMassGrams, resolveUserMassGrams, type PortionMassResolution, type UserMassResolution } from './mass';
+import { resolveEffectiveMassDecision } from './effectiveMass';
 import { PORTION_SEMANTICS_VERSION, type PortionMeasurement } from './portionSemantics';
 import {
   deriveCountRequirement,
@@ -647,16 +648,26 @@ function evaluateIngredient(
     const hasPortion = prepared.portionSelection !== undefined;
     const hasCountPortion = prepared.countPortionSelection !== undefined;
     const hasUserMass = prepared.userMassSelection !== undefined;
-    // Every mass source is mutually exclusive with every other.
-    const massSourceCount = [hasPortion, hasCountPortion, hasUserMass].filter(Boolean).length;
-    if (massSourceCount > 1) {
+    // ONE effective-mass decision, shared with the live projection. More than
+    // one non-direct selection, or a direct recipe mass together with ANY
+    // alternate mass choice (user total, source portion, or count portion), is
+    // a conflict and fails the whole request closed rather than silently
+    // preferring one source over another.
+    const authority = resolveEffectiveMassDecision({
+      directMassGrams:
+        parsed.measurement_kind === 'mass' && parsed.grams !== undefined ? parsed.grams : undefined,
+      hasUserMass,
+      hasSourcePortion: hasPortion,
+      hasCountPortion,
+    });
+    if (authority.kind === 'conflict') {
       return { ok: false, code: 'invalid_portion_selection' };
     }
-    if (parsed.measurement_kind === 'mass' && parsed.grams !== undefined) {
-      if (!isWithinCanonicalBound(parsed.grams)) return { ok: false, code: 'numeric_overflow' };
-      grams = parsed.grams;
+    if (authority.kind === 'direct_mass') {
+      if (!isWithinCanonicalBound(authority.grams)) return { ok: false, code: 'numeric_overflow' };
+      grams = authority.grams;
       massSource = 'direct_mass';
-    } else if (hasUserMass) {
+    } else if (authority.kind === 'user_mass') {
       const userResult = sanitizeUserMassSelection(prepared.userMassSelection);
       if (!userResult.ok) return { ok: false, code: (userResult as { ok: false; code: Phase3FailureCode }).code };
       const resolution: UserMassResolution = resolveUserMassGrams(
@@ -676,7 +687,7 @@ function evaluateIngredient(
       } else if ((resolution as { ok: false; reason: string }).reason === 'invalid') {
         return { ok: false, code: 'invalid_user_mass' };
       }
-    } else if (hasPortion) {
+    } else if (authority.kind === 'source_portion') {
       const selectionResult = sanitizePortionSelection(prepared.portionSelection);
       if (!selectionResult.ok) {
         return { ok: false, code: (selectionResult as { ok: false; code: Phase3FailureCode }).code };

@@ -15,7 +15,9 @@ import { buildMatchingBundle } from '../fixtures/usdaMatchingFixtures';
 import { createAdvancedNutritionSession } from '../../src/core/nutritionV2/phase4/session';
 import { adaptRecipe } from '../../src/core/nutritionV2/phase4/adapt';
 import { analyzeRecipe } from '../../src/core/nutritionV2/phase4/analyzer';
-import { buildCalculationRequest, buildReviewRows } from '../../src/core/nutritionV2/phase4/rows';
+import { buildCalculationRequest, buildReviewRows, selectionFromMatchChoice } from '../../src/core/nutritionV2/phase4/rows';
+import { buildCountPortionChoice } from '../../src/core/nutritionV2/phase4/countPortion';
+import { reviewCanonicalLineCountPortions } from '../../src/core/nutritionV2/phase4/countContext';
 import { projectLiveRows, summarizeLiveRows } from '../../src/core/nutritionV2/phase4/liveRow';
 import { ingredientEvidenceViews } from '../../src/core/nutritionV2/phase4/display';
 import {
@@ -366,5 +368,110 @@ describe('AI amount interpretation — local verification', () => {
     if (!parsed.ok) return;
     expect(parsed.parsed.amount).toBe(3);
     expect(parseIngredientLine('3 garlic cloves, minced').amount).toBe(3);
+  });
+
+  it('offers carry the canonical hint and an offer choice preserves the digest (no arbitrary pick)', () => {
+    const { adapted, rows, state, liveRows } = setup('3 slices bread');
+    const outcome = resolveAmountsFromAiSuggestions({
+      session,
+      rows,
+      adapted,
+      liveRows,
+      state,
+      suggestions: [
+        suggestion(rows[0].line_ref, {
+          interpreted_food_name: 'Bread, white',
+          suggested_usda_queries: ['bread white'],
+          quantity_value: 3,
+          quantity_unit_hint: 'slices',
+          count_descriptor_hint: 'slice',
+          portion_search_hint: 'slice',
+        }),
+      ],
+    });
+    expect(outcome.resolved).toHaveLength(0);
+    expect(outcome.offers).toHaveLength(2);
+    for (const offer of outcome.offers) {
+      expect(offer.hint).toEqual({ unit: 'slice', size: null });
+    }
+    const offer = outcome.offers.find((entry) => entry.resolved_grams === 75);
+    if (!offer) throw new Error('missing offer');
+    const choice = buildUserChoiceFromAiAmountOffer({
+      session,
+      offer,
+      row: rows[0],
+      entry: adapted[0],
+      matchChoice: state.matches[rows[0].line_ref],
+    });
+    expect(choice).toBeDefined();
+    if (!choice) return;
+    expect(choice.countRequirementHint).toEqual({ unit: 'slice', size: null });
+    // The stored user choice binds the SAME candidate set/digest the canonical
+    // context and the calculator re-derive.
+    const merged: Phase4State = {
+      ...state,
+      countPortions: { ...state.countPortions, [rows[0].line_ref]: choice },
+    } as Phase4State;
+    const canonical = reviewCanonicalLineCountPortions(
+      session,
+      merged,
+      rows[0].line_ref,
+      adapted[0].ingredient,
+      offer.fdc_id
+    );
+    expect(canonical.ok).toBe(true);
+    if (!canonical.ok) return;
+    expect((choice.selection as { candidates_digest: string }).candidates_digest).toBe(
+      canonical.review.candidates_digest
+    );
+    const calculated = session.calculate(buildCalculationRequest(adapted, merged));
+    expect(calculated.ok).toBe(true);
+    if (!calculated.ok) return;
+    expect(calculated.preview.ingredients[0].resolved_grams).toBe(75);
+  });
+
+  it('a manually built count choice preserves the canonical hint for re-derivation', () => {
+    const { adapted, rows, state } = setup('3 garlic cloves, minced');
+    const lineRef = rows[0].line_ref;
+    const match = state.matches[lineRef];
+    const fdcId = match?.fdc_id ?? 7001;
+    const hint = { unit: 'clove', size: null };
+    const review = session.reviewCountPortions(adapted[0].ingredient, fdcId, hint);
+    expect(review.ok).toBe(true);
+    if (!review.ok) return;
+    const built = buildCountPortionChoice(session, {
+      lineRef,
+      ingredient: adapted[0].ingredient,
+      review: rows[0].review,
+      ...(match !== undefined ? { selection: selectionFromMatchChoice(match, lineRef) } : {}),
+      automaticSelection: match?.automatic === true,
+      fdcId,
+      portionIndex: review.review.candidates[0].index,
+      countRequirementHint: hint,
+    });
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    expect(built.choice.countRequirementHint).toEqual(hint);
+    const merged: Phase4State = {
+      ...state,
+      countPortions: { ...state.countPortions, [lineRef]: built.choice },
+    } as Phase4State;
+    const canonical = reviewCanonicalLineCountPortions(
+      session,
+      merged,
+      lineRef,
+      adapted[0].ingredient,
+      fdcId
+    );
+    expect(canonical.ok).toBe(true);
+    if (!canonical.ok) return;
+    expect((built.choice.selection as { candidates_digest: string }).candidates_digest).toBe(
+      canonical.review.candidates_digest
+    );
+    const calculated = session.calculate(buildCalculationRequest(adapted, merged));
+    expect(calculated.ok).toBe(true);
+    if (!calculated.ok) return;
+    expect(calculated.preview.ingredients[0].resolved_grams).toBe(9);
+    expect(calculated.preview.ingredients[0].mass_source).toBe('count_portion');
   });
 });
