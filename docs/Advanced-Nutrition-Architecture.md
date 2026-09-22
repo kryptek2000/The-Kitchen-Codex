@@ -2474,6 +2474,60 @@ consolidated in this phase.
 **Phase 4.5D still performs no persistence, no Apply, and no count-to-mass
 calculation.**
 
+### 20.10 Phase 0A — primary-food identity vs secondary component
+
+USDA descriptions name the primary food first and may then introduce a secondary
+component, medium, coating, flavor, or accompaniment after a relational marker
+(`Fish, sardine, Pacific, canned in tomato sauce, drained solids with bone`;
+`Cereals, QUAKER, Instant Grits, Country Bacon flavor, dry`). A query that
+identifies only that secondary component (`canned tomato sauce`, `bacon`) does
+not prove the candidate's primary food identity and therefore must not receive
+automatic authority.
+
+**Deterministic guard.** `secondaryComponentOnlyMatchCount` in
+`src/core/nutritionV2/matching/query.ts` scans the candidate's normalized tokens
+once with a closed marker vocabulary (relational `in`, `with`, `filled`,
+`stuffed`, `containing`, `contains`, `coated`, `topped`; flavor `flavor(s)`,
+`flavored`, `flavour(s)`, `flavoured`). The query's identity tokens are its
+`food_tokens` minus state qualifiers (`canned`, `frozen`, ...), so a state word
+inside the candidate's primary segment cannot mask a secondary-only match, while
+a query that genuinely names the primary category (`cereal`) keeps its
+candidate. When every matched identity token lies outside the primary segment,
+the guard contributes one FAMILY MISMATCH, which removes the candidate from
+automatic authority through the existing zero-condition confidence contract.
+The candidate remains visible and reviewable; ranking may demote it.
+
+**Not recipe-specific, and candidate-relative.** There is no literal food, brand,
+or FDC blocklist and no AI involvement: the rule is marker-driven, bounded, and
+deterministic for every description. Whether it triggers depends on the
+candidate. A query such as `tomato sauce` or `bacon` does not trigger against
+candidates where tomato sauce or bacon is the primary identity (`Tomato
+products, canned, sauce`; `Pork, cured, bacon, unprepared`), but the same query
+does trigger against fish/cereal candidates where those tokens appear only as
+secondary sauce/flavor components (`Fish, sardine, ... canned in tomato sauce`;
+`Cereals, ... Country Bacon flavor`). When the query names the candidate's
+primary food (`sardines in tomato sauce`, `canned sardines in tomato sauce`,
+`fish in tomato sauce`), existing identity evidence decides exactly as before.
+An explicit exact-phrase/token-multiset query remains independently authorized.
+
+**Unchanged behavior.** Eligibility, the rank tuple, the zero-condition
+confidence contract, runner-up ambiguity, review outcomes, digest binding, the
+USDA nutrient authority, the AI interpretation-only boundary, live-row
+authority, and the explicit Apply boundary are all unchanged. The guard can only
+reduce unsafe automatic authority or improve safe candidate ordering; it never
+manufactures authority.
+
+**Identity safety corpus.** `tests/fixtures/advancedNutritionIdentityCorpus.ts`
+plus `tests/unit/advancedNutritionIdentityCorpus.test.ts` run a bounded corpus
+of ordinary ingredients against the real pinned bundle and assert explicit
+invariants: zero incorrect automatic identities, the confirmed
+`canned tomato sauce` → sardine defect can never recur, known-correct automatic
+identities are unchanged, untouched candidate order is unchanged, and repeated
+runs are content-identical. Lines with known identity/amount limitations are
+marked `knownIssue` and only forbid a NEW automatic identity; they do not bless
+the current one. The corpus is a diagnostic baseline for later phases, not an
+approval of any household-portion or parsing design.
+
 ---
 
 ## 21. Phase 4.5E — authenticated count-portion resolution

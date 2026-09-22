@@ -2026,6 +2026,99 @@ export function unrequestedCookingMethodCount(
 }
 
 /**
+ * Closed RELATIONAL-COMPONENT markers. USDA descriptions name the primary food
+ * first and introduce a secondary component, medium, coating, or accompaniment
+ * after a relational marker (`Fish, sardine, Pacific, canned in tomato sauce`;
+ * `Crackers, filled with cheese`; `Chicken, ... topped with sauce`). A query
+ * that identifies only the secondary component must never authorize the
+ * candidate's primary food identity automatically.
+ */
+const RELATIONAL_COMPONENT_MARKERS: ReadonlySet<string> = new Set([
+  'in',
+  'with',
+  'filled',
+  'stuffed',
+  'containing',
+  'contains',
+  'coated',
+  'topped',
+]);
+
+/**
+ * Closed FLAVOR-COMPONENT markers. The token immediately adjacent to the marker
+ * names a flavoring, never the primary food (`Cereals, ... Country Bacon
+ * flavor`, `bacon-flavored cereal`). A query that identifies only the flavor
+ * token must never authorize the primary food automatically.
+ */
+const FLAVOR_COMPONENT_MARKERS: ReadonlySet<string> = new Set([
+  'flavor',
+  'flavors',
+  'flavored',
+  'flavour',
+  'flavours',
+  'flavoured',
+]);
+
+/**
+ * SECONDARY-COMPONENT-ONLY match count. 1 when every matched query identity
+ * token identifies only a secondary relational/flavor component of the
+ * candidate, so the candidate's primary food identity is absent from the query
+ * (`canned tomato sauce` must not automatically bind `Fish, sardine, ... canned
+ * in tomato sauce`; `bacon` must not bind `Cereal, ... Country Bacon flavor`).
+ *
+ * Bounded and deterministic: a single linear scan over the candidate's
+ * normalized tokens with a closed marker vocabulary; no regex, no AI, no
+ * taxonomy. It never removes a candidate from matching or review — it only
+ * disqualifies the candidate from automatic authority, because the query failed
+ * to prove the primary food identity. An explicit exact-phrase/multiset query
+ * remains independently authorized by the confidence contract.
+ */
+export function secondaryComponentOnlyMatchCount(
+  candidateTokens: ReadonlyArray<string>,
+  projection: IngredientQueryProjection
+): number {
+  if (candidateTokens.length === 0) return 0;
+  // The query's FOOD identity tokens. `food_tokens` is the requested identity
+  // vocabulary; state qualifiers (`canned`, `frozen`, ...) are removed because a
+  // state word may legitimately appear in the candidate's primary segment and
+  // must not mask a secondary-only match. Category words (`cereal`) stay, so a
+  // query that genuinely names the primary category keeps its candidate.
+  const qualifierTokens = new Set(projection.qualifier_tokens);
+  const identityTokens = projection.food_tokens.filter((token) => !qualifierTokens.has(token));
+  if (identityTokens.length === 0) return 0;
+  const identityMatches = (segment: ReadonlyArray<string>): boolean => {
+    for (const queryToken of identityTokens) {
+      for (const token of segment) {
+        if (tokensMatch(queryToken, token)) return true;
+      }
+    }
+    return false;
+  };
+
+  // 1. Relational component: `primary <marker> secondary`. The query must
+  //    identify the primary segment; a marker with an empty/absent primary
+  //    segment (description begins with the marker) cannot prove the primary.
+  for (let markerIndex = 0; markerIndex < candidateTokens.length; markerIndex += 1) {
+    if (!RELATIONAL_COMPONENT_MARKERS.has(candidateTokens[markerIndex])) continue;
+    if (identityMatches(candidateTokens.slice(0, markerIndex))) continue;
+    if (identityMatches(candidateTokens.slice(markerIndex + 1))) return 1;
+  }
+
+  // 2. Flavor component: the adjacent flavor token is a flavoring only.
+  for (let markerIndex = 0; markerIndex < candidateTokens.length; markerIndex += 1) {
+    if (!FLAVOR_COMPONENT_MARKERS.has(candidateTokens[markerIndex])) continue;
+    const flavorIndex = markerIndex - 1;
+    const primary = candidateTokens.filter(
+      (_token, index) => index !== markerIndex && index !== flavorIndex
+    );
+    if (identityMatches(primary)) continue;
+    if (flavorIndex >= 0 && identityMatches([candidateTokens[flavorIndex]])) return 1;
+  }
+
+  return 0;
+}
+
+/**
  * FOOD-FAMILY MISMATCH. 1 when the candidate is not the requested food family:
  *
  *   - a DERIVED COMPONENT names an unrequested rendered fat/animal part
@@ -2042,7 +2135,11 @@ export function unrequestedCookingMethodCount(
  *     so a bare family query never auto-selects a composed/coated dish that
  *     merely contains the requested token somewhere (`Chicken, ..., fried,
  *     flour` for `flour`, `Eggplant with cheese and tomato sauce` for
- *     `tomato sauce`).
+ *     `tomato sauce`);
+ *   - the query matches ONLY a secondary relational/flavor component, so the
+ *     candidate's primary food is absent from the query (`Fish, sardine, ...
+ *     canned in tomato sauce` for `canned tomato sauce`; `Cereal, ... Country
+ *     Bacon flavor` for `bacon`).
  *
  * Bounded and explainable; it never removes a candidate from matching, it only
  * disqualifies it from automatic authority. Explicit compound queries still work
@@ -2187,6 +2284,10 @@ export function familyMismatchCount(
       NOISE_TOKENS.has(head);
     if (!benignHead) return 1;
   }
+
+  // 5. Secondary-component-only match. The candidate names a primary food plus a
+  //    relational/flavor component; the query identifies only the component.
+  if (secondaryComponentOnlyMatchCount(candidateTokens, projection) > 0) return 1;
 
   return 0;
 }
