@@ -292,6 +292,151 @@ describe('AI resolution — local deterministic resolution', () => {
   });
 
   it('exposes the AI resolution version', () => {
-    expect(AI_RESOLUTION_VERSION).toBe('nutrition_ai_resolution_v1');
+    expect(AI_RESOLUTION_VERSION).toBe('nutrition_ai_resolution_v2');
+  });
+});
+
+describe('AI resolution — authenticated source-constraint parity', () => {
+  const PARITY_SPECS: ReadonlyArray<CalcRecordSpec> = [
+    { fdcId: 7001, dataType: 'fndds', description: 'Zzz, raw', nutrients: { calories: 10 } },
+    { fdcId: 7002, dataType: 'fndds', description: 'Zzz, canned', nutrients: { calories: 20 } },
+    { fdcId: 7003, dataType: 'fndds', description: 'Zzz, crushed, canned', nutrients: { calories: 30 } },
+    { fdcId: 7004, dataType: 'fndds', description: 'Zzz, diced', nutrients: { calories: 40 } },
+  ];
+  const PARITY_BUNDLE = buildCalculationBundle(PARITY_SPECS);
+  const PARITY_RESULT = createAdvancedNutritionSession(PARITY_BUNDLE.manifest, PARITY_BUNDLE.records);
+  if (!PARITY_RESULT.ok) throw new Error('parity session failed');
+  const PARITY_SESSION: AdvancedNutritionSession = PARITY_RESULT.session;
+
+  function buildParityRows(lines: ReadonlyArray<string>) {
+    const adaptation = adaptRecipe(recipe(lines));
+    if (!adaptation.ok) throw new Error('adapt failed');
+    const adapted = adaptation.recipe.adapted;
+    const rows = buildReviewRows(PARITY_SESSION, adapted);
+    return { adapted, rows };
+  }
+
+  function resolveOne(
+    line: string,
+    suggestion:
+      | string
+      | {
+          readonly interpreted_food_name: string;
+          readonly suggested_usda_queries?: ReadonlyArray<string>;
+          readonly preparation_hint?: string;
+          readonly count_descriptor_hint?: string;
+          readonly quantity_unit_hint?: string;
+        }
+  ) {
+    const { adapted, rows } = buildParityRows([line]);
+    const row = rows[0];
+    const spec =
+      typeof suggestion === 'string'
+        ? { interpreted_food_name: suggestion, suggested_usda_queries: [suggestion] }
+        : suggestion;
+    const outcome = resolveFoodsFromAiSuggestions({
+      session: PARITY_SESSION,
+      rows,
+      adapted,
+      suggestions: [{ line_ref: row.line_ref, ...spec } as never],
+    });
+    return { adapted, rows, row, outcome };
+  }
+
+  it('retains the source container constraint when the AI omits it', () => {
+    const { outcome } = resolveOne('1 can Zzz', 'Zzz raw');
+    expect(outcome.candidates).toHaveLength(0);
+    expect(outcome.unresolved).toHaveLength(1);
+  });
+
+  it('retains the source explicit state when the AI omits it', () => {
+    const { outcome } = resolveOne('1 can Zzz', 'Zzz');
+    expect(outcome.candidates).toHaveLength(0);
+  });
+
+  it('retains the source preparation form when the AI omits it', () => {
+    const explicitDifferent = resolveOne('1 cup crushed Zzz', 'Zzz diced');
+    expect(explicitDifferent.outcome.candidates).toHaveLength(0);
+    // A silent candidate stays neutral (negative-only contract): the source form
+    // vetoes a DIFFERENT explicit form, never an unspecified one.
+    const silentCandidate = resolveOne('1 cup crushed Zzz', 'Zzz');
+    expect(silentCandidate.outcome.candidates[0]?.fdc_id).toBe(7001);
+  });
+
+  it('rejects a provider attempt to contradict source state or form', () => {
+    expect(resolveOne('1 can Zzz', 'Zzz raw').outcome.candidates).toHaveLength(0);
+    expect(resolveOne('1 cup crushed Zzz', 'Zzz diced').outcome.candidates).toHaveLength(0);
+  });
+
+  it('keeps source silence neutral and preserves same-form resolutions', () => {
+    const silentSource = resolveOne('1 cup Zzz', 'Zzz raw');
+    expect(silentSource.outcome.candidates[0]?.fdc_id).toBe(7001);
+    expect(silentSource.outcome.candidates[0]?.auto).toBe(true);
+
+    const sameForm = resolveOne('1 cup diced Zzz', 'Zzz diced');
+    expect(sameForm.outcome.candidates[0]?.fdc_id).toBe(7004);
+  });
+
+  it('cannot gain authority from source agreement alone', () => {
+    // The source and the suggestion agree, but no deterministic candidate
+    // satisfies BOTH the suggestion review and the source state constraint.
+    const { outcome } = resolveOne('1 can crushed Zzz', 'Zzz crushed');
+    expect(outcome.candidates).toHaveLength(0);
+  });
+
+  it('reconstructs constraints from the source line, never from provider hints', () => {
+    // Provider hints cannot ADD a container/state constraint to a silent source.
+    const hintedSilent = resolveOne('1 cup Zzz', {
+      interpreted_food_name: 'Zzz raw',
+      suggested_usda_queries: ['Zzz raw'],
+      preparation_hint: 'crushed',
+      count_descriptor_hint: 'can',
+      quantity_unit_hint: 'can',
+    });
+    expect(hintedSilent.outcome.candidates[0]?.fdc_id).toBe(7001);
+
+    // Provider hints cannot REMOVE a real source constraint.
+    const hintedConstrained = resolveOne('1 can Zzz', {
+      interpreted_food_name: 'Zzz',
+      suggested_usda_queries: ['Zzz raw'],
+      preparation_hint: 'peeled',
+    });
+    expect(hintedConstrained.outcome.candidates).toHaveLength(0);
+  });
+
+  it('fails closed on a stale/inconsistent source fingerprint', () => {
+    const { adapted, rows } = buildParityRows(['1 can Zzz']);
+    const mismatch = rows.map((row) => ({ ...row, original_text: '1 cup Zzz' })) as typeof rows;
+    const outcome = resolveFoodsFromAiSuggestions({
+      session: PARITY_SESSION,
+      rows: mismatch,
+      adapted,
+      suggestions: [
+        {
+          line_ref: rows[0].line_ref,
+          interpreted_food_name: 'Zzz canned',
+          suggested_usda_queries: ['Zzz canned'],
+        },
+      ],
+    });
+    expect(outcome.candidates).toHaveLength(0);
+  });
+
+  it('fails closed on a wrong or stale line reference', () => {
+    const { adapted, rows } = buildParityRows(['1 can Zzz']);
+    const outcome = resolveFoodsFromAiSuggestions({
+      session: PARITY_SESSION,
+      rows,
+      adapted,
+      suggestions: [
+        {
+          line_ref: 'ing:0:000000000000',
+          interpreted_food_name: 'Zzz canned',
+          suggested_usda_queries: ['Zzz canned'],
+        },
+      ],
+    });
+    expect(outcome.candidates).toHaveLength(0);
+    expect(outcome.unresolved).toHaveLength(0);
   });
 });

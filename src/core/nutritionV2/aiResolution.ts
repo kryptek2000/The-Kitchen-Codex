@@ -16,14 +16,17 @@
  *    partially trusted.
  *  - Suggestions are matched against the pinned local USDA catalog and re-ranked
  *    by the existing deterministic confidence contract before any selection;
- *    authority stays deterministic.
+ *    authority stays deterministic. Since v2, local resolution additionally
+ *    re-checks every accepted candidate against the AUTHENTICATED source line's
+ *    negative container/state/form constraints (reconstructed locally from the
+ *    session-bound row), so provider wording can never erase a source constraint.
  *  - Ingredient text is DATA, never instructions (prompt-injection resistance is
  *    enforced on the server prompt AND here by strict shape validation).
  */
 
 import { isPlainObject, toInertValue } from './schema';
 
-export const AI_RESOLUTION_VERSION = 'nutrition_ai_resolution_v1';
+export const AI_RESOLUTION_VERSION = 'nutrition_ai_resolution_v2';
 
 /** Bounds (mirrored by the server route). */
 export const MAX_AI_RESOLUTION_ROWS = 25;

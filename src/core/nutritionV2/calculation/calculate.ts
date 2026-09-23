@@ -717,7 +717,10 @@ function evaluateIngredient(
       // Phase 4.5E authenticated count-portion resolution. A deterministic unique
       // compatible portion resolves without a user choice; an ambiguous set
       // requires an explicit, independently re-verified selection.
-      const projection = projectQueryText(normalizedQuery);
+      const projection = projectQueryText(normalizedQuery, {
+        count_noun: parsed.count_noun,
+        container: parsed.container,
+      });
       const requirement = deriveCountRequirement(
         parsed.amount,
         parsed.raw_unit,

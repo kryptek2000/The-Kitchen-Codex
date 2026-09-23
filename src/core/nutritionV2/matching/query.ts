@@ -44,7 +44,26 @@
  * helpers used by the deterministic ranking and confidence contract.
  */
 
-export const QUERY_PROJECTION_VERSION = 'usda_query_projection_v8';
+export const QUERY_PROJECTION_VERSION = 'usda_query_projection_v10';
+
+/**
+ * Optional, bounded Phase 1 metadata that a caller can supply when it already
+ * holds the canonical parse result. The projection NEVER re-detects these with a
+ * second grammar: when the context is absent the fields stay null (the bounded
+ * legacy fallback), and when present they are validated and copied verbatim.
+ *
+ * `container === 'can'` (the canonical noun for every `can`/`tin` alias) is the
+ * ONLY container that deterministically implies the `canned` preservation state:
+ * a recipe line written as `1 can X` explicitly names a can, so a raw/fresh
+ * candidate must not be automatically bound. Every other container noun
+ * (jar/box/bag/bottle/package) stays package metadata only.
+ */
+export interface QueryProjectionContext {
+  /** Canonical Phase 1 count noun (`clove`, `slice`, ...), or null. */
+  readonly count_noun?: string | null;
+  /** Canonical Phase 1 container noun (`can`, `jar`, ...), or null. */
+  readonly container?: string | null;
+}
 
 /** A required anchor: the candidate must contain a token from `accepted`. */
 export interface AnchorGroup {
@@ -59,10 +78,29 @@ export interface IngredientQueryProjection {
   readonly food_tokens: ReadonlyArray<string>;
   /** The FOOD-name tokens only (qualifiers/forms/prep/size removed). */
   readonly core_tokens: ReadonlyArray<string>;
+  /**
+   * PRIMARY food/head identity: the accepted tokens of the required matching
+   * anchor (the head noun, or the alias anchor group). Reuses the ONE anchor
+   * derivation; it never invents a second head grammar.
+   */
+  readonly primary_identity_tokens: ReadonlyArray<string>;
   /** Nutritionally significant state/variant qualifier tokens requested. */
   readonly qualifier_tokens: ReadonlyArray<string>;
+  /**
+   * Physical-state role: closed preservation/preparation states explicitly
+   * present (raw, cooked, canned, dried, frozen, fresh, drained, undrained,
+   * ground, whole, ...) plus the deterministic `canned` implied by a `can`
+   * container. Used ONLY for contradiction evidence; never for positive
+   * authority and never as required identity.
+   */
+  readonly state_tokens: ReadonlyArray<string>;
   /** Food-FORM tokens requested (powder, flakes, sauce, juice, ...). */
   readonly form_tokens: ReadonlyArray<string>;
+  /**
+   * Variety/color role: closed cultivar/color tokens present in the identity
+   * (black, roma, basmati, pinto, ...). Identity evidence, never discarded.
+   */
+  readonly variety_tokens: ReadonlyArray<string>;
   /**
    * Bounded OPTIONAL culinary-refinement tokens (kosher, sea, fine, coarse).
    * Preserved as preference evidence; never required identity.
@@ -83,6 +121,17 @@ export interface IngredientQueryProjection {
   readonly notes: ReadonlyArray<string>;
   readonly numeric_qualifiers: ReadonlyArray<string>;
   readonly aliases: ReadonlyArray<string>;
+  /**
+   * Bounded tokens that follow a relational marker (`in`, `with`, ...) or name a
+   * flavoring next to a flavor marker. Secondary-component EVIDENCE only: it
+   * never changes membership, ranking, or authority (the Phase 0A guard remains
+   * the sole owner of the secondary-component safety decision).
+   */
+  readonly secondary_component_tokens: ReadonlyArray<string>;
+  /** Phase 1 canonical count noun supplied by context, or null. */
+  readonly count_noun: string | null;
+  /** Phase 1 canonical container noun supplied by context, or null. */
+  readonly container: string | null;
 }
 
 /**
@@ -1240,6 +1289,146 @@ const QUALIFIER_OPPOSITES: ReadonlyArray<readonly [string, string]> = Object.fre
   Object.freeze(['whole', 'skim'] as const),
 ]);
 
+/**
+ * Closed PHYSICAL-STATE role vocabulary (Phase 2 projection). These are the
+ * bounded state words a recipe line can explicitly declare. The role is derived
+ * from the already-assigned identity/preparation tokens — it is never a second
+ * grammar — and it is used ONLY for state-contradiction evidence.
+ */
+const STATE_ROLE_TOKENS: ReadonlySet<string> = new Set([
+  'raw',
+  'uncooked',
+  'cooked',
+  'fresh',
+  'dried',
+  'dehydrated',
+  'frozen',
+  'canned',
+  'dry',
+  'reconstituted',
+  'condensed',
+  'evaporated',
+  'smoked',
+  'pickled',
+  'prepared',
+  'unprepared',
+  'refrigerated',
+  'bottled',
+  'packaged',
+  'drained',
+  'undrained',
+  'ground',
+  'powdered',
+  'whole',
+]);
+
+/**
+ * Closed STATE-CONTRADICTION pairs (Phase 2). Two explicit states from opposite
+ * sides of a pair cannot both describe the same food, so a candidate carrying
+ * one side is disqualified from automatic authority when the query declares the
+ * other. This is negative evidence only: it can withhold/demote authority but
+ * can never manufacture a match, and it never removes a candidate from matching
+ * or review. `powdered` participates through the closed equivalence group
+ * (`powdered` ~ `dry`/`dried`), so `dry milk` is not contradicted by `powdered`.
+ */
+const STATE_CONTRADICTION_PAIRS: ReadonlyArray<
+  readonly [ReadonlySet<string>, ReadonlySet<string>]
+> = Object.freeze([
+  // Raw/uncooked <> cooked.
+  Object.freeze([new Set(['raw', 'uncooked']), new Set(['cooked'])] as const),
+  // Fresh <> dried (equivalence covers powdered/dry).
+  Object.freeze([new Set(['fresh']), new Set(['dried'])] as const),
+  // Fresh <> frozen.
+  Object.freeze([new Set(['fresh']), new Set(['frozen'])] as const),
+  // Canned <> raw/fresh.
+  Object.freeze([new Set(['canned']), new Set(['raw', 'uncooked', 'fresh'])] as const),
+  // Drained <> undrained.
+  Object.freeze([new Set(['drained']), new Set(['undrained'])] as const),
+  // Ground <> whole (a committed form vs the whole food). `ground` is NOT
+  // opposed to `raw`/`fresh` — raw ground beef is a real food — and `powdered`
+  // is NOT opposed to `whole` (powdered whole milk is a real food).
+  Object.freeze([new Set(['ground']), new Set(['whole'])] as const),
+]);
+
+/**
+ * Closed PREPARATION-FORM canonical map (Phase 2 preparation-form authority).
+ *
+ * Only forms that materially change the prepared ingredient are listed, and each
+ * surface token maps to ONE canonical form id. Two explicit forms are compatible
+ * only when they share a canonical id; a different explicit form is a
+ * contradiction. Words that legitimately COEXIST with a cut form (`peeled`,
+ * `trimmed`, `cooked`, `drained`, `seasoned`, `unprepared`, ...) are deliberately
+ * NOT in this vocabulary and stay neutral. There is no stemming, fuzzy matching,
+ * plural guessing beyond the closed aliases below, or recipe-specific entry.
+ */
+const PREPARATION_FORM_CANONICAL: Readonly<Record<string, string>> = Object.freeze({
+  diced: 'diced',
+  dice: 'diced',
+  crushed: 'crushed',
+  crush: 'crushed',
+  sliced: 'sliced',
+  slice: 'sliced',
+  slices: 'sliced',
+  chopped: 'chopped',
+  chop: 'chopped',
+  minced: 'minced',
+  mince: 'minced',
+  mashed: 'mashed',
+  mash: 'mashed',
+  pureed: 'pureed',
+  puree: 'pureed',
+  purees: 'pureed',
+  'purée': 'pureed',
+  'purées': 'pureed',
+  shredded: 'shredded',
+  shred: 'shredded',
+  grated: 'grated',
+  grate: 'grated',
+  whole: 'whole',
+  halved: 'halved',
+  halves: 'halved',
+  quartered: 'quartered',
+  quarter: 'quartered',
+  quarters: 'quartered',
+});
+
+/**
+ * PREPARATION-FORM CONTRADICTION count (Phase 2). 1 when the query explicitly
+ * requests a recognized preparation form and the candidate explicitly declares a
+ * DIFFERENT mutually incompatible form (so `1 can diced tomatoes` can never be
+ * automatically satisfied by `Tomatoes, crushed, canned`). A candidate silent
+ * about preparation form is NEUTRAL (0), and an explicit matching form is
+ * compatible (0). Negative evidence ONLY: it can withhold automatic authority
+ * but can never manufacture a match, and it never removes a candidate from
+ * ranking or review. It is intentionally NOT part of `familyMismatchCount`, so
+ * the ranking comparator remains unchanged.
+ */
+export function preparationFormContradictionCount(
+  candidateTokens: ReadonlyArray<string>,
+  projection: IngredientQueryProjection
+): number {
+  const requested = new Set<string>();
+  const collectRequested = (tokens: ReadonlyArray<string>): void => {
+    for (const token of tokens) {
+      const canonical = PREPARATION_FORM_CANONICAL[token];
+      if (canonical) requested.add(canonical);
+    }
+  };
+  collectRequested(projection.preparation_qualifiers);
+  collectRequested(projection.food_tokens);
+  collectRequested(projection.state_tokens);
+  if (requested.size === 0) return 0;
+
+  let candidateHasForm = false;
+  for (const token of candidateTokens) {
+    const canonical = PREPARATION_FORM_CANONICAL[token];
+    if (!canonical) continue;
+    candidateHasForm = true;
+    if (requested.has(canonical)) return 0;
+  }
+  return candidateHasForm ? 1 : 0;
+}
+
 /** Bounded trailing recipe-instruction lead-ins (non-authoritative notes). */
 const NOTE_LEAD_INS: ReadonlyArray<string> = [
   'formed into',
@@ -1532,10 +1721,61 @@ function assignRoles(tokens: ReadonlyArray<string>): TokenRoles {
 }
 
 /**
+ * Bounded Phase 1 noun validation for the projection context. A non-string,
+ * oversized, or non-printable value is ignored (stays null); a valid value is
+ * lower-cased and bounded. The projection NEVER re-derives these tokens.
+ */
+function boundedProjectionNoun(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim().toLowerCase();
+  if (trimmed.length === 0 || trimmed.length > 48) return null;
+  if (!/^[a-z][a-z0-9 -]*$/.test(trimmed)) return null;
+  return trimmed;
+}
+
+function contextNoun(context: unknown, key: 'count_noun' | 'container'): string | null {
+  if (context === null || typeof context !== 'object') return null;
+  try {
+    return boundedProjectionNoun((context as Record<string, unknown>)[key]);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Bounded secondary-component EVIDENCE extraction (never authority). Reuses the
+ * Phase 0A relational/flavor marker vocabulary: a relational marker contributes
+ * its following tokens, and a flavor marker contributes the adjacent flavor
+ * token. The Phase 0A guard remains the sole owner of the safety decision.
+ */
+function extractSecondaryComponentTokens(tokens: ReadonlyArray<string>): ReadonlyArray<string> {
+  const collected: string[] = [];
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (RELATIONAL_COMPONENT_MARKERS.has(token)) {
+      for (let j = i + 1; j < tokens.length && collected.length < 8; j += 1) {
+        collected.push(tokens[j]);
+      }
+    } else if (FLAVOR_COMPONENT_MARKERS.has(token) && i > 0 && collected.length < 8) {
+      collected.push(tokens[i - 1]);
+    }
+  }
+  const unique: string[] = [];
+  for (const token of collected) {
+    if (!unique.includes(token)) unique.push(token);
+    if (unique.length >= 8) break;
+  }
+  return Object.freeze(unique);
+}
+
+/**
  * Projects one normalized food-name query into closed roles. Deterministic and
  * independent of locale/time/state.
  */
-export function projectQueryText(text: string): IngredientQueryProjection {
+export function projectQueryText(
+  text: string,
+  context?: QueryProjectionContext
+): IngredientQueryProjection {
   const normalized = String(text).trim();
   const measurementTokens: string[] = [];
 
@@ -1626,17 +1866,58 @@ export function projectQueryText(text: string): IngredientQueryProjection {
       !REFINEMENT_TOKENS.has(token)
   );
 
-  // Deterministic anchor: the last CORE identity token (the food head noun),
-  // falling back to the last identity token, then to the query itself.
-  let anchorTokens = coreTokens.length > 0 ? [...coreTokens] : [...identityTokens];
-  if (anchorTokens.length === 0) anchorTokens = [];
+  // PRIMARY identity, computed FIRST: the required head noun (the last CORE
+  // identity token, falling back to the last identity token), or the
+  // directional alias anchor group when an alias fired. This is the ONE head
+  // derivation; the anchor groups below are built FROM it, so production
+  // matching authority consumes `primary_identity_tokens` directly.
+  let primaryIdentityTokens: string[];
+  if (anchorOverride) {
+    primaryIdentityTokens = [...anchorOverride[0]];
+  } else if (coreTokens.length > 0) {
+    primaryIdentityTokens = [coreTokens[coreTokens.length - 1]];
+  } else if (identityTokens.length > 0) {
+    primaryIdentityTokens = [identityTokens[identityTokens.length - 1]];
+  } else {
+    primaryIdentityTokens = [];
+  }
+
   let anchorGroups: AnchorGroup[];
   if (anchorOverride) {
     anchorGroups = anchorOverride.map((accepted) => Object.freeze({ accepted: Object.freeze([...accepted]) }));
-  } else if (anchorTokens.length > 0) {
-    anchorGroups = [Object.freeze({ accepted: Object.freeze([anchorTokens[anchorTokens.length - 1]]) })];
+  } else if (primaryIdentityTokens.length > 0) {
+    anchorGroups = [Object.freeze({ accepted: Object.freeze([...primaryIdentityTokens]) })];
   } else {
     anchorGroups = [];
+  }
+
+  // PHYSICAL-STATE role: closed state words already assigned to identity or
+  // preparation. Used only for contradiction evidence.
+  const stateTokens: string[] = [];
+  const pushState = (token: string): void => {
+    if (STATE_ROLE_TOKENS.has(token) && !stateTokens.includes(token)) stateTokens.push(token);
+  };
+  for (const token of identityTokens) pushState(token);
+  for (const token of roles.preparationQualifiers) pushState(token);
+
+  // Phase 1 context is copied verbatim (bounded); it is never re-detected here.
+  const countNoun = contextNoun(context, 'count_noun');
+  const container = contextNoun(context, 'container');
+  // A `can` line explicitly names a can, so the `canned` preservation state is
+  // requested; a raw/fresh candidate can then never be automatically bound. No
+  // other container implies a state (package/container metadata stays amount
+  // metadata, not identity evidence).
+  if (container === 'can') pushState('canned');
+
+  // VARIETY/COLOR role: closed cultivar/color tokens present in the identity.
+  const varietyTokens: string[] = [];
+  for (const token of identityTokens) {
+    if (
+      (VARIETY_TOKENS.has(token) || MATERIAL_VARIETY_TOKENS.has(token)) &&
+      !varietyTokens.includes(token)
+    ) {
+      varietyTokens.push(token);
+    }
   }
 
   return Object.freeze({
@@ -1644,8 +1925,11 @@ export function projectQueryText(text: string): IngredientQueryProjection {
     food_identity: identityTokens.join(' '),
     food_tokens: Object.freeze([...identityTokens]),
     core_tokens: Object.freeze([...coreTokens]),
+    primary_identity_tokens: Object.freeze([...primaryIdentityTokens]),
     qualifier_tokens: Object.freeze([...roles.qualifierTokens]),
+    state_tokens: Object.freeze([...stateTokens]),
     form_tokens: Object.freeze([...roles.formTokens]),
+    variety_tokens: Object.freeze([...varietyTokens]),
     refinement_tokens: Object.freeze([...roles.refinementTokens]),
     alternative_groups: Object.freeze(
       (hasAlternatives ? orInfo.branches : []).map((branch) => Object.freeze([...branch]))
@@ -1657,6 +1941,9 @@ export function projectQueryText(text: string): IngredientQueryProjection {
     notes: Object.freeze([...notes]),
     numeric_qualifiers: Object.freeze([...numeric]),
     aliases: Object.freeze([...aliases]),
+    secondary_component_tokens: extractSecondaryComponentTokens(roleSource),
+    count_noun: countNoun,
+    container,
   });
 }
 
@@ -1775,6 +2062,53 @@ export function qualifierOppositionCount(
     }
   }
   return opposition;
+}
+
+/** True when a contradiction side contains `token` (closed equivalence aware). */
+function stateSideHas(side: ReadonlySet<string>, token: string): boolean {
+  if (side.has(token)) return true;
+  for (const member of side) {
+    if (tokensEquivalent(member, token)) return true;
+  }
+  return false;
+}
+
+/**
+ * STATE-CONTRADICTION count (Phase 2). Number of requested physical states that
+ * the candidate explicitly CONTRADICTS through a closed opposite pair:
+ * `drained` vs `undrained`, `ground` vs `whole`, `fresh` vs `dried`/`frozen`,
+ * `raw` vs `cooked`, `canned` vs raw/fresh. A state the candidate does not
+ * mention is NOT a contradiction (a plain record stays compatible), and an
+ * equivalent token (`dry` ~ `dried`) is the same state, not a contradiction.
+ *
+ * Negative evidence ONLY: the caller may withhold/demote automatic authority
+ * for a contradiction, but this function can never manufacture a positive match
+ * and never removes the candidate from matching or review.
+ */
+export function stateContradictionCount(
+  candidateTokens: ReadonlyArray<string>,
+  projection: IngredientQueryProjection
+): number {
+  if (projection.state_tokens.length === 0) return 0;
+  const seen = new Set<string>();
+  let count = 0;
+  for (const requested of projection.state_tokens) {
+    for (const candidateToken of candidateTokens) {
+      if (tokensEquivalent(requested, candidateToken)) continue;
+      for (const [sideA, sideB] of STATE_CONTRADICTION_PAIRS) {
+        const opposed =
+          (stateSideHas(sideA, requested) && stateSideHas(sideB, candidateToken)) ||
+          (stateSideHas(sideB, requested) && stateSideHas(sideA, candidateToken));
+        if (!opposed) continue;
+        const key = `${requested}|${candidateToken}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          count += 1;
+        }
+      }
+    }
+  }
+  return count;
 }
 
 /** Number of requested qualifier tokens absent from the candidate. */
@@ -1970,7 +2304,10 @@ export function unrequestedMaterialVariantCount(
   candidateTokens: ReadonlyArray<string>,
   projection: IngredientQueryProjection
 ): number {
-  const requested = new Set(projection.food_tokens);
+  // Requested states include the closed state role (so a `can`-implied `canned`
+  // state makes a candidate's `canned` token a REQUESTED preservation state
+  // rather than an unrequested material alteration).
+  const requested = new Set([...projection.food_tokens, ...projection.state_tokens]);
   for (const group of projection.anchor_groups) {
     for (const accepted of group.accepted) requested.add(accepted);
   }
@@ -2116,6 +2453,26 @@ export function secondaryComponentOnlyMatchCount(
   }
 
   return 0;
+}
+
+/**
+ * CONTAINER-IMPLIED STATE COMPATIBILITY count (Phase 2). A `can`/`tin` line
+ * supplies the `canned` preservation state from Phase 1 container metadata. A
+ * candidate that explicitly contradicts that state is blocked by
+ * `stateContradictionCount`; a candidate that is SILENT about state is a safe
+ * canned substitute only when it is a generic family record
+ * (`NFS`/`NS`/`unspecified`). A silent named variety (`Tomato, roma`) or raw
+ * preparation (`Tomatoes, scalloped`) is not a safe canned substitute and is
+ * withheld from automatic authority. This is negative evidence only.
+ */
+export function impliedStateCompatibilityMismatchCount(
+  candidateTokens: ReadonlyArray<string>,
+  projection: IngredientQueryProjection
+): number {
+  if (projection.container !== 'can') return 0;
+  if (candidateHasEquivalent(candidateTokens, 'canned')) return 0;
+  if (genericMarkerCount(candidateTokens) > 0) return 0;
+  return 1;
 }
 
 /**

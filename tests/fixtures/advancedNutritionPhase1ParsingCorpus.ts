@@ -322,8 +322,12 @@ export const PHASE1_PARSING_CASES: ReadonlyArray<Phase1ParsingCase> = [
     container: 'can',
     packageMass: { amount: 14.5, unit: 'oz', scope: 'per_container' },
     foodText: 'diced tomatoes',
-    expectedAutoFdc: 2709719,
-    expectLiveStatus: 'needs_amount',
+    // Phase 2 preparation-form authority: `diced` is an explicit requested form,
+    // so a canned crushed sibling is a form contradiction and a raw tomato is
+    // state-contradicted. No safe compatible record exists inside the bounded
+    // candidate set, so automatic authority is withheld (review required).
+    expectNoAutomatic: true,
+    expectLiveStatus: 'review_suggested',
   },
   {
     line: '1 400 g can chickpeas',

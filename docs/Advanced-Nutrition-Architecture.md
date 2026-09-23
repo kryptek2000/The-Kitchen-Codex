@@ -2754,10 +2754,122 @@ portion (72 g) because the record's `strip large (3" long)` portion is
 correctly a strip (verified as a 7 g strip candidate under a strip
 requirement), and calculation and live projection agree at 3 x 72 g.
 
-**Not implemented.** Phase 2 food-class projection/ranking redesign, a household
-gram registry, density conversions, generic package weights, AI-authored grams
-or ids, schema v2, saved-hint persistence, and the source-portion
-catalog-digest revision remain future work and do not exist.
+**Not implemented.** A ranking-policy redesign, a household gram registry,
+density conversions, generic package weights, AI-authored grams or ids, schema
+v2, saved-hint persistence, and the source-portion catalog-digest revision remain
+future work and do not exist.
+
+---
+
+### 20.13 Phase 2 — deterministic query + food-class projection
+
+Phase 2 adds ONE canonical, bounded, versioned query projection
+(`projectQueryText` in `src/core/nutritionV2/matching/query.ts`) that turns the
+Phase 1 parsed food phrase and amount metadata into deterministic identity
+evidence. It adds no second parser, no household gram values, no AI authority, no
+persistence change, and no general ranking-policy redesign.
+
+**Owner and version.** `projectQueryText` remains the single projection owner
+(`QUERY_PROJECTION_VERSION = 'usda_query_projection_v10'`). The projection version
+is part of the review-catalog digest, so a review/confirmation produced under an
+older projection fails closed (`stale_review`). `MATCH_CONFIDENCE_VERSION` is
+`usda_match_confidence_v12` because the automatic-authority contract gained
+state-contradiction, container-state-compatibility, and preparation-form
+contradiction evidence. No persisted nutrition schema changed
+(`CODEX_NUTRITION_SCHEMA_V1` is still 1).
+
+**Descriptor roles.** The projection exposes explicit, bounded roles:
+`core_tokens` (food-name tokens), `primary_identity_tokens` (the required head —
+the accepted tokens of the directional alias anchor, else the last core token,
+else the last identity token; the anchor groups are BUILT from these tokens, so
+production matching authority consumes this field directly), `state_tokens`
+(closed physical states: raw/cooked/canned/dried/dehydrated/frozen/fresh/drained/
+undrained/ground/whole/...), `preparation_qualifiers`, `size_qualifiers`,
+`variety_tokens` (closed cultivar/color vocabulary), `form_tokens`,
+`count_noun`/`container` (Phase 1 amount metadata), and
+`secondary_component_tokens` (relational/flavor evidence only). Unknown words
+are NEVER discarded: an unrecognized descriptor stays in `core_tokens` as
+identity evidence. There is no stemming, fuzzy matching, external NLP, or AI.
+Qualitative cues are owned earlier (`ingredientSemantics`/Phase 1) and are NOT
+carried by the projection.
+
+**Phase 1 consumption (one authority path).** `projectQueryText(text, context?)`
+accepts an optional bounded Phase 1 context (`count_noun`, `container`) and copies
+validated values verbatim; it never re-detects ranges, package net mass, count
+nouns, or containers with a second grammar. The canonical automatic-authority path
+(`reviewIngredient` → review snapshot → `explainCandidate`/`selectAutomaticMatch`/
+`selectBestEffortMatch`) consumes the Phase 1 count/container metadata; the
+ranking/search path remains a documented text-only fallback because count and
+container are amount metadata and never change membership or order.
+
+**State contradiction and container-implied canned.** A closed, symmetric
+opposition table withholds automatic authority when the query declares a physical
+state and the candidate explicitly declares the opposite: raw/uncooked vs cooked,
+fresh vs dried (equivalence covers powdered/dry), fresh vs frozen, canned vs
+raw/fresh, drained vs undrained, ground vs whole. A candidate that is silent about
+state is NOT a contradiction (`whole almonds` stays eligible). A `can`/`tin` line
+supplies the `canned` state from Phase 1 container metadata (no other container
+implies any state): a raw/fresh candidate is contradicted, and a state-silent
+named variety (`Tomato, roma`) is withheld because canning is a strong
+preservation claim, while an explicit canned token or a generic family record
+(`NFS`/`NS`/`unspecified`) stays compatible.
+
+**Preparation-form contradiction.** A closed form vocabulary
+(`PREPARATION_FORM_CANONICAL`) maps explicit preparation/product forms to
+canonical ids: diced, crushed, sliced, chopped, minced, mashed, pureed/purée,
+shredded, grated, whole, halved, quartered (with closed surface aliases for
+plurals and accents). When the query explicitly requests a recognized form and
+the candidate explicitly declares a DIFFERENT canonical form, automatic authority
+is withheld (`preparation_form_contradiction`, reason
+`preparation_form_contradiction`) because the substitution would materially
+misrepresent the named ingredient (`1 can diced tomatoes` must never be silently
+satisfied by `Tomatoes, crushed, canned`). A candidate SILENT about preparation
+form is neutral; an explicit matching form is compatible; form agreement can
+never GRANT authority (missing core identity still fails). Words that legitimately
+coexist with a cut form (`peeled`, `trimmed`, `cooked`, `drained`, `seasoned`,
+`unprepared`, `crumbled`, ...) are deliberately not in the vocabulary. The rule
+is negative-only, feeds both strict and best-effort contracts (and therefore the
+analyzer and AI-assisted deterministic verification, which validate against the
+same contracts), does not participate in the ranking comparator, and never
+removes a candidate from review.
+
+All Phase 2 evidence is negative only: it can withhold/demote automatic
+authority but can never manufacture a match, never grants positive authority, and
+never removes a candidate from ranking or review. Phase 0A's secondary-component
+guard remains the sole owner of the secondary-component veto and is reused, not
+duplicated; `family_mismatch` (product/dish head, derived component, foreign
+head, secondary-only) and `missing_core_identity` remain the head/class safety
+surfaces. Candidate explanations expose bounded reason enums:
+`state_contradiction`, `container_state_incompatible`,
+`preparation_form_contradiction`, `secondary_component_only`,
+`food_family_mismatch`, `missing_core_identity`.
+
+**Reviewed corpus changes.** On the real pinned bundle, the corrected Phase 2
+result for `1 can diced tomatoes` and `2 (14.5 oz) cans diced tomatoes` is NO
+automatic identity on any path: the raw tomato record is state-contradicted, the
+canned crushed sibling is a preparation-form contradiction, and the catalog's
+correct canned diced record (333281) ranks outside the bounded candidate set.
+Both lines stay truthfully review-required/review-suggested with no grams and no
+nutrients, and canned tomato candidates stay visible for explicit review. The
+same explicit form remains legitimate (`1 can crushed tomatoes` selects the
+canned crushed sibling 170501). `1 can sliced mushrooms` selects no whole/
+chopped/minced/crushed mushroom record. For `1 can black beans` and `1 can tuna`
+the strict automatic selection is withheld (the state-neutral NFS record ties the
+requested canned sibling on the auto-authority key); best-effort/analyzer keep
+`Black beans, NFS` (2707359) for the beans line, while the tuna line's pipeline
+identity remains the authenticated portion-bearing canned sibling (2706311) with
+the audited 115 g can portion. Every other measured line keeps its identity,
+mass, and status; direct mass (`1 lb ground beef (80/20)`), bacon count mass (4/8
+slices), range no-grams, word-cardinal, tin-alias, package net mass,
+cooked-vs-dry rice, and Phase 0A sardine/tomato-sauce safety are unchanged.
+
+**Not implemented (Phase 3 / registry work).** NFS/default preference, penne
+shape fallback, plain-before-flavored preference, duplicate-record collapsing,
+data-type preference across equivalent records, a household portion registry,
+generic produce masses, package/container mass conversion, and density
+conversion remain future work and do not exist. Container-derived state is
+limited to `can`; `jar`/`box`/`bag`/`bottle`/`package` remain amount metadata
+only.
 
 ---
 
@@ -4476,6 +4588,24 @@ confidence contract as the one-click analyzer) -> an ordinary `kind: 'manual'`
 selection bound to the ORIGINAL row's review digest + the authenticated record
 digest. AI grants no authority: if the deterministic matcher does not accept a
 candidate, the row stays for user review / manual full-catalog search.
+
+**AI source-constraint parity (Phase 2).** AI wording may improve positive
+lexical identity, aliases, or phrasing, but it can NEVER weaken or erase an
+explicit constraint of the authenticated source line. `resolveFoodsFromAiSuggestions`
+reconstructs the source constraints LOCALLY from the session-bound row text through
+the canonical Phase 1 parse and the ONE query projection (container-implied
+`can`/`tin -> canned` state, explicit physical state, and explicit preparation/
+product form), then re-checks every strict/best-effort candidate with the SAME
+closed Phase 2 counters (`stateContradictionCount`,
+`impliedStateCompatibilityMismatchCount`, `preparationFormContradictionCount`)
+before offering it. A contradicting candidate is rejected (the row stays for
+review); candidate silence stays neutral; source agreement never creates positive
+authority. Provider-supplied hints/context are never trusted as source context,
+and a line-ref/fingerprint mismatch (an edited or stale source line) fails closed.
+The AI-resolution contract identifier is `nutrition_ai_resolution_v2`
+(`AI_RESOLUTION_VERSION`); the request/response shape is unchanged, responses are
+never persisted, and every response is freshly re-verified, so no digest or
+persisted-schema change is required.
 
 Amount/count identity: AI count-identity hint -> `phase4/aiAmountResolve.ts` ->
 `session.reviewCountPortions(ingredient, fdcId, hint)` (the genuine authenticated

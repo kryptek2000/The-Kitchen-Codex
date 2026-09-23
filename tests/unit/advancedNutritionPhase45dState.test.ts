@@ -34,7 +34,7 @@ describe('phase 4.5d versioning — explicit bumps', () => {
     expect(MATCHING_RANKING_VERSION).toBe('usda_match_rank_v10');
     expect(MATCHING_CATALOG_VERSION).toBe('usda_review_catalog_v2');
     expect(MATCHING_CONFIRMATION_VERSION).toBe('usda_match_confirm_v2');
-    expect(QUERY_PROJECTION_VERSION).toBe('usda_query_projection_v8');
+    expect(QUERY_PROJECTION_VERSION).toBe('usda_query_projection_v10');
     expect(ELIGIBILITY_POLICY_VERSION).toBe('usda_home_recipe_eligibility_v1');
     expect(CALCULATION_VERSION).toBe('usda_advisory_calc_v4');
     expect(CALCULATION_CONTEXT_VERSION).toBe('usda_calc_context_v3');

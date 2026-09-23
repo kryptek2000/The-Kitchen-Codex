@@ -90,8 +90,13 @@ export const IDENTITY_SAFETY_CORPUS: ReadonlyArray<IdentityCorpusLine> = [
   {
     line: '1 can diced tomatoes',
     category: 'canned-tomatoes',
-    baselineAutoFdc: 2709719,
-    knownIssue: 'canned-state-drift',
+    // Phase 2 preparation-form repair: `diced` is an explicit requested form, so
+    // the canned crushed sibling (170501) is a form contradiction and the raw
+    // tomato record is state-contradicted. The catalog's correct canned diced
+    // record (333281) ranks outside the bounded candidate set, so NO automatic
+    // path may bind an identity; the line stays reviewable.
+    expectNoAutomatic: true,
+    forbiddenAutoDescription: /\braw\b|\bcrushed\b/i,
   },
   {
     line: '1 can black beans',
@@ -102,8 +107,13 @@ export const IDENTITY_SAFETY_CORPUS: ReadonlyArray<IdentityCorpusLine> = [
   {
     line: '1 can tuna',
     category: 'tuna',
-    baselineAutoFdc: 2706309,
-    knownIssue: 'nfs-variant',
+    // Phase 2 (container-implied state): the analyzer selects the authenticated
+    // portion-bearing canned tuna sibling (2706311) for a `can` line. The
+    // strict/best-effort paths remain on the equally safe state-neutral NFS
+    // record (2706309), so this is pinned as the pipeline identity (not a
+    // single-baseline contract), with non-tuna automatic identities forbidden.
+    expectedAutoFdc: 2706311,
+    forbiddenAutoDescription: /sardine|salmon|mackerel|anchov/i,
   },
   {
     line: '1 jar marinara sauce',

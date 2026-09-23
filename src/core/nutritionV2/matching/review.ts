@@ -343,6 +343,8 @@ function invalidReview(
     line_ref: parsed?.line_ref,
     original_text: parsed?.original_text,
     query: parsed?.query,
+    ...(parsed?.count_noun !== undefined ? { count_noun: parsed.count_noun } : {}),
+    ...(parsed?.container !== undefined ? { container: parsed.container } : {}),
     normalized_query: undefined,
     query_tokens: Object.freeze([] as string[]),
     bundle_release: metadata.bundle_release,
@@ -457,6 +459,8 @@ export function reviewIngredient(
     line_ref: parsed.line_ref,
     original_text: parsed.original_text,
     query: parsed.query,
+    ...(parsed.count_noun !== undefined ? { count_noun: parsed.count_noun } : {}),
+    ...(parsed.container !== undefined ? { container: parsed.container } : {}),
     normalized_query: normalized.text,
     query_tokens: Object.freeze([...normalized.tokens]),
     bundle_release: metadata.bundle_release,
@@ -514,6 +518,10 @@ const REVIEW_KEYS = new Set([
   'review_digest',
   'selected_fdc_id',
   'failure',
+  // Phase 2 bounded Phase 1 amount metadata (accepted for round-trip
+  // compatibility; never part of the review digest and never identity).
+  'count_noun',
+  'container',
 ]);
 const CANDIDATE_KEYS = new Set([
   'fdc_id',
@@ -679,6 +687,18 @@ function sanitizeReview(raw: unknown): SanitizedReviewResult {
     return { ok: false, code: 'invalid_review' };
   }
   if (!isBoundedString(value.query, MAX_INGREDIENT_TEXT_LENGTH)) {
+    return { ok: false, code: 'invalid_review' };
+  }
+  if (
+    value.count_noun !== undefined &&
+    !isBoundedString(value.count_noun, MAX_INGREDIENT_TEXT_LENGTH)
+  ) {
+    return { ok: false, code: 'invalid_review' };
+  }
+  if (
+    value.container !== undefined &&
+    !isBoundedString(value.container, MAX_INGREDIENT_TEXT_LENGTH)
+  ) {
     return { ok: false, code: 'invalid_review' };
   }
   if (!isBoundedString(value.normalized_query, MAX_INGREDIENT_TEXT_LENGTH)) {

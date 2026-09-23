@@ -252,7 +252,10 @@ export function createAdvancedNutritionSession(
       if (!hintResult.ok) return { ok: false, failure: phase3PortionFailure() };
       const parsed = parseIngredient(ingredient);
       if (!parsed.ok) return { ok: false, failure: phase3PortionFailure() };
-      const projection = projectQueryText(normalizeQuery(parsed.parsed.query).text);
+      const projection = projectQueryText(normalizeQuery(parsed.parsed.query).text, {
+        count_noun: parsed.parsed.count_noun,
+        container: parsed.parsed.container,
+      });
       const requirement = deriveCountRequirement(
         parsed.parsed.amount,
         parsed.parsed.raw_unit,

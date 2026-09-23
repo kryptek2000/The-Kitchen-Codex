@@ -312,6 +312,17 @@ interface ReviewCommon {
    * caller cannot change a limit to hide or change the authoritative set.
    */
   readonly result_limit: number;
+  /**
+   * Phase 1 canonical count noun (amount metadata; `clove`, `slice`, ...).
+   * Bounded and additive: it never participates in the review digest and is
+   * consumed only as negative/count evidence by the projection context.
+   */
+  readonly count_noun?: string | undefined;
+  /**
+   * Phase 1 canonical container noun (amount metadata; `can`, `jar`, ...).
+   * Bounded and additive; a `can` supplies the projection's `canned` state.
+   */
+  readonly container?: string | undefined;
   readonly candidates: ReadonlyArray<RankedCandidate>;
   readonly review_digest: string | undefined;
 }

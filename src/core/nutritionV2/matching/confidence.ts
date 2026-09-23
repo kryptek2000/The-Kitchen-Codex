@@ -50,14 +50,18 @@ import {
   compoundProductPenaltyCount,
   familyMismatchCount,
   genericMarkerCount,
+  impliedStateCompatibilityMismatchCount,
   missingCoreTokenCount,
   missingFormTokenCount,
   missingQualifierTokenCount,
+  preparationFormContradictionCount,
   preparedProductFormCount,
   projectQueryText,
   qualifierAgreementCount,
   qualifierConflictCount,
   qualifierOppositionCount,
+  secondaryComponentOnlyMatchCount,
+  stateContradictionCount,
   tokensEquivalent,
   unrequestedCookingMethodCount,
   unrequestedFormTokenCount,
@@ -65,10 +69,11 @@ import {
   unrequestedMaterialVarietyCount,
   unrequestedVarietyCount,
   type IngredientQueryProjection,
+  type QueryProjectionContext,
 } from './query';
 import type { IngredientReviewResult, RankedCandidate } from './types';
 
-export const MATCH_CONFIDENCE_VERSION = 'usda_match_confidence_v10';
+export const MATCH_CONFIDENCE_VERSION = 'usda_match_confidence_v12';
 
 export type MatchConfidence = 'high' | 'review' | 'unresolved';
 
@@ -94,6 +99,36 @@ export interface CandidateExplanation {
   readonly unrequested_material_variants: number;
   readonly unrequested_cooking_methods: number;
   readonly generic_marker: number;
+  /**
+   * Phase 2 STATE-CONTRADICTION count: requested physical states the candidate
+   * explicitly contradicts through a closed opposite pair (`drained` vs
+   * `undrained`, `ground` vs `whole`, `fresh` vs `dried`/`frozen`, ...). Any
+   * positive value withholds automatic authority. Negative evidence only.
+   */
+  readonly state_contradiction: number;
+  /**
+   * Container-implied state compatibility: 1 when a `can` line's implied
+   * `canned` state is not honored by an explicit canned token or a generic
+   * family record (`NFS`/`NS`/`unspecified`). Any positive value withholds
+   * automatic authority. Negative evidence only.
+   */
+  readonly implied_state_mismatch: number;
+  /**
+   * Phase 2 PREPARATION-FORM CONTRADICTION: 1 when the query explicitly requests
+   * a recognized preparation form and the candidate explicitly declares a
+   * different incompatible form (`diced` vs `crushed`, `sliced` vs `whole`).
+   * Any positive value withholds automatic authority. A candidate silent about
+   * preparation form is neutral (0). Negative evidence only.
+   */
+  readonly preparation_form_contradiction: number;
+  /**
+   * Phase 0A SECONDARY-COMPONENT-ONLY count: positive when every matched query
+   * identity token identifies only a relational/flavor secondary component of
+   * the candidate (the candidate's primary food is absent from the query).
+   * Surfaced here as bounded explanation evidence; the Phase 0A guard itself
+   * remains the owner of the withholding decision through `family_mismatch`.
+   */
+  readonly secondary_component_only: number;
   readonly automatic_eligible: boolean;
   /**
    * True when the candidate is a safe SAME-FAMILY best-effort default: full core
@@ -113,8 +148,11 @@ const EMPTY_PROJECTION: IngredientQueryProjection = Object.freeze({
   food_identity: '',
   food_tokens: Object.freeze([] as string[]),
   core_tokens: Object.freeze([] as string[]),
+  primary_identity_tokens: Object.freeze([] as string[]),
   qualifier_tokens: Object.freeze([] as string[]),
+  state_tokens: Object.freeze([] as string[]),
   form_tokens: Object.freeze([] as string[]),
+  variety_tokens: Object.freeze([] as string[]),
   refinement_tokens: Object.freeze([] as string[]),
   alternative_groups: Object.freeze([]),
   anchor_groups: Object.freeze([]),
@@ -124,6 +162,9 @@ const EMPTY_PROJECTION: IngredientQueryProjection = Object.freeze({
   notes: Object.freeze([] as string[]),
   numeric_qualifiers: Object.freeze([] as string[]),
   aliases: Object.freeze([] as string[]),
+  secondary_component_tokens: Object.freeze([] as string[]),
+  count_noun: null,
+  container: null,
 });
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -155,12 +196,31 @@ function headTokensOverlap(
   return aHasHeadB && bHasHeadA;
 }
 
-function projectionFor(normalizedQuery: string): IngredientQueryProjection {
+function projectionFor(
+  normalizedQuery: string,
+  context?: QueryProjectionContext
+): IngredientQueryProjection {
   try {
-    return projectQueryText(normalizedQuery);
+    return projectQueryText(normalizedQuery, context);
   } catch {
     return EMPTY_PROJECTION;
   }
+}
+
+/**
+ * Bounded Phase 1 context extracted from a review snapshot. Only the canonical
+ * count/container nouns are read (amount metadata, never identity), and the
+ * projection validates them again; an unsafe/oversized value is ignored. Every
+ * automatic-authority decision runs against a FRESH review computed from the raw
+ * ingredient, so a caller cannot gain authority by injecting metadata into a
+ * stale serialized review.
+ */
+function reviewContext(review: IngredientReviewResult | undefined): QueryProjectionContext | undefined {
+  if (review === undefined || review === null || typeof review !== 'object') return undefined;
+  const context: { count_noun?: string; container?: string } = {};
+  if (typeof review.count_noun === 'string') context.count_noun = review.count_noun;
+  if (typeof review.container === 'string') context.container = review.container;
+  return context.count_noun === undefined && context.container === undefined ? undefined : context;
 }
 
 function ineligibleExplanation(): CandidateExplanation {
@@ -185,6 +245,10 @@ function ineligibleExplanation(): CandidateExplanation {
     unrequested_material_variants: 0,
     unrequested_cooking_methods: 0,
     generic_marker: 0,
+    state_contradiction: 0,
+    implied_state_mismatch: 0,
+    preparation_form_contradiction: 0,
+    secondary_component_only: 0,
     automatic_eligible: false,
     same_family_default_eligible: false,
     reasons: Object.freeze(['invalid_candidate']),
@@ -197,12 +261,13 @@ function ineligibleExplanation(): CandidateExplanation {
  */
 export function explainCandidate(
   normalizedQuery: string,
-  candidate: RankedCandidate
+  candidate: RankedCandidate,
+  context?: QueryProjectionContext
 ): CandidateExplanation {
   if (!isRecord(candidate) || typeof candidate.match_class !== 'string') {
     return ineligibleExplanation();
   }
-  const projection = projectionFor(typeof normalizedQuery === 'string' ? normalizedQuery : '');
+  const projection = projectionFor(typeof normalizedQuery === 'string' ? normalizedQuery : '', context);
   const tokens = candidateTokensOf(candidate);
   const missingCore = missingCoreTokenCount(tokens, projection);
   const familyMismatch = familyMismatchCount(tokens, projection);
@@ -215,6 +280,10 @@ export function explainCandidate(
   const unrequestedVariety = unrequestedVarietyCount(tokens, projection);
   const materialVariety = unrequestedMaterialVarietyCount(tokens, projection);
   const unrequestedForm = unrequestedFormTokenCount(tokens, projection);
+  const stateContradiction = stateContradictionCount(tokens, projection);
+  const impliedStateMismatch = impliedStateCompatibilityMismatchCount(tokens, projection);
+  const preparationFormContradiction = preparationFormContradictionCount(tokens, projection);
+  const secondaryOnly = secondaryComponentOnlyMatchCount(tokens, projection);
   // Numeric qualifiers (`80 20`) are agreement evidence, exactly as in ranking.
   let numericAgreement = 0;
   for (const numeric of projection.numeric_qualifiers) {
@@ -236,6 +305,17 @@ export function explainCandidate(
       preparedProduct === 0 &&
       conflicts === 0 &&
       opposition === 0 &&
+      // A candidate that explicitly contradicts a requested physical state
+      // (`drained` vs `undrained`, `ground` vs `whole`, `fresh` vs `dried`) can
+      // never be an automatic choice, even when every core token is present.
+      stateContradiction === 0 &&
+      // A `can` line's implied `canned` state must be honored by an explicit
+      // canned token or a generic family record.
+      impliedStateMismatch === 0 &&
+      // An explicitly different preparation form (`diced` query vs `crushed`
+      // candidate) is a material misrepresentation and can never be an automatic
+      // choice; candidate silence stays neutral.
+      preparationFormContradiction === 0 &&
       missingQualifier === 0 &&
       missingForm === 0 &&
       unrequestedVariety === 0 &&
@@ -255,6 +335,9 @@ export function explainCandidate(
       preparedProduct === 0 &&
       conflicts === 0 &&
       opposition === 0 &&
+      stateContradiction === 0 &&
+      impliedStateMismatch === 0 &&
+      preparationFormContradiction === 0 &&
       missingQualifier === 0 &&
       missingForm === 0 &&
       // An unrequested FORM (`Rice, white, with gravy`, `Cheese sandwich`) is a
@@ -275,6 +358,10 @@ export function explainCandidate(
   if (exact) reasons.push('exact');
   if (missingCore > 0) reasons.push('missing_core_identity');
   if (familyMismatch > 0) reasons.push('food_family_mismatch');
+  if (secondaryOnly > 0) reasons.push('secondary_component_only');
+  if (stateContradiction > 0) reasons.push('state_contradiction');
+  if (impliedStateMismatch > 0) reasons.push('container_state_incompatible');
+  if (preparationFormContradiction > 0) reasons.push('preparation_form_contradiction');
   if (preparedProduct > 0) reasons.push('prepared_product_form');
   if (conflicts > 0) reasons.push('qualifier_or_form_conflict');
   if (opposition > 0) reasons.push('qualifier_opposition');
@@ -307,6 +394,10 @@ export function explainCandidate(
     unrequested_material_variants: unrequestedVariants,
     unrequested_cooking_methods: unrequestedCooking,
     generic_marker: genericMarker,
+    state_contradiction: stateContradiction,
+    implied_state_mismatch: impliedStateMismatch,
+    preparation_form_contradiction: preparationFormContradiction,
+    secondary_component_only: secondaryOnly,
     automatic_eligible: automaticEligible,
     same_family_default_eligible: sameFamilyDefaultEligible,
     reasons: Object.freeze(reasons),
@@ -329,7 +420,7 @@ export function classifyReviewConfidence(review: IngredientReviewResult): MatchC
   if (!top) return 'unresolved';
   const normalized = typeof review.normalized_query === 'string' ? review.normalized_query : '';
   if (normalized.length === 0) return 'review';
-  const explanation = explainCandidate(normalized, top);
+  const explanation = explainCandidate(normalized, top, reviewContext(review));
   if (explanation.automatic_eligible) return 'high';
   // A credible but not auto-eligible match: all core identity tokens present and
   // no qualifier opposition. This is "review suggested", never automatic.
@@ -396,23 +487,24 @@ export function selectAutomaticMatch(review: IngredientReviewResult): AutomaticS
       fdc_id: selected.fdc_id,
       match_class: selected.match_class,
       confidence: 'high' as const,
-      explanation: explainCandidate(normalized, selected),
+      explanation: explainCandidate(normalized, selected, reviewContext(review)),
     });
   }
   if (review.outcome !== 'review_required') return undefined;
   const top = candidates[0];
   if (!top) return undefined;
   if (normalized.length === 0) return undefined;
-  const explanation = explainCandidate(normalized, top);
+  const context = reviewContext(review);
+  const explanation = explainCandidate(normalized, top, context);
   if (!explanation.automatic_eligible) return undefined;
 
   // RUNNER-UP AMBIGUITY: the FDC-id tie-break must never manufacture authority.
-  const projection = projectionFor(normalized);
+  const projection = projectionFor(normalized, context);
   const topKey = semanticKey(explanation, top);
   const topTokens = candidateTokensOf(top);
   for (let i = 1; i < candidates.length; i += 1) {
     const other = candidates[i];
-    const otherExplanation = explainCandidate(normalized, other);
+    const otherExplanation = explainCandidate(normalized, other, context);
     if (semanticKey(otherExplanation, other) !== topKey) continue;
     if (candidateSubtypeDiffers(topTokens, candidateTokensOf(other), projection)) {
       return undefined;
@@ -448,10 +540,11 @@ export function bestEffortDefaultCandidates(
   const normalized = typeof review.normalized_query === 'string' ? review.normalized_query : '';
   if (normalized.length === 0) return [];
   const candidates = Array.isArray(review.candidates) ? review.candidates : [];
+  const context = reviewContext(review);
 
   const eligible: RankedCandidate[] = [];
   for (const candidate of candidates) {
-    if (explainCandidate(normalized, candidate).same_family_default_eligible) {
+    if (explainCandidate(normalized, candidate, context).same_family_default_eligible) {
       eligible.push(candidate);
     }
   }
@@ -505,7 +598,7 @@ export function selectBestEffortMatch(
     fdc_id: best.fdc_id,
     match_class: best.match_class,
     confidence: 'high' as const,
-    explanation: explainCandidate(normalized, best),
+    explanation: explainCandidate(normalized, best, reviewContext(review)),
   });
 }
 
