@@ -76,6 +76,8 @@ const HOUSEHOLD_UNIT_ALIASES: Readonly<Record<string, HouseholdUnit>> = Object.f
   // Containers
   can: Object.freeze({ noun: 'can', kind: 'container' as const }),
   cans: Object.freeze({ noun: 'can', kind: 'container' as const }),
+  tin: Object.freeze({ noun: 'can', kind: 'container' as const }),
+  tins: Object.freeze({ noun: 'can', kind: 'container' as const }),
   package: Object.freeze({ noun: 'package', kind: 'container' as const }),
   packages: Object.freeze({ noun: 'package', kind: 'container' as const }),
   pkg: Object.freeze({ noun: 'package', kind: 'container' as const }),
