@@ -455,7 +455,7 @@ export interface RawIngredientPartsOptions {
  * Explicit canonical-parse contract version. Bumping this is required whenever
  * the canonical parse classification of an existing input changes meaning.
  */
-export const CANONICAL_INGREDIENT_PARSE_VERSION = 'canonical_ingredient_parse_v1';
+export const CANONICAL_INGREDIENT_PARSE_VERSION = 'canonical_ingredient_parse_v2';
 
 /**
  * Maximum accepted quantity RANGE endpoint. Exact-quantity parsing is unchanged
@@ -718,22 +718,27 @@ export function parseCanonicalIngredientParts(
   options: RawIngredientPartsOptions = {}
 ): CanonicalIngredientParts {
   const includeCount = options.includeCount === true;
-  const originalTextRaw = String(line).trim().slice(0, 300);
-  if (!originalTextRaw) return absentParse(originalTextRaw);
+  // Immutable source text: the bounded, trimmed wording the user authored. It is
+  // what the returned `originalText` (and every food-text fallback) must expose,
+  // never the internal expanded working form below.
+  const originalText = String(line).trim().slice(0, 300);
+  if (!originalText) return absentParse(originalText);
 
   // Calendar dates and other non-quantity leading numerics are not quantities.
-  if (DATE_PREFIX_PATTERN.test(originalTextRaw)) return absentParse(originalTextRaw);
+  if (DATE_PREFIX_PATTERN.test(originalText)) return absentParse(originalText);
 
-  // Closed spelled-out cardinals (`one` ... `twelve`) collapse to their numeral
-  // ONLY when they directly precede an existing supported measurement or
-  // count/container unit, so the existing amount parsing handles them unchanged.
-  const originalText = expandLeadingWordCardinal(originalTextRaw);
+  // Internal working text: the source with a recognized leading spelled-out
+  // cardinal (`one` ... `twelve`) collapsed to its numeral ONLY when it directly
+  // precedes an existing supported measurement or count/container unit, so the
+  // existing amount parsing handles it unchanged. Quantity parsing runs on this
+  // working form; `originalText` is never overwritten by it.
+  const workingText = expandLeadingWordCardinal(originalText);
 
   let quantity: CanonicalQuantity = emptyQuantity('absent');
-  let rest = originalText;
+  let rest = workingText;
   let malformed = false;
 
-  const range = RANGE_PATTERN.exec(originalText);
+  const range = RANGE_PATTERN.exec(workingText);
   if (range) {
     const lower = parseAmount(range[1]);
     const upper = parseAmount(range[2]);
@@ -746,7 +751,7 @@ export function parseCanonicalIngredientParts(
       value <= MAX_CANONICAL_RANGE_QUANTITY;
     if (bounded(lower) && bounded(upper) && lower <= upper) {
       quantity = Object.freeze({ kind: 'range' as const, amount: null, lower, upper });
-      rest = originalText.slice(range[0].length).trim();
+      rest = workingText.slice(range[0].length).trim();
     } else if (
       bounded(lower) &&
       bounded(upper) &&
@@ -757,7 +762,7 @@ export function parseCanonicalIngredientParts(
       const mixed = parseAmount(whole);
       if (mixed !== null && Number.isFinite(mixed) && mixed > 0) {
         quantity = Object.freeze({ kind: 'exact' as const, amount: mixed, lower: null, upper: null });
-        rest = originalText.slice(range[0].length).trim();
+        rest = workingText.slice(range[0].length).trim();
       } else {
         malformed = true;
       }
@@ -765,10 +770,10 @@ export function parseCanonicalIngredientParts(
       malformed = true;
     }
   } else {
-    const exact = EXACT_AMOUNT_PATTERN.exec(originalText);
+    const exact = EXACT_AMOUNT_PATTERN.exec(workingText);
     if (exact) {
       const amount = parseAmount(exact[1]);
-      const after = originalText.slice(exact[0].length).trim();
+      const after = workingText.slice(exact[0].length).trim();
       const mixedUnit = MIXED_UNIT_RANGE_PATTERN.exec(after);
       const mixedUnitRange =
         mixedUnit !== null && normalizeUnit(mixedUnit[1].replace(/[.]+$/, '')) !== undefined;

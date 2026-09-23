@@ -2634,10 +2634,32 @@ reversed or non-positive endpoints, chained ranges (`1-2-3`), mixed-unit ranges
 (`2024-01-02`), negative signs, model numbers, and hyphenated food words. The
 pre-existing closed mixed-fraction contract is preserved: `2-1/2` is the mixed
 number `2 1/2`, never a reversed range. The canonical parse contract is versioned
-(`CANONICAL_INGREDIENT_PARSE_VERSION`); the query-normalization and projection
-version ids are unchanged because normalized-query semantics did not change —
-only the parsed food phrase does, and every digest binds the phrase it actually
-used, so stale selections fail closed.
+(`CANONICAL_INGREDIENT_PARSE_VERSION`, currently `canonical_ingredient_parse_v2`);
+v2 exists solely because leading spelled-out cardinals (`one cup flour`) now
+classify as exact quantities, which changes the canonical classification of
+already-valid inputs. `originalText` always preserves the bounded, trimmed source
+wording the user authored; the expanded numeral is an internal working form used
+only for quantity parsing, so provenance (`line_ref`, `original_text`), food-text
+fallbacks, hydration, and Apply bindings never expose a rewritten numeral. The
+query-normalization and projection version ids are unchanged because
+normalized-query semantics did not change — only the parsed food phrase does, and
+every digest binds the phrase it actually used, so stale selections fail closed.
+`parse_version` is currently informational: it is exposed on the parsed review
+view but is not part of any digest and is not persisted in any nutrition schema.
+
+**Word cardinals (closed set).** A leading spelled-out cardinal `one` … `twelve`
+(case-insensitive) is recognized only when it directly precedes an already
+supported mass, volume, count, or container unit (`one cup flour`,
+`two cloves garlic`, `three tbsp olive oil`, `one tin chopped tomatoes`). The
+numeral expands into an internal working form handled by the existing amount
+parser; no new unit vocabulary, generic mass, guessed grams, or default amount is
+added. `a`, `half`, `quarter`, ordinals (`first`), compound word numbers
+(`twenty one cups`), and word numbers not followed by a supported unit
+(`one pot chicken`) remain unrecognized, and the path never bypasses the
+compound-food collision policy (`one bottle gourd`, `one head cheese`,
+`one leaf lettuce` keep their full food identity and original wording). The
+`tin`/`tins` alias remains authority-identical to `can`/`cans` and never implies
+mass.
 
 **Household count vocabulary (one owner).** `src/utils/householdUnits.ts` is the
 ONE canonical owner of the Phase 1 classifications: count nouns (clove, slice,
