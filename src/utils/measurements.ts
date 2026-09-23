@@ -511,6 +511,49 @@ export interface CanonicalIngredientParts {
 }
 
 /** Existing-equivalent exact quantity matcher (one canonical fraction contract). */
+/**
+ * Closed spelled-out CARDINAL amount vocabulary (`one` ... `twelve`).
+ *
+ * Deliberately narrow: bare `a`, `half`, `quarter`, ordinal words (`first`), and
+ * compound word numbers (`twenty one`) are NOT recognized, and a word number is
+ * only consumed when it directly precedes an EXISTING supported measurement or
+ * count/container unit. No default amount, no mass conversion, and no new unit
+ * is introduced.
+ */
+const WORD_CARDINAL_AMOUNTS: Readonly<Record<string, number>> = Object.freeze({
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+});
+
+/**
+ * Expands a leading spelled-out cardinal into its numeral when the following
+ * token is an already-supported measurement or count/container unit. Every other
+ * line is returned unchanged, so no new grammar is introduced.
+ */
+function expandLeadingWordCardinal(line: string): string {
+  const match = /^([A-Za-z]+)(\s+)/.exec(line);
+  if (!match) return line;
+  const value = WORD_CARDINAL_AMOUNTS[match[1].toLowerCase()];
+  if (value === undefined) return line;
+  const after = line.slice(match[0].length);
+  const nextToken = (after.split(/\s+/)[0] ?? "").replace(/[.,;:!?"'()[\]{}]+$/, "");
+  if (!nextToken) return line;
+  const supported =
+    normalizeUnit(nextToken) !== undefined || canonicalHouseholdUnit(nextToken) !== null;
+  if (!supported) return line;
+  return `${String(value)} ${after}`;
+}
+
 const EXACT_AMOUNT_PATTERN =
   /^\s*(\d+\s+\d+\/\d+|\d+\s*-\s*\d+\/\d+|\d+\/\d+|\d+\s*[½⅓⅔¼¾⅛⅜⅝⅞]|[½⅓⅔¼¾⅛⅜⅝⅞]|\d+(?:\.\d+)?)/;
 
@@ -675,11 +718,16 @@ export function parseCanonicalIngredientParts(
   options: RawIngredientPartsOptions = {}
 ): CanonicalIngredientParts {
   const includeCount = options.includeCount === true;
-  const originalText = String(line).trim().slice(0, 300);
-  if (!originalText) return absentParse(originalText);
+  const originalTextRaw = String(line).trim().slice(0, 300);
+  if (!originalTextRaw) return absentParse(originalTextRaw);
 
   // Calendar dates and other non-quantity leading numerics are not quantities.
-  if (DATE_PREFIX_PATTERN.test(originalText)) return absentParse(originalText);
+  if (DATE_PREFIX_PATTERN.test(originalTextRaw)) return absentParse(originalTextRaw);
+
+  // Closed spelled-out cardinals (`one` ... `twelve`) collapse to their numeral
+  // ONLY when they directly precede an existing supported measurement or
+  // count/container unit, so the existing amount parsing handles them unchanged.
+  const originalText = expandLeadingWordCardinal(originalTextRaw);
 
   let quantity: CanonicalQuantity = emptyQuantity('absent');
   let rest = originalText;
