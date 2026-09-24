@@ -31,7 +31,7 @@ import { buildMatchingBundle } from '../fixtures/usdaMatchingFixtures';
 describe('phase 4.5d versioning — explicit bumps', () => {
   it('bumps every affected matching/calculation/phase version', () => {
     expect(MATCHING_NORMALIZATION_VERSION).toBe('usda_match_normalize_v2');
-    expect(MATCHING_RANKING_VERSION).toBe('usda_match_rank_v10');
+    expect(MATCHING_RANKING_VERSION).toBe('usda_match_rank_v11');
     expect(MATCHING_CATALOG_VERSION).toBe('usda_review_catalog_v2');
     expect(MATCHING_CONFIRMATION_VERSION).toBe('usda_match_confirm_v2');
     expect(QUERY_PROJECTION_VERSION).toBe('usda_query_projection_v10');

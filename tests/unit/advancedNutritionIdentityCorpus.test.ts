@@ -359,29 +359,40 @@ describe('identity safety corpus — automatic-identity invariants', () => {
   );
 
   it(
-    'confirmed regression: `canned tomato sauce` never automatically binds the sardine record',
+    'confirmed regression: `canned tomato sauce` binds only the plain tomato product and never the sardine record',
     () => {
-      const { diagnostics } = diagnoseCached();
+      const { diagnostics, descriptions } = diagnoseCached();
       const diag = diagnostics[IDENTITY_SAFETY_LINES.findIndex((spec) => spec.line === 'canned tomato sauce')];
       expect(diag).toBeDefined();
-      expect(diag.autoFdc).toBeNull();
-      expect(diag.bestFdc).toBeNull();
-      expect(diag.analyzerSelectedFdc).toBeNull();
-      if (diag.topDescription !== null) {
-        expect(diag.topDescription).not.toMatch(/sardine|fish/i);
+      // Phase 3 plain-before-specialty: the plain canned tomato product wins and
+      // is safe to authorize; every fish/sardine/dish description stays forbidden.
+      expect(diag.autoFdc).toBe(170054);
+      expect(diag.bestFdc).toBe(170054);
+      expect(diag.analyzerSelectedFdc).toBe(170054);
+      for (const fdc of [diag.autoFdc, diag.bestFdc, diag.analyzerSelectedFdc, diag.topFdc]) {
+        if (fdc === null) continue;
+        expect(descriptions.get(fdc) ?? '').not.toMatch(/sardine|fish|spaghetti|eggplant/i);
       }
+      expect(diag.previewGrams).toBeNull();
+      expect(diag.liveGrams).toBeNull();
     },
     30000
   );
 
   it(
-    '`3 cans tomato sauce` keeps tomato evidence, invents no mass, and never binds fish',
+    '`3 cans tomato sauce` binds the plain tomato product, invents no mass, and never binds fish',
     () => {
-      const { diagnostics } = diagnoseCached();
+      const { diagnostics, descriptions } = diagnoseCached();
       const diag = diagnostics[IDENTITY_SAFETY_LINES.findIndex((spec) => spec.line === '3 cans tomato sauce')];
       expect(diag).toBeDefined();
-      expect(diag.autoFdc).toBeNull();
-      expect(diag.analyzerSelectedFdc).toBeNull();
+      // Phase 3: the plain canned tomato product wins; nothing fish/dish-like.
+      expect(diag.autoFdc).toBe(170054);
+      expect(diag.analyzerSelectedFdc).toBe(170054);
+      for (const fdc of [diag.autoFdc, diag.bestFdc, diag.analyzerSelectedFdc]) {
+        if (fdc === null) continue;
+        expect(descriptions.get(fdc) ?? '').not.toMatch(/sardine|fish|eggplant/i);
+      }
+      // Package count is not mass authority; no grams are invented.
       expect(diag.previewGrams).toBeNull();
       expect(diag.liveGrams).toBeNull();
     },

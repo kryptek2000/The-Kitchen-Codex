@@ -67,13 +67,15 @@ import {
   unrequestedFormTokenCount,
   unrequestedMaterialVariantCount,
   unrequestedMaterialVarietyCount,
+  unrequestedSpecialtyCount,
   unrequestedVarietyCount,
+  varietyContradictionCount,
   type IngredientQueryProjection,
   type QueryProjectionContext,
 } from './query';
 import type { IngredientReviewResult, RankedCandidate } from './types';
 
-export const MATCH_CONFIDENCE_VERSION = 'usda_match_confidence_v12';
+export const MATCH_CONFIDENCE_VERSION = 'usda_match_confidence_v13';
 
 export type MatchConfidence = 'high' | 'review' | 'unresolved';
 
@@ -121,6 +123,20 @@ export interface CandidateExplanation {
    * preparation form is neutral (0). Negative evidence only.
    */
   readonly preparation_form_contradiction: number;
+  /**
+   * Phase 3 EXPLICIT VARIETY CONTRADICTION: 1 when the query names a
+   * variety/color/cultivar and the candidate explicitly names a different one
+   * (`white rice` vs `Rice, red`). Any positive value withholds automatic
+   * authority. A candidate silent about variety is neutral, not a contradiction.
+   */
+  readonly variety_contradiction: number;
+  /**
+   * Phase 3 UNREQUESTED SPECIALTY VARIANT count: candidate specialty modifiers
+   * (`flavored`, `fortified`, `seasoned`, `colored`, `spinach`, `chili`) that the
+   * query did not request. Any positive value withholds automatic authority and
+   * demotes the candidate below the plain family member.
+   */
+  readonly unrequested_specialty: number;
   /**
    * Phase 0A SECONDARY-COMPONENT-ONLY count: positive when every matched query
    * identity token identifies only a relational/flavor secondary component of
@@ -248,6 +264,8 @@ function ineligibleExplanation(): CandidateExplanation {
     state_contradiction: 0,
     implied_state_mismatch: 0,
     preparation_form_contradiction: 0,
+    variety_contradiction: 0,
+    unrequested_specialty: 0,
     secondary_component_only: 0,
     automatic_eligible: false,
     same_family_default_eligible: false,
@@ -283,6 +301,8 @@ export function explainCandidate(
   const stateContradiction = stateContradictionCount(tokens, projection);
   const impliedStateMismatch = impliedStateCompatibilityMismatchCount(tokens, projection);
   const preparationFormContradiction = preparationFormContradictionCount(tokens, projection);
+  const varietyContradiction = varietyContradictionCount(tokens, projection);
+  const unrequestedSpecialty = unrequestedSpecialtyCount(tokens, projection);
   const secondaryOnly = secondaryComponentOnlyMatchCount(tokens, projection);
   // Numeric qualifiers (`80 20`) are agreement evidence, exactly as in ranking.
   let numericAgreement = 0;
@@ -316,6 +336,12 @@ export function explainCandidate(
       // candidate) is a material misrepresentation and can never be an automatic
       // choice; candidate silence stays neutral.
       preparationFormContradiction === 0 &&
+      // An explicit variety/color contradiction (`Rice, red` for `white rice`)
+      // can never be an automatic choice; a silent candidate stays eligible.
+      varietyContradiction === 0 &&
+      // A specialty variant the query did not request (`spinach` pasta,
+      // `flavored` products) is never auto-authorized over the plain food.
+      unrequestedSpecialty === 0 &&
       missingQualifier === 0 &&
       missingForm === 0 &&
       unrequestedVariety === 0 &&
@@ -338,6 +364,8 @@ export function explainCandidate(
       stateContradiction === 0 &&
       impliedStateMismatch === 0 &&
       preparationFormContradiction === 0 &&
+      varietyContradiction === 0 &&
+      unrequestedSpecialty === 0 &&
       missingQualifier === 0 &&
       missingForm === 0 &&
       // An unrequested FORM (`Rice, white, with gravy`, `Cheese sandwich`) is a
@@ -362,6 +390,8 @@ export function explainCandidate(
   if (stateContradiction > 0) reasons.push('state_contradiction');
   if (impliedStateMismatch > 0) reasons.push('container_state_incompatible');
   if (preparationFormContradiction > 0) reasons.push('preparation_form_contradiction');
+  if (varietyContradiction > 0) reasons.push('variety_contradiction');
+  if (unrequestedSpecialty > 0) reasons.push('unrequested_specialty');
   if (preparedProduct > 0) reasons.push('prepared_product_form');
   if (conflicts > 0) reasons.push('qualifier_or_form_conflict');
   if (opposition > 0) reasons.push('qualifier_opposition');
@@ -397,6 +427,8 @@ export function explainCandidate(
     state_contradiction: stateContradiction,
     implied_state_mismatch: impliedStateMismatch,
     preparation_form_contradiction: preparationFormContradiction,
+    variety_contradiction: varietyContradiction,
+    unrequested_specialty: unrequestedSpecialty,
     secondary_component_only: secondaryOnly,
     automatic_eligible: automaticEligible,
     same_family_default_eligible: sameFamilyDefaultEligible,

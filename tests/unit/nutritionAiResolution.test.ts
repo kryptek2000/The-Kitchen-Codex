@@ -292,7 +292,7 @@ describe('AI resolution — local deterministic resolution', () => {
   });
 
   it('exposes the AI resolution version', () => {
-    expect(AI_RESOLUTION_VERSION).toBe('nutrition_ai_resolution_v2');
+    expect(AI_RESOLUTION_VERSION).toBe('nutrition_ai_resolution_v3');
   });
 });
 

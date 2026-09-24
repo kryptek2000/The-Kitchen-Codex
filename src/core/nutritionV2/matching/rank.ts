@@ -2,9 +2,9 @@
  * The Kitchen Codex — Advanced Nutrition Phase 4.5D: deterministic ranking.
  *
  * PURE, offline. Ranking is fully specified and explainable. It uses an integer
- * comparison tuple (no floating-point scores) and never uses nutrient values or
- * data-type preference. The only presentation tie-break is the numeric FDC id,
- * which is stable but NEVER converts a semantic tie into an automatic selection
+ * comparison tuple (no floating-point scores) and never uses nutrient values.
+ * The only presentation tie-breaks are a LATE data-type order (Phase 3) and the
+ * numeric FDC id; neither can convert a semantic tie into an automatic selection
  * (see `review.ts`).
  *
  * CLOSED MATCH CLASSES (most specific first):
@@ -23,10 +23,10 @@
  * `salt free`) removes negated candidates unless the query itself requests the
  * negation.
  *
- * ORDERING TUPLE (ascending):
+ * ORDERING TUPLE (ascending, Phase 5 semantics as of rank v11):
  *   [class_rank,
  *    missing_core_identity_tokens,
- *    family_mismatch,                // candidate head is a composed product/dish
+ *    family_mismatch,                // composed product/dish head
  *    prepared_product_forms,         // survey dish built from the food (stick/mush)
  *    unrequested_cooking_methods,    // cooked/fried/baked not requested (prefer raw)
  *    qualifier_conflicts,            // candidate variant/form tokens not requested
@@ -34,13 +34,21 @@
  *    -qualifier_agreement,           // requested qualifier/form/numeric present
  *    missing_qualifier_tokens,       // requested qualifier absent
  *    missing_form_tokens,            // requested form absent
- *    unrequested_variety,            // specific variety not requested (blue/roma)
- *    compound_penalty,               // adjacent unknown compound modifier
+ *    -refinement_agreement,          // optional refinement present
+ *    -alternative_agreement,         // OR-alternative branch satisfied
+ *    unrequested_forms,              // composed product form not requested
+ *    unrequested_specialty,          // Phase 3: flavored/fortified/seed/... specialty
  *    unrequested_material_variants,  // candidate state not requested (dried/canned)
- *    -generic_marker,                // prefer the plain/unspecified family member
+ *    compound_penalty,               // adjacent unknown compound modifier
+ *    unrequested_variety,            // specific variety not requested (blue/roma)
+ *    variety_contradiction,          // Phase 3: different explicit variety
+ *    material_variety,               // named cultivar (tan/pinto/black/wild)
+ *    unrequested_subtype,            // level/type subtype not requested
  *    contradiction(0/1),
  *    extra_candidate_tokens,
+ *    -generic_marker,                // prefer the plain/unspecified family member
  *    order_disagreement (0 agrees / 1 disagrees),
+ *    data_type_tie_break (sr_legacy < foundation < fndds),
  *    fdc_id]
  *
  * v3 (post-Phase-5 smoke-test remediation) adds core-identity coverage, qualifier
@@ -53,6 +61,10 @@
  * staple records merely because the staple name appears in the record. A
  * foundational/SR-Legacy form of the same food (`Butter, stick, unsalted`) is
  * unaffected.
+ *
+ * v11 (Phase 3) adds the plain-before-specialty demotion, the explicit variety
+ * contradiction demotion, and the late data-type tie-break. See the comparator
+ * comments for the exact intent of each dimension.
  */
 
 import {
@@ -86,8 +98,10 @@ import {
   unrequestedFormTokenCount,
   unrequestedMaterialVariantCount,
   unrequestedMaterialVarietyCount,
+  unrequestedSpecialtyCount,
   unrequestedSubtypeCount,
   unrequestedVarietyCount,
+  varietyContradictionCount,
   type IngredientQueryProjection,
 } from './query';
 
@@ -98,6 +112,28 @@ const CLASS_RANK: Readonly<Record<MatchClass, number>> = Object.freeze({
   partial_token_overlap: 3,
   no_match: 4,
 });
+
+/**
+ * LATE DATA-TYPE TIE-BREAK (Phase 3). Used ONLY after every semantic dimension
+ * (identity coverage, family, prepared form, specialty, state/form, variety,
+ * compound, subtype, extra tokens, generic marker, order agreement) has tied, so
+ * it can never outrank food identity. Order: SR Legacy first because its
+ * authenticated household portions remain the source of the existing
+ * count-portion mass authority (Foundation records often carry only a RACC
+ * portion); Foundation second (analytical records), FNDDS last (survey dishes).
+ * The tie-break never participates in automatic authority by itself: the
+ * runner-up ambiguity contract still decides whether a tie may auto-select.
+ */
+const DATA_TYPE_TIE_BREAK: Readonly<Record<string, number>> = Object.freeze({
+  sr_legacy: 0,
+  foundation: 1,
+  fndds: 2,
+});
+
+function dataTypeRank(dataType: string): number {
+  const rank = DATA_TYPE_TIE_BREAK[dataType];
+  return rank === undefined ? 3 : rank;
+}
 
 function countTokens(tokens: ReadonlyArray<string>): Map<string, number> {
   const counts = new Map<string, number>();
@@ -167,6 +203,8 @@ interface Evaluated {
   readonly refinementAgreement: number;
   readonly alternativeAgreement: number;
   readonly unrequestedVariety: number;
+  readonly varietyContradiction: number;
+  readonly unrequestedSpecialty: number;
   readonly materialVariety: number;
   readonly unrequestedSubtype: number;
   readonly compoundPenalty: number;
@@ -199,6 +237,8 @@ const NO_MATCH: Evaluated = Object.freeze({
   refinementAgreement: 0,
   alternativeAgreement: 0,
   unrequestedVariety: 0,
+  varietyContradiction: 0,
+  unrequestedSpecialty: 0,
   materialVariety: 0,
   unrequestedSubtype: 0,
   compoundPenalty: 0,
@@ -274,6 +314,8 @@ function evaluate(
     refinementAgreement: refinementAgreementCount(candidateTokens, projection),
     alternativeAgreement: alternativeAgreementCount(candidateTokens, projection),
     unrequestedVariety: unrequestedVarietyCount(candidateTokens, projection),
+    varietyContradiction: varietyContradictionCount(candidateTokens, projection),
+    unrequestedSpecialty: unrequestedSpecialtyCount(candidateTokens, projection),
     materialVariety: unrequestedMaterialVarietyCount(candidateTokens, projection),
     unrequestedSubtype: unrequestedSubtypeCount(candidateTokens, projection),
     compoundPenalty: compoundPenaltyCount(candidateTokens, projection),
@@ -343,6 +385,14 @@ function compareEvaluated(a: Evaluated, b: Evaluated): number {
   // component even when it contains the component word.
   const unrequestedFormDelta = a.unrequestedForms - b.unrequestedForms;
   if (unrequestedFormDelta !== 0) return unrequestedFormDelta;
+  // PLAIN BEFORE UNREQUESTED SPECIALTY (Phase 3): after composed product FORMS
+  // are demoted, a consumer specialty variant of the same family
+  // (`Spaghetti, spinach, dry`, `Spices, dill seed`, `Tomato chili sauce`) is
+  // demoted below the plain family member BEFORE material-state and compound
+  // dimensions, so it can never outrank a plain record merely by carrying fewer
+  // extra tokens. An explicitly requested specialty contributes 0.
+  const specialtyDelta = a.unrequestedSpecialty - b.unrequestedSpecialty;
+  if (specialtyDelta !== 0) return specialtyDelta;
   // A materially altered unrequested variant (`Apple, dried` for `apple`) is
   // demoted below the ordinary food, but is never excluded from review.
   const variantDelta = a.unrequestedMaterialVariants - b.unrequestedMaterialVariants;
@@ -357,6 +407,11 @@ function compareEvaluated(a: Evaluated, b: Evaluated): number {
   // below the generic family member.
   const varietyDelta = a.unrequestedVariety - b.unrequestedVariety;
   if (varietyDelta !== 0) return varietyDelta;
+  // An EXPLICIT VARIETY CONTRADICTION (`Rice, red` for `white rice`) is worse
+  // than a merely unrequested variety and is demoted below records that either
+  // match or are silent about variety.
+  const varietyContradictionDelta = a.varietyContradiction - b.varietyContradiction;
+  if (varietyContradictionDelta !== 0) return varietyContradictionDelta;
   // A named MATERIAL cultivar (`Rice, black`, `Wild rice`, `Beans, Dry, Tan`)
   // is a different food within the family and is demoted below the ordinary
   // plain/white/brown family member.
@@ -382,6 +437,10 @@ function compareEvaluated(a: Evaluated, b: Evaluated): number {
   const orderDelta =
     (a.evidence.order_agreement ? 0 : 1) - (b.evidence.order_agreement ? 0 : 1);
   if (orderDelta !== 0) return orderDelta;
+  // LATE data-type tie-break: only after every semantic/presentation dimension
+  // has tied, so it can never outrank food identity.
+  const dataTypeDelta = dataTypeRank(a.entry.data_type) - dataTypeRank(b.entry.data_type);
+  if (dataTypeDelta !== 0) return dataTypeDelta;
   return a.entry.fdc_id - b.entry.fdc_id;
 }
 

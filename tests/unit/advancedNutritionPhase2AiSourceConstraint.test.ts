@@ -172,7 +172,6 @@ describe('phase 2 AI source-constraint parity — legitimate resolutions preserv
     ['1 can tuna', 'tuna', 2706309],
     ['1 can black beans', 'black beans', 2707359],
     ['2 cups cooked long-grain rice (cooled)', 'cooked rice', 2708402],
-    ['1 cup dry white rice', 'dry rice', 2710838],
     ['4 slices bacon', 'bacon', 168277],
     ['1 lb ground beef (80/20)', 'ground beef 80 20', 174036],
   ] as const)('%s + AI `%s` resolves %d', (source, query, fdc) => {
@@ -181,6 +180,19 @@ describe('phase 2 AI source-constraint parity — legitimate resolutions preserv
     ]);
     expect(outcome.candidates[0]?.fdc_id).toBe(fdc);
     expect(outcome.candidates[0]?.auto).toBe(true);
+  });
+
+  it('never lets AI erase a source variety (dry white rice must not bind red rice)', () => {
+    const { outcome } = resolveFor('1 cup dry white rice', [
+      { interpreted_food_name: 'dry rice', suggested_usda_queries: ['dry rice'] },
+    ]);
+    for (const candidate of outcome.candidates) {
+      expect(candidate.description).not.toMatch(/\bred\b/i);
+    }
+    // The safe outcome may be review; it must never be a red-rice identity.
+    if (outcome.candidates.length > 0) {
+      expect(outcome.candidates[0].description).toMatch(/\bwhite\b/i);
+    }
   });
 
   it('does not invent authority: no FDC/grams/digest from provider wording alone', () => {

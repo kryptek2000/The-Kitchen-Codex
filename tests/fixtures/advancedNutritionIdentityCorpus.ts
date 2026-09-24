@@ -39,6 +39,9 @@ export interface IdentityCorpusLine {
 export const IDENTITY_SAFETY_CORPUS: ReadonlyArray<IdentityCorpusLine> = [
   // meats by weight / ground
   { line: '1.5 lb ground beef', category: 'meat', expectedAutoFdc: 2705854 },
+  // Phase 3 late data-type preference: the SR Legacy record wins the tie because
+  // its authenticated household portions remain the count-portion authority
+  // source (identical description `Beef, ground, 80% lean meat / 20% fat, raw`).
   { line: '1 lb ground beef (80/20)', category: 'meat', expectedAutoFdc: 174036 },
   { line: '2 chicken breasts', category: 'meat', expectedAutoFdc: 2646170 },
   { line: '1 lb pork shoulder', category: 'meat', expectedAutoFdc: 167845 },
@@ -51,7 +54,9 @@ export const IDENTITY_SAFETY_CORPUS: ReadonlyArray<IdentityCorpusLine> = [
   // eggs
   { line: '3 large eggs', category: 'eggs', expectedAutoFdc: 2707152 },
   { line: '1 egg', category: 'eggs', expectedAutoFdc: 2707152 },
-  // garlic (both word orders)
+  // garlic (both word orders). Phase 3 late data-type preference: the SR Legacy
+  // record wins the tie (identical `Garlic, raw`; it carries the authenticated
+  // clove portions the count-portion authority uses).
   { line: '3 cloves garlic, minced', category: 'garlic', expectedAutoFdc: 169230 },
   { line: '2 garlic cloves, minced', category: 'garlic', expectedAutoFdc: 169230 },
   // onions
@@ -78,7 +83,10 @@ export const IDENTITY_SAFETY_CORPUS: ReadonlyArray<IdentityCorpusLine> = [
   {
     line: '3 cans tomato sauce',
     category: 'tomato-sauce',
-    knownIssue: 'sauce-variant-ambiguity',
+    // Phase 3 plain-before-specialty ordering: the plain canned tomato product
+    // is now the automatic identity; fish/sardine/dish descriptions stay
+    // forbidden and no mass is invented (package count is not mass authority).
+    expectedAutoFdc: 170054,
     forbiddenAutoDescription: /sardine|fish|eggplant/i,
   },
   {
@@ -124,6 +132,8 @@ export const IDENTITY_SAFETY_CORPUS: ReadonlyArray<IdentityCorpusLine> = [
   // carrots / celery
   { line: '2 carrots, sliced', category: 'carrots', expectedAutoFdc: 170393 },
   { line: '3 large carrots', category: 'carrots', expectedAutoFdc: 170393 },
+  // Phase 3 late data-type preference: SR Legacy wins the tie (identical
+  // `Celery, raw`; portion semantics preserved).
   { line: '2 celery stalks, chopped', category: 'celery', expectedAutoFdc: 169988 },
   { line: '2 stalks celery', category: 'celery', expectedAutoFdc: 169988 },
   // potatoes
@@ -157,7 +167,9 @@ export const IDENTITY_SAFETY_CORPUS: ReadonlyArray<IdentityCorpusLine> = [
   // qualitative / seasoning
   { line: 'salt to taste', category: 'seasoning', expectQualitative: true },
   { line: 'freshly ground black pepper', category: 'seasoning', expectedAutoFdc: 170931 },
-  { line: 'fresh dill for garnish', category: 'seasoning', knownIssue: 'qualitative-cue', expectTopFdc: 170925 },
+  // Phase 3: the unrequested `seed` specialty (`Spices, dill seed`) is demoted
+  // below the fresh dill weed record; the line stays reviewable (no automatic).
+  { line: 'fresh dill for garnish', category: 'seasoning', knownIssue: 'qualitative-cue', expectTopFdc: 172233 },
   // ranges / optional
   {
     line: '1/4-1/2 tsp chili flakes (optional)',
@@ -181,7 +193,10 @@ export const IDENTITY_SAFETY_REGRESSION_LINES: ReadonlyArray<IdentityCorpusLine>
   {
     line: 'canned tomato sauce',
     category: 'safety-secondary',
-    expectNoAutomatic: true,
+    // Phase 3 plain-before-specialty ordering: the plain canned tomato product
+    // (`Tomato products, canned, sauce`) now wins and is eligible; the Phase 0A
+    // guarantee is retained by forbidding every fish/sardine/dish description.
+    expectedAutoFdc: 170054,
     forbiddenAutoDescription: /sardine|fish|spaghetti|eggplant/i,
     expectCandidateDescription: /tomato/i,
   },

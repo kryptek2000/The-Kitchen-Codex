@@ -473,6 +473,10 @@ const FORM_TOKENS: ReadonlySet<string> = new Set([
   'plate',
   'meal',
   'entree',
+  // FNDDS frozen-meal heads (`Spaghetti and meatballs dinner`) are composed
+  // product forms, not the plain staple; demoted exactly like `meal`/`entree`.
+  'dinner',
+  'dinners',
   'patty',
   'nugget',
   'tender',
@@ -860,6 +864,11 @@ const DESCRIPTOR_TOKENS: ReadonlySet<string> = new Set([
   'unbleached',
   // Grain-type descriptor (`Flour, wheat, all-purpose`), not a compound prefix.
   'wheat',
+  // USDA category phrasing (`Tomato products, canned, sauce`) is a benign
+  // product descriptor, not a compound-food modifier; without this the plain
+  // tomato-product record was compound-penalized below `Tomato chili sauce`.
+  'product',
+  'products',
   'peeled',
   'pitted',
   'skinless',
@@ -1230,6 +1239,38 @@ const MATERIAL_VARIETY_TOKENS: ReadonlySet<string> = new Set([
 
 /** Closed generic family markers (the plain/unspecified family member). */
 const GENERIC_MARKER_TOKENS: ReadonlySet<string> = new Set(['nfs', 'ns', 'unspecified']);
+
+/**
+ * Closed SPECIALTY-VARIANT vocabulary (Phase 3). Bounded descriptors that mark a
+ * consumer variant of the SAME base food rather than a different food:
+ * flavored/flavour spellings, fortified, seasoned, colored/coloured, the
+ * flavored-pasta/vegetable modifier `spinach`, and the sauce flavor modifier
+ * `chili`. These are NEGATIVE preference/veto evidence only: an UNREQUESTED
+ * specialty is demoted below the plain family member and cannot be granted
+ * automatic authority. An explicitly requested specialty (`spinach spaghetti`,
+ * `chili sauce`, `seasoned salt`) is in the requested set and is unaffected.
+ * This is deliberately NOT a food taxonomy: only tokens that were observed to
+ * outrank a plain sibling under the existing comparator are listed.
+ */
+const SPECIALTY_VARIANT_TOKENS: ReadonlySet<string> = new Set([
+  'flavored',
+  'flavor',
+  'flavors',
+  'flavour',
+  'flavoured',
+  'flavours',
+  'fortified',
+  'seasoned',
+  'colored',
+  'coloured',
+  'spinach',
+  'chili',
+  // Plant-part specialty forms: an unrequested `seed`/`seeds` product is a
+  // different specialty form of the herb/spice (`Spices, dill seed` for
+  // `fresh dill`); an explicit `dill seed` query requests it and is unaffected.
+  'seed',
+  'seeds',
+]);
 
 /**
  * Closed material-state equivalence groups. A requested state/form token is
@@ -2748,6 +2789,70 @@ export function unrequestedVarietyCount(
     if (VARIETY_TOKENS.has(token)) count += 1;
   }
   return count;
+}
+
+/**
+ * Number of unrequested SPECIALTY-VARIANT tokens (Phase 3): `flavored`,
+ * `fortified`, `seasoned`, `colored`, `spinach`, `chili`. A plain/generic query
+ * must rank the plain family member above a consumer specialty variant and must
+ * never auto-authorize an unrequested specialty merely because all query tokens
+ * occur in the specialized description. An explicitly requested specialty token
+ * is in the requested set and contributes 0. Never removes a token from matching.
+ */
+export function unrequestedSpecialtyCount(
+  candidateTokens: ReadonlyArray<string>,
+  projection: IngredientQueryProjection
+): number {
+  const requested = new Set(projection.food_tokens);
+  for (const group of projection.anchor_groups) {
+    for (const accepted of group.accepted) requested.add(accepted);
+  }
+  const requestedList = [...requested];
+  let count = 0;
+  for (let i = 0; i < candidateTokens.length; i += 1) {
+    const token = candidateTokens[i];
+    if (!SPECIALTY_VARIANT_TOKENS.has(token)) continue;
+    // Botanical dry-legume wording (`Beans, black, mature seeds, raw`) describes
+    // the bean itself, not a specialty seed product.
+    if (
+      (token === 'seed' || token === 'seeds') &&
+      i > 0 &&
+      tokensEquivalent(candidateTokens[i - 1], 'mature')
+    ) {
+      continue;
+    }
+    if (requestedList.some((requestedToken) => tokensEquivalent(requestedToken, token))) continue;
+    count += 1;
+  }
+  return count;
+}
+
+/**
+ * Number of EXPLICIT VARIETY CONTRADICTIONS (Phase 3). 1 when the query
+ * explicitly names a variety/color/cultivar and the candidate explicitly names a
+ * DIFFERENT one (`white rice` vs `Rice, red`; `red bell pepper` vs a green
+ * pepper). A candidate silent about variety is NOT a contradiction (a
+ * less-specific record may still be ranked as a safe fallback), and a generic
+ * marker (`NFS`/`NS`) listing options is never a contradiction. Negative
+ * evidence only; never removes a candidate from review.
+ */
+export function varietyContradictionCount(
+  candidateTokens: ReadonlyArray<string>,
+  projection: IngredientQueryProjection
+): number {
+  if (genericMarkerCount(candidateTokens) > 0) return 0;
+  if (projection.variety_tokens.length === 0) return 0;
+  const candidateVarieties: string[] = [];
+  for (const token of candidateTokens) {
+    if (VARIETY_TOKENS.has(token)) candidateVarieties.push(token);
+  }
+  if (candidateVarieties.length === 0) return 0;
+  for (const requested of projection.variety_tokens) {
+    for (const candidate of candidateVarieties) {
+      if (tokensEquivalent(requested, candidate)) return 0;
+    }
+  }
+  return 1;
 }
 
 /**

@@ -82,7 +82,7 @@ describe('phase 2 projection — versioned contract and determinism', () => {
   it('pins the Phase 2 projection contract version', () => {
     expect(QUERY_PROJECTION_VERSION).toBe('usda_query_projection_v10');
     expect(projectQueryText('black beans').version).toBe('usda_query_projection_v10');
-    expect(MATCH_CONFIDENCE_VERSION).toBe('usda_match_confidence_v12');
+    expect(MATCH_CONFIDENCE_VERSION).toBe('usda_match_confidence_v13');
   });
 
   it('is deterministic and never mutates its input or context', () => {

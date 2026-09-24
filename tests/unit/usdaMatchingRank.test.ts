@@ -9,8 +9,10 @@ import {
 import type { UsdaDataType } from '../../src/core/nutritionV2/usda/types';
 
 /**
- * Phase 2 — deterministic ranking. Integer tuple ordering; no nutrient values;
- * no data-type preference; FDC id is only a presentation tie-break.
+ * Phase 3 — deterministic ranking. Integer tuple ordering; no nutrient values;
+ * the data-type order (foundation > sr_legacy > fndds) is a LATE tie-break that
+ * only applies after every semantic dimension has tied, so it can never outrank
+ * food identity; FDC id remains the final stable presentation tie-break.
  */
 
 function entry(fdcId: number, dataType: UsdaDataType, description: string): RankableEntry {
@@ -106,14 +108,25 @@ describe('phase 2 rank — determinism, ties, caps', () => {
     expect(results.map((c) => c.fdc_id)).toEqual([2001, 2002]);
   });
 
-  it('does not prefer a data type; FDC id is the only tie-break', () => {
+  it('prefers Foundation over FNDDS only on a full semantic tie', () => {
     const results = rankCandidates(
       normalizeQuery('milk'),
       [entry(10, 'foundation', 'milk'), entry(2, 'fndds', 'milk')],
       MAX_RESULT_LIMIT
     );
+    expect(results.map((c) => c.fdc_id)).toEqual([10, 2]);
+    expect(results.map((c) => c.data_type)).toEqual(['foundation', 'fndds']);
+  });
+
+  it('does not let data type outrank a semantic difference', () => {
+    const results = rankCandidates(
+      normalizeQuery('milk'),
+      [entry(10, 'foundation', 'milk cooked'), entry(2, 'fndds', 'milk')],
+      MAX_RESULT_LIMIT
+    );
+    // The plain FNDDS record still outranks the Foundation record with an
+    // unrequested cooking state despite the data-type order.
     expect(results.map((c) => c.fdc_id)).toEqual([2, 10]);
-    expect(results.map((c) => c.data_type)).toEqual(['fndds', 'foundation']);
   });
 
   it('is independent of input entry order', () => {

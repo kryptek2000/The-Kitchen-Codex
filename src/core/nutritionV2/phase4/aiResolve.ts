@@ -34,6 +34,7 @@ import {
   preparationFormContradictionCount,
   projectQueryText,
   stateContradictionCount,
+  varietyContradictionCount,
   type IngredientQueryProjection,
 } from '../matching/query';
 import type { MatchChoice, Phase4Row } from './types';
@@ -122,9 +123,10 @@ function sourceProjectionFor(row: Phase4Row): IngredientQueryProjection | undefi
 /**
  * True when the candidate's explicit wording contradicts a NEGATIVE constraint
  * of the authenticated source line: container-implied canned state, explicit
- * physical state, or explicit preparation/product form. Candidate silence is
- * neutral, source agreement never grants authority, and only the three closed
- * Phase 2 counters are used (no parallel state/form grammar).
+ * physical state, explicit preparation/product form, or an explicit variety the
+ * suggestion would erase (`white rice` source + a red-rice candidate). Candidate
+ * silence is neutral, source agreement never grants authority, and only the
+ * closed Phase 2/3 counters are used (no parallel state/form/variety grammar).
  */
 function candidateContradictsSource(
   candidateTokens: ReadonlyArray<string>,
@@ -134,6 +136,7 @@ function candidateContradictsSource(
   if (stateContradictionCount(candidateTokens, source) > 0) return true;
   if (impliedStateCompatibilityMismatchCount(candidateTokens, source) > 0) return true;
   if (preparationFormContradictionCount(candidateTokens, source) > 0) return true;
+  if (varietyContradictionCount(candidateTokens, source) > 0) return true;
   return false;
 }
 

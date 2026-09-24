@@ -2863,13 +2863,99 @@ mass, and status; direct mass (`1 lb ground beef (80/20)`), bacon count mass (4/
 slices), range no-grams, word-cardinal, tin-alias, package net mass,
 cooked-vs-dry rice, and Phase 0A sardine/tomato-sauce safety are unchanged.
 
-**Not implemented (Phase 3 / registry work).** NFS/default preference, penne
-shape fallback, plain-before-flavored preference, duplicate-record collapsing,
-data-type preference across equivalent records, a household portion registry,
-generic produce masses, package/container mass conversion, and density
-conversion remain future work and do not exist. Container-derived state is
-limited to `can`; `jar`/`box`/`bag`/`bottle`/`package` remain amount metadata
-only.
+**Not implemented (registry work).** NFS/default preference, penne shape
+fallback, duplicate-record collapsing, a household portion registry, generic
+produce masses, package/container mass conversion, and density conversion remain
+future work and do not exist. Container-derived state is limited to `can`;
+`jar`/`box`/`bag`/`bottle`/`package` remain amount metadata only.
+
+---
+
+### 20.14 Phase 3 — smarter ranking + automatic-match authority
+
+Phase 3 improves deterministic ordering and authority evidence for ordinary
+ingredients without lowering a single existing authority threshold. The safety
+rule is unchanged: **a safely unresolved ingredient is better than a confidently
+wrong food**, and withholding authority is an acceptable outcome.
+
+**Plain before unrequested specialty.** A new closed specialty vocabulary
+(`SPECIALTY_VARIANT_TOKENS`: flavored/flavour spellings, fortified, seasoned,
+colored/coloured, spinach, chili, and unrequested plant-part `seed`/`seeds`)
+introduces `unrequestedSpecialtyCount`. An unrequested specialty is demoted in
+the ranking tuple after composed product FORMS (so a frozen dinner can never
+outrank a same-food specialty) and before material-state/compound dimensions,
+and it blocks automatic authority (strict and best-effort) with the bounded
+reason `unrequested_specialty`. An explicitly requested specialty (`spinach
+spaghetti`, `dill seed`, `seasoned salt`, `chili sauce`) is in the requested set
+and is unaffected. Botanical dry-legume wording (`Beans, black, mature seeds`)
+is exempted. This is deliberately NOT a food taxonomy: only tokens observed to
+outrank a plain sibling are listed. Plain-before-specialty also uses the
+existing conflict-qualifier, subtype, unrequested-form, prepared-product, and
+compound penalties; `product`/`products` joined the benign descriptor set so the
+plain `Tomato products, canned, sauce` record is no longer compound-penalized
+below `Tomato chili sauce`.
+
+**Explicit variety constraints.** `varietyContradictionCount` withholds
+automatic authority (reason `variety_contradiction`) when the query names a
+variety/color/cultivar and the candidate explicitly names a DIFFERENT one
+(`white rice` vs `Rice, red`; `red bell pepper` vs a green pepper). A candidate
+silent about variety is NOT a contradiction (a less-specific record may rank as a
+safe fallback), and a generic `NFS`/`NS` record enumerating options is exempt.
+Ranking demotes a contradiction below matching and silent candidates. The AI
+source-constraint path (`resolveFoodsFromAiSuggestions`) applies the same veto
+against the authenticated source line, so an AI suggestion can never erase a
+source variety (`1 cup dry white rice` + AI `dry rice` no longer binds red rice).
+
+**Late data-type tie-break (bounded equivalence).** `sr_legacy > foundation >
+fndds` is applied ONLY after every semantic dimension has tied (identity
+coverage, family, prepared product, specialty, state/form, variety, compound,
+subtype, extra tokens, generic marker, order agreement). Two records that tie on
+all of those dimensions are equivalent under the existing comparator contract
+(identical normalized descriptions in the measured cases), so the tie-break
+cannot outrank food identity and never participates in automatic authority (the
+runner-up ambiguity contract still decides). SR Legacy is preferred because its
+authenticated household portions remain the source of the existing count-portion
+mass authority (Foundation records often carry only a RACC portion — switching
+`Garlic, raw` to its Foundation sibling would have silently removed the
+authenticated 3 g/9 g clove portions); Foundation precedes FNDDS survey dishes.
+If equivalence cannot be proven, both candidates are retained and the normal
+ambiguity/review contract withholds authority. `MATCHING_RANKING_VERSION` is
+`usda_match_rank_v11`; `MATCH_CONFIDENCE_VERSION` is
+`usda_match_confidence_v13`; `AI_RESOLUTION_VERSION` is
+`nutrition_ai_resolution_v3` (the source-variety veto extends the AI
+verification contract). `QUERY_PROJECTION_VERSION` stays v10 (no projection
+shape/semantics change). Review digests bind the ranking version, so stale
+reviews fail closed; no persisted schema changed.
+
+**Measured Phase 3 corpus (28 lines, real pinned bundle).** Automatic identity
+changes are exactly one: `canned tomato sauce` (and `3 cans tomato sauce`)
+review-required -> 170054 `Tomato products, canned, sauce` (the plain canned
+tomato product; fish/sardine/dish descriptions remain forbidden). Every
+other line keeps its audited automatic identity and grams, including
+`1 lb ground beef (80/20)` 174036, `3 garlic cloves` / `2 garlic cloves,
+minced` 169230 (the SR Legacy records whose authenticated portions back the
+count-portion authority), `1 can tuna` 2706311 with 115 g, `4 slices bacon`
+168277 with 112 g, and `1 cup white rice` 168879 with 195 g. Ordering
+improvements with unchanged identity: `fresh dill` / `fresh dill for garnish`
+top 170925 (dill seed) -> 172233 (Dill weed, fresh); `tomato sauce` top 2709735
+(Tomato chili sauce) -> 170054 (Tomato products, canned, sauce); `spinach
+spaghetti` keeps the requested spinach record top while `2 cups penne pasta`
+demotes spinach pasta below plain pasta; `1 jar marinara sauce`/`low sodium
+marinara sauce`/`1 red bell pepper` reorder only by the late tie-break. Safety
+metrics: incorrect automatic identities 0; explicit variety/state/form
+contradictions granted authority 0; primary/secondary false automatic matches 0;
+direct mass, source-portion, count-portion, and user-mass behavior unchanged.
+`2 cups penne pasta` remains `NEEDS MATCH` (no authentic penne identity);
+`fresh dill for garnish` remains reviewable; `2 medium potatoes`, `1 can tuna`,
+and `1 can black beans` are not improved by guessing state.
+
+**Boundaries unchanged.** USDA remains the only nutrient authority; AI remains
+interpretation-only (no FDC id, grams, portion, digest, or authorization; the
+resolver re-verifies everything locally against the session-bound source line);
+explicit user choices remain final; Apply remains the only persistence boundary.
+No household registry, density conversion, package/container mass conversion,
+schema v2, saved-hint persistence, provider-catalog change, or unrelated UI work
+is implemented.
 
 ---
 
@@ -4589,23 +4675,24 @@ selection bound to the ORIGINAL row's review digest + the authenticated record
 digest. AI grants no authority: if the deterministic matcher does not accept a
 candidate, the row stays for user review / manual full-catalog search.
 
-**AI source-constraint parity (Phase 2).** AI wording may improve positive
-lexical identity, aliases, or phrasing, but it can NEVER weaken or erase an
-explicit constraint of the authenticated source line. `resolveFoodsFromAiSuggestions`
-reconstructs the source constraints LOCALLY from the session-bound row text through
-the canonical Phase 1 parse and the ONE query projection (container-implied
-`can`/`tin -> canned` state, explicit physical state, and explicit preparation/
-product form), then re-checks every strict/best-effort candidate with the SAME
-closed Phase 2 counters (`stateContradictionCount`,
-`impliedStateCompatibilityMismatchCount`, `preparationFormContradictionCount`)
-before offering it. A contradicting candidate is rejected (the row stays for
-review); candidate silence stays neutral; source agreement never creates positive
-authority. Provider-supplied hints/context are never trusted as source context,
-and a line-ref/fingerprint mismatch (an edited or stale source line) fails closed.
-The AI-resolution contract identifier is `nutrition_ai_resolution_v2`
-(`AI_RESOLUTION_VERSION`); the request/response shape is unchanged, responses are
-never persisted, and every response is freshly re-verified, so no digest or
-persisted-schema change is required.
+**AI source-constraint parity (Phase 2, extended in Phase 3).** AI wording may
+improve positive lexical identity, aliases, or phrasing, but it can NEVER weaken
+or erase an explicit constraint of the authenticated source line.
+`resolveFoodsFromAiSuggestions` reconstructs the source constraints LOCALLY from
+the session-bound row text through the canonical Phase 1 parse and the ONE query
+projection (container-implied `can`/`tin -> canned` state, explicit physical
+state, explicit preparation/product form, and explicit variety), then re-checks
+every strict/best-effort candidate with the SAME closed Phase 2/3 counters
+(`stateContradictionCount`, `impliedStateCompatibilityMismatchCount`,
+`preparationFormContradictionCount`, `varietyContradictionCount`) before offering
+it. A contradicting candidate is rejected (the row stays for review); candidate
+silence stays neutral; source agreement never creates positive authority.
+Provider-supplied hints/context are never trusted as source context, and a
+line-ref/fingerprint mismatch (an edited or stale source line) fails closed.
+The AI-resolution contract identifier is `nutrition_ai_resolution_v3`
+(`AI_RESOLUTION_VERSION`); the wire request/response shape is unchanged,
+responses are never persisted, and every response is freshly re-verified, so no
+digest or persisted-schema change is required.
 
 Amount/count identity: AI count-identity hint -> `phase4/aiAmountResolve.ts` ->
 `session.reviewCountPortions(ingredient, fdcId, hint)` (the genuine authenticated

@@ -132,6 +132,7 @@ export const PHASE1_PARSING_CASES: ReadonlyArray<Phase1ParsingCase> = [
     container: null,
     packageMass: null,
     foodText: 'garlic',
+    // Phase 3 late data-type preference (SR Legacy wins the tie; clove portions).
     expectedAutoFdc: 169230,
     expectLiveStatus: 'needs_amount',
   },
@@ -147,6 +148,7 @@ export const PHASE1_PARSING_CASES: ReadonlyArray<Phase1ParsingCase> = [
     container: null,
     packageMass: null,
     foodText: 'garlic, minced',
+    // Phase 3 late data-type preference (SR Legacy wins the tie; clove portions).
     expectedAutoFdc: 169230,
     knownIssue: 'ambiguous-count-portions',
     expectLiveStatus: 'needs_amount',
@@ -162,6 +164,7 @@ export const PHASE1_PARSING_CASES: ReadonlyArray<Phase1ParsingCase> = [
     container: null,
     packageMass: null,
     foodText: 'celery',
+    // Phase 3 late data-type preference (SR Legacy wins the tie).
     expectedAutoFdc: 169988,
     expectLiveStatus: 'needs_amount',
   },
@@ -295,7 +298,9 @@ export const PHASE1_PARSING_CASES: ReadonlyArray<Phase1ParsingCase> = [
     foodText: 'tomato sauce',
     knownIssue: 'package-net-mass-representation-only',
     forbiddenAutoDescription: /sardine|fish|eggplant/i,
-    expectLiveStatus: 'review_suggested',
+    // Phase 3: the plain canned tomato product identity is now authorized, so
+    // the row is NEEDS AMOUNT (food known, package mass never converted).
+    expectLiveStatus: 'needs_amount',
   },
   {
     line: '1 (8 oz) package cream cheese',
@@ -431,6 +436,8 @@ export const PHASE1_PARSING_CASES: ReadonlyArray<Phase1ParsingCase> = [
     container: null,
     packageMass: null,
     foodText: 'ground beef (80/20)',
+    // Phase 3 late data-type preference (SR Legacy wins the tie; identical
+    // description; portion semantics preserved).
     expectedAutoFdc: 174036,
     expectLiveGrams: 453.59237,
     expectMassSource: 'direct_mass',
@@ -544,7 +551,9 @@ export const PHASE1_PARSING_CASES: ReadonlyArray<Phase1ParsingCase> = [
     container: null,
     packageMass: null,
     foodText: 'canned tomato sauce',
-    expectNoAutomatic: true,
+    // Phase 3 plain-before-specialty ordering: the plain canned tomato product
+    // is the correct identity; fish/sardine/dish descriptions stay forbidden.
+    expectedAutoFdc: 170054,
     forbiddenAutoDescription: /sardine|fish|spaghetti|eggplant/i,
     expectCandidateDescription: /tomato/i,
   },
