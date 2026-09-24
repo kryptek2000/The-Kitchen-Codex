@@ -4762,3 +4762,129 @@ forged AI marker grants no authority.
   ordinary reducer path; nothing is written to the vault.
 - No schema change: AI assistance is working-state discovery only and is never
   persisted into `codex_nutrition` or used in Apply authorization.
+
+---
+
+## 35. Household-portion registry contract — registry-track Phase 4 (contract only)
+
+**Naming.** This is Phase 4 of the *household-portion registry track*
+(contract → curation → integration), not §16 (the advisory review/display
+UI). The two tracks share nothing but the digest/materialization primitives.
+
+**Status: contract only.** This phase defines the authenticated,
+deterministic, versioned, digest-bound contract for a future household-portion
+registry: record types, closed vocabularies, sanitization/materialization,
+canonical normalization, per-record digests, a registry-level digest, release
+lock/manifest verification, duplicate and ambiguity rejection, a deterministic
+in-memory lookup structure, provenance metadata, and security/isolation
+tests. It ships **zero real household-portion records** (all fixtures are
+unmistakably synthetic) and has **zero effect on matching, calculation, live
+rows, AI, Apply, persistence, or user-visible behavior**. No working
+household registry, no new amount result, and no estimate feature exists yet.
+
+### 35.1 Module boundary
+
+`src/core/nutritionV2/household/` (not re-exported from any public barrel):
+
+| Concern | Module |
+| --- | --- |
+| Public closed types, schema version, bounds, failure taxonomy | `types.ts` |
+| Canonical bounded field normalization | `normalize.ts` |
+| Canonical digest construction | `digest.ts` |
+| Materialization, validation, lock verification, immutable lookup | `registry.ts` |
+| Narrow public exports | `index.ts` |
+
+Reuse (no duplicated namespaces): strict canonical serialization +
+SHA-256 (`usda/digest.ts`), the inert materializer + byte accounting
+(`schema.ts`: `toInertValue`, `serializedBlockBytes`, `utf8ByteLength`), the
+Phase 1 count-unit owner (`utils/householdUnits.ts`), and the shared
+positive-finite implementation (`units.ts`: `isValidNutrientAmount`). The size
+and state vocabularies are owned locally because their natural homes live in
+the calculation layer (`calculation/countPortion.ts`) and matching authority
+(`matching/query.ts`), which this contract must not import.
+
+### 35.2 Schema version vs. registry release
+
+`HOUSEHOLD_PORTION_REGISTRY_SCHEMA_VERSION = 'household_portion_registry_v1'`
+identifies the CONTRACT. It is distinct from the Advanced Nutrition persisted
+schema v1, matching/calculation/AI versions, and from the concrete registry
+release identifier (`registry_release`, e.g. a dated curation id), which
+identifies the DATA. No schema v2 exists; no persisted recipe schema changed.
+
+### 35.3 Record fields
+
+A bounded semantic record: `schema_version`, `food_key` (canonical audit
+label, grants no identity), `aliases` (sorted/deduped, never authority),
+`usda_fdc_ids` (declared identity constraints, numerically sorted — no USDA
+lookup in this phase), `household_unit` (Phase 1 **count** nouns only,
+canonical singular; containers such as can/package/jar/box/bag/bottle and all
+mass/volume units are rejected, never silently converted), `size_class`
+(closed: small/medium/large/jumbo/mini/petite/xl/xxl, or null for
+not-size-specific), `grams_per_unit` (positive finite, `<= 10_000`, no
+coercion; the authored number is preserved exactly), `quantity_behavior`
+(`'linear'` only), `requires_state` (closed: raw/cooked/canned/drained/
+undrained/fresh/dried/frozen, or null for no requirement), `excluded_states`
+(closed, sorted, never containing `requires_state`), `exclude_generic_identity`
+(future NFS/NS rejection flag, no Phase 4 authority), `authority_class`,
+`bounds`, `source` (closed kind, bounded citation, optional `https:` URL that
+is parsed but never fetched, optional `YYYY-MM-DD` access date), `reviewed_at`
+(real calendar `YYYY-MM-DD`), `supersedes` (null or a SHA-256 digest; no chain
+resolution). The authenticated record adds a locally computed
+`record_digest`; a declared digest, when present, must match exactly.
+
+### 35.4 Provenance classes and bounded estimates
+
+- `usda_derived`: source `usda_fdc`, FDC ids required, `bounds` null.
+- `vetted_standard`: source `government_standard`/`standards_body`, `bounds`
+  null.
+- `bounded_estimate`: source `government_standard`/`standards_body`, `bounds`
+  required with strict `min_grams < max_grams` and
+  `min_grams <= grams_per_unit <= max_grams`.
+
+Representing `bounded_estimate` does NOT authorize automatic use — whether it
+becomes automatic, review-only, or unsupported is a later Sid-approved policy
+decision.
+
+### 35.5 Canonical digests and release lock
+
+Record digests reuse the strict Phase 1 serializer: exact key order, exact
+array ordering, exact null/number representation, NFC strings, no locale or
+insertion-order dependence, digest field excluded. The registry digest binds
+schema version + release + record count + ascendingly ordered record digests,
+so it is input-order-independent and any record/release change alters it. The
+lock (`schema_version`, `registry_release`, `record_count`,
+`registry_digest`) is recomputed locally: wrong version/count/digest,
+duplicate digests, duplicate lookup keys, alias collisions, food-key reuse
+with incompatible FDC constraints, self-supersession, supersede cycles, and
+unknown lock keys all fail closed with no partial registry.
+
+### 35.6 Immutable loader and lookup
+
+`loadHouseholdPortionRegistry(recordsRaw, lockRaw)` accepts inert unknown
+input: guarded reads, closed exact key sets at every level, bounded depth/
+keys/strings/arrays/records/total bytes, no coercion, no input mutation, and
+closed input-redacted failure codes. Success returns a frozen registry
+exposing only `metadata()`, `size()`, canonical-order `records()`, exact-key
+`findByKey()`, and audit `findByDigest()` — no mutable maps, no
+insert/update, no callbacks, no raw input. Lookup keys are
+FDC × unit × size × required state; collisions fail at load, so lookup never
+first-wins (a defensive multi-hit still returns `ambiguous_lookup`).
+
+### 35.7 Authority boundary and non-goals
+
+> Cryptographic integrity proves which reviewed record was loaded; it does
+> not prove the real-world truth of the cited grams or authorize its use for
+> a recipe.
+
+The registry will eventually supply ONLY a mass conversion for an already
+authenticated USDA identity plus a compatible household unit. It never
+decides food identity, FDC selection, nutrients, totals, AI confidence,
+automatic-match authority, user confirmation, or Apply authorization; a valid
+record is not automatically authorized for calculation. Later phases must
+separately bind record → authenticated FDC ID → parsed unit → size/state →
+quantity → release → digest → calculation/session identity.
+
+Explicitly unimplemented: Phase 5 data curation (real reviewed records) and
+Phase 6 integration (matching/calculation/UI/AI/persistence wiring). A
+before/after corpus run proves byte-identical authoritative behavior for the
+established identity and amount corpora.
