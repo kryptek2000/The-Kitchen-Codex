@@ -614,6 +614,10 @@ describe('household registry — module purity', () => {
       'src/core/nutritionV2/household/normalize.ts',
       'src/core/nutritionV2/household/digest.ts',
       'src/core/nutritionV2/household/registry.ts',
+      // Registry-track Phase 5 data slice (data/provenance only; contract deps only).
+      'src/core/nutritionV2/household/initialData.ts',
+      'src/core/nutritionV2/household/initialLock.ts',
+      'src/core/nutritionV2/household/initialProvenance.ts',
       'src/core/nutritionV2/usda/digest.ts',
       'src/core/nutritionV2/units.ts',
       'src/core/nutritionV2/schema.ts',
@@ -713,7 +717,17 @@ describe('household registry — consumer and barrel isolation', () => {
 
 describe('household registry — no production data', () => {
   it('ships zero real household-portion records or food-weight knowledge', () => {
-    const all = HOUSEHOLD_SOURCES.map((entry) => entry.source).join('\n');
+    // The Phase 4 CONTRACT modules ship no data. Registry-track Phase 5 adds the
+    // reviewed USDA-derived data slice in `initialData.ts` plus its pure
+    // provenance/digest machinery (covered by the Phase 5 suites); these contract
+    // modules must remain data-free.
+    const contractSources = HOUSEHOLD_SOURCES.filter(
+      ({ file }) =>
+        !file.endsWith('initialData.ts') &&
+        !file.endsWith('initialLock.ts') &&
+        !file.endsWith('initialProvenance.ts')
+    );
+    const all = contractSources.map((entry) => entry.source).join('\n');
     for (const word of ['garlic', 'onion', 'carrot', 'celery', 'tomato', 'bread', 'bacon', 'cabbage', 'butter']) {
       expect(all, `real-food word ${word}`).not.toMatch(new RegExp(`\\b${word}\\b`, 'i'));
     }

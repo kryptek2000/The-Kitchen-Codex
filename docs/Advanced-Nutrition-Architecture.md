@@ -4884,7 +4884,112 @@ record is not automatically authorized for calculation. Later phases must
 separately bind record → authenticated FDC ID → parsed unit → size/state →
 quantity → release → digest → calculation/session identity.
 
-Explicitly unimplemented: Phase 5 data curation (real reviewed records) and
-Phase 6 integration (matching/calculation/UI/AI/persistence wiring). A
+Explicitly unimplemented: Phase 6 integration
+(matching/calculation/UI/AI/persistence wiring), which remains future work. The
+Phase 5 data curation slice that followed this contract is documented in §36. A
 before/after corpus run proves byte-identical authoritative behavior for the
 established identity and amount corpora.
+
+---
+
+## 36. Household-portion registry — registry-track Phase 5 USDA-derived data (data only)
+
+**Status: reviewed data slice, not integrated (audit-repaired).** Phase 5
+populates the Phase 4 contract with **31 authentic USDA-derived household-portion
+records across 11 foods** under the registry release
+`household_portion_initial_usda_v1`. It is DATA ONLY: it adds no matching,
+ranking, calculation, live-row, analyzer, AI, hydration, Apply, persistence,
+schema, UI, or server wiring, and loading it changes no application behavior.
+Phase 6 integration remains future work.
+
+### 36.1 Source authority and derivation
+
+Every record is derived EXCLUSIVELY from declared portions of the already pinned
+USDA FoodData Central bundle
+`usda_fdc_87c5408a3e98838944a87be74824761e` (source-locked in
+`usda/releaseLock.ts`). The pinned canonical record and its declared portion are
+the numerical authority. Derivation rules (reviewed, v1):
+
+- only portions whose canonical `amount` and `gram_weight` are BOTH declared and
+  positive are used; an omitted FNDDS `amount` is never invented;
+- the source portion amount must equal EXACTLY `1` in this v1 slice, so
+  `grams_per_unit === gram_weight` by construction; non-one amounts are rejected
+  and require a future reviewed rational/canonical-decimal derivation contract
+  (strict floating-point quotient equality is not claimed to be generally safe);
+- a size-only whole-food portion (e.g. `medium (2-1/2" dia)`) is encoded as
+  `household_unit: 'item'` plus the canonical size it declares; the one source
+  size alias used (`extra large`) is canonicalized once to `xl`;
+- `usda_fdc_ids` lists the derivation source first and may add additional
+  eligible FDCs of the same ordinary food identity only with a positive,
+  reviewable cross-FDC equivalence rationale for every pairing (species/family,
+  state, color/variety, edible form, positive evidence, corroborating portion,
+  data-type differences, nutrient-profile delta, bounded conclusion). The
+  absence of a contradictory portion is never the primary rationale, and
+  nutrients always come from the selected target FDC — mass transfer only.
+
+The repaired slice covers: garlic clove; tomato, green/red bell pepper,
+green/red cabbage, egg, white mushroom, peach, and zucchini item/head sizes; and
+unsalted butter stick. **Removed in repair:** the generic yellow-onion, red-onion,
+and lime item records. Foundation `1 Onion, Edible` is a sampled specimen mass
+that conflicts with the broader same-food size landscape (SR 70/110/150 g; FNDDS
+whole 148 g), and lime `fruit (2" dia)` carries explicit physical size evidence
+that cannot truthfully become a `size_class: null` key; both remain rejected in
+the census (`ambiguous_or_conflicting` and `state_or_size_mismatch`
+respectively). Containers/packages (can/package/jar/box/bag/bottle), mass/volume
+units, generic non-food-specific masses, density conversions, bounded estimates,
+web tables, AI values, and guessed grams are NOT present.
+
+### 36.2 Reviewed separate-module source-controlled lock
+
+`src/core/nutritionV2/household/initialLock.ts` is a separate, source-controlled
+lock that pins the schema version, registry release, exact record count (31),
+the complete expected registry digest
+`6ad593ef558ca9325197549f005da5b1eee822211f2ec6b5290f5c58fedc4ac4`, the complete
+provenance/equivalence digest
+`adba614327f9cb078ffd35d6abade50b25de180b43f4b373eea6ab8825694b31`, and the
+aggregate release digest
+`f8fed2230ac210c8dc2548f3a300134091c3a490ac6eb68add2766ac9b85b256` that
+cryptographically commits to both. The verified loader recomputes every digest
+from the data and fails closed unless all match. Because the lock is deliberately
+kept in a separate module from `initialData.ts`, editing, adding, removing, or
+substituting any record, provenance field, or equivalence rationale without a
+reviewed lock update fails every test. Correcting or extending the data
+therefore REQUIRES a deliberate review and an explicit lock change.
+
+This lock is a **repository-local reviewed constant set**, not an external
+signature or external distribution trust service: **no external cryptographic
+trust anchor or distribution authenticity system exists yet**, and that remains
+future work.
+
+### 36.3 Immutability, digest binding, and verified-loader-only access
+
+Records and provenance are immutable and digest-bound: the Phase 4 loader
+recomputes each `record_digest` over the canonical semantic payload and binds
+the registry digest over the ordered record digests, and the Phase 5 provenance
+digest binds the registry release, schema, record count, every authenticated
+record (key, fields, sorted bound-FDC set, record digest), every provenance
+entry (source release/FDC/record digest, portion index/id, amount, gram weight,
+measure, modifier, derived grams, citation linkage), and every equivalence
+rationale. The aggregate release digest commits to the registry and provenance
+digests together.
+
+Raw record, provenance, and rationale definitions are MODULE-PRIVATE. The only
+public access path is the lock-verifying `loadHouseholdInitialRegistry()`, which
+returns a fresh immutable registry plus a deeply frozen verified dataset
+(provenance and rationales). No barrel re-exports the data, no runtime module
+imports it, and no mutable registration/replacement/update API exists. Current
+grams bounds: minimum 3 g, maximum 1248 g, all positive safe integers within the
+10,000 g contract bound.
+
+### 36.4 No runtime consumer (Phase 6 remains future work)
+
+No matching, ranking, calculation, live-row, analyzer, AI, hydration, Apply,
+persistence, schema, UI, or server module imports the data; the Phase 0/1
+barrels do not re-export it. The dataset is therefore **not current application
+behavior**: the pinned `NEEDS AMOUNT`/status outcomes for ordinary lines are
+unchanged, and no line gains grams from the registry. Projected future coverage
+(for example the garlic clove or cross-identity produce cases described in the
+census) is labeled non-runtime and non-authoritative. The Phase 4 holder-freeze
+defense-in-depth flag (the returned outer holder object is not itself
+`Object.freeze`d although all authoritative content is immutable) remains
+deferred and is not addressed here.
