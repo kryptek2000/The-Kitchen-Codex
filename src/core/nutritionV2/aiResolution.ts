@@ -27,7 +27,7 @@
 
 import { isPlainObject, toInertValue } from './schema';
 
-export const AI_RESOLUTION_VERSION = 'nutrition_ai_resolution_v3';
+export const AI_RESOLUTION_VERSION = 'nutrition_ai_resolution_v4';
 
 /** Bounds (mirrored by the server route). */
 export const MAX_AI_RESOLUTION_ROWS = 25;
@@ -103,6 +103,24 @@ export interface AiResolutionSuggestion {
   readonly count_descriptor_hint?: string;
   /** Optional authenticated-USDA portion search wording (e.g. `clove`). */
   readonly portion_search_hint?: string;
+  /**
+   * Optional household-unit wording (e.g. `clove`, `head`, `stick`). It may
+   * only FILL a unit the recipe line does not declare, through the closed
+   * Kitchen Codex household unit vocabulary; it never carries mass.
+   */
+  readonly household_unit_hint?: string;
+  /**
+   * Optional household-size wording (e.g. `small`, `medium`, `large`). It may
+   * only FILL a size the recipe line does not declare, through the closed size
+   * vocabulary; it never carries mass.
+   */
+  readonly household_size_hint?: string;
+  /**
+   * Optional household physical-state wording (e.g. `raw`, `cooked`, `canned`).
+   * It may only FILL a state the recipe line does not declare, through the
+   * closed household state vocabulary; it never carries mass.
+   */
+  readonly household_state_hint?: string;
   /** Optional bounded short explanation. */
   readonly explanation?: string;
 }
@@ -137,6 +155,9 @@ const SUGGESTION_KEYS = new Set([
   'quantity_unit_hint',
   'count_descriptor_hint',
   'portion_search_hint',
+  'household_unit_hint',
+  'household_size_hint',
+  'household_state_hint',
   'explanation',
 ]);
 const ENVELOPE_KEYS = new Set(['version', 'suggestions']);
@@ -261,6 +282,12 @@ export function sanitizeAiResolutionResponse(
     if (countDescriptorHint.malformed) return { ok: false, code: 'invalid_response' };
     const portionSearchHint = optionalField(entry, 'portion_search_hint', MAX_AI_RESOLUTION_PORTION_HINT_LENGTH);
     if (portionSearchHint.malformed) return { ok: false, code: 'invalid_response' };
+    const householdUnitHint = optionalField(entry, 'household_unit_hint', MAX_AI_RESOLUTION_HINT_LENGTH);
+    if (householdUnitHint.malformed) return { ok: false, code: 'invalid_response' };
+    const householdSizeHint = optionalField(entry, 'household_size_hint', MAX_AI_RESOLUTION_HINT_LENGTH);
+    if (householdSizeHint.malformed) return { ok: false, code: 'invalid_response' };
+    const householdStateHint = optionalField(entry, 'household_state_hint', MAX_AI_RESOLUTION_HINT_LENGTH);
+    if (householdStateHint.malformed) return { ok: false, code: 'invalid_response' };
     const explanation = optionalField(entry, 'explanation', MAX_AI_RESOLUTION_NOTE_LENGTH);
     if (explanation.malformed) return { ok: false, code: 'invalid_response' };
     let quantityValue: number | undefined;
@@ -282,6 +309,9 @@ export function sanitizeAiResolutionResponse(
         ...(quantityUnitHint.value !== undefined ? { quantity_unit_hint: quantityUnitHint.value } : {}),
         ...(countDescriptorHint.value !== undefined ? { count_descriptor_hint: countDescriptorHint.value } : {}),
         ...(portionSearchHint.value !== undefined ? { portion_search_hint: portionSearchHint.value } : {}),
+        ...(householdUnitHint.value !== undefined ? { household_unit_hint: householdUnitHint.value } : {}),
+        ...(householdSizeHint.value !== undefined ? { household_size_hint: householdSizeHint.value } : {}),
+        ...(householdStateHint.value !== undefined ? { household_state_hint: householdStateHint.value } : {}),
         ...(explanation.value !== undefined ? { explanation: explanation.value } : {}),
       })
     );
@@ -337,6 +367,9 @@ export function buildAiResolutionSchema(): {
             quantity_unit_hint: { type: 'string' },
             count_descriptor_hint: { type: 'string' },
             portion_search_hint: { type: 'string' },
+            household_unit_hint: { type: 'string' },
+            household_size_hint: { type: 'string' },
+            household_state_hint: { type: 'string' },
             explanation: { type: 'string' },
           },
           required: ['line_ref', 'interpreted_food_name', 'suggested_usda_queries'],

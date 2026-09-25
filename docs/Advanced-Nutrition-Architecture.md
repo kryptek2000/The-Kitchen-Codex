@@ -530,8 +530,17 @@ enable machine-generated nutrition application.
   values, and reports unknown/malformed saved blocks while preserving them.
   Nothing is merged, migrated, or rewritten. Audit gate: presentation +
   non-destruction review.
-- **Phase 6 — Vault Intelligence integration (separate explicit approval).**
-  Single-recipe review first; bulk remains disabled. [NOT STARTED]
+- **Phase 6 — verified household-portion authority.** DONE (offline, isolated):
+  a lock-verified Kitchen Codex household-portion registry (31 USDA-derived
+  records), an exact-key deterministic resolver, a fully digest-bound household
+  selection, lowest-authority effective-mass precedence, truthful schema-v2
+  persistence/reopen, and full fail-closed guarding. See §37.
+- **Phase 7 — AI interpretation alignment with verified household portions.**
+  DONE (offline, isolated, advisory-only): AI may interpret a closed
+  unit/size/state household wording hint, but only the local deterministic core
+  may resolve it against the authenticated registry. See §38.
+- **Phase 8 — broader final migration, staleness, round-trip, production-browser,
+  corpus, and release-exit program.** [NOT STARTED]
 
 MVP: Phases 0–4 plus a minimal Phase 5 for a single recipe, without claiming
 completeness.
@@ -5257,3 +5266,199 @@ range lines parse with no amount (the amount guard fails closed) and size-first
 container lines lose their container/unit token (the item-mapping token scan
 fails closed). Both layers are retained and the behavioral tests pin the
 no-mass outcome.
+
+## 38. Phase 7 — AI household interpretation alignment (isolated)
+
+Phase 7 aligns the optional AI interpretation layer with the completed Phase 6
+verified household-portion system. AI interprets language only; deterministic
+local code decides whether any authenticated household record applies. The
+Phase 6 registry, records, digests, grammar, precedence, and schema are
+unchanged.
+
+### 38.1 Closed unit/size/state hint contract (`nutrition_ai_resolution_v4`)
+
+One canonical, locally owned hint contract carries a bounded household
+interpretation. The AI wire contract (`AiResolutionSuggestion`) adds exactly
+three optional string fields — `household_unit_hint`, `household_size_hint`,
+`household_state_hint` — and the AI resolution contract constant is bumped to
+`nutrition_ai_resolution_v4`. The provider schema declares them and the strict
+sanitizer enforces them field-by-field; an unknown, forbidden, or
+authority-shaped field rejects the WHOLE response (fail closed), never a
+partially trusted one.
+
+The tokens are canonicalized locally through the project's existing single
+owners: `canonicalHouseholdCountUnit` (`src/utils/householdUnits.ts`, count
+nouns only), `canonicalSize` (`calculation/countPortion.ts`, whose canonical
+outputs are exactly the registry size classes), and `canonicalHouseholdState`
+(`calculation/householdPortion.ts`, reusing the ONE `HOUSEHOLD_STATES`
+vocabulary exported by `household/normalize.ts`). Unknown tokens are reduced to
+"no hint"; a known household CONTAINER unit (`can`, `jar`, `package`, `box`,
+`bag`, `bottle`) rejects the hint whole; non-string/array/object/oversized
+values and non-ASCII/confusable size wording never match. The sanitizer consumes
+`isPlainObject` input, never mutates it, and prototype-shaped input is harmless.
+The closed hint is interpretation-only: it contains no amount, mass, FDC id,
+registry record id, portion index, nutrient, digest, confirmation, or
+authorization.
+
+### 38.2 Source constraints outrank AI suggestions
+
+The household lookup context is derived from the session-bound original
+ingredient text through the existing canonical parser and query projection
+(`parseIngredient`, `projectQueryText`, `deriveCountRequirement`). Ai-provided
+unit/size/state may only FILL a dimension the source line does not declare:
+
+- an explicit source unit (including a non-household count noun such as
+  `serving`) is authoritative and is never replaced;
+- an explicit source size is authoritative; a contradictory hint is ignored;
+- an explicit source state is authoritative; a contradictory hint is ignored
+  and the source state still keys the lookup;
+- a range quantity, a direct mass line, a container line, and a volume line are
+  refused before any hint is considered;
+- the recipe quantity remains the only quantity; the AI cannot change a range
+  into an exact amount, a container into a count or household mass, or a size
+  into a different size.
+
+### 38.3 Local deterministic resolution
+
+For a still-unresolved eligible `NEEDS AMOUNT` line with a resolved food
+identity, `resolveHouseholdsFromAiSuggestions`
+(`src/core/nutritionV2/phase4/aiHouseholdResolve.ts`) asks the genuine Phase 6
+builder (`buildHouseholdPortionChoice`) for the exact-key registry record. The
+builder performs the identity-binding dry run through the genuine session,
+resolves the authenticated registry record, builds the closed digest-bound
+selection, and re-verifies the whole binding through the calculation engine. The
+resolver accepts only a genuine success; absent, incomplete, or ambiguous
+records leave the line unresolved. It never picks the first/top/closest record,
+never accepts an AI-authored gram/FDC/record value, and never marks the choice
+`user_confirmed`.
+
+`automatic` versus `aiAssisted` (audit repair). The two flags are independent
+and truthful: `aiAssisted: true` means only that AI supplied accepted household
+WORDING; `automatic` is derived by the genuine core builder from the
+authenticated food/match authority already present in the working state and is
+NEVER forced by AI assistance. An analyzer-automatic food yields
+`automatic: true`; a user-confirmed/manual (or unique-exact) food yields
+`automatic: false`. `automatic` is a working-state display marker with no
+downstream authority: flipping it changes no selection, gram, provenance, or
+persisted value.
+The bounded hint travels with the working choice as
+`household_requirement_hint`, is canonicalized again at the calculation
+boundary, and is NOT persisted.
+
+### 38.4 Authority, persistence, and reopen
+
+Every accepted resolution flows through the existing calculation and Apply
+authority chain. AI authors no FDC id, registry id, gram weight, package mass,
+quantity override, USDA portion index, household record index, nutrient value,
+conversion math, registry version, catalog/record/candidate/ingredient/selection
+digest, confidence, user confirmation, application authorization, persistence,
+or Apply eligibility. The preview stays advisory and unapplied
+(`application_authorized: false`); closing without Apply writes nothing; only an
+explicit Apply persists, using the unchanged schema-v2 household provenance.
+
+Because the AI hint is not persisted, reopen retains only what the Phase 6
+schema contract can truthfully re-authenticate: a household basis unlocked by AI
+wording alone does not re-authenticate without the hint, so the working review
+stays unresolved rather than inventing authority. The saved block itself remains
+valid and readable. No schema change and no v3 format were introduced.
+
+### 38.5 Stale / mid-flight protection
+
+The per-line working-choice fingerprint covers the food match, the
+authenticated source portion, the authenticated count portion, an explicit
+user-entered mass, and the verified household choice (including an explicit
+Clear). The snapshot is taken for EVERY current row (not only the rows the
+request targets) because the response merge boundary applies entries per
+`line_ref`; a newer user decision — including the Clear of an existing verified
+household choice — is therefore final even when that line was not part of the
+request. A response for a different recipe/session, an older generation, a
+superseded request, or a closed editor is discarded before any state mutation;
+a row whose working choice changed during the request is skipped per line so
+unaffected lines still resolve. The independent household merge guard remains
+the second layer: it refuses a verified household choice over a line that
+already carries one, or any stored higher-authority mass source. AI results
+never overwrite a manual food selection, a user-entered total mass, an
+authenticated USDA source/count portion, a previously verified household
+portion, a direct recipe mass, a newer match/amount decision, an edited
+ingredient text, a changed quantity, or a changed serving context.
+
+### 38.6 Truthful messaging
+
+The AI copy states that AI interprets food wording, count language, and
+household unit/size/state wording only, and that the pinned USDA catalog, the
+deterministic matcher, authenticated USDA portions, and the verified Kitchen
+Codex household registry decide every resolution; AI never supplies grams. A
+resolved household row is labeled as a vetted (or bounded-estimate) household
+portion, with an "AI-interpreted wording" marker only when the wording was
+AI-assisted. Resolved/unresolved counts derive from the post-operation live
+projection.
+
+### 38.7 Phase 8 is not implemented
+
+Phase 7 deliberately does not perform the broader final migration, staleness,
+full round-trip, production-browser, corpus, or release-exit program; that
+remains Phase 8. No household records, USDA bundle data, density tables,
+container masses, package-size guessing, provider catalogs, fuzzy matching, or
+persistence formats were added.
+
+### 38.8 Phase 7 final audit findings repair (stale-verifier maintenance + contract hardening)
+
+A narrow repair pass addressed the independent audit's findings without
+reopening the cleared Phase 6 authority architecture and without starting
+Phase 8. No authority source, registry record, USDA bundle datum, schema
+definition, persisted selection version, matching/ranking threshold, parser
+grammar, provider catalog, hosting, or billing contract changed.
+
+- Repaired Phase 5C production verifier. The advanced hamburger recipe
+  contains `2 medium tomatoes, sliced`, which Phase 6 legitimately resolves
+  through the verified household registry (`tomato|item|medium|null`,
+  2 × 123 g = 246 g), so the analyzer-driven Apply persists canonical schema v2
+  with household provenance instead of schema v1. `scripts/verify_phase5c_prod.ts`
+  now asserts schema v2 and the exact household provenance (registry release,
+  record key, unit, size class, quantity binding, conversion basis, grams,
+  selection/record digests) for that line, while continuing to assert canonical
+  schema v1 for non-household persisted recipes. This is stale-verifier
+  maintenance originating from Phase 6, not a Phase 7 behavior change; an
+  ordinary unit regression in
+  `tests/unit/advancedNutritionPhase7AiHouseholdAlignment.test.ts` pins the same
+  behavior so it is not browser-only.
+- `automatic` semantics. The AI household adapter no longer forces
+  `automatic: true`; it preserves the value derived by the core builder from
+  the authenticated food/match authority. A user-confirmed food therefore
+  yields an AI-assisted household choice that is NOT analyzer-automatic, and
+  the flag has no downstream authority effect.
+- Builder mass-and-volume exclusion. `buildHouseholdPortionChoice` rejects a
+  direct-volume line at its creation gate (reusing the canonical parsed
+  `measurement_kind`, never a string heuristic), exactly as it already rejected
+  a direct-mass line. Direct calls, analyzer calls, AI calls, the calculator,
+  and the live projection fail closed consistently; valid USDA source-portion
+  resolution for volume lines is preserved.
+- Modal display authority. The Modal's household portion panel no longer
+  renders the stored `choice.resolved_grams` claim. Displayed grams come from
+  the SAME calculator/live-verified row projection used elsewhere; a
+  forged/tampered stored gram field cannot alter any visible gram value, and a
+  rejected choice shows no grams, no MATCHED state, and no household chip.
+- Vocabulary drift and estimate policy. The test matrices are pinned by exact
+  set equality to the canonical production vocabularies (household states, size
+  classes, AI-eligible count nouns, authority classes), so a production
+  vocabulary addition/removal requires an intentional test update. A synthetic
+  (test-only) bounded-estimate registry proves the invariant that AI hints
+  cannot promote a bounded estimate into stronger or more automatic authority
+  than the ordinary Phase 6 household path permits; an estimate stays visibly
+  an estimate and is never presented as an exact `usda_derived` conversion.
+  Phase 6 defines no explicit-review-only rule for `bounded_estimate`, and no
+  production estimate record exists; nothing was added to the registry.
+- Truthful server prompt vocabulary. The server household prompt now renders
+  its accepted unit/size/state lists directly from the canonical exported
+  vocabulary constants (`householdCountNouns`, `HOUSEHOLD_SIZE_CLASSES`,
+  `HOUSEHOLD_STATES`) and presents them as exact, so accepted tokens such as
+  `petite` and `xxl` can never be silently omitted from an allegedly exhaustive
+  list. A drift test binds the prompt list token-for-token to the canonical
+  owner.
+- Calculation-request fail mode. A malformed stored household hint (extra key,
+  container unit, unsupported size/state, nested object, non-string value,
+  prototype-shaped input, oversized token) fails the WHOLE calculation closed
+  with a bounded classification rather than silently degrading to ordinary
+  unresolved behavior; live projection claims no grams and no MATCHED state.
+
+Phase 8 remains NOT STARTED.

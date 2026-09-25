@@ -13,9 +13,11 @@
 import {
   buildHouseholdPortionSelection,
   resolveHouseholdPortion,
+  sanitizeHouseholdRequirementHint,
+  type HouseholdRequirementHint,
 } from '../calculation/householdPortion';
 import { CALCULATION_VERSION } from '../calculation/types';
-import { hasDirectRecipeMass } from './rows';
+import { hasDirectRecipeMass, hasDirectRecipeVolume } from './rows';
 import {
   phase4Failure,
   type AdvancedNutritionSession,
@@ -31,6 +33,12 @@ export interface HouseholdPortionChoiceParams {
   /** True when the bound match was an automatic analyzer selection. */
   readonly automaticSelection?: boolean;
   readonly fdcId: number;
+  /**
+   * Optional bounded interpretation-only hint (untrusted). It is sanitized here
+   * against the closed vocabularies and may only fill a source-missing
+   * unit/size/state; a malformed hint fails closed (no choice).
+   */
+  readonly householdRequirementHint?: unknown;
 }
 
 export type HouseholdPortionChoiceResult =
@@ -47,13 +55,20 @@ export function buildHouseholdPortionChoice(
   session: AdvancedNutritionSession,
   params: HouseholdPortionChoiceParams
 ): HouseholdPortionChoiceResult {
-  // The ONE shared direct-mass creation gate: a line that already declares its
-  // own recipe mass has complete mass authority, so no household choice is ever
-  // created for it (the effective-mass decision fails any conflicting state
-  // closed instead of silently ignoring the choice).
-  if (hasDirectRecipeMass(params.ingredient)) {
+  // The ONE shared direct-mass/direct-volume creation gate: a line that already
+  // declares its own recipe mass has complete mass authority, and a line that
+  // declares a direct volume is resolved through its own canonical USDA
+  // source-portion path. Neither is ever a household count, so no household
+  // choice is created for them (the effective-mass decision fails any
+  // conflicting state closed instead of silently ignoring the choice).
+  if (hasDirectRecipeMass(params.ingredient) || hasDirectRecipeVolume(params.ingredient)) {
     return { ok: false, failure: phase4Failure('invalid_selection') };
   }
+  // The optional bounded hint is validated ONCE here (defense in depth): a
+  // malformed/forged hint yields NO choice rather than a partially trusted one.
+  const hintResult = sanitizeHouseholdRequirementHint(params.householdRequirementHint);
+  if (!hintResult.ok) return { ok: false, failure: phase4Failure('invalid_selection') };
+  const householdRequirementHint: HouseholdRequirementHint | undefined = hintResult.hint;
   // Identity-binding dry run (no household selection): yields the canonical
   // ingredient identity digest + the authenticated USDA record binding.
   const dry = session.calculate({
@@ -84,6 +99,7 @@ export function buildHouseholdPortionChoice(
     fdcId: evidence.fdc_id,
     usdaRecordDigest: evidence.record_digest,
     bundleRelease: dry.preview.bundle_release,
+    ...(householdRequirementHint !== undefined ? { hint: householdRequirementHint } : {}),
   });
   if (!resolution) return { ok: false, failure: phase4Failure('invalid_selection') };
 
@@ -111,6 +127,9 @@ export function buildHouseholdPortionChoice(
         ...(params.selection !== undefined ? { selection: params.selection } : {}),
         ...(params.automaticSelection === true ? { automatic_selection: true } : {}),
         household_portion_selection: selection,
+        ...(householdRequirementHint !== undefined
+          ? { household_requirement_hint: householdRequirementHint }
+          : {}),
       },
     ],
   });
@@ -135,6 +154,9 @@ export function buildHouseholdPortionChoice(
       resolved_grams: resolution.resolved_grams,
       selection,
       automatic: params.automaticSelection === true,
+      ...(householdRequirementHint !== undefined
+        ? { householdRequirementHint }
+        : {}),
     }),
   };
 }

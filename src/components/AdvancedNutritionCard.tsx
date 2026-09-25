@@ -45,12 +45,18 @@ import {
   summarizeLiveRows,
   userConfirmedChoiceFromAiSuggestion,
   type AiAmountResolveOutcome,
+  type AiHouseholdResolveOutcome,
   type AiResolutionIssueKind,
   type AiResolveOutcome,
   type CountPortionChoice,
   type HouseholdPortionChoice,
   type LiveRowState,
 } from '../core/nutritionV2/phase4';
+import {
+  conflictedWorkingLineRefs,
+  mergeAiHouseholdPortions,
+  workingChoiceFingerprint,
+} from '../core/nutritionV2/phase4/aiMidFlight';
 import {
   AdvancedNutritionModal,
   type AdvancedNutritionAiAmountOffer,
@@ -134,6 +140,8 @@ export type AdvancedNutritionAiResolveHandler = (args: {
   readonly interpretedCount?: number;
   readonly outcome: AiResolveOutcome;
   readonly amounts: AiAmountResolveOutcome;
+  /** Verified-household resolutions (optional for back-compatible ports). */
+  readonly households?: AiHouseholdResolveOutcome;
 }>;
 
 /**
@@ -144,6 +152,7 @@ export type AdvancedNutritionAiResolveHandler = (args: {
 function interpretedSuggestionCount(result: {
   readonly outcome: AiResolveOutcome;
   readonly amounts: AiAmountResolveOutcome;
+  readonly households?: AiHouseholdResolveOutcome;
 }): number {
   const refs = new Set<string>();
   for (const candidate of result.outcome.candidates) refs.add(candidate.line_ref);
@@ -152,51 +161,10 @@ function interpretedSuggestionCount(result: {
   for (const entry of result.amounts.offers) refs.add(entry.line_ref);
   for (const ref of result.amounts.unresolved) refs.add(ref);
   for (const ref of result.amounts.inconsistent) refs.add(ref);
+  for (const entry of result.households?.resolved ?? []) refs.add(entry.line_ref);
+  for (const ref of result.households?.unresolved ?? []) refs.add(ref);
+  for (const ref of result.households?.inconsistent ?? []) refs.add(ref);
   return refs.size;
-}
-
-/**
- * Order-independent SEMANTIC key for one arbitrary working-choice value. Keys
- * are sorted recursively so a choice that is re-created with the same fields is
- * `===`-key-equal (never a false conflict), while any field the user actually
- * changed — food/FDC, review or record digest, portion index, selection digest,
- * automatic/AI provenance, mass — produces a different key. Never relies on
- * object identity. Bounded depth/keys keep it safe for frozen choice objects.
- */
-function stableChoiceKey(value: unknown, depth = 0): string {
-  if (value === undefined) return 'u';
-  if (value === null) return 'n';
-  const type = typeof value;
-  if (type === 'string') return JSON.stringify(value);
-  if (type === 'number' || type === 'boolean') return String(value);
-  if (type !== 'object') return 'x';
-  if (depth >= 8) return 'd';
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => stableChoiceKey(entry, depth + 1)).join(',')}]`;
-  }
-  const record = value as Record<string, unknown>;
-  const keys = Object.keys(record).sort();
-  return `{${keys
-    .map((key) => `${JSON.stringify(key)}:${stableChoiceKey(record[key], depth + 1)}`)
-    .join(',')}}`;
-}
-
-/**
- * The PER-LINE working-choice fingerprint used to preserve mid-flight user
- * edits. It covers every working selection that can resolve or alter one row:
- * the food match (authority + provenance), the authenticated source portion,
- * the authenticated count portion, and an explicit user-entered mass. Captured
- * for each AI-targeted row when the request starts and re-read immediately
- * before application; a changed fingerprint means the user edited that row
- * after the AI request began and the stale AI result must NOT overwrite it.
- */
-function workingChoiceFingerprint(state: Phase4State, lineRef: string): string {
-  return [
-    stableChoiceKey(state.matches[lineRef]),
-    stableChoiceKey(state.countPortions[lineRef]),
-    stableChoiceKey(state.portions[lineRef]),
-    stableChoiceKey(state.userMasses[lineRef]),
-  ].join('\u0000');
 }
 
 type ApplyUiState =
@@ -773,8 +741,14 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
         ...(next.householdPortions ?? base.householdPortions ?? {}),
       };
       for (const lineRef of Object.keys(mergedHousehold)) {
+        // A food-identity match (automatic or user) is NOT a mass source and
+        // must not evict a verified household portion by itself; only a CHANGED
+        // food selection or an actual higher-authority mass choice does.
+        const matchChanged =
+          next.matches?.[lineRef] !== undefined &&
+          next.matches[lineRef] !== base.matches[lineRef];
         const hasHigherSource =
-          next.matches?.[lineRef] !== undefined ||
+          matchChanged ||
           next.portions?.[lineRef] !== undefined ||
           next.countPortions?.[lineRef] !== undefined ||
           next.userMasses?.[lineRef] !== undefined;
@@ -871,13 +845,17 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
       // request (the server rate limiter is only a backstop).
       if (aiRunningRef.current) return;
       aiRunningRef.current = true;
-      // MID-FLIGHT USER-AUTHORITY SNAPSHOT. For every targeted row, capture the
+      // MID-FLIGHT USER-AUTHORITY SNAPSHOT. For EVERY current row, capture the
       // semantic working choice at the instant the request starts. At apply time
       // any row whose choice changed in the meantime is SKIPPED: the user's newer
       // explicit decision is final authority and a stale AI result must never
-      // overwrite it. Untouched rows still receive their AI result.
+      // overwrite it. Untouched rows still receive their AI result. The snapshot
+      // covers every row (not only the targeted set) because the response merge
+      // boundary applies entries per line_ref; a line the user edited — e.g. the
+      // user Clear of an existing verified household choice — must remain
+      // protected even when it was not part of the request.
       const capturedWorkingChoices = new Map<string, string>();
-      for (const row of targets) {
+      for (const row of stateRef.current.rows) {
         capturedWorkingChoices.set(row.line_ref, workingChoiceFingerprint(stateRef.current, row.line_ref));
       }
       // RECIPE-BOUND REQUEST TOKEN. Captured at request creation; the response is
@@ -935,10 +913,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
         // choice changed since the request began belongs to the USER now. Its AI
         // result is discarded (per line, without aborting the rest) so the newer
         // explicit decision is preserved exactly and is never credited to AI.
-        const conflictedRefs = new Set<string>();
-        for (const [lineRef, captured] of capturedWorkingChoices) {
-          if (workingChoiceFingerprint(base, lineRef) !== captured) conflictedRefs.add(lineRef);
-        }
+        const conflictedRefs = conflictedWorkingLineRefs(base, capturedWorkingChoices);
         const matches: Record<string, MatchChoice> = { ...base.matches };
         const countPortions: Record<string, CountPortionChoice> = { ...base.countPortions };
         const suggestions: Record<string, AdvancedNutritionAiSuggestion> = {};
@@ -982,10 +957,20 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
             }),
           ]);
         }
+        // LOWEST mass authority: the independent merge guard refuses a verified
+        // household choice over a mid-flight-conflicted row, a line that already
+        // carries one, or a line with any stored higher-authority mass source
+        // (including a count portion resolved by THIS response).
+        const householdPortions = mergeAiHouseholdPortions({
+          base,
+          countPortions,
+          resolved: result.households?.resolved ?? [],
+          conflicted: conflictedRefs,
+        });
 
         setAiSuggestions(suggestions);
         setAiAmountOffers(amountOffers);
-        const applied = applyWorkingSelections({ matches, countPortions });
+        const applied = applyWorkingSelections({ matches, countPortions, householdPortions });
 
         const interpretedCount =
           typeof result.interpretedCount === 'number' && Number.isFinite(result.interpretedCount)
@@ -1041,7 +1026,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
         } else {
           setAiMessage(
             `AI interpreted ${interpretedCount} ingredient${interpretedCount === 1 ? '' : 's'}. ` +
-              `${resolvedAutomatically} resolved automatically with USDA data. ` +
+              `${resolvedAutomatically} resolved automatically from verified local data. ` +
               `${stillNeedReview} still need${stillNeedReview === 1 ? 's' : ''} review.`
           );
         }

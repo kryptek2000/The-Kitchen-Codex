@@ -366,7 +366,7 @@ describe('AI amount offers and post-result feedback — UI', () => {
     fireEvent.click(screen.getByTestId('advanced-nutrition-ai-resolve'));
     await waitFor(() =>
       expect(screen.getByTestId('advanced-nutrition-ai-message').textContent).toMatch(
-        /1 resolved automatically with USDA data/i
+        /1 resolved automatically from verified local data/i
       )
     );
 

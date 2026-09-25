@@ -458,7 +458,7 @@ describe('mid-flight user authority — mixed bulk', () => {
       calls[0].resolve({ ok: true, interpretedCount: 2, outcome: EMPTY_FOOD, amounts });
       await Promise.resolve();
     });
-    await waitFor(() => expect(messageText()).toMatch(/2 resolved automatically with USDA data/i));
+    await waitFor(() => expect(messageText()).toMatch(/2 resolved automatically from verified local data/i));
 
     const rows = Array.from(document.querySelectorAll('[data-testid="advanced-nutrition-row"]'));
     expect(rows).toHaveLength(2);
@@ -537,7 +537,7 @@ describe('mid-flight user authority — mixed bulk', () => {
     expect(garlic.textContent).toMatch(/AI-assisted USDA count portion/i);
 
     // Counts: exactly the untouched row is credited.
-    expect(messageText()).toMatch(/1 resolved automatically with USDA data/i);
+    expect(messageText()).toMatch(/1 resolved automatically from verified local data/i);
     expect(messageText()).toMatch(/1 still needs review/i);
     const summary = screen.getByTestId('advanced-nutrition-live-summary').textContent ?? '';
     expect(summary).toMatch(/1 matched/);

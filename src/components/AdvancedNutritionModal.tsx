@@ -162,10 +162,13 @@ function liveMassText(live: LiveRowState): string | undefined {
       return `${grams} g · ${live.source_portion_automatic ? 'auto-selected' : 'selected'} USDA portion`;
     case 'count_portion':
       return `${grams} g · USDA count portion`;
-    case 'household_portion':
-      return live.household_authority_class === 'bounded_estimate'
-        ? `${grams} g · household estimate`
-        : `${grams} g · vetted household portion`;
+    case 'household_portion': {
+      const base =
+        live.household_authority_class === 'bounded_estimate'
+          ? `${grams} g · household estimate`
+          : `${grams} g · vetted household portion`;
+      return live.household_ai_assisted === true ? `${base} · AI-interpreted wording` : base;
+    }
     case 'direct_mass':
       return `${grams} g`;
     default:
@@ -260,6 +263,12 @@ interface PortionControlsProps {
   state: Phase4State;
   dispatch: React.Dispatch<Phase4Action>;
   adapted: ReadonlyArray<AdaptedIngredient>;
+  /**
+   * The SAME calculator/live-verified row projection used everywhere else. A
+   * displayed household gram value comes ONLY from this verified row (source +
+   * grams), never from the stored choice's own `resolved_grams` claim.
+   */
+  live: LiveRowState | undefined;
 }
 
 const PortionControls: React.FC<PortionControlsProps> = ({
@@ -269,6 +278,7 @@ const PortionControls: React.FC<PortionControlsProps> = ({
   state,
   dispatch,
   adapted,
+  live,
 }) => {
   const [candidates, setCandidates] = useState<ReadonlyArray<PortionCandidateView> | null>(null);
   const [countReview, setCountReview] = useState<{
@@ -282,6 +292,20 @@ const PortionControls: React.FC<PortionControlsProps> = ({
   const currentCount = state.countPortions[row.line_ref];
   const currentUserMass = state.userMasses[row.line_ref];
   const currentHousehold = state.householdPortions[row.line_ref];
+  /**
+   * CALCULATOR/LIVE-VERIFIED household display authority. The stored choice's
+   * own `resolved_grams` is a display claim only and is NEVER rendered: the
+   * displayed gram value comes from the SAME live row projection used by the
+   * collapsed row (a bounded per-line calculation dry-run through the genuine
+   * session). When the current calculation does not accept the stored choice as
+   * the effective household source, no gram value is shown at all.
+   */
+  const verifiedHousehold =
+    live !== undefined &&
+    live.mass_source === 'household_portion' &&
+    typeof live.resolved_grams === 'number'
+      ? live
+      : undefined;
   const matchChoice = state.matches[row.line_ref];
   const entry = adapted.find((item) => item.line_ref === row.line_ref);
   const measurementKind = entry ? ingredientMeasurementKind(entry) : 'unknown';
@@ -467,12 +491,16 @@ const PortionControls: React.FC<PortionControlsProps> = ({
         <div className="space-y-1" data-testid="advanced-nutrition-household-portion">
           <div className="flex items-center gap-2">
             <h4 className="text-[11px] font-semibold text-gray-300">
-              {currentHousehold.authority_class === 'bounded_estimate'
-                ? 'Kitchen Codex household estimate'
-                : 'Kitchen Codex household portion'}
+              {verifiedHousehold === undefined
+                ? 'Stored household portion'
+                : verifiedHousehold.household_authority_class === 'bounded_estimate'
+                  ? 'Kitchen Codex household estimate'
+                  : 'Kitchen Codex household portion'}
             </h4>
             <span className="text-[10px] text-gray-500">
-              {currentHousehold.record_key.split('|')[1] ?? 'item'}
+              {verifiedHousehold?.household_unit ??
+                currentHousehold.record_key.split('|')[1] ??
+                'item'}
             </span>
             <button
               type="button"
@@ -483,9 +511,17 @@ const PortionControls: React.FC<PortionControlsProps> = ({
             </button>
           </div>
           <p className="text-[10px] text-gray-500">
-            {Math.round(currentHousehold.resolved_grams * 10) / 10} g from a reviewed Kitchen Codex
-            household record. It applies only while no higher-authority mass source is chosen, and
-            it is never treated as USDA portion or user-entered data.
+            {verifiedHousehold !== undefined ? (
+              <>
+                {Math.round(verifiedHousehold.resolved_grams * 10) / 10} g from a reviewed Kitchen
+                Codex household record. It applies only while no higher-authority mass source is
+                chosen, and it is never treated as USDA portion or user-entered data.
+                {verifiedHousehold.household_ai_assisted === true &&
+                  ' The household wording was AI-interpreted; the record and grams were authenticated locally by the registry.'}
+              </>
+            ) : (
+              'This stored household portion is not accepted by the current calculation, so no gram value is shown.'
+            )}
           </p>
         </div>
       )}
@@ -987,9 +1023,10 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                     ✨ Resolve remaining with AI
                   </p>
                   <p className="text-[10px] text-gray-500">
-                    AI interprets food wording and count/portion language only. The pinned USDA
-                    catalog, the deterministic matcher, and authenticated USDA portions decide every
-                    resolution. Nothing is saved.
+                    AI interprets food wording, count language, and household unit/size/state
+                    wording only. The pinned USDA catalog, the deterministic matcher, authenticated
+                    USDA portions, and the verified Kitchen Codex household registry decide every
+                    resolution; AI never supplies grams. Nothing is saved.
                   </p>
                 </div>
                 <button
@@ -1412,6 +1449,7 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                             state={state}
                             dispatch={dispatch}
                             adapted={adapted}
+                            live={live}
                           />
                         )}
                       </div>

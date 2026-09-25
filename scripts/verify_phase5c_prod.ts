@@ -13,6 +13,15 @@
  *   D. unknown future schema   -> unsupported notice + labelled legacy fallback
  *   E. explicit Apply          -> consolidated surface switches to saved Advanced
  *
+ * SCHEMA-VERSION EXPECTATIONS (stale-verifier maintenance originating from
+ * Phase 6, NOT a Phase 7 behavior change): the advanced hamburger recipe
+ * contains `2 medium tomatoes, sliced`, which the verified household registry
+ * legitimately resolves (`tomato|item|medium|null`, 2 × 123 g = 246 g), so the
+ * analyzer-driven Apply now persists canonical schema v2 with household
+ * provenance for that line. Non-household persisted recipes (the pre-seeded
+ * conflicting/stale fixtures, and any Apply whose lines carry no household
+ * basis) remain canonical schema v1.
+ *
  * Usage: bun x tsx scripts/verify_phase5c_prod.ts
  */
 
@@ -22,7 +31,11 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseObsidianRecipeMarkdown, serializeRecipeToObsidianMarkdown } from '../src/utils/markdownParser';
 import { adaptRecipe } from '../src/core/nutritionV2/phase4/adapt';
-import { decodeCodexNutrition, validateCodexNutritionV1 } from '../src/core/nutritionV2/validate';
+import {
+  decodeCodexNutrition,
+  validateCodexNutritionV1,
+  validateCodexNutritionV2,
+} from '../src/core/nutritionV2/validate';
 import { DV_STANDARD_ID } from '../src/core/nutritionV2/dailyValues';
 import type { CodexNutritionV1 } from '../src/core/nutritionV2/schema';
 import type { ObsidianRecipe } from '../src/types';
@@ -592,13 +605,57 @@ async function main(): Promise<void> {
     record('F. advanced recipe: persisted Markdown has exactly one codex_nutrition block', (hamburgerMd.match(/codex_nutrition/g) || []).length === 1);
     const parsedHamburger = parseObsidianRecipeMarkdown(hamburgerMd, `${HAMBURGER_TITLE}.md`, `${HAMBURGER_TITLE}.md`);
     const decodedHamburger = decodeCodexNutrition(parsedHamburger.codexNutrition);
-    record('F. advanced recipe: persisted block is canonical schema v1', decodedHamburger.kind === 'v1');
-    if (decodedHamburger.kind === 'v1') {
-      record('F. advanced recipe: persisted block validates', validateCodexNutritionV1(decodedHamburger.value).ok === true);
-      record('F. advanced recipe: partial status persisted', decodedHamburger.value.status === 'partial');
-      const bacon = decodedHamburger.value.ingredients.find((entry) => entry.source_food_id === '168277');
+    record('F. advanced recipe: persisted block is canonical schema v2 (household-resolved)', decodedHamburger.kind === 'v2');
+    if (decodedHamburger.kind === 'v2') {
+      const block = decodedHamburger.value;
+      record('F. advanced recipe: persisted block validates as canonical schema v2', validateCodexNutritionV2(block).ok === true);
+      record('F. advanced recipe: partial status persisted', block.status === 'partial');
+      const bacon = block.ingredients.find((entry) => entry.source_food_id === '168277');
       record('F. advanced recipe: bacon 224 g persisted', bacon?.amount?.value === 224);
-      record('F. advanced recipe: tomatoes/pickles persisted unresolved', decodedHamburger.value.unresolved.length >= 2);
+      // `2 medium tomatoes, sliced` resolves through the verified household
+      // registry: exactly ONE tomato item medium record, 2 × 123 g = 246 g.
+      const tomato = block.ingredients.find((entry) => entry.source_food_id === '2709719');
+      record('F. advanced recipe: tomato line is persisted evidence', tomato !== undefined);
+      record('F. advanced recipe: tomato conversion basis is household_portion', tomato?.conversion_basis === 'household_portion');
+      record('F. advanced recipe: tomato grams are 2 x 123 g = 246 g', tomato?.amount?.value === 246);
+      const tomatoHousehold = tomato?.household_portion;
+      record('F. advanced recipe: tomato evidence carries household provenance', tomatoHousehold !== undefined);
+      record(
+        'F. advanced recipe: tomato registry release is household_portion_initial_usda_v1',
+        tomatoHousehold?.registry_release === 'household_portion_initial_usda_v1'
+      );
+      record(
+        'F. advanced recipe: tomato household record key is tomato|item|medium|null',
+        tomatoHousehold?.record_key === 'tomato|item|medium|null'
+      );
+      record('F. advanced recipe: tomato household unit is item', tomatoHousehold?.household_unit === 'item');
+      record('F. advanced recipe: tomato household size class is medium', tomatoHousehold?.size_class === 'medium');
+      record('F. advanced recipe: tomato household state requirement is null', tomatoHousehold?.requires_state === null);
+      record('F. advanced recipe: tomato household quantity binding is 2', tomatoHousehold?.quantity === 2);
+      record(
+        'F. advanced recipe: tomato household record digest is a sha256 hex',
+        /^[0-9a-f]{64}$/.test(tomatoHousehold?.record_digest ?? '')
+      );
+      record(
+        'F. advanced recipe: tomato household selection digest is a sha256 hex',
+        /^[0-9a-f]{64}$/.test(tomatoHousehold?.selection_digest ?? '')
+      );
+      // Only the pickles line remains honestly unresolved.
+      record(
+        'F. advanced recipe: only the pickles line persists unresolved',
+        block.unresolved.length === 1 && block.unresolved[0]?.reason === 'no_mass'
+      );
+    }
+
+    // NON-HOUSEHOLD PERSISTED RECIPES still require canonical schema v1: the
+    // pre-seeded conflicting fixture (a plain Advanced block with no household
+    // line) must keep decoding and validating as v1.
+    const conflictMd = String((await evaluate(cdp, `window.__kcVaultStore[${JSON.stringify('Conflict Recipe.md')}]`)) || '');
+    const parsedConflict = parseObsidianRecipeMarkdown(conflictMd, 'Conflict Recipe.md', 'Conflict Recipe.md');
+    const decodedConflict = decodeCodexNutrition(parsedConflict.codexNutrition);
+    record('F. non-household recipe: persisted block stays canonical schema v1', decodedConflict.kind === 'v1');
+    if (decodedConflict.kind === 'v1') {
+      record('F. non-household recipe: canonical schema v1 block validates', validateCodexNutritionV1(decodedConflict.value).ok === true);
     }
 
     // Close the review dialog and verify the consolidated surface is Advanced-primary.

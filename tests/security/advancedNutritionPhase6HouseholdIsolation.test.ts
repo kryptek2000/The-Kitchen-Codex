@@ -95,6 +95,7 @@ describe('phase 6 — module purity and dependency boundary', () => {
     const allowed = [
       '../../../utils/householdUnits',
       '../../../utils/measurements',
+      '../schema',
       '../matching/normalize',
       '../matching/parse',
       '../matching/query',
@@ -103,6 +104,7 @@ describe('phase 6 — module purity and dependency boundary', () => {
       '../units',
       './types',
       '../household/initialData',
+      '../household/normalize',
       '../calculation/householdPortion',
       '../calculation/types',
       './rows',

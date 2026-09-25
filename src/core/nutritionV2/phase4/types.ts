@@ -421,6 +421,25 @@ export interface HouseholdPortionChoice {
   readonly selection: unknown;
   /** True ONLY when the deterministic analyzer auto-selected this choice. */
   readonly automatic?: boolean;
+  /**
+   * Display-only marker: the household unit/size/state WORDING was interpreted
+   * with AI assistance, but the mass comes exclusively from the authenticated
+   * Kitchen Codex household registry record the deterministic core builder and
+   * calculator independently re-derive and re-verify. It carries NO extra
+   * authority, is never persisted, and does NOT make the choice user-confirmed.
+   */
+  readonly aiAssisted?: boolean;
+  /**
+   * Bounded advisory household-requirement hint that accompanied this selection
+   * (closed unit/size/state vocabulary). It is working-state input to the
+   * calculator so the exact-key lookup and selection binding can be re-derived;
+   * it never contains an amount/mass and is never persisted.
+   */
+  readonly householdRequirementHint?: {
+    readonly unit: string | null;
+    readonly size: string | null;
+    readonly state: string | null;
+  };
 }
 
 export interface Phase4State {

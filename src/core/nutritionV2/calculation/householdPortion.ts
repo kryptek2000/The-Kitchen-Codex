@@ -45,29 +45,93 @@
 
 import { canonicalHouseholdUnit } from '../../../utils/householdUnits';
 import { getMeasurementKind, normalizeUnit } from '../../../utils/measurements';
+import { isPlainObject } from '../schema';
 import { normalizeQuery } from '../matching/normalize';
 import { parseIngredient } from '../matching/parse';
 import { projectQueryText } from '../matching/query';
 import { canonicalStringify, sha256Hex } from '../usda/digest';
-import { deriveCountRequirement } from './countPortion';
+import { canonicalSize, deriveCountRequirement } from './countPortion';
 import { isValidNutrientAmount } from '../units';
 import { MAX_CALCULATION_GRAMS } from './types';
 import { loadHouseholdInitialRegistry } from '../household/initialData';
+import { HOUSEHOLD_STATES } from '../household/normalize';
 
 /** Closed household-portion selection contract version. */
 export const HOUSEHOLD_PORTION_SELECTION_VERSION = 'household_portion_selection_v1';
 
-/** The closed physical-state vocabulary the registry can declare. */
-const HOUSEHOLD_STATES: ReadonlySet<string> = new Set([
-  'raw',
-  'cooked',
-  'canned',
-  'drained',
-  'undrained',
-  'fresh',
-  'dried',
-  'frozen',
-]);
+/** Printable ASCII only: confusables/invisible format characters never match. */
+const ASCII_TOKEN_PATTERN = /^[ -~]+$/;
+
+/**
+ * Canonicalizes one household physical-state token against the ONE registry
+ * state vocabulary. Returns null for anything outside it (never a guess).
+ */
+export function canonicalHouseholdState(raw: string | null | undefined): string | null {
+  if (raw === null || raw === undefined) return null;
+  const cleaned = String(raw).normalize('NFC').toLowerCase().trim();
+  if (cleaned.length === 0) return null;
+  if (!ASCII_TOKEN_PATTERN.test(cleaned)) return null;
+  return HOUSEHOLD_STATES.includes(cleaned) ? cleaned : null;
+}
+
+/** Canonicalizes one household unit token to a COUNT noun, or null. Containers
+ * (which the registry never converts) and unknown tokens are never accepted. */
+export function canonicalHouseholdCountUnit(raw: string | null | undefined): string | null {
+  const unit = canonicalHouseholdUnit(raw ?? null);
+  return unit !== null && unit.kind === 'count' ? unit.noun : null;
+}
+
+/**
+ * Bounded advisory household-requirement hint. It may only FILL a MISSING
+ * unit/size/state of the recipe's own parsed line; it can never supply the
+ * quantity, a gram weight, an FDC id, or override an explicit recipe
+ * dimension. Values are the CLOSED canonical vocabularies only.
+ */
+export interface HouseholdRequirementHint {
+  readonly unit: string | null;
+  readonly size: string | null;
+  readonly state: string | null;
+}
+
+/**
+ * Strictly sanitizes an untrusted household-requirement hint. Absent/null is
+ * simply no hint; a present malformed value (non-plain object, unknown keys, a
+ * container unit, or a token outside the closed vocabularies) fails closed.
+ */
+export function sanitizeHouseholdRequirementHint(
+  raw: unknown
+): { ok: true; hint?: HouseholdRequirementHint } | { ok: false } {
+  if (raw === undefined || raw === null) return { ok: true };
+  if (!isPlainObject(raw)) return { ok: false };
+  for (const key of Object.keys(raw)) {
+    if (key !== 'unit' && key !== 'size' && key !== 'state') return { ok: false };
+  }
+  // Present values must be strings; numbers, booleans, arrays, objects, and
+  // null are never coerced (null alone means "absent dimension").
+  const rawUnit = raw.unit;
+  const rawSize = raw.size;
+  const rawState = raw.state;
+  if (rawUnit !== undefined && rawUnit !== null && typeof rawUnit !== 'string') return { ok: false };
+  if (rawSize !== undefined && rawSize !== null && typeof rawSize !== 'string') return { ok: false };
+  if (rawState !== undefined && rawState !== null && typeof rawState !== 'string') {
+    return { ok: false };
+  }
+  const unit =
+    rawUnit === undefined || rawUnit === null ? null : canonicalHouseholdCountUnit(rawUnit as string);
+  if (rawUnit !== undefined && rawUnit !== null && unit === null) return { ok: false };
+  // The size canonicalizer strips punctuation/whitespace, so reject
+  // non-ASCII/format/confusable input BEFORE canonicalization: only printable
+  // ASCII size wording may ever match.
+  if (typeof rawSize === 'string' && rawSize.trim().length > 0 && !ASCII_TOKEN_PATTERN.test(rawSize.trim())) {
+    return { ok: false };
+  }
+  const size = rawSize === undefined || rawSize === null ? null : canonicalSize(rawSize as string);
+  if (rawSize !== undefined && rawSize !== null && size === null) return { ok: false };
+  const state =
+    rawState === undefined || rawState === null ? null : canonicalHouseholdState(rawState as string);
+  if (rawState !== undefined && rawState !== null && state === null) return { ok: false };
+  return { ok: true, hint: Object.freeze({ unit, size, state }) };
+}
 
 /** Derivation classification of one verified household record. */
 export type HouseholdPortionDerivation = 'authenticated_exact_conversion' | 'bounded_estimate';
@@ -111,6 +175,8 @@ interface HouseholdPortionIndex {
   readonly aggregate_release_digest: string;
   readonly byKey: ReadonlyMap<string, IndexedRegistryRecord>;
 }
+
+const HOUSEHOLD_STATE_LOOKUP: ReadonlySet<string> = new Set(HOUSEHOLD_STATES);
 
 function indexKey(fdcId: number, unit: string, size: string | null, state: string | null): string {
   return `${fdcId}|${unit}|${size ?? 'null'}|${state ?? 'null'}`;
@@ -195,13 +261,17 @@ export interface HouseholdLookupContext {
  * the behavioral tests pin the user-visible no-mass outcome regardless of which
  * layer fires.
  */
-export function deriveHouseholdLookupContext(ingredient: unknown): HouseholdLookupContext | undefined {
+export function deriveHouseholdLookupContext(
+  ingredient: unknown,
+  hint?: HouseholdRequirementHint
+): HouseholdLookupContext | undefined {
   const parsedResult = parseIngredient(ingredient);
   if (!parsedResult.ok) return undefined;
   const parsed = parsedResult.parsed;
   // A generic container line (`can`, `package`, `jar`, …) is NEVER a household
-  // count conversion, even when a size qualifier is present; the recipe-authored
-  // package mass remains the only legitimate container evidence.
+  // count conversion, even when a size qualifier or an accepted hint is present;
+  // the recipe-authored package mass remains the only legitimate container
+  // evidence. A provider hint can never turn a container into a count.
   if (parsed.container !== undefined) return undefined;
   if (parsed.quantity_kind !== 'exact') return undefined;
   if (typeof parsed.amount !== 'number' || !Number.isFinite(parsed.amount)) return undefined;
@@ -211,6 +281,9 @@ export function deriveHouseholdLookupContext(ingredient: unknown): HouseholdLook
     count_noun: parsed.count_noun,
     container: parsed.container,
   });
+  // The requirement is derived from the SOURCE line alone. The bounded hint may
+  // only FILL a dimension the source does not declare; it never replaces or
+  // overrides an explicit recipe unit, size, or state.
   const requirement = deriveCountRequirement(
     parsed.amount,
     parsed.raw_unit,
@@ -219,14 +292,21 @@ export function deriveHouseholdLookupContext(ingredient: unknown): HouseholdLook
   );
   if (!requirement) return undefined;
 
-  // Canonical household unit: reuse the Phase 1 owner. A size-only whole-food
-  // line (no count noun, an explicit size) has `item` semantics; a named unit
-  // that is not a Phase 1 household count noun is never coerced.
-  const canonicalUnit =
-    requirement.unit !== null && canonicalHouseholdUnit(requirement.unit)?.kind === 'count'
-      ? canonicalHouseholdUnit(requirement.unit)?.noun ?? null
-      : null;
-  const itemMappingRequested = canonicalUnit === null && requirement.unit === null && requirement.size !== null;
+  const hintUnit = hint?.unit ?? null;
+  const hintSize = hint?.size ?? null;
+  const hintState = hint?.state ?? null;
+
+  // Canonical household unit: reuse the Phase 1 owner. A source-declared unit
+  // is authoritative (a non-household count noun such as `serving` is never
+  // coerced and never replaced by a hint). The hint may supply a unit ONLY when
+  // the source declares none. A size-only whole-food line (no count noun, a
+  // size — source or accepted hint) has `item` semantics.
+  const sourceUnitNoun = requirement.unit !== null ? canonicalHouseholdCountUnit(requirement.unit) : null;
+  const householdUnit =
+    sourceUnitNoun ?? (requirement.unit === null ? hintUnit : null) ?? null;
+  const size = requirement.size ?? hintSize;
+  const itemMappingRequested =
+    householdUnit === null && requirement.unit === null && size !== null;
   if (itemMappingRequested) {
     // The size-only `item` mapping is allowed ONLY when the line names no unit
     // at all. A size qualifier appearing before a named unit (`1 medium can …`,
@@ -241,23 +321,24 @@ export function deriveHouseholdLookupContext(ingredient: unknown): HouseholdLook
       if (measurementKind === 'mass' || measurementKind === 'volume') return undefined;
     }
   }
-  const householdUnit = canonicalUnit ?? (itemMappingRequested ? 'item' : null);
-  if (householdUnit === null) return undefined;
+  const resolvedUnit = householdUnit ?? (itemMappingRequested ? 'item' : null);
+  if (resolvedUnit === null) return undefined;
 
   // Physical state: only the closed registry vocabulary, and only when the line
   // declares exactly one recognized state (multiple distinct states are
-  // ambiguous and yield no mass). No state -> the null dimension.
+  // ambiguous and yield no mass). A source state is authoritative; the hint may
+  // supply a state ONLY when the source declares none. No state -> null.
   const states = new Set<string>();
   for (const token of projection.state_tokens) {
-    if (HOUSEHOLD_STATES.has(token)) states.add(token);
+    if (HOUSEHOLD_STATE_LOOKUP.has(token)) states.add(token);
   }
   if (states.size > 1) return undefined;
-  const requiresState = states.size === 1 ? [...states][0] : null;
+  const requiresState = states.size === 1 ? [...states][0] : hintState;
 
   return Object.freeze({
     quantity: parsed.amount,
-    household_unit: householdUnit,
-    size_class: requirement.size,
+    household_unit: resolvedUnit,
+    size_class: size,
     requires_state: requiresState,
   });
 }
@@ -272,6 +353,12 @@ export function resolveHouseholdPortion(input: {
   readonly fdcId: number;
   readonly usdaRecordDigest: string;
   readonly bundleRelease: string;
+  /**
+   * Optional bounded interpretation-only hint (closed vocabularies, already
+   * sanitized by the caller). It may only FILL a source-missing unit/size/state;
+   * the source line always outranks it and it can never carry a mass.
+   */
+  readonly hint?: HouseholdRequirementHint;
 }): HouseholdPortionResolution | undefined {
   if (!Number.isSafeInteger(input.fdcId) || input.fdcId <= 0) return undefined;
   if (typeof input.usdaRecordDigest !== 'string' || input.usdaRecordDigest.length === 0) {
@@ -279,7 +366,7 @@ export function resolveHouseholdPortion(input: {
   }
   if (typeof input.bundleRelease !== 'string' || input.bundleRelease.length === 0) return undefined;
 
-  const context = deriveHouseholdLookupContext(input.ingredient);
+  const context = deriveHouseholdLookupContext(input.ingredient, input.hint);
   if (!context) return undefined;
 
   const index = getHouseholdPortionIndex();

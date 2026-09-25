@@ -12,6 +12,7 @@ import { projectQueryText } from '../matching/query';
 import { candidatePortionCompatibility } from '../calculation/portionSemantics';
 export { candidatePortionCompatibility };
 import { canonicalCountRequirementHint } from './countContext';
+import { canonicalHouseholdRequirementHint } from './householdContext';
 import {
   convertMassToGrams,
   type MeasurementKind,
@@ -172,6 +173,21 @@ export function hasDirectRecipeMass(ingredient: unknown): boolean {
     Number.isFinite(parsed.parsed.grams) &&
     parsed.parsed.grams >= 0
   );
+}
+
+/**
+ * True when the ingredient line itself declares a direct recipe volume
+ * (cup/tbsp/tsp/ml/fl oz/…). A direct-volume line is resolved through its own
+ * canonical USDA source-portion path; it is NEVER a household count conversion.
+ * The canonical parsed measurement is reused (no string heuristic): a size hint
+ * can otherwise make some parsers drop the volume token, silently reinterpreting
+ * `1 cup diced tomatoes` as one whole item. The core household builder calls
+ * this at its creation gate so direct calls, analyzer calls, AI calls, the
+ * calculator, and the live projection all fail closed identically.
+ */
+export function hasDirectRecipeVolume(ingredient: unknown): boolean {
+  const parsed = parseIngredient(ingredient);
+  return parsed.ok && parsed.parsed.measurement_kind === 'volume';
 }
 
 /** The deterministic measurement dimension of an adapted ingredient. */
@@ -338,6 +354,10 @@ export function lineCalculationInput(
   // bounded hint bound to the stored count-portion choice. The calculator
   // re-derives the SAME candidate set/digest the live projection displays.
   const countRequirementHint = canonicalCountRequirementHint(state, entry.line_ref);
+  // The ONE canonical household context for this line: the sanitized bounded
+  // unit/size/state hint bound to the stored household choice. The calculator
+  // re-derives the SAME exact-key registry resolution the working state holds.
+  const householdRequirementHint = canonicalHouseholdRequirementHint(state, entry.line_ref);
   // Any explicit user decision is supplied, not only a `review_required` row:
   // a user can manually select a USDA food for an `unmatched` (or
   // `matched_exact`) line via the full-catalog manual search, and that
@@ -366,7 +386,16 @@ export function lineCalculationInput(
     // LOWEST authority: supplied only when the working state actually carries a
     // verified household choice, so a line with no stored household choice is
     // never silently given one.
-    ...(household ? { household_portion_selection: household.selection } : {}),
+    ...(household
+      ? {
+          household_portion_selection: household.selection,
+          // The canonical bounded household hint accompanies the selection so
+          // the calculator re-derives the SAME exact-key resolution.
+          ...(householdRequirementHint !== undefined
+            ? { household_requirement_hint: householdRequirementHint }
+            : {}),
+        }
+      : {}),
   };
 }
 

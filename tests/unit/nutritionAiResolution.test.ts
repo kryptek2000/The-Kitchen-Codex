@@ -157,6 +157,9 @@ describe('AI resolution contract — strict sanitization', () => {
       'confidence',
       'count_descriptor_hint',
       'explanation',
+      'household_size_hint',
+      'household_state_hint',
+      'household_unit_hint',
       'interpreted_food_name',
       'line_ref',
       'normalized_food_query',
@@ -292,7 +295,7 @@ describe('AI resolution — local deterministic resolution', () => {
   });
 
   it('exposes the AI resolution version', () => {
-    expect(AI_RESOLUTION_VERSION).toBe('nutrition_ai_resolution_v3');
+    expect(AI_RESOLUTION_VERSION).toBe('nutrition_ai_resolution_v4');
   });
 });
 

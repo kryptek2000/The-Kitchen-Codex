@@ -17,7 +17,9 @@ import {
   buildAiResolutionSchema,
   sanitizeAiResolutionResponse,
 } from '../../src/core/nutritionV2/aiResolution';
-import { sanitizeResolveRows } from '../../server/nutritionResolve';
+import { HOUSEHOLD_SIZE_CLASSES, HOUSEHOLD_STATES } from '../../src/core/nutritionV2/household/normalize';
+import { householdCountNouns } from '../../src/utils/householdUnits';
+import { sanitizeResolveRows, NUTRITION_RESOLVE_INSTRUCTIONS } from '../../server/nutritionResolve';
 
 const ALLOWED = ['ing:0:aaa', 'ing:1:bbb'];
 
@@ -62,6 +64,9 @@ describe('AI amount contract — bounded advisory fields', () => {
       'confidence',
       'count_descriptor_hint',
       'explanation',
+      'household_size_hint',
+      'household_state_hint',
+      'household_unit_hint',
       'interpreted_food_name',
       'line_ref',
       'normalized_food_query',
@@ -184,5 +189,46 @@ describe('AI amount contract — trusted issue kind', () => {
     expect(
       sanitizeResolveRows([{ line_ref: 'a', ingredient_text: 'x', grams: 9 }])
     ).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FLAG F-5 — the server household prompt vocabulary is generated from the ONE
+// canonical owner and can never omit an accepted token.
+// ---------------------------------------------------------------------------
+
+describe('AI amount contract — household prompt vocabulary (F-5)', () => {
+  it('renders the complete canonical size/state/unit vocabularies as exact lists', () => {
+    const prompt = NUTRITION_RESOLVE_INSTRUCTIONS;
+    for (const size of HOUSEHOLD_SIZE_CLASSES) {
+      expect(prompt, `size ${size} missing from the prompt`).toContain(size);
+    }
+    for (const state of HOUSEHOLD_STATES) {
+      expect(prompt, `state ${state} missing from the prompt`).toContain(state);
+    }
+    for (const noun of householdCountNouns()) {
+      expect(prompt, `unit ${noun} missing from the prompt`).toContain(noun);
+    }
+    // The previously omitted accepted sizes must never silently disappear from
+    // an allegedly exhaustive list.
+    expect(prompt).toContain('petite');
+    expect(prompt).toContain('xxl');
+    // The vocabulary is presented as EXACT, not illustrative.
+    expect(prompt).toMatch(/household unit words are exactly:/i);
+    expect(prompt).toMatch(/household size words are exactly:/i);
+    expect(prompt).toMatch(/household state words are exactly:/i);
+  });
+
+  it('binds the exhaustive prompt size list token-for-token to the canonical owner', () => {
+    const match = /household size words are exactly:\s*([^.]*)\./i.exec(
+      NUTRITION_RESOLVE_INSTRUCTIONS
+    );
+    expect(match).not.toBeNull();
+    if (!match) return;
+    const listed = match[1]
+      .split(',')
+      .map((token) => token.trim())
+      .filter((token) => token.length > 0);
+    expect([...listed].sort()).toEqual([...HOUSEHOLD_SIZE_CLASSES].sort());
   });
 });

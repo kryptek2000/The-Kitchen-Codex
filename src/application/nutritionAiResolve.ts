@@ -22,10 +22,12 @@ import {
   aiResolutionEligibleRows,
   resolveFoodsFromAiSuggestions,
   resolveAmountsFromAiSuggestions,
+  resolveHouseholdsFromAiSuggestions,
   ingredientMeasurement,
   type AdvancedNutritionSession,
   type AdaptedIngredient,
   type AiAmountResolveOutcome,
+  type AiHouseholdResolveOutcome,
   type AiResolveOutcome,
   type LiveRowState,
   type Phase4Row,
@@ -150,6 +152,13 @@ const EMPTY_AMOUNT_OUTCOME: AiAmountResolveOutcome = Object.freeze({
   auto_count: 0,
 });
 
+const EMPTY_HOUSEHOLD_OUTCOME: AiHouseholdResolveOutcome = Object.freeze({
+  resolved: Object.freeze([]),
+  unresolved: Object.freeze([]),
+  inconsistent: Object.freeze([]),
+  auto_count: 0,
+});
+
 export interface AiResolutionRunResult {
   readonly ok: boolean;
   readonly message?: string;
@@ -160,6 +169,8 @@ export interface AiResolutionRunResult {
   readonly outcome: AiResolveOutcome;
   /** Amount-interpretation verification outcome (needs_amount). */
   readonly amounts: AiAmountResolveOutcome;
+  /** Verified-household verification outcome (needs_amount). */
+  readonly households: AiHouseholdResolveOutcome;
 }
 
 export interface AiResolutionRunArgs extends AiResolutionRequestArgs {
@@ -190,6 +201,7 @@ export async function resolveUnresolvedRowsWithAi(
       interpretedCount: requested.suggestions.length,
       outcome: EMPTY_FOOD_OUTCOME,
       amounts: EMPTY_AMOUNT_OUTCOME,
+      households: EMPTY_HOUSEHOLD_OUTCOME,
     };
   }
 
@@ -226,11 +238,35 @@ export async function resolveUnresolvedRowsWithAi(
         })
       : EMPTY_AMOUNT_OUTCOME;
 
+  // VERIFIED-HOUSEHOLD PASS (LOWEST mass authority). It runs ONLY for lines the
+  // count/amount pass did not already resolve, and it is excluded for every
+  // line that already carries a `needs_amount` stored mass choice or an
+  // existing verified household choice, so the merged working state can never
+  // hold two competing mass sources for one line.
+  let households: AiHouseholdResolveOutcome = EMPTY_HOUSEHOLD_OUTCOME;
+  if (amountSuggestions.length > 0 && args.liveRows !== undefined && args.state !== undefined) {
+    const excluded = new Set<string>(amounts.resolved.map((entry) => entry.line_ref));
+    for (const lineRef of Object.keys(args.state.portions ?? {})) excluded.add(lineRef);
+    for (const lineRef of Object.keys(args.state.countPortions ?? {})) excluded.add(lineRef);
+    for (const lineRef of Object.keys(args.state.userMasses ?? {})) excluded.add(lineRef);
+    for (const lineRef of Object.keys(args.state.householdPortions ?? {})) excluded.add(lineRef);
+    households = resolveHouseholdsFromAiSuggestions({
+      session: args.session,
+      rows: args.rows,
+      adapted: args.adapted,
+      liveRows: args.liveRows,
+      state: args.state,
+      suggestions: amountSuggestions,
+      excludeLineRefs: excluded,
+    });
+  }
+
   return {
     ok: true,
     aiAttempted: true,
     interpretedCount: requested.suggestions.length,
     outcome,
     amounts,
+    households,
   };
 }

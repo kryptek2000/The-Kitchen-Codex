@@ -86,6 +86,12 @@ export interface LiveRowState {
   readonly household_size_class: string | undefined;
   readonly household_requires_state: string | undefined;
   readonly household_authority_class: string | undefined;
+  /**
+   * Display-only: the household unit/size/state WORDING was AI-interpreted while
+   * the verified registry record and grams are locally authenticated. Never
+   * authority and never persisted.
+   */
+  readonly household_ai_assisted?: boolean;
 }
 
 function finitePositive(value: unknown): value is number {
@@ -279,6 +285,7 @@ export function projectLiveRow(input: LiveRowProjectionInput): LiveRowState {
   let householdSizeClass: string | undefined;
   let householdRequiresState: string | undefined;
   let householdAuthorityClass: string | undefined;
+  let householdAiAssisted: boolean | undefined;
 
   if (authority.kind === 'direct_mass') {
     resolvedGrams = authority.grams;
@@ -330,6 +337,8 @@ export function projectLiveRow(input: LiveRowProjectionInput): LiveRowState {
           householdSizeClass = evidence.household_size_class ?? undefined;
           householdRequiresState = evidence.household_requires_state ?? undefined;
           householdAuthorityClass = evidence.household_authority_class;
+          // Display-only provenance; the mass is the verified registry grams.
+          householdAiAssisted = household?.aiAssisted === true;
         }
       }
     }
@@ -425,6 +434,7 @@ export function projectLiveRow(input: LiveRowProjectionInput): LiveRowState {
     household_size_class: householdSizeClass,
     household_requires_state: householdRequiresState,
     household_authority_class: householdAuthorityClass,
+    ...(householdAiAssisted === true ? { household_ai_assisted: true } : {}),
   });
 }
 

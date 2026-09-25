@@ -41,7 +41,9 @@ import {
   HOUSEHOLD_PORTION_SELECTION_VERSION,
   householdSelectionMatchesResolution,
   resolveHouseholdPortion,
+  sanitizeHouseholdRequirementHint,
   type HouseholdPortionSelection,
+  type HouseholdRequirementHint,
 } from './householdPortion';
 import { contributionFor, isWithinCanonicalBound, roundCanonicalTotal, stableSum } from './numeric';
 import { isValidStrictServingCount } from './servings';
@@ -79,6 +81,7 @@ const INGREDIENT_INPUT_KEYS = new Set([
   'count_requirement_hint',
   'user_mass_selection',
   'household_portion_selection',
+  'household_requirement_hint',
 ]);
 const PORTION_SELECTION_KEYS = new Set([
   'calculation_version',
@@ -190,6 +193,12 @@ interface PreparedIngredient {
   readonly userMassSelection: unknown;
   /** Phase 6 verified household-portion selection (closed shape). */
   readonly householdPortionSelection: unknown;
+  /**
+   * Bounded interpretation-only household hint (closed unit/size/state
+   * vocabulary). It may only FILL a source-missing dimension and is only used to
+   * re-derive the exact-key registry lookup; it never supplies a mass.
+   */
+  readonly householdRequirementHint: HouseholdRequirementHint | undefined;
 }
 
 interface EvaluatedIngredient {
@@ -921,6 +930,9 @@ function evaluateIngredient(
         fdcId,
         usdaRecordDigest: record.record_digest,
         bundleRelease: inputs.bundleRelease,
+        ...(prepared.householdRequirementHint !== undefined
+          ? { hint: prepared.householdRequirementHint }
+          : {}),
       });
       if (!resolution) return { ok: false, code: 'invalid_portion_selection' };
       if (
@@ -1097,6 +1109,11 @@ export function runAdvisoryCalculation(inputs: AdvisoryCalculationInputs): Calcu
       // being silently ignored. It never supplies the count amount.
       const hintResult = sanitizeCountRequirementHint(raw.count_requirement_hint);
       if (!hintResult.ok) return fail('invalid_portion_selection');
+      // The bounded household hint is validated with the SAME defense in depth:
+      // a malformed/forged hint fails the WHOLE calculation closed rather than
+      // being silently ignored, and it never supplies a mass.
+      const householdHintResult = sanitizeHouseholdRequirementHint(raw.household_requirement_hint);
+      if (!householdHintResult.ok) return fail('invalid_portion_selection');
       prepared.push({
         lineRef,
         ingredient: raw.ingredient,
@@ -1108,6 +1125,7 @@ export function runAdvisoryCalculation(inputs: AdvisoryCalculationInputs): Calcu
         countRequirementHint: hintResult.hint,
         userMassSelection: raw.user_mass_selection,
         householdPortionSelection: raw.household_portion_selection,
+        householdRequirementHint: householdHintResult.hint,
       });
     }
 

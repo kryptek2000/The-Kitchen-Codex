@@ -36,17 +36,33 @@ import {
   type AiResolutionRequestRow,
   type AiResolutionSuggestion,
 } from "../src/core/nutritionV2/aiResolution.js";
+import { HOUSEHOLD_SIZE_CLASSES, HOUSEHOLD_STATES } from "../src/core/nutritionV2/household/normalize.js";
+import { householdCountNouns } from "../src/utils/householdUnits.js";
 
 dotenv.config();
 
+// ---------------------------------------------------------------------------
+// Household hint vocabulary — GENERATED from the canonical owners
+// ---------------------------------------------------------------------------
+// The prompt may not present an allegedly exhaustive wording list that omits an
+// accepted token. These lists are rendered directly from the SAME canonical
+// vocabularies the local sanitizer and registry enforce (Phase 1 unit owner,
+// registry size/state owners), so a production vocabulary addition/removal can
+// never silently drift away from what the model is told. No second vocabulary
+// owner is introduced here.
+const HOUSEHOLD_UNIT_WORDS = householdCountNouns().join(", ");
+const HOUSEHOLD_SIZE_WORDS = HOUSEHOLD_SIZE_CLASSES.join(", ");
+const HOUSEHOLD_STATE_WORDS = HOUSEHOLD_STATES.join(", ");
+
 /** Instructions embedded in the prompt. Ingredient text is appended as DATA. */
-const NUTRITION_RESOLVE_INSTRUCTIONS = [
+export const NUTRITION_RESOLVE_INSTRUCTIONS = [
   "You help interpret difficult recipe ingredient wording for a USDA food search.",
   "You are an INTERPRETATION ASSISTANT only. You are NOT a nutrition calculator.",
   "For each ingredient, return an interpreted food name and up to a few short USDA search phrases likely to match a generic USDA FoodData Central record.",
   "Each ingredient carries a trusted issue_kind: needs_match (no food identity), review_suggested (identity needs confirmation), or needs_amount (food identity is known but the amount/count/portion is unresolved).",
   "For needs_amount, focus on interpreting the recipe's own quantity, count unit, count descriptor, and preparation wording; do not re-interpret the food identity.",
   "For needs_amount, set count_descriptor_hint to the SINGLE countable unit word when one exists (e.g. clove, slice, stalk, ear, can), quantity_unit_hint to the same wording family, and portion_search_hint to a short USDA portion wording. Use only plain singular unit words.",
+  `For needs_amount, you may also interpret household wording the recipe line leaves unstated. The accepted household unit words are exactly: ${HOUSEHOLD_UNIT_WORDS}. The accepted household size words are exactly: ${HOUSEHOLD_SIZE_WORDS}. The accepted household state words are exactly: ${HOUSEHOLD_STATE_WORDS}. Set household_unit_hint, household_size_hint, and household_state_hint only to those exact words, and omit any hint that is already stated in the line. These hints only fill missing wording; a verified local household registry decides whether any conversion applies.`,
   "Preserve meaningful food-defining modifiers (e.g. raw, cooked, whole, skim, unsalted, 80/20, ground, skinless).",
   "Prefer plain/common generic USDA wording over brands, restaurants, or composed dishes.",
   "Do NOT invent or output any USDA FDC id, nutrient amount, calorie value, gram weight, mass, portion index, portion gram weight, digest, or token.",
