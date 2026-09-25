@@ -166,7 +166,7 @@ describe('phase 5B card — explicit Apply UX', () => {
     const handler = vi.fn(async () => ({ ok: true, mode: 'create' as const, message: 'Saved.' }));
     render(
       <AdvancedNutritionCard
-        recipe={recipe({ codexNutrition: { kind: 'opaque', schema: 2, data: {} } as never })}
+        recipe={recipe({ codexNutrition: { kind: 'opaque', schema: 3, data: {} } as never })}
         session={genuineSession()}
         onApplyAdvancedNutrition={handler}
       />

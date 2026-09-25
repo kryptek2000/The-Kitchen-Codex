@@ -30,11 +30,13 @@ import type { IngredientReviewResult } from '../matching/types';
 import { candidatePortionCompatibility } from '../calculation/portionSemantics';
 import type { AdvisoryNutritionPreview } from '../calculation/types';
 import { buildPortionChoice } from './portion';
+import { buildHouseholdPortionChoice } from './householdPortion';
 import { buildCalculationRequest, buildReviewRows } from './rows';
 import type {
   AdaptedIngredient,
   AdvancedNutritionSession,
   CountPortionChoice,
+  HouseholdPortionChoice,
   MatchChoice,
   Phase4Row,
   Phase4State,
@@ -74,6 +76,7 @@ export interface RecipeAnalysis {
   readonly matches: Readonly<Record<string, MatchChoice>>;
   readonly portions: Readonly<Record<string, PortionChoice>>;
   readonly countPortions: Readonly<Record<string, CountPortionChoice>>;
+  readonly householdPortions: Readonly<Record<string, HouseholdPortionChoice>>;
   readonly preview: AdvisoryNutritionPreview | undefined;
   readonly summary: {
     readonly total: number;
@@ -469,7 +472,50 @@ export function analyzeRecipe(
 
   const request = buildCalculationRequest(adapted, syntheticState);
   const calculated = session.calculate(request);
-  const preview = calculated.ok ? calculated.preview : undefined;
+  let preview = calculated.ok ? calculated.preview : undefined;
+
+  // Phase 6 verified household-portion fallback. LOWEST authority: a household
+  // choice is created ONLY for a line the higher-authority machinery left
+  // without a resolved mass (the first preview above already reflects direct
+  // mass, user mass, USDA source portions, and automatic count portions). The
+  // builder performs its own full-binding verification through the genuine
+  // session, so the stored choice can never be one the calculator rejects.
+  const householdPortions: Record<string, HouseholdPortionChoice> = {};
+  if (preview) {
+    const analyzedByRef = new Map(analyzed.map((row) => [row.line_ref, row]));
+    for (const row of rows) {
+      const entry = adaptedByRef.get(row.line_ref);
+      if (!entry) continue;
+      const analyzedRow = analyzedByRef.get(row.line_ref);
+      if (!analyzedRow || analyzedRow.status !== 'matched') continue;
+      const selectedFdcId = analyzedRow.selected_fdc_id;
+      if (selectedFdcId === undefined) continue;
+      const evidence = preview.ingredients.find((item) => item.line_ref === row.line_ref);
+      if (!evidence || evidence.outcome === 'calculated' || evidence.qualitative) continue;
+      const review = row.outcome === 'review_required' ? reviewOf(row) : undefined;
+      const built = buildHouseholdPortionChoice(session, {
+        lineRef: row.line_ref,
+        ingredient: entry.ingredient,
+        review: row.outcome === 'review_required' ? row.review : undefined,
+        selection:
+          row.outcome === 'review_required' && review
+            ? selectionForAuto(review, selectedFdcId)
+            : undefined,
+        automaticSelection: row.outcome === 'review_required',
+        fdcId: selectedFdcId,
+      });
+      if (built.ok) householdPortions[row.line_ref] = built.choice;
+    }
+  }
+  if (Object.keys(householdPortions).length > 0) {
+    const withHouseholdState = {
+      ...syntheticState,
+      householdPortions,
+    } as unknown as Phase4State;
+    const householdRequest = buildCalculationRequest(adapted, withHouseholdState);
+    const householdCalculated = session.calculate(householdRequest);
+    if (householdCalculated.ok) preview = householdCalculated.preview;
+  }
 
   // Refine the food-level status with mass evidence from the preview: a
   // high-confidence food whose mass cannot be resolved is `needs_amount`.
@@ -504,6 +550,7 @@ export function analyzeRecipe(
     matches: Object.freeze(matches),
     portions: Object.freeze(portions),
     countPortions: Object.freeze(countPortions),
+    householdPortions: Object.freeze(householdPortions),
     preview,
     summary: Object.freeze(summary),
   });

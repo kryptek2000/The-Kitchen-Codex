@@ -647,20 +647,25 @@ describe('household registry — module purity', () => {
 });
 
 describe('household registry — consumer and barrel isolation', () => {
-  it('is imported by no matching/calculation/UI/AI/persistence/server module', () => {
+  it('is imported ONLY by the Phase 6 verified household resolver', () => {
+    // Phase 6 integrates the registry through ONE calculation-layer resolver
+    // (`calculation/householdPortion.ts`) that uses the verified loader. Any
+    // OTHER runtime importer is an offender.
+    const ALLOWED = new Set(['src/core/nutritionV2/calculation/householdPortion.ts']);
     const offenders: string[] = [];
     const importRe = /(?:from|import)\s*(?:\(\s*)?\s*['"]([^'"]+)['"]/g;
     for (const root of [resolve(ROOT, 'src'), resolve(ROOT, 'server')]) {
       for (const file of listFiles(root)) {
         if (file.startsWith(HOUSEHOLD_DIR)) continue;
         if (file.includes(`${'/'}tests${'/'}`)) continue;
+        const rel = file.slice(ROOT.length + 1);
         const source = readFileSync(file, 'utf8');
         let match: RegExpExecArray | null;
         importRe.lastIndex = 0;
         while ((match = importRe.exec(source)) !== null) {
           const resolved = resolveProjectSpecifier(file, match[1]);
-          if (resolved && resolved.startsWith(HOUSEHOLD_DIR)) {
-            offenders.push(file.slice(ROOT.length + 1));
+          if (resolved && resolved.startsWith(HOUSEHOLD_DIR) && !ALLOWED.has(rel)) {
+            offenders.push(rel);
             break;
           }
         }

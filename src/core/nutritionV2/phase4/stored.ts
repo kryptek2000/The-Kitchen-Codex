@@ -1,7 +1,7 @@
 /**
  * The Kitchen Codex — Advanced Nutrition Phase 4: stored-block projection.
  *
- * PURE, offline, display-only. Recognized schema-v1 stored data is validated
+ * PURE, offline, display-only. Recognized schema-v1/v2 stored data is validated
  * before trusted display; malformed data is never shown as authoritative; an
  * unknown future schema is preserved opaquely and never interpreted.
  *
@@ -23,7 +23,7 @@ export interface StoredNutrientValue {
 }
 
 export interface StoredAdvancedSummary {
-  readonly kind: 'none' | 'v1' | 'opaque';
+  readonly kind: 'none' | 'v1' | 'v2' | 'opaque';
   readonly status?: string;
   readonly servings?: number;
   /** Resolved measurable ingredient-line count of the saved block. */
@@ -61,9 +61,10 @@ function none(): StoredAdvancedSummary {
 
 /**
  * Projects an already-decoded advanced-nutrition block for trusted display. Only
- * a recognized `schema: 1` / `basis: 'total'` block is interpreted; everything
- * else (opaque future schema or malformed data) is reported as opaque. The value
- * is materialized once into inert data before any property is read.
+ * a recognized `schema: 1`/`schema: 2` / `basis: 'total'` block is interpreted;
+ * everything else (opaque future schema or malformed data) is reported as
+ * opaque. The value is materialized once into inert data before any property is
+ * read.
  */
 export function summarizeStoredAdvanced(blockRaw: unknown): StoredAdvancedSummary {
   if (blockRaw === null || blockRaw === undefined) return none();
@@ -84,7 +85,7 @@ export function summarizeStoredAdvanced(blockRaw: unknown): StoredAdvancedSummar
     ingredient_digest?: unknown;
   };
   if (candidate.kind === 'opaque') return opaque();
-  if (candidate.schema !== 1 || candidate.basis !== 'total') return opaque();
+  if ((candidate.schema !== 1 && candidate.schema !== 2) || candidate.basis !== 'total') return opaque();
   if (candidate.nutrients === null || typeof candidate.nutrients !== 'object') return opaque();
 
   const nutrients = candidate.nutrients as Record<string, unknown>;
@@ -103,7 +104,7 @@ export function summarizeStoredAdvanced(blockRaw: unknown): StoredAdvancedSummar
   const unresolvedCount = Array.isArray(candidate.unresolved) ? candidate.unresolved.length : 0;
 
   return Object.freeze({
-    kind: 'v1',
+    kind: candidate.schema === 2 ? 'v2' : 'v1',
     status: typeof candidate.status === 'string' ? candidate.status : undefined,
     servings: isFiniteNonNegative(candidate.servings) ? candidate.servings : undefined,
     resolvedCount,

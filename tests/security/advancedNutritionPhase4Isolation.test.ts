@@ -145,6 +145,7 @@ describe('phase 4 isolation — source purity', () => {
         'countContext.ts',
         'countPortion.ts',
         'display.ts',
+        'householdPortion.ts',
         'hydrate.ts',
         'index.ts',
         'liveRow.ts',

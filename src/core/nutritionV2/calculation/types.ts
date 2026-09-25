@@ -163,7 +163,12 @@ export type IngredientOutcome =
 
 export type MatchStatus = 'unique_exact' | 'user_confirmed' | 'auto_confirmed' | 'none';
 
-export type MassSource = 'direct_mass' | 'source_portion' | 'count_portion' | 'user_mass';
+export type MassSource =
+  | 'direct_mass'
+  | 'source_portion'
+  | 'count_portion'
+  | 'user_mass'
+  | 'household_portion';
 
 export interface IngredientCalculationEvidence {
   readonly line_ref: string;
@@ -190,6 +195,23 @@ export interface IngredientCalculationEvidence {
   /** Entered total-weight quantity/unit for a `user_mass` result. */
   readonly user_mass_quantity?: number;
   readonly user_mass_unit?: string;
+  /**
+   * Verified Kitchen Codex household-portion evidence for a
+   * `household_portion` result. Every field is re-derived and re-verified by the
+   * calculation boundary; the working-state selection is never trusted alone.
+   */
+  readonly household_registry_release?: string;
+  readonly household_record_key?: string;
+  readonly household_record_digest?: string;
+  readonly household_unit?: string;
+  readonly household_size_class?: string | null;
+  readonly household_requires_state?: string | null;
+  /** Registry authority class (`usda_derived` | `bounded_estimate`). */
+  readonly household_authority_class?: string;
+  /** Recipe quantity the household conversion was applied to. */
+  readonly household_quantity?: number;
+  /** Deterministic selection digest of the verified binding. */
+  readonly household_selection_digest?: string;
   /** Binds the ingredient identity WITHOUT any portion selection. */
   readonly ingredient_identity_digest: string;
   /** Binds the ingredient identity WITH the applied portion selection. */

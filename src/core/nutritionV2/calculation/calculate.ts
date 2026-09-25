@@ -37,6 +37,12 @@ import {
   type CountPortionMassResolution,
   type CountRequirementHint,
 } from './countPortion';
+import {
+  HOUSEHOLD_PORTION_SELECTION_VERSION,
+  householdSelectionMatchesResolution,
+  resolveHouseholdPortion,
+  type HouseholdPortionSelection,
+} from './householdPortion';
 import { contributionFor, isWithinCanonicalBound, roundCanonicalTotal, stableSum } from './numeric';
 import { isValidStrictServingCount } from './servings';
 import {
@@ -72,6 +78,7 @@ const INGREDIENT_INPUT_KEYS = new Set([
   'count_portion_selection',
   'count_requirement_hint',
   'user_mass_selection',
+  'household_portion_selection',
 ]);
 const PORTION_SELECTION_KEYS = new Set([
   'calculation_version',
@@ -103,6 +110,27 @@ const USER_MASS_SELECTION_KEYS = new Set([
   'quantity',
   'unit',
   'grams',
+  'selection_digest',
+]);
+const HOUSEHOLD_SELECTION_KEYS = new Set([
+  'household_selection_version',
+  'calculation_version',
+  'line_ref',
+  'ingredient_identity_digest',
+  'bundle_release',
+  'usda_fdc_id',
+  'usda_record_digest',
+  'registry_release',
+  'registry_digest',
+  'provenance_digest',
+  'aggregate_release_digest',
+  'household_record_key',
+  'household_record_digest',
+  'household_unit',
+  'size_class',
+  'requires_state',
+  'quantity',
+  'resolved_grams',
   'selection_digest',
 ]);
 
@@ -160,6 +188,8 @@ interface PreparedIngredient {
    */
   readonly countRequirementHint: CountRequirementHint | undefined;
   readonly userMassSelection: unknown;
+  /** Phase 6 verified household-portion selection (closed shape). */
+  readonly householdPortionSelection: unknown;
 }
 
 interface EvaluatedIngredient {
@@ -191,6 +221,15 @@ interface EvaluatedIngredient {
   readonly countDeterministic: boolean | undefined;
   readonly userMassQuantity: number | undefined;
   readonly userMassUnit: string | undefined;
+  readonly householdRegistryRelease: string | undefined;
+  readonly householdRecordKey: string | undefined;
+  readonly householdRecordDigest: string | undefined;
+  readonly householdUnit: string | undefined;
+  readonly householdSizeClass: string | null | undefined;
+  readonly householdRequiresState: string | null | undefined;
+  readonly householdAuthorityClass: string | undefined;
+  readonly householdQuantity: number | undefined;
+  readonly householdSelectionDigest: string | undefined;
   readonly contributions: Partial<Record<NutrientId, number>>;
   readonly contributingNutrients: ReadonlyArray<NutrientId>;
   readonly outcome: IngredientOutcome;
@@ -235,6 +274,21 @@ function fullPayload(e: EvaluatedIngredient) {
       : {}),
     ...(e.userMassQuantity !== undefined ? { user_mass_quantity: e.userMassQuantity } : {}),
     ...(e.userMassUnit !== undefined ? { user_mass_unit: e.userMassUnit } : {}),
+    ...(e.householdRecordKey !== undefined
+      ? {
+          household: {
+            registry_release: e.householdRegistryRelease,
+            record_key: e.householdRecordKey,
+            record_digest: e.householdRecordDigest,
+            unit: e.householdUnit,
+            size_class: e.householdSizeClass ?? null,
+            requires_state: e.householdRequiresState ?? null,
+            authority_class: e.householdAuthorityClass,
+            quantity: e.householdQuantity,
+            selection_digest: e.householdSelectionDigest,
+          },
+        }
+      : {}),
     resolved_grams: e.grams ?? null,
     outcome: e.outcome,
     contributing_nutrients: [...e.contributingNutrients],
@@ -400,6 +454,100 @@ function sanitizeUserMassSelection(
       quantity: value.quantity,
       unit: value.unit,
       grams: value.grams,
+      selection_digest: value.selection_digest,
+    },
+  };
+}
+
+/**
+ * Bounded, fail-closed sanitization of a Phase 6 household-portion selection.
+ * The selection is NEVER trusted: the caller's grams/digests are only used as
+ * claims, and `evaluateIngredient` independently re-derives the household
+ * resolution and requires exact equality of every binding field.
+ */
+function sanitizeHouseholdPortionSelection(
+  raw: unknown
+): { ok: true; selection: HouseholdPortionSelection } | { ok: false; code: Phase3FailureCode } {
+  const materialized = materialize(raw);
+  if (!materialized.ok) {
+    return {
+      ok: false,
+      code: (materialized as { ok: false; unsafe: boolean }).unsafe
+        ? 'unsafe_request'
+        : 'invalid_portion_selection',
+    };
+  }
+  if (!isPlainObject(materialized.value)) return { ok: false, code: 'invalid_portion_selection' };
+  const value = materialized.value;
+  for (const key of Object.keys(value)) {
+    if (!HOUSEHOLD_SELECTION_KEYS.has(key)) return { ok: false, code: 'unknown_field' };
+  }
+  if (value.household_selection_version !== HOUSEHOLD_PORTION_SELECTION_VERSION) {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
+  if (value.calculation_version !== CALCULATION_VERSION) {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
+  if (typeof value.line_ref !== 'string' || value.line_ref.length === 0) {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
+  if (typeof value.ingredient_identity_digest !== 'string') {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
+  if (typeof value.bundle_release !== 'string') return { ok: false, code: 'invalid_portion_selection' };
+  if (!isSafePositiveInt(value.usda_fdc_id)) return { ok: false, code: 'invalid_portion_selection' };
+  if (typeof value.usda_record_digest !== 'string') {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
+  if (typeof value.registry_release !== 'string') return { ok: false, code: 'invalid_portion_selection' };
+  if (typeof value.registry_digest !== 'string') return { ok: false, code: 'invalid_portion_selection' };
+  if (typeof value.provenance_digest !== 'string') return { ok: false, code: 'invalid_portion_selection' };
+  if (typeof value.aggregate_release_digest !== 'string') {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
+  if (typeof value.household_record_key !== 'string' || value.household_record_key.length === 0) {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
+  if (typeof value.household_record_digest !== 'string') {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
+  if (typeof value.household_unit !== 'string' || value.household_unit.length === 0) {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
+  if (value.size_class !== null && typeof value.size_class !== 'string') {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
+  if (value.requires_state !== null && typeof value.requires_state !== 'string') {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
+  if (!isFiniteNonNegativeNumber(value.quantity) || !((value.quantity as number) > 0)) {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
+  if (!isFiniteNonNegativeNumber(value.resolved_grams) || !((value.resolved_grams as number) > 0)) {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
+  if (typeof value.selection_digest !== 'string') return { ok: false, code: 'invalid_portion_selection' };
+  return {
+    ok: true,
+    selection: {
+      household_selection_version: HOUSEHOLD_PORTION_SELECTION_VERSION,
+      calculation_version: CALCULATION_VERSION,
+      line_ref: value.line_ref,
+      ingredient_identity_digest: value.ingredient_identity_digest,
+      bundle_release: value.bundle_release,
+      usda_fdc_id: value.usda_fdc_id,
+      usda_record_digest: value.usda_record_digest,
+      registry_release: value.registry_release,
+      registry_digest: value.registry_digest,
+      provenance_digest: value.provenance_digest,
+      aggregate_release_digest: value.aggregate_release_digest,
+      household_record_key: value.household_record_key,
+      household_record_digest: value.household_record_digest,
+      household_unit: value.household_unit,
+      size_class: (value.size_class ?? null) as string | null,
+      requires_state: (value.requires_state ?? null) as string | null,
+      quantity: value.quantity as number,
+      resolved_grams: value.resolved_grams as number,
       selection_digest: value.selection_digest,
     },
   };
@@ -624,6 +772,15 @@ function evaluateIngredient(
     countDeterministic: undefined,
     userMassQuantity: undefined,
     userMassUnit: undefined,
+    householdRegistryRelease: undefined,
+    householdRecordKey: undefined,
+    householdRecordDigest: undefined,
+    householdUnit: undefined,
+    householdSizeClass: undefined,
+    householdRequiresState: undefined,
+    householdAuthorityClass: undefined,
+    householdQuantity: undefined,
+    householdSelectionDigest: undefined,
     contributions: {},
     contributingNutrients: [],
     outcome: 'no_match',
@@ -643,22 +800,47 @@ function evaluateIngredient(
   let countDeterministic: boolean | undefined;
   let userMassQuantity: number | undefined;
   let userMassUnit: string | undefined;
+  let householdRegistryRelease: string | undefined;
+  let householdRecordKey: string | undefined;
+  let householdRecordDigest: string | undefined;
+  let householdUnit: string | undefined;
+  let householdSizeClass: string | null | undefined;
+  let householdRequiresState: string | null | undefined;
+  let householdAuthorityClass: string | undefined;
+  let householdQuantity: number | undefined;
+  let householdSelectionDigest: string | undefined;
 
   if (!qualitative && matched && record) {
     const hasPortion = prepared.portionSelection !== undefined;
     const hasCountPortion = prepared.countPortionSelection !== undefined;
     const hasUserMass = prepared.userMassSelection !== undefined;
+    const hasHouseholdPortion = prepared.householdPortionSelection !== undefined;
+    // The canonical query projection + count requirement are derived ONCE and
+    // shared by the count-portion and household-portion paths. Every dimension
+    // comes from the existing contracts, never from a second grammar.
+    const projection = projectQueryText(normalizedQuery, {
+      count_noun: parsed.count_noun,
+      container: parsed.container,
+    });
+    const requirement = deriveCountRequirement(
+      parsed.amount,
+      parsed.raw_unit,
+      projection.food_tokens,
+      projection.size_qualifiers,
+      prepared.countRequirementHint
+    );
     // ONE effective-mass decision, shared with the live projection. More than
     // one non-direct selection, or a direct recipe mass together with ANY
-    // alternate mass choice (user total, source portion, or count portion), is
-    // a conflict and fails the whole request closed rather than silently
-    // preferring one source over another.
+    // alternate mass choice (user total, source portion, count portion, or a
+    // verified household portion), is a conflict and fails the whole request
+    // closed rather than silently preferring one source over another.
     const authority = resolveEffectiveMassDecision({
       directMassGrams:
         parsed.measurement_kind === 'mass' && parsed.grams !== undefined ? parsed.grams : undefined,
       hasUserMass,
       hasSourcePortion: hasPortion,
       hasCountPortion,
+      hasHouseholdPortion,
     });
     if (authority.kind === 'conflict') {
       return { ok: false, code: 'invalid_portion_selection' };
@@ -713,21 +895,63 @@ function evaluateIngredient(
       } else if ((resolution as { ok: false; reason: string }).reason === 'overflow') {
         return { ok: false, code: 'numeric_overflow' };
       }
+    } else if (authority.kind === 'household_portion') {
+      // Phase 6 verified Kitchen Codex household portion. The working-state
+      // selection is NEVER trusted: the bounded selection is sanitized, the
+      // resolution is independently re-derived from the authenticated registry
+      // plus the authenticated USDA record, and every binding field (digests
+      // included) must match exactly. Any stale/forged/cross-line/cross-food/
+      // cross-quantity/cross-release selection fails the whole request closed.
+      const selectionResult = sanitizeHouseholdPortionSelection(
+        prepared.householdPortionSelection
+      );
+      if (!selectionResult.ok) {
+        return { ok: false, code: (selectionResult as { ok: false; code: Phase3FailureCode }).code };
+      }
+      const selection = selectionResult.selection;
+      if (
+        selection.line_ref !== prepared.lineRef ||
+        selection.usda_fdc_id !== fdcId ||
+        selection.usda_record_digest !== record.record_digest
+      ) {
+        return { ok: false, code: 'invalid_portion_selection' };
+      }
+      const resolution = resolveHouseholdPortion({
+        ingredient: prepared.ingredient,
+        fdcId,
+        usdaRecordDigest: record.record_digest,
+        bundleRelease: inputs.bundleRelease,
+      });
+      if (!resolution) return { ok: false, code: 'invalid_portion_selection' };
+      if (
+        !householdSelectionMatchesResolution({
+          selection,
+          resolution,
+          expectedIdentityDigest: identityDigest,
+          expectedLineRef: prepared.lineRef,
+          expectedBundleRelease: inputs.bundleRelease,
+        })
+      ) {
+        return { ok: false, code: 'invalid_portion_selection' };
+      }
+      if (!isWithinCanonicalBound(resolution.resolved_grams)) {
+        return { ok: false, code: 'numeric_overflow' };
+      }
+      grams = resolution.resolved_grams;
+      massSource = 'household_portion';
+      householdRegistryRelease = resolution.registry_release;
+      householdRecordKey = resolution.household_record_key;
+      householdRecordDigest = resolution.household_record_digest;
+      householdUnit = resolution.household_unit;
+      householdSizeClass = resolution.size_class;
+      householdRequiresState = resolution.requires_state;
+      householdAuthorityClass = resolution.authority_class;
+      householdQuantity = resolution.quantity;
+      householdSelectionDigest = selection.selection_digest;
     } else {
       // Phase 4.5E authenticated count-portion resolution. A deterministic unique
       // compatible portion resolves without a user choice; an ambiguous set
       // requires an explicit, independently re-verified selection.
-      const projection = projectQueryText(normalizedQuery, {
-        count_noun: parsed.count_noun,
-        container: parsed.container,
-      });
-      const requirement = deriveCountRequirement(
-        parsed.amount,
-        parsed.raw_unit,
-        projection.food_tokens,
-        projection.size_qualifiers,
-        prepared.countRequirementHint
-      );
       if (requirement) {
         let resolution: CountPortionMassResolution | undefined;
         if (hasCountPortion) {
@@ -811,6 +1035,15 @@ function evaluateIngredient(
     countDeterministic,
     userMassQuantity,
     userMassUnit,
+    householdRegistryRelease,
+    householdRecordKey,
+    householdRecordDigest,
+    householdUnit,
+    householdSizeClass,
+    householdRequiresState,
+    householdAuthorityClass,
+    householdQuantity,
+    householdSelectionDigest,
     contributions,
     contributingNutrients,
     outcome,
@@ -874,6 +1107,7 @@ export function runAdvisoryCalculation(inputs: AdvisoryCalculationInputs): Calcu
         countPortionSelection: raw.count_portion_selection,
         countRequirementHint: hintResult.hint,
         userMassSelection: raw.user_mass_selection,
+        householdPortionSelection: raw.household_portion_selection,
       });
     }
 
@@ -962,6 +1196,19 @@ export function runAdvisoryCalculation(inputs: AdvisoryCalculationInputs): Calcu
           : {}),
         ...(entry.userMassQuantity !== undefined ? { user_mass_quantity: entry.userMassQuantity } : {}),
         ...(entry.userMassUnit !== undefined ? { user_mass_unit: entry.userMassUnit } : {}),
+        ...(entry.householdRecordKey !== undefined
+          ? {
+              household_registry_release: entry.householdRegistryRelease,
+              household_record_key: entry.householdRecordKey,
+              household_record_digest: entry.householdRecordDigest,
+              household_unit: entry.householdUnit,
+              household_size_class: entry.householdSizeClass ?? null,
+              household_requires_state: entry.householdRequiresState ?? null,
+              household_authority_class: entry.householdAuthorityClass,
+              household_quantity: entry.householdQuantity,
+              household_selection_digest: entry.householdSelectionDigest,
+            }
+          : {}),
         ingredient_identity_digest: digestOf(identityPayload(entry)),
         ingredient_digest: digestOf(fullPayload(entry)),
         contributing_nutrients: Object.freeze([...entry.contributingNutrients]),

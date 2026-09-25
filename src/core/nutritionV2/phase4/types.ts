@@ -21,7 +21,7 @@ import type { CountPortionReviewResult } from '../calculation/countPortion';
 import type { ConfirmationResult, IngredientReviewResult } from '../matching/types';
 
 export const PHASE4_SESSION_VERSION = 'usda_phase4_session_v3';
-export const PHASE4_STATE_VERSION = 'usda_phase4_state_v4';
+export const PHASE4_STATE_VERSION = 'usda_phase4_state_v5';
 
 /**
  * Canonical, value-based identity of a Phase 4 session's authority. It is a
@@ -401,6 +401,28 @@ export interface UserMassChoice {
   readonly selection: unknown;
 }
 
+/**
+ * A verified Kitchen Codex household-portion choice (`household_portion`). It is
+ * the LOWEST mass authority (below direct mass, user mass, USDA source portion,
+ * and USDA count portion) and is created only from the authenticated Phase 5
+ * registry through the deterministic resolver. The calculator independently
+ * re-derives and re-verifies the selection; the working state is never trusted.
+ */
+export interface HouseholdPortionChoice {
+  /** Bound USDA FDC id the household record applies to. */
+  readonly fdc_id: number;
+  /** Canonical household record key (`food_key|unit|size|state`). */
+  readonly record_key: string;
+  /** Registry authority class (`usda_derived` | `bounded_estimate`). */
+  readonly authority_class: string;
+  /** Resolved grams for the recipe quantity (display/evidence only). */
+  readonly resolved_grams: number;
+  /** The closed, digest-bound household selection verified by the calculator. */
+  readonly selection: unknown;
+  /** True ONLY when the deterministic analyzer auto-selected this choice. */
+  readonly automatic?: boolean;
+}
+
 export interface Phase4State {
   readonly version: string;
   readonly status: Phase4Status;
@@ -413,6 +435,7 @@ export interface Phase4State {
   readonly portions: Readonly<Record<string, PortionChoice>>;
   readonly countPortions: Readonly<Record<string, CountPortionChoice>>;
   readonly userMasses: Readonly<Record<string, UserMassChoice>>;
+  readonly householdPortions: Readonly<Record<string, HouseholdPortionChoice>>;
   readonly basis: BasisMode;
   readonly selectedServings: number;
   readonly preview: AdvisoryNutritionPreview | null;
@@ -442,6 +465,12 @@ export type Phase4Action =
   | { readonly type: 'clear_count_portion'; readonly lineRef: string }
   | { readonly type: 'select_user_mass'; readonly lineRef: string; readonly choice: UserMassChoice }
   | { readonly type: 'clear_user_mass'; readonly lineRef: string }
+  | {
+      readonly type: 'select_household_portion';
+      readonly lineRef: string;
+      readonly choice: HouseholdPortionChoice;
+    }
+  | { readonly type: 'clear_household_portion'; readonly lineRef: string }
   | { readonly type: 'set_basis'; readonly basis: BasisMode }
   | { readonly type: 'set_servings'; readonly value: unknown }
   | {
@@ -455,6 +484,7 @@ export type Phase4Action =
       readonly portions: Readonly<Record<string, PortionChoice>>;
       readonly countPortions: Readonly<Record<string, CountPortionChoice>>;
       readonly userMasses: Readonly<Record<string, UserMassChoice>>;
+      readonly householdPortions: Readonly<Record<string, HouseholdPortionChoice>>;
     }
   | {
       /**
@@ -467,6 +497,8 @@ export type Phase4Action =
       readonly matches: Readonly<Record<string, MatchChoice>>;
       readonly portions: Readonly<Record<string, PortionChoice>>;
       readonly countPortions: Readonly<Record<string, CountPortionChoice>>;
+      /** Verified household-portion choices produced by the analyzer. */
+      readonly householdPortions: Readonly<Record<string, HouseholdPortionChoice>>;
       /**
        * User-entered total weights preserved across a Re-analyze. Absent for a
        * plain analyzer run (the reducer then clears them).
@@ -528,6 +560,11 @@ export interface IngredientEvidenceView {
   readonly count_deterministic: boolean | undefined;
   readonly user_mass_quantity: number | undefined;
   readonly user_mass_unit: string | undefined;
+  /** Verified household-portion evidence (present only for `household_portion`). */
+  readonly household_unit: string | undefined;
+  readonly household_size_class: string | undefined;
+  readonly household_requires_state: string | undefined;
+  readonly household_authority_class: string | undefined;
   readonly contributing_nutrients: ReadonlyArray<NutrientId>;
 }
 

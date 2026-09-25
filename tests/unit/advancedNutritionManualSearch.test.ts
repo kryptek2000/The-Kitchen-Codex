@@ -339,6 +339,7 @@ describe('manual search — selection authority and live state', () => {
       },
       portions: {},
       countPortions: {},
+      householdPortions: {},
       userMasses: {},
       basis: 'entire_recipe',
       selectedServings: 1,

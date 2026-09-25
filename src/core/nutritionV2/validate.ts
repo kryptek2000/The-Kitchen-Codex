@@ -31,6 +31,7 @@ import { DV_STANDARD_ID } from './dailyValues';
 import { isCanonicalUnit, isValidNutrientAmount, isNegativeZero, type CanonicalUnit } from './units';
 import {
   CODEX_NUTRITION_SCHEMA_V1,
+  CODEX_NUTRITION_SCHEMA_V2,
   CODEX_NUTRITION_BASIS_TOTAL,
   NUTRITION_SOURCE_IDS,
   DATASET_BACKED_SOURCE_IDS,
@@ -57,8 +58,10 @@ import {
   serializedBlockBytes,
   toInertValue,
   type CodexNutritionV1,
+  type CodexNutritionV2,
   type NutrientResult,
   type IngredientEvidence,
+  type IngredientEvidenceV2,
   type UnresolvedIngredientRef,
   type ManualOverrideMetadata,
   type NutritionSourceId,
@@ -97,9 +100,16 @@ const UNRESOLVED_REASONS: ReadonlyArray<UnresolvedIngredientRef['reason']> = [
   'no_nutrition',
   'qualitative',
 ];
-const CONVERSION_BASES: ReadonlyArray<NonNullable<IngredientEvidence['conversion_basis']>> = [
+/** v1 is closed to direct mass and authenticated USDA source portions. */
+const CONVERSION_BASES_V1: ReadonlyArray<NonNullable<IngredientEvidence['conversion_basis']>> = [
   'direct_mass',
   'source_portion',
+];
+/** v2 retains every v1 basis and adds the closed household basis. */
+const CONVERSION_BASES_V2: ReadonlyArray<NonNullable<IngredientEvidenceV2['conversion_basis']>> = [
+  'direct_mass',
+  'source_portion',
+  'household_portion',
 ];
 
 const V1_KEYS = new Set([
@@ -121,6 +131,9 @@ const V1_KEYS = new Set([
   'extensions',
 ]);
 
+/** v2 uses the same closed top-level key set as v1. */
+const V2_KEYS = V1_KEYS;
+
 const NUTRIENT_RESULT_KEYS = new Set([
   'amount',
   'unit',
@@ -129,7 +142,8 @@ const NUTRIENT_RESULT_KEYS = new Set([
   'covered_ingredient_count',
   'measurable_ingredient_count',
 ]);
-const EVIDENCE_KEYS = new Set([
+/** v1 evidence keys: NO household key exists in the v1 contract. */
+const EVIDENCE_KEYS_V1 = new Set([
   'line_ref',
   'line_digest',
   'source',
@@ -141,6 +155,20 @@ const EVIDENCE_KEYS = new Set([
   'amount',
   'conversion_basis',
 ]);
+/** v2 evidence keys: the v1 set plus the closed household evidence object. */
+const EVIDENCE_KEYS_V2 = new Set([...EVIDENCE_KEYS_V1, 'household_portion']);
+const HOUSEHOLD_PORTION_EVIDENCE_KEYS = new Set([
+  'registry_release',
+  'record_key',
+  'record_digest',
+  'household_unit',
+  'size_class',
+  'requires_state',
+  'quantity',
+  'selection_digest',
+]);
+/** Bounded household evidence text fields (registry release / key / unit / size / state). */
+const MAX_HOUSEHOLD_EVIDENCE_TEXT_LENGTH = 120;
 const EVIDENCE_AMOUNT_KEYS = new Set(['value', 'unit']);
 const UNRESOLVED_KEYS = new Set(['line_ref', 'reason', 'source_food_id', 'source_release']);
 const MANUAL_OVERRIDE_KEYS = new Set(['overridden_at', 'note']);
@@ -173,11 +201,11 @@ class Diagnostics {
   }
 }
 
-export interface AdvancedNutritionValidation {
+export interface AdvancedNutritionValidation<T = CodexNutritionV1 | CodexNutritionV2> {
   ok: boolean;
   errors: string[];
   /** Present only when `ok`. */
-  value?: CodexNutritionV1;
+  value?: T;
 }
 
 function isFinitePositive(value: unknown): value is number {
@@ -302,17 +330,30 @@ function validateNutrientResult(id: NutrientId, raw: unknown, diag: Diagnostics)
 }
 
 /**
- * Strictly validates an already-materialized, inert schema-v1 block. Unknown or
+ * Strictly validates an already-materialized, inert block under the VERSION-
+ * SPECIFIC contract selected by the schema discriminator. Unknown or
  * unrepresentable own properties are REJECTED (never sanitized away). Returns a
  * normalized whitelisted clone on success.
+ *
+ * v1 is restored to its committed meaning: the closed conversion bases are
+ * direct mass and an authenticated USDA source portion, and no household key
+ * exists. v2 retains every v1 meaning and adds the closed household basis plus
+ * the closed household evidence object, coupled bidirectionally.
  */
-function validateInertCodexNutritionV1(raw: Record<string, unknown>): AdvancedNutritionValidation {
+function validateInertCodexNutrition(
+  raw: Record<string, unknown>,
+  version: 1 | 2
+): AdvancedNutritionValidation {
+  const isV2 = version === CODEX_NUTRITION_SCHEMA_V2;
+  const topLevelKeys = isV2 ? V2_KEYS : V1_KEYS;
+  const evidenceKeys = isV2 ? EVIDENCE_KEYS_V2 : EVIDENCE_KEYS_V1;
+  const conversionBases = isV2 ? CONVERSION_BASES_V2 : CONVERSION_BASES_V1;
   const diag = new Diagnostics();
 
   for (const key of Object.keys(raw)) {
-    if (!V1_KEYS.has(key)) diag.add('unknown_field');
+    if (!topLevelKeys.has(key)) diag.add('unknown_field');
   }
-  if (raw.schema !== CODEX_NUTRITION_SCHEMA_V1) diag.add('invalid_schema');
+  if (raw.schema !== version) diag.add('invalid_schema');
   if (raw.basis !== CODEX_NUTRITION_BASIS_TOTAL) diag.add('invalid_basis');
 
   const servings = raw.servings;
@@ -457,7 +498,7 @@ function validateInertCodexNutritionV1(raw: Record<string, unknown>): AdvancedNu
   }
 
   // Ingredients evidence.
-  const ingredients: IngredientEvidence[] = [];
+  const ingredients: IngredientEvidenceV2[] = [];
   const lineRefs = new Set<string>();
   if (!Array.isArray(raw.ingredients) || raw.ingredients.length > MAX_INGREDIENT_EVIDENCE) {
     diag.add('invalid_ingredients');
@@ -468,7 +509,7 @@ function validateInertCodexNutritionV1(raw: Record<string, unknown>): AdvancedNu
         continue;
       }
       for (const key of Object.keys(entry)) {
-        if (!EVIDENCE_KEYS.has(key)) diag.add('ingredient_unknown_field');
+        if (!evidenceKeys.has(key)) diag.add('ingredient_unknown_field');
       }
       const lineRef = entry.line_ref;
       if (typeof lineRef !== 'string' || lineRef.trim().length === 0 || lineRef.length > MAX_LINE_REF_LENGTH) {
@@ -542,16 +583,92 @@ function validateInertCodexNutritionV1(raw: Record<string, unknown>): AdvancedNu
           }
         }
       }
-      let conversionBasis: IngredientEvidence['conversion_basis'];
+      let conversionBasis: IngredientEvidenceV2['conversion_basis'];
       if (hasOwn(entry, 'conversion_basis')) {
         if (
           typeof entry.conversion_basis !== 'string' ||
-          !CONVERSION_BASES.includes(entry.conversion_basis as NonNullable<IngredientEvidence['conversion_basis']>)
+          !conversionBases.includes(entry.conversion_basis as NonNullable<IngredientEvidenceV2['conversion_basis']>)
         ) {
           diag.add('invalid_conversion_basis');
         } else {
-          conversionBasis = entry.conversion_basis as NonNullable<IngredientEvidence['conversion_basis']>;
+          conversionBasis = entry.conversion_basis as NonNullable<IngredientEvidenceV2['conversion_basis']>;
         }
+      }
+      // The closed household evidence object exists ONLY in the schema-v2
+      // contract. A v1 block carrying it fails closed as an unknown evidence
+      // field (see `evidenceKeys` above) and is never interpreted.
+      let householdPortion: IngredientEvidenceV2['household_portion'];
+      if (isV2 && hasOwn(entry, 'household_portion')) {
+        if (!isPlainObject(entry.household_portion)) {
+          diag.add('invalid_household_portion_evidence');
+        } else {
+          const household = entry.household_portion;
+          let householdEvidenceValid = true;
+          for (const key of Object.keys(household)) {
+            if (!HOUSEHOLD_PORTION_EVIDENCE_KEYS.has(key)) {
+              householdEvidenceValid = false;
+              diag.add('unknown_household_portion_field');
+            }
+          }
+          const boundedText = (value: unknown): boolean =>
+            typeof value === 'string' &&
+            value.length > 0 &&
+            value.length <= MAX_HOUSEHOLD_EVIDENCE_TEXT_LENGTH &&
+            !/[\u0000-\u001f\u007f-\u009f]/.test(value);
+          const nullableText = (value: unknown): boolean => value === null || boundedText(value);
+          if (!boundedText(household.registry_release)) householdEvidenceValid = false;
+          if (!boundedText(household.record_key)) householdEvidenceValid = false;
+          if (
+            typeof household.record_digest !== 'string' ||
+            household.record_digest.length > MAX_DIGEST_LENGTH
+          ) {
+            householdEvidenceValid = false;
+          }
+          if (!boundedText(household.household_unit)) householdEvidenceValid = false;
+          if (!nullableText(household.size_class)) householdEvidenceValid = false;
+          if (!nullableText(household.requires_state)) householdEvidenceValid = false;
+          if (!isValidNutrientAmount(household.quantity) || !((household.quantity as number) > 0)) {
+            householdEvidenceValid = false;
+          }
+          if (
+            typeof household.selection_digest !== 'string' ||
+            household.selection_digest.length > MAX_DIGEST_LENGTH
+          ) {
+            householdEvidenceValid = false;
+          }
+          if (!householdEvidenceValid) {
+            diag.add('invalid_household_portion_evidence');
+          } else {
+            householdPortion = {
+              registry_release: household.registry_release as string,
+              record_key: household.record_key as string,
+              record_digest: household.record_digest as string,
+              household_unit: household.household_unit as string,
+              size_class: (household.size_class ?? null) as string | null,
+              requires_state: (household.requires_state ?? null) as string | null,
+              quantity: household.quantity as number,
+              selection_digest: household.selection_digest as string,
+            };
+          }
+        }
+      }
+      // The household evidence object exists ONLY for the household conversion
+      // basis, and that basis requires the evidence object. Unknown/future
+      // schema or conversion bases fail closed (never coerced to user mass).
+      if (conversionBasis === 'household_portion' && !householdPortion) {
+        diag.add('household_portion_evidence_missing');
+      }
+      if (householdPortion && conversionBasis !== 'household_portion') {
+        diag.add('household_portion_evidence_without_basis');
+      }
+      // A household basis asserts a RESOLVED mass; conflicting mass evidence
+      // (an unresolved line or a missing/non-positive gram amount) fails the
+      // whole block closed rather than persisting an unprovable household mass.
+      if (
+        conversionBasis === 'household_portion' &&
+        (entry.resolved !== true || amount === undefined || !(amount.value > 0))
+      ) {
+        diag.add('household_portion_conflicting_mass');
       }
       ingredients.push({
         line_ref: typeof lineRef === 'string' ? lineRef : '',
@@ -564,6 +681,7 @@ function validateInertCodexNutritionV1(raw: Record<string, unknown>): AdvancedNu
         user_confirmed: entry.user_confirmed === true,
         ...(amount ? { amount } : {}),
         ...(conversionBasis ? { conversion_basis: conversionBasis } : {}),
+        ...(householdPortion ? { household_portion: householdPortion } : {}),
       });
     }
   }
@@ -728,8 +846,8 @@ function validateInertCodexNutritionV1(raw: Record<string, unknown>): AdvancedNu
 
   if (diag.hasErrors) return { ok: false, errors: diag.list() };
 
-  const value: CodexNutritionV1 = {
-    schema: CODEX_NUTRITION_SCHEMA_V1,
+  const value = {
+    schema: version,
     basis: CODEX_NUTRITION_BASIS_TOTAL,
     servings: servings as number,
     ...(servingSize !== undefined ? { serving_size: servingSize } : {}),
@@ -745,7 +863,7 @@ function validateInertCodexNutritionV1(raw: Record<string, unknown>): AdvancedNu
     unresolved,
     ...(manualOverride ? { manual_override: manualOverride } : {}),
     ...(extensions ? { extensions } : {}),
-  };
+  } as CodexNutritionV1 | CodexNutritionV2;
   return { ok: true, errors: [], value };
 }
 
@@ -755,12 +873,15 @@ function validateInertCodexNutritionV1(raw: Record<string, unknown>): AdvancedNu
  * accessor invocation), then validates only the inert copy. Never throws;
  * unexpected reflective failures return a fixed bounded error.
  */
-export function validateCodexNutritionV1(raw: unknown): AdvancedNutritionValidation {
+export function validateCodexNutritionV1(
+  raw: unknown
+): AdvancedNutritionValidation<CodexNutritionV1> {
   try {
     const materialized = toInertValue(raw);
     if (materialized.ok) {
       if (!isPlainObject(materialized.value)) return { ok: false, errors: ['not_an_object'] };
-      return validateInertCodexNutritionV1(materialized.value);
+      return validateInertCodexNutrition(materialized.value, CODEX_NUTRITION_SCHEMA_V1) as
+        AdvancedNutritionValidation<CodexNutritionV1>;
     }
     const failure = materialized as { ok: false; reason: string };
     return { ok: false, errors: [`unsafe_value:${failure.reason}`] };
@@ -769,18 +890,70 @@ export function validateCodexNutritionV1(raw: unknown): AdvancedNutritionValidat
   }
 }
 
+/**
+ * Strictly validates a recognized schema-v2 block from an untrusted value. The
+ * same single descriptor-based materialization precedes validation, and the v2
+ * validator owns the closed household basis/evidence coupling.
+ */
+export function validateCodexNutritionV2(
+  raw: unknown
+): AdvancedNutritionValidation<CodexNutritionV2> {
+  try {
+    const materialized = toInertValue(raw);
+    if (materialized.ok) {
+      if (!isPlainObject(materialized.value)) return { ok: false, errors: ['not_an_object'] };
+      return validateInertCodexNutrition(materialized.value, CODEX_NUTRITION_SCHEMA_V2) as
+        AdvancedNutritionValidation<CodexNutritionV2>;
+    }
+    const failure = materialized as { ok: false; reason: string };
+    return { ok: false, errors: [`unsafe_value:${failure.reason}`] };
+  } catch {
+    return { ok: false, errors: ['validation_error'] };
+  }
+}
+
+/**
+ * Version-DISPATCHING validator: the schema discriminator selects the
+ * version-specific contract. Schema 1 uses the restored v1 contract; schema 2
+ * uses the v2 contract. Any other schema (including a future version or a
+ * non-numeric discriminator) fails closed and is never coerced. The value is
+ * materialized inertly BEFORE the discriminator is read, so no getter is ever
+ * invoked.
+ */
+export function validateCodexNutrition(
+  raw: unknown
+): AdvancedNutritionValidation {
+  try {
+    const materialized = toInertValue(raw);
+    if (!materialized.ok) {
+      const failure = materialized as { ok: false; reason: string };
+      return { ok: false, errors: [`unsafe_value:${failure.reason}`] };
+    }
+    if (!isPlainObject(materialized.value)) return { ok: false, errors: ['not_an_object'] };
+    const inert = materialized.value;
+    if (inert.schema === CODEX_NUTRITION_SCHEMA_V2) {
+      return validateInertCodexNutrition(inert, CODEX_NUTRITION_SCHEMA_V2);
+    }
+    return validateInertCodexNutrition(inert, CODEX_NUTRITION_SCHEMA_V1);
+  } catch {
+    return { ok: false, errors: ['validation_error'] };
+  }
+}
+
 export type DecodeResult =
   | { kind: 'none' }
   | { kind: 'v1'; value: CodexNutritionV1 }
+  | { kind: 'v2'; value: CodexNutritionV2 }
   | { kind: 'opaque'; value: OpaqueCodexNutrition }
   | { kind: 'malformed'; errors: string[] };
 
 /**
- * Decodes a raw `codex_nutrition` value. Recognized schema v1 is strictly
- * validated; an unknown FUTURE numeric schema is preserved as bounded opaque
- * safe data (never interpreted); anything malformed is reported and left
- * untouched by the caller (so a malformed block can never damage the recipe).
- * The value is materialized inertly first; never throws.
+ * Decodes a raw `codex_nutrition` value. A recognized schema (v1 or v2) is
+ * strictly validated under its OWN version-specific contract; an unknown FUTURE
+ * numeric schema is preserved as bounded opaque safe data (never interpreted);
+ * anything malformed is reported and left untouched by the caller (so a
+ * malformed block can never damage the recipe). The value is materialized
+ * inertly first; never throws.
  */
 export function decodeCodexNutrition(raw: unknown): DecodeResult {
   try {
@@ -791,8 +964,14 @@ export function decodeCodexNutrition(raw: unknown): DecodeResult {
       const inert = materialized.value;
 
       if (inert.schema === CODEX_NUTRITION_SCHEMA_V1) {
-        const validation = validateInertCodexNutritionV1(inert);
-        if (validation.ok && validation.value) return { kind: 'v1', value: validation.value };
+        const validation = validateInertCodexNutrition(inert, CODEX_NUTRITION_SCHEMA_V1);
+        if (validation.ok && validation.value) return { kind: 'v1', value: validation.value as CodexNutritionV1 };
+        return { kind: 'malformed', errors: validation.errors };
+      }
+
+      if (inert.schema === CODEX_NUTRITION_SCHEMA_V2) {
+        const validation = validateInertCodexNutrition(inert, CODEX_NUTRITION_SCHEMA_V2);
+        if (validation.ok && validation.value) return { kind: 'v2', value: validation.value as CodexNutritionV2 };
         return { kind: 'malformed', errors: validation.errors };
       }
 
@@ -848,7 +1027,13 @@ export function encodeCodexNutrition(block: AdvancedNutritionBlock): Record<stri
     return encoded;
   }
 
-  const validation = validateInertCodexNutritionV1(inert);
+  // The schema discriminator selects the VERSION-SPECIFIC contract; a household
+  // block is only ever encoded under schema v2, and a v1 block can never carry
+  // household semantics.
+  const validation =
+    inert.schema === CODEX_NUTRITION_SCHEMA_V2
+      ? validateInertCodexNutrition(inert, CODEX_NUTRITION_SCHEMA_V2)
+      : validateInertCodexNutrition(inert, CODEX_NUTRITION_SCHEMA_V1);
   if (!validation.ok || !validation.value) throw new Error(ENCODE_INVALID_MESSAGE);
 
   const value = validation.value;
@@ -880,12 +1065,12 @@ export function encodeCodexNutrition(block: AdvancedNutritionBlock): Record<stri
 }
 
 /**
- * ADVISORY ONLY. Reports whether a schema-v1 block has complete evidence. It
- * does NOT authorize any write; the production gate remains the existing
- * `canApplyNutritionEstimate` hard-disable.
+ * ADVISORY ONLY. Reports whether a recognized schema-v1 or schema-v2 block has
+ * complete evidence. It does NOT authorize any write; the production gate
+ * remains the existing `canApplyNutritionEstimate` hard-disable.
  */
 export function evaluateAdvancedNutritionEligibility(block: unknown): { eligible: boolean; reasons: string[] } {
-  const validation = validateCodexNutritionV1(block);
+  const validation = validateCodexNutrition(block);
   if (!validation.ok || !validation.value) {
     return { eligible: false, reasons: ['invalid_block', ...validation.errors].slice(0, 20) };
   }

@@ -39,7 +39,8 @@ describe('phase 4.5d versioning — explicit bumps', () => {
     expect(CALCULATION_VERSION).toBe('usda_advisory_calc_v4');
     expect(CALCULATION_CONTEXT_VERSION).toBe('usda_calc_context_v3');
     expect(PHASE4_SESSION_VERSION).toBe('usda_phase4_session_v3');
-    expect(PHASE4_STATE_VERSION).toBe('usda_phase4_state_v4');
+    // Phase 6 adds the verified household-portion mass source + state map.
+    expect(PHASE4_STATE_VERSION).toBe('usda_phase4_state_v5');
     expect(COUNT_PORTION_VERSION).toBe('usda_count_portion_v2');
   });
 

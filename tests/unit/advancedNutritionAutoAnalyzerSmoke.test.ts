@@ -476,6 +476,7 @@ describe('auto analyzer — row states', () => {
       matches: analysis.matches,
       portions: analysis.portions,
       countPortions: analysis.countPortions,
+      householdPortions: analysis.householdPortions,
       preview: analysis.preview,
     });
     const request = buildCalculationRequest(adapted, state) as {
@@ -515,6 +516,7 @@ describe('auto analyzer — row states', () => {
       matches: analysis.matches,
       portions: analysis.portions,
       countPortions: analysis.countPortions,
+      householdPortions: analysis.householdPortions,
       preview: analysis.preview,
     });
     const result = authorizeNutritionPersistence({
@@ -796,6 +798,7 @@ describe('auto analyzer — forged automatic marker fails closed', () => {
       matches: analysis.matches,
       portions: analysis.portions,
       countPortions: analysis.countPortions,
+      householdPortions: analysis.householdPortions,
       preview: analysis.preview,
     });
     const calculated = session.calculate(buildCalculationRequest(adapted, state));

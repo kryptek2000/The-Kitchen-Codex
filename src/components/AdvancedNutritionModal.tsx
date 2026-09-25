@@ -162,6 +162,10 @@ function liveMassText(live: LiveRowState): string | undefined {
       return `${grams} g · ${live.source_portion_automatic ? 'auto-selected' : 'selected'} USDA portion`;
     case 'count_portion':
       return `${grams} g · USDA count portion`;
+    case 'household_portion':
+      return live.household_authority_class === 'bounded_estimate'
+        ? `${grams} g · household estimate`
+        : `${grams} g · vetted household portion`;
     case 'direct_mass':
       return `${grams} g`;
     default:
@@ -277,6 +281,7 @@ const PortionControls: React.FC<PortionControlsProps> = ({
   const current = state.portions[row.line_ref];
   const currentCount = state.countPortions[row.line_ref];
   const currentUserMass = state.userMasses[row.line_ref];
+  const currentHousehold = state.householdPortions[row.line_ref];
   const matchChoice = state.matches[row.line_ref];
   const entry = adapted.find((item) => item.line_ref === row.line_ref);
   const measurementKind = entry ? ingredientMeasurementKind(entry) : 'unknown';
@@ -458,6 +463,32 @@ const PortionControls: React.FC<PortionControlsProps> = ({
         </p>
       ) : (
         <>
+      {currentHousehold && (
+        <div className="space-y-1" data-testid="advanced-nutrition-household-portion">
+          <div className="flex items-center gap-2">
+            <h4 className="text-[11px] font-semibold text-gray-300">
+              {currentHousehold.authority_class === 'bounded_estimate'
+                ? 'Kitchen Codex household estimate'
+                : 'Kitchen Codex household portion'}
+            </h4>
+            <span className="text-[10px] text-gray-500">
+              {currentHousehold.record_key.split('|')[1] ?? 'item'}
+            </span>
+            <button
+              type="button"
+              onClick={() => dispatch({ type: 'clear_household_portion', lineRef: row.line_ref })}
+              className="px-2 py-0.5 rounded-lg text-[11px] text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
+            >
+              Clear
+            </button>
+          </div>
+          <p className="text-[10px] text-gray-500">
+            {Math.round(currentHousehold.resolved_grams * 10) / 10} g from a reviewed Kitchen Codex
+            household record. It applies only while no higher-authority mass source is chosen, and
+            it is never treated as USDA portion or user-entered data.
+          </p>
+        </div>
+      )}
       {countApplicable ? (
         <div className="space-y-1">
           <div className="flex items-center gap-2">

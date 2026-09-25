@@ -142,13 +142,13 @@ describe('recognized schema v1 — canonical round-trip', () => {
 
 describe('unknown future schema — opaque, never interpreted', () => {
   it('2. safely round-trips an unknown future schema as bounded opaque data', () => {
-    const future = { schema: 2, basis: 'total', futureField: { nested: [1, 2, 3] }, note: 'future' };
+    const future = { schema: 3, basis: 'total', futureField: { nested: [1, 2, 3] }, note: 'future' };
     const md = serializeRecipeToObsidianMarkdown({
       ...baseRecipe(),
       frontmatter: { codex_nutrition: future },
     });
     const parsed = parseObsidianRecipeMarkdown(md, 'r1.md', 'r1.md');
-    expect(parsed.codexNutrition).toMatchObject({ kind: 'opaque', schema: 2 });
+    expect(parsed.codexNutrition).toMatchObject({ kind: 'opaque', schema: 3 });
     expect((parsed.codexNutrition as { data: Record<string, unknown> }).data.note).toBe('future');
 
     const reparsed = parseObsidianRecipeMarkdown(
@@ -255,7 +255,7 @@ describe('fail-closed malformed data and no auto-creation', () => {
 
     const huge = 'x'.repeat(70000);
     const oversized =
-      '---\ntitle: Huge\ncodex_nutrition:\n  schema: 2\n  note: "' + huge + '"\n---\n\n# Huge\n';
+      '---\ntitle: Huge\ncodex_nutrition:\n  schema: 3\n  note: "' + huge + '"\n---\n\n# Huge\n';
     const parsedHuge = parseObsidianRecipeMarkdown(oversized, 'Huge.md', 'Huge.md');
     expect(parsedHuge.codexNutrition).toBeUndefined();
     expect(parsedHuge.title).toBe('Huge');

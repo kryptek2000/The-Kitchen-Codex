@@ -31,6 +31,10 @@ function live(lineRef: string, status: LiveRowStatus): LiveRowState {
     user_mass_quantity: undefined,
     user_mass_unit: undefined,
     source_portion_automatic: false,
+    household_unit: undefined,
+    household_size_class: undefined,
+    household_requires_state: undefined,
+    household_authority_class: undefined,
   });
 }
 

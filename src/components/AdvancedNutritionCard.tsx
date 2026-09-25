@@ -35,7 +35,7 @@ import {
   type UserMassChoice,
 } from '../core/nutritionV2/phase4';
 import { authorizeNutritionPersistence } from '../core/nutritionV2/phase5';
-import type { CodexNutritionV1 } from '../core/nutritionV2/schema';
+import type { CodexNutritionV1, CodexNutritionV2 } from '../core/nutritionV2/schema';
 import {
   actionableExceptionRows,
   buildUserChoiceFromAiAmountOffer,
@@ -48,6 +48,7 @@ import {
   type AiResolutionIssueKind,
   type AiResolveOutcome,
   type CountPortionChoice,
+  type HouseholdPortionChoice,
   type LiveRowState,
 } from '../core/nutritionV2/phase4';
 import {
@@ -104,7 +105,7 @@ interface AdvancedNutritionCardProps {
    * nutrition section. The saved report renders from this alone; no USDA
    * session is required. Absent for recipes without a recognized saved result.
    */
-  savedAdvancedBlock?: CodexNutritionV1;
+  savedAdvancedBlock?: CodexNutritionV1 | CodexNutritionV2;
   /**
    * Optional AI-assisted USDA resolution port, injected by the shell (the shell
    * owns the network + application layer; the UI never imports the application
@@ -414,6 +415,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
       portions: hydrated.portions,
       countPortions: hydrated.countPortions,
       userMasses: hydrated.userMasses,
+      householdPortions: hydrated.householdPortions,
     });
     setHydratedFromSaved(true);
     setWorkingTouched(false);
@@ -454,7 +456,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
   const liveMatchesSaved = useMemo(
     () =>
       preview !== null &&
-      stored.kind === 'v1' &&
+      (stored.kind === 'v1' || stored.kind === 'v2') &&
       typeof stored.ingredientDigest === 'string' &&
       stored.ingredientDigest === preview.ingredient_digest,
     [preview, stored.kind, stored.ingredientDigest]
@@ -484,7 +486,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
   }, [session, recipe, adaptation, state, stored.kind]);
 
   const applyMode: 'create' | 'replace' | null =
-    stored.kind === 'v1' ? 'replace' : stored.kind === 'none' ? 'create' : null;
+    stored.kind === 'v1' || stored.kind === 'v2' ? 'replace' : stored.kind === 'none' ? 'create' : null;
 
   const handleRequestApply = () => {
     if (!onApplyAdvancedNutrition || applyEligibility !== true || applyMode === null) return;
@@ -611,6 +613,13 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
     const portions: Record<string, PortionChoice> = { ...current.portions };
     const countPortions: Record<string, CountPortionChoice> = { ...current.countPortions };
     const userMasses: Record<string, UserMassChoice> = { ...state.userMasses };
+    // Phase 6: the analyzer's verified household fallbacks. A line the user has
+    // explicitly decided keeps its higher-authority choice (the household entry
+    // is removed below), so a household portion can never override a stored
+    // user/USDA source.
+    const householdPortions: Record<string, HouseholdPortionChoice> = {
+      ...(current.householdPortions ?? {}),
+    };
     for (const row of state.rows) {
       const choice = state.matches[row.line_ref];
       if (!choice) continue;
@@ -627,14 +636,17 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
         userMasses[row.line_ref] = userMass;
         delete portions[row.line_ref];
         delete countPortions[row.line_ref];
+        delete householdPortions[row.line_ref];
       } else if (portion) {
         portions[row.line_ref] = portion;
         delete userMasses[row.line_ref];
         delete countPortions[row.line_ref];
+        delete householdPortions[row.line_ref];
       } else if (countPortion) {
         countPortions[row.line_ref] = countPortion;
         delete userMasses[row.line_ref];
         delete portions[row.line_ref];
+        delete householdPortions[row.line_ref];
       }
     }
 
@@ -647,6 +659,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
       portions,
       countPortions,
       userMasses,
+      householdPortions,
     } as Phase4State;
     let preview = current.preview;
     const calculated = session.calculate(buildCalculationRequest(adapted, mergedState));
@@ -657,6 +670,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
       matches,
       portions,
       countPortions,
+      householdPortions,
       userMasses,
       preview,
     });
@@ -741,6 +755,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
       readonly portions?: Readonly<Record<string, PortionChoice>>;
       readonly countPortions?: Readonly<Record<string, CountPortionChoice>>;
       readonly userMasses?: Readonly<Record<string, UserMassChoice>>;
+      readonly householdPortions?: Readonly<Record<string, HouseholdPortionChoice>>;
       readonly fallback?: { readonly type: 'select_match' | 'select_count_portion'; readonly lineRef: string; readonly choice: unknown };
     }): WorkingApplyResult => {
       if (!session || !adaptation.ok) return { ok: false };
@@ -748,12 +763,30 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
       // The reducer refuses `apply_analysis` before initialization; the caller
       // must therefore never be told an application succeeded.
       if (base.recipeKey === null) return { ok: false };
+      // MASS-SOURCE EXCLUSIVITY: a verified household portion is the LOWEST
+      // authority, so adding any stored higher-authority source (a changed food
+      // selection, a USDA source/count portion, or a user-entered weight) for a
+      // line removes that line's household choice, exactly as the reducer does.
+      // This keeps every merged state conflict-free by construction (conflicts
+      // remain a fail-closed backstop for forged/legacy states).
+      const mergedHousehold: Record<string, HouseholdPortionChoice> = {
+        ...(next.householdPortions ?? base.householdPortions ?? {}),
+      };
+      for (const lineRef of Object.keys(mergedHousehold)) {
+        const hasHigherSource =
+          next.matches?.[lineRef] !== undefined ||
+          next.portions?.[lineRef] !== undefined ||
+          next.countPortions?.[lineRef] !== undefined ||
+          next.userMasses?.[lineRef] !== undefined;
+        if (hasHigherSource) delete mergedHousehold[lineRef];
+      }
       const merged = {
         ...base,
         matches: next.matches ?? base.matches,
         portions: next.portions ?? base.portions,
         countPortions: next.countPortions ?? base.countPortions,
         userMasses: next.userMasses ?? base.userMasses,
+        householdPortions: mergedHousehold,
       } as Phase4State;
       const calculated = session.calculate(buildCalculationRequest(adapted, merged));
       if (calculated.ok) {
@@ -763,6 +796,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
           matches: merged.matches,
           portions: merged.portions,
           countPortions: merged.countPortions,
+          householdPortions: merged.householdPortions,
           userMasses: merged.userMasses,
           preview: calculated.preview,
         });
@@ -1153,7 +1187,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
           {bundleStatus === 'loading' ||
           bundleStatus === 'failed' ||
           bundleStatus === 'unsupported' ||
-          stored.kind !== 'v1' ? (
+          (stored.kind !== 'v1' && stored.kind !== 'v2') ? (
             <p className="text-xs text-gray-300" role="status" aria-live="polite">
               {bundleStatus === 'loading'
                 ? PHASE4_LOADING_MESSAGE
@@ -1228,7 +1262,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
 
       {session && adaptation.ok && (
         <div className="space-y-3">
-          {stored.kind === 'v1' && (
+          {(stored.kind === 'v1' || stored.kind === 'v2') && (
             <div className="p-3 rounded-xl bg-[#0E0E0E] border border-white/5">
               {stored.status === 'complete' && stored.unresolvedCount === 0 ? (
                 <div data-testid="advanced-saved-complete" className="space-y-0.5">

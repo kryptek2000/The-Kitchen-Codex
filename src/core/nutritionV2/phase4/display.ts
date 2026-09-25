@@ -210,6 +210,10 @@ export function ingredientEvidenceViews(
         count_deterministic: entry.count_deterministic,
         user_mass_quantity: entry.user_mass_quantity,
         user_mass_unit: entry.user_mass_unit,
+        household_unit: entry.household_unit,
+        household_size_class: entry.household_size_class ?? undefined,
+        household_requires_state: entry.household_requires_state ?? undefined,
+        household_authority_class: entry.household_authority_class,
         contributing_nutrients: entry.contributing_nutrients,
       })
     )
@@ -234,9 +238,38 @@ export function massSourceLabel(entry: IngredientEvidenceView): string {
       return entry.user_mass_quantity !== undefined && entry.user_mass_unit !== undefined
         ? `user-entered total weight · ${entry.user_mass_quantity} ${entry.user_mass_unit}`
         : 'user-entered total weight';
+    case 'household_portion':
+      return householdPortionEvidenceLabel(entry);
     default:
       return 'no mass';
   }
+}
+
+/** Bounded household-portion dimension text, e.g. `1 clove · item · medium`. */
+function householdDimensionText(entry: IngredientEvidenceView): string {
+  const parts: string[] = [];
+  if (entry.household_unit !== undefined) parts.push(entry.household_unit);
+  if (entry.household_size_class !== undefined && entry.household_size_class.length > 0) {
+    parts.push(entry.household_size_class);
+  }
+  if (entry.household_requires_state !== undefined && entry.household_requires_state.length > 0) {
+    parts.push(entry.household_requires_state);
+  }
+  return parts.join(' · ');
+}
+
+/**
+ * Truthful household-portion evidence label. An `usda_derived` record is a
+ * vetted exact conversion; a `bounded_estimate` record is visibly an ESTIMATE.
+ * It is never labeled USDA portion, user-entered, or AI-provided.
+ */
+export function householdPortionEvidenceLabel(entry: IngredientEvidenceView): string {
+  const dimensions = householdDimensionText(entry);
+  const suffix = dimensions.length > 0 ? ` · ${dimensions}` : '';
+  if (entry.household_authority_class === 'bounded_estimate') {
+    return `Kitchen Codex household estimate${suffix}`;
+  }
+  return `Kitchen Codex household portion${suffix}`;
 }
 
 /**

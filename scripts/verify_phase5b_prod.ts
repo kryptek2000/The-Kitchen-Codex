@@ -21,8 +21,8 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseObsidianRecipeMarkdown } from '../src/utils/markdownParser';
-import { decodeCodexNutrition, validateCodexNutritionV1 } from '../src/core/nutritionV2/validate';
-import type { CodexNutritionV1 } from '../src/core/nutritionV2/schema';
+import { decodeCodexNutrition, validateCodexNutrition } from '../src/core/nutritionV2/validate';
+import type { CodexNutritionV1, CodexNutritionV2 } from '../src/core/nutritionV2/schema';
 
 const ROOT = resolve(import.meta.dirname, '..');
 const CHROME = process.env.CHROME_BIN || '/opt/google/chrome/chrome';
@@ -465,13 +465,23 @@ async function main(): Promise<void> {
     const occurrences = (persisted.match(/codex_nutrition/g) || []).length;
     record('exactly one codex_nutrition block is present', occurrences === 1, `count=${occurrences}`);
 
-    let decodedBlock: CodexNutritionV1 | null = null;
+    let decodedBlock: CodexNutritionV1 | CodexNutritionV2 | null = null;
     if (persisted) {
       const parsed = parseObsidianRecipeMarkdown(persisted, recipeNames[0], recipeNames[0]);
       const decoded = decodeCodexNutrition(parsed.codexNutrition);
-      if (decoded.kind === 'v1') decodedBlock = decoded.value;
-      record('the persisted block re-parses as canonical schema v1', decoded.kind === 'v1');
-      record('the persisted block validates', decoded.kind === 'v1' && validateCodexNutritionV1(decoded.value).ok === true);
+      if (decoded.kind === 'v1' || decoded.kind === 'v2') decodedBlock = decoded.value;
+      // Phase 6: the hamburger scenario includes tomatoes, whose verified
+      // household portion makes the whole block canonical schema v2. Both
+      // recognized versions are accepted and validated under their own contract.
+      record(
+        'the persisted block re-parses as a recognized canonical schema (v1/v2)',
+        decoded.kind === 'v1' || decoded.kind === 'v2'
+      );
+      record(
+        'the persisted block validates under its own version',
+        (decoded.kind === 'v1' || decoded.kind === 'v2') &&
+          validateCodexNutrition(decoded.value).ok === true
+      );
       record('unrelated title survives', persisted.includes(`# ${HAMBURGER_TITLE}`));
       record('unrelated ingredient lines survive', persisted.includes(HAMBURGER_INGREDIENTS[0]));
     }

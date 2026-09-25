@@ -53,7 +53,12 @@ export type LiveRowStatus =
   | 'qualitative';
 
 /** The live, authenticated mass provenance of a resolved row. */
-export type LiveRowMassSource = 'source_portion' | 'count_portion' | 'user_mass' | 'direct_mass';
+export type LiveRowMassSource =
+  | 'source_portion'
+  | 'count_portion'
+  | 'user_mass'
+  | 'direct_mass'
+  | 'household_portion';
 
 /** The live food-identity authority of a resolved row. */
 export type LiveRowFoodAuthority =
@@ -76,6 +81,11 @@ export interface LiveRowState {
   readonly user_mass_quantity: number | undefined;
   readonly user_mass_unit: string | undefined;
   readonly source_portion_automatic: boolean;
+  /** Verified household-portion evidence (present only for `household_portion`). */
+  readonly household_unit: string | undefined;
+  readonly household_size_class: string | undefined;
+  readonly household_requires_state: string | undefined;
+  readonly household_authority_class: string | undefined;
 }
 
 function finitePositive(value: unknown): value is number {
@@ -175,6 +185,10 @@ export function projectLiveRow(input: LiveRowProjectionInput): LiveRowState {
     user_mass_quantity: undefined as number | undefined,
     user_mass_unit: undefined as string | undefined,
     source_portion_automatic: false,
+    household_unit: undefined as string | undefined,
+    household_size_class: undefined as string | undefined,
+    household_requires_state: undefined as string | undefined,
+    household_authority_class: undefined as string | undefined,
   };
 
   if (row.outcome === 'qualitative') {
@@ -229,6 +243,7 @@ export function projectLiveRow(input: LiveRowProjectionInput): LiveRowState {
   const portion = state.portions[lineRef];
   const count = state.countPortions[lineRef];
   const userMass = state.userMasses[lineRef];
+  const household = state.householdPortions?.[lineRef];
 
   // The recipe's own declared direct mass (g/kg/oz/lb), when the line declares
   // one. It is food-independent and survives a food change.
@@ -251,6 +266,7 @@ export function projectLiveRow(input: LiveRowProjectionInput): LiveRowState {
     hasUserMass: userMass !== undefined,
     hasSourcePortion: portion !== undefined,
     hasCountPortion: count !== undefined,
+    hasHouseholdPortion: household !== undefined,
   });
 
   let resolvedGrams: number | undefined;
@@ -259,6 +275,10 @@ export function projectLiveRow(input: LiveRowProjectionInput): LiveRowState {
   let userMassQuantity: number | undefined;
   let userMassUnit: string | undefined;
   let sourcePortionAutomatic = false;
+  let householdUnit: string | undefined;
+  let householdSizeClass: string | undefined;
+  let householdRequiresState: string | undefined;
+  let householdAuthorityClass: string | undefined;
 
   if (authority.kind === 'direct_mass') {
     resolvedGrams = authority.grams;
@@ -266,7 +286,8 @@ export function projectLiveRow(input: LiveRowProjectionInput): LiveRowState {
   } else if (
     (authority.kind === 'user_mass' ||
       authority.kind === 'source_portion' ||
-      authority.kind === 'count_portion') &&
+      authority.kind === 'count_portion' ||
+      authority.kind === 'household_portion') &&
     entry !== undefined
   ) {
     // FULL-BINDING DISPLAY VERIFICATION. For every explicit non-direct mass
@@ -291,7 +312,8 @@ export function projectLiveRow(input: LiveRowProjectionInput): LiveRowState {
         evidence.mass_source !== undefined &&
         (evidence.mass_source === 'user_mass' ||
           evidence.mass_source === 'source_portion' ||
-          evidence.mass_source === 'count_portion')
+          evidence.mass_source === 'count_portion' ||
+          evidence.mass_source === 'household_portion')
       ) {
         resolvedGrams = evidence.resolved_grams;
         massSource = evidence.mass_source;
@@ -302,6 +324,12 @@ export function projectLiveRow(input: LiveRowProjectionInput): LiveRowState {
         }
         if (evidence.mass_source === 'source_portion') {
           sourcePortionAutomatic = portion?.automatic === true;
+        }
+        if (evidence.mass_source === 'household_portion') {
+          householdUnit = evidence.household_unit;
+          householdSizeClass = evidence.household_size_class ?? undefined;
+          householdRequiresState = evidence.household_requires_state ?? undefined;
+          householdAuthorityClass = evidence.household_authority_class;
         }
       }
     }
@@ -339,7 +367,13 @@ export function projectLiveRow(input: LiveRowProjectionInput): LiveRowState {
       resolvedGrams === undefined &&
       evidence !== undefined &&
       evidence.fdc_id === selectedFdcId &&
-      evidence.resolved_grams !== undefined
+      evidence.resolved_grams !== undefined &&
+      // A household result is NOT an automatic suggestion: it applies only from
+      // a stored verified choice, so stale preview evidence from a cleared
+      // household choice must never resurrect the mass here (calculator/live
+      // parity). Direct mass is likewise handled by the authority decision.
+      evidence.mass_source !== 'household_portion' &&
+      evidence.mass_source !== 'direct_mass'
     ) {
       resolvedGrams = evidence.resolved_grams;
       massSource = evidence.mass_source as LiveRowMassSource | undefined;
@@ -387,6 +421,10 @@ export function projectLiveRow(input: LiveRowProjectionInput): LiveRowState {
     user_mass_quantity: userMassQuantity,
     user_mass_unit: userMassUnit,
     source_portion_automatic: sourcePortionAutomatic,
+    household_unit: householdUnit,
+    household_size_class: householdSizeClass,
+    household_requires_state: householdRequiresState,
+    household_authority_class: householdAuthorityClass,
   });
 }
 

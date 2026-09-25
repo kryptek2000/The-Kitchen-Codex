@@ -4,8 +4,9 @@
  *
  * PURE, platform-neutral, offline, ADVISORY-BUILD ONLY. This module consumes the
  * exact current reviewed nutrition result ONLY through the genuine Phase 4
- * session boundary, then produces a canonical schema-v1 `codex_nutrition`
- * persistence candidate plus a closed authorization result for the future
+ * session boundary, then produces a canonical `codex_nutrition` persistence
+ * candidate (schema v1, or schema v2 when any applied line carries verified
+ * household provenance) plus a closed authorization result for the future
  * Phase 5B Apply/write step.
  *
  * TRUST PRINCIPLE
@@ -17,7 +18,7 @@
  * fails closed for any fake, clone, spread, inherited object, proxy, wrapper,
  * primitive, or `null` — before invoking any caller-supplied method. This module
  * then owns only:
- *   - persistence candidate construction and schema-v1 mapping,
+ *   - persistence candidate construction and schema v1/v2 mapping,
  *   - persistence identity construction, and
  *   - the final schema validation + canonical encode gate.
  * The caller's preview is used only as a stale-detection binding against the
@@ -44,7 +45,8 @@ import {
   isPlainObject,
   MAX_TIMESTAMP_LENGTH,
   type CodexNutritionV1,
-  type IngredientEvidence,
+  type CodexNutritionV2,
+  type IngredientEvidenceV2,
   type NutrientResult,
   type NutritionBlockStatus,
   type NutritionSourceId,
@@ -53,7 +55,7 @@ import {
 } from '../schema';
 import { canonicalStringify, sha256Hex } from '../usda/digest';
 import { DV_STANDARD_ID } from '../dailyValues';
-import { decodeCodexNutrition, encodeCodexNutrition, validateCodexNutritionV1 } from '../validate';
+import { decodeCodexNutrition, encodeCodexNutrition, validateCodexNutrition } from '../validate';
 import { isNutrientId, NUTRIENT_IDS, type NutrientId } from '../nutrients';
 import { isValidStrictServingCount } from '../calculation/servings';
 import { roundCanonicalTotal } from '../calculation/numeric';
@@ -146,6 +148,7 @@ function resolvePersistenceMode(
     case 'none':
       return { ok: true, mode: 'create' };
     case 'v1':
+    case 'v2':
       return { ok: true, mode: 'replace' };
     case 'opaque':
       // A safe but unknown FUTURE schema is never authorized for overwrite.
@@ -244,21 +247,33 @@ function mapUnresolvedReason(outcome: string): UnresolvedReason | undefined {
 
 /**
  * Maps a resolved Phase 3 ingredient's mass source onto the schema's closed
- * `conversion_basis`. A `user_mass` line has no schema-v1 representation (the
- * schema only distinguishes direct mass from a source portion) and is therefore
+ * `conversion_basis`. A `user_mass` line has no schema representation (neither
+ * v1 nor v2 distinguishes a user-entered total weight) and is therefore
  * omitted rather than mislabelled. See §22.9 of the architecture document.
  */
-function conversionBasisFor(massSource: string | undefined): 'direct_mass' | 'source_portion' | undefined {
+function conversionBasisFor(
+  massSource: string | undefined
+): 'direct_mass' | 'source_portion' | 'household_portion' | undefined {
   if (massSource === 'direct_mass') return 'direct_mass';
   if (massSource === 'source_portion' || massSource === 'count_portion') return 'source_portion';
+  if (massSource === 'household_portion') return 'household_portion';
   return undefined;
 }
 
 interface BlockBuild {
   readonly ok: true;
-  readonly block: CodexNutritionV1;
+  readonly block: CodexNutritionV1 | CodexNutritionV2;
 }
 
+/**
+ * Canonical conditional write policy (Phase 6 repair):
+ *   - when ANY applied line carries the `household_portion` basis, the WHOLE
+ *     block is serialized as schema v2 (household provenance is a v2 meaning);
+ *   - when no household line exists, the canonical write remains schema v1
+ *     exactly as before.
+ * A recipe that drops its last household line therefore deterministically
+ * returns to canonical schema v1 on the next Apply.
+ */
 function buildPersistenceBlock(preview: AdvisoryNutritionPreview, computedAt: string): BlockBuild {
   const sources: NutritionSourceId[] = ['usda_fdc'];
   const sourceReleases: Partial<Record<NutritionSourceId, string>> = {
@@ -279,11 +294,37 @@ function buildPersistenceBlock(preview: AdvisoryNutritionPreview, computedAt: st
     };
   }
 
-  const ingredients: IngredientEvidence[] = [];
+  const ingredients: IngredientEvidenceV2[] = [];
+  let hasHouseholdBasis = false;
   for (const entry of preview.ingredients) {
     if (entry.outcome !== 'calculated') continue;
     if (entry.fdc_id === undefined || entry.resolved_grams === undefined) continue;
     const conversion = conversionBasisFor(entry.mass_source);
+    if (conversion === 'household_portion') hasHouseholdBasis = true;
+    // Phase 6 household provenance: persist ONLY the bounded re-authentication
+    // evidence (registry release + record binding + quantity + selection digest).
+    // A household basis without complete evidence is persisted WITHOUT the
+    // evidence object on purpose: schema validation then fails the whole block
+    // closed rather than writing a household result that cannot be re-proven.
+    const householdPortion =
+      entry.mass_source === 'household_portion' &&
+      typeof entry.household_registry_release === 'string' &&
+      typeof entry.household_record_key === 'string' &&
+      typeof entry.household_record_digest === 'string' &&
+      typeof entry.household_unit === 'string' &&
+      typeof entry.household_quantity === 'number' &&
+      typeof entry.household_selection_digest === 'string'
+        ? {
+            registry_release: entry.household_registry_release,
+            record_key: entry.household_record_key,
+            record_digest: entry.household_record_digest,
+            household_unit: entry.household_unit,
+            size_class: entry.household_size_class ?? null,
+            requires_state: entry.household_requires_state ?? null,
+            quantity: entry.household_quantity,
+            selection_digest: entry.household_selection_digest,
+          }
+        : undefined;
     // ESTABLISHED Phase 5 persisted-review semantics (see §22.2 / §22.12): the
     // `confirmed` / `resolved: true` / `user_confirmed: true` triple means "this
     // evidence was part of the explicit reviewed result the user authorized for
@@ -302,6 +343,7 @@ function buildPersistenceBlock(preview: AdvisoryNutritionPreview, computedAt: st
       user_confirmed: true,
       amount: { value: roundCanonicalTotal(entry.resolved_grams), unit: 'g' },
       ...(conversion ? { conversion_basis: conversion } : {}),
+      ...(householdPortion ? { household_portion: householdPortion } : {}),
     });
   }
 
@@ -335,8 +377,9 @@ function buildPersistenceBlock(preview: AdvisoryNutritionPreview, computedAt: st
     });
   }
 
-  const block: CodexNutritionV1 = {
-    schema: 1,
+  const schema = hasHouseholdBasis ? 2 : 1;
+  const block = {
+    schema,
     basis: 'total',
     servings: preview.servings,
     status: preview.status as NutritionBlockStatus,
@@ -349,7 +392,7 @@ function buildPersistenceBlock(preview: AdvisoryNutritionPreview, computedAt: st
     nutrients,
     ingredients,
     unresolved,
-  };
+  } as CodexNutritionV1 | CodexNutritionV2;
   return { ok: true, block };
 }
 
@@ -436,7 +479,7 @@ export function authorizeNutritionPersistence(requestRaw: unknown): Phase5Author
       // The existing block may be stored in its encoded frontmatter form; use
       // the SAME decoding the mode resolution already performed.
       const decodedExisting = decodeCodexNutrition(existingField.value);
-      if (decodedExisting.kind === 'v1') {
+      if (decodedExisting.kind === 'v1' || decodedExisting.kind === 'v2') {
         const derivedResolved = new Set(
           built.block.ingredients.filter((entry) => entry.resolved === true).map((entry) => entry.line_ref)
         );
@@ -452,7 +495,10 @@ export function authorizeNutritionPersistence(requestRaw: unknown): Phase5Author
     }
 
     // --- Final schema validation gate (never bypass) ------------------------
-    const validation = validateCodexNutritionV1(built.block);
+    // The schema discriminator selects the version-specific contract; a
+    // household-bearing candidate is validated as v2, a non-household candidate
+    // as canonical v1.
+    const validation = validateCodexNutrition(built.block);
     if (!validation.ok || !validation.value) return fail('schema_invalid');
     const canonical = validation.value;
 

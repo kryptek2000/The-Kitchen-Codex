@@ -386,7 +386,14 @@ async function main(): Promise<void> {
     record('bacon derivation shows 224 g', /8 slices × 28 g per slice = 224 g/.test(evidenceText), evidenceText.slice(0, 300));
     record('cheddar derivation shows 68 g', /4 slices × 17 g per slice = 68 g/.test(evidenceText), evidenceText.slice(0, 300));
     record('burger buns derivation shows 208 g', /4 buns × 52 g per bun = 208 g/.test(evidenceText), evidenceText.slice(0, 300));
-    record('tomatoes remain unresolved (no invented mass)', !/2 medium tomatoes.*USDA count portion/s.test(evidenceText));
+    // Phase 6: `2 medium tomatoes` is resolved by the verified household
+    // fallback (246 g) because no compatible USDA count portion exists. It must
+    // never be shown as a USDA count portion.
+    record(
+      'tomatoes resolve only through the verified household fallback (never a USDA count portion)',
+      /2 medium tomatoes.*Kitchen Codex household portion/s.test(evidenceText) &&
+        !/2 medium tomatoes.*USDA count portion/s.test(evidenceText)
+    );
     record('pickles remain unresolved (no invented mass)', !/4 pickles.*USDA count portion/s.test(evidenceText));
 
     // 5. Irrelevant examples absent.

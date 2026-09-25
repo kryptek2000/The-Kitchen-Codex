@@ -558,10 +558,36 @@ async function main(): Promise<void> {
     await createRecipe(cdp, 'AI Amount', ['3 garlic cloves, minced']);
     await openWorkingFor('AI Amount', 1);
     const amountRowBefore = String(await evaluate(cdp, rowTextExpression('garlic')));
+    // Phase 6: the verified household fallback resolves `3 garlic cloves` (9 g)
+    // because no compatible USDA count portion is deterministic. The AI-count
+    // scenario deliberately clears that fallback through the UI so the
+    // needs_amount-only AI path is exercised.
+    record(
+      'A. the garlic line resolves via a verified household portion before AI',
+      /household portion/i.test(amountRowBefore) && /9 g/.test(amountRowBefore),
+      amountRowBefore.slice(0, 180)
+    );
+    await evaluate(cdp, `(() => {
+      const row = Array.from(document.querySelectorAll('[data-testid="advanced-nutrition-row"]')).find((n) => (n.innerText||'').includes('garlic'));
+      const b = row && row.querySelector('[data-testid="advanced-nutrition-edit"]');
+      if (b && b.getAttribute('aria-expanded') !== 'true') b.click();
+      return !!b;
+    })()`);
+    await sleep(200);
+    const clearedHousehold = await evaluate(cdp, `(() => {
+      const row = Array.from(document.querySelectorAll('[data-testid="advanced-nutrition-row"]')).find((n) => (n.innerText||'').includes('garlic'));
+      const block = row && row.querySelector('[data-testid="advanced-nutrition-household-portion"]');
+      const b = block && Array.from(block.querySelectorAll('button')).find((x) => (x.textContent||'').trim() === 'Clear');
+      if (b) b.click();
+      return !!b;
+    })()`);
+    record('A. clearing the verified household fallback is offered and works', clearedHousehold === true);
+    await sleep(250);
+    const amountRowBefore2 = String(await evaluate(cdp, rowTextExpression('garlic')));
     record(
       'A. needs_amount-only row shows NEEDS AMOUNT',
-      /needs amount/i.test(amountRowBefore),
-      amountRowBefore.slice(0, 160)
+      /needs amount/i.test(amountRowBefore2),
+      amountRowBefore2.slice(0, 160)
     );
     const summaryBefore = String(await evaluate(cdp, summaryExpression));
     record('A. summary reports zero need-match rows', /0 need match/i.test(summaryBefore), summaryBefore);
@@ -676,6 +702,31 @@ async function main(): Promise<void> {
     ];
     await createRecipe(cdp, 'AI Large Live', LARGE);
     await openWorkingFor('AI Large Live', LARGE.length);
+    // Phase 6: garlic resolves deterministically through the verified household
+    // fallback (9 g). Clear it through the UI so the AI count-resolution path is
+    // exercised on a genuine needs_amount row.
+    const previewBeforeClearG = String(await evaluate(cdp, `document.querySelector('[aria-label="Advisory nutrition preview"]')?.innerText || ''`));
+    const garlicHouseholdBeforeG = String(await evaluate(cdp, rowTextExpression('garlic')));
+    record(
+      'G. multi-line: garlic first resolves via the verified household fallback',
+      /household portion/i.test(garlicHouseholdBeforeG) && /9 g/.test(garlicHouseholdBeforeG),
+      garlicHouseholdBeforeG.slice(0, 180)
+    );
+    await evaluate(cdp, `(() => {
+      const row = Array.from(document.querySelectorAll('[data-testid="advanced-nutrition-row"]')).find((n) => (n.innerText||'').includes('garlic'));
+      const b = row && row.querySelector('[data-testid="advanced-nutrition-edit"]');
+      if (b && b.getAttribute('aria-expanded') !== 'true') b.click();
+      return !!b;
+    })()`);
+    await sleep(200);
+    await evaluate(cdp, `(() => {
+      const row = Array.from(document.querySelectorAll('[data-testid="advanced-nutrition-row"]')).find((n) => (n.innerText||'').includes('garlic'));
+      const block = row && row.querySelector('[data-testid="advanced-nutrition-household-portion"]');
+      const b = block && Array.from(block.querySelectorAll('button')).find((x) => (x.textContent||'').trim() === 'Clear');
+      if (b) b.click();
+      return !!b;
+    })()`);
+    await sleep(250);
     const statusesBeforeG = await renderedStatusList();
     const previewBeforeG = String(await evaluate(cdp, `document.querySelector('[aria-label="Advisory nutrition preview"]')?.innerText || ''`));
     const garlicBeforeG = String(await evaluate(cdp, rowTextExpression('garlic')));
@@ -706,11 +757,31 @@ async function main(): Promise<void> {
       /AI-assisted USDA count portion/i.test(garlicAfterG) && !/user-confirmed/i.test(garlicAfterG),
       garlicAfterG.slice(0, 220)
     );
+    // Phase 6: `previewBeforeClearG` already contains the deterministic verified
+    // household resolution for garlic (9 g). The scenario deliberately CLEARS it
+    // so the AI count path runs on a genuine needs_amount row. The unresolved
+    // count therefore starts one HIGHER than beforeClear, and a successful AI
+    // resolution can only return it to (never past) the beforeClear baseline.
+    // The assertion is `<= beforeClear` rather than `<` for exactly that reason.
     record(
-      'G. multi-line: the preview recalculated DOWN from the new live state',
+      'G. multi-line: the preview recalculated from the new live state without regressing',
       unresolvedLineCount(previewAfterG) >= 0 &&
-        unresolvedLineCount(previewAfterG) < unresolvedLineCount(previewBeforeG),
-      `before=${unresolvedLineCount(previewBeforeG)} after=${unresolvedLineCount(previewAfterG)}`
+        unresolvedLineCount(previewAfterG) <= unresolvedLineCount(previewBeforeClearG),
+      `beforeClear=${unresolvedLineCount(previewBeforeClearG)} preAi=${unresolvedLineCount(previewBeforeG)} after=${unresolvedLineCount(previewAfterG)}`
+    );
+    // The relaxed bound above must not mask a no-op AI run: this SEPARATE
+    // assertion requires a STRICT drop in the RENDERED non-matched row count
+    // versus the post-clear pre-AI state. The preview text itself is captured
+    // shortly after async recalculation and is not a reliable instant-to-instant
+    // baseline, so the authoritative rendered status list is used instead. If
+    // the AI pass did nothing, garlic would remain NEEDS AMOUNT and the counts
+    // would be equal, failing here.
+    const preAiActionableG = statusesBeforeG.filter((status) => status !== 'matched').length;
+    const afterActionableG = statusesAfterG.filter((status) => status !== 'matched').length;
+    record(
+      'G. multi-line: the AI run was not a no-op (rendered non-matched rows strictly dropped)',
+      afterActionableG < preAiActionableG,
+      `preAi=${preAiActionableG} after=${afterActionableG} pre=[${statusesBeforeG.join(',')}] post=[${statusesAfterG.join(',')}]`
     );
 
     // The reported automatic resolutions must equal the ACTUAL rendered-row

@@ -20,6 +20,7 @@ import {
   phase4Failure,
   type BasisMode,
   type CountPortionChoice,
+  type HouseholdPortionChoice,
   type MatchChoice,
   type Phase4Action,
   type Phase4Row,
@@ -38,6 +39,7 @@ export const INITIAL_PHASE4_STATE: Phase4State = Object.freeze({
   portions: Object.freeze({}),
   countPortions: Object.freeze({}),
   userMasses: Object.freeze({}),
+  householdPortions: Object.freeze({}),
   basis: 'entire_recipe',
   selectedServings: 1,
   preview: null,
@@ -99,6 +101,7 @@ export function phase4Reducer(state: Phase4State, action: Phase4Action): Phase4S
         portions: action.portions,
         countPortions: action.countPortions,
         userMasses: action.userMasses,
+        householdPortions: action.householdPortions,
         failure: null,
       };
     }
@@ -113,12 +116,15 @@ export function phase4Reducer(state: Phase4State, action: Phase4Action): Phase4S
       delete countPortions[action.lineRef];
       const userMasses = { ...state.userMasses };
       delete userMasses[action.lineRef];
+      const householdPortions = { ...state.householdPortions };
+      delete householdPortions[action.lineRef];
       const next: Phase4State = {
         ...state,
         matches,
         portions,
         countPortions,
         userMasses,
+        householdPortions,
         failure: null,
         operationSeq: state.operationSeq + 1,
       };
@@ -134,11 +140,14 @@ export function phase4Reducer(state: Phase4State, action: Phase4Action): Phase4S
       delete countPortions[action.lineRef];
       const userMasses = { ...state.userMasses };
       delete userMasses[action.lineRef];
+      const householdPortions = { ...state.householdPortions };
+      delete householdPortions[action.lineRef];
       const next: Phase4State = {
         ...state,
         portions,
         countPortions,
         userMasses,
+        householdPortions,
         failure: null,
         operationSeq: state.operationSeq + 1,
       };
@@ -162,11 +171,14 @@ export function phase4Reducer(state: Phase4State, action: Phase4Action): Phase4S
       delete portions[action.lineRef];
       const userMasses = { ...state.userMasses };
       delete userMasses[action.lineRef];
+      const householdPortions = { ...state.householdPortions };
+      delete householdPortions[action.lineRef];
       const next: Phase4State = {
         ...state,
         countPortions,
         portions,
         userMasses,
+        householdPortions,
         failure: null,
         operationSeq: state.operationSeq + 1,
       };
@@ -190,11 +202,51 @@ export function phase4Reducer(state: Phase4State, action: Phase4Action): Phase4S
       delete portions[action.lineRef];
       const countPortions = { ...state.countPortions };
       delete countPortions[action.lineRef];
+      const householdPortions = { ...state.householdPortions };
+      delete householdPortions[action.lineRef];
       const next: Phase4State = {
         ...state,
         userMasses,
         portions,
         countPortions,
+        householdPortions,
+        failure: null,
+        operationSeq: state.operationSeq + 1,
+      };
+      return withPreviewStale(next);
+    }
+
+    case 'select_household_portion': {
+      if (state.recipeKey === null) return state;
+      if (!state.rows.some((row) => row.line_ref === action.lineRef)) return state;
+      const householdPortions = { ...state.householdPortions, [action.lineRef]: action.choice };
+      // Mass sources are mutually exclusive: a verified household portion only
+      // applies when no higher-authority stored source is active.
+      const portions = { ...state.portions };
+      delete portions[action.lineRef];
+      const countPortions = { ...state.countPortions };
+      delete countPortions[action.lineRef];
+      const userMasses = { ...state.userMasses };
+      delete userMasses[action.lineRef];
+      const next: Phase4State = {
+        ...state,
+        householdPortions,
+        portions,
+        countPortions,
+        userMasses,
+        failure: null,
+        operationSeq: state.operationSeq + 1,
+      };
+      return withPreviewStale(next);
+    }
+
+    case 'clear_household_portion': {
+      if (!(action.lineRef in state.householdPortions)) return state;
+      const householdPortions = { ...state.householdPortions };
+      delete householdPortions[action.lineRef];
+      const next: Phase4State = {
+        ...state,
+        householdPortions,
         failure: null,
         operationSeq: state.operationSeq + 1,
       };
@@ -232,6 +284,7 @@ export function phase4Reducer(state: Phase4State, action: Phase4Action): Phase4S
         matches: action.matches,
         portions: action.portions,
         countPortions: action.countPortions,
+        householdPortions: action.householdPortions,
         // A plain analyzer run clears user masses; a Re-analyze that preserves
         // reviewed user-entered weights carries them through explicitly.
         userMasses: action.userMasses ?? Object.freeze({}),

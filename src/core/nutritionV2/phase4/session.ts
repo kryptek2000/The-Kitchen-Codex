@@ -439,6 +439,10 @@ export function recomputeReviewedNutrition(
     if (!countPortions.ok) return { ok: false, failure: phase4Failure(selectionReadFailure(countPortions)) };
     const userMasses = readSelectionField(state, 'userMasses');
     if (!userMasses.ok) return { ok: false, failure: phase4Failure(selectionReadFailure(userMasses)) };
+    const householdPortions = readSelectionField(state, 'householdPortions');
+    if (!householdPortions.ok) {
+      return { ok: false, failure: phase4Failure(selectionReadFailure(householdPortions)) };
+    }
 
     const scope = readStateNutrientScope(state);
 
@@ -454,6 +458,7 @@ export function recomputeReviewedNutrition(
       portions: portions.value,
       countPortions: countPortions.value,
       userMasses: userMasses.value,
+      householdPortions: householdPortions.value,
       basis: 'entire_recipe',
       selectedServings: adapted.base_servings,
       preview: null,

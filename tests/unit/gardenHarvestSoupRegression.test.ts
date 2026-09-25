@@ -113,6 +113,7 @@ function gardenHarvest() {
     matches: analysis.matches,
     portions: analysis.portions,
     countPortions: analysis.countPortions,
+    householdPortions: analysis.householdPortions,
     userMasses: {},
     basis: 'entire_recipe',
     selectedServings: 4,
@@ -170,15 +171,34 @@ describe('Garden Harvest Vegetable Soup — live status authority', () => {
     const eligible = actionableExceptionRows(rows, liveRows);
     expect(eligible.length).toBeGreaterThan(0);
     const texts = eligible.map((row) => row.original_text).join(' | ');
-    expect(texts).toMatch(/garlic cloves/i);
+    // Phase 6: garlic resolves deterministically through the verified household
+    // fallback, so it is no longer an actionable exception; the genuinely
+    // unresolved lines remain offered.
+    expect(texts).not.toMatch(/garlic/i);
     expect(texts).toMatch(/vegetable broth/i);
     expect(texts).toMatch(/zucchini/i);
+    const garlic = liveRows.find((row) => /garlic/i.test(row.original_text));
+    expect(garlic?.status).toBe('matched');
+    expect(garlic?.mass_source).toBe('household_portion');
+    expect(garlic?.resolved_grams).toBe(9);
   });
 });
 
 describe('Garden Harvest Vegetable Soup — AI amount path', () => {
   it('resolves 3 garlic cloves through an authenticated USDA clove portion', () => {
-    const { adapted, rows, state, liveRows } = gardenHarvest();
+    const { adapted, analysis, rows, state } = gardenHarvest();
+    // Phase 6: clear the deterministic household fallback so the AI-assisted
+    // COUNT path is exercised on a genuine needs_amount row.
+    const clearedState: Phase4State = { ...state, householdPortions: {} } as Phase4State;
+    const liveRows = projectLiveRows(
+      clearedState,
+      new Map(analysis.rows.map((row) => [row.line_ref, row])),
+      adapted,
+      session,
+      analysis.preview ? ingredientEvidenceViews(analysis.preview) : null,
+      analysis.portions,
+      analysis.countPortions
+    );
     const garlic = liveRows.find((row) => /garlic/i.test(row.original_text));
     if (!garlic) throw new Error('missing garlic row');
     expect(garlic.status).toBe('needs_amount');
@@ -188,7 +208,7 @@ describe('Garden Harvest Vegetable Soup — AI amount path', () => {
       rows,
       adapted,
       liveRows,
-      state,
+      state: clearedState,
       suggestions: [
         {
           line_ref: garlic.line_ref,
@@ -207,8 +227,8 @@ describe('Garden Harvest Vegetable Soup — AI amount path', () => {
     expect(outcome.resolved[0].choice.aiAssisted).toBe(true);
 
     const merged: Phase4State = {
-      ...state,
-      countPortions: { ...state.countPortions, [garlic.line_ref]: outcome.resolved[0].choice },
+      ...clearedState,
+      countPortions: { ...clearedState.countPortions, [garlic.line_ref]: outcome.resolved[0].choice },
     } as Phase4State;
     const calculated = session.calculate(buildCalculationRequest(adapted, merged));
     expect(calculated.ok).toBe(true);
@@ -221,7 +241,7 @@ describe('Garden Harvest Vegetable Soup — AI amount path', () => {
     // Apply remains explicit: AI assistance never authorizes persistence.
     expect(calculated.preview.application_authorized).toBe(false);
     // The AI path never mutated the caller's working state.
-    expect(state.countPortions[garlic.line_ref]).toBeUndefined();
+    expect(clearedState.countPortions[garlic.line_ref]).toBeUndefined();
   });
 
   it('does not invent grams when the AI interpretation has no closed count unit', () => {

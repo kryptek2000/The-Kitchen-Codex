@@ -94,7 +94,7 @@ interface LineFlow {
   readonly lineRef: string;
 }
 
-function setup(line: string): LineFlow {
+function setup(line: string, options: { clearHousehold?: boolean } = {}): LineFlow {
   const recipe = { title: 'Parity', servings: 1, ingredients: [structuredLine(line)] };
   const adaptation = adaptRecipe(recipe);
   if (!adaptation.ok) throw new Error('adapt failed');
@@ -113,8 +113,19 @@ function setup(line: string): LineFlow {
     matches: analysis.matches,
     portions: analysis.portions,
     countPortions: analysis.countPortions,
+    householdPortions: analysis.householdPortions,
     preview: analysis.preview,
   });
+  // Phase 6 household fallbacks pre-empt the USDA count path for garlic. The
+  // Phase 0B count-parity coverage clears the household choice so the COUNT
+  // authority is exercised in isolation (household pre-emption and precedence
+  // are covered by the dedicated Phase 6 suites).
+  if (options.clearHousehold === true) {
+    state = phase4Reducer(state, {
+      type: 'clear_household_portion',
+      lineRef: adapted[0].line_ref,
+    });
+  }
   const analyzedByRef = new Map(analysis.rows.map((row) => [row.line_ref, row]));
   const live = projectLiveRows(
     state,
@@ -333,6 +344,7 @@ describe('phase 0B — effective-mass authority parity (real bundle)', () => {
         hasUserMass: true,
         hasSourcePortion: false,
         hasCountPortion: false,
+        hasHouseholdPortion: false,
       })
     ).toEqual({ kind: 'conflict', reason: 'direct_mass_with_user_mass' });
   });
@@ -373,7 +385,7 @@ describe('phase 0B — effective-mass authority parity (real bundle)', () => {
     // Forged count selection: tamper the candidate digest AND recompute the
     // selection digest so the sanitizer passes and the STALE resolution path is
     // exercised (the calculator rejects it against its own candidate set).
-    const garlic = setup('3 garlic cloves');
+    const garlic = setup('3 garlic cloves', { clearHousehold: true });
     const choice = aiResolveGarlic(garlic);
     const selection = { ...(choice.selection as Record<string, unknown>) };
     selection.candidates_digest = 'f'.repeat(64);
@@ -428,6 +440,7 @@ describe('phase 0B — effective-mass authority parity (real bundle)', () => {
       matches: flow.analysis.matches,
       portions: flow.analysis.portions,
       countPortions: flow.analysis.countPortions,
+      householdPortions: flow.analysis.householdPortions,
       preview: flow.analysis.preview,
     });
     expect(reanalyzed.userMasses).toEqual({});
@@ -486,7 +499,7 @@ describe('phase 0B — canonical count-hint projection parity (real bundle)', ()
     // `3 garlic cloves` now carries its own count unit (noun after the food), so
     // the authenticated clove candidate set binds WITHOUT any hint. The hint is
     // redundant for this line; it can never change the outcome.
-    const flow = setup('3 garlic cloves');
+    const flow = setup('3 garlic cloves', { clearHousehold: true });
     const fdcId = matchChoiceOf(flow).fdc_id;
     const review = session.reviewCountPortions(flow.adapted[0].ingredient, fdcId);
     expect(review.ok).toBe(true);
@@ -504,7 +517,7 @@ describe('phase 0B — canonical count-hint projection parity (real bundle)', ()
   });
 
   it('valid hint path: review, canonical context, request, and calculator share one digest', () => {
-    const flow = setup('3 garlic cloves');
+    const flow = setup('3 garlic cloves', { clearHousehold: true });
     const choice = aiResolveGarlic(flow);
     expect(choice.countRequirementHint).toEqual({ unit: 'clove', size: null });
     const state = phase4Reducer(flow.state, {
@@ -539,7 +552,7 @@ describe('phase 0B — canonical count-hint projection parity (real bundle)', ()
 
   it('garlic regression: AI-assisted count resolves to MATCHED 9 g with explicit Apply and truthful provenance', () => {
     for (const line of ['3 garlic cloves', '3 cloves garlic']) {
-      const flow = setup(line);
+      const flow = setup(line, { clearHousehold: true });
       const before = summarizeLiveRows(flow.live);
       expect(before.needs_amount).toBe(1);
 
@@ -611,7 +624,7 @@ describe('phase 0B — canonical count-hint projection parity (real bundle)', ()
   });
 
   it('a count context cannot bind to a changed food', () => {
-    const garlic = setup('3 garlic cloves');
+    const garlic = setup('3 garlic cloves', { clearHousehold: true });
     const choice = aiResolveGarlic(garlic);
     const garlicState = phase4Reducer(garlic.state, {
       type: 'select_count_portion',
@@ -640,9 +653,9 @@ describe('phase 0B — canonical count-hint projection parity (real bundle)', ()
   });
 
   it('a quantity change invalidates the stale selection and never reuses its grams', () => {
-    const three = setup('3 garlic cloves');
+    const three = setup('3 garlic cloves', { clearHousehold: true });
     const choice = aiResolveGarlic(three);
-    const two = setup('2 garlic cloves');
+    const two = setup('2 garlic cloves', { clearHousehold: true });
     const staleState: Phase4State = {
       ...two.state,
       countPortions: { ...two.state.countPortions, [two.lineRef]: choice },
@@ -666,7 +679,7 @@ describe('phase 0B — canonical count-hint projection parity (real bundle)', ()
   });
 
   it('line cross-binding is rejected (selection belongs to another line)', () => {
-    const flow = setup('3 garlic cloves');
+    const flow = setup('3 garlic cloves', { clearHousehold: true });
     const choice = aiResolveGarlic(flow);
     const request = {
       servings: 1,
@@ -704,7 +717,7 @@ describe('phase 0B — canonical count-hint projection parity (real bundle)', ()
   });
 
   it('a count selection with a stale catalog/record binding never binds mass or displays', () => {
-    const flow = setup('3 garlic cloves');
+    const flow = setup('3 garlic cloves', { clearHousehold: true });
     const choice = aiResolveGarlic(flow);
     const selection = { ...(choice.selection as Record<string, unknown>), bundle_release: 'forged' };
     const state = phase4Reducer(flow.state, {
@@ -753,7 +766,7 @@ describe('phase 0B — canonical count-hint projection parity (real bundle)', ()
   });
 
   it('candidate-set digest is identical across review, stored selection and manual selection', () => {
-    const flow = setup('3 cloves garlic');
+    const flow = setup('3 cloves garlic', { clearHousehold: true });
     const choice = aiResolveGarlic(flow);
     const state = phase4Reducer(flow.state, {
       type: 'select_count_portion',
@@ -826,11 +839,11 @@ describe('phase 0B final parity — direct-mass exclusivity (I-1, real bundle)',
 
   it('the effective-mass decision makes direct mass exclusive with every alternate (truth table)', () => {
     const direct = 453.59237;
-    expect(resolveEffectiveMassDecision({ directMassGrams: direct, hasUserMass: false, hasSourcePortion: false, hasCountPortion: false })).toEqual({ kind: 'direct_mass', grams: direct });
-    expect(resolveEffectiveMassDecision({ directMassGrams: direct, hasUserMass: true, hasSourcePortion: false, hasCountPortion: false })).toEqual({ kind: 'conflict', reason: 'direct_mass_with_user_mass' });
-    expect(resolveEffectiveMassDecision({ directMassGrams: direct, hasUserMass: false, hasSourcePortion: true, hasCountPortion: false })).toEqual({ kind: 'conflict', reason: 'direct_mass_with_source_portion' });
-    expect(resolveEffectiveMassDecision({ directMassGrams: direct, hasUserMass: false, hasSourcePortion: false, hasCountPortion: true })).toEqual({ kind: 'conflict', reason: 'direct_mass_with_count_portion' });
-    expect(resolveEffectiveMassDecision({ directMassGrams: direct, hasUserMass: true, hasSourcePortion: true, hasCountPortion: true })).toEqual({ kind: 'conflict', reason: 'direct_mass_with_multiple_alternates' });
+    expect(resolveEffectiveMassDecision({ directMassGrams: direct, hasUserMass: false, hasSourcePortion: false, hasCountPortion: false, hasHouseholdPortion: false })).toEqual({ kind: 'direct_mass', grams: direct });
+    expect(resolveEffectiveMassDecision({ directMassGrams: direct, hasUserMass: true, hasSourcePortion: false, hasCountPortion: false, hasHouseholdPortion: false })).toEqual({ kind: 'conflict', reason: 'direct_mass_with_user_mass' });
+    expect(resolveEffectiveMassDecision({ directMassGrams: direct, hasUserMass: false, hasSourcePortion: true, hasCountPortion: false, hasHouseholdPortion: false })).toEqual({ kind: 'conflict', reason: 'direct_mass_with_source_portion' });
+    expect(resolveEffectiveMassDecision({ directMassGrams: direct, hasUserMass: false, hasSourcePortion: false, hasCountPortion: true, hasHouseholdPortion: false })).toEqual({ kind: 'conflict', reason: 'direct_mass_with_count_portion' });
+    expect(resolveEffectiveMassDecision({ directMassGrams: direct, hasUserMass: true, hasSourcePortion: true, hasCountPortion: true, hasHouseholdPortion: false })).toEqual({ kind: 'conflict', reason: 'direct_mass_with_multiple_alternates' });
   });
 
   it.each([
@@ -883,6 +896,7 @@ describe('phase 0B final parity — direct-mass exclusivity (I-1, real bundle)',
         hasUserMass: alternate === 'user' || alternate === 'all',
         hasSourcePortion: alternate === 'source' || alternate === 'all',
         hasCountPortion: alternate === 'count' || alternate === 'all',
+        hasHouseholdPortion: false,
       })
     ).toEqual({ kind: 'conflict', reason });
   });
@@ -927,6 +941,7 @@ describe('phase 0B final parity — direct-mass exclusivity (I-1, real bundle)',
       matches: flow.analysis.matches,
       portions: flow.analysis.portions,
       countPortions: flow.analysis.countPortions,
+      householdPortions: flow.analysis.householdPortions,
       preview: flow.analysis.preview,
     });
     expect(reanalyzed.portions).toEqual({});
@@ -951,7 +966,7 @@ describe('phase 0B final parity — full-binding display verification (F-1, real
   }
 
   it('count: a valid builder-created choice agrees, and every forged binding is withheld identically by calculator AND live', () => {
-    const flow = setup('3 garlic cloves');
+    const flow = setup('3 garlic cloves', { clearHousehold: true });
     const choice = aiResolveGarlic(flow);
     const validState = phase4Reducer(flow.state, { type: 'select_count_portion', lineRef: flow.lineRef, choice });
     const valid = calculateAndProject(flow, validState);
@@ -1120,10 +1135,10 @@ describe('phase 0B final parity — full-binding display verification (F-1, real
   });
 
   it('changed quantity and changed food identity invalidate both surfaces identically', () => {
-    const three = setup('3 garlic cloves');
+    const three = setup('3 garlic cloves', { clearHousehold: true });
     const choice = aiResolveGarlic(three);
     // Quantity change: the same selection against a different parsed amount.
-    const two = setup('2 garlic cloves');
+    const two = setup('2 garlic cloves', { clearHousehold: true });
     const staleState: Phase4State = {
       ...two.state,
       countPortions: { ...two.state.countPortions, [two.lineRef]: choice },

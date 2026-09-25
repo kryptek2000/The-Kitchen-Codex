@@ -12,7 +12,7 @@ import {
   savedReportGroups,
   savedReportMeta,
 } from '../core/nutritionV2/phase5c/savedReport';
-import type { CodexNutritionV1 } from '../core/nutritionV2/schema';
+import type { CodexNutritionV1, CodexNutritionV2 } from '../core/nutritionV2/schema';
 
 interface AdvancedNutritionSavedReportProps {
   isOpen: boolean;
@@ -20,7 +20,7 @@ interface AdvancedNutritionSavedReportProps {
   /** Materialized, bounded recipe title (never a raw untrusted recipe). */
   title: string;
   /** The already-validated canonical saved block. */
-  block: CodexNutritionV1;
+  block: CodexNutritionV1 | CodexNutritionV2;
   /** Opens the working analyzer/editor. */
   onEdit: () => void;
 }

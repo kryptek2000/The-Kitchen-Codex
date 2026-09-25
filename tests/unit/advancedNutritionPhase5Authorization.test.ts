@@ -687,7 +687,7 @@ describe('phase 5A — schema gate', () => {
 
   it('fails closed on an opaque future schema and never drops its data', () => {
     const setup = calculatePreview(SESSION, recipeWith([structured(FLOUR_LINE)]), ['calories', 'protein']);
-    const future = { schema: 2, basis: 'total', futureField: { nested: [1, 2, 3] }, note: 'future' };
+    const future = { schema: 3, basis: 'total', futureField: { nested: [1, 2, 3] }, note: 'future' };
     const before = JSON.stringify(future);
     const result = authorize(setup, { existingBlock: future });
     expect(failureCodeOf(result)).toBe('unknown_future_schema');

@@ -333,6 +333,7 @@ export function lineCalculationInput(
   const portion = state.portions[entry.line_ref];
   const countPortion = state.countPortions[entry.line_ref];
   const userMass = state.userMasses[entry.line_ref];
+  const household = state.householdPortions?.[entry.line_ref];
   // The ONE canonical count-identity context for this line: the sanitized
   // bounded hint bound to the stored count-portion choice. The calculator
   // re-derives the SAME candidate set/digest the live projection displays.
@@ -362,6 +363,10 @@ export function lineCalculationInput(
         }
       : {}),
     ...(userMass ? { user_mass_selection: userMass.selection } : {}),
+    // LOWEST authority: supplied only when the working state actually carries a
+    // verified household choice, so a line with no stored household choice is
+    // never silently given one.
+    ...(household ? { household_portion_selection: household.selection } : {}),
   };
 }
 

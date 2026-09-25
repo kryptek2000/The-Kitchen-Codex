@@ -240,6 +240,7 @@ describe('direct recipe mass is authoritative', () => {
       matches: {},
       portions: {},
       countPortions: {},
+      householdPortions: {},
       userMasses: {},
       basis: 'entire_recipe',
       selectedServings: 1,

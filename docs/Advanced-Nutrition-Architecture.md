@@ -2775,8 +2775,9 @@ is part of the review-catalog digest, so a review/confirmation produced under an
 older projection fails closed (`stale_review`). `MATCH_CONFIDENCE_VERSION` is
 `usda_match_confidence_v12` because the automatic-authority contract gained
 state-contradiction, container-state-compatibility, and preparation-form
-contradiction evidence. No persisted nutrition schema changed
-(`CODEX_NUTRITION_SCHEMA_V1` is still 1).
+contradiction evidence. That phase changed no persisted nutrition schema
+(`CODEX_NUTRITION_SCHEMA_V1` remained 1 then; Phase 6 later introduces the
+versioned v1/v2 contract described in §37.5).
 
 **Descriptor roles.** The projection exposes explicit, bounded roles:
 `core_tokens` (food-name tokens), `primary_identity_tokens` (the required head —
@@ -4565,8 +4566,11 @@ source_release?: string;   // must equal the declared `usda_fdc` release
 - A new block carrying them is rejected as `malformed` (preserved, never
   interpreted) by an older reader that predates the fields — the documented
   fail-closed behavior for forward-added fields.
-- No schema version bump: `CODEX_NUTRITION_SCHEMA_V1` remains `1`; totals,
-  nutrients, serving denominator, and Apply authorization are unchanged.
+- That phase made no schema version bump: the two unresolved-food fields remain
+  valid schema-v1 fields (`CODEX_NUTRITION_SCHEMA_V1` = 1); totals, nutrients,
+  serving denominator, and Apply authorization are unchanged. Phase 6 later
+  introduces the genuine schema v2 household extension (§37.5) rather than
+  expanding v1 in place.
 
 ### 33.2 Persistence and hydration
 
@@ -4894,13 +4898,12 @@ established identity and amount corpora.
 
 ## 36. Household-portion registry — registry-track Phase 5 USDA-derived data (data only)
 
-**Status: reviewed data slice, not integrated (audit-repaired).** Phase 5
-populates the Phase 4 contract with **31 authentic USDA-derived household-portion
-records across 11 foods** under the registry release
-`household_portion_initial_usda_v1`. It is DATA ONLY: it adds no matching,
-ranking, calculation, live-row, analyzer, AI, hydration, Apply, persistence,
-schema, UI, or server wiring, and loading it changes no application behavior.
-Phase 6 integration remains future work.
+**Status: reviewed data slice, integrated by Phase 6 (§37) but otherwise
+inert.** Phase 5 populates the Phase 4 contract with **31 authentic USDA-derived
+household-portion records across 11 foods** under the registry release
+`household_portion_initial_usda_v1`. The data itself adds no behavior; Phase 6
+(§37) integrates it as the LOWEST mass authority through the verified loader,
+while matching, AI, nutrients, and persistence semantics remain unchanged.
 
 ### 36.1 Source authority and derivation
 
@@ -4976,20 +4979,281 @@ digests together.
 Raw record, provenance, and rationale definitions are MODULE-PRIVATE. The only
 public access path is the lock-verifying `loadHouseholdInitialRegistry()`, which
 returns a fresh immutable registry plus a deeply frozen verified dataset
-(provenance and rationales). No barrel re-exports the data, no runtime module
-imports it, and no mutable registration/replacement/update API exists. Current
+(provenance and rationales). No barrel re-exports the data. Exactly ONE runtime
+module reaches it — the Phase 6 calculation-layer resolver
+(`calculation/householdPortion.ts`), and only through the verified loader; the
+raw data/lock/provenance modules are imported by no consumer. No mutable
+registration/replacement/update API exists. Current
 grams bounds: minimum 3 g, maximum 1248 g, all positive safe integers within the
 10,000 g contract bound.
 
-### 36.4 No runtime consumer (Phase 6 remains future work)
+### 36.4 Runtime consumer (Phase 6 integration)
 
-No matching, ranking, calculation, live-row, analyzer, AI, hydration, Apply,
-persistence, schema, UI, or server module imports the data; the Phase 0/1
-barrels do not re-export it. The dataset is therefore **not current application
-behavior**: the pinned `NEEDS AMOUNT`/status outcomes for ordinary lines are
-unchanged, and no line gains grams from the registry. Projected future coverage
-(for example the garlic clove or cross-identity produce cases described in the
-census) is labeled non-runtime and non-authoritative. The Phase 4 holder-freeze
+The Phase 6 resolver (§37) is the ONLY runtime consumer, and it reaches the data
+exclusively through the verified loader. The data itself still contains no
+matching, ranking, calculation, live-row, analyzer, AI, hydration, Apply,
+persistence, schema, UI, or server authority: the resolver derives one household
+MASS relationship for an already-authenticated USDA food identity, and no line
+gains grams unless its exact key (FDC + canonical unit + size + state) matches.
+The Phase 0/1 barrels do not re-export the data. The Phase 4 holder-freeze
 defense-in-depth flag (the returned outer holder object is not itself
 `Object.freeze`d although all authoritative content is immutable) remains
 deferred and is not addressed here.
+
+---
+
+## 37. Household-portion registry — registry-track Phase 6 integration
+
+**Status: integrated (uncommitted).** Phase 6 makes the verified Phase 5
+household-portion dataset a deterministic mass source inside the existing
+Advanced Nutrition pipeline. It adds no records, edits no gram values, and
+changes no AI, nutrient-composition, matching, or schema authority beyond the
+narrow, truthful persistence extension described below.
+
+### 37.1 Authority position
+
+Household portions are the LOWEST mass authority. The shared effective-mass
+decision (`calculation/effectiveMass.ts`) now resolves ONE source in this order:
+
+1. direct recipe mass;
+2. explicit user-entered mass;
+3. authenticated USDA source portion;
+4. authenticated USDA count portion;
+5. verified Kitchen Codex household portion;
+6. no mass.
+
+A household result never overrides direct mass, user mass, or a selected USDA
+source/count portion. Multiple non-direct sources (including household) are a
+conflict and fail closed; a direct recipe mass combined with any alternate
+choice — household included — is a conflict and fails closed. The reducer and
+the UI merge paths delete the household choice whenever a higher-authority
+source is stored for the line, so ordinary operation cannot create a conflict
+(conflicts remain the fail-closed backstop for forged/legacy state).
+
+### 37.2 Authenticated lookup and exact binding
+
+`calculation/householdPortion.ts` is the ONE resolver. It loads the registry
+ONLY through the Phase 5 verified loader (registry + provenance + aggregate
+digest locks must all verify; raw data stays module-private) and builds a
+module-private immutable exact-key index:
+
+```
+bound FDC id | canonical household unit | size (or null) | required state (or null)
+```
+
+The recipe context (quantity, unit, size, state) is derived exclusively with the
+existing canonical contracts — `parseIngredient`, `projectQueryText`, and
+`deriveCountRequirement` — plus the Phase 1 household-unit owner. A named unit
+must be a Phase 1 count noun; a size-only whole-food line has `item` semantics;
+a unit that is neither is never coerced. Every declared dimension must match
+exactly. No default size, midpoint, range endpoint, container mass, package
+size, density, or "closest" record is ever used; a missing or ambiguous
+dimension yields NO mass. A quantity range, a non-positive/non-exact quantity,
+or more than one recognized physical state yields NO mass.
+
+### 37.3 Selection binding and digest verification
+
+A stored household choice is a closed `household_portion_selection_v1` object
+binding the line, the ingredient identity digest, the USDA bundle release and
+record digest, the registry release and registry/provenance/aggregate digests,
+the household record key and digest, the canonical unit/size/state, the recipe
+quantity, the resolved grams, and a deterministic SHA-256 selection digest. The
+calculator NEVER trusts the working-state object: it sanitizes the selection,
+independently re-derives the resolution from the verified registry plus the
+authenticated USDA record, recomputes the selection digest locally, and requires
+exact equality of every field. A stale, forged, cross-line, cross-food,
+cross-quantity, or cross-release selection fails the whole calculation closed.
+The live row obtains its household grams through the same bounded calculator
+dry-run used for every other explicit selection, so the display can never claim
+a mass the calculator rejects.
+
+### 37.4 Live, UI, and summary evidence
+
+`MassSource`/`LiveRowMassSource` gain `household_portion`. The collapsed row
+shows `{grams} g · vetted household portion`; a `bounded_estimate` record would
+be shown as `{grams} g · household estimate` and expanded evidence says
+`Kitchen Codex household estimate`, so an estimate never looks like
+authenticated USDA source-portion data. Expanded evidence names the Kitchen Codex
+household portion, the canonical unit/size/state, and the authority class. It is
+never labeled USDA portion, user-entered, or AI-provided, and an alternative
+household control is not offered on a direct-mass line. Status and counts
+continue to come from the ONE live-row projection and `summarizeLiveRows`; no
+second status system exists.
+
+### 37.5 Persistence: a true versioned schema (v1 restored, v2 added)
+
+Household mass cannot be persisted with schema-v1 omission (omission means a
+genuine `user_mass`) or as a USDA `source_portion` (that would lie about
+provenance). The repair therefore introduces a GENUINE versioned contract
+instead of silently expanding v1:
+
+- **Schema v1 is unchanged and closed.** Its conversion bases remain exactly
+  `direct_mass` and `source_portion`; there is no household evidence key; an
+  unknown v1 field, an unknown v1 basis, or a household basis/evidence object
+  marked `schema: 1` fails closed. Genuine v1 user mass keeps its existing
+  omitted-basis representation. A parent-style v1 reader rejects every
+  household-bearing block.
+- **Schema v2 (`CODEX_NUTRITION_SCHEMA_V2 = 2`) is the smallest truthful
+  extension.** It retains every valid v1 line/result meaning and adds ONLY the
+  closed `household_portion` conversion basis plus the closed
+  `IngredientEvidenceV2.household_portion` evidence object
+  (`registry_release`, `record_key`, `record_digest`, `household_unit`,
+  `size_class`, `requires_state`, `quantity`, `selection_digest`). Basis and
+  evidence are coupled BIDIRECTIONALLY: basis without evidence, evidence
+  without basis, conflicting mass evidence (an unresolved line or a
+  missing/non-positive gram amount), unknown evidence fields, unknown bases,
+  and unknown schema versions all fail closed.
+- **Version-specific decoding.** `decodeCodexNutrition` selects the validator
+  from the schema discriminator (`1` -> v1, `2` -> v2); an unknown future
+  numeric schema remains bounded opaque data that is never interpreted and can
+  never be overwritten. The schema version participates in the canonical
+  encoded block, so the Phase 5 candidate digest differs between a v1 and a v2
+  write.
+- **Canonical conditional write policy.** If an applied result contains at
+  least one `household_portion` line, the WHOLE block is serialized as schema
+  v2. If no household line exists, the canonical write remains schema v1. New
+  code reads both. Dropping the last household line and re-applying
+  deterministically returns the block to canonical schema v1.
+- **Old/new reader compatibility.** Older builds that only understand schema
+  v1 fail a household-bearing v2 block closed (never interpreted) and never
+  read it as user mass or a USDA portion. New readers accept valid historical
+  v1 blocks and valid v2 household blocks. Old readers are NOT able to
+  understand household data; honest fail-closed incompatibility is the
+  contract.
+
+### 37.6 Apply and reopen
+
+Apply re-derives the preview through the genuine session before authorizing; a
+household line is re-resolved from the current recipe text, food identity, USDA
+bundle, verified registry release, record, and selection binding, so a stale
+registry release, forged record digest, changed quantity/unit/size/state, changed
+food/FDC, unresolved line, conflicting sources, or invalid grams refuses the
+write before anything is persisted. Reopen independently re-authenticates the
+registry and restores the household choice ONLY when the registry release, record
+key/digest, unit, size, state, quantity, and grams all match; otherwise the row
+stays NEEDS AMOUNT and is NEVER degraded into `user_mass`. Genuine schema-v1 user
+masses, direct masses, and USDA source/count blocks keep their existing reopen
+behavior.
+
+Reader matrix (proven by tests):
+
+| Stored block | Parent-style v1 reader | New reader |
+| --- | --- | --- |
+| schema 1, no household | valid v1 | valid v1 |
+| schema 1 with household basis or evidence | fails closed | malformed v1 (fails closed) |
+| schema 2, valid household provenance | fails closed (never user mass) | valid v2, household restored |
+| schema 2, stale/forged household binding | fails closed | row stays NEEDS AMOUNT, never user mass |
+| unknown future schema | opaque, never interpreted | opaque, never interpreted |
+| schema 2 recomputed with no household line | — | canonical schema-v1 rewrite |
+
+### 37.7 Unchanged boundaries and exclusions
+
+- AI authority is unchanged: AI never supplies or selects grams, FDC IDs,
+  registry record IDs, releases, digests, candidate indexes, portion masses,
+  totals, or Apply authorization, and the planned household-unit AI hint
+  remains future work.
+- USDA nutrient-composition authority is unchanged: nutrients always come from
+  the authenticated target FDC; the registry authorizes ONLY a household mass
+  relationship and never transfers nutrients.
+- Matching/ranking identity authority is unchanged; the household resolver
+  never manufactures food identity.
+- Excluded: new household records, value edits, fuzzy matching, density or
+  volume-to-mass conversion, generic container/package weights, web/API lookups,
+  provider catalog work, and any Phase 7 behavior.
+
+### 37.8 Measured resolution (pinned bundle)
+
+With the pinned bundle, three ordinary lines in the established corpus now
+resolve through the verified household fallback where no higher source was
+available: `3 cloves garlic` → 9 g (`garlic|clove|null|null`), `2 medium
+tomatoes` → 246 g (`tomato|item|medium|null`), and `1 stick unsalted butter` →
+113 g (`unsalted butter|stick|null|null`). Lines without a truthful exact
+binding (e.g. `2 celery stalks`, `1 red bell pepper`, `1 medium head green
+cabbage`, `2 medium potatoes`, `1 lemon`, `2 slices white bread`) remain
+`NEEDS AMOUNT`. No automatic food identity changed.
+
+### 37.9 Registry contract coverage vs natural reachability
+
+The Phase 6 suite separates two different claims. The **registry binding
+contract** group verifies all 31 published records against an independently
+hardcoded oracle (authenticated key, unit, size/state, FDC binding, grams,
+record digest, lock identities) using CONTROLLED resolver inputs; it makes NO
+claim that ordinary recipe lines naturally reach every record. The **real
+pipeline reachability** group runs ordinary lines through parse -> review ->
+analyzer -> calculation -> live projection and records the real outcome:
+household-reachable (`3 cloves garlic`, `3 garlic cloves, minced`, `2 medium
+tomatoes, sliced`, `1 stick unsalted butter`, `1 medium peach`, `1 large red
+bell pepper`, `1 large green bell pepper`); correctly SHADOWED by an
+authenticated USDA count portion (`1 large egg`, `1 medium white mushroom`,
+`1 head large red cabbage` — no household choice is created and the higher
+authority remains effective); identity-review blocked (`1 medium zucchini`,
+whose review is `review_required` with no deterministic selection, so no
+identity authority exists to convert); and parser-limitation blocked
+(`1 large head red cabbage`, see §37.13). Shadowing is correct authority
+behavior; household resolution is never forced merely to exercise a record.
+
+### 37.10 Estimate display is synthetic-tested only
+
+Every production record is `usda_derived`; there is NO `bounded_estimate`
+record in the Phase 5 slice and there is no end-to-end production estimate
+path. The estimate display branch (`Kitchen Codex household estimate`) is
+exercised only by a synthetic UI-evidence test. A future estimate record
+requires its own data review, lock update, audit, and a production acceptance
+test; it must not be implied to exist today.
+
+### 37.11 `user_confirmed` semantics
+
+The persisted `IngredientEvidence.user_confirmed` field keeps its established
+Phase 5 meaning: "this evidence was part of the explicit reviewed result the
+user authorized by clicking Apply" — it does NOT mean "the original match
+required a manual click", and it is not a mass provenance. A unique-exact
+match, a deterministic analyzer selection (`auto_confirmed`), an AI-assisted
+deterministic acceptance (`ai_assisted`), and a manual user choice are all
+persisted as `match_status: 'confirmed'` + `resolved: true` +
+`user_confirmed: true` once the user Applies. The automatic-vs-user-vs-AI
+distinction lives in the WORKING row: the live food authority remains
+`unique_exact` / `automatic` / `ai_assisted` / `user_confirmed` before Apply,
+and hydration restores the reviewed food through the genuine session.
+
+Consequences enforced by tests: an automatic household resolution is never
+displayed as manually entered or manually selected, never changes food-identity
+authority to `user_confirmed` in the working row, and never becomes `user_mass`.
+After Apply, the persisted `user_confirmed: true` carries the
+Apply-authorization meaning above; the mass keeps
+`conversion_basis: 'household_portion'` and its dedicated label. Reopen
+restores the household MASS (never a user mass); the restored food identity
+follows the pre-existing reviewed-reopen contract.
+
+### 37.12 Garlic, the AI count path, and the Clear flow
+
+`3 cloves garlic` and `3 garlic cloves, minced` resolve deterministically
+through the verified household clove record (9 g) before any AI runs. Because
+the production AI-count verifier needs a genuine `NEEDS AMOUNT` row to exercise
+the AI-assisted count path, that verifier explicitly CLEARS the household
+fallback through the UI ("Clear" in the household control), proves the row
+becomes `NEEDS AMOUNT`, then runs AI. The AI count resolution itself is
+unchanged and remains AI-assisted USDA count provenance, never household and
+never user-confirmed. The verifier keeps `after <= beforeClear` (the cleared
+household mass can only be recovered, never exceeded) and additionally requires
+a STRICT drop versus the post-clear pre-AI state, so a no-op AI run still fails
+the scenario.
+
+### 37.13 Parser limitations and layered guards
+
+`1 large head red cabbage` (size adjective BEFORE the named unit) is a parser
+limitation, not a household gap: the parser classifies `head` as a preparation
+qualifier, so no canonical count unit/size is derived; the size-only
+item-mapping path then correctly REFUSES to reinterpret the named `head` unit
+as one whole item (`head` is a recognized household count noun), and the line
+stays `NEEDS AMOUNT`. The unit-first form (`1 head large red cabbage`) parses a
+canonical `head` + `large` requirement and is resolved by the higher USDA count
+authority (1134 g) before household is considered. No mass is ever invented for
+the ambiguous ordering.
+
+The outer container/range guards in `deriveHouseholdLookupContext` are
+deliberate DEFENSE IN DEPTH. Mutation probes neutralizing either the explicit
+container guard or the explicit non-exact/range guard do NOT produce a mass:
+range lines parse with no amount (the amount guard fails closed) and size-first
+container lines lose their container/unit token (the item-mapping token scan
+fails closed). Both layers are retained and the behavioral tests pin the
+no-mass outcome.

@@ -33,6 +33,15 @@ import { NUTRIENT_IDS, type NutrientId } from './nutrients';
 import type { CanonicalUnit } from './units';
 
 export const CODEX_NUTRITION_SCHEMA_V1 = 1;
+/**
+ * Schema v2 is the smallest truthful extension of v1: it retains every valid
+ * v1 line/result meaning and adds ONLY the closed `household_portion`
+ * conversion basis plus the closed household evidence object. The schema
+ * discriminator selects a VERSION-SPECIFIC validator; a v1 block must never
+ * contain household semantics, and a v2 block must carry them bidirectionally
+ * (basis <-> evidence).
+ */
+export const CODEX_NUTRITION_SCHEMA_V2 = 2;
 export const CODEX_NUTRITION_BASIS_TOTAL = 'total';
 export const CODEX_NUTRITION_FRONTMATTER_KEY = 'codex_nutrition';
 
@@ -84,6 +93,24 @@ export interface NutrientResult extends NutrientCoverage {
 export type IngredientMatchStatus = 'confirmed' | 'suggested' | 'ambiguous';
 
 /** Per-ingredient traceable evidence. */
+/**
+ * Verified Phase 6 household-portion provenance for one resolved line. It
+ * preserves ONLY the bounded evidence necessary to independently re-authenticate
+ * the household result on reopen (registry release + record binding + quantity);
+ * the selection digest commits to the complete verified binding. It never
+ * carries nutrients, AI data, or any amount authority by itself.
+ */
+export interface HouseholdPortionEvidence {
+  readonly registry_release: string;
+  readonly record_key: string;
+  readonly record_digest: string;
+  readonly household_unit: string;
+  readonly size_class: string | null;
+  readonly requires_state: string | null;
+  readonly quantity: number;
+  readonly selection_digest: string;
+}
+
 export interface IngredientEvidence {
   /** Bounded original ingredient line (or stable reference). */
   line_ref: string;
@@ -96,8 +123,27 @@ export interface IngredientEvidence {
   resolved: boolean;
   user_confirmed: boolean;
   amount?: { value: number; unit: CanonicalUnit };
+  /**
+   * Schema-v1 conversion bases are CLOSED to direct recipe mass and an
+   * authenticated USDA source portion. `household_portion` is a schema-v2
+   * meaning only: a v1 block carrying it fails closed.
+   */
   conversion_basis?: 'direct_mass' | 'source_portion';
 }
+
+/**
+ * Schema-v2 per-ingredient evidence. It retains every v1 meaning and adds the
+ * closed household conversion basis plus the household evidence object. The
+ * two are coupled: a `household_portion` basis without the evidence object and
+ * an evidence object without that basis both fail closed.
+ */
+export interface IngredientEvidenceV2 extends Omit<IngredientEvidence, 'conversion_basis'> {
+  conversion_basis?: 'direct_mass' | 'source_portion' | 'household_portion';
+  household_portion?: HouseholdPortionEvidence;
+}
+
+/** Version-neutral read view of per-ingredient evidence. */
+export type AnyIngredientEvidence = IngredientEvidence | IngredientEvidenceV2;
 
 export type UnresolvedReason = 'no_match' | 'ambiguous' | 'no_mass' | 'no_nutrition' | 'qualitative';
 
@@ -150,6 +196,15 @@ export interface CodexNutritionV1 {
   extensions?: Record<string, unknown>;
 }
 
+/**
+ * Recognized schema-v2 block. Every v1 meaning is retained verbatim; only the
+ * closed household basis/evidence extension is added (see `IngredientEvidenceV2`).
+ */
+export interface CodexNutritionV2 extends Omit<CodexNutritionV1, 'schema' | 'ingredients'> {
+  schema: 2;
+  ingredients: IngredientEvidenceV2[];
+}
+
 /** Bounded opaque safe data for an unknown FUTURE schema value. */
 export interface OpaqueCodexNutrition {
   kind: 'opaque';
@@ -158,7 +213,7 @@ export interface OpaqueCodexNutrition {
 }
 
 /** The parsed advanced-nutrition view attached to an ObsidianRecipe. */
-export type AdvancedNutritionBlock = CodexNutritionV1 | OpaqueCodexNutrition;
+export type AdvancedNutritionBlock = CodexNutritionV1 | CodexNutritionV2 | OpaqueCodexNutrition;
 
 export const MAX_SERVINGS = 1000;
 export const MAX_SOURCES = NUTRITION_SOURCE_IDS.length;

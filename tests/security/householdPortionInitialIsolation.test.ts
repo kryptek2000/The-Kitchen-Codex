@@ -166,12 +166,18 @@ describe('phase 5 repair — module purity and dependency boundary', () => {
     }
   });
 
-  it('is imported by no runtime module and re-exported from no barrel', () => {
+  it('is imported ONLY by the verified household resolver (Phase 6) and no barrel', () => {
+    // Phase 6 integrates the registry through ONE calculation-layer resolver
+    // that uses the verified loader. Every other runtime importer of the data,
+    // lock, or provenance machinery is an offender: raw data is module-private
+    // and must never be imported directly by a consumer.
+    const ALLOWED = new Set(['src/core/nutritionV2/calculation/householdPortion.ts']);
     const offenders: string[] = [];
     const importRe = /(?:from|import)\s*(?:\(\s*)?\s*['"]([^'"]+)['"]/g;
     for (const root of [resolve(ROOT, 'src'), resolve(ROOT, 'server')]) {
       for (const file of listTsFiles(root)) {
         if (file.startsWith(HOUSEHOLD_DIR)) continue;
+        const rel = file.slice(ROOT.length + 1);
         const source = readFileSync(file, 'utf8');
         let match: RegExpExecArray | null;
         importRe.lastIndex = 0;
@@ -181,9 +187,10 @@ describe('phase 5 repair — module purity and dependency boundary', () => {
             resolved &&
             (resolved.endsWith('/initialData.ts') ||
               resolved.endsWith('/initialLock.ts') ||
-              resolved.endsWith('/initialProvenance.ts'))
+              resolved.endsWith('/initialProvenance.ts')) &&
+            !ALLOWED.has(rel)
           ) {
-            offenders.push(file.slice(ROOT.length + 1));
+            offenders.push(rel);
             break;
           }
         }
@@ -300,15 +307,18 @@ interface SnapshotEntry {
 }
 
 const SNAPSHOT: ReadonlyArray<SnapshotEntry> = Object.freeze([
-  { line: '3 cloves garlic, minced', fdc: 169230, status: 'needs_amount', grams: null, mass: null },
+  // Phase 6: the verified household fallback resolves ONLY lines that have no
+  // higher-authority mass source. Lines the USDA source/count paths already
+  // resolve keep their higher-authority provenance.
+  { line: '3 cloves garlic, minced', fdc: 169230, status: 'matched', grams: 9, mass: 'household_portion' },
   { line: '2 celery stalks, chopped', fdc: 169988, status: 'needs_amount', grams: null, mass: null },
   { line: '1 medium onion', fdc: 170000, status: 'matched', grams: 110, mass: 'count_portion' },
-  { line: '2 medium tomatoes, sliced', fdc: 2709719, status: 'needs_amount', grams: null, mass: null },
+  { line: '2 medium tomatoes, sliced', fdc: 2709719, status: 'matched', grams: 246, mass: 'household_portion' },
   { line: '3 large carrots', fdc: 170393, status: 'matched', grams: 216, mass: 'count_portion' },
   { line: '1 red bell pepper', fdc: 2258590, status: 'needs_amount', grams: null, mass: null },
   { line: '1 medium head green cabbage', fdc: 2346407, status: 'needs_amount', grams: null, mass: null },
   { line: '2 medium potatoes', fdc: 2709382, status: 'needs_amount', grams: null, mass: null },
-  { line: '1 stick unsalted butter', fdc: 789828, status: 'needs_amount', grams: null, mass: null },
+  { line: '1 stick unsalted butter', fdc: 789828, status: 'matched', grams: 113, mass: 'household_portion' },
   { line: '4 slices bacon', fdc: 168277, status: 'matched', grams: 112, mass: 'count_portion' },
   { line: '4 slices bread', fdc: 172686, status: 'matched', grams: 116, mass: 'count_portion' },
   { line: '2 slices white bread', fdc: 2707598, status: 'needs_amount', grams: null, mass: null },
@@ -346,8 +356,8 @@ function structuredLine(original: string): Record<string, unknown> {
   };
 }
 
-describe('phase 5 repair — behavioral non-integration', () => {
-  it('produces exactly the pinned pre-Phase-5 statuses and grams for ordinary lines', () => {
+describe('phase 5 repair — Phase 6 integrated behavior', () => {
+  it('produces exactly the pinned Phase 6 statuses/grams and no mass beyond the authority order', () => {
     const adaptation = adaptRecipe({
       title: 'Phase 5 Repair Non-Integration Snapshot',
       servings: 4,

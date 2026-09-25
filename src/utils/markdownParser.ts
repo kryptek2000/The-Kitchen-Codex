@@ -797,9 +797,9 @@ export function parseObsidianRecipeMarkdown(
   };
 
   // Advanced nutrition (Phase 0): decode the namespaced `codex_nutrition` block.
-  // Recognized schema v1 is strictly validated; a safe unknown future schema is
-  // preserved opaquely; malformed data is left untouched in `frontmatter` and is
-  // never interpreted.
+  // Recognized schema v1/v2 is strictly validated under its own contract; a safe
+  // unknown future schema is preserved opaquely; malformed data is left untouched
+  // in `frontmatter` and is never interpreted.
   const decodedAdvanced = decodeCodexNutrition(frontmatter[CODEX_NUTRITION_FRONTMATTER_KEY]);
 
   // Production Canonical Boundary (Load Path):
@@ -807,7 +807,11 @@ export function parseObsidianRecipeMarkdown(
   // before delivering to the UI as an ObsidianRecipe.
   const canonical = obsidianToCanonicalRecipe(rawParsedRecipe);
   const parsed = canonicalToObsidianRecipe(canonical, fileHandle);
-  if (decodedAdvanced.kind === 'v1' || decodedAdvanced.kind === 'opaque') {
+  if (
+    decodedAdvanced.kind === 'v1' ||
+    decodedAdvanced.kind === 'v2' ||
+    decodedAdvanced.kind === 'opaque'
+  ) {
     parsed.codexNutrition = decodedAdvanced.value;
   }
   return parsed;
@@ -993,7 +997,7 @@ function applyAdvancedNutritionRoundTrip(
   const inert = materialized.value;
 
   const decoded = decodeCodexNutrition(inert);
-  if (decoded.kind === 'v1' || decoded.kind === 'opaque') {
+  if (decoded.kind === 'v1' || decoded.kind === 'v2' || decoded.kind === 'opaque') {
     try {
       frontmatterObj[key] = encodeCodexNutrition(decoded.value);
       return;

@@ -26,6 +26,7 @@ import {
   isPlainObject,
   toInertValue,
   type CodexNutritionV1,
+  type CodexNutritionV2,
 } from '../schema';
 import { decodeCodexNutrition } from '../validate';
 import { readOwnDataField } from '../phase4/materialize';
@@ -52,8 +53,8 @@ export type NutritionStaleReason = 'servings_changed' | 'ingredients_changed';
 export interface NutritionPresentation {
   readonly version: string;
   readonly kind: NutritionPresentationKind;
-  /** The decoded recognized schema-v1 block (advanced_saved / advanced_stale). */
-  readonly advanced: CodexNutritionV1 | undefined;
+  /** The decoded recognized schema-v1/v2 block (advanced_saved / advanced_stale). */
+  readonly advanced: CodexNutritionV1 | CodexNutritionV2 | undefined;
   /** The stored whole-recipe serving denominator of the Advanced block. */
   readonly advanced_servings: number | undefined;
   /** The stored whole-recipe calories total of the Advanced block. */
@@ -146,7 +147,7 @@ function sameStringSet(a: ReadonlyArray<string>, b: ReadonlyArray<string>): bool
  */
 function detectAdvancedStale(
   recipe: object,
-  block: CodexNutritionV1
+  block: CodexNutritionV1 | CodexNutritionV2
 ): ReadonlyArray<NutritionStaleReason> {
   const reasons: NutritionStaleReason[] = [];
   const adaptation = adaptRecipe(recipe);
@@ -202,7 +203,7 @@ export function resolveRecipeNutritionPresentation(recipe: unknown): NutritionPr
     decoded = { kind: 'malformed' as const, errors: ['validation_error'] };
   }
 
-  if (decoded.kind === 'v1') {
+  if (decoded.kind === 'v1' || decoded.kind === 'v2') {
     const block = decoded.value;
     const reasons = detectAdvancedStale(recipe, block);
     const stale = reasons.length > 0;

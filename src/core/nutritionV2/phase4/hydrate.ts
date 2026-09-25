@@ -33,16 +33,24 @@
  * line never reuses stale evidence.
  */
 
-import type { CodexNutritionV1 } from '../schema';
+import type {
+  CodexNutritionV1,
+  CodexNutritionV2,
+  HouseholdPortionEvidence,
+  IngredientEvidence,
+  IngredientEvidenceV2,
+} from '../schema';
 import { derivedCountPortionGrams } from './liveRow';
 import { derivedSourcePortionGrams, ingredientMeasurement } from './rows';
 import { buildPortionChoice } from './portion';
 import { buildCountPortionChoice } from './countPortion';
 import { buildUserMassChoice } from './userMass';
+import { buildHouseholdPortionChoice } from './householdPortion';
 import type {
   AdaptedIngredient,
   AdvancedNutritionSession,
   CountPortionChoice,
+  HouseholdPortionChoice,
   MatchChoice,
   Phase4Row,
   PortionChoice,
@@ -57,6 +65,7 @@ export interface HydratedWorkingReview {
   readonly portions: Readonly<Record<string, PortionChoice>>;
   readonly countPortions: Readonly<Record<string, CountPortionChoice>>;
   readonly userMasses: Readonly<Record<string, UserMassChoice>>;
+  readonly householdPortions: Readonly<Record<string, HouseholdPortionChoice>>;
   /** Number of ingredient lines whose reviewed state was reconstructed. */
   readonly hydrated_count: number;
 }
@@ -65,7 +74,7 @@ export interface HydrateWorkingReviewParams {
   readonly session: AdvancedNutritionSession;
   readonly adapted: ReadonlyArray<AdaptedIngredient>;
   readonly rows: ReadonlyArray<Phase4Row>;
-  readonly savedBlock: CodexNutritionV1;
+  readonly savedBlock: CodexNutritionV1 | CodexNutritionV2;
 }
 
 function parseFdcId(value: unknown): number | undefined {
@@ -77,6 +86,18 @@ function parseFdcId(value: unknown): number | undefined {
 function closeEnough(a: number, b: number): boolean {
   if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
   return Math.abs(a - b) <= GRAMS_EPSILON;
+}
+
+/**
+ * Version-neutral household evidence access. Only a schema-v2 evidence entry
+ * can carry the household object (a v1 block with the key fails schema
+ * validation and never reaches hydration), so the cast is safe behind the
+ * `conversion_basis === 'household_portion'` guard.
+ */
+function householdEvidenceOf(
+  evidence: IngredientEvidence | IngredientEvidenceV2
+): HouseholdPortionEvidence | undefined {
+  return (evidence as IngredientEvidenceV2).household_portion;
 }
 
 function manualSelectionObject(lineRef: string, match: MatchChoice): unknown {
@@ -119,6 +140,7 @@ export function hydrateWorkingReview(
   const portions: Record<string, PortionChoice> = {};
   const countPortions: Record<string, CountPortionChoice> = {};
   const userMasses: Record<string, UserMassChoice> = {};
+  const householdPortions: Record<string, HouseholdPortionChoice> = {};
   let hydrated = 0;
 
   /** Re-derives a reviewed manual match for one line from the pinned catalog. */
@@ -218,6 +240,55 @@ export function hydrateWorkingReview(
       }
     }
 
+    if (!bound && evidence.conversion_basis === 'household_portion') {
+      // PHASE 6 HOUSEHOLD PROVENANCE. Reopen independently re-authenticates the
+      // registry and reproduces the SAME verified household result. When the
+      // registry release, record, digest, USDA binding, quantity, unit, size, or
+      // state no longer matches, the row is left NEEDS AMOUNT — it is NEVER
+      // degraded into `user_mass` and never silently re-resolved with a
+      // different record.
+      const saved = householdEvidenceOf(evidence);
+      if (!saved) continue;
+      if (typeof saved.registry_release !== 'string' || typeof saved.record_key !== 'string') continue;
+      if (typeof saved.record_digest !== 'string') continue;
+      if (typeof saved.quantity !== 'number' || !Number.isFinite(saved.quantity)) continue;
+      const built = buildHouseholdPortionChoice(session, {
+        lineRef,
+        ingredient: entry.ingredient,
+        review,
+        selection,
+        fdcId,
+      });
+      if (!built.ok) continue;
+      const selectionBinding = built.choice.selection as {
+        readonly registry_release?: unknown;
+        readonly household_record_key?: unknown;
+        readonly household_record_digest?: unknown;
+        readonly household_unit?: unknown;
+        readonly size_class?: unknown;
+        readonly requires_state?: unknown;
+        readonly quantity?: unknown;
+        readonly resolved_grams?: unknown;
+        readonly selection_digest?: unknown;
+      } | null;
+      if (!selectionBinding || typeof selectionBinding !== 'object') continue;
+      const reauthenticated =
+        selectionBinding.registry_release === saved.registry_release &&
+        selectionBinding.household_record_key === saved.record_key &&
+        selectionBinding.household_record_digest === saved.record_digest &&
+        selectionBinding.household_unit === saved.household_unit &&
+        (selectionBinding.size_class ?? null) === (saved.size_class ?? null) &&
+        (selectionBinding.requires_state ?? null) === (saved.requires_state ?? null) &&
+        selectionBinding.quantity === saved.quantity &&
+        typeof selectionBinding.resolved_grams === 'number' &&
+        closeEnough(selectionBinding.resolved_grams, grams);
+      if (reauthenticated) {
+        householdPortions[lineRef] = built.choice;
+        bound = true;
+      }
+      // A household basis that cannot be re-authenticated stays unresolved.
+    }
+
     if (!bound && evidence.conversion_basis === undefined) {
       // ONLY a saved line whose basis is OMITTED — the existing schema-v1
       // user-mass contract — may hydrate as a user-entered total weight. The
@@ -268,6 +339,7 @@ export function hydrateWorkingReview(
     portions: Object.freeze(portions),
     countPortions: Object.freeze(countPortions),
     userMasses: Object.freeze(userMasses),
+    householdPortions: Object.freeze(householdPortions),
     hydrated_count: hydrated,
   });
 }

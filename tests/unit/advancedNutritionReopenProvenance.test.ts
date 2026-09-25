@@ -35,7 +35,7 @@ import type {
   Phase4State,
 } from '../../src/core/nutritionV2/phase4/types';
 import type { AiResolutionSuggestion } from '../../src/core/nutritionV2/aiResolution';
-import type { CodexNutritionV1 } from '../../src/core/nutritionV2/schema';
+import type { CodexNutritionV1, CodexNutritionV2 } from '../../src/core/nutritionV2/schema';
 import type { ObsidianRecipe } from '../../src/types';
 
 const SPECS = [
@@ -122,6 +122,7 @@ function flow(line: string): Flow {
     matches: analysis.matches,
     portions: analysis.portions,
     countPortions: analysis.countPortions,
+    householdPortions: analysis.householdPortions,
     preview: analysis.preview,
   });
   return { recipe: recipeObject, adapted, analysis, rows, state, lineRef: adapted[0].line_ref };
@@ -144,7 +145,7 @@ function applyReady(flowValue: Flow, state: Phase4State): Phase4State {
   } as Phase4State;
 }
 
-function authorize(flowValue: Flow, state: Phase4State): CodexNutritionV1 {
+function authorize(flowValue: Flow, state: Phase4State): CodexNutritionV1 | CodexNutritionV2 {
   const result = authorizeNutritionPersistence({
     session,
     recipe: flowValue.recipe,
@@ -161,7 +162,7 @@ function authorize(flowValue: Flow, state: Phase4State): CodexNutritionV1 {
 function reAuthorize(
   flowValue: Flow,
   state: Phase4State,
-  existingBlock: CodexNutritionV1
+  existingBlock: CodexNutritionV1 | CodexNutritionV2
 ): { code: string } {
   const result = authorizeNutritionPersistence({
     session,
@@ -356,10 +357,10 @@ describe('phase 0B final parity — Apply→reopen provenance (I-2)', () => {
     });
     const block = authorize(f, applyReady(f, working));
     // Corrupt the saved amount so NO candidate can re-authenticate the basis.
-    const corruptedBlock: CodexNutritionV1 = {
+    const corruptedBlock = {
       ...block,
       ingredients: [{ ...block.ingredients[0], amount: { value: 999, unit: 'g' } }],
-    };
+    } as CodexNutritionV1;
     const hydrated = hydrateWorkingReview({
       session,
       adapted: f.adapted,
