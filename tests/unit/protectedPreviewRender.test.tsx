@@ -249,6 +249,11 @@ describe('F1 — licensed thumbnails through the authenticated binary path (moun
     );
     fireEvent.click(screen.getByTestId('find-representative-image'));
     await waitFor(() => expect(screen.getAllByTestId('representative-candidate').length).toBeGreaterThan(0));
+    // The thumbnail request is dispatched by a separate async effect after the
+    // candidate card renders; wait for it explicitly instead of assuming it.
+    await waitFor(() =>
+      expect(seen.find((c) => c.url === '/api/recipes/image/representative-thumbnail/opaque-1')).toBeTruthy()
+    );
     const thumbCall = seen.find((c) => c.url === '/api/recipes/image/representative-thumbnail/opaque-1');
     expect(thumbCall?.headers.Authorization).toBe(`Bearer ${ENDPOINT_TOKEN}`);
     await waitFor(() => {
@@ -268,6 +273,11 @@ describe('F1 — licensed thumbnails through the authenticated binary path (moun
     );
     fireEvent.click(screen.getByTestId('find-representative-image'));
     await waitFor(() => expect(screen.getAllByTestId('representative-candidate').length).toBeGreaterThan(0));
+    // Same async-effect ordering as the protected case: the candidate card does
+    // not prove the thumbnail request has been dispatched yet.
+    await waitFor(() =>
+      expect(seen.find((c) => c.url === '/api/recipes/image/representative-thumbnail/opaque-1')).toBeTruthy()
+    );
     const thumbCall = seen.find((c) => c.url === '/api/recipes/image/representative-thumbnail/opaque-1');
     expect(thumbCall).toBeTruthy();
     expect(thumbCall?.headers.Authorization).toBeUndefined();
