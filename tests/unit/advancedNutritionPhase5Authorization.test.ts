@@ -687,7 +687,7 @@ describe('phase 5A — schema gate', () => {
 
   it('fails closed on an opaque future schema and never drops its data', () => {
     const setup = calculatePreview(SESSION, recipeWith([structured(FLOUR_LINE)]), ['calories', 'protein']);
-    const future = { schema: 3, basis: 'total', futureField: { nested: [1, 2, 3] }, note: 'future' };
+    const future = { schema: 4, basis: 'total', futureField: { nested: [1, 2, 3] }, note: 'future' };
     const before = JSON.stringify(future);
     const result = authorize(setup, { existingBlock: future });
     expect(failureCodeOf(result)).toBe('unknown_future_schema');
@@ -1029,7 +1029,7 @@ describe('phase 5A — persistence identity cannot be replayed across authority'
     expect(create.identity.candidate_digest).toBe(replace.identity.candidate_digest);
     expect(create.identity).not.toEqual(replace.identity);
     // An opaque future block can never be replaced.
-    expect(failureCodeOf(authorize(setup, { existingBlock: { schema: 3, note: 'future' } }))).toBe(
+    expect(failureCodeOf(authorize(setup, { existingBlock: { schema: 4, note: 'future' } }))).toBe(
       'unknown_future_schema'
     );
   });

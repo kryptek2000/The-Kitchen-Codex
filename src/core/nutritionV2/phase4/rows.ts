@@ -8,6 +8,7 @@
  */
 
 import { parseIngredient } from '../matching/parse';
+import type { RangeRepresentative } from '../matching/types';
 import { projectQueryText } from '../matching/query';
 import { candidatePortionCompatibility } from '../calculation/portionSemantics';
 export { candidatePortionCompatibility };
@@ -215,6 +216,12 @@ export interface IngredientMeasurementView {
   readonly measurement_kind: MeasurementKind;
   readonly milliliters: number | undefined;
   readonly grams: number | undefined;
+  /**
+   * Present ONLY when `grams` is the deterministic midpoint of a written mass
+   * range. `undefined` for an exact scalar mass, so the UI/evidence can always
+   * distinguish a range midpoint from an exact author-written value.
+   */
+  readonly range_representative: RangeRepresentative | undefined;
 }
 
 export function ingredientMeasurement(entry: AdaptedIngredient): IngredientMeasurementView {
@@ -226,6 +233,7 @@ export function ingredientMeasurement(entry: AdaptedIngredient): IngredientMeasu
       measurement_kind: 'unknown' as MeasurementKind,
       milliliters: undefined,
       grams: undefined,
+      range_representative: undefined,
     });
   }
   const p = parsed.parsed;
@@ -235,6 +243,7 @@ export function ingredientMeasurement(entry: AdaptedIngredient): IngredientMeasu
     measurement_kind: p.measurement_kind,
     milliliters: p.milliliters,
     grams: p.grams,
+    range_representative: p.range_representative,
   });
 }
 

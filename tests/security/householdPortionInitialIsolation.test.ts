@@ -357,7 +357,24 @@ function structuredLine(original: string): Record<string, unknown> {
 }
 
 describe('phase 5 repair — Phase 6 integrated behavior', () => {
-  it('produces exactly the pinned Phase 6 statuses/grams and no mass beyond the authority order', () => {
+  interface Phase6SnapshotFixture {
+    readonly rows: ReturnType<typeof buildReviewRows>;
+    readonly analysis: ReturnType<typeof analyzeRecipe>;
+  }
+
+  /**
+   * BOUNDED FILE-SCOPED FIXTURE (test-stability repair, no coverage change).
+   *
+   * The 15-line snapshot review is deterministic and read-only, but its
+   * real-bundle work (adapt + review rows + analyzer) legitimately costs
+   * multiple seconds; under full-suite contention it exceeded Vitest's default
+   * 5000 ms per-test timeout. The invariant setup runs ONCE here, in a bounded
+   * hook outside the per-test timeout clock. The test body keeps every
+   * assertion unchanged and still exercises the genuine records.
+   */
+  let snapshotFixture: Phase6SnapshotFixture | undefined;
+
+  beforeAll(() => {
     const adaptation = adaptRecipe({
       title: 'Phase 5 Repair Non-Integration Snapshot',
       servings: 4,
@@ -365,8 +382,15 @@ describe('phase 5 repair — Phase 6 integrated behavior', () => {
     });
     if (!adaptation.ok) throw new Error('adapt failed');
     const adapted = adaptation.recipe.adapted;
-    const rows = buildReviewRows(session, adapted);
-    const analysis = analyzeRecipe(session, adapted, 4);
+    snapshotFixture = Object.freeze({
+      rows: buildReviewRows(session, adapted),
+      analysis: analyzeRecipe(session, adapted, 4),
+    });
+  }, 120000);
+
+  it('produces exactly the pinned Phase 6 statuses/grams and no mass beyond the authority order', () => {
+    const fixture = snapshotFixture as Phase6SnapshotFixture;
+    const { rows, analysis } = fixture;
     for (let index = 0; index < SNAPSHOT.length; index += 1) {
       const expected = SNAPSHOT[index];
       const analyzer = analysis.rows[index];

@@ -93,7 +93,21 @@ function structuredLine(original: string): Record<string, unknown> {
   };
 }
 
-function gardenHarvest() {
+/**
+ * The invariant real-data setup for the 10-line Garden Harvest recipe: the real
+ * pinned-bundle adapt + analyze + review-rows + live projection. It is
+ * deterministic and read-only, but legitimately costs more than a second, so
+ * running it inside every test body repeatedly consumed Vitest's default 5000 ms
+ * per-test budget under full-suite CPU contention (deterministically
+ * reproducible with all cores occupied).
+ *
+ * TEST-STABILITY REPAIR (no coverage change): the setup runs ONCE in the bounded
+ * file-scoped hook below, outside the per-test timeout clock. Every behavioral
+ * assertion remains in its original test body, and every per-test state
+ * derivation (`clearedState`, `merged`, ...) is built from spread copies, so the
+ * shared fixture is never mutated by a test.
+ */
+function buildGardenHarvest() {
   const adaptation = adaptRecipe({
     title: 'Garden Harvest Vegetable Soup',
     servings: 4,
@@ -132,7 +146,20 @@ function gardenHarvest() {
     analysis.portions,
     analysis.countPortions
   );
-  return { adaptation, adapted, analysis, rows, state, liveRows };
+  return Object.freeze({ adaptation, adapted, analysis, rows, state, liveRows });
+}
+
+let gardenHarvestFixture: ReturnType<typeof buildGardenHarvest> | undefined;
+
+beforeAll(() => {
+  gardenHarvestFixture = buildGardenHarvest();
+}, 120000);
+
+function gardenHarvest(): ReturnType<typeof buildGardenHarvest> {
+  if (gardenHarvestFixture === undefined) {
+    throw new Error('garden harvest fixture not initialized');
+  }
+  return gardenHarvestFixture;
 }
 
 describe('Garden Harvest Vegetable Soup — live status authority', () => {

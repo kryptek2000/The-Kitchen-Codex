@@ -151,8 +151,13 @@ const LIVE_STATUS_CLASS: Record<LiveRowStatus, string> = {
   qualitative: 'bg-white/5 text-gray-400 border-white/10',
 };
 
-/** Bounded, user-facing live mass-source text for the collapsed row. */
-function liveMassText(live: LiveRowState): string | undefined {
+/**
+ * Bounded, user-facing live mass-source text for the collapsed row. Direct mass
+ * derived from a written MASS RANGE is labelled as a deterministic midpoint and
+ * always rendered through the same 1-decimal display rounding, so raw
+ * floating-point artifacts are never exposed.
+ */
+export function liveMassText(live: LiveRowState): string | undefined {
   if (live.resolved_grams === undefined) return undefined;
   const grams = Math.round(live.resolved_grams * 10) / 10;
   switch (live.mass_source) {
@@ -169,8 +174,13 @@ function liveMassText(live: LiveRowState): string | undefined {
           : `${grams} g · vetted household portion`;
       return live.household_ai_assisted === true ? `${base} · AI-interpreted wording` : base;
     }
-    case 'direct_mass':
+    case 'direct_mass': {
+      const representative = live.mass_representative;
+      if (representative !== undefined) {
+        return `${grams} g · written range midpoint (${representative.lower}–${representative.upper} ${representative.unit})`;
+      }
       return `${grams} g`;
+    }
     default:
       return `${grams} g`;
   }

@@ -197,7 +197,7 @@ describe('phase 5C — presentation precedence', () => {
 
   it('7. unknown future Advanced + legacy -> advanced_unsupported', () => {
     const r = recipe([FLOUR], {
-      frontmatter: { codex_nutrition: { schema: 3, basis: 'total', futureField: true } },
+      frontmatter: { codex_nutrition: { schema: 4, basis: 'total', futureField: true } },
       nutrition: { calories: 100 } as never,
     });
     const p = resolveRecipeNutritionPresentation(r);

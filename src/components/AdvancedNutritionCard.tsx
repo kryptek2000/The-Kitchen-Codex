@@ -35,7 +35,7 @@ import {
   type UserMassChoice,
 } from '../core/nutritionV2/phase4';
 import { authorizeNutritionPersistence } from '../core/nutritionV2/phase5';
-import type { CodexNutritionV1, CodexNutritionV2 } from '../core/nutritionV2/schema';
+import type { CodexNutritionV1, CodexNutritionV2, CodexNutritionV3 } from '../core/nutritionV2/schema';
 import {
   actionableExceptionRows,
   buildUserChoiceFromAiAmountOffer,
@@ -111,7 +111,7 @@ interface AdvancedNutritionCardProps {
    * nutrition section. The saved report renders from this alone; no USDA
    * session is required. Absent for recipes without a recognized saved result.
    */
-  savedAdvancedBlock?: CodexNutritionV1 | CodexNutritionV2;
+  savedAdvancedBlock?: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3;
   /**
    * Optional AI-assisted USDA resolution port, injected by the shell (the shell
    * owns the network + application layer; the UI never imports the application
@@ -424,7 +424,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
   const liveMatchesSaved = useMemo(
     () =>
       preview !== null &&
-      (stored.kind === 'v1' || stored.kind === 'v2') &&
+      (stored.kind === 'v1' || stored.kind === 'v2' || stored.kind === 'v3') &&
       typeof stored.ingredientDigest === 'string' &&
       stored.ingredientDigest === preview.ingredient_digest,
     [preview, stored.kind, stored.ingredientDigest]
@@ -454,7 +454,11 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
   }, [session, recipe, adaptation, state, stored.kind]);
 
   const applyMode: 'create' | 'replace' | null =
-    stored.kind === 'v1' || stored.kind === 'v2' ? 'replace' : stored.kind === 'none' ? 'create' : null;
+    stored.kind === 'v1' || stored.kind === 'v2' || stored.kind === 'v3'
+      ? 'replace'
+      : stored.kind === 'none'
+        ? 'create'
+        : null;
 
   const handleRequestApply = () => {
     if (!onApplyAdvancedNutrition || applyEligibility !== true || applyMode === null) return;
@@ -1172,7 +1176,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
           {bundleStatus === 'loading' ||
           bundleStatus === 'failed' ||
           bundleStatus === 'unsupported' ||
-          (stored.kind !== 'v1' && stored.kind !== 'v2') ? (
+          (stored.kind !== 'v1' && stored.kind !== 'v2' && stored.kind !== 'v3') ? (
             <p className="text-xs text-gray-300" role="status" aria-live="polite">
               {bundleStatus === 'loading'
                 ? PHASE4_LOADING_MESSAGE
@@ -1247,7 +1251,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
 
       {session && adaptation.ok && (
         <div className="space-y-3">
-          {(stored.kind === 'v1' || stored.kind === 'v2') && (
+          {(stored.kind === 'v1' || stored.kind === 'v2' || stored.kind === 'v3') && (
             <div className="p-3 rounded-xl bg-[#0E0E0E] border border-white/5">
               {stored.status === 'complete' && stored.unresolvedCount === 0 ? (
                 <div data-testid="advanced-saved-complete" className="space-y-0.5">

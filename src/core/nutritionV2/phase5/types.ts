@@ -19,7 +19,7 @@
  * or `src/core/index.ts`; the React layer and tests import it explicitly.
  */
 
-import type { CodexNutritionV1, CodexNutritionV2 } from '../schema';
+import type { CodexNutritionV1, CodexNutritionV2, CodexNutritionV3 } from '../schema';
 import type { AdvancedNutritionSession } from '../phase4/types';
 
 /** Closed authorization-contract version (part of the candidate identity). */
@@ -127,10 +127,11 @@ export interface Phase5AuthorizedCandidate {
   readonly identity: Phase5PersistenceIdentity;
   /**
    * Canonical, schema-validated block (totals only). Schema v1 unless an
-   * applied line carries verified household provenance, in which case the
-   * whole block is schema v2.
+   * applied line carries an extension: verified household provenance makes the
+   * whole block v2; a written-mass-range representative (with or without
+   * household provenance) makes the whole block v3.
    */
-  readonly block: CodexNutritionV1 | CodexNutritionV2;
+  readonly block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3;
   /** Frontmatter-ready encoded whole-block replacement unit. */
   readonly encoded: Record<string, unknown>;
 }

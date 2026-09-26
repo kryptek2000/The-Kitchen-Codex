@@ -176,7 +176,7 @@ describe('phase 4 display — stored block trust', () => {
   it('does not trust malformed or unknown-schema stored blocks', () => {
     expect(summarizeStoredAdvanced(undefined).kind).toBe('none');
     expect(summarizeStoredAdvanced({ kind: 'opaque', schema: 9, data: {} }).kind).toBe('opaque');
-    expect(summarizeStoredAdvanced({ schema: 3, basis: 'total' }).kind).toBe('opaque');
+    expect(summarizeStoredAdvanced({ schema: 4, basis: 'total' }).kind).toBe('opaque');
     expect(summarizeStoredAdvanced({ schema: 1, basis: 'per_serving' }).kind).toBe('opaque');
     expect(summarizeStoredAdvanced({ schema: 1, basis: 'total', nutrients: null }).kind).toBe('opaque');
     expect(summarizeStoredAdvanced('nope').kind).toBe('opaque');

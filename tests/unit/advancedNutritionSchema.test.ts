@@ -691,7 +691,7 @@ describe('UTF-8 serialized byte limit (Finding 3)', () => {
     const big = 'x'.repeat(MAX_EXTENSION_STRING);
     const oversized = { schema: 2, items: new Array(MAX_EXTENSION_ARRAY).fill(big) };
     expect(decodeCodexNutrition(oversized).kind).toBe('malformed');
-    expect(decodeCodexNutrition({ schema: 3, small: 'ok' }).kind).toBe('opaque');
+    expect(decodeCodexNutrition({ schema: 4, small: 'ok' }).kind).toBe('opaque');
 
     // The whole-block byte budget is enforced during materialization, so an
     // oversized recognized block fails closed before field diagnostics.

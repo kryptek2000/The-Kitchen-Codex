@@ -146,16 +146,20 @@ describe('auto analyzer — smoke corpus', () => {
     expect(['matched_check', 'needs_match']).toContain(row.status);
   });
 
-  it('D. provolone: cheese identity dominates; range forces review', () => {
+  it('D. provolone: cheese identity dominates; the written total-mass range resolves by midpoint', () => {
     const lines = ['3 to 4 slices provolone (about 75 to 100 grams in total)'];
-    const { row } = rowFor(lines);
+    const { analysis, row } = rowFor(lines);
     expect(row.selected_description).toMatch(/provolone/i);
     const tops = topDescriptions(lines);
     for (const description of tops) {
       expect(description).not.toMatch(/quail|pheasant|salmon/i);
     }
     expect(hasExplicitMassRange(lines[0])).toBe(true);
-    expect(row.status).toBe('needs_amount');
+    // The line declares its own total mass range, so it resolves through the
+    // documented midpoint policy (75-100 g -> 87.5 g) as direct recipe mass.
+    expect(row.status).toBe('matched');
+    expect(analysis.preview?.ingredients[0].mass_source).toBe('direct_mass');
+    expect(analysis.preview?.ingredients[0].resolved_grams).toBeCloseTo(87.5, 6);
   });
 
   it('E. tomato: tomato only; thinly-sliced beef excluded', () => {
@@ -454,10 +458,18 @@ describe('auto analyzer — row states', () => {
     expect(row.selected_fdc_id).toBeUndefined();
   });
 
-  it('classifies a range-prose count line as needs_amount, not a fabricated number', () => {
-    const { row } = rowFor(['3 to 4 slices provolone (about 75 to 100 grams in total)']);
-    expect(row.status).toBe('needs_amount');
-    expect(row.reason).toBe('explicit_mass_range');
+  it('uses a line-written total-mass range by midpoint and never fabricates a scalar for a massless range', () => {
+    const written = rowFor(['3 to 4 slices provolone (about 75 to 100 grams in total)']);
+    // The recipe's OWN written total mass is honored (documented midpoint
+    // policy); nothing is invented beyond the author's stated range.
+    expect(written.row.status).toBe('matched');
+    expect(written.row.reason).toBe('explicit_mass_range');
+    expect(written.analysis.preview?.ingredients[0].resolved_grams).toBeCloseTo(87.5, 6);
+
+    const massless = rowFor(['2-3 tomatoes']);
+    expect(massless.row.status).toBe('needs_amount');
+    expect(massless.row.reason).not.toBe('explicit_mass_range');
+    expect(massless.analysis.preview?.ingredients[0].resolved_grams).toBeUndefined();
   });
 
   it('records an automatic selection truthfully (auto_confirmed, not user_confirmed)', () => {
@@ -671,11 +683,14 @@ describe('auto analyzer — consolidated audit repair matrix', () => {
     expect(tops.some((d) => /pepper/i.test(d))).toBe(true);
   });
 
-  it('11. `3 to 4 slices provolone (about 75 to 100 grams total)` no quail/pheasant/salmon; amount review', () => {
-    const { row } = rowFor(['3 to 4 slices provolone (about 75 to 100 grams total)']);
+  it('11. `3 to 4 slices provolone (about 75 to 100 grams total)` no quail/pheasant/salmon; written mass honored', () => {
+    const lines = ['3 to 4 slices provolone (about 75 to 100 grams total)'];
+    const { analysis, row } = rowFor(lines);
     expect(row.selected_description).toMatch(/provolone/i);
-    expect(row.status).toBe('needs_amount');
-    const tops = topDescriptions(['3 to 4 slices provolone (about 75 to 100 grams total)'], 0, 12);
+    // The written total mass resolves by midpoint; the identity never crosses.
+    expect(row.status).toBe('matched');
+    expect(analysis.preview?.ingredients[0].resolved_grams).toBeCloseTo(87.5, 6);
+    const tops = topDescriptions(lines, 0, 12);
     for (const d of tops) expect(d).not.toMatch(/quail|pheasant|salmon/i);
   });
 

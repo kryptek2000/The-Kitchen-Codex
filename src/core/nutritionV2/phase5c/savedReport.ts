@@ -23,7 +23,7 @@ import { deriveDailyValue } from '../calculation/dailyValues';
 import { derivePerServing, deriveRequestedServing } from '../calculation/servings';
 import { formatUnitLabel, NUTRIENT_GROUPS } from '../phase4/display';
 import type { BasisMode, DisplayNutrient, NutrientGroup } from '../phase4/types';
-import type { CodexNutritionV1, CodexNutritionV2 } from '../schema';
+import type { CodexNutritionV1, CodexNutritionV2, CodexNutritionV3 } from '../schema';
 
 export const SAVED_REPORT_VERSION = 'usda_phase5c_saved_report_v1';
 
@@ -59,7 +59,7 @@ function scaleStored(
  * nutrient stays `missing`. Never tops up from legacy/simple nutrition.
  */
 export function deriveSavedReportNutrients(
-  block: CodexNutritionV1 | CodexNutritionV2,
+  block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3,
   basis: BasisMode,
   selectedServings: number
 ): ReadonlyArray<DisplayNutrient> {
@@ -107,7 +107,7 @@ export function deriveSavedReportNutrients(
 }
 
 /** Bounded, display-safe saved-report metadata. Never throws on a valid block. */
-export function savedReportMeta(block: CodexNutritionV1 | CodexNutritionV2): SavedReportMeta {
+export function savedReportMeta(block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3): SavedReportMeta {
   const resolved = block.ingredients.length;
   const unresolved = block.unresolved.length;
   return Object.freeze({
@@ -140,7 +140,7 @@ export function savedReportGroups(): ReadonlyArray<NutrientGroup> {
  * `derivePerServing` math used everywhere else (no new rounding scheme).
  */
 export function deriveAdvancedCompactPerServing(
-  block: CodexNutritionV1 | CodexNutritionV2
+  block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3
 ): { calories?: number; protein?: number; carbohydrates?: number; fat?: number; fiber?: number; sodium?: number; servings: number } | undefined {
   if (block.status !== 'complete' || block.unresolved.length > 0) return undefined;
   const base = block.servings;

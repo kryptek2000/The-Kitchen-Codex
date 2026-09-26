@@ -42,6 +42,17 @@ export const CODEX_NUTRITION_SCHEMA_V1 = 1;
  * (basis <-> evidence).
  */
 export const CODEX_NUTRITION_SCHEMA_V2 = 2;
+/**
+ * Schema v3 is the smallest truthful extension of v2: it retains every valid
+ * v1/v2 line/result meaning and adds ONLY the closed per-line
+ * `range_representative` evidence object recording that a resolved
+ * `direct_mass` gram amount is the deterministic MIDPOINT of a recipe-authored
+ * WRITTEN MASS RANGE (`3-4 lb`), not an authored scalar. The evidence is
+ * coupled to `conversion_basis: 'direct_mass'` and to the stored canonical
+ * `amount` (grams). v1/v2 blocks must never contain it; v3 blocks may carry it
+ * on direct-mass lines and retain the v2 household meaning unchanged.
+ */
+export const CODEX_NUTRITION_SCHEMA_V3 = 3;
 export const CODEX_NUTRITION_BASIS_TOTAL = 'total';
 export const CODEX_NUTRITION_FRONTMATTER_KEY = 'codex_nutrition';
 
@@ -142,8 +153,40 @@ export interface IngredientEvidenceV2 extends Omit<IngredientEvidence, 'conversi
   household_portion?: HouseholdPortionEvidence;
 }
 
+/**
+ * Schema-v3 per-ingredient evidence. It retains every v1/v2 meaning and adds the
+ * closed written-mass-range representative evidence object. The marker is
+ * coupled to the `direct_mass` conversion basis and to the canonical stored
+ * `amount`: an exact author-written scalar carries no marker, and a midpoint
+ * representative can never be persisted without its authored endpoints. This is
+ * deterministic recipe-authored evidence, NEVER an AI estimate.
+ */
+export interface IngredientEvidenceV3 extends IngredientEvidenceV2 {
+  range_representative?: WrittenMassRangeEvidence;
+}
+
+/**
+ * Deterministic representative provenance for a recipe-authored WRITTEN MASS
+ * RANGE (for example `3-4 lb`). `lower`/`upper` are the author's own endpoints
+ * in `unit`; `representative_grams` is the arithmetic-midpoint grams scalar the
+ * calculation used. It is persisted ONLY on a resolved `direct_mass` line whose
+ * canonical `amount` equals `representative_grams`, so a block-only consumer can
+ * always distinguish a range midpoint from an exact authored scalar. It never
+ * carries nutrients, AI data, or any additional amount authority.
+ */
+export interface WrittenMassRangeEvidence {
+  readonly amount_source: 'written_mass_range';
+  readonly policy: 'midpoint';
+  readonly lower: number;
+  readonly upper: number;
+  /** Original authored mass unit (`g`, `kg`, `oz`, `lb`, `grams`, ...). */
+  readonly unit: string;
+  /** Canonical midpoint grams; equals the stored `amount.value`. */
+  readonly representative_grams: number;
+}
+
 /** Version-neutral read view of per-ingredient evidence. */
-export type AnyIngredientEvidence = IngredientEvidence | IngredientEvidenceV2;
+export type AnyIngredientEvidence = IngredientEvidence | IngredientEvidenceV2 | IngredientEvidenceV3;
 
 export type UnresolvedReason = 'no_match' | 'ambiguous' | 'no_mass' | 'no_nutrition' | 'qualitative';
 
@@ -205,6 +248,16 @@ export interface CodexNutritionV2 extends Omit<CodexNutritionV1, 'schema' | 'ing
   ingredients: IngredientEvidenceV2[];
 }
 
+/**
+ * Recognized schema-v3 block. Every v1/v2 meaning is retained verbatim; only the
+ * closed written-mass-range representative evidence is added (see
+ * `IngredientEvidenceV3`). Household evidence remains valid in v3.
+ */
+export interface CodexNutritionV3 extends Omit<CodexNutritionV1, 'schema' | 'ingredients'> {
+  schema: 3;
+  ingredients: IngredientEvidenceV3[];
+}
+
 /** Bounded opaque safe data for an unknown FUTURE schema value. */
 export interface OpaqueCodexNutrition {
   kind: 'opaque';
@@ -213,7 +266,11 @@ export interface OpaqueCodexNutrition {
 }
 
 /** The parsed advanced-nutrition view attached to an ObsidianRecipe. */
-export type AdvancedNutritionBlock = CodexNutritionV1 | CodexNutritionV2 | OpaqueCodexNutrition;
+export type AdvancedNutritionBlock =
+  | CodexNutritionV1
+  | CodexNutritionV2
+  | CodexNutritionV3
+  | OpaqueCodexNutrition;
 
 export const MAX_SERVINGS = 1000;
 export const MAX_SOURCES = NUTRITION_SOURCE_IDS.length;
@@ -226,6 +283,8 @@ export const MAX_SOURCE_ID_LENGTH = 128;
 export const MAX_SOURCE_RELEASE_LENGTH = 64;
 export const MAX_SERVING_SIZE_LENGTH = 120;
 export const MAX_TIMESTAMP_LENGTH = 40;
+/** Bounded original mass-unit text on a persisted written-range marker. */
+export const MAX_RANGE_UNIT_LENGTH = 24;
 export const MAX_MANUAL_NOTE_LENGTH = 500;
 export const MAX_EXTENSION_DEPTH = 4;
 export const MAX_EXTENSION_KEYS = 50;

@@ -13,6 +13,7 @@
 
 import type { NutrientId } from '../nutrients';
 import type { CanonicalUnit } from '../units';
+import type { WrittenMassRangeEvidence } from '../schema';
 import type { UsdaDataType } from '../usda/types';
 
 export const CALCULATION_SCHEMA = 1;
@@ -195,6 +196,14 @@ export interface IngredientCalculationEvidence {
   /** Entered total-weight quantity/unit for a `user_mass` result. */
   readonly user_mass_quantity?: number;
   readonly user_mass_unit?: string;
+  /**
+   * Deterministic written-mass-range representative evidence for a `direct_mass`
+   * result whose gram amount is the MIDPOINT of the recipe author's own written
+   * range. Present ONLY for a range-derived direct mass; an exact authored
+   * scalar omits it. This is recipe-authored deterministic evidence, NEVER an AI
+   * estimate, and it never changes the resolved grams.
+   */
+  readonly range_representative?: WrittenMassRangeEvidence;
   /**
    * Verified Kitchen Codex household-portion evidence for a
    * `household_portion` result. Every field is re-derived and re-verified by the

@@ -115,6 +115,38 @@ function householdEntry(block: Record<string, unknown>): Record<string, unknown>
   return (block.ingredients as Array<Record<string, unknown>>)[0];
 }
 
+/** A valid canonical v3 block whose line carries a written-range midpoint. */
+function validV3(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const v1 = validV1();
+  return {
+    ...v1,
+    schema: 3,
+    ingredients: [
+      {
+        line_ref: '3-4 lb ground beef',
+        source: 'usda_fdc',
+        source_food_id: '171077',
+        source_release: '2026-04',
+        match_status: 'confirmed',
+        resolved: true,
+        user_confirmed: true,
+        amount: { value: 1587.573295, unit: 'g' },
+        conversion_basis: 'direct_mass',
+        range_representative: {
+          amount_source: 'written_mass_range',
+          policy: 'midpoint',
+          lower: 3,
+          upper: 4,
+          unit: 'lb',
+          representative_grams: 1587.573295,
+        },
+      },
+    ],
+    unresolved: [],
+    ...overrides,
+  };
+}
+
 describe('schema v2 — restored v1 contract (parent-style reader)', () => {
   it('v1 still accepts the canonical v1 block and its valid bases', () => {
     for (const basis of ['direct_mass', 'source_portion'] as const) {
@@ -285,16 +317,23 @@ describe('schema v2 — version-specific decoding', () => {
     }
   });
 
-  it('the new reader never interprets version 3 or an unknown future version', () => {
-    const v3 = validV2({ schema: 3 });
+  it('the v2 reader never interprets schema 3 as v2, and preserves an unknown future version', () => {
+    // A v3 block carrying written-range evidence is invalid under v1/v2 (the
+    // evidence key is unknown there) and decodes only as v3.
+    const v3 = validV3();
     const decoded = decodeCodexNutrition(v3);
-    // Unknown FUTURE schemas keep the established opaque-preservation contract:
-    // they are never validated as v1/v2 and never interpreted.
-    expect(decoded.kind).toBe('opaque');
-    if (decoded.kind === 'opaque') expect(decoded.value.schema).toBe(3);
-    expect(validateCodexNutrition(v3).ok).toBe(false);
-    expect(validateCodexNutritionV1(v3).ok).toBe(false);
+    expect(decoded.kind).toBe('v3');
     expect(validateCodexNutritionV2(v3).ok).toBe(false);
+    expect(validateCodexNutritionV1(v3).ok).toBe(false);
+    expect(validateCodexNutrition(v3).ok).toBe(true);
+    // v3 RETAINS every v2 meaning: a household-only block labeled 3 is valid v3.
+    expect(validateCodexNutrition(validV2({ schema: 3 })).ok).toBe(true);
+    // An unknown FUTURE schema (4+) keeps the opaque-preservation contract.
+    const future = validV2({ schema: 4 });
+    const futureDecoded = decodeCodexNutrition(future);
+    expect(futureDecoded.kind).toBe('opaque');
+    if (futureDecoded.kind === 'opaque') expect(futureDecoded.value.schema).toBe(4);
+    expect(validateCodexNutrition(future).ok).toBe(false);
     expect(decodeCodexNutrition(validV2({ schema: 'two' })).kind).toBe('malformed');
   });
 });

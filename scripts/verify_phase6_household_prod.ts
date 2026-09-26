@@ -33,6 +33,7 @@ import { decodeCodexNutrition, encodeCodexNutrition } from '../src/core/nutritio
 import type {
   CodexNutritionV1,
   CodexNutritionV2,
+  CodexNutritionV3,
   HouseholdPortionEvidence,
   IngredientEvidenceV2,
 } from '../src/core/nutritionV2/schema';
@@ -156,7 +157,7 @@ async function main(): Promise<void> {
   record('the live summary counts the row as matched', summarizeLiveRows(live).matched === 1);
 
   // CLOSE WITHOUT APPLY: no persistence call is made, so no block exists.
-  let persistedBlock: CodexNutritionV1 | CodexNutritionV2 | undefined;
+  let persistedBlock: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | undefined;
   record('closing without Apply persists nothing', persistedBlock === undefined);
 
   // EXPLICIT APPLY (authorization only; the vault write remains the app's job).

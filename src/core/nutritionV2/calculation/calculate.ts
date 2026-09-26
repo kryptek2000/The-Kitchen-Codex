@@ -13,7 +13,7 @@
  * authorizes anything.
  */
 
-import { isPlainObject, toInertValue } from '../schema';
+import { isPlainObject, toInertValue, type WrittenMassRangeEvidence } from '../schema';
 import { canonicalStringify, sha256Hex } from '../usda/digest';
 import { isNutrientId, NUTRIENT_IDS, NUTRIENT_REGISTRY, type NutrientId } from '../nutrients';
 import { isValidNutrientAmount, MAX_NUTRIENT_AMOUNT, type CanonicalUnit } from '../units';
@@ -239,6 +239,11 @@ interface EvaluatedIngredient {
   readonly householdAuthorityClass: string | undefined;
   readonly householdQuantity: number | undefined;
   readonly householdSelectionDigest: string | undefined;
+  /**
+   * Deterministic written-mass-range evidence; set ONLY when the resolved mass
+   * is a `direct_mass` midpoint of a recipe-authored range.
+   */
+  readonly rangeRepresentative: WrittenMassRangeEvidence | undefined;
   readonly contributions: Partial<Record<NutrientId, number>>;
   readonly contributingNutrients: ReadonlyArray<NutrientId>;
   readonly outcome: IngredientOutcome;
@@ -297,6 +302,9 @@ function fullPayload(e: EvaluatedIngredient) {
             selection_digest: e.householdSelectionDigest,
           },
         }
+      : {}),
+    ...(e.rangeRepresentative !== undefined
+      ? { range_representative: e.rangeRepresentative }
       : {}),
     resolved_grams: e.grams ?? null,
     outcome: e.outcome,
@@ -790,6 +798,7 @@ function evaluateIngredient(
     householdAuthorityClass: undefined,
     householdQuantity: undefined,
     householdSelectionDigest: undefined,
+    rangeRepresentative: undefined,
     contributions: {},
     contributingNutrients: [],
     outcome: 'no_match',
@@ -1056,6 +1065,10 @@ function evaluateIngredient(
     householdAuthorityClass,
     householdQuantity,
     householdSelectionDigest,
+    // A written-range representative exists ONLY for a resolved direct recipe
+    // mass: an unresolved line, a portion-backed mass, or an exact scalar never
+    // carries the marker.
+    rangeRepresentative: massSource === 'direct_mass' ? parsed.range_representative : undefined,
     contributions,
     contributingNutrients,
     outcome,
@@ -1214,6 +1227,9 @@ export function runAdvisoryCalculation(inputs: AdvisoryCalculationInputs): Calcu
           : {}),
         ...(entry.userMassQuantity !== undefined ? { user_mass_quantity: entry.userMassQuantity } : {}),
         ...(entry.userMassUnit !== undefined ? { user_mass_unit: entry.userMassUnit } : {}),
+        ...(entry.rangeRepresentative !== undefined
+          ? { range_representative: entry.rangeRepresentative }
+          : {}),
         ...(entry.householdRecordKey !== undefined
           ? {
               household_registry_release: entry.householdRegistryRelease,

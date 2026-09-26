@@ -219,7 +219,9 @@ function verifyPersistedBlock(
 ): void {
   const parsed = parseObsidianRecipeMarkdown(markdown, recipe.fileName, recipe.filePath);
   const decoded = decodeCodexNutrition(parsed.codexNutrition);
-  if (decoded.kind !== 'v1' && decoded.kind !== 'v2') throw new Error('advanced_nutrition_verify');
+  if (decoded.kind !== 'v1' && decoded.kind !== 'v2' && decoded.kind !== 'v3') {
+    throw new Error('advanced_nutrition_verify');
+  }
   const encoded = encodeCodexNutrition(decoded.value);
   const digest = `sha256:${sha256Hex(canonicalStringify(encoded))}`;
   if (digest !== candidateDigest) throw new Error('advanced_nutrition_verify');
@@ -264,7 +266,9 @@ export async function applyAdvancedNutrition(requestRaw: unknown): Promise<Advan
     if (decodedExisting.kind === 'opaque') return fail('unknown_future_schema');
     if (decodedExisting.kind === 'malformed') return fail('invalid_existing_block');
     const currentMode: 'create' | 'replace' =
-      decodedExisting.kind === 'v1' || decodedExisting.kind === 'v2' ? 'replace' : 'create';
+      decodedExisting.kind === 'v1' || decodedExisting.kind === 'v2' || decodedExisting.kind === 'v3'
+        ? 'replace'
+        : 'create';
 
     // The mode the UI showed must still match the current stored block.
     const expectedModeField = ownField(requestRaw, 'expectedMode');

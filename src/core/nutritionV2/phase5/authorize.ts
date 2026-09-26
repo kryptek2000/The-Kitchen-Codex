@@ -44,14 +44,18 @@
 import {
   isPlainObject,
   MAX_TIMESTAMP_LENGTH,
+  MAX_RANGE_UNIT_LENGTH,
   type CodexNutritionV1,
   type CodexNutritionV2,
+  type CodexNutritionV3,
   type IngredientEvidenceV2,
+  type IngredientEvidenceV3,
   type NutrientResult,
   type NutritionBlockStatus,
   type NutritionSourceId,
   type UnresolvedIngredientRef,
   type UnresolvedReason,
+  type WrittenMassRangeEvidence,
 } from '../schema';
 import { canonicalStringify, sha256Hex } from '../usda/digest';
 import { DV_STANDARD_ID } from '../dailyValues';
@@ -149,6 +153,7 @@ function resolvePersistenceMode(
       return { ok: true, mode: 'create' };
     case 'v1':
     case 'v2':
+    case 'v3':
       return { ok: true, mode: 'replace' };
     case 'opaque':
       // A safe but unknown FUTURE schema is never authorized for overwrite.
@@ -262,17 +267,66 @@ function conversionBasisFor(
 
 interface BlockBuild {
   readonly ok: true;
-  readonly block: CodexNutritionV1 | CodexNutritionV2;
+  readonly block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3;
 }
 
 /**
- * Canonical conditional write policy (Phase 6 repair):
- *   - when ANY applied line carries the `household_portion` basis, the WHOLE
- *     block is serialized as schema v2 (household provenance is a v2 meaning);
- *   - when no household line exists, the canonical write remains schema v1
+ * Canonicalizes a Phase 3 written-mass-range representative from the GENUINE
+ * re-derived preview. A persisted marker is admitted ONLY when the authored
+ * endpoints/unit are well-formed and the representative midpoint matches the
+ * resolved direct mass within the canonical rounding bound; the marker's
+ * `representative_grams` is then written as the SAME canonical rounded scalar as
+ * the line `amount`, so a block-only consumer can never see a contradictory
+ * pair. Malformed or absent evidence yields no marker (never a fabricated one).
+ */
+function persistedRangeRepresentative(
+  raw: WrittenMassRangeEvidence | undefined,
+  grams: number
+): WrittenMassRangeEvidence | undefined {
+  if (raw === undefined) return undefined;
+  if (raw.amount_source !== 'written_mass_range' || raw.policy !== 'midpoint') return undefined;
+  const lower = raw.lower;
+  const upper = raw.upper;
+  if (typeof lower !== 'number' || !Number.isFinite(lower) || lower <= 0 || Object.is(lower, -0)) {
+    return undefined;
+  }
+  if (typeof upper !== 'number' || !Number.isFinite(upper) || upper <= 0 || Object.is(upper, -0)) {
+    return undefined;
+  }
+  if (lower > upper) return undefined;
+  if (typeof raw.unit !== 'string') return undefined;
+  const unit = raw.unit.trim();
+  if (unit.length === 0 || unit.length > MAX_RANGE_UNIT_LENGTH || /[\u0000-\u001f\u007f-\u009f]/.test(unit)) {
+    return undefined;
+  }
+  if (typeof raw.representative_grams !== 'number' || !Number.isFinite(raw.representative_grams)) {
+    return undefined;
+  }
+  // The preview midpoint is derived from the same parse as the resolved grams;
+  // it may only differ by the canonical 6-decimal rounding of the stored amount.
+  if (Math.abs(raw.representative_grams - grams) > 1e-6) return undefined;
+  return {
+    amount_source: 'written_mass_range',
+    policy: 'midpoint',
+    lower,
+    upper,
+    unit,
+    representative_grams: grams,
+  };
+}
+
+/**
+ * Canonical conditional write policy (Phase 6 + persisted-range repair):
+ *   - when ANY applied line carries the `household_portion` basis, the block is
+ *     serialized as schema v2 (household provenance is a v2/v3 meaning);
+ *   - when ANY applied line carries a written-mass-range representative, the
+ *     WHOLE block is serialized as schema v3 (the range marker is a v3 meaning;
+ *     v3 retains household evidence, so a household + range block is v3);
+ *   - when neither extension exists, the canonical write remains schema v1
  *     exactly as before.
- * A recipe that drops its last household line therefore deterministically
- * returns to canonical schema v1 on the next Apply.
+ * A recipe that drops its last extended-provenance line therefore
+ * deterministically returns to the smallest truthful schema version on the next
+ * Apply (v2 with household only, v1 with neither).
  */
 function buildPersistenceBlock(preview: AdvisoryNutritionPreview, computedAt: string): BlockBuild {
   const sources: NutritionSourceId[] = ['usda_fdc'];
@@ -294,13 +348,24 @@ function buildPersistenceBlock(preview: AdvisoryNutritionPreview, computedAt: st
     };
   }
 
-  const ingredients: IngredientEvidenceV2[] = [];
+  const ingredients: IngredientEvidenceV3[] = [];
   let hasHouseholdBasis = false;
+  let hasRangeRepresentative = false;
   for (const entry of preview.ingredients) {
     if (entry.outcome !== 'calculated') continue;
     if (entry.fdc_id === undefined || entry.resolved_grams === undefined) continue;
     const conversion = conversionBasisFor(entry.mass_source);
     if (conversion === 'household_portion') hasHouseholdBasis = true;
+    const canonicalGrams = roundCanonicalTotal(entry.resolved_grams);
+    // Persisted written-mass-range provenance: the marker exists ONLY for a
+    // resolved `direct_mass` line and is coherent with the stored amount. It is
+    // deterministic recipe-authored evidence, never AI-supplied and never
+    // re-derived from the caller's claimed preview.
+    const rangeRepresentative =
+      entry.mass_source === 'direct_mass'
+        ? persistedRangeRepresentative(entry.range_representative, canonicalGrams)
+        : undefined;
+    if (rangeRepresentative !== undefined) hasRangeRepresentative = true;
     // Phase 6 household provenance: persist ONLY the bounded re-authentication
     // evidence (registry release + record binding + quantity + selection digest).
     // A household basis without complete evidence is persisted WITHOUT the
@@ -341,9 +406,10 @@ function buildPersistenceBlock(preview: AdvisoryNutritionPreview, computedAt: st
       match_status: 'confirmed',
       resolved: true,
       user_confirmed: true,
-      amount: { value: roundCanonicalTotal(entry.resolved_grams), unit: 'g' },
+      amount: { value: canonicalGrams, unit: 'g' },
       ...(conversion ? { conversion_basis: conversion } : {}),
       ...(householdPortion ? { household_portion: householdPortion } : {}),
+      ...(rangeRepresentative ? { range_representative: rangeRepresentative } : {}),
     });
   }
 
@@ -377,7 +443,7 @@ function buildPersistenceBlock(preview: AdvisoryNutritionPreview, computedAt: st
     });
   }
 
-  const schema = hasHouseholdBasis ? 2 : 1;
+  const schema = hasRangeRepresentative ? 3 : hasHouseholdBasis ? 2 : 1;
   const block = {
     schema,
     basis: 'total',
@@ -392,7 +458,7 @@ function buildPersistenceBlock(preview: AdvisoryNutritionPreview, computedAt: st
     nutrients,
     ingredients,
     unresolved,
-  } as CodexNutritionV1 | CodexNutritionV2;
+  } as CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3;
   return { ok: true, block };
 }
 
@@ -479,7 +545,7 @@ export function authorizeNutritionPersistence(requestRaw: unknown): Phase5Author
       // The existing block may be stored in its encoded frontmatter form; use
       // the SAME decoding the mode resolution already performed.
       const decodedExisting = decodeCodexNutrition(existingField.value);
-      if (decodedExisting.kind === 'v1' || decodedExisting.kind === 'v2') {
+      if (decodedExisting.kind === 'v1' || decodedExisting.kind === 'v2' || decodedExisting.kind === 'v3') {
         const derivedResolved = new Set(
           built.block.ingredients.filter((entry) => entry.resolved === true).map((entry) => entry.line_ref)
         );

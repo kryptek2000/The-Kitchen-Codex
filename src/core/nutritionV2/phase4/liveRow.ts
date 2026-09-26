@@ -92,6 +92,19 @@ export interface LiveRowState {
    * authority and never persisted.
    */
   readonly household_ai_assisted?: boolean;
+  /**
+   * Present ONLY when the effective direct mass is the deterministic MIDPOINT of
+   * a recipe-authored mass range. Display/evidence only: the written endpoints
+   * remain the source, and an exact scalar mass leaves this undefined, so the
+   * two are always distinguishable downstream.
+   */
+  readonly mass_representative?: {
+    readonly amount_source: 'written_mass_range';
+    readonly policy: 'midpoint';
+    readonly lower: number;
+    readonly upper: number;
+    readonly unit: string;
+  };
 }
 
 function finitePositive(value: unknown): value is number {
@@ -286,10 +299,29 @@ export function projectLiveRow(input: LiveRowProjectionInput): LiveRowState {
   let householdRequiresState: string | undefined;
   let householdAuthorityClass: string | undefined;
   let householdAiAssisted: boolean | undefined;
+  let massRepresentative:
+    | {
+        readonly amount_source: 'written_mass_range';
+        readonly policy: 'midpoint';
+        readonly lower: number;
+        readonly upper: number;
+        readonly unit: string;
+      }
+    | undefined;
 
   if (authority.kind === 'direct_mass') {
     resolvedGrams = authority.grams;
     massSource = 'direct_mass';
+    const representative = measurement?.range_representative;
+    if (representative !== undefined) {
+      massRepresentative = Object.freeze({
+        amount_source: representative.amount_source,
+        policy: representative.policy,
+        lower: representative.lower,
+        upper: representative.upper,
+        unit: representative.unit,
+      });
+    }
   } else if (
     (authority.kind === 'user_mass' ||
       authority.kind === 'source_portion' ||
@@ -399,6 +431,7 @@ export function projectLiveRow(input: LiveRowProjectionInput): LiveRowState {
         measurement_kind: 'unknown',
         milliliters: undefined,
         grams: undefined,
+        range_representative: undefined,
       });
       if (grams !== undefined) {
         resolvedGrams = grams;
@@ -435,6 +468,7 @@ export function projectLiveRow(input: LiveRowProjectionInput): LiveRowState {
     household_requires_state: householdRequiresState,
     household_authority_class: householdAuthorityClass,
     ...(householdAiAssisted === true ? { household_ai_assisted: true } : {}),
+    ...(massRepresentative !== undefined ? { mass_representative: massRepresentative } : {}),
   });
 }
 

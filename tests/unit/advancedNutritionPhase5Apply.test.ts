@@ -502,7 +502,7 @@ describe('phase 5B — forged input cannot cause a write', () => {
 
 describe('phase 5B — existing block protection', () => {
   it('fails closed and preserves an unknown future schema', async () => {
-    const future = { schema: 3, basis: 'total', futureField: { nested: [1, 2, 3] } };
+    const future = { schema: 4, basis: 'total', futureField: { nested: [1, 2, 3] } };
     const before = JSON.stringify(future);
     const recipe = obsidianRecipe([structured(FLOUR_LINE)], { frontmatter: { codex_nutrition: future } });
     const reviewed = buildReviewed(SESSION, recipe, ['calories', 'protein']);

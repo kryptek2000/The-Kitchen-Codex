@@ -174,6 +174,23 @@ export interface NormalizedQuery {
  * text and never mutates the source. `grams`/`milliliters` are populated ONLY
  * for direct mass / volume units; count and unknown never carry mass.
  */
+/**
+ * Deterministic representative metadata for a recipe-authored MASS RANGE. The
+ * endpoints are the author's authority; `representative_grams` is the bounded
+ * MIDPOINT scalar used by the calculation. This is recipe-authored deterministic
+ * range handling, NOT an AI estimate, and it is never persisted as if it were an
+ * exact author-written scalar.
+ */
+export interface RangeRepresentative {
+  readonly amount_source: 'written_mass_range';
+  readonly policy: 'midpoint';
+  readonly lower: number;
+  readonly upper: number;
+  /** Canonical mass unit the endpoints were written in (`g`, `kg`, `oz`, `lb`). */
+  readonly unit: string;
+  readonly representative_grams: number;
+}
+
 export interface ParsedIngredientReview {
   /** Bounded stable reference (caller-supplied, else the original text). */
   readonly line_ref: string;
@@ -204,6 +221,12 @@ export interface ParsedIngredientReview {
   readonly quantity_kind: CanonicalQuantityKind;
   /** Range endpoints when `quantity_kind === 'range'`; undefined otherwise. */
   readonly quantity_range: { readonly lower: number; readonly upper: number } | undefined;
+  /**
+   * Present ONLY when `grams` was derived from a written MASS RANGE (the
+   * documented midpoint policy). An exact author-written scalar mass leaves this
+   * undefined, so the two remain distinguishable downstream.
+   */
+  readonly range_representative: RangeRepresentative | undefined;
   /** Canonical unit classification: mass, volume, count, container, unknown. */
   readonly unit_kind: CanonicalUnitKind;
   /** Canonical count noun (leading or after the food), when recognized. */

@@ -36,6 +36,7 @@
 import type {
   CodexNutritionV1,
   CodexNutritionV2,
+  CodexNutritionV3,
   HouseholdPortionEvidence,
   IngredientEvidence,
   IngredientEvidenceV2,
@@ -74,7 +75,7 @@ export interface HydrateWorkingReviewParams {
   readonly session: AdvancedNutritionSession;
   readonly adapted: ReadonlyArray<AdaptedIngredient>;
   readonly rows: ReadonlyArray<Phase4Row>;
-  readonly savedBlock: CodexNutritionV1 | CodexNutritionV2;
+  readonly savedBlock: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3;
 }
 
 function parseFdcId(value: unknown): number | undefined {

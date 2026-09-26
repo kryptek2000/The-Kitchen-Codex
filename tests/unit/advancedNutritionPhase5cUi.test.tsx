@@ -226,7 +226,7 @@ describe('phase 5C — consolidated Nutrition UI', () => {
   it('reports an unknown future schema and keeps the legacy fallback clearly labelled', () => {
     renderSection(
       recipe([FLOUR], {
-        frontmatter: { codex_nutrition: { schema: 3, basis: 'total' } },
+        frontmatter: { codex_nutrition: { schema: 4, basis: 'total' } },
         nutrition: { calories: 100 } as never,
       })
     );

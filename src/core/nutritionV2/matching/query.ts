@@ -162,6 +162,7 @@ const PREPARATION_QUALIFIERS: ReadonlySet<string> = new Set([
   'stemmed',
   'seeded',
   'cored',
+  'shucked',
   'julienned',
   'cubed',
   'cubing',

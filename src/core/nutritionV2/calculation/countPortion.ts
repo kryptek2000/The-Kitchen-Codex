@@ -359,7 +359,13 @@ export function extractCountIdentity(
   }
   if (amount === null) return null;
 
-  const tokens = normalizeToken(remainder).split(' ').filter(Boolean);
+  // Parenthetical descriptors are package/portion metadata, never the count
+  // identity: `1 slice (15 per 8 oz package)` is ONE SLICE, and the embedded
+  // package mass must not discard an otherwise valid count portion. Strip every
+  // parenthetical group BEFORE the mass/volume token guard so a package-size
+  // note can never remove a legitimate count identity.
+  const remainderWithoutParentheticals = remainder.replace(/\([^()]*\)/g, ' ').trim();
+  const tokens = normalizeToken(remainderWithoutParentheticals).split(' ').filter(Boolean);
   if (tokens.length === 0) return null;
   // A mass/volume unit is never a count identity.
   if (tokens.some((token) => MASS_OR_VOLUME_TOKENS.has(token))) return null;

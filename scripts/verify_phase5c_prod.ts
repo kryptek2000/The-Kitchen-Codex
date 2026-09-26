@@ -262,7 +262,7 @@ function seedVaultFiles(): Record<string, string> {
   files['Unsupported Recipe.md'] = serializeRecipeToObsidianMarkdown(
     baseRecipe('Unsupported Recipe', {
       nutrition: { calories: 100, servings: 4 } as never,
-      frontmatter: { codex_nutrition: { schema: 3, basis: 'total', futureField: true } },
+      frontmatter: { codex_nutrition: { schema: 4, basis: 'total', futureField: true } },
     })
   );
 

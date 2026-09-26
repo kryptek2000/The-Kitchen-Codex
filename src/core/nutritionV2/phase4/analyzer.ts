@@ -290,6 +290,55 @@ function chooseBestEffortFood(
 }
 
 /**
+ * Order-independent token key for one candidate's normalized description. Used
+ * ONLY to prove two USDA records are the SAME food (identical description token
+ * set), never to compare different foods.
+ */
+function descriptionTokenKey(description: unknown): string {
+  if (typeof description !== 'string' || description.length === 0) return '';
+  return description.toLowerCase().split(/\s+/).filter(Boolean).sort().join(' ');
+}
+
+/**
+ * STRICT-SELECTION PORTION EQUIVALENCE (VOLUME ONLY). A strict automatic
+ * selection (unique exact / unambiguous specific match) is never reordered
+ * toward a different food. When the strict record exposes NO compatible
+ * authenticated VOLUME portion at all for the recipe's measurement, and
+ * ANOTHER candidate carries the IDENTICAL normalized description token set (an
+ * equivalent duplicate USDA record of the SAME food, e.g. two `Cream, heavy`
+ * records), preferring the portion-bearing duplicate is a pure
+ * measurement-resolution choice, not an identity change.
+ *
+ * Count/stalk-style interpretations are deliberately NOT reordered here: the
+ * Phase 1/4/5/6 contract keeps size-specific count portions from binding an
+ * unsized requirement, and an ambiguous-but-present portion set stays with the
+ * strict default. The identity gate is never crossed.
+ */
+function chooseDescriptionEquivalentPortionFood(
+  session: AdvancedNutritionSession,
+  entry: AdaptedIngredient,
+  review: IngredientReviewResult,
+  defaultFdcId: number,
+  measurementKind: string
+): number {
+  if (measurementKind !== 'volume') return defaultFdcId;
+  if (hasCompatibleAuthenticatedMass(session, entry, defaultFdcId, measurementKind)) {
+    return defaultFdcId;
+  }
+  const defaultCandidate = review.candidates.find((candidate) => candidate.fdc_id === defaultFdcId);
+  const defaultKey = descriptionTokenKey(defaultCandidate?.normalized_description);
+  if (defaultKey.length === 0) return defaultFdcId;
+  for (const candidate of review.candidates) {
+    if (candidate.fdc_id === defaultFdcId) continue;
+    if (descriptionTokenKey(candidate.normalized_description) !== defaultKey) continue;
+    if (hasCompatibleAuthenticatedMass(session, entry, candidate.fdc_id, measurementKind)) {
+      return candidate.fdc_id;
+    }
+  }
+  return defaultFdcId;
+}
+
+/**
  * Analyzes one adapted recipe: deterministic auto-selection + auto-portion +
  * compact row statuses + advisory preview. Never throws for an adapted recipe.
  */
@@ -374,16 +423,15 @@ export function analyzeRecipe(
       continue;
     }
 
-    // Portion-aware same-family default: prefer an otherwise-equivalent sibling
-    // that can actually satisfy the recipe measurement with an authenticated
-    // portion. Food identity always wins over portion availability, and a STRICT
-    // automatic selection (unique exact / unambiguous specific match) is never
-    // reordered.
+    // Portion-aware candidate resolution. Food identity always wins over portion
+    // availability: a best-effort default may prefer a same-family sibling, and a
+    // STRICT selection may only prefer an IDENTICAL-description duplicate record.
     const strict = selectAutomaticMatch(review);
-    const chosenFdcId =
-      entry && strict === undefined
+    const chosenFdcId = entry
+      ? strict === undefined
         ? chooseBestEffortFood(session, entry, review, automatic.fdc_id, measurementKind)
-        : automatic.fdc_id;
+        : chooseDescriptionEquivalentPortionFood(session, entry, review, automatic.fdc_id, measurementKind)
+      : automatic.fdc_id;
     const selected = review.candidates.find((candidate) => candidate.fdc_id === chosenFdcId);
     const selectedDescription = selected?.description;
 

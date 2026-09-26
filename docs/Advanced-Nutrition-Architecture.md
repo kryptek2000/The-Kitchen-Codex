@@ -5462,3 +5462,249 @@ grammar, provider catalog, hosting, or billing contract changed.
   unresolved behavior; live projection claims no grams and no MATCHED state.
 
 Phase 8 remains NOT STARTED.
+
+## 39. Phase 7 resolution-coverage systemic repair (benchmark-driven)
+
+Real-world smoke testing showed that Advanced Nutrition left too many ordinary
+ingredients unresolved even when the pipeline held enough information. A
+checked-in benchmark was added before any behavior change:
+
+- corpus: `tests/fixtures/advancedNutritionResolutionCorpus.ts` (class lines plus
+  the reused real-ingredient identity corpus);
+- runner: `scripts/benchmark_resolution_coverage.ts` (real pinned bundle; prints
+  per-line terminal state, authenticated mass source, and bounded failure reason
+  codes; `--json` for before/after comparison).
+
+Baseline on the corpus: 91 lines, 33 fully auto-resolved (36.3%); top reasons
+`qualitative_or_absent_amount`, `selected_record_lacks_compatible_portion`,
+`identity_needs_review`, `authenticated_count_absent`,
+`compatible_candidate_exists_but_not_selected`, `mass_range_not_parsed`,
+`container_mass_absent`. After the generalized repairs below: 42/91 (46.2%),
+with **no line losing its previous resolution and no wrong-food resolution
+added** (all newly resolved classes use an authenticated deterministic source).
+
+### 39.1 Explicit mass ranges (documented midpoint policy)
+
+`quantity_range` was parsed but never consumed, so `3-4 lb`, `75-100 grams`,
+and `3 to 4 lb` stayed `NEEDS AMOUNT`. The review parse now derives a
+representative grams value for a **direct MASS range** as the arithmetic
+MIDPOINT of the recipe author's own endpoints
+(`representativeMassGrams` in `matching/parse.ts`). Truthfulness is preserved:
+`amount` stays `null`, `quantity_kind` stays `range`, and `quantity_range`
+keeps both endpoints, so no endpoint is silently chosen and the range remains
+visible to the working review. Count and volume ranges are deliberately NOT
+converted (a midpoint count/volume would fake precision the recipe never
+stated).
+
+### 39.2 Explicit secondary (parenthetical) mass
+
+A parenthetical explicit total mass is the same authority class as a direct mass
+range: `3 to 4 slices provolone (about 75 to 100 grams in total)` and
+`2 slices bacon (about 20 g)` resolve through the same midpoint policy, and the
+measurement clause is stripped from the food query (`provolone`) so the
+identity is never polluted. Container lines are excluded: the canonical parse
+represents a declared package net mass (`1 (15 oz) can ...`) separately
+(`package_net_mass`) and deliberately does NOT convert it into mass authority;
+that remains a documented, non-converted representation (a candidate for a
+future reviewed policy), not a silent conversion.
+
+### 39.3 Measurement-aware candidate resolution
+
+Food identity is the gate; measurement compatibility is a resolution criterion
+inside valid identities. When a STRICT automatic selection exposes NO compatible
+authenticated VOLUME portion at all, and another candidate carries the
+IDENTICAL normalized description token set (an equivalent duplicate USDA record
+of the same food, e.g. two `Cream, heavy` records), the analyzer prefers the
+portion-bearing duplicate (`chooseDescriptionEquivalentPortionFood` in
+`phase4/analyzer.ts`). Count/stalk-style interpretations are deliberately not
+reordered: the Phase 1/4/5/6 contract keeps size-specific count portions from
+binding an unsized requirement, and an ambiguous-but-present portion set stays
+with the strict default. The identity gate is never crossed, and portion
+availability never rescues a semantically different food (see §39.4).
+
+### 39.4 Count identities and semantic guard
+
+`extractCountIdentity` now strips parenthetical package descriptors before
+tokenizing, so `1 slice (15 per 8 oz package)` is a slice (not a portion
+discarded because the note contains `oz`); `6 slices mortadella` resolves to
+90 g through the authenticated count portion. `shucked` joins the closed
+preparation-qualifier vocabulary, so `24 pieces fresh shucked oysters` no
+longer fails identity on a preparation action.
+
+The semantic identity gate is unchanged and remains authoritative: for
+`1/4 teaspoon crushed red pepper flakes` the requested `flakes` form is absent
+from every candidate, so neither the fresh bell-pepper record nor any other
+record is auto-selected; measurement compatibility cannot compensate for a
+missing requested form. `X or Y` alternatives are never collapsed into a
+fabricated single food identity.
+
+### 39.5 Authority order and deferrals
+
+Every newly covered class resolves through the strongest truthful
+authenticated source available (direct mass for ranges/secondary mass,
+authenticated source portion for volume, authenticated count portion where
+available), never through a weaker estimate while a deterministic path exists.
+No bounded-estimate path was added in this round: vague amounts (`pinch dried
+basil`) remain truthfully unresolved rather than receiving fabricated grams or
+USDA provenance; a defensible bounded-estimate contract (interpreted
+measurement, bounds, category, explicit estimate provenance, and UI
+separation) remains future work. Also deferred: container net-mass conversion,
+size-specific count binding for unsized requirements, and deterministic
+resolution of alternatives and missing-variety identities (AI semantic rescue
+may interpret them; deterministic validation still decides authority).
+
+### 39.6 Post-audit repair: nutrient annotations and range provenance
+
+A final audit found two truthfulness gaps in the §39.2/§39.1 handling; both are
+repaired without new authority.
+
+**Nutrient annotations are never ingredient mass (BLOCKING repair).** The
+secondary-mass reader is narrowed to a positive grammar plus fail-closed
+exclusions. A parenthetical is accepted as a written total mass ONLY when,
+after an optional approximation adverb (`about`, `approximately`, `~`, ...), it
+is an explicit MASS quantity followed by nothing or a closed total-mass trailing
+phrase (`total`, `in total`, `net`, `drained`, ...). Any parenthetical naming a
+nutrient or nutrition-annotation syntax (`protein`, `fat`, `carbs`,
+`carbohydrate`, `fiber`, `sugar`, `sodium`, `cholesterol`, `calories`, `kcal`,
+`% DV`, `per serving`) is rejected BEFORE any mass interpretation, and the clause
+is also stripped from the food query so it cannot pollute identity. Thus
+`1 cup flour (20 g protein)` never gains 20 g of direct mass; its own `1 cup`
+flows to the authenticated source portion (125 g) instead, and
+`2 tbsp peanut butter (8 g protein per serving)` resolves 32 g from its own
+tablespoons. Credible written totals (`(about 20 g)`, `(20 g)`,
+`(75-100 g in total)`, `(approximately 250 g)`) still resolve through the
+midpoint policy of §39.1.
+
+**Written-range representative provenance (FLAG repair).** A mass derived from a
+written range remains distinguishable downstream from an exact author-written
+scalar. The review parse exposes a bounded `range_representative`
+(`amount_source: 'written_mass_range'`, `policy: 'midpoint'`, `lower`, `upper`,
+`unit`, `representative_grams`) ONLY when the representative came from a range;
+the live row carries the same marker (`mass_representative`), and the UI mass
+text renders the midpoint through the ordinary 1-decimal display rounding as
+`... g · written range midpoint (lower–upper unit)`. An exact `3.5 lb` line has
+no such marker and stays an exact scalar. `amount` stays `null` and
+`quantity_kind` stays `range` for ranges; raw floating-point artifacts are never
+rendered.
+
+The same rule covers a credible SECONDARY parenthetical total-mass range
+(`3 to 4 slices provolone (about 75 to 100 grams in total)`): the marker is
+attached only to the source that actually supplied the resolved grams (a direct
+range first, otherwise the secondary range), so an exact parenthetical scalar
+and an exact base measurement never gain a range marker.
+
+---
+
+## 40. Persisted written-mass-range provenance (schema v3)
+
+A focused re-audit (`FLAG-1`) found that the §39.6 written-range midpoint
+provenance existed through parsing, review, live-row state, and UI but was LOST
+in the persisted `codex_nutrition` block: a block-only consumer saw a scalar
+gram amount and could not tell a range midpoint from an exact authored scalar.
+This section documents the repair.
+
+### 40.1 The persistence gap
+
+`3-4 lb beef chuck roast` reviews as `quantity_kind: 'range'`, endpoints 3/4,
+midpoint policy, representative grams 1587.573295. Phase 5A persisted only
+`amount: { value: 1587.573295, unit: 'g' }` with `conversion_basis:
+'direct_mass'` — identical in shape to `3.5 lb`. The authored range authority
+(endpoints + unit + representative policy) was unrecoverable from the block.
+
+### 40.2 Why a genuine schema version (v3) was required
+
+- The persisted scalar `amount` changes MEANING for a range line (a
+  deterministic representative of an authored range, not an authored scalar);
+  that is a new authoritative persisted meaning, not merely an optional field.
+- The established policy (§33.1 / §37.5) is to introduce a genuine versioned
+  contract for a new provenance meaning rather than silently expanding an
+  existing version in place. v1 and v2 remain byte-for-byte frozen.
+- Forward compatibility: an older reader reports schema 3 as opaque and
+  preserves it (§23.5), whereas an in-place v1/v2 field would make older readers
+  treat the whole block as `malformed`.
+- v3 is the SMALLEST versioned extension: it retains every v1/v2 meaning
+  (household included) and adds exactly one closed optional evidence object.
+
+### 40.3 Schema contract
+
+`CODEX_NUTRITION_SCHEMA_V3 = 3`; `CodexNutritionV3` retains the v1 top-level
+keys and v2 household meaning. The only addition is the per-line
+`IngredientEvidenceV3.range_representative`:
+
+```
+range_representative = {
+  amount_source: 'written_mass_range',
+  policy: 'midpoint',
+  lower, upper,            // the author's own endpoints
+  unit,                    // the original authored mass unit
+  representative_grams     // equals the stored canonical `amount.value`
+}
+```
+
+Coupling (all fail the WHOLE block closed):
+
+- present ONLY with `conversion_basis: 'direct_mass'` and `resolved: true`;
+- `amount.unit` must be `g` and `amount.value === representative_grams`
+  (byte-for-byte), so the two persisted scalars can never contradict;
+- `lower`/`upper` bounded positive finite numbers with `lower <= upper`; `unit`
+  bounded non-control text; `representative_grams` a bounded positive finite
+  number;
+- unknown marker fields, unknown amount sources, unknown policies, a marker in
+  a v1/v2 block, and a marker on a source-portion/household/unresolved line all
+  fail closed.
+
+`decodeCodexNutrition` selects v1/v2/v3 by discriminator; schemas 4+ remain
+bounded opaque data that is never interpreted and never overwritten.
+
+### 40.4 Canonical conditional write policy
+
+Phase 5A builds the block from the GENUINE re-derived preview only:
+
+- any written-range marker (with or without household provenance) -> schema v3;
+- household provenance only -> schema v2 (unchanged Phase 6 behavior);
+- neither -> schema v1 (unchanged).
+
+Dropping the last range/household line and re-applying deterministically
+returns to the smallest truthful version. The marker's
+`representative_grams` is written as the SAME canonical rounded scalar as the
+line `amount`; the preview midpoint may differ only by the canonical 6-decimal
+rounding. The marker participates in the preview `ingredient_digest` (via the
+calculation `fullPayload`) and therefore in the canonical candidate digest,
+Apply authorization, replace-mode regression gate, and post-write verification.
+
+### 40.5 Authority and AI containment
+
+The endpoints, unit, policy, and representative are deterministic
+recipe-authored evidence. They are derived exclusively from the canonical parse
+inside the genuine calculation and copied by Phase 5A; a caller-supplied
+preview, an AI-assisted selection carrying forged provenance fields, and a
+hostile existing v3 block can never contribute them. A divergent forged
+selection fails Apply authorization (`calculation_mismatch`); an injected
+marker on an otherwise-genuine selection is ignored because the recommendation
+selection contract is closed and the provenance is re-derived from the recipe
+text. No marker is ever fabricated for an exact scalar.
+
+### 40.6 Reader matrix
+
+| Stored block | Reader before this repair | Reader after |
+| --- | --- | --- |
+| schema 1, exact direct mass | valid v1 | valid v1 (no marker) |
+| schema 2, valid household provenance | valid v2, household restored | valid v2, household restored |
+| schema 3, valid written-range evidence | opaque, never interpreted | valid v3, marker available to block consumers |
+| schema 3, malformed marker coupling | opaque | malformed (fail closed, never trusted) |
+| schema 4+ (future) | opaque, never interpreted | opaque, never interpreted |
+
+Legacy v1/v2 blocks without the marker remain fully readable; no legacy block
+is migrated or rewritten without an explicit Apply.
+
+### 40.7 Regression proof
+
+`tests/unit/advancedNutritionPersistedRangeProvenance.test.ts` (real pinned
+bundle) proves Analyze -> Review -> Apply -> serialize -> parse -> hydration for
+`3-4 lb beef chuck roast` (original text preserved, schema v3, both endpoints,
+unit, midpoint policy, canonical representative grams, unchanged totals, UI
+still `written range midpoint (3–4 lb)`), the exact `3.5 lb` scalar remains
+schema v1 with no marker and identical totals, household-only remains v2, a
+household + range block is v3 retaining both, legacy blocks stay readable, the
+conditional return to v1/v2, digest divergence, stale/TOCTOU and tampered-write
+failures, and the closed v3 coupling matrix.
