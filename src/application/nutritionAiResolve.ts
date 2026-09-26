@@ -19,6 +19,17 @@ import {
   type AiResolutionSuggestion,
 } from '../core/nutritionV2/aiResolution';
 import {
+  AI_ADVANCED_CONTRACT_VERSION,
+  adaptAiAdvancedInterpretationsForResolution,
+  sanitizeAiAdvancedInterpretationResponse,
+  type AiAdvancedAuthoritativeAmountObservation,
+  type AiAdvancedIngredientInterpretation,
+} from '../core/nutritionV2/aiAdvanced';
+import {
+  isAiInterpretationAvailable,
+  type NutritionCapabilities,
+} from '../core/nutritionV2/nutritionCapabilities';
+import {
   aiResolutionEligibleRows,
   resolveFoodsFromAiSuggestions,
   resolveAmountsFromAiSuggestions,
@@ -181,6 +192,23 @@ export interface AiResolutionRunArgs extends AiResolutionRequestArgs {
    */
   readonly liveRows?: ReadonlyArray<LiveRowState>;
   readonly state?: Phase4State;
+  /**
+   * Centralized Basic vs AI Advanced capability boundary. When supplied, a
+   * capability set without `aiInterpretation` fails CLOSED before any network
+   * call (Basic Nutrition stays fully available). When omitted, legacy behavior
+   * is preserved.
+   */
+  readonly capabilities?: NutritionCapabilities;
+  /**
+   * Pre-sanitized canonical AI-Advanced interpretations. When supplied, the
+   * network request is skipped entirely and the interpretations are adapted
+   * into the SAME bounded transport shape, then verified by the SAME
+   * deterministic pipeline. This is the architecture proof path: no provider is
+   * required to exercise the canonical contract.
+   */
+  readonly interpretations?: ReadonlyArray<AiAdvancedIngredientInterpretation>;
+  /** Deterministic parse observations used to reconcile echoed amounts. */
+  readonly authoritativeByLineRef?: ReadonlyMap<string, AiAdvancedAuthoritativeAmountObservation>;
 }
 
 /**
@@ -192,24 +220,77 @@ export interface AiResolutionRunArgs extends AiResolutionRequestArgs {
 export async function resolveUnresolvedRowsWithAi(
   args: AiResolutionRunArgs
 ): Promise<AiResolutionRunResult> {
-  const requested = await requestAiIngredientResolution(args);
-  if (!requested.ok) {
+  // CAPABILITY GATE (centralized, billing-independent): no AI capability means
+  // no AI attempt at all. Deterministic/manual Advanced Nutrition is untouched.
+  if (args.capabilities !== undefined && !isAiInterpretationAvailable(args.capabilities)) {
     return {
       ok: false,
-      message: requested.message ?? AI_RESOLUTION_UNAVAILABLE_MESSAGE,
-      aiAttempted: requested.aiAttempted,
-      interpretedCount: requested.suggestions.length,
+      message: AI_RESOLUTION_UNAVAILABLE_MESSAGE,
+      aiAttempted: false,
+      interpretedCount: 0,
       outcome: EMPTY_FOOD_OUTCOME,
       amounts: EMPTY_AMOUNT_OUTCOME,
       households: EMPTY_HOUSEHOLD_OUTCOME,
     };
   }
 
+  let suggestions: ReadonlyArray<AiResolutionSuggestion>;
+  let aiAttempted: boolean;
+  if (args.interpretations !== undefined) {
+    // CANONICAL PATH: bounded, request-scoped adaptation of already-sanitized
+    // canonical interpretations. No provider is called here. Defense in depth:
+    // the supplied interpretations are re-sanitized against the request rows so
+    // an authority-shaped or malformed injection can never reach adaptation.
+    const allowedLineRefs = requestableRows(args).map((row) => row.line_ref);
+    const allowed = new Set(allowedLineRefs);
+    const sanitized = sanitizeAiAdvancedInterpretationResponse(
+      {
+        contract_version: AI_ADVANCED_CONTRACT_VERSION,
+        interpretations: args.interpretations.filter((entry) => allowed.has(entry.line_ref)),
+      },
+      { allowedLineRefs }
+    );
+    if (!sanitized.ok) {
+      return {
+        ok: false,
+        message: AI_RESOLUTION_INVALID_MESSAGE,
+        aiAttempted: false,
+        interpretedCount: 0,
+        outcome: EMPTY_FOOD_OUTCOME,
+        amounts: EMPTY_AMOUNT_OUTCOME,
+        households: EMPTY_HOUSEHOLD_OUTCOME,
+      };
+    }
+    const adapted = adaptAiAdvancedInterpretationsForResolution({
+      interpretations: sanitized.interpretations,
+      ...(args.authoritativeByLineRef !== undefined
+        ? { authoritativeByLineRef: args.authoritativeByLineRef }
+        : {}),
+    });
+    suggestions = adapted.suggestions;
+    aiAttempted = false;
+  } else {
+    const requested = await requestAiIngredientResolution(args);
+    if (!requested.ok) {
+      return {
+        ok: false,
+        message: requested.message ?? AI_RESOLUTION_UNAVAILABLE_MESSAGE,
+        aiAttempted: requested.aiAttempted,
+        interpretedCount: requested.suggestions.length,
+        outcome: EMPTY_FOOD_OUTCOME,
+        amounts: EMPTY_AMOUNT_OUTCOME,
+        households: EMPTY_HOUSEHOLD_OUTCOME,
+      };
+    }
+    suggestions = requested.suggestions;
+    aiAttempted = true;
+  }
+
   const issueKinds = args.issueKinds;
-  const foodSuggestions = requested.suggestions.filter(
+  const foodSuggestions = suggestions.filter(
     (suggestion) => issueKinds?.[suggestion.line_ref] !== 'needs_amount'
   );
-  const amountSuggestions = requested.suggestions.filter(
+  const amountSuggestions = suggestions.filter(
     (suggestion) => issueKinds?.[suggestion.line_ref] === 'needs_amount'
   );
   const foodRows =
@@ -263,8 +344,8 @@ export async function resolveUnresolvedRowsWithAi(
 
   return {
     ok: true,
-    aiAttempted: true,
-    interpretedCount: requested.suggestions.length,
+    aiAttempted,
+    interpretedCount: suggestions.length,
     outcome,
     amounts,
     households,

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { X, ShieldAlert, FlaskConical, CheckCircle2, AlertTriangle, Info, Search } from 'lucide-react';
 import { convertMassToGrams, type NormalizedUnit } from '../utils/measurements';
+import { AI_ADVANCED_NUTRITION_LABEL } from '../core/nutritionV2/nutritionCapabilities';
 import {
   NUTRIENT_GROUPS,
   PHASE4_DIRECT_MASS_NOTE,
@@ -1029,14 +1030,18 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="min-w-0">
-                  <p className="text-[11px] font-semibold text-gray-200">
-                    ✨ Resolve remaining with AI
+                  <p
+                    data-testid="advanced-nutrition-ai-tier"
+                    className="text-[11px] font-semibold text-gray-200"
+                  >
+                    ✨ {AI_ADVANCED_NUTRITION_LABEL}
                   </p>
                   <p className="text-[10px] text-gray-500">
                     AI interprets food wording, count language, and household unit/size/state
                     wording only. The pinned USDA catalog, the deterministic matcher, authenticated
                     USDA portions, and the verified Kitchen Codex household registry decide every
-                    resolution; AI never supplies grams. Nothing is saved.
+                    resolution; AI never supplies grams. Basic manual review and correction are
+                    always available. Nothing is saved.
                   </p>
                 </div>
                 <button

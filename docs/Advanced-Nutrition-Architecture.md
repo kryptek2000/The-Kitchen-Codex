@@ -5708,3 +5708,206 @@ schema v1 with no marker and identical totals, household-only remains v2, a
 household + range block is v3 retaining both, legacy blocks stay readable, the
 conditional return to v1/v2, digest divergence, stale/TOCTOU and tampered-write
 failures, and the closed v3 coupling matrix.
+
+---
+
+## 41. AI Advanced Nutrition — architecture and contract foundation (AI-0)
+
+**Status: AI-0 IMPLEMENTED — contract foundation only, UNCOMMITTED for audit.**
+AI-0 changes no existing deterministic behavior, calls no provider, adds no
+route, and enables no estimation. It records the permanent architecture and the
+closed contracts that later AI phases must satisfy.
+
+### 41.1 Basic Nutrition vs AI Advanced Nutrition
+
+Two product tiers over ONE deterministic nutrition core:
+
+- **Basic Nutrition** is the existing deterministic/manual workflow and is
+  ALWAYS available, with or without AI: imported/existing nutrition where
+  supported, the deterministic analyzer, manual food-match correction, manual
+  total weight, verified source portions, verified count portions, verified
+  household portions, deterministic mass and nutrient math, truthful
+  provenance, Review, and explicit Apply.
+- **AI Advanced Nutrition** adds semantic ingredient interpretation, messy-
+  language understanding, ambiguity recognition, alternative interpretation,
+  contextual food understanding, candidate orchestration, and (only in a future,
+  separately reviewed phase) bounded estimation. It uses the SAME deterministic
+  core; it is a new CONSUMER of the existing contracts, never a new authority.
+
+The centralized boundary is `src/core/nutritionV2/nutritionCapabilities.ts`
+(`BASIC_NUTRITION_CAPABILITIES`, `resolveNutritionCapabilities`,
+`isManualEditingAvailable`, `isAiInterpretationAvailable`). It fails safe:
+anything other than an explicitly configured AND reachable AI provider yields
+Basic. `manualEditing` is `true` for every tier, and `aiEstimation` is always
+`'disabled'` in AI-0. The boundary is billing-independent: no pricing, checkout,
+subscription, account entitlement, or payment-provider logic exists here.
+
+### 41.2 Permanent manual deterministic invariant
+
+`tests/unit/advancedNutritionManualDeterministicMode.test.ts` (real pinned
+bundle) proves the full workflow with AI disabled end to end: Basic capabilities;
+deterministic analysis; manual food-match correction; manual total weight;
+verified source-portion control; clearing an automatic resolution; successful
+calculation; Review evidence; Apply persistence; reload/hydration of the manual
+state; and a zero-AI-call assertion. `advancedNutritionManualDeterministicModeUi.test.tsx`
+proves the modal opens and works with no AI provider and that the AI-assisted
+path is labeled **AI Advanced Nutrition** while manual review/correction wording
+remains present. This invariant may never be weakened: AI Advanced Nutrition
+must not remove or hide manual deterministic editing.
+
+### 41.3 AI interprets; AI never authors
+
+AI MAY interpret: food identity wording, aliases, preparation, state, count
+noun, household wording, size descriptors, approximate language, authored
+ranges, alternatives, ambiguity, and contextual qualifiers.
+
+AI MAY NEVER author (or the contract rejects the whole response with
+`authority_field`): FDC ids / trusted catalog ids, nutrient values, grams,
+density, source/count/household portion grams, persisted or range provenance,
+schema versions, application authorization, selection/ingredient/catalog/record
+digests, user confirmation, Apply permission, authoritative serving counts, or
+persistent nutrition blocks. `AI_ADVANCED_FORBIDDEN_AUTHORITY_KEYS` in
+`src/core/nutritionV2/aiAdvanced.ts` enumerates the closed list; it is checked
+before generic unknown-key rejection so adversarial payloads get a precise,
+testable classification.
+
+### 41.4 Canonical interpretation contract (`nutrition_ai_advanced_interpretation_v1`)
+
+`src/core/nutritionV2/aiAdvanced.ts` owns the ONE canonical, provider-neutral
+ingredient interpretation contract:
+`AiAdvancedIngredientInterpretation` with `semantic_food`,
+`search_phrases`, `amount_semantics` (`exact` / `range` / `approximate` /
+`qualitative` / `alternative` / `unknown`), `unit_semantics` (`mass` / `volume` /
+`count` / `household` / `unknown`), `count_semantics`, `alternatives`,
+`ambiguity`, `confidence`, and `notes`.
+
+`sanitizeAiAdvancedInterpretationResponse` is closed and fail-closed: plain-object
+validation, bounded strings/arrays/rows, unknown-key and prototype-pollution
+rejection (through the shared `toInertValue` materializer), exact contract
+versioning, unknown/duplicate line-ref rejection, and internally consistent
+amount semantics (a claimed range must declare both endpoints; endpoints on a
+non-range claim are rejected). Malformed output yields **no AI resolution**,
+never partial authority.
+
+**Relationship to the existing Phase 4/7 contract.** `nutrition_ai_resolution_v4`
+(`src/core/nutritionV2/aiResolution.ts`) remains the bounded TRANSPORT contract.
+The canonical contract is an evolution layered above it:
+`aiAdvancedInterpretationFromResolutionSuggestion` maps existing Phase 7
+semantics (count descriptor, household unit/size/state hints, quantity echo,
+confidence) INTO canonical observations, and
+`adaptAiAdvancedInterpretationsForResolution` maps canonical observations back
+into the existing transport shape. Every existing deterministic verification
+runs unchanged: the confidence matcher, the authenticated USDA count-portion
+review, the verified household registry, the calculator, and Phase 5A/5B
+authorization. Nothing is superseded; no second architecture exists.
+
+**Source text remains authority for the authored amount.**
+`reconcileAiAdvancedAmount` (deterministic, parse-observation-driven) refuses:
+an exact authored scalar reinterpreted as a range; an authored range collapsed
+to a scalar or losing an endpoint; and a quantity-less line gaining an invented
+scalar. A `3.5 lb` scalar can never become a range; a `3-4 lb` authored range
+never becomes a scalar. The deterministic written-mass midpoint representative
+may be echoed, but the AI's own scalar is never accepted as the amount.
+
+### 41.5 Resolution plan contract (`nutrition_ai_advanced_plan_v1`)
+
+Interpretation and PROPOSED RESOLUTION PLAN are separate contracts.
+`src/core/nutritionV2/aiAdvancedPlan.ts` owns `AiAdvancedResolutionPlan`: a
+request-scoped opaque `candidate_ref` (and optional `portion_ref`),
+`measure_kind`, `review_required`, `ambiguity_reasons`, `confidence`, `notes`.
+A plan can never carry invented grams, database ids, nutrient totals,
+schema/authorization/provenance fields, or Apply permission. It is a PROPOSAL
+the deterministic core may reject whole; `resolvePlanCandidate` maps an accepted
+opaque ref back to the locally owned candidate, and the existing identity and
+measurement gates still decide.
+
+### 41.6 Candidate-bound orchestration
+
+`src/core/nutritionV2/aiAdvancedCandidates.ts` supplies the deterministic
+bounded set. The provider-facing view exposes only opaque request-scoped refs
+(`c1..cN`; portions `p1..pN`), display descriptions, and bounded semantic tags —
+never an FDC id or digest. Duplicate local candidates reject request
+construction; unknown/absent refs reject; refs are scoped to the request; input
+ordering confers no authority. An AI candidate choice is a proposal, not Apply
+authorization.
+
+### 41.7 Provider-neutral architecture
+
+The nutrition domain owns the port (`AiAdvancedInterpretationPort`) and the
+bounded request builder; adapters live outside the domain (`server/ai/*`
+provider registry, BYOK session secrets, OpenRouter/Gemini adapters). The domain
+imports no provider SDK, no Express, no server module, and no runtime
+dependency — enforced statically in
+`tests/unit/advancedNutritionAiAdvancedContract.test.ts`. Current BYOK behavior
+is unchanged; a future Kitchen Codex-hosted provider can implement the same port
+without redesigning the nutrition contract.
+
+### 41.8 Future bounded-estimate policy skeleton (`ai_estimate`)
+
+`src/core/nutritionV2/aiAdvancedEstimate.ts` defines the FUTURE contract only.
+Any future activation must include: explicit lower/upper uncertainty bounds; a
+declared representative policy; the input semantics used; the reason
+authenticated evidence was unavailable; provider/model metadata where
+appropriate; visibly weaker provenance (`ai_estimate`) than authenticated
+USDA/local portions; deterministic validation; explicit UI labeling
+(`AI estimate (not USDA-authenticated)`); and Review before Apply.
+
+AI-0 ships estimation hard-disabled: `AI_ESTIMATION_AVAILABILITY === 'disabled'`,
+`isAiEstimationEnabled() === false`, and `resolveAiBoundedEstimate` ALWAYS
+returns `estimation_disabled` — even for a structurally perfect proposal. No
+food-specific estimate tables, density guessing, or production grams were added.
+
+### 41.9 Benchmark foundation
+
+The deterministic benchmark denominator and score are unchanged: expanded
+`46/97`, legacy subset `42/91` (pinned by
+`tests/unit/advancedNutritionAiAdvancedBenchmarkFoundation.test.ts` on the real
+pinned bundle; `scripts/benchmark_resolution_coverage.ts` now also prints the
+separate accounting). `src/core/nutritionV2/aiAdvancedBenchmark.ts` classifies
+future runs into separate buckets:
+
+```
+Deterministic:                x / N
+AI-assisted authenticated:    y / N
+AI-assisted bounded estimate: z / N
+Still review:                 r / N
+```
+
+An AI interpretation ALONE is never counted as resolved: resolution credit
+requires deterministic acceptance, an estimate-class resolution is never counted
+as authenticated, and a "resolved" line with no provable deterministic mass
+source gets no credit.
+
+### 41.10 AI-0 smoke corpus
+
+`tests/fixtures/aiAdvancedSmokeCorpus.ts` pins the semantic and safety
+expectations for the hard families: unsalted butter/sticks, heavy cream volume,
+chuck-roast written range, provolone parenthetical total-mass range, onion,
+garlic cloves, shallots, oysters, mortadella slices, pickles, crushed red pepper
+flakes, cloves ambiguity, pinch, handful, fresh herb wording, apple cider
+vinegar, and `butter or olive oil` alternatives. AI-0 does NOT resolve them; the
+corpus ensures a future phase cannot quietly change what these lines mean or
+grant the AI mass authority over them.
+
+### 41.11 Security / adversarial proof
+
+`tests/unit/advancedNutritionAiAdvancedSecurity.test.ts` mutates valid payloads
+to prove the boundaries: unknown interpretation/plan keys, prototype-shaped and
+accessor payloads, oversized strings, excessive alternatives/rows, excessive
+candidate refs, candidate refs never supplied, duplicate candidates, raw FDC id
+injection, grams injection, nutrient injection, schema-version injection,
+Apply-authorization injection, persisted/range-provenance injection, malicious
+provider metadata, source-amount contradiction, stale responses, mid-flight
+manual correction, mid-flight Clear, and the AI-disabled path. Each mutation
+fails closed; each test demonstrates that the guard is load-bearing.
+
+### 41.12 AI-0 scope — explicitly NOT implemented
+
+AI-0 does NOT implement and does not enable: billing, Stripe, subscriptions,
+accounts, hosted paid AI, an entitlement server, production bounded mass
+estimates, broad new food matching, new USDA datasets, external nutrition APIs
+(Edamam/Nutritionix/Spoonacular), new density databases, automatic bulk
+persistence, automatic Apply, mobile nutrition tracking, diet coaching, medical
+advice, goal-based recommendations, a major UI redesign, or any Phase AI-1+
+behavior. No existing Phase 5/6/7 behavior, no schema v1/v2/v3 behavior, and no
+authority boundary was changed.

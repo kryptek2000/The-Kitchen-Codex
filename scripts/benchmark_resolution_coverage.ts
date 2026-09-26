@@ -29,6 +29,11 @@ import { phase4SessionIdentity } from '../src/core/nutritionV2/phase4/types';
 import { projectLiveRows } from '../src/core/nutritionV2/phase4/liveRow';
 import { ingredientEvidenceViews } from '../src/core/nutritionV2/phase4/display';
 import type { AdvancedNutritionSession } from '../src/core/nutritionV2/phase4/types';
+import {
+  formatAiAdvancedBenchmarkReport,
+  summarizeAiAdvancedBenchmark,
+  type AiAdvancedBenchmarkEntry,
+} from '../src/core/nutritionV2/aiAdvancedBenchmark';
 import { RESOLUTION_COVERAGE_CORPUS } from '../tests/fixtures/advancedNutritionResolutionCorpus';
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -277,10 +282,36 @@ async function main(): Promise<void> {
     console.log(`  [${r.terminal}] ${r.reason} :: ${r.line}`);
   }
 
+  // -------------------------------------------------------------------------
+  // AI-ADVANCED ACCOUNTING (separate buckets; deterministic score unchanged)
+  // -------------------------------------------------------------------------
+  // This deterministic run has no AI assistance, so every resolved line lands in
+  // `deterministic` and every unresolved line lands in `still_review` (actionable
+  // exceptions) or `unresolved` (qualitative/non-actionable). The same module
+  // classifies future AI-assisted runs without changing this denominator.
+  const benchmarkEntries: AiAdvancedBenchmarkEntry[] = results.map((result) => {
+    if (result.terminal.startsWith('resolved_')) {
+      const bySource: Record<string, AiAdvancedBenchmarkEntry['mass_source']> = {
+        resolved_direct_mass: 'direct_mass',
+        resolved_source_portion: 'source_portion',
+        resolved_count_portion: 'count_portion',
+        resolved_household_portion: 'household_portion',
+      };
+      return { resolved: true, mass_source: bySource[result.terminal] };
+    }
+    return {
+      resolved: false,
+      review_required: result.terminal !== 'qualitative' && result.terminal !== 'unresolved',
+    };
+  });
+  const aiAdvancedSummary = summarizeAiAdvancedBenchmark(benchmarkEntries);
+  console.log('--- AI Advanced Nutrition separate accounting ---');
+  console.log(formatAiAdvancedBenchmarkReport(aiAdvancedSummary));
+
   if (jsonPath) {
     writeFileSync(
       jsonPath,
-      JSON.stringify({ total, resolved, results, topReasons }, null, 2)
+      JSON.stringify({ total, resolved, results, topReasons, aiAdvanced: aiAdvancedSummary }, null, 2)
     );
     console.log(`json written: ${jsonPath}`);
   }
