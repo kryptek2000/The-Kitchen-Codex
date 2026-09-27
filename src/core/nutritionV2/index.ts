@@ -21,6 +21,13 @@ export * from './validate';
 export * from './aiAdvanced';
 export * from './aiAdvancedCandidates';
 export * from './aiAdvancedPlan';
+// AI-2A candidate authority foundation: request context, deterministic plan
+// source, and the deterministic plan validator. Pure, provider-free, and still
+// authority-free: these modules classify (automatic | offer | review) using the
+// existing deterministic rules and never write anything.
+export * from './aiAdvancedPlanRequest';
+export * from './aiAdvancedPlanSource';
+export * from './aiAdvancedPlanApply';
 export * from './nutritionCapabilities';
 export * from './aiAdvancedEstimate';
 export * from './aiAdvancedBenchmark';

@@ -6081,13 +6081,21 @@ The live application prefers the canonical route; the legacy route stays
 functional for compatibility and is exercised by its own regression tests and
 production verifier.
 
-### 42.12 AI-2 explicitly not started
+### 42.12 AI-2 status (updated by AI-2A)
 
-AI-2 is **not started**. AI-1 implements none of: candidate-plan orchestration,
-AI-selected database identity, AI-authored grams, AI mass/density estimation,
-automatic Apply, new persistence authority, billing/subscription enforcement, or
-a UI redesign. `aiAdvancedCandidates.ts`, `aiAdvancedPlan.ts`, and
-`aiAdvancedEstimate.ts` remain unreachable skeletons.
+**AI-2A — candidate authority foundation** is implemented (see §43): the
+deterministic plan source, the bounded request context, and the deterministic
+plan validator/classifier now exist as pure core modules. They add **no**
+provider route, no model call, no UI wiring, no persistence, and no live
+application orchestration, and they remain unreachable from any production path
+(a static security test pins that).
+
+**AI-2B (live provider-neutral plan route)** and **AI-2C (deterministic plan
+application + UI integration)** are **not started**. Nothing in the codebase
+implements: a plan endpoint, AI-selected database identity in production,
+AI-authored grams, AI mass/density estimation, automatic Apply, new persistence
+authority, billing/subscription enforcement, or a UI redesign.
+`aiAdvancedEstimate.ts` remains an unreachable skeleton with estimation disabled.
 
 ### 42.13 Estimates remain disabled
 
@@ -6123,3 +6131,141 @@ unwired.
 
 No unit or security test depends on a live paid provider; the production adapter
 remains the genuine provider-neutral implementation.
+
+## 43. AI-2A — candidate authority foundation
+
+AI-2A builds the **deterministic/request-scoped foundation** for AI-2 candidate
+orchestration with **zero provider exposure**. It answers one question safely:
+*can a supplied opaque candidate reference ever become authority?* The answer is
+that it can only ever become the authority the deterministic core already
+granted, otherwise an explicit user decision.
+
+```text
+deterministic review candidates
+→ opaque request-scoped candidate refs        (c1..cN, frozen AI-0 contract)
+→ bounded plan request context                (≤12 lines, 32 KiB UTF-8 cap)
+→ sanitized injected plan                     (server-grade sanitizer, empty portions)
+→ local opaque-ref resolution                 (candidateSet.resolve only)
+→ deterministic candidate validation          (existing rules, no new thresholds)
+→ AUTO only where deterministic rules already authorize, otherwise OFFER / REVIEW
+```
+
+### 43.1 Modules (all pure, provider-free, side-effect free)
+
+| Module | Role |
+|---|---|
+| `src/core/nutritionV2/aiAdvancedPlanSource.ts` | Projects an ALREADY-PRODUCED `IngredientReviewResult` into `AiAdvancedLocalCandidate`s → frozen `buildAiAdvancedCandidateSet` → local ref maps + `review_digest` binding. Fails closed on unusable reviews, a missing digest, duplicate/invalid candidates, and an over-cap candidate set (**never truncates**). |
+| `src/core/nutritionV2/aiAdvancedPlanRequest.ts` | Assembles line sources into one bounded context: caller-supplied `request_id`, `≤ 12` lines, opaque provider payload, measured UTF-8 bytes, frozen per-line allowances, and the frozen EMPTY portion allowance. |
+| `src/core/nutritionV2/aiAdvancedPlanApply.ts` | Validates a raw/sanitized plan against the exact context and classifies each requested line `automatic`/`offer`/`review` using the EXISTING deterministic acceptance decision, supplied through the required `deterministicAcceptance` PORT (the audited Phase 2 isolation rule lets only the Phase 4 boundary import `matching/*`, so AI-2A injects the decision instead of importing Phase 2). Absent port ⇒ whole response discarded, so AI can never grant `automatic` on its own. Inert, frozen results; no writes. |
+
+The frozen AI-0 contracts (`aiAdvancedPlan.ts`, `aiAdvancedCandidates.ts`,
+`aiAdvanced.ts`, `aiAdvancedEstimate.ts`) are **unchanged**; a security test
+asserts they never import the AI-2A slice backward.
+
+### 43.2 Invariants
+
+1. **AI never creates authority.** `automatic` requires that the SAME candidate
+   would already be auto-accepted by the STRICT existing deterministic rule,
+   reported by the injected Phase 4 acceptance port (canonically
+   `selectAutomaticMatch`, surfaced as `strict_automatic_fdc_id` — deliberately
+   NOT named after the broader `isDeterministicAutomaticSelection`). A
+   missing port fails the whole response (`invalid_acceptance_port`).
+2. **Three deterministic classes are distinguished exactly.** The port reports
+   them separately and AI-2A never conflates them:
+   * **strict automatic** — `selectAutomaticMatch(review)`, surfaced as
+     `strict_automatic_fdc_id`; the only class that may stay `automatic`
+     (`matches_strict_automatic`);
+   * **best-effort DEFAULT** — `selectBestEffortMatch(review)`, surfaced as
+     `best_effort_default_fdc_id` (informational/telemetry: it is one member of
+     the family below);
+   * **best-effort ELIGIBLE family** — every `fdcId` for which the EXISTING
+     `isDeterministicBestEffortSelection(review, fdcId)` is true, surfaced as
+     `best_effort_eligible_fdc_ids` and reported per line as
+     `matches_best_effort_eligible`. AI-2A does not re-derive it and invents no
+     thresholds; a port that omits or malforms the family is treated as empty,
+     which can only lose the label, never grant authority.
+3. **AI-specific subtractive safety policy (deliberate).** The ordinary
+   deterministic system grants automatic authority more broadly:
+   `isDeterministicAutomaticSelection(review, fdcId)` accepts either the strict
+   automatic choice OR a safe best-effort same-family default. For an
+   AI-SELECTED candidate, AI-2A intentionally spends only the strict branch: any
+   best-effort-only AI candidate — the DEFAULT *or* a non-default eligible
+   sibling — is classified `offer` (`deterministic_best_effort_only`,
+   `matches_best_effort_eligible: true`) even when the ordinary deterministic
+   analyzer could use it automatically. `deterministic_best_effort_only`
+   therefore means **membership in the deterministic best-effort eligible
+   family**, never merely equality with the default; `below_deterministic_threshold`
+   is reserved for a candidate in **no** deterministic acceptance set (real
+   bundle: `cornmeal` → best-effort default 167628, no strict automatic;
+   `yellow cornmeal` → strict 168039; `cream` → default 2705592 while c2
+   2346386 is an eligible non-default sibling; `tomato sauce` → neither class).
+   AI does not gain the right to spend the broader best-effort automatic
+   authority merely because the deterministic analyzer may do so without AI.
+   This does not redefine or weaken the deterministic matcher and does not alter
+   Basic/manual behavior.
+4. **Confidence is subtractive only.** `medium`/`low` force an offer; `high`
+   never promotes. Omitting confidence changes nothing.
+5. **Anti-laundering.** A `review_suggested` row, declared `review_required`, or
+   any declared ambiguity can never be returned as `automatic`.
+6. **Per-line binding.** A response is discarded **whole** on request-identity,
+   namespace, or sanitizer failure, and **per line** on a stale `review_digest`,
+   a changed interpretation fingerprint, a candidate that left the bound review,
+   or a `record_digest` mismatch.
+7. **Opaque refs only.** Candidates resolve exclusively through the local
+   `candidateSet.resolve`; the contract has no FDC field, and AI text is never
+   re-queried through the matcher.
+8. **Portion firewall.** AI-2A issues **zero** portion refs, so any `portion_ref`
+   fails closed (`unknown_portion_ref`) and no grams/mass/portion authority
+   exists in this slice. `measure_kind` is echoed as advisory metadata only.
+9. **Explicit ref namespace.** Candidate refs must start with `c`; a `p`-ref in
+   candidate position (and a `c`-ref in portion position) is rejected by AI-2A's
+   own guard, so the rule is local rather than emergent.
+10. **Local identity never leaves.** FDC ids, `record_digest`, `review_digest`,
+   `catalog_digest` and `bundle_release` stay local; the provider payload carries
+   `line_ref` and opaque views only. Real-bundle tests assert that no corpus FDC
+   id appears anywhere in a serialized provider payload.
+
+### 43.3 Bounds
+
+| Bound | Value |
+|---|---|
+| lines per plan request | 12 (`MAX_AI_ADVANCED_PLAN_LINES`) |
+| provider request payload | 32 KiB UTF-8, measured with the existing `utf8ByteLength`, fail closed (`request_too_large`) |
+| candidates per line | 12 (frozen AI-0 cap; over-cap fails closed, never truncated) |
+| portion refs issued | 0 |
+| plans per response | 25 (frozen AI-0 `MAX_AI_ADVANCED_PLANS`) |
+
+### 43.4 Verification added by AI-2A
+
+- `tests/unit/advancedNutritionAi2PlanSource.test.ts` — projection and context
+  construction: deterministic `c1..cN` refs, local identity retention, no
+  truncation, request-id validation, line bounds/uniqueness, the 32 KiB cap, and
+  payload containment.
+- `tests/unit/advancedNutritionAi2PlanApply.test.ts` — the auto/offer/review
+  truth table: whole-response discard, per-line binding, anti-laundering,
+  confidence-is-subtractive, namespace, portion firewall, authority rejection,
+  advisory `measure_kind`, and input-shape validation.
+- `tests/unit/advancedNutritionAi2Corpus.test.ts` — the §12 corpus (clear,
+  ambiguous, state-sensitive, household, alternatives) on the REAL pinned bundle,
+  proving AI agreement never deviates from the deterministic ground truth, that
+  ambiguity/`medium`/`review_required` only subtract, that no `review_suggested`
+  row is laundered, and the adversarial matrix fails closed on real reviews.
+  Plus the AI-specific subtractive-policy test: best-effort-only `cornmeal`
+  (167628) is an `offer` under otherwise-clean high-confidence metadata while
+  neighboring strict `yellow cornmeal` (168039) is `automatic`; the
+  best-effort-membership test proving a NON-DEFAULT eligible sibling (`cream`
+  c2 = 2346386, default 2705592) is labelled `deterministic_best_effort_only`
+  rather than `below_deterministic_threshold`; and the below-threshold test
+  (`tomato sauce`, a candidate in no deterministic acceptance set).
+- `tests/security/advancedNutritionAi2Isolation.test.ts` — architecture pins:
+  closed import allowlist, no network/IO/async/randomness, no persistence/storage/
+  vault/server/UI/provider/estimate import, no production route or caller, frozen
+  AI-0 pins, AI-1 path untouched, no focused/skipped tests, no secrets.
+
+### 43.5 Benchmark accounting
+
+AI-2A is **not** a resolution feature: it produces requests, classifier outcomes
+and offers. Deterministic coverage (`46/97`), the legacy subset (`42/91`),
+AI-assisted authenticated resolution (`0/97`) and bounded estimate (`0/97`) are
+unchanged, and no plan construction, candidate selection or offer is counted as
+nutrition resolution.
