@@ -17,6 +17,7 @@ import {
   composeAdvancedNutritionSessionFromBundle,
   decodeBoundedGzip,
   decodeUtf8Strict,
+  GzipDecodeError,
   type RuntimeBundleInputs,
   type RuntimeBundleResult,
 } from '../../src/core/nutritionV2/runtime';
@@ -326,12 +327,40 @@ describe('phase 4.5B — bounded gzip decoding', () => {
     });
   });
 
-  it('rejects concatenated gzip members by exceeding the exact uncompressed length', async () => {
+  it('concatenated gzip members cannot masquerade as the locked single member', async () => {
     const bytes = new Uint8Array(readFileSync(join(BUNDLE_DIR, SHARD_FILENAMES.foundation)));
     const concatenated = new Uint8Array([...bytes, ...bytes]);
-    const decoded = await decodeBoundedGzip(concatenated, 4 * 1024 * 1024);
-    expect(decoded.length).toBe(958025 * 2);
-    expect(decoded.length).not.toBe(958025);
+    const locked = USDA_BUNDLE_RELEASE_LOCK.shards.find((shard) => shard.data_type === 'foundation');
+    if (!locked) throw new Error('release lock is missing the foundation shard');
+
+    // Portable security invariant: a concatenated payload must never be
+    // indistinguishable from the locked single member. Compliant runtimes satisfy it
+    // either by refusing the concatenated stream (fail-closed) or by decoding the
+    // members, after which the caller's exact locked uncompressed length + SHA-256
+    // (runtime/bundle.ts) reject the result. Both safe behaviours are accepted here;
+    // neither is hard-coded, so the test does not fail on a different Node runtime.
+    let decoded: Uint8Array | null = null;
+    let rejectionReason: string | null = null;
+    try {
+      decoded = await decodeBoundedGzip(concatenated, 4 * 1024 * 1024);
+    } catch (error) {
+      expect(error).toBeInstanceOf(GzipDecodeError);
+      rejectionReason = (error as GzipDecodeError).reason;
+    }
+
+    // Outcome A — the decoder refuses concatenated members: fail-closed and valid.
+    if (rejectionReason !== null) {
+      expect(rejectionReason).toBe('malformed');
+      return;
+    }
+
+    // Outcome B — the decoder produced bytes: they must NOT be the locked single member
+    // (in particular a decoder that silently returns only the first member fails here).
+    const output = decoded as Uint8Array;
+    expect(output.length).not.toBe(locked.uncompressed_bytes);
+    // Both complete members decoded: exactly twice the locked member's length.
+    expect(output.length).toBe(locked.uncompressed_bytes * 2);
+    expect(sha256HexFromBytes(output)).not.toBe(locked.uncompressed_sha256);
   });
 
   it('rejects a malformed gzip header', async () => {

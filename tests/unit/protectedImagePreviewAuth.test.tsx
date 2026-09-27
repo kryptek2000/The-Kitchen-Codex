@@ -197,15 +197,53 @@ function authOf(calls: RecordedCall[], url: string, method?: string): string | u
   return found?.headers?.Authorization;
 }
 
+/**
+ * jsdom storage availability repair (test-environment only).
+ *
+ * Vitest's jsdom environment uses `globalThis` as the window, and Node 26 defines its
+ * own experimental `localStorage` accessor there. Node's accessor SHADOWS jsdom's
+ * genuine `Storage` (it stays reachable as jsdom's own backing property) and returns
+ * `undefined` unless the process was started with `--localstorage-file` — which is why
+ * bare `localStorage` and `window.localStorage` were both undefined here.
+ * `sessionStorage` is unaffected (jsdom's object is what that name resolves to).
+ *
+ * Re-point the (configurable) accessor at the jsdom-owned instance, so every assertion
+ * below inspects REAL browser storage — no fake implementation, no Node flag, no
+ * production change. The sentinel test later in this file proves the inspected object
+ * is genuinely jsdom window storage.
+ */
+(function repairJsdomLocalStorage() {
+  if (window.localStorage) return;
+  const jsdomOwned = (window as unknown as { _localStorage?: Storage })._localStorage;
+  if (jsdomOwned) {
+    Object.defineProperty(window, 'localStorage', {
+      value: jsdomOwned,
+      configurable: true,
+      writable: true,
+    });
+  }
+  if (!window.localStorage) {
+    throw new Error(
+      'protectedImagePreviewAuth: jsdom window storage is unavailable — refusing to inspect a missing storage object'
+    );
+  }
+})();
+
 function storageDump(): string {
   let out = '';
-  for (let i = 0; i < localStorage.length; i += 1) {
-    const k = localStorage.key(i) || '';
-    out += `${k}=${localStorage.getItem(k) || ''};`;
+  // The jsdom-owned storage objects are addressed explicitly: on Node 26 the bare
+  // global `localStorage` name is not jsdom's window storage (Node defines its own,
+  // which is undefined without --localstorage-file), so inspecting the bare global
+  // would inspect the wrong object instead of the browser storage under test.
+  const local = window.localStorage;
+  const session = window.sessionStorage;
+  for (let i = 0; i < local.length; i += 1) {
+    const k = local.key(i) || '';
+    out += `${k}=${local.getItem(k) || ''};`;
   }
-  for (let i = 0; i < sessionStorage.length; i += 1) {
-    const k = sessionStorage.key(i) || '';
-    out += `${k}=${sessionStorage.getItem(k) || ''};`;
+  for (let i = 0; i < session.length; i += 1) {
+    const k = session.key(i) || '';
+    out += `${k}=${session.getItem(k) || ''};`;
   }
   return out;
 }
@@ -215,8 +253,8 @@ beforeEach(async () => {
   await hydrateAiSelections({ get: async () => undefined });
   (URL as any).createObjectURL = vi.fn(() => 'blob:protected-preview');
   (URL as any).revokeObjectURL = vi.fn();
-  localStorage.clear();
-  sessionStorage.clear();
+  window.localStorage.clear();
+  window.sessionStorage.clear();
 });
 
 afterEach(() => {
@@ -382,6 +420,26 @@ describe('secret containment — the endpoint token never leaks', () => {
     expect(getEndpointAccessHeaders()).toEqual({ Authorization: `Bearer ${ENDPOINT_TOKEN}` });
     clearEndpointAccessToken();
     expect(getEndpointAccessHeaders()).toEqual({});
+  });
+
+  it('the inspected storage is the real jsdom window storage (sentinel round-trip)', () => {
+    const sentinelKey = '__kc_storage_sentinel__';
+    expect(window.localStorage).toBeDefined();
+    expect(window.sessionStorage).toBeDefined();
+
+    try {
+      window.localStorage.setItem(sentinelKey, 'sentinel');
+      // The dump the containment assertions rely on must see a value that IS there,
+      // so an empty/fake inspectable object cannot make those assertions vacuous.
+      expect(window.localStorage.getItem(sentinelKey)).toBe('sentinel');
+      expect(storageDump()).toContain(`${sentinelKey}=sentinel`);
+    } finally {
+      window.localStorage.removeItem(sentinelKey);
+    }
+
+    // Nothing is persisted after the test.
+    expect(window.localStorage.getItem(sentinelKey)).toBeNull();
+    expect(storageDump()).not.toContain(sentinelKey);
   });
 });
 
