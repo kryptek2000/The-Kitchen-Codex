@@ -16,6 +16,7 @@ import { canonicalCountRequirementHint } from './countContext';
 import { canonicalHouseholdRequirementHint } from './householdContext';
 import {
   convertMassToGrams,
+  type CanonicalQuantityKind,
   type MeasurementKind,
   type NormalizedUnit,
 } from '../../../utils/measurements';
@@ -222,6 +223,20 @@ export interface IngredientMeasurementView {
    * distinguish a range midpoint from an exact author-written value.
    */
   readonly range_representative: RangeRepresentative | undefined;
+  /**
+   * Canonical Phase 1 quantity classification of the authored line
+   * (`exact` / `range` / `absent` / `invalid`). Additive deterministic evidence:
+   * it lets an out-of-boundary consumer (the AI-1 canonical source-observation
+   * map) read the authored quantity class through THIS boundary instead of
+   * importing the Phase 2 parser itself.
+   */
+  readonly quantity_kind: CanonicalQuantityKind;
+  /**
+   * The authored quantity-range endpoints when the LINE ITSELF is a range
+   * (never a mass range). `undefined` for an exact/absent/invalid quantity, so a
+   * range can always be distinguished from a collapsed scalar.
+   */
+  readonly quantity_range: { readonly lower: number; readonly upper: number } | undefined;
 }
 
 export function ingredientMeasurement(entry: AdaptedIngredient): IngredientMeasurementView {
@@ -234,6 +249,8 @@ export function ingredientMeasurement(entry: AdaptedIngredient): IngredientMeasu
       milliliters: undefined,
       grams: undefined,
       range_representative: undefined,
+      quantity_kind: 'invalid' as CanonicalQuantityKind,
+      quantity_range: undefined,
     });
   }
   const p = parsed.parsed;
@@ -244,6 +261,11 @@ export function ingredientMeasurement(entry: AdaptedIngredient): IngredientMeasu
     milliliters: p.milliliters,
     grams: p.grams,
     range_representative: p.range_representative,
+    quantity_kind: p.quantity_kind,
+    quantity_range:
+      p.quantity_range !== undefined
+        ? Object.freeze({ lower: p.quantity_range.lower, upper: p.quantity_range.upper })
+        : undefined,
   });
 }
 

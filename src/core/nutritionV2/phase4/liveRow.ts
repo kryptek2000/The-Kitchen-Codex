@@ -432,6 +432,8 @@ export function projectLiveRow(input: LiveRowProjectionInput): LiveRowState {
         milliliters: undefined,
         grams: undefined,
         range_representative: undefined,
+        quantity_kind: 'invalid',
+        quantity_range: undefined,
       });
       if (grams !== undefined) {
         resolvedGrams = grams;

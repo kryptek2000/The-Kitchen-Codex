@@ -5911,3 +5911,215 @@ persistence, automatic Apply, mobile nutrition tracking, diet coaching, medical
 advice, goal-based recommendations, a major UI redesign, or any Phase AI-1+
 behavior. No existing Phase 5/6/7 behavior, no schema v1/v2/v3 behavior, and no
 authority boundary was changed.
+
+
+## 42. AI-1 — Live semantic ingredient interpretation
+
+AI-1 makes the AI-0 canonical interpretation contract reachable through the live
+provider/server/application path. It is **additive**: no deterministic authority,
+no existing Phase 5/6/7 behavior, no schema v1/v2/v3 behavior, and no manual
+workflow changed. The live pipeline is:
+
+```text
+client actionable rows
+    -> buildAiAdvancedInterpretationRequest      (bounded, semantics only)
+    -> POST /api/nutrition/interpret-ingredients  (canonical interpretation route)
+    -> nutritionInterpret.ts                      (provider-neutral adapter)
+    -> sanitizeAiAdvancedInterpretationResponse   (server sanitization)
+    -> canonical interpretations                  (transport, advisory)
+    -> client RE-SANITIZATION                     (defense in depth)
+    -> authoritative source reconciliation
+    -> withholdNonDeterministicAdaptations        (ambiguity / alternatives)
+    -> adaptAiAdvancedInterpretationsForResolution
+    -> existing Phase 4/7 deterministic resolvers (unchanged)
+```
+
+### 42.1 Live canonical route
+
+`POST /api/nutrition/interpret-ingredients` is a **distinct canonical
+interpretation route** owned by `server/nutritionInterpret.ts`. It reuses the
+existing provider infrastructure only: `runWithAiFallback`, effective text
+selection, registered providers, BYOK selection, the pricing guard, and provider
+diagnostics. It is guarded by `requireAiAccessToken`, `textPricingGuard`, and its
+own rate-limit bucket (`nutritionInterpretRateLimiter`, keyed
+`nutr_interpret_<...>` via `NUTRITION_INTERPRET_RATE_LIMIT`), so it can never
+consume or dilute the legacy route's bucket.
+
+The route is fail-closed: an unavailable provider, a malformed payload, a
+rejected provider document, or a contract mismatch returns a bounded error
+(400/401/429/503) with no raw exception text, and the application treats any
+failure as "no semantic assistance" rather than as evidence. The route is
+activated from the existing AI action; no new UI affordance and no redesign.
+
+### 42.2 Minimal request contents
+
+`buildAiAdvancedInterpretationRequest` sends only the rows the deterministic core
+itself flagged as actionable, and only the semantics needed to read the wording:
+the line ref, the original text, the authored amount/unit as written, and the
+deterministic parser's own projection. The request carries **no** catalog
+identity, no candidate list, no FDC ids, no densities, no nutrients, no portion
+grams, no digests, no schema hints beyond the contract version, no authorization
+or persistence fields, and no instructions. Ingredient text is declared
+**untrusted data** in the prompt.
+
+The canonical scope is driven by the TRUSTED application classification
+(`issueKinds`, derived from the live projection's exception kind). AI-1 sends all
+trusted actionable issue kinds — `needs_match`, `review_suggested`,
+`needs_amount`. `review_suggested` (a below-threshold deterministic candidate)
+is therefore eligible for semantic interpretation, which is what
+`aiResolutionEligibleRows()` alone never allowed; that function and the legacy
+scope are unchanged.
+
+### 42.3 Provider-neutral adapter
+
+`server/nutritionInterpret.ts` owns the provider-neutral prompt and the
+deterministic-echo JSON schema (`buildAiAdvancedInterpretationSchema()`). The
+prompt forbids the provider from supplying or implying FDC ids, grams, density,
+nutrients, portions, portions-by-mass, persistence, Apply, authorization,
+provenance, digests, or schema versions, and forbids following any instruction
+contained in the ingredient text. The adapter is provider-agnostic: whatever
+model/role the existing selection resolves is used, and no provider-specific
+branch exists.
+
+### 42.4 Server AND client sanitization (defense in depth)
+
+The server sanitizes provider output before it leaves the process
+(`sanitizeCanonicalInterpretationPayload` -> `sanitizeAiAdvancedInterpretationResponse`):
+unknown envelope/entry keys, forbidden authority keys, unknown or duplicate line
+refs, wrong contract version, oversized or non-plain payloads, accessor/prototype
+shapes, and nested authority objects all fail closed.
+
+The application **independently re-sanitizes** the same document before any
+adaptation. A response that is accepted by the server is therefore still
+untrusted by the client: the client recomputes the allowed line-ref set, rejects
+the WHOLE payload on any violation, and enforces the contract version again.
+Neither layer is load-bearing alone; both are proven independently by tests.
+
+### 42.5 Authored source reconciliation
+
+`src/core/nutritionV2/aiAdvancedSource.ts` builds
+`AiAdvancedAuthoritativeAmountObservation` per line from the frozen parser and
+the adapted Phase 4 state: quantity kind (exact/range/absent), the authored
+quantity range, the authored written mass range, and (only when the deterministic
+core has already computed one) a representative grams value.
+
+`reconcileAiAdvancedAmount` then judges the provider's amount semantics against
+that evidence:
+
+- an authored range can never collapse to an AI scalar;
+- an exact scalar can never be claimed as a range;
+- a scalar echo is admitted only against deterministic scalar evidence (and is
+  replaced by the deterministic value);
+- a contradiction drops the interpretation from the transport entirely.
+
+Real behaviour is pinned by tests: `3 to 4 slices provolone (about 75-100 g in
+total)` takes its range authority from the written mass range, and a
+5%-tolerance echo adopts the deterministic 87.5 g rather than the provider's
+number.
+
+### 42.6 Alternatives
+
+An `X or Y` line is genuine semantic understanding and is preserved in the
+canonical contract. It is **never** collapsed into a fabricated single identity:
+alternatives are intentionally not mapped into resolution queries, and
+`withholdNonDeterministicAdaptations` removes such an interpretation's queries
+from the transport while keeping the interpretation itself. An alternative line
+can therefore only ever weaken automation, never strengthen it.
+
+### 42.7 Ambiguity
+
+An interpretation that the provider itself reports as ambiguous is understood,
+reported (`withheld` with reason `ambiguous`), and withheld from resolution
+queries. Ambiguity can never become automatic certainty, regardless of the
+provider's confidence field.
+
+### 42.8 Semantic vs authoritative
+
+Semantic interpretation answers "what does this wording mean". It never answers
+"what is this food in the catalog", "how many grams", or "what is the nutrition".
+The provider may only ECHO deterministic evidence; every identity, digest, gram
+value, portion, and nutrient still comes from the pinned local catalog, the
+deterministic matcher, authenticated USDA portions, the verified household
+registry, and the deterministic calculator.
+
+### 42.9 Deterministic resolution authority is unchanged
+
+No matcher, threshold, candidate, veto, portion, household, or calculator rule
+changed. AI text becomes a *query* that must still pass every existing gate:
+authenticated portions decide grams, the negative-source veto still refuses a
+candidate whose state, form, or variety contradicts the authored source (a
+high-confidence provider claim included), and the deterministic record digest is
+still bound in the result.
+
+AI-1 additionally forbids **below-threshold laundering**: for a row the trusted
+projection classified `review_suggested`, an AI-driven automatic acceptance is
+withheld by `withholdBelowThresholdAutoAcceptance`. The deterministic
+verification result survives as an explicit OFFER the user must confirm, so AI
+agreement can never upgrade a candidate the deterministic core was unwilling to
+accept automatically, and confidence is not authority. For `needs_amount` rows
+the existing deterministic amount path is unchanged (it still requires a
+matched food, `needs_amount` status, a selected FDC id, and an authenticated
+compatible portion).
+
+### 42.10 Manual deterministic invariant
+
+Basic manual review and correction remain fully available and are unaffected:
+manual USDA search, explicit food selection, USDA count portions, the verified
+household portion panel with Clear, the explicit total-weight fallback, Review,
+Calculate Preview, Close without saving, and the saved-version-only Apply
+control. The modal copy states the truth: *AI Advanced Nutrition interprets
+ingredient wording. Verified local data and deterministic rules decide
+nutrition.* Nothing is saved by AI.
+
+### 42.11 v4 compatibility
+
+`POST /api/nutrition/resolve-ingredients` still returns the legacy
+`nutrition_ai_resolution_v4` advisory response through
+`server/nutritionResolve.ts`; the legacy route, its contract, its scope
+(`aiResolutionEligibleRows`), and the Phase 7 compatibility path are untouched.
+The live application prefers the canonical route; the legacy route stays
+functional for compatibility and is exercised by its own regression tests and
+production verifier.
+
+### 42.12 AI-2 explicitly not started
+
+AI-2 is **not started**. AI-1 implements none of: candidate-plan orchestration,
+AI-selected database identity, AI-authored grams, AI mass/density estimation,
+automatic Apply, new persistence authority, billing/subscription enforcement, or
+a UI redesign. `aiAdvancedCandidates.ts`, `aiAdvancedPlan.ts`, and
+`aiAdvancedEstimate.ts` remain unreachable skeletons.
+
+### 42.13 Estimates remain disabled
+
+`isAiEstimationEnabled() === false` is preserved. No estimate is produced,
+stored, persisted, or applied, and `aiAdvancedEstimate.ts` is not wired into any
+production path; a static test asserts the estimation entry point stays
+unwired.
+
+### 42.14 Verification added by AI-1
+
+- `tests/unit/advancedNutritionInterpretLive.test.ts` — live canonical path:
+  bounded wire hygiene, capability-gated zero network calls, unavailable/invalid
+  classification, wrong-version rejection, nested-`grams`/`fdc_id` rejection,
+  unknown/duplicate line refs, equivalence with the explicit canonical path,
+  confidence-is-not-authority.
+- `tests/security/nutritionInterpretRoute.test.ts` — the real HTTP route with a
+  deterministic provider seam: 400/401/503 fail-closed behavior, no raw exception
+  leak, server sanitizer proven load-bearing, prompt injection handled as data,
+  own-bucket 429, and the legacy v4 route undisturbed.
+- `tests/unit/advancedNutritionAiAdvancedSemanticCorpus.test.ts` — the semantic
+  acceptance corpus (all 18 required lines) asserting invariants, never prose.
+- `tests/unit/advancedNutritionAiAdvancedSource.test.ts` — authoritative
+  source-map construction and provider invariance.
+- `tests/unit/advancedNutritionAiAdvancedReviewSuggested.test.ts` — trusted
+  issue-kind eligibility, `skim` preservation, no below-threshold laundering,
+  source-wording precedence, and legacy v4 behavior.
+- `tests/unit/advancedNutritionCanonicalMidFlight.test.tsx` — canonical live
+  mid-flight user authority (manual grams, changed match, verified portion,
+  household Clear, closed editor, changed recipe, serialized requests).
+- `tests/security/advancedNutritionAiAdvancedLiveIsolation.test.ts` —
+  architecture pins: one route per format, full guard chain, provider neutrality,
+  no server imports from `src/`, prompt prohibitions, estimation unwired.
+
+No unit or security test depends on a live paid provider; the production adapter
+remains the genuine provider-neutral implementation.

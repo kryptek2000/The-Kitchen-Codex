@@ -173,6 +173,52 @@ export function nutritionResolveRateLimiter(req: Request, res: Response, next: N
 }
 
 /**
+ * Express middleware for rate limiting on the AI Advanced Nutrition canonical
+ * semantic interpretation endpoint. Configurable via
+ * `NUTRITION_INTERPRET_RATE_LIMIT` (default 20 requests per minute). Its OWN
+ * bucket: a semantic-interpretation storm can never starve (or be starved by) the
+ * legacy estimator or the v4 resolution endpoint.
+ */
+export function nutritionInterpretRateLimiter(req: Request, res: Response, next: NextFunction) {
+  const parsedLimit = parseInt(process.env.NUTRITION_INTERPRET_RATE_LIMIT || "20", 10);
+  const maxRequestsPerWindow = isNaN(parsedLimit) || parsedLimit <= 0 ? 20 : parsedLimit;
+  const windowMs = 60 * 1000; // 1 minute window
+
+  const clientIp = getClientIp(req);
+  const now = Date.now();
+
+  let entry = clientIpStore.get(`nutr_interpret_${clientIp}`);
+
+  if (!entry || entry.resetTime <= now) {
+    entry = {
+      count: 1,
+      resetTime: now + windowMs,
+    };
+    clientIpStore.set(`nutr_interpret_${clientIp}`, entry);
+  } else {
+    entry.count += 1;
+  }
+
+  const remaining = Math.max(0, maxRequestsPerWindow - entry.count);
+  const resetSeconds = Math.ceil((entry.resetTime - now) / 1000);
+
+  res.setHeader("RateLimit-Limit", maxRequestsPerWindow);
+  res.setHeader("RateLimit-Remaining", remaining);
+  res.setHeader("RateLimit-Reset", resetSeconds);
+
+  if (entry.count > maxRequestsPerWindow) {
+    res.setHeader("Retry-After", resetSeconds);
+    return res.status(429).json({
+      ok: false,
+      error: "Too many AI interpretation requests. Please wait a moment before trying again.",
+      retryAfterSeconds: resetSeconds,
+    });
+  }
+
+  next();
+}
+
+/**
  * Express middleware for rate limiting on AI metadata recovery endpoints.
  * Configurable via `METADATA_RECOVERY_RATE_LIMIT` (default 25 requests per minute).
  */

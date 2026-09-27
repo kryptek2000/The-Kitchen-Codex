@@ -216,7 +216,7 @@ async function main(): Promise<void> {
     let aiMode: 'suggest' | 'unavailable' = 'suggest';
     let aiRequestCount = 0;
     let holdMode = false;
-    let held: { requestId: string; lines: ReadonlyArray<ResolveLine> } | null = null;
+    let held: { requestId: string; lines: ReadonlyArray<ResolveLine>; canonical: boolean } | null = null;
 
     interface ResolveLine {
       readonly line_ref?: string;
@@ -274,6 +274,86 @@ async function main(): Promise<void> {
       };
     };
 
+    // AI-1: the live application now uses the CANONICAL semantic interpretation
+    // route. This seam answers that route with canonical (semantics-only)
+    // interpretations so the deterministic pipeline under test is the real one.
+    const CANONICAL_CONTRACT = 'nutrition_ai_advanced_interpretation_v1';
+
+    const canonicalInterpretationFor = (line: ResolveLine): Record<string, unknown> => {
+      const text = String(line.ingredient_text ?? '').toLowerCase();
+      const base: Record<string, unknown> = {
+        contract_version: CANONICAL_CONTRACT,
+        line_ref: line.line_ref,
+        alternatives: [],
+        ambiguity: { ambiguous: false, reasons: [] },
+        confidence: 'high',
+      };
+      const amount =
+        typeof line.amount === 'number' && Number.isFinite(line.amount)
+          ? { amount_semantics: { kind: 'exact', echoed_value: line.amount } }
+          : { amount_semantics: { kind: 'unknown' } };
+      if (/garlic/.test(text)) {
+        return {
+          ...base,
+          ...amount,
+          semantic_food: { normalized_name: 'Garlic, raw', modifiers: ['raw'], preparation: ['minced'], state: [], qualifiers: [] },
+          search_phrases: ['garlic raw'],
+          unit_semantics: { family: 'count', interpreted_unit: 'cloves' },
+          count_semantics: { noun: 'clove' },
+        };
+      }
+      if (/onion/.test(text)) {
+        return {
+          ...base,
+          ...amount,
+          semantic_food: { normalized_name: 'Onions, yellow, raw', modifiers: ['yellow'], preparation: [], state: [], qualifiers: [] },
+          search_phrases: ['onions yellow raw'],
+          unit_semantics: { family: 'count', interpreted_unit: 'onion' },
+          count_semantics: { noun: 'onion' },
+        };
+      }
+      if (/zucchini/.test(text)) {
+        return {
+          ...base,
+          ...amount,
+          semantic_food: { normalized_name: 'Zucchini', modifiers: [], preparation: [], state: [], qualifiers: [] },
+          search_phrases: ['zucchini raw'],
+        };
+      }
+      if (/vegetable broth/.test(text)) {
+        return {
+          ...base,
+          ...amount,
+          semantic_food: { normalized_name: 'Vegetable broth', modifiers: [], preparation: [], state: [], qualifiers: [] },
+          search_phrases: ['vegetable broth', 'vegetable stock'],
+        };
+      }
+      return {
+        ...base,
+        ...amount,
+        semantic_food: { normalized_name: 'Broccoli, raw', modifiers: ['raw'], preparation: [], state: [], qualifiers: [] },
+        search_phrases: ['broccoli raw'],
+        notes: 'The recipe wording refers to raw broccoli.',
+      };
+    };
+
+    const fulfillCanonical = async (
+      requestId: string,
+      lines: ReadonlyArray<ResolveLine>
+    ) => {
+      const payload = {
+        ok: true,
+        contract_version: CANONICAL_CONTRACT,
+        interpretations: lines.map((line) => canonicalInterpretationFor(line)),
+      };
+      await cdp!.send('Fetch.fulfillRequest', {
+        requestId,
+        responseCode: 200,
+        responseHeaders: [{ name: 'Content-Type', value: 'application/json' }],
+        body: Buffer.from(JSON.stringify(payload)).toString('base64'),
+      });
+    };
+
     const fulfillSuggestion = async (
       requestId: string,
       lines: ReadonlyArray<ResolveLine>
@@ -292,7 +372,10 @@ async function main(): Promise<void> {
     };
 
     await cdp.send('Fetch.enable', {
-      patterns: [{ urlPattern: '*resolve-ingredients*', requestStage: 'Request' }],
+      patterns: [
+        { urlPattern: '*resolve-ingredients*', requestStage: 'Request' },
+        { urlPattern: '*interpret-ingredients*', requestStage: 'Request' },
+      ],
     });
     cdp.on('Fetch.requestPaused', (params: any) => {
       void (async () => {
@@ -304,8 +387,9 @@ async function main(): Promise<void> {
         } catch {
           // ignore
         }
+        const canonical = String(params.request?.url ?? '').includes('interpret-ingredients');
         if (holdMode) {
-          held = { requestId: params.requestId, lines };
+          held = { requestId: params.requestId, lines, canonical };
           return;
         }
         if (aiMode === 'unavailable') {
@@ -317,7 +401,8 @@ async function main(): Promise<void> {
           });
           return;
         }
-        await fulfillSuggestion(params.requestId, lines);
+        if (canonical) await fulfillCanonical(params.requestId, lines);
+        else await fulfillSuggestion(params.requestId, lines);
       })();
     });
 
@@ -456,8 +541,11 @@ async function main(): Promise<void> {
     await openRecipeByTitle(B2);
 
     // Fulfill A's held response now that B is current.
-    const heldRequest = held as { requestId: string; lines: ReadonlyArray<ResolveLine> } | null;
-    if (heldRequest) await fulfillSuggestion(heldRequest.requestId, heldRequest.lines);
+    const heldRequest = held as { requestId: string; lines: ReadonlyArray<ResolveLine>; canonical: boolean } | null;
+    if (heldRequest) {
+      if (heldRequest.canonical) await fulfillCanonical(heldRequest.requestId, heldRequest.lines);
+      else await fulfillSuggestion(heldRequest.requestId, heldRequest.lines);
+    }
     await sleep(500);
 
     // B must show NO AI state from A.

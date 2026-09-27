@@ -1037,11 +1037,12 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                     ✨ {AI_ADVANCED_NUTRITION_LABEL}
                   </p>
                   <p className="text-[10px] text-gray-500">
-                    AI interprets food wording, count language, and household unit/size/state
-                    wording only. The pinned USDA catalog, the deterministic matcher, authenticated
-                    USDA portions, and the verified Kitchen Codex household registry decide every
-                    resolution; AI never supplies grams. Basic manual review and correction are
-                    always available. Nothing is saved.
+                    AI Advanced Nutrition interprets ingredient wording. Verified local data and
+                    deterministic rules decide nutrition. AI interprets food wording, count language,
+                    and household unit/size/state wording only. The pinned USDA catalog, the
+                    deterministic matcher, authenticated USDA portions, and the verified Kitchen
+                    Codex household registry decide every resolution; AI never supplies grams. Basic
+                    manual review and correction are always available. Nothing is saved.
                   </p>
                 </div>
                 <button

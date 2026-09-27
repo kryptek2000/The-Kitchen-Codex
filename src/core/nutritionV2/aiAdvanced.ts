@@ -994,6 +994,73 @@ export function adaptAiAdvancedInterpretationsForResolution(
   });
 }
 
+// ---------------------------------------------------------------------------
+// AI-1 resolution-eligibility guard (ambiguity / authored alternatives)
+// ---------------------------------------------------------------------------
+
+export type AiAdvancedWithheldReason = 'ambiguous' | 'alternatives';
+
+/** One interpretation withheld from deterministic resolution queries. */
+export interface AiAdvancedWithheldInterpretation {
+  readonly line_ref: string;
+  readonly reason: AiAdvancedWithheldReason;
+}
+
+export interface AiAdvancedResolutionEligibleAdaptation extends AiAdvancedAdaptOutcome {
+  /** Interpretations that were understood but withheld from resolution (AI-1). */
+  readonly withheld: ReadonlyArray<AiAdvancedWithheldInterpretation>;
+}
+
+/**
+ * AI-1 deterministic eligibility guard. An ambiguous reading, or one the
+ * provider itself reported as an authored ALTERNATIVE, may be a perfectly
+ * correct piece of semantic understanding — but it may NEVER become a
+ * deterministic identity decision. Ambiguity and alternatives may only weaken
+ * automation, never strengthen it.
+ *
+ * The guard runs at the CANONICAL ADAPTATION BOUNDARY (never in the legacy
+ * nutrition authority layer) and is purely subtractive: it removes the
+ * interpretation's resolution queries from the transport, leaving
+ * `contradicted`/`inadaptable` untouched. The interpretation itself is not
+ * discarded — the caller still holds it — so the semantic result is preserved
+ * while a confident search phrase inside an ambiguous or alternative reading can
+ * no longer drive an automatic match, and an `X or Y` line can never be silently
+ * collapsed into one selected food.
+ */
+export function withholdNonDeterministicAdaptations(input: {
+  readonly interpretations: ReadonlyArray<AiAdvancedIngredientInterpretation>;
+  readonly outcome: AiAdvancedAdaptOutcome;
+}): AiAdvancedResolutionEligibleAdaptation {
+  const withheldReasonByLineRef = new Map<string, AiAdvancedWithheldReason>();
+  for (const interpretation of input.interpretations) {
+    if (interpretation.ambiguity.ambiguous === true) {
+      withheldReasonByLineRef.set(interpretation.line_ref, 'ambiguous');
+      continue;
+    }
+    if (interpretation.alternatives.length > 0) {
+      withheldReasonByLineRef.set(interpretation.line_ref, 'alternatives');
+    }
+  }
+
+  const withheld: AiAdvancedWithheldInterpretation[] = [];
+  const suggestions: AiResolutionSuggestion[] = [];
+  for (const suggestion of input.outcome.suggestions) {
+    const reason = withheldReasonByLineRef.get(suggestion.line_ref);
+    if (reason !== undefined) {
+      withheld.push(Object.freeze({ line_ref: suggestion.line_ref, reason }));
+      continue;
+    }
+    suggestions.push(suggestion);
+  }
+
+  return Object.freeze({
+    suggestions: Object.freeze(suggestions),
+    contradicted: input.outcome.contradicted,
+    inadaptable: input.outcome.inadaptable,
+    withheld: Object.freeze(withheld),
+  });
+}
+
 /**
  * Maps an already-sanitized Phase 4/7 advisory suggestion INTO the canonical
  * semantic contract, proving the existing Phase 7 semantics are a subset of the

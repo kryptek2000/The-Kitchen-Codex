@@ -21,12 +21,18 @@ import {
 import {
   AI_ADVANCED_CONTRACT_VERSION,
   adaptAiAdvancedInterpretationsForResolution,
+  buildAiAdvancedInterpretationRequest,
   sanitizeAiAdvancedInterpretationResponse,
+  withholdNonDeterministicAdaptations,
   type AiAdvancedAuthoritativeAmountObservation,
   type AiAdvancedIngredientInterpretation,
+  type AiAdvancedWithheldInterpretation,
 } from '../core/nutritionV2/aiAdvanced';
+import { buildAuthoritativeAmountObservations } from '../core/nutritionV2/aiAdvancedSource';
 import {
+  BASIC_NUTRITION_CAPABILITIES,
   isAiInterpretationAvailable,
+  resolveNutritionCapabilities,
   type NutritionCapabilities,
 } from '../core/nutritionV2/nutritionCapabilities';
 import {
@@ -46,6 +52,17 @@ import {
 } from '../core/nutritionV2/phase4';
 
 export const NUTRITION_RESOLVE_ENDPOINT = '/api/nutrition/resolve-ingredients';
+
+/**
+ * The LIVE canonical semantic-interpretation route (AI-1). Distinct from the v4
+ * advisory resolution endpoint above: this one owns the canonical
+ * `nutrition_ai_advanced_interpretation_v1` contract and never returns the
+ * legacy suggestion shape. Two formats are never served from one route.
+ */
+export const NUTRITION_INTERPRET_ENDPOINT = '/api/nutrition/interpret-ingredients';
+
+/** Read-only, secret-free provider availability surface (no network probe). */
+export const NUTRITION_AI_STATUS_ENDPOINT = '/api/providers';
 
 /** Fixed, bounded, user-facing messages (never raw provider/exception text). */
 export const AI_RESOLUTION_UNAVAILABLE_MESSAGE =
@@ -149,6 +166,331 @@ export async function requestAiIngredientResolution(
   return { ok: true, suggestions: sanitized.suggestions, aiAttempted: true };
 }
 
+/**
+ * Bounded canonical request rows for the AI-1 semantic path. This is the ONLY
+ * ingredient payload that leaves the client: the opaque line ref, the ingredient
+ * text, an optional normalized text, the deterministic authored amount/unit, and
+ * the trusted application issue kind. No vault, no other recipes, no notes, no
+ * saved nutrition block, no nutrient result, no credential, no user metadata.
+ */
+function buildCanonicalRequestRows(
+  rows: ReadonlyArray<Phase4Row>,
+  adapted: ReadonlyArray<AdaptedIngredient>,
+  issueKinds?: Readonly<Record<string, AiResolutionIssueKind>>
+) {
+  const adaptedByRef = new Map(adapted.map((entry) => [entry.line_ref, entry]));
+  return rows.map((row) => {
+    const entry = adaptedByRef.get(row.line_ref);
+    const measurement = entry ? ingredientMeasurement(entry) : undefined;
+    return {
+      line_ref: row.line_ref,
+      ingredient_text: row.original_text || row.query,
+      normalized_text: row.query,
+      amount: measurement?.amount ?? null,
+      unit: measurement?.raw_unit,
+      issue_kind: issueKinds?.[row.line_ref],
+    };
+  });
+}
+
+/**
+ * Resolves the Basic vs AI Advanced capability set from the server's READ-ONLY,
+ * secret-free provider status surface (no network probe, no spend). Fails SAFE:
+ * any error, non-2xx, unknown shape, or missing signal yields Basic Nutrition, so
+ * the deterministic/manual workflow is never gated behind an AI probe.
+ */
+export async function resolveNutritionAiCapabilities(
+  network: NetworkAdapter
+): Promise<NutritionCapabilities> {
+  try {
+    const response = await network.get<{ providers?: unknown }>(NUTRITION_AI_STATUS_ENDPOINT);
+    if (!response || response.ok !== true) return BASIC_NUTRITION_CAPABILITIES;
+    const providers = Array.isArray(response.data?.providers)
+      ? (response.data?.providers as ReadonlyArray<unknown>)
+      : [];
+    let aiConfigured = false;
+    let aiReachable = false;
+    for (const entry of providers) {
+      if (entry === null || typeof entry !== 'object') continue;
+      const status = entry as {
+        readonly configured?: unknown;
+        readonly available?: unknown;
+        readonly enabled?: unknown;
+        readonly capabilities?: unknown;
+      };
+      if (status.enabled === false) continue;
+      const capabilities = status.capabilities;
+      const structuredOutput =
+        capabilities !== null &&
+        typeof capabilities === 'object' &&
+        (capabilities as Record<string, unknown>).structuredOutput === true;
+      if (!structuredOutput) continue;
+      if (status.configured === true) aiConfigured = true;
+      if (status.available === true) aiReachable = true;
+    }
+    return resolveNutritionCapabilities({ aiConfigured, aiReachable });
+  } catch {
+    return BASIC_NUTRITION_CAPABILITIES;
+  }
+}
+
+export interface AiAdvancedInterpretationRequestResult {
+  readonly ok: boolean;
+  readonly message?: string;
+  readonly interpretations: ReadonlyArray<AiAdvancedIngredientInterpretation>;
+  /**
+   * Deterministic parse observations built from SOURCE state before any call.
+   * Never requested from, and never influenced by, the provider.
+   */
+  readonly authoritativeByLineRef: ReadonlyMap<string, AiAdvancedAuthoritativeAmountObservation>;
+  readonly aiAttempted: boolean;
+}
+
+/**
+ * LIVE canonical interpretation request (AI-1). Selects the actionable rows,
+ * builds the bounded canonical request, calls the canonical
+ * `POST /api/nutrition/interpret-ingredients` route, and then RE-SANITIZES the
+ * response against the exact requested line refs. Server-originated canonical
+ * JSON is never trusted merely because it came from our own server: a malformed,
+ * version-mismatched, or authority-shaped payload rejects the WHOLE result.
+ */
+export async function requestAiAdvancedInterpretations(
+  args: AiResolutionRequestArgs
+): Promise<AiAdvancedInterpretationRequestResult> {
+  const rows = canonicalRequestableRows(args);
+  const authoritativeByLineRef = buildAuthoritativeAmountObservations({
+    rows,
+    adapted: args.adapted,
+  });
+  const request = buildAiAdvancedInterpretationRequest(
+    buildCanonicalRequestRows(rows, args.adapted, args.issueKinds)
+  );
+  const allowedLineRefs = request.rows.map((row) => row.line_ref);
+  if (allowedLineRefs.length === 0) {
+    return {
+      ok: false,
+      message: 'Nothing unresolved to interpret.',
+      interpretations: Object.freeze([]),
+      authoritativeByLineRef,
+      aiAttempted: false,
+    };
+  }
+
+  let response;
+  try {
+    response = await args.network.post<{
+      ok?: boolean;
+      contract_version?: unknown;
+      interpretations?: unknown;
+    }>(
+      NUTRITION_INTERPRET_ENDPOINT,
+      { ingredients: request.rows },
+      await buildAiSelectionRequestOptions()
+    );
+  } catch {
+    return {
+      ok: false,
+      message: AI_RESOLUTION_UNAVAILABLE_MESSAGE,
+      interpretations: Object.freeze([]),
+      authoritativeByLineRef,
+      aiAttempted: true,
+    };
+  }
+
+  if (!response || response.ok !== true) {
+    return {
+      ok: false,
+      message: AI_RESOLUTION_UNAVAILABLE_MESSAGE,
+      interpretations: Object.freeze([]),
+      authoritativeByLineRef,
+      aiAttempted: true,
+    };
+  }
+
+  // The server must answer in the canonical contract version this client asked
+  // for; any other version is an unusable response (never coerced).
+  if (response.data?.contract_version !== AI_ADVANCED_CONTRACT_VERSION) {
+    return {
+      ok: false,
+      message: AI_RESOLUTION_INVALID_MESSAGE,
+      interpretations: Object.freeze([]),
+      authoritativeByLineRef,
+      aiAttempted: true,
+    };
+  }
+
+  const sanitized = sanitizeAiAdvancedInterpretationResponse(
+    {
+      contract_version: AI_ADVANCED_CONTRACT_VERSION,
+      interpretations: response.data?.interpretations,
+    },
+    { allowedLineRefs }
+  );
+  if (sanitized.ok !== true) {
+    return {
+      ok: false,
+      message: AI_RESOLUTION_INVALID_MESSAGE,
+      interpretations: Object.freeze([]),
+      authoritativeByLineRef,
+      aiAttempted: true,
+    };
+  }
+  const accepted = sanitized as {
+    readonly ok: true;
+    readonly interpretations: ReadonlyArray<AiAdvancedIngredientInterpretation>;
+  };
+  return {
+    ok: true,
+    interpretations: accepted.interpretations,
+    authoritativeByLineRef,
+    aiAttempted: true,
+  };
+}
+
+interface CanonicalApplicationResult {
+  readonly ok: boolean;
+  readonly suggestions: ReadonlyArray<AiResolutionSuggestion>;
+  readonly withheld: ReadonlyArray<AiAdvancedWithheldInterpretation>;
+  /** Canonical interpretations accepted for this request (post re-sanitization). */
+  readonly acceptedCount: number;
+}
+
+/**
+ * The ONE canonical interpretation -> deterministic transport application step,
+ * shared by the AI-0 explicit path and the AI-1 live path:
+ *
+ *   re-sanitize (exact requested line refs, whole-payload rejection)
+ *     -> deterministic source reconciliation (adaptation)
+ *     -> AI-1 eligibility guard (ambiguity / authored alternatives withheld)
+ *
+ * No deterministic resolution logic is duplicated: the caller hands the result
+ * to the SAME `resolveFoodsFromAiSuggestions` /
+ * `resolveAmountsFromAiSuggestions` / `resolveHouseholdsFromAiSuggestions`
+ * pipeline the legacy path uses.
+ */
+function applyCanonicalInterpretations(input: {
+  readonly args: AiResolutionRequestArgs;
+  readonly interpretations: ReadonlyArray<AiAdvancedIngredientInterpretation>;
+  readonly authoritativeByLineRef?: ReadonlyMap<string, AiAdvancedAuthoritativeAmountObservation>;
+}): CanonicalApplicationResult {
+  const allowedLineRefs = canonicalRequestableRows(input.args).map((row) => row.line_ref);
+  const allowed = new Set(allowedLineRefs);
+  const sanitized = sanitizeAiAdvancedInterpretationResponse(
+    {
+      contract_version: AI_ADVANCED_CONTRACT_VERSION,
+      interpretations: input.interpretations.filter((entry) => allowed.has(entry.line_ref)),
+    },
+    { allowedLineRefs }
+  );
+  if (sanitized.ok !== true) {
+    return {
+      ok: false,
+      suggestions: Object.freeze([]),
+      withheld: Object.freeze([]),
+      acceptedCount: 0,
+    };
+  }
+  const accepted = sanitized as {
+    readonly ok: true;
+    readonly interpretations: ReadonlyArray<AiAdvancedIngredientInterpretation>;
+  };
+  const adapted = adaptAiAdvancedInterpretationsForResolution({
+    interpretations: accepted.interpretations,
+    ...(input.authoritativeByLineRef !== undefined
+      ? { authoritativeByLineRef: input.authoritativeByLineRef }
+      : {}),
+  });
+  const eligible = withholdNonDeterministicAdaptations({
+    interpretations: accepted.interpretations,
+    outcome: adapted,
+  });
+  return {
+    ok: true,
+    suggestions: eligible.suggestions,
+    withheld: eligible.withheld,
+    acceptedCount: accepted.interpretations.length,
+  };
+}
+
+/**
+ * Canonical SEMANTIC INTERPRETATION scope (AI-1 / architect decision).
+ *
+ * AI-1 sends every TRUSTED actionable issue kind to the canonical interpreter:
+ *   - `needs_match`       — nothing matched deterministically;
+ *   - `review_suggested`  — only a BELOW-THRESHOLD deterministic candidate exists;
+ *   - `needs_amount`      — food matched, the amount is still unresolved.
+ *
+ * This is deliberately NOT a change to `aiResolutionEligibleRows()`: the legacy
+ * v4 path keeps its own (unmatched/invalid) scope and behavior. The canonical
+ * path is driven by the trusted application `issueKinds` classification taken
+ * from the live projection, and it falls back to the legacy scope when that
+ * classification is absent.
+ */
+export const AI_ADVANCED_SEMANTIC_ISSUE_KINDS: ReadonlyArray<AiResolutionIssueKind> = Object.freeze([
+  'needs_match',
+  'review_suggested',
+  'needs_amount',
+]);
+
+function canonicalRequestableRows(
+  args: AiResolutionRequestArgs
+): ReadonlyArray<Phase4Row> {
+  const kinds = args.issueKinds;
+  if (kinds === undefined) return aiResolutionEligibleRows(args.rows);
+  return Object.freeze(
+    args.rows.filter((row) => {
+      const kind = kinds[row.line_ref];
+      return kind !== undefined && AI_ADVANCED_SEMANTIC_ISSUE_KINDS.includes(kind);
+    })
+  );
+}
+
+/**
+ * AI-1 BELOW-THRESHOLD LAUNDERING GUARD (architect decision).
+ *
+ * A `review_suggested` row is one where the DETERMINISTIC matcher already found
+ * a candidate it is NOT willing to accept automatically — the row is explicitly
+ * waiting for a human decision. Sending such a row to the canonical semantic
+ * interpreter must not upgrade it: if the provider's wording happens to re-hit
+ * the best-effort threshold, the deterministic acceptance would be laundered
+ * into an automatic one by AI agreement.
+ *
+ * This guard is purely SUBTRACTIVE and lives in the application canonical path
+ * (never in the legacy matcher, and never in the transport contract): for rows
+ * classified `review_suggested`, an automatic acceptance is downgraded to an
+ * OFFER the user must confirm explicitly, exactly like a below-threshold
+ * candidate. The deterministic candidate itself, its evidence, and every
+ * matcher/ranking rule are untouched — the AI merely may not spend authority it
+ * was never granted.
+ */
+export function withholdBelowThresholdAutoAcceptance(input: {
+  readonly outcome: AiResolveOutcome;
+  readonly issueKinds?: Readonly<Record<string, AiResolutionIssueKind>>;
+}): AiResolveOutcome {
+  const kinds = input.issueKinds;
+  if (kinds === undefined) return input.outcome;
+  let downgraded = false;
+  const candidates = input.outcome.candidates.map((candidate) => {
+    if (candidate.auto !== true || kinds[candidate.line_ref] !== 'review_suggested') return candidate;
+    downgraded = true;
+    const choice = candidate.choice as unknown as Record<string, unknown>;
+    const { aiAccepted: _aiAccepted, ...restChoice } = choice;
+    return Object.freeze({
+      ...candidate,
+      auto: false,
+      // An offered candidate omits `aiAccepted`, so an explicit "Use this match"
+      // remains a genuine USER confirmation.
+      choice: Object.freeze(restChoice),
+    });
+  }) as ReadonlyArray<AiResolveOutcome['candidates'][number]>;
+  if (!downgraded) return input.outcome;
+  return Object.freeze({
+    candidates: Object.freeze(candidates),
+    unresolved: input.outcome.unresolved,
+    auto_count: candidates.filter((candidate) => candidate.auto).length,
+  });
+}
+
 const EMPTY_FOOD_OUTCOME: AiResolveOutcome = Object.freeze({
   candidates: Object.freeze([]),
   unresolved: Object.freeze([]),
@@ -176,6 +518,17 @@ export interface AiResolutionRunResult {
   readonly aiAttempted: boolean;
   /** Number of sanitized advisory suggestions accepted from the AI response. */
   readonly interpretedCount: number;
+  /**
+   * Canonical SEMANTIC interpretations accepted on the AI-1 path. ADVISORY
+   * METRIC ONLY: a semantic interpretation is never a nutrition resolution and
+   * never inflates the deterministic coverage score.
+   */
+  readonly semanticInterpretedCount: number;
+  /**
+   * Interpretations that were understood but WITHHELD from deterministic
+   * resolution (ambiguity, or authored alternatives). Audit/display only.
+   */
+  readonly withheld: ReadonlyArray<AiAdvancedWithheldInterpretation>;
   /** Food-identity verification outcome (needs_match / review_suggested). */
   readonly outcome: AiResolveOutcome;
   /** Amount-interpretation verification outcome (needs_amount). */
@@ -207,6 +560,14 @@ export interface AiResolutionRunArgs extends AiResolutionRequestArgs {
    * required to exercise the canonical contract.
    */
   readonly interpretations?: ReadonlyArray<AiAdvancedIngredientInterpretation>;
+  /**
+   * AI-1 LIVE canonical semantic path. When true (and the capability set allows
+   * AI interpretation), the orchestrator calls the canonical interpretation route
+   * with the bounded rows, re-sanitizes the response, reconciles it against the
+   * deterministic source observations, and runs the SAME deterministic
+   * verification pipeline. The legacy v4 advisory path is used otherwise.
+   */
+  readonly liveCanonicalInterpretation?: boolean;
   /** Deterministic parse observations used to reconcile echoed amounts. */
   readonly authoritativeByLineRef?: ReadonlyMap<string, AiAdvancedAuthoritativeAmountObservation>;
 }
@@ -228,47 +589,73 @@ export async function resolveUnresolvedRowsWithAi(
       message: AI_RESOLUTION_UNAVAILABLE_MESSAGE,
       aiAttempted: false,
       interpretedCount: 0,
+      semanticInterpretedCount: 0,
+      withheld: Object.freeze([]),
       outcome: EMPTY_FOOD_OUTCOME,
       amounts: EMPTY_AMOUNT_OUTCOME,
       households: EMPTY_HOUSEHOLD_OUTCOME,
     };
   }
 
+  const canonicalInterpretationPath =
+    args.interpretations !== undefined || args.liveCanonicalInterpretation === true;
   let suggestions: ReadonlyArray<AiResolutionSuggestion>;
   let aiAttempted: boolean;
-  if (args.interpretations !== undefined) {
-    // CANONICAL PATH: bounded, request-scoped adaptation of already-sanitized
-    // canonical interpretations. No provider is called here. Defense in depth:
-    // the supplied interpretations are re-sanitized against the request rows so
-    // an authority-shaped or malformed injection can never reach adaptation.
-    const allowedLineRefs = requestableRows(args).map((row) => row.line_ref);
-    const allowed = new Set(allowedLineRefs);
-    const sanitized = sanitizeAiAdvancedInterpretationResponse(
-      {
-        contract_version: AI_ADVANCED_CONTRACT_VERSION,
-        interpretations: args.interpretations.filter((entry) => allowed.has(entry.line_ref)),
-      },
-      { allowedLineRefs }
-    );
-    if (!sanitized.ok) {
+  let withheld: ReadonlyArray<AiAdvancedWithheldInterpretation> = Object.freeze([]);
+  let semanticInterpretedCount = 0;
+  if (canonicalInterpretationPath) {
+    // CANONICAL PATH (AI-0 explicit interpretations, AI-1 live route). Both forms
+    // converge on ONE application step: re-sanitize against the exact request
+    // rows, reconcile against the deterministic source observations, then apply
+    // the ambiguity/alternatives eligibility guard.
+    let interpretations = args.interpretations;
+    let authoritative = args.authoritativeByLineRef;
+    if (interpretations === undefined) {
+      // AI-1 LIVE: bounded canonical request -> canonical route -> client
+      // re-sanitization. The deterministic source map was built before the call.
+      const live = await requestAiAdvancedInterpretations(args);
+      if (live.ok !== true) {
+        return {
+          ok: false,
+          message: live.message ?? AI_RESOLUTION_UNAVAILABLE_MESSAGE,
+          aiAttempted: live.aiAttempted,
+          interpretedCount: 0,
+          semanticInterpretedCount: 0,
+          withheld: Object.freeze([]),
+          outcome: EMPTY_FOOD_OUTCOME,
+          amounts: EMPTY_AMOUNT_OUTCOME,
+          households: EMPTY_HOUSEHOLD_OUTCOME,
+        };
+      }
+      interpretations = live.interpretations;
+      authoritative = live.authoritativeByLineRef;
+      aiAttempted = true;
+    } else {
+      // No provider is called on the explicit-interpretations path.
+      aiAttempted = false;
+    }
+
+    const applied = applyCanonicalInterpretations({
+      args,
+      interpretations,
+      ...(authoritative !== undefined ? { authoritativeByLineRef: authoritative } : {}),
+    });
+    if (applied.ok !== true) {
       return {
         ok: false,
         message: AI_RESOLUTION_INVALID_MESSAGE,
-        aiAttempted: false,
+        aiAttempted,
         interpretedCount: 0,
+        semanticInterpretedCount: 0,
+        withheld: Object.freeze([]),
         outcome: EMPTY_FOOD_OUTCOME,
         amounts: EMPTY_AMOUNT_OUTCOME,
         households: EMPTY_HOUSEHOLD_OUTCOME,
       };
     }
-    const adapted = adaptAiAdvancedInterpretationsForResolution({
-      interpretations: sanitized.interpretations,
-      ...(args.authoritativeByLineRef !== undefined
-        ? { authoritativeByLineRef: args.authoritativeByLineRef }
-        : {}),
-    });
-    suggestions = adapted.suggestions;
-    aiAttempted = false;
+    suggestions = applied.suggestions;
+    withheld = applied.withheld;
+    semanticInterpretedCount = applied.acceptedCount;
   } else {
     const requested = await requestAiIngredientResolution(args);
     if (!requested.ok) {
@@ -277,6 +664,8 @@ export async function resolveUnresolvedRowsWithAi(
         message: requested.message ?? AI_RESOLUTION_UNAVAILABLE_MESSAGE,
         aiAttempted: requested.aiAttempted,
         interpretedCount: requested.suggestions.length,
+        semanticInterpretedCount: 0,
+        withheld: Object.freeze([]),
         outcome: EMPTY_FOOD_OUTCOME,
         amounts: EMPTY_AMOUNT_OUTCOME,
         households: EMPTY_HOUSEHOLD_OUTCOME,
@@ -298,7 +687,7 @@ export async function resolveUnresolvedRowsWithAi(
       ? args.rows
       : Object.freeze(args.rows.filter((row) => issueKinds[row.line_ref] !== 'needs_amount'));
 
-  const outcome =
+  const resolvedOutcome =
     foodSuggestions.length > 0
       ? resolveFoodsFromAiSuggestions({
           session: args.session,
@@ -307,6 +696,11 @@ export async function resolveUnresolvedRowsWithAi(
           suggestions: foodSuggestions,
         })
       : EMPTY_FOOD_OUTCOME;
+  // AI-1: on the canonical semantic path, an AI-driven automatic acceptance may
+  // never upgrade a row the DETERMINISTIC matcher classified `review_suggested`.
+  const outcome = canonicalInterpretationPath
+    ? withholdBelowThresholdAutoAcceptance({ outcome: resolvedOutcome, issueKinds })
+    : resolvedOutcome;
   const amounts =
     amountSuggestions.length > 0 && args.liveRows !== undefined && args.state !== undefined
       ? resolveAmountsFromAiSuggestions({
@@ -346,6 +740,8 @@ export async function resolveUnresolvedRowsWithAi(
     ok: true,
     aiAttempted,
     interpretedCount: suggestions.length,
+    semanticInterpretedCount,
+    withheld,
     outcome,
     amounts,
     households,

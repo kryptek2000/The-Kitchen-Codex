@@ -62,7 +62,8 @@ import {
 } from './application/recipeImageRecovery';
 import { saveGeneratedRecipeImageToVault, hashCanonicalMarkdown, type GeneratedImageSaveResult } from './application/recipeImageSave';
 import { hydrateAiSelections } from './application/aiSelection';
-import { resolveUnresolvedRowsWithAi } from './application/nutritionAiResolve';
+import { resolveNutritionAiCapabilities, resolveUnresolvedRowsWithAi } from './application/nutritionAiResolve';
+import type { NutritionCapabilities } from './core/nutritionV2/nutritionCapabilities';
 import { getEndpointAccessHeaders } from './application/endpointAccess';
 import { loadProductionAdvancedNutritionSession } from './browser/advancedNutritionBundle';
 import { useAdvancedNutritionBundle } from './application-ui/useAdvancedNutritionBundle';
@@ -836,10 +837,26 @@ export default function App() {
     return { ok: false, message: ADVANCED_NUTRITION_APPLY_UI_MESSAGE[failureCode] };
   };
 
+  // AI Advanced Nutrition capability tier (AI-1). Resolved from the server's
+  // read-only, secret-free provider status surface and cached in memory for the
+  // page session. Fail-safe: any failure yields Basic Nutrition, where the AI
+  // semantic path performs NO network call and the deterministic/manual workflow
+  // (analysis, manual correction, Review, Apply) remains fully usable.
+  const nutritionAiCapabilitiesRef = useRef<NutritionCapabilities | null>(null);
+  const resolveNutritionCapabilitiesOnce = useCallback(async () => {
+    if (nutritionAiCapabilitiesRef.current !== null) return nutritionAiCapabilitiesRef.current;
+    const resolved = await resolveNutritionAiCapabilities(networkAdapter);
+    nutritionAiCapabilitiesRef.current = resolved;
+    return resolved;
+  }, [networkAdapter]);
+
   // Optional AI-assisted USDA resolution port. This shell owns the network +
   // application layer; the Advanced Nutrition UI receives ONLY this bounded port
   // (it never imports the application layer). Advisory only: the resolver sends
   // bounded unresolved-ingredient text and returns deterministic local candidates.
+  // AI-1 activates the LIVE canonical semantic path: bounded ingredient rows ->
+  // canonical interpretation route -> client re-sanitization -> deterministic
+  // source reconciliation -> the SAME deterministic resolvers.
   const handleResolveAdvancedNutritionAi: AdvancedNutritionAiResolveHandler = async ({
     session,
     rows,
@@ -856,6 +873,8 @@ export default function App() {
       issueKinds,
       liveRows,
       state,
+      capabilities: await resolveNutritionCapabilitiesOnce(),
+      liveCanonicalInterpretation: true,
     });
 
   // Save or Create a Vault Note (e.g. ingredient or technique created from wikilink modal)

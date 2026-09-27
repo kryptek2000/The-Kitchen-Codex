@@ -11,11 +11,13 @@ import express from "express";
 import { grabRecipeFromWeb } from "./recipeGrabber.js";
 import { estimateRecipeNutrition } from "./nutritionEstimator.js";
 import { resolveIngredientFoodsOnServer } from "./nutritionResolve.js";
+import { interpretIngredientsOnServer } from "./nutritionInterpret.js";
 import { recoverRecipeMetadata } from "./metadataRecovery.js";
 import {
   recipeImportRateLimiter,
   nutritionEstimateRateLimiter,
   nutritionResolveRateLimiter,
+  nutritionInterpretRateLimiter,
   metadataRecoveryRateLimiter,
   kitchenInterpretRateLimiter,
   kitchenRankRateLimiter,
@@ -659,6 +661,73 @@ export function createApp(opts: CreateAppOptions): express.Express {
       return res.status(500).json({
         ok: false,
         error: "An unexpected error occurred during ingredient resolution.",
+      });
+    }
+  });
+
+  // AI Advanced Nutrition — canonical SEMANTIC INGREDIENT INTERPRETATION (AI-1).
+  // The LIVE canonical route: it owns the provider-neutral semantic
+  // interpretation contract (`nutrition_ai_advanced_interpretation_v1`) and
+  // returns it ONLY after server-side canonical sanitization; the application
+  // re-sanitizes the same payload against the exact line refs it requested.
+  // The model interprets wording and nothing else — the response can carry no
+  // FDC id, gram/mass/density, nutrient, portion, digest, schema, provenance,
+  // authorization, or persistence field, at any nesting depth. The v4 advisory
+  // resolution route above is unchanged and remains a separate contract.
+  app.post("/api/nutrition/interpret-ingredients", requireAiAccessToken, textPricingGuard, nutritionInterpretRateLimiter, async (req, res) => {
+    const clientIp = getClientIp(req);
+
+    try {
+      if (!req.body || typeof req.body !== "object") {
+        return res.status(400).json({ ok: false, error: "Invalid request payload." });
+      }
+      if (!Array.isArray(req.body.ingredients) || req.body.ingredients.length === 0) {
+        return res.status(400).json({ ok: false, error: '"ingredients" must be a non-empty array.' });
+      }
+      if (req.body.ingredients.length > 25) {
+        return res.status(400).json({ ok: false, error: '"ingredients" exceeds maximum length (25).' });
+      }
+
+      const userSelection = parseTextSelectionHeader(req.headers);
+      const result = await interpretIngredientsOnServer(req.body.ingredients, userSelection);
+
+      if (result.ok !== true) {
+        const failure = result as {
+          readonly ok: false;
+          readonly code: string;
+          readonly aiAttempted: boolean;
+          readonly aiFailed: boolean;
+        };
+        if (failure.code === "invalid_request") {
+          return res.status(400).json({ ok: false, error: "Invalid interpretation request." });
+        }
+        // Semantic interpretation is an optional assistant: an unavailable or
+        // failed interpreter degrades to the deterministic/manual workflow.
+        return res.status(503).json({
+          ok: false,
+          aiAttempted: failure.aiAttempted === true,
+          aiFailed: failure.aiFailed === true,
+          error: "AI assistance is unavailable. You can continue with the deterministic analyzer and manual review.",
+        });
+      }
+
+      const accepted = result as {
+        readonly ok: true;
+        readonly contractVersion: string;
+        readonly interpretations: ReadonlyArray<unknown>;
+      };
+      return res.json({
+        ok: true,
+        contract_version: accepted.contractVersion,
+        interpretations: accepted.interpretations,
+        aiAttempted: true,
+      });
+    } catch (error: any) {
+      const errorMsg = error?.message || "";
+      console.error(`[${new Date().toISOString()}] [Client: ${clientIp}] Nutrition Interpret Error:`, errorMsg);
+      return res.status(500).json({
+        ok: false,
+        error: "An unexpected error occurred during ingredient interpretation.",
       });
     }
   });
