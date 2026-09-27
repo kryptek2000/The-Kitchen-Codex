@@ -175,12 +175,15 @@ describe('AI-2A isolation — pure core modules with no side channels', () => {
         expect(source.includes(token), `${file} references ${token}`).toBe(false);
       }
     }
-    // No plan route exists anywhere on the server.
+    // AI-2A shipped no plan route. AI-2B now adds the dedicated candidate
+    // PLANNING route, so the claim narrows to what still holds: the AI-2A core
+    // modules are not imported by any production surface, and `app.ts` stays thin
+    // — the route is registered through the AI-2B adapter, and NO AI-2A module is
+    // imported by the app factory itself.
     const app = read('server/app.ts');
-    expect(app.includes('plan-ingredients')).toBe(false);
-    expect(app.includes('nutritionPlan')).toBe(false);
-    // The server tree has no AI-2A adapter yet.
-    expect(read('server/app.ts').includes('aiAdvancedPlan')).toBe(false);
+    expect(app).toContain('/api/nutrition/plan-ingredients');
+    expect(app).toContain('./nutritionPlan.js');
+    expect(app.includes('aiAdvancedPlan')).toBe(false);
   });
 
   it('keeps the AI-1 live path and the AI-0 contract pins untouched', () => {

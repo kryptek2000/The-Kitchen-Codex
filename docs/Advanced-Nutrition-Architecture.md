@@ -6269,3 +6269,573 @@ and offers. Deterministic coverage (`46/97`), the legacy subset (`42/91`),
 AI-assisted authenticated resolution (`0/97`) and bounded estimate (`0/97`) are
 unchanged, and no plan construction, candidate selection or offer is counted as
 nutrition resolution.
+
+## 44. AI-2B — live provider-neutral candidate planning
+
+AI-2A defined the candidate-authority foundation offline. AI-2B activates a live
+provider-neutral **candidate-planning round trip** and nothing more: it turns a
+bounded, opaque candidate context into a canonical candidate PLAN, which it then
+returns to the caller **inert**.
+
+```text
+AI-2A bounded candidate context
+  -> transport envelope + strict server request sanitizer
+  -> provider-neutral structured model call (untrusted candidate data)
+  -> provider-response byte cap + canonical sanitizer
+  -> canonical WIRE payload (envelope-only plan_version)
+  -> application request-id binding + local re-sanitization
+  -> inert canonical candidate plan (NO Apply, NO state mutation)
+```
+
+AI-2C will connect a live plan to the deterministic acceptance port and app state.
+
+### 44.1 Modules
+
+- `src/core/nutritionV2/aiAdvancedPlanWire.ts` — PURE. The ONE owner of the frozen
+  wire shape: envelope keys `plan_version` + `plans`, entry keys without
+  `plan_version`, `toAiAdvancedPlanWirePayload` (rebuild field-by-field) and
+  `readAiAdvancedPlanWirePayload` (strict reader). No provider, no network, no
+  `async`, no clock, no randomness.
+- `server/nutritionPlan.ts` — the server adapter: `sanitizePlanTransportRequest`,
+  `sanitizePlanProviderResponse`, `buildPlanPrompt`, `NUTRITION_PLAN_INSTRUCTIONS`,
+  `planIngredientsOnServer`. Talks only to the existing provider abstraction
+  (`runWithAiFallback` / `resolveRoleCandidates` / `resolveExecutableTextCandidates`),
+  the frozen AI plan/request contracts, the wire helper and `utf8ByteLength`.
+- `src/application/nutritionAiPlan.ts` — the application requester:
+  `requestAiAdvancedCandidatePlan({ context, network, capabilities })`,
+  `isAiCandidatePlanAvailable`, `NUTRITION_PLAN_ENDPOINT`. Transport port, the
+  centralized capability model, the AI-2A context, the frozen sanitizer and the
+  wire helper only.
+- `server/app.ts` — one extra route registration plus its import.
+- `server/rateLimiter.ts` — `nutritionPlanRateLimiter` (own bucket `nutr_plan_`,
+  `NUTRITION_PLAN_RATE_LIMIT`, default 12/min).
+- `scripts/verify_ai_plan_prod.ts` — credential-free production verification.
+
+### 44.2 Transport contract
+
+Client request (the ONLY accepted envelope; unknown keys reject the request):
+
+```text
+{
+  request_version: "nutrition_ai_advanced_plan_request_v1",
+  request_id: <bounded request identity>,
+  plan_request: { contract_version: "nutrition_ai_advanced_plan_v1", lines: [ ... ] }
+}
+```
+
+`plan_request` is EXACTLY the AI-2A provider-facing request: per line a `line_ref`
+and candidate views carrying only `candidate_ref`, `display_description` and
+`semantic_tags`. The local candidate map, FDC ids, record/review/catalog digests,
+bundle release, acceptance-port values, working state, recipe identity, user
+identity and vault information are never sent. `request_id` is transport identity
+only and is **never sent to the model** — the route echoes the id it VALIDATED.
+
+### 44.3 Server request sanitizer (closed shape, rebuilt)
+
+`request_version` must be exact; `request_id` non-empty, ≤120 chars and pattern-
+bound; `plan_request` accepts only `contract_version` + `lines`; the plan contract
+version must be exact; 1–12 lines with unique `line_ref`; each line 1–12 candidates
+(the frozen AI-0 cap) with unique refs inside the `c...` candidate namespace;
+descriptions and tags bounded to the frozen view bounds (200 chars; 8 tags × 40
+chars). Any unknown, authority-shaped, identity-shaped or persistence-shaped key at
+any depth — including `fdc_id`, digests, `grams`, `nutrients`, `portion_ref`,
+`authorization`, `apply` — rejects the WHOLE request. The canonical provider
+payload is REBUILT from the validated fields and capped at **32 KiB UTF-8**; the
+cap is measured on the rebuilt payload, never on the caller's wrapper, and Express's
+broader JSON limit is not relied on.
+
+### 44.4 Provider execution (provider-neutral)
+
+`runWithAiFallback` over `resolveRoleCandidates("nutrition", …)` with
+`structuredOutput` and `buildAiAdvancedPlanSchema()`, temperature 0 and minimal
+thinking — the same infrastructure AI-1 uses. Gemini, OpenRouter and every BYOK
+provider are reached through that abstraction; nothing is hard-coded and no
+nutrition vendor exists. With no executable provider the adapter returns
+`unavailable` with `aiAttempted: false` **before any provider work**.
+
+### 44.5 Provider prompt
+
+The instructions state the authority boundary exhaustively: choose at most one
+`candidate_ref` supplied for the SAME line, decline when unsure, never invent a
+candidate or identifier, never output grams/mass/density/nutrients/database
+ids/portion data/authorization/persistence/Apply, `measure_kind` MUST be `unknown`,
+no `portion_ref`, and confidence is advisory only. The candidate catalog is appended
+as a structurally separate **untrusted DATA** block (`Candidate set (untrusted
+data):` + JSON) — descriptions and tags are data, never instructions.
+
+### 44.6 Live candidate-only policy (route policy on top of the frozen contract)
+
+The frozen contract supports several `measure_kind` values and an optional
+`portion_ref`. The live AI-2B route is narrower: `measure_kind` MUST be `unknown`
+and `portion_ref` MUST NOT appear; violation rejects the WHOLE provider response.
+The frozen contract itself is unchanged, so the postponed portion/mass surface
+cannot activate through the live route. `measure_kind` affects nothing.
+
+### 44.7 Server response sanitization and the WIRE trap
+
+Order: hard 32 KiB UTF-8 response cap → `sanitizeAiAdvancedPlanResponse` with the
+exact requested line refs, the exact per-line candidate refs and the frozen EMPTY
+portion allowance → AI-2B live policy. Any failure discards the whole response (no
+partial provider trust); unknown and cross-line refs fail closed; a non-serializable
+payload fails closed (`unsafe_response`).
+
+`plan_version` is **envelope-only** on the wire. The canonical sanitizer's normalized
+INTERNAL plan objects each carry a `plan_version` property, so the adapter must never
+JSON-serialize them: doing so would place `plan_version` inside every plan entry and
+application re-sanitization would reject the application's own response. The adapter
+therefore rebuilds the wire entry **field-by-field** through the shared
+`toAiAdvancedPlanWirePayload` owner. Regression tests pin both halves: the internal
+form carries the property, and only the rebuilt payload has exactly ONE
+`plan_version` (envelope) with zero per-entry occurrences, no `request_id` inside
+`plan`, and absent optional fields rather than `undefined` values.
+
+### 44.8 Application requester
+
+Capability gate FIRST (Basic/manual mode and any tier without
+`aiCandidateOrchestration` produce **zero** network calls), then POST the transport
+envelope, then require HTTP + application success, then require the returned
+`request_id` to equal the locally held context id (missing/wrong/empty/replayed ⇒
+`stale_request`, no plan), then a strict wire read (envelope-only `plan_version`,
+closed entry keys), then canonical **re-sanitization** against
+`allowed_line_refs`, `allowed_candidate_refs_by_line` and the EMPTY portion
+allowance, then the AI-2B live policy again, and finally the canonical wire rebuild.
+The result is inert: no Apply, no `validateAndApplyAiAdvancedPlan` call, no state
+mutation, no persistence. A proof test feeds the requester's output into
+`validateAndApplyAiAdvancedPlan` (injected deterministic acceptance port, test
+harness only) to prove shape compatibility: `automatic` for the strict candidate,
+`offer`/`below_deterministic_threshold` for a below-threshold sibling, `review` for
+an abstention.
+
+### 44.9 Route, isolation and privacy
+
+`POST /api/nutrition/plan-ingredients` is a dedicated endpoint with
+`requireAiAccessToken`, `textPricingGuard`, `nutritionPlanRateLimiter` and JSON body
+handling mirroring the AI-1 route. It shares no request state, no response schema and
+no rate-limit bucket with `POST /api/nutrition/interpret-ingredients`, whose
+semantics are unchanged (AI-1's own route tests and buckets are asserted untouched).
+The server adapter may not import the USDA runtime/catalog, Phase 2 `matching`,
+Phase 4 state, persistence, vault or UI; the application requester may not import
+the server, a provider implementation, storage/vault or UI; no AI-2B module imports
+the bounded estimate or builds portions. The provider sees only line refs, opaque
+candidate refs, display descriptions and tags.
+
+### 44.10 Failure behavior
+
+No executable provider, a provider throw, malformed structured output, an
+unsupported version, an oversized payload, an unknown or cross-line ref, an
+authority field, a non-`unknown` measure kind, or a portion ref all yield a bounded
+failure: `invalid_request` (400) or a 503 with `aiAttempted`/`aiFailed` flags and no
+plan. There is no fallback to an invented candidate, the AI-1 text resolver, an
+automatic manual search, or an arbitrary FDC lookup — AI-2B failure simply means
+**no live candidate plan**.
+
+### 44.11 Verification added by AI-2B
+
+- `tests/unit/advancedNutritionAi2bPlanTransport.test.ts` — the request sanitizer
+  (closed shape, ref namespace, bounds, every authority field, the rebuilt 32 KiB
+  cap, class/prototype/getter bodies), the response sanitizer (valid, abstain,
+  unknown/cross-line refs, authority at depth, version, duplicate line, the
+  per-entry `plan_version` trap, the live policy, the 32 KiB response cap,
+  non-serializable output, prompt injection), the wire payload (envelope-only
+  `plan_version` with the internal-form regression pair, optional-field omission,
+  strict reader) and prompt privacy/structure.
+- `tests/security/nutritionPlanRoute.test.ts` — the LIVE route over real HTTP with a
+  deterministic provider double: auth, malformed/mistyped bodies, authority-shaped
+  and over-bound views, oversize-with-no-provider-call, the sanitized wire response,
+  server-controlled request-id echo, unknown/cross-line/out-of-namespace/duplicate/
+  authority/live-policy rejections, provider throw and malformed/oversized output,
+  no-provider fail-closed, prompt-injection round trip, its own rate-limit bucket,
+  and the AI-1 route unchanged.
+- `tests/unit/advancedNutritionAi2bPlanRequest.test.ts` — the application requester:
+  capability gate with zero calls, transport-body shape and non-leakage, request-id
+  binding, transport failures, local re-sanitization (trapped envelope, unknown/
+  cross-line refs, portion ref, non-`unknown` measure kind, authority fields,
+  duplicates, over-cap), and the AI-2A validator compatibility proofs.
+- `tests/security/advancedNutritionAi2bIsolation.test.ts` — import allowlists for the
+  server adapter, the application requester and the wire module; forbidden
+  USDA/matching/Phase 4/persistence/vault/UI/estimate/portion tokens (asserted
+  against code with comments and string literals stripped); provider neutrality;
+  the wire rebuild being the only payload path; route separation and the untouched
+  AI-1 route; frozen modules not importing AI-2B; hygiene (no focused/skipped test,
+  no secret, no absolute home path, no new dependency).
+- `scripts/verify_ai_plan_prod.ts` — credential-free production verification: the
+  in-process adapter/wire/requester matrix plus the built-and-served route
+  (auth, 400s, fail-closed 503 with no provider, own rate-limit bucket, AI-1 route
+  still served, no identity/authority leakage).
+- `tests/security/advancedNutritionAi2Isolation.test.ts` — one assertion updated:
+  AI-2A shipped no plan route; AI-2B now ships the dedicated planning route, so the
+  claim narrows to "no AI-2A module is imported by the app factory" (still true).
+
+### 44.12 Benchmark accounting
+
+AI-2B still does **not** resolve nutrition. A provider selecting `c3` is a PLAN, not
+a nutrition resolution. Deterministic coverage (`46/97`), the legacy subset
+(`42/91`), AI-assisted authenticated resolution (`0/97`) and bounded estimate
+(`0/97`) are unchanged.
+
+### 44.13 AI-2C is not started
+
+No UI, no `AdvancedNutritionCard`, no working Phase 4 state mutation, no Apply flow,
+no persistence, no live resolver integration, no `deterministicAcceptanceView`, and
+no `buildAiAdvancedPortionSet` activation. AI-2C owns all of it.
+## 45. AI-2B repair — semantic target binding
+
+### 45.1 The defect: an authority-safe but semantically BLIND planner
+
+§44 shipped a planner that could not know **what it was choosing for**. Each
+model-facing line carried `line_ref` and `candidates[]` but no ingredient wording and
+no canonical semantic target, so given candidates like
+
+```text
+c1 = Cream, fluid, heavy whipping
+c2 = Cream cheese
+c3 = Sour cream
+```
+
+the provider could pick a *permitted* candidate but had no basis to pick a *correct*
+one: it was never told whether the line was "heavy cream", "cream cheese" or "sour
+cream". Every authority boundary held, and the feature was still functionally useless.
+This was a blocking functional defect, repaired here — **without** loosening a single
+authority boundary.
+
+### 45.2 Architecture decision: candidate authority context vs planning target
+
+The frozen AI-2A candidate context is NOT extended with semantic data. Two concepts
+stay separate:
+
+- **AI-2A — candidate authority context**: which candidates exist, which refs are
+  issued, what may ever be accepted.
+- **AI-2B — planning target**: the bounded semantic description of the food a line's
+  candidates are being compared against.
+
+AI-2C will decide whether a target came from authored ingredient text or from a
+sanitized AI-1 semantic query. AI-2B supports **both** and decides neither: the
+requester accepts whatever targets the caller supplies (after re-sanitizing them), and
+`buildAiAdvancedPlanTarget` accepts a plain `source_text`, an optional
+interpretation-shaped object, or both.
+
+### 45.3 `src/core/nutritionV2/aiAdvancedPlanTarget.ts` (PURE)
+
+The ONE owner of the planning-target shape. No provider, no network, no `async`, no
+clock, no randomness, no storage, no React. It imports only the canonical semantic
+bounds from `./aiAdvanced` and the shared shape helpers from `./schema` — it does NOT
+re-declare a single cap, so there is no second vocabulary owner to drift.
+
+```ts
+interface AiAdvancedPlanTarget {
+  readonly line_ref: string;
+  readonly source_text: string;                    // 1..300 chars (trimmed)
+  readonly semantic_food?: {
+    readonly normalized_name?: string;             // <= 120
+    readonly modifiers: readonly string[];         // <= 12 x 60
+    readonly preparation: readonly string[];
+    readonly state: readonly string[];
+    readonly qualifiers: readonly string[];
+  };
+  readonly search_phrases?: readonly string[];     // <= 4 x 120
+  readonly ambiguity?: { readonly ambiguous: boolean; readonly reasons: readonly string[] }; // <= 6 x 60
+  readonly alternatives?: readonly { readonly normalized_name: string; readonly notes?: string }[];
+}
+```
+
+Rules, each enforced by a closed key set or a bound:
+
+- **Closed at every depth.** Unknown keys are rejected at the target, `semantic_food`,
+  `ambiguity` and `alternatives` levels — so `fdc_id`, `record_digest`, `grams`,
+  `nutrients`, `portion_ref`, `confidence`, `candidate_ref`, `review_required` or an
+  Apply flag cannot ride along anywhere. `AI_ADVANCED_PLAN_TARGET_KEYS` and
+  `AI_ADVANCED_PLAN_TARGET_SEMANTIC_KEYS` contain no authority name at all.
+- **Fail closed, never truncate.** An over-bound array/string is a rejection, not a
+  silent trim (a trimmed modifier list would mislead the model).
+- **A target is a description, not a quantity.** An interpretation contributes ONLY
+  its semantic subset; `amount_semantics`, `unit_semantics`, `count_semantics` and
+  `confidence` are dropped — a planning target can never become mass authority.
+- **An empty semantic husk is omitted** (no information is lost), while a malformed
+  block is rejected.
+- **Cross-line safety**: an interpretation whose `line_ref` does not match the target's
+  line is refused (`unusable_interpretation`).
+- **Deterministic coverage**: `sanitizeAiAdvancedPlanTargets(raw, allowedLineRefs)`
+  requires exactly one target per requested line, no duplicates and no unknown line
+  refs, and returns them in canonical request order. Without it the model would be
+  asked to choose blind for at least one line, which is precisely the defect above.
+
+### 45.4 Transport contract
+
+The AI-2B envelope gains ONE key (closed set of four):
+
+```ts
+{ request_version, request_id, plan_request, planning_targets: [ { line_ref, source_text, … } ] }
+```
+
+`planning_targets` is **required**: a request missing a target for any requested line
+is rejected with `400`. The targets ride in the TRANSPORT only — `plan_request` stays
+byte-for-byte the AI-2A provider request, `request_id` is still never sent to the model,
+and a target grants no candidate allowance, so a target cannot widen a candidate set.
+
+### 45.5 Prompt: one untrusted DATA block, target bound to line
+
+`buildPlanPrompt(providerRequest, planningTargets)` emits the instructions first and then
+a single data block:
+
+```text
+Planning target + candidate set (untrusted data):
+{"candidate_set":{…},"planning_targets":[…]}
+```
+
+The instructions now state that the target identifies WHICH food the candidates are
+compared against, that a candidate which is merely a plausible food is NOT a correct
+answer, and that an ambiguous target — or one no supplied candidate represents — must
+be declined with review required. Target text is classified as untrusted DATA exactly
+like catalog text, so a hostile ingredient wording cannot become an instruction.
+
+### 45.6 Application requester
+
+`requestAiAdvancedCandidatePlan({ context, network, capabilities, targets })`:
+
+1. capability gate (Basic/manual still performs ZERO network calls);
+2. **target coverage re-validated before the network** — the caller's targets are
+   re-read, never trusted; a gap fails closed with code `invalid_response`,
+   `AI_PLAN_TARGET_MESSAGE` and `aiAttempted:false`, with zero requests issued;
+3. transport POST carrying `planning_targets`; request-id binding, re-sanitization and
+   the inert wire plan are unchanged.
+
+### 45.7 Proof
+
+- `tests/unit/advancedNutritionAi2bPlanTarget.test.ts` (new, 23) — construction, the
+  canonical-subset copy, husk omission, ambiguity capture, the fail-closed bounds
+  matrix, the authority firewall at every depth, and coverage/canonical ordering.
+- `tests/unit/advancedNutritionAi2bPlanTransport.test.ts` (28) — target required, exact
+  coverage, authority/over-bound/unknown-key rejection, and the prompt proof: the
+  provider is TOLD the ingredient (`heavy cream` + `cream, heavy` + all three cream
+  candidates) with no identity/authority surface.
+- `tests/security/nutritionPlanRoute.test.ts` (17) — real HTTP with a capturing provider
+  double: the served request delivers the target to the provider, and missing,
+  mismatched, authority-shaped or over-bound targets are refused with `400`.
+- `tests/unit/advancedNutritionAi2bPlanRequest.test.ts` (18) — targets ride in the
+  envelope (never inside `plan_request`), and inexact coverage fails closed with ZERO
+  network calls.
+- `tests/security/advancedNutritionAi2bIsolation.test.ts` (23) — the target module is
+  pure, has no second bounds owner and no authority key.
+- `scripts/verify_ai_plan_prod.ts` — `A-t1`…`A-t7` and `B10`…`B12` (`39 → 45` checks).
+
+### 45.8 What did NOT change
+
+Frozen AI-0/AI-2A modules are byte-identical; the AI-1 route, the sanitizer, the wire
+rebuild and the request-id binding are untouched; there is still **no** Apply, no state
+mutation, no UI, no persistence, no portion selection and no mass/grams authority. A
+target is inert semantic input: it can shape a plan's *meaning*, never its authority.
+Benchmark accounting is unchanged (deterministic `46/97`, legacy `42/91`, AI-assisted
+`0/97`, bounded estimate `0/97`) — AI-2B still does not resolve nutrition.
+
+### 45.9a CLOSURE — the 32 KiB bound covers the COMPLETE model request
+
+The cap was originally measured over the rebuilt AI-2A candidate payload, evaluated
+*before* target validation. Once the target block existed, that left the data which
+makes a choice meaningful **outside the bound**: a candidate set just under 32 KiB plus
+an unbounded target block still reached the provider.
+
+`MAX_AI_ADVANCED_PLAN_REQUEST_BYTES` (32 KiB, frozen AI-0 constant) is now applied to
+the **complete model-facing request** — `buildPlanPromptPayload(providerRequest,
+planningTargets)`, i.e. `{candidate_set, planning_targets}` — measured **after** target
+validation and on the exact payload the provider receives:
+
+```ts
+const modelRequestBytes = utf8ByteLength(
+  JSON.stringify(buildPlanPromptPayload(providerRequest, targets.targets))
+);
+if (modelRequestBytes > MAX_AI_ADVANCED_PLAN_REQUEST_BYTES) return { ok: false, code: "invalid_request" };
+```
+
+Three properties are pinned by tests rather than asserted in prose:
+
+- **No split-cap escape**: a request whose candidate set and target block are each
+  individually under the cap, but whose combined payload is over it, is refused
+  (`A-t8`/`A-t9`, `B13`, and the transport test "caps the COMPLETE model-facing
+  request — candidate set AND planning targets").
+- **One payload owner, so the cap cannot drift from the prompt**: the cap and
+  `buildPlanPrompt` both consume `buildPlanPromptPayload`; a test asserts the prompt's
+  data block byte length EQUALS the reported `modelRequestBytes` (mutation M17 catches a
+  candidate-only measurement).
+- **The measurement is reported** on the sanitized request (`modelRequestBytes`) so the
+  bound is observable rather than internal.
+
+The response side is unchanged: the raw provider response is still capped at 32 KiB
+(`MAX_AI_ADVANCED_PLAN_RESPONSE_BYTES`) before canonical sanitization.
+
+### 45.9b CLOSURE 2 — local interpretation fingerprint binding
+
+A target derived from an AI-1 interpretation must **retain that interpretation's
+fingerprint**, because the fingerprint is the only thing binding a plan back to the
+interpretation it was built against: AI-2A's acceptance port refuses a source whose
+`interpretation_fingerprint` no longer matches the current interpretation
+(`stale_interpretation`). Without retention the binding is lost on the target path and
+AI-2C has nothing to compare.
+
+```ts
+export const AI_ADVANCED_PLAN_TARGET_BINDING_KEYS = ['target', 'interpretation_fingerprint'];
+interface AiAdvancedPlanTargetBinding {
+  readonly target: AiAdvancedPlanTarget;
+  readonly interpretation_fingerprint?: string;
+}
+buildAiAdvancedPlanTargetBinding({ lineRef, sourceText, interpretation?, interpretationFingerprint? })
+readAiAdvancedPlanTargetBinding(value)
+```
+
+Properties, each pinned:
+
+- **LOCAL means local.** The fingerprint is metadata *about* the target, never part of
+  it: `interpretation_fingerprint` is not a target key, and the transport and the prompt
+  are both built from `target` alone, so a fingerprint cannot reach the provider. The
+  isolation suite asserts that neither the server adapter nor the application requester
+  references `interpretation_fingerprint` at all.
+- **Bounded by AI-2A's own limit** (`MAX_AI_ADVANCED_FINGERPRINT_LENGTH` = 200, imported,
+  not re-declared) and **fail-closed**: over-length or blank is `invalid_fingerprint`, not
+  a truncation. Exactly-at-bound is accepted.
+- **AI-2B never invents or recomputes a fingerprint.** The value is caller-supplied
+  (AI-2A computes it); a target built from an interpretation WITHOUT a supplied
+  fingerprint carries none.
+- **Closed keys** (`unknown_binding_key`), so a binding cannot smuggle an authority
+  field — at binding level or nested in the target.
+- **Authored-wording targets** carry no fingerprint: there is no interpretation to bind.
+
+### 45.9c Closure corrections — the application layer is not under a fingerprint ban, and the planner is target-SENSITIVE
+
+Two corrections to the closure-2 pins:
+
+1. **A categorical "the application requester must never reference
+   `interpretation_fingerprint`" rule was too strict** and is removed. The application
+   layer may handle a fingerprint as *local* binding metadata (that retention is the
+   whole point of §45.9b); only the provider boundary is absolute. The rules now are:
+   the **server adapter** — which builds the prompt and the provider request — must not
+   reference a fingerprint at all (static pin), the fingerprint is **not a target key**
+   (so the transport and the prompt, built from the target alone, cannot carry one), and
+   the requester is pinned at **runtime**: a target built from a binding posts nothing
+   containing its fingerprint, and a BINDING handed in where a target is expected is
+   refused outright (its extra key is not a target key) with zero network calls.
+2. **TARGET-SENSITIVE PROOF.** The defect was that the provider could not distinguish
+   "heavy cream" from "cream cheese" from "sour cream" on identical candidate sets.
+   Sensitivity is therefore proven at the deterministic seam, for ONE candidate set:
+   - two different targets ⇒ two different model-facing payloads **and** different
+     prompts, while the `candidate_set` region stays byte-identical (the authority
+     surface is untouched by a target choice);
+   - the instructions + the candidate-set prefix are byte-identical between the two
+     prompts, so the ONLY difference is the target block;
+   - each prompt carries its own semantics **and its own wording** (`source_text`) and
+     not the other's;
+   - the payload is a pure function of its inputs (same inputs ⇒ same bytes);
+   - the sanitized request carries the caller's target through unchanged, so
+     sensitivity survives the transport seam instead of being normalized away.
+
+### 45.9d CLOSURES 2–4 — binding check, ambiguity enforcement, canonical re-sanitization
+
+**Closure 2 — the binding check actually runs (pre-flight, zero network).** The
+fingerprint is not merely retained (§45.9b); it is COMPARED. For each exact line ref,
+before any provider/network execution: the AI-2A plan-line source fingerprint
+(`context.line(lineRef)?.interpretation_fingerprint`, the same field AI-2A's
+`stale_interpretation` check consumes) and the AI-2B binding fingerprint are read. If
+BOTH exist they must match exactly; a mismatch fails the whole request closed
+(`stale_request` + `AI_PLAN_FINGERPRINT_MESSAGE`, `aiAttempted: false`) with **zero
+network calls**. If only one side carries a fingerprint, nothing is invented and nothing
+fails. The requester accepts EITHER `targets` OR `targetBindings`; supplying both is
+refused, so a target never has two sources of truth. The failure code set stays closed
+and the specific cause is observable in the dedicated message.
+
+**Closure 3 — ambiguity / alternative enforcement at BOTH trust boundaries.** If
+`target.ambiguity?.ambiguous === true` or `target.alternatives.length > 0`, an accepted
+plan for that line must carry **no `candidate_ref`** and **`review_required === true`**: a
+provider cannot resolve ambiguity by picking one plausible reading. This is implemented
+TWICE, deliberately — `enforceTargetAmbiguityPolicy` in the server adapter (after the
+canonical sanitizer, before the wire rebuild) and an independent block in the application
+requester (after its own re-sanitization, before its wire rebuild). Neither is the single
+point of enforcement, so a forged or stale server response cannot smuggle candidate
+authority past the client. An isolation test pins that the rule exists in BOTH files.
+
+**Closure 4 — canonical AI-1 re-sanitization instead of duck typing.** A
+caller-supplied interpretation is no longer inspected by shape. `canonicalInterpretationFor`
+passes it through the EXISTING `sanitizeAiAdvancedInterpretationResponse` (envelope
+`{contract_version, interpretations:[raw]}`, `allowedLineRefs: [lineRef]`) and projects
+only from its canonical output. Consequences: no second sanitizer exists; the line
+binding is canonical (`unknown_line_ref` for a foreign ref) rather than a hand-rolled
+string compare; unknown keys, forbidden authority keys, a per-entry contract-version
+mismatch and malformed semantic blocks are rejected by the rules that already define
+them; the hand-rolled duck-typing key set was deleted from the module. Only
+`semantic_food`, `search_phrases`, `ambiguity` and `alternatives` are ever projected —
+never amount/unit/count semantics, confidence, grams, nutrients, portions, FDC/database
+identity, persistence or Apply.
+
+**Target-sensitive behavioural proof (provider double).** The deterministic payload proof
+above is kept, but the acceptance proof is behavioural: the real route and server adapter,
+with a deterministic provider double, and the SAME candidate set (`Cream, fluid, heavy
+whipping` / `Cream cheese` / `Sour cream`) in two calls. The double reads the model-facing
+prompt and answers according to the target it finds there — `heavy cream` ⇒ `c1`,
+`cream cheese` ⇒ `c2` — so only the semantic target differs, and the two inert plans
+differ accordingly. A payload that removes or constant-folds the target cannot produce
+`c1`/`c2` at all, which is what mutation **M22** demonstrates.
+
+**Mutation numbering.** Canonical rows: **M18** fingerprint-comparison bypass, **M19**
+ambiguity-enforcement bypass, **M20** authored-alternative-enforcement bypass, **M21**
+canonical AI-1 sanitizer bypass, **M22** target removed/constant-folded from the provider
+payload. Supplemental rows: **M23** unbounded fingerprint, **M24** fingerprint inside the
+target, **M25** semantic target block collapsed, **M26** target key widened to accept a
+fingerprint. M19 and M20 mutate BOTH boundaries in one row (the battery runner supports
+multi-file rows), so each row proves the RULE rather than one copy of it.
+
+### 45.9e M9 / M10 — mutation proof accounting for the line cap and the duplicate-line defense
+
+**M9 — the line cap is independently mutation-sensitive.** The server's line-count cap
+(`MAX_AI_ADVANCED_PLAN_LINES`) has its own pin in the route suite (real HTTP, deterministic
+provider double). CONTROL: exactly the permitted maximum of lines, one canonical target per
+line ref → `200` and the provider is reached. VIOLATION: ONE line above the maximum, otherwise
+identical in shape → `400` with the provider never called. The fixture's coverage is valid
+(one target per DISTINCT line ref, no shared refs, no foreign refs), so none of the coverage
+failure modes is reachable — and the mutation run proves it twice over: with ONLY the cap
+guard removed the request is wrongly admitted (`expected 200 to be 400`). M9 is therefore an
+**independent single-layer** mutation.
+
+**Duplicate-line safety is DEFENSE IN DEPTH — this is honest accounting, not a single guard.**
+A duplicated line ref is refused by TWO independent layers, and EITHER one alone suffices:
+
+- **LAYER A — the server's early duplicate-line guard** (`seenLines`): a repeated line identity
+  is refused on sight, before target validation.
+- **LAYER B — canonical target coverage** (`sanitizeAiAdvancedPlanTargets`): its expectations
+  come from the SAME line list, so a ref that appears twice can never be satisfied. One target
+  cannot cover an expectation list naming the ref twice (`missing_target`), two targets on one
+  ref are refused (`duplicate_target`), and a target naming an unrequested line is refused
+  (`unknown_target_line_ref`). Layer B alone therefore also refuses a duplicated line.
+
+**The three-case proof** — a duplicate defense-in-depth probe: each case is run against the real
+route with the relevant rejection layer bypassed, and every edit is restored byte-identically
+afterwards. The probe is a diagnostic technique, not a shipped artifact:
+
+| Case | Layer A | Layer B | Result |
+| --- | --- | --- | --- |
+| A | ON | **bypassed** | duplicate request **REFUSED** (probe passes — Layer A alone protects) |
+| B | **bypassed** | ON | duplicate request **REFUSED** (probe passes — Layer B alone protects) |
+| C | **bypassed** | **bypassed** | duplicate request **ADMITTED** (probe FAILS: `expected 200 to be 400`) |
+
+**M10 is a COMPOSITE defense-in-depth mutation, and is reported as such everywhere.** Its
+purpose is to prove the CHAIN: a duplicate request can be admitted only if BOTH independent
+protections are defeated. It therefore intentionally disables (A) the early duplicate-line
+guard and (B) the coverage duplicate backstop ONLY — the expectations are iterated over their
+distinct values, which changes behaviour for a duplicated expectation and nothing else (a
+genuinely missing target for a distinct ref still fails, and duplicate/foreign targets are
+untouched). Under both, the duplicate is admitted and the M10 defense-chain pin fails with
+`expected 200 to be 400`. **A guard-only bypass does NOT fail that pin** — Layer B still
+refuses the request — and no claim to the contrary is made anywhere.
+
+**Non-mutating proof of Layer B ships in the suite.** The target suite asserts the three
+coverage refusals directly (`missing_target` for a duplicated expectation, `duplicate_target`,
+`unknown_target_line_ref`) with an acceptance control, so the second duplicate defense is
+proven by ordinary tests and does not depend on a mutation row at all.
+
+**Numbering.** M9 = line-cap guard bypass (independent single-layer). M10 = duplicate-line
+defense chain bypass (COMPOSITE). M18–M26 meanings unchanged; the two displaced witnesses
+remain **M27** (`server bypasses the AI-2B live policy`) and **M28** (`capability-off path
+performs network`). Budget: **M1–M28 = 28 / 28 caught**, of which exactly one (M10) is
+composite and the rest are single-guard rows — stated in every report rather than hidden
+behind a uniform "caught" count.
+
+### 45.9 AI-2C owns
+
+Choosing the target source (authored wording vs sanitized AI-1 query) and the UI/Apply
+path that consumes a live plan through the deterministic acceptance port.

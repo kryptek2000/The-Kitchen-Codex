@@ -28,6 +28,8 @@ export * from './aiAdvancedPlan';
 export * from './aiAdvancedPlanRequest';
 export * from './aiAdvancedPlanSource';
 export * from './aiAdvancedPlanApply';
+export * from './aiAdvancedPlanWire';
+export * from './aiAdvancedPlanTarget';
 export * from './nutritionCapabilities';
 export * from './aiAdvancedEstimate';
 export * from './aiAdvancedBenchmark';

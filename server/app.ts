@@ -12,12 +12,14 @@ import { grabRecipeFromWeb } from "./recipeGrabber.js";
 import { estimateRecipeNutrition } from "./nutritionEstimator.js";
 import { resolveIngredientFoodsOnServer } from "./nutritionResolve.js";
 import { interpretIngredientsOnServer } from "./nutritionInterpret.js";
+import { planIngredientsOnServer } from "./nutritionPlan.js";
 import { recoverRecipeMetadata } from "./metadataRecovery.js";
 import {
   recipeImportRateLimiter,
   nutritionEstimateRateLimiter,
   nutritionResolveRateLimiter,
   nutritionInterpretRateLimiter,
+  nutritionPlanRateLimiter,
   metadataRecoveryRateLimiter,
   kitchenInterpretRateLimiter,
   kitchenRankRateLimiter,
@@ -728,6 +730,69 @@ export function createApp(opts: CreateAppOptions): express.Express {
       return res.status(500).json({
         ok: false,
         error: "An unexpected error occurred during ingredient interpretation.",
+      });
+    }
+  });
+
+  // AI-2B — live provider-neutral candidate PLANNING for the frozen
+  // `nutrition_ai_advanced_plan_v1` contract. Deliberately SEPARATE from the
+  // canonical interpretation route above: no shared request state, no shared
+  // response schema, no mixed discriminator, and its own rate-limit bucket. The
+  // model receives ONLY opaque candidate refs, display descriptions and
+  // semantic tags as untrusted data; the response is rebuilt field-by-field
+  // against the frozen WIRE keys after canonical sanitization (envelope-only
+  // `plan_version`), the request identity echoed back is the SERVER-VALIDATED id
+  // and never a model-produced value, and the returned plan is INERT: this route
+  // never applies a plan, mutates working state, persists, or resolves nutrition.
+  app.post("/api/nutrition/plan-ingredients", requireAiAccessToken, textPricingGuard, nutritionPlanRateLimiter, async (req, res) => {
+    const clientIp = getClientIp(req);
+
+    try {
+      const userSelection = parseTextSelectionHeader(req.headers);
+      const result = await planIngredientsOnServer(req.body, userSelection);
+
+      if (result.ok !== true) {
+        const failure = result as {
+          readonly ok: false;
+          readonly code: string;
+          readonly aiAttempted: boolean;
+          readonly aiFailed: boolean;
+        };
+        if (failure.code === "invalid_request") {
+          return res.status(400).json({ ok: false, error: "Invalid planning request." });
+        }
+        // Candidate planning is an optional assistant: an unavailable, failed or
+        // unusable planner degrades to the deterministic/manual workflow. There is
+        // no fallback to an invented candidate, the AI-1 text resolver, an
+        // automatic manual search, or an arbitrary FDC lookup.
+        return res.status(503).json({
+          ok: false,
+          aiAttempted: failure.aiAttempted === true,
+          aiFailed: failure.aiFailed === true,
+          error: "AI planning is unavailable. You can continue with the deterministic analyzer and manual review.",
+        });
+      }
+
+      const accepted = result as {
+        readonly ok: true;
+        readonly requestId: string;
+        readonly plan: unknown;
+      };
+      // `request_id` is transport identity only: it is echoed from the
+      // server-validated request and never sent to the model. The plan payload
+      // itself carries no request id and no per-entry `plan_version`.
+      return res.json({
+        ok: true,
+        request_id: accepted.requestId,
+        plan: accepted.plan,
+        aiAttempted: true,
+      });
+    } catch (error: any) {
+      const errorMsg = error?.message || "";
+      console.error(`[${new Date().toISOString()}] [Client: ${clientIp}] Nutrition Plan Error:`, errorMsg);
+      return res.status(500).json({
+        ok: false,
+        error: "An unexpected error occurred during ingredient planning.",
       });
     }
   });

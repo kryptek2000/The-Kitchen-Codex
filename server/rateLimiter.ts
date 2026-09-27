@@ -219,6 +219,53 @@ export function nutritionInterpretRateLimiter(req: Request, res: Response, next:
 }
 
 /**
+ * Express middleware for rate limiting on the AI Advanced Nutrition canonical
+ * candidate-PLANNING endpoint (`/api/nutrition/plan-ingredients`, AI-2B).
+ * Configurable via `NUTRITION_PLAN_RATE_LIMIT` (default 12 requests per minute).
+ * Its OWN bucket: plan traffic can never starve (or be starved by) canonical
+ * interpretation, the legacy estimator, or the v4 resolution endpoint. The AI-1
+ * interpretation limiter is untouched.
+ */
+export function nutritionPlanRateLimiter(req: Request, res: Response, next: NextFunction) {
+  const parsedLimit = parseInt(process.env.NUTRITION_PLAN_RATE_LIMIT || "12", 10);
+  const maxRequestsPerWindow = isNaN(parsedLimit) || parsedLimit <= 0 ? 12 : parsedLimit;
+  const windowMs = 60 * 1000; // 1 minute window
+
+  const clientIp = getClientIp(req);
+  const now = Date.now();
+
+  let entry = clientIpStore.get(`nutr_plan_${clientIp}`);
+
+  if (!entry || entry.resetTime <= now) {
+    entry = {
+      count: 1,
+      resetTime: now + windowMs,
+    };
+    clientIpStore.set(`nutr_plan_${clientIp}`, entry);
+  } else {
+    entry.count += 1;
+  }
+
+  const remaining = Math.max(0, maxRequestsPerWindow - entry.count);
+  const resetSeconds = Math.ceil((entry.resetTime - now) / 1000);
+
+  res.setHeader("RateLimit-Limit", maxRequestsPerWindow);
+  res.setHeader("RateLimit-Remaining", remaining);
+  res.setHeader("RateLimit-Reset", resetSeconds);
+
+  if (entry.count > maxRequestsPerWindow) {
+    res.setHeader("Retry-After", resetSeconds);
+    return res.status(429).json({
+      ok: false,
+      error: "Too many AI planning requests. Please wait a moment before trying again.",
+      retryAfterSeconds: resetSeconds,
+    });
+  }
+
+  next();
+}
+
+/**
  * Express middleware for rate limiting on AI metadata recovery endpoints.
  * Configurable via `METADATA_RECOVERY_RATE_LIMIT` (default 25 requests per minute).
  */
