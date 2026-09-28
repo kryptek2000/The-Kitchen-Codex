@@ -27,4 +27,6 @@ export * from './hydrate';
 export * from './aiResolve';
 export * from './aiAmountResolve';
 export * from './aiHouseholdResolve';
+export * from './deterministicAcceptanceView';
+export * from './aiPlanReconcile';
 export type { AiResolutionIssueKind } from '../aiResolution';

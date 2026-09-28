@@ -6839,3 +6839,250 @@ behind a uniform "caught" count.
 
 Choosing the target source (authored wording vs sanitized AI-1 query) and the UI/Apply
 path that consumes a live plan through the deterministic acceptance port.
+
+**Status: IMPLEMENTED (see §46).** AI-2C chose the authored-wording target source (the row's
+own deterministic review; no AI-1-interpreted query text is fed into AI-2C) and consumes the
+plan through the deterministic acceptance port on the existing working-state path. The
+strict-automatic branch is documented as dormant defense-in-depth with the architect's
+Option-A decision recorded in §46.9.
+
+
+---
+
+## §46. AI-2C — DETERMINISTIC PLAN ACCEPTANCE / REVIEW
+
+### 46.1 Purpose and authority chain
+
+AI-2B produces an **inert** candidate plan: opaque, request-scoped `candidate_ref`s plus
+advisory metadata. AI-2C is the deterministic bridge that turns such a plan into the SAME
+kind of state transition a trusted user/manual review action would create — and nothing more.
+
+```
+AI-2B canonical inert plan
+        -> AI-2A validation / classification   (frozen, port-injected)
+        -> Phase-4 deterministic acceptance view
+        -> Phase-4 pure reconciliation         (inert buckets only)
+        -> genuine Phase-4 session authority   (confirmAdvancedNutritionMatch)
+        -> existing working review state       (unchanged select_match path)
+```
+
+**AI-2C creates no parallel acceptance authority.** It adds no server route, no persistence
+path, no provenance enum, no capability flag, and no benchmark bucket. The model may
+recommend an opaque ref; only existing Kitchen Codex authority may resolve, validate,
+confirm and transition it.
+
+### 46.2 The one new boundary: `deterministicAcceptanceView`
+
+`src/core/nutritionV2/phase4/deterministicAcceptanceView.ts` is the ONLY new file allowed to
+import the existing Phase-2 `matching/confidence` machinery (the Phase-4 directory was
+already the approved importer; the AI-2C isolation suite pins that this stays true).
+
+It may expose only the existing deterministic facts the frozen AI-2A contract consumes:
+
+| field | source (reused, never re-derived) |
+|---|---|
+| `strict_automatic_fdc_id` | `selectAutomaticMatch(review)?.fdc_id` |
+| `best_effort_default_fdc_id` | `bestEffortDefaultCandidates(review)[0]?.fdc_id` |
+| `best_effort_eligible_fdc_ids` | `bestEffortDefaultCandidates(review).map(fdc_id)` |
+
+No new threshold, no new ranking, no mutation, no network, no persistence. An unusable input
+returns `undefined` (fail closed). The single deliberate deviation from the AI-2A comment is
+that `best_effort_default_fdc_id` is read from the best-effort FAMILY rather than from
+`selectBestEffortMatch` (which echoes the strict selection for a `matched_exact` review): this
+preserves the documented invariant that the default is contained in the eligible family. The
+field is telemetry only — only `strict_automatic_fdc_id` and the family can influence the
+label, and neither can create authority the deterministic contract did not already grant.
+
+### 46.3 Genuine-session confirmation
+
+`confirmAdvancedNutritionMatch(sessionRaw, reviewRaw, selectionRaw)` (added to
+`phase4/session.ts`) is the only way an AI-2C selection becomes trusted:
+
+* it resolves the genuine session through the existing module-private `SESSION_AUTHORITY`
+  WeakMap registry FIRST, and only then delegates to the existing Phase-2
+  `confirmIngredientReview`;
+* there is no second confirmation implementation, no exported catalog, no new brand/token
+  system, and Phase-2 authority semantics are untouched;
+* an unregistered receiver fails closed with `invalid_catalog` — verified for a plain
+  structural object, a spread copy, a prototype-linked clone, a proxy, an inherited object, a
+  primitive, and (strongest shape) a structural object carrying a functionally equivalent
+  catalog plus the genuine method copied onto it.
+
+### 46.4 Pure reconciliation (`phase4/aiPlanReconcile.ts`)
+
+Calls the EXISTING `validateAndApplyAiAdvancedPlan(...)` with the Phase-4 acceptance port and
+re-implements none of AI-2A's classification. Output is inert and closed: `accepted`,
+`offers`, `preserved`, `conflicts`, `unchanged`, plus the AI-2A classification record and
+honest counts. No reducer dispatch, no Apply, no persistence, no UI, no network. Guard order
+for an `automatic` line:
+
+0. **line existence** — a removed line is preserved, never recreated;
+1. **mid-flight user authority** — a changed working-choice fingerprint (or a missing capture)
+   makes the line ineligible, for offers too;
+2. **independent port re-check** — `automatic` must be provable HERE, from the same port, for
+   the same locally resolved candidate (defense-in-depth layer B, see §46.13 M40);
+3. **idempotency** — an already-identical working selection is `unchanged`; nothing dispatched;
+4. **user-authority guard** — a current explicit match (including `kind:'none'`) or a captured
+   at-request-start match is never overwritten;
+5. **mass firewall** — any stored source portion, count portion, user mass or household
+   portion (current or captured) forbids automatic acceptance.
+
+Failures reuse the existing closed vocabulary: an unknown/foreign ref or a bad port withdraws
+the WHOLE plan (`unknown_candidate_ref`, `invalid_acceptance_port`), a superseded response is
+`stale_request`, and per-line user conflicts are internal bounded kinds
+(`pre_existing_match`, `pre_existing_mass_source`, `fingerprint_changed`, `no_capture`) —
+never new public failure codes.
+
+### 46.5 Application orchestration (`src/application/nutritionAiPlanAcceptance.ts`)
+
+Order: existing capability gate -> AI-2B `requestAiAdvancedCandidatePlan` -> pure
+reconciliation -> request/session/recipe currency -> genuine-session confirmation per accepted
+line -> bounded outcome (`accepted`, `unconfirmed`, `offers`, `preserved`, `conflicts`,
+`unchanged`). It never persists, never calls Phase 5, never writes Markdown, never uses raw
+provider output, and performs exactly one requester call site. Its import set is CLOSED and
+pinned by test.
+
+### 46.6 User authority: what AI may never spend
+
+> AI may spend deterministic authority; it may not spend user authority.
+
+An explicit existing `MatchChoice` — including `kind:'none'` — is a user/working decision and
+is never silently overwritten. If a strict candidate fails ONLY because the line already has
+working/user state that would be displaced, the AI result is downgraded to a non-mutating
+offer or a preserved review, and that state is left byte-identical.
+
+### 46.7 Mass / portion firewall
+
+AI-2C writes candidate IDENTITY only. It never selects a source portion, a count portion or a
+household portion, never creates a user mass, never generates grams or serving weight, never
+creates density, and never mints USDA portion authority. This is structural: the accepted
+entry carries identity plus binding, the reconcile result carries no portion/mass/gram/nutrient
+keys (asserted over the whole serialized result), and `select_match`'s existing
+mass-clearing semantics make acceptance over a stored mass source impossible.
+
+### 46.8 OFFER / REVIEW / ABSTENTION — the live behaviour
+
+* OFFER — a locally authenticated recommendation. No `aiAccepted`, no `automatic`, no
+  working-state mutation, no preselection: it populates the EXISTING suggestion surface
+  (`AdvancedNutritionCard.tsx`, unchanged pattern) and only an explicit user click applies it,
+  through the normal manual path.
+* REVIEW — the line stays a review. No mutation.
+* ABSTENTION — nothing is written.
+* `review_suggested` issue kinds and declared review requirements cannot be laundered into an
+  automatic acceptance.
+
+### 46.9 The dormant strict-automatic branch — reachability truth
+
+`phase4/analyzer.ts` spends the BROADER deterministic authority (`selectBestEffortMatch`) while
+every line is still an ordinary row. Because strict automatic authority is a SUBSET of
+best-effort authority, a line the strict rule would accept has already been resolved by the
+analyzer (status `matched`, working choice recorded) and never becomes an actionable MATCH
+exception. An actionable match exception therefore carries NO automatic authority at all, so
+AI-2A classifies it `offer` (best-effort only) or `review` — never `automatic`.
+
+**Consequence, accepted by the architect (Option A):** in current production composition the
+strict-automatic acceptance branch is **dormant**. Its live value today is authenticated OFFER
+generation, preserved REVIEW, and conflict/user-authority protection. The branch remains fully
+guarded, tested, fail-closed defense-in-depth for future compatible callers. It is **not** a
+defect and **not** an active source of production resolutions; no candidate sourcing,
+analyzer behaviour, exception creation, AI-2A or AI-2B code was changed to force it live.
+
+Verified forms of this truth (real pipeline, not source inspection):
+
+* `tests/unit/advancedNutritionAi2cReachability.test.ts` (4/4) — real `adaptRecipe ->
+  analyzeRecipe -> phase4Reducer -> projectLiveRows`: a strict-automatic row is resolved and
+  not a match exception; even fed to the bridge with its recorded state it yields NO acceptance;
+  an exception row has neither strict nor best-effort authority and reconciles to an OFFER.
+* Production verifier over the real bundle (A28/A29): of 30 corpus lines, 24 carry strict
+  automatic authority, 28 are amount-only exceptions, and **no** strict-automatic row is a
+  match exception and **no** match exception carries automatic authority; 24/24
+  strict-automatic review-required rows already carry the analyzer's recorded choice.
+* A nuance worth naming: a `needs_amount` row is an exception for the AMOUNT flow, not the
+  match bridge. Its identity is already resolved (and recorded when the review required one),
+  so the AI-2C match bridge has nothing to accept there and refuses pre-existing working state.
+
+### 46.10 Idempotency
+
+A second identical plan dispatches nothing: the semantically identical working selection is
+reported `unchanged`, the reducer is not dispatched, `operationSeq` is not bumped, no history
+is appended, preview staleness is not triggered, and nothing is persisted.
+
+### 46.11 No new route, no Apply, no persistence
+
+The server registers exactly one plan route (`POST /api/nutrition/plan-ingredients`, AI-2B) and
+no acceptance/apply route. AI-2C has no import path to Phase 5 persistence, to
+`advancedNutritionApply`, or to recipe Markdown writers (pinned by the AI-2C isolation suite
+and by the verifier's transitive module-graph walk). Apply remains the explicit user action in
+the existing Phase-5 path and is never reachable from AI-2C.
+
+### 46.12 Isolation boundaries
+
+`tests/security/advancedNutritionAi2cIsolation.test.ts` pins: the closed application import
+set; only `deterministicAcceptanceView.ts` gaining the matching/confidence allowance; the
+reconciliation module reaching only pure core; comment-stripped banned-token scans (no Phase 5,
+Apply, Markdown writer, server/provider code, network adapter, fetch, USDA network/search
+module, raw provider contract, `codex_nutrition`, vault or localStorage); the UI remaining
+injection-only; exactly one plan route and no acceptance route; and sha256 byte-identity of
+every frozen AI-0/AI-2A module and every stable AI-2B production module.
+
+### 46.13 Mutation accounting M29–M40
+
+Every row names the rule mutated, the exact witness test, and the observed failure. Rows whose
+protection is redundant by design are declared composite and proved with the M9/M10 discipline
+(layer A alone, layer B alone, only both removed exposes the defect). Files are restored
+byte-identically after every row (sha256 verified).
+
+| row | rule mutated | kind | witness | result |
+|---|---|---|---|---|
+| M29 | mid-flight fingerprint protection | single | AI-2C reconcile: mid-flight test | CAUGHT |
+| M30 | pre-existing explicit match protection | single | reconcile: pre-existing match test | CAUGHT |
+| M31 | mass-source firewall | single | reconcile: pre-existing source portion | CAUGHT |
+| M32 | OFFER/REVIEW cannot escalate to automatic | single | reconcile: offer stays an offer | CAUGHT |
+| M33 | per-line candidate namespace | single | reconcile: cross-line ref | CAUGHT |
+| M34 | genuine-session confirmation step | single | acceptance: forged session | CAUGHT |
+| M35 | genuine session authority (**weaken the module-private `SESSION_AUTHORITY` receiver resolution**) | single | view: equivalent-catalog forgery | CAUGHT (forged receiver confirms when it must be `invalid`) |
+| M36 | no portion/mass smuggled on acceptance | single | reconcile: accepted-entry purity | CAUGHT |
+| M37 | Apply/persistence reachability | **[ISOLATION]** | AI-2C isolation: closed import set | CAUGHT |
+| M38 | idempotency no-op | single | reconcile: identical selection unchanged | CAUGHT |
+| M39 | capability gate (no network when unavailable) | **COMPOSITE** | acceptance: zero network work | A-alone blocked by the AI-2B gate; B-alone blocked by the AI-2C gate; both = defect observable |
+| M40 | strict-automatic acceptance port | **COMPOSITE** | reconcile: offer stays an offer | A-alone (AI-2A gate removed) CAUGHT by layer B; B-alone (bridge re-check removed) not observable; both = defect observable |
+
+Notes that must not be softened:
+
+* **M35** — SINGLE-LAYER, and the load-bearing boundary is the module-private Phase-4
+  `SESSION_AUTHORITY` registry. Weakening receiver resolution so a structural receiver can
+  supply authority makes the forged/equivalent-catalog receiver confirmable and the witness
+  test fail for exactly that reason. The application-layer experiment (delegating to a
+  receiver-owned confirmation method) is recorded as DIAGNOSTIC EVIDENCE ONLY: changing it
+  alone exposes no defect, so it is NOT a second protective layer and is not counted as one.
+  The private registry is what actually prevents structural forgery.
+* **M37** — there is structurally NO production call site to mutate, so the proof IS the
+  isolation boundary: injecting the forbidden import breaks the closed-import-set pin. No
+  dormant Apply/persistence call was added to manufacture a mutation.
+* **M39** — two independent capability gates (AI-2B requester + AI-2C orchestration) both
+  protect; only removing both lets a request reach the transport on an unavailable tier.
+* **M40** — two independent layers (AI-2A's strict-identity gate and the bridge's own port
+  re-check). Reported as composite, never as a single-layer witness.
+
+Budget: **M29–M40 = 12/12 verified** — **10 single-layer witnesses** (M29, M30, M31, M32,
+M33, M34, M35, M36, M37 [ISOLATION], M38) and **2 declared composite** (M39, M40) with the
+independently-protective chains truthfully proven. No row is labelled composite unless each
+layer independently prevents the defect.
+
+### 46.14 Benchmark-credit rule
+
+AI-2C earns NO resolution credit for candidate identity, for an offer, for a dormant automatic
+branch, for a plan existing, or for a semantically plausible candidate. `ai_assisted_authenticated`
+credit still requires the full existing rule: authenticated candidate authority, trusted
+confirmation, valid semantic constraints, an authoritative deterministic mass source, resolved
+grams, a non-estimated result and truthful provenance. Buckets remain **deterministic 46/97**,
+**legacy 42/91**, **AI-assisted authenticated 0/97**, **bounded estimate 0/97**.
+
+### 46.15 Honest remaining limitation
+
+The strict-automatic acceptance branch cannot be exercised end-to-end in current production
+composition (§46.9). It is proven by unit-level witnesses against real reviews and real port
+behaviour, and by the composite mutation chain, but it is NOT demonstrated by a live production
+resolution — because no live production resolution of that shape exists today. Any future
+change that makes it reachable must come from an architect decision about AI-2C's candidate
+source, and must bring AI-1's semantic parity discipline with it.

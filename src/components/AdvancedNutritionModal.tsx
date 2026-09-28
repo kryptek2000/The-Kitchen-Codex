@@ -101,6 +101,14 @@ export interface AdvancedNutritionAiUi {
   readonly amountOffers: Readonly<Record<string, ReadonlyArray<AdvancedNutritionAiAmountOffer>>>;
   /** Actionable rows (needs_match + review_suggested + needs_amount). */
   readonly exceptionCount: number;
+  /**
+   * OPTIONAL AI-2C candidate-plan action (absent when no plan port is wired).
+   * Explicit, user-invoked, and non-mutating on its own: accepted results flow
+   * through the card's existing working-state merge, offers wait for the user.
+   */
+  readonly planAvailable?: boolean;
+  readonly planRunning?: boolean;
+  readonly onPlan?: () => void;
   readonly onResolve: (lineRef?: string) => void;
   readonly onUseSuggestion: (lineRef: string) => void;
   readonly onUseAmountOffer: (lineRef: string, portionIndex: number) => void;
@@ -1055,6 +1063,20 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                 >
                   {ai.running ? 'Resolving remaining ingredients…' : 'Resolve remaining with AI'}
                 </button>
+                {ai.planAvailable === true && ai.onPlan !== undefined && (
+                  <button
+                    type="button"
+                    data-testid="advanced-nutrition-ai-plan"
+                    disabled={!ai.available || ai.running || ai.planRunning === true || ai.exceptionCount === 0}
+                    aria-disabled={
+                      !ai.available || ai.running || ai.planRunning === true || ai.exceptionCount === 0
+                    }
+                    onClick={ai.onPlan}
+                    className="shrink-0 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white/5 hover:bg-white/10 border border-white/15 text-gray-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {ai.planRunning === true ? 'Planning candidates…' : 'Plan candidates with AI'}
+                  </button>
+                )}
               </div>
               {!ai.available && (
                 <p className="text-[10px] text-gray-500">

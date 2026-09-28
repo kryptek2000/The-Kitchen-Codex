@@ -493,3 +493,36 @@ export function recomputeReviewedNutrition(
     return { ok: false, failure: phase4Failure('validation_error') };
   }
 }
+
+/**
+ * Genuine Phase-4 candidate confirmation for a caller that holds only the
+ * session RECEIVER (AI-2C).
+ *
+ * WHY THIS EXISTS
+ * ---------------
+ * `session.confirmMatch(...)` is only authoritative on the exact receiver
+ * `this`, which forces callers to invoke a method on an object they hold. That
+ * is exactly the wrong shape for an AI result boundary: an arbitrary structural
+ * object with a `confirmMatch` property would satisfy the type but carry no
+ * authority. This helper resolves the module-private `SESSION_AUTHORITY`
+ * registry FIRST, so a structural fake, clone, spread object, proxy, inherited
+ * object, wrapper, primitive or `null` fails closed (`invalid_catalog`) BEFORE
+ * any caller-supplied method is invoked, and then delegates to the SAME Phase-2
+ * `confirmIngredientReview` — there is no second confirmation implementation,
+ * no exported catalog, and no new brand/token system.
+ */
+export function confirmAdvancedNutritionMatch(
+  sessionRaw: unknown,
+  reviewRaw: unknown,
+  selectionRaw: unknown
+): ConfirmationResult {
+  const authority = resolveSessionAuthority(sessionRaw);
+  if (!authority) {
+    return Object.freeze({ outcome: 'invalid' as const, failure: phase2Failure('invalid_catalog') });
+  }
+  try {
+    return confirmIngredientReview(authority.catalog, reviewRaw, selectionRaw);
+  } catch {
+    return Object.freeze({ outcome: 'invalid' as const, failure: phase2Failure('invalid_catalog') });
+  }
+}

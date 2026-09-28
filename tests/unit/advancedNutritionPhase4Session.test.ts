@@ -46,8 +46,20 @@ describe('phase 4 session — lexical authority encapsulation', () => {
   it('the session module exports only the intentional factory and the narrow Phase 5A re-derivation capability', () => {
     // `recomputeReviewedNutrition` is the single audited Phase 5A boundary that
     // resolves the private authority; it exposes no registry/authority internals.
+    //
+    // `confirmAdvancedNutritionMatch` (AI-2C) is the single audited entry point
+    // that lets the application layer confirm one AI-proposed candidate through
+    // the SAME private registry and the SAME Phase-2 confirmation implementation.
+    // It resolves the authority internally and exposes no registry/authority
+    // internals, so the allow-list below is extended by exactly this one name --
+    // and it remains an explicit allow-list, not a wildcard: any other addition
+    // (including anything that leaks authority) still fails this pin.
     expect(Object.keys(sessionModule).sort()).toEqual(
-      ['createAdvancedNutritionSession', 'recomputeReviewedNutrition'].sort()
+      [
+        'createAdvancedNutritionSession',
+        'recomputeReviewedNutrition',
+        'confirmAdvancedNutritionMatch',
+      ].sort()
     );
     for (const key of Object.keys(sessionModule)) {
       expect(key).not.toMatch(/register|authority|registry|retrieve|bless|token/i);
