@@ -166,6 +166,11 @@ describe('phase 4 isolation — source purity', () => {
         // inert/pure: no network, no secret, no persistence, no nondeterminism.
         'recipeContextContract.ts',
         'recipeContextSnapshot.ts',
+        // AI-4B deterministic recipe-context extraction: a closed, offline phrase
+        // matcher that reads authored instruction text and builds the AI-4A
+        // envelope through the production sanitizer. Pure, provider-free, and
+        // authority-free.
+        'recipeContextExtraction.ts',
         'rows.ts',
         'session.ts',
         'state.ts',

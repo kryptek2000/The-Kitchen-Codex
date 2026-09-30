@@ -7601,3 +7601,142 @@ its own manifest and designations.
 Ruling 4 stands: the missing AI-3 `clear_ai_estimate` UI is a SEPARATE future
 cleanup. When AI-4 reaches acceptance, visible accepted interpretations, per-item
 undo, dismiss and byte-truthful state restoration ship IN THE SAME PHASE.
+
+---
+
+## §50. AI-4B — DETERMINISTIC RECIPE CONTEXT EXTRACTION (PHASE 2, INERT)
+
+AI-4A defined the SHAPE of a recipe-context envelope. **AI-4B produces that shape
+from the recipe itself** with nothing but local string rules, and is the only
+thing it is.
+
+`src/core/nutritionV2/phase4/recipeContextExtraction.ts` — one public function,
+`extractRecipeContext({ recipe, instructions })`.
+
+**AI-4B ships NO behavior beyond evidence.** Zero provider calls, zero fetch, zero
+route, zero limiter, zero UI, zero reducer or state mutation, zero persistence,
+zero calculator behavior, zero clock, zero randomness. It is not exported from any
+barrel and is not reachable from the live Advanced Nutrition workflow.
+
+### 50.1 The one permanent rule
+
+> Instruction text is EVIDENCE, not authority.
+
+"Reserve half for sauce" proves the author wrote words about reserving. It says
+nothing about how much of the chicken is eaten, and AI-4B has no field capable of
+expressing an amount. Every number an extraction can carry is either the recipe's
+own `base_servings` (copied verbatim) or a structural line count
+(`target_count`, `signal_count`, `omitted_target_count`, `omitted_signal_count`,
+`skipped_line_count`).
+
+### 50.2 What it reads, and what it never reads
+
+Reads, narrowly, after materializing once into inert data: the Phase 4 narrow
+`AdaptedRecipe` (`adapted`, `title`, `base_servings`) and the authored instruction
+array (each element's own `text` property only). It never reads a match result, a
+catalog, a record digest, a bundle release, a candidate set, a portion, a household
+record or a user mass. Ingredient identity, USDA matching and FDC identity remain
+owned entirely by the deterministic matcher.
+
+**The measurement-text rule.** Phrase rules run over INSTRUCTION TEXT ONLY. An
+ingredient line is read strictly as an opaque line ref, its bounded authored text
+and its authored food name — never as a phrase source. Its amount/unit text is
+Phase 2 measurement authority, so `half teaspoon salt`, `1/2 cup oil` and
+`2 portions chicken` are never scanned for context and can never become a
+division, a reserved portion or a serving count.
+
+### 50.3 The closed signal vocabulary
+
+Deliberately DISJOINT from the AI-4A interpretation vocabulary
+(`role`, `relations`, `preparation_hints`, `confidence`, `abstain_reason`): those
+describe a MODEL's reading, these describe a PHRASE that was literally matched.
+
+| signal | authored reading |
+| --- | --- |
+| `partial_use` | part of a line is set aside (`reserve`, `set aside`, `hold back`, `save`) |
+| `not_consumed` | a line/preparation is discarded (`discard`, `dispose of`, `pour off`, `toss out`, `not eaten`) |
+| `preparation_only` | a preparation step on a PART (`remove/trim/debone` + a body part) |
+| `garnish_only` | a finishing/garnish mention (`garnish`, `top with`, `finish with`, `decorate with`) |
+| `transformation` | a coating/marinating/seasoning step (`brush with`, `coat with`, `drizzle`, `toss with`, `marinate`, `season`) |
+| `division` | a split/division step (`divide`/`split`/`separate` + `into`/`evenly`/`equally`) |
+
+Each rule is `(contiguous trigger phrase, required completion cue)`. A cue-free
+rule fires on its verb alone; a cued rule (`preparation_only`, `division`, most
+`transformation` verbs) cannot fire without one. No trigger, cue or stop token may
+be a digit, a canonical unit or a household measure — pinned in
+`tests/security/advancedNutritionAi4bIsolation.test.ts`. `portion` is deliberately
+NOT a trigger: it is the authored measurement word.
+
+`food_semantics` reuses the established AI-3 convention (`row.query`): the bounded
+authored name only. `instruction_slots` are opaque local digests
+(`rc1:<16 hex>`), bound to the evidence, and used only for AI-4A snapshot binding.
+
+### 50.4 The quantity-cue veto
+
+A matched clause containing any unbounded-quantity cue (`to taste`, `as needed`,
+`until`, `enough`, `or more`, `for serving`, …) is REFUSED outright. "Season to
+taste" and "add oil until coated" are open-ended instructions, and AI-4B will not
+encode an open-ended instruction as a bounded context claim. A veto group can
+never contain a trigger phrase, so a rule cannot be permanently silenced (pinned).
+
+### 50.5 Selection, bounds, and honesty about omission
+
+Candidates are ingredient lines then instruction lines, in authored order. The
+budget is applied in this order: each signal-bearing instruction IMMEDIATELY
+followed by the ingredient lines its signals name; then remaining ingredient
+lines; then remaining signal-free instructions. Keeping a signal adjacent to its
+subject means the budget can only drop a whole evidence group — it can never leave
+an instruction pointing at an ingredient the envelope does not carry.
+
+Subject reference is CONTAINMENT ONLY: every content token of the authored name
+must appear in the instruction. It is not similarity, not a match and not a food
+lookup, so "chicken thighs" is NOT linked by "brush chicken with oil" — a
+conservative miss, stated rather than hidden. A subject is reported only when the
+sanitized envelope actually carries that line, so every ref in an extraction is a
+real envelope target.
+
+An over-long authored line, a non-conforming line ref or a step past the step
+budget is SKIPPED, never truncated. `title` and `base_servings` outside contract
+bounds are OMITTED (absence), never coerced. Everything dropped is counted.
+
+### 50.6 Fail-closed and inert
+
+`unsafe_context` (accessor, symbol key, dangerous key, unmaterializable),
+`invalid_context` (not an object, `adapted`/`instructions` not an array),
+`no_context_targets` (nothing selectable), `context_envelope_refused` (the REAL
+AI-4A production sanitizer refused the built envelope — defense in depth). A
+hostile input is never converted into an empty successful extraction, and every
+output is the sanitizer's own canonical object.
+
+### 50.7 Authority differential proof
+
+`tests/unit/advancedNutritionAi4bAuthorityDifferential.test.ts` drives the REAL
+production pipeline (pinned local USDA bundle, real session, real
+`analyzeRecipe`, real `buildCalculationRequest` + `session.calculate`, real
+`authorizeNutritionPersistence`, real `applyAdvancedNutrition`) three times:
+
+- BASELINE — no AI-4B extraction in existence;
+- AI-4B ON — a real extraction with at least four real detected signals;
+- ADVERSARIAL — the adversarial instruction set ("save half for tomorrow", "add
+  oil until coated", "season to taste", "serve half immediately", …), which also
+  produces real signals.
+
+Authored instructions are the ONLY thing that varies, and they are passed only to
+the extractor — never to adaptation, analysis, state, calculation or persistence.
+With real, non-empty extractions in existence, every nutrition truth is
+byte-identical: resolved grams, per-line mass evidence, FDC identity set, identity
+triples, `ingredient_identity_digest`, the aggregate `ingredient_digest`,
+release/catalog/nutrient-map/calculation pins, totals, unresolved rows, the whole
+preview, the persistence authorization payload, the Apply verdict (with the writer
+never reached), the effective-mass decision, the AI-3 eligibility verdict per line,
+and the whole working state.
+
+### 50.8 What AI-4B does NOT do
+
+It does not call any AI provider, Gemini or OpenRouter; perform any semantic
+inference; create UI, routes or limiters; persist anything; calculate nutrition,
+weights, portions or yields; modify `AdaptedRecipe`; bypass AI-3 provenance; or
+treat instruction text as nutritional truth. It is not an `AiRecipeContextInterpretation`
+and cannot be serialized as one: AI-4B re-owns no AI-4A token, redefines no AI-4A
+sanitizer, and adds no seventh `EffectiveMassClaims` source. The AI-3 authority
+chain and the cleared AI-3 mutation evidence are unmodified.
