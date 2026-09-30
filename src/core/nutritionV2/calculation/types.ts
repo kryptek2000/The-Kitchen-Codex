@@ -164,12 +164,50 @@ export type IngredientOutcome =
 
 export type MatchStatus = 'unique_exact' | 'user_confirmed' | 'auto_confirmed' | 'none';
 
+/**
+ * A BOUNDED AI MASS ESTIMATE selection supplied to the calculator (AI-3).
+ *
+ * It carries a RANGE plus the deterministic-midpoint policy, never a bare
+ * scalar, and the calculator RE-DERIVES the representative from the range. The
+ * model never authors the identity, the record binding, the snapshot binding
+ * or the calculation grams.
+ */
+export interface AiEstimateSelection {
+  readonly calculation_version: string;
+  readonly line_ref: string;
+  readonly ingredient_identity_digest: string;
+  readonly bundle_release: string;
+  readonly fdc_id: number;
+  readonly record_digest: string;
+  readonly lower_grams: number;
+  readonly upper_grams: number;
+  readonly representative_policy: 'midpoint';
+  readonly provenance: 'ai_estimate';
+  readonly snapshot_binding: string;
+}
+
+/** Bounded, truthful estimate evidence retained for display (never persisted). */
+export interface AiEstimateEvidence {
+  readonly lower_grams: number;
+  readonly upper_grams: number;
+  readonly representative_grams: number;
+  readonly representative_policy: 'midpoint';
+  readonly provenance: 'ai_estimate';
+}
+
 export type MassSource =
   | 'direct_mass'
   | 'source_portion'
   | 'count_portion'
   | 'user_mass'
-  | 'household_portion';
+  | 'household_portion'
+  /**
+   * BOUNDED AI MASS ESTIMATE (AI-3). The lowest mass authority, mutually
+   * exclusive with every other source, and never persisted: `conversion_basis`
+   * has no representation for it, so an estimate-backed line is omitted from
+   * the persisted block rather than mislabelled.
+   */
+  | 'ai_estimate';
 
 export interface IngredientCalculationEvidence {
   readonly line_ref: string;
@@ -204,6 +242,12 @@ export interface IngredientCalculationEvidence {
    * estimate, and it never changes the resolved grams.
    */
   readonly range_representative?: WrittenMassRangeEvidence;
+  /**
+   * Bounded AI-3 estimate evidence. Present ONLY for a resolved `ai_estimate`
+   * line; it retains the range and the locally derived representative for
+   * truthful display and is never written to persistence.
+   */
+  readonly ai_estimate?: AiEstimateEvidence;
   /**
    * Verified Kitchen Codex household-portion evidence for a
    * `household_portion` result. Every field is re-derived and re-verified by the

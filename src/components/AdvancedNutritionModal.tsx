@@ -43,6 +43,10 @@ import {
   type Phase4State,
   type RecipeAnalysis,
 } from '../core/nutritionV2/phase4';
+import {
+  formatAiEstimateOfferSummary,
+  type AiEstimateOffer,
+} from '../core/nutritionV2/phase4/aiEstimateAccept';
 
 /** Apply status shown by the explicit Phase 5B control. */
 export type AdvancedNutritionApplyStatus = 'idle' | 'confirming' | 'applying' | 'success' | 'error';
@@ -99,6 +103,16 @@ export interface AdvancedNutritionAiUi {
   readonly message: string | null;
   readonly suggestions: Readonly<Record<string, AdvancedNutritionAiSuggestion>>;
   readonly amountOffers: Readonly<Record<string, ReadonlyArray<AdvancedNutritionAiAmountOffer>>>;
+  /**
+   * AI-3 estimate OFFERS. Display-only. An offer that merely exists never
+   * changes the preview or Apply eligibility; only the second explicit click
+   * can promote one into working state.
+   */
+  readonly estimateOffers?: Readonly<Record<string, Readonly<AiEstimateOffer>>>;
+  readonly estimateRunning?: boolean;
+  readonly estimateMessage?: string | null;
+  readonly onEstimateMassesWithAi?: () => void;
+  readonly onUseEstimateOffer?: (lineRef: string) => void;
   /** Actionable rows (needs_match + review_suggested + needs_amount). */
   readonly exceptionCount: number;
   /**
@@ -1063,6 +1077,30 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                 >
                   {ai.running ? 'Resolving remaining ingredients…' : 'Resolve remaining with AI'}
                 </button>
+                {ai.onEstimateMassesWithAi && (
+                  <button
+                    type="button"
+                    data-testid="advanced-nutrition-ai-estimate"
+                    disabled={!ai.available || ai.running || ai.estimateRunning === true || ai.exceptionCount === 0}
+                    aria-disabled={
+                      !ai.available || ai.running || ai.estimateRunning === true || ai.exceptionCount === 0
+                    }
+                    onClick={ai.onEstimateMassesWithAi}
+                    className="shrink-0 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {ai.estimateRunning === true
+                      ? 'Estimating remaining amounts…'
+                      : 'Estimate remaining amounts with AI'}
+                  </button>
+                )}
+                {ai.estimateMessage !== undefined && ai.estimateMessage !== null && (
+                  <p
+                    data-testid="advanced-nutrition-ai-estimate-message"
+                    className="w-full text-[10px] text-amber-200/80"
+                  >
+                    {ai.estimateMessage}
+                  </p>
+                )}
                 {ai.planAvailable === true && ai.onPlan !== undefined && (
                   <button
                     type="button"
@@ -1470,6 +1508,45 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                                 </div>
                               </div>
                             )}
+                        {ai.estimateOffers?.[row.line_ref] !== undefined && (
+                          <div
+                            data-testid="advanced-nutrition-ai-estimate-offer"
+                            className="p-2 rounded-lg bg-amber-950/20 border border-amber-500/30 space-y-1"
+                          >
+                            <p
+                              data-testid="advanced-nutrition-ai-estimate-label"
+                              className="text-[11px] font-semibold text-amber-200"
+                            >
+                              {ai.estimateOffers[row.line_ref]?.label}
+                            </p>
+                            <p
+                              data-testid="advanced-nutrition-ai-estimate-range"
+                              className="text-[11px] text-gray-200"
+                            >
+                              {ai.estimateOffers[row.line_ref] !== undefined
+                                ? formatAiEstimateOfferSummary(ai.estimateOffers[row.line_ref] as AiEstimateOffer)
+                                : ''}
+                            </p>
+                            {ai.estimateOffers[row.line_ref]?.notes !== undefined && (
+                              <p
+                                data-testid="advanced-nutrition-ai-estimate-note"
+                                className="text-[10px] text-gray-400 italic"
+                              >
+                                {ai.estimateOffers[row.line_ref]?.notes}
+                              </p>
+                            )}
+                            {ai.onUseEstimateOffer && (
+                              <button
+                                type="button"
+                                data-testid="advanced-nutrition-ai-estimate-use"
+                                onClick={() => ai.onUseEstimateOffer?.(row.line_ref)}
+                                className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30"
+                              >
+                                Use this estimate
+                              </button>
+                            )}
+                          </div>
+                        )}
                           </div>
                         )}
                         {row.outcome === 'qualitative' && (

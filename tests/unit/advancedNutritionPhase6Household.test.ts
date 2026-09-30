@@ -1056,7 +1056,11 @@ describe('phase 6 — container and range guards', () => {
       const live = liveOf(value, value.state);
       expect(live.resolved_grams, line).toBeUndefined();
     }
-  });
+    // TEST-STABILITY ONLY. Iterates the full authenticated bundle across every
+    // guarded line. Measured 2376ms in isolation and over Vitest's accidental
+    // 5000ms unit default under full-suite parallel load. Scoped 10s budget;
+    // no global timeout, no assertion change, no production change.
+  }, 10000);
 
   it('also fails the explicit container forms (container parsed as the unit)', () => {
     for (const line of ['1 can tomatoes', '1 package tomatoes']) {
@@ -1210,7 +1214,12 @@ describe('phase 6 — household-choice invalidation', () => {
       expect(value.analysis.preview?.ingredients[0].resolved_grams ?? null, line).toBeNull();
       expect(liveOf(value, value.state).resolved_grams, line).toBeUndefined();
     }
-  });
+    // TEST-STABILITY ONLY. Drives the full recipe-quantity/unit/size/state
+    // edit-invalidation flow over the authenticated bundle. Measured 2730ms in
+    // isolation and over Vitest's accidental 5000ms unit default under
+    // full-suite parallel load. Scoped 10s budget; no global timeout, no
+    // assertion change, no production change.
+  }, 10000);
 
   it('a re-analysis replaces the household map and never resurrects a cleared choice', () => {
     const garlic = flow('3 cloves garlic');

@@ -71,6 +71,19 @@ export function workingChoiceFingerprint(state: Phase4State, lineRef: string): s
     stableChoiceKey(state.portions[lineRef]),
     stableChoiceKey(state.userMasses[lineRef]),
     stableChoiceKey(state.householdPortions?.[lineRef]),
+    // AI-3: a BOUNDED AI MASS ESTIMATE is a working mass choice too, so it is
+    // covered by the same mid-flight protection. Including it means a user who
+    // replaces an estimate with their own mass (or with another estimate)
+    // invalidates a later in-flight estimate, and an estimate can never
+    // silently overwrite another estimate.
+    //
+    // This is an ADDITIVE field: an absent estimate contributes the sentinel
+    // 'u'. The fingerprint STRING therefore differs from the pre-AI-3 value
+    // for every line (one extra field is joined in), but it is still a
+    // deterministic function of the same inputs, and the equality CHECK the
+    // AI-1/AI-2C witnesses rely on is unchanged in meaning. Do not treat the
+    // pre-AI-3 fingerprint string as a stable constant.
+    stableChoiceKey(state.aiEstimates?.[lineRef]),
   ].join('\u0000');
 }
 

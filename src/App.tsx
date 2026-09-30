@@ -63,6 +63,11 @@ import {
 import { saveGeneratedRecipeImageToVault, hashCanonicalMarkdown, type GeneratedImageSaveResult } from './application/recipeImageSave';
 import { hydrateAiSelections } from './application/aiSelection';
 import { resolveNutritionAiCapabilities, resolveUnresolvedRowsWithAi } from './application/nutritionAiResolve';
+import { requestAiMassEstimateOffers } from './application/nutritionAiEstimate';
+import { buildAiSelectionRequestOptions } from './application/aiSelection';
+
+/** The ONE dedicated AI-3 route. It never shares the AI-2 planning route. */
+const AI_ESTIMATE_ENDPOINT = '/api/nutrition/estimate-mass';
 import type { NutritionCapabilities } from './core/nutritionV2/nutritionCapabilities';
 import { getEndpointAccessHeaders } from './application/endpointAccess';
 import { loadProductionAdvancedNutritionSession } from './browser/advancedNutritionBundle';
@@ -89,6 +94,7 @@ import { RecipeCard } from './components/RecipeCard';
 import { RecipeDetailView } from './components/RecipeDetailView';
 import type {
   AdvancedNutritionAiResolveHandler,
+  AdvancedNutritionAiEstimateHandler,
   AdvancedNutritionApplyHandler,
   AdvancedNutritionApplyHandlerArgs,
   AdvancedNutritionApplyUiResult,
@@ -877,6 +883,61 @@ export default function App() {
       liveCanonicalInterpretation: true,
     });
 
+  /**
+   * AI-3 PRODUCTION COMPOSITION OWNER — bounded mass estimates.
+   *
+   * This is a THIN adapter. It does not parse, hash, build a provider payload,
+   * implement eligibility, compute a midpoint, dispatch a selection or persist.
+   * All of that lives in `requestAiMassEstimateOffers` and the Phase-4/session
+   * evidence owner it calls.
+   *
+   * Capability: the adapter gates FIRST. A Basic tier costs zero provider calls.
+   */
+  const handleEstimateMassesWithAi: AdvancedNutritionAiEstimateHandler = useCallback(
+    async ({ state, lines, servings, request_token }) => {
+      const session = advancedNutritionBundle.session;
+      if (session === null || session === undefined) {
+        return { ok: true, offers: [], refused: [], message: 'Advanced Nutrition is still loading.' };
+      }
+      try {
+        return await requestAiMassEstimateOffers({
+          state,
+          lines,
+          // The shell's single centralized capability decision, used verbatim.
+          // The adapter has no other way to learn the tier.
+          capabilities: await resolveNutritionCapabilitiesOnce(),
+          session,
+          transport: {
+            request: async (request) => {
+              const response = await networkAdapter.post<{
+                ok?: boolean;
+                request_id?: string;
+                estimates?: ReadonlyArray<Record<string, unknown>>;
+                code?: string;
+              }>(
+                AI_ESTIMATE_ENDPOINT,
+                request,
+                await buildAiSelectionRequestOptions(),
+              );
+              const data = response.data;
+              if (response.ok !== true || data?.ok !== true) {
+                return { ok: false, code: data?.code };
+              }
+              return {
+                ok: true,
+                request_id: data.request_id,
+                estimates: (data.estimates ?? []) as ReadonlyArray<Record<string, unknown>>,
+              };
+            },
+          },
+        });
+      } catch {
+        return { ok: true, offers: [], refused: [], message: 'AI estimate failed.' };
+      }
+    },
+    [advancedNutritionBundle.session, networkAdapter, resolveNutritionCapabilitiesOnce],
+  );
+
   // Save or Create a Vault Note (e.g. ingredient or technique created from wikilink modal)
   const handleSaveNoteToVault = async (note: VaultNote) => {
     setNotes((prev) => {
@@ -1554,6 +1615,7 @@ export default function App() {
             onLoadAdvancedNutritionBundle={advancedNutritionBundle.load}
             onApplyAdvancedNutrition={handleApplyAdvancedNutrition}
             onResolveAdvancedNutritionAi={handleResolveAdvancedNutritionAi}
+            onEstimateMassesWithAi={handleEstimateMassesWithAi}
           />
         ) : activeTab === 'grid' ? (
           /* Recipe Gallery View */

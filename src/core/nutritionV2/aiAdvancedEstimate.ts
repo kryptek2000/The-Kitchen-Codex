@@ -1,14 +1,19 @@
 /**
- * The Kitchen Codex — AI Advanced Nutrition: FUTURE bounded-estimate contract
- * skeleton (AI-0).
+ * The Kitchen Codex — AI Advanced Nutrition: bounded-estimate contract (AI-0,
+ * ACTIVATED for AI-3).
  *
- * PURE, offline. This module defines the SHAPE a future AI mass estimate must
- * take and the policy gates any future activation must satisfy. It is NOT a
- * mass estimator: `resolveAiBoundedEstimate` ALWAYS refuses with
- * `estimation_disabled`, and no food-specific tables, density guessing, or
- * grams are computed here.
+ * PURE, offline. This module owns the SHAPE an AI mass estimate must take and
+ * the policy gates activation must satisfy. It is NOT a mass estimator: no
+ * food-specific tables, no density guessing, and no grams are computed here.
+ * `validateAiBoundedEstimateProposal` is the canonical structural sanitizer;
+ * `resolveAiBoundedEstimate` validates and returns a proposal.
  *
- * FUTURE ACTIVATION REQUIREMENTS (must all hold before estimation ships):
+ * ACTIVATION (AI-3): the contract shape, sanitizer, forbidden authority keys,
+ * provenance class, policy version, display label, representative-policy
+ * vocabulary and every numeric/string bound are UNCHANGED from AI-0. Only the
+ * availability constant and the resolver's activation wiring changed.
+ *
+ * ACTIVATION REQUIREMENTS (all enforced by the AI-3 layers):
  *  - explicit lower/upper uncertainty bounds (never a bare scalar);
  *  - a declared representative policy;
  *  - the input semantics the estimate was based on;
@@ -28,11 +33,10 @@ export const AI_ESTIMATE_POLICY_VERSION = 'nutrition_ai_estimate_policy_v1';
 export const AI_ESTIMATE_DISPLAY_LABEL = 'AI estimate (not USDA-authenticated)';
 
 /**
- * AI-0 ships estimation hard-disabled. This constant is the single switch a
- * future, explicitly reviewed phase would have to change (together with the
- * Review/UI gates above); no caller can enable it per-request.
+ * The single availability switch. AI-0 shipped `'disabled'`; AI-3 activates
+ * bounded estimation. No caller can enable or disable it per-request.
  */
-export const AI_ESTIMATION_AVAILABILITY = 'disabled' as const;
+export const AI_ESTIMATION_AVAILABILITY = 'available' as const;
 
 export const AI_ESTIMATE_REPRESENTATIVE_POLICIES = Object.freeze([
   'midpoint',
@@ -241,19 +245,31 @@ export function validateAiBoundedEstimateProposal(raw: unknown): AiBoundedEstima
 }
 
 export type AiBoundedEstimateResolution =
-  | { readonly ok: false; readonly code: 'estimation_disabled' };
+  | { readonly ok: true; readonly proposal: AiBoundedEstimateProposal }
+  | {
+      readonly ok: false;
+      readonly code: 'estimation_disabled' | AiBoundedEstimateValidationFailure;
+    };
 
 /**
- * AI-0 ALWAYS refuses. Even a structurally perfect proposal is not an
- * authorization and production never guesses grams.
+ * Validates a raw bounded-estimate proposal through the EXISTING canonical
+ * sanitizer and returns the frozen proposal shape. Structural validation is
+ * NOT an authorization: the AI-3 layers own eligibility, bounds beyond this
+ * contract, the deterministic midpoint rule and the working-state firewall, and
+ * this module still never guesses grams.
  */
-export function resolveAiBoundedEstimate(_raw: unknown): AiBoundedEstimateResolution {
-  return Object.freeze({ ok: false as const, code: 'estimation_disabled' as const });
+export function resolveAiBoundedEstimate(raw: unknown): AiBoundedEstimateResolution {
+  if (AI_ESTIMATION_AVAILABILITY !== 'available') {
+    return Object.freeze({ ok: false as const, code: 'estimation_disabled' as const });
+  }
+  const validated = validateAiBoundedEstimateProposal(raw);
+  if (!validated.ok) return Object.freeze(validated);
+  return Object.freeze({ ok: true as const, proposal: validated.proposal });
 }
 
-/** AI estimation is hard-disabled in AI-0. */
-export function isAiEstimationEnabled(): false {
-  return false;
+/** AI estimation is available (AI-3 activation). */
+export function isAiEstimationEnabled(): true {
+  return true;
 }
 
 /**

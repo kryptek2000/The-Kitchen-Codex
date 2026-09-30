@@ -1,0 +1,1541 @@
+{
+ "$comment": "AI-3 EXECUTABLE MUTATION MANIFEST M41-M61, CURRENT EXPLICIT SCHEMA (v4). The strict verifier reads ONLY the current-schema keys listed in `current_schema_authoritative_keys`. Everything under `notes` is historical or forensic prose and everything under `legacy` is a retired historical field; neither is ever read by the parser or the executor (proved by a differential strip self-test that re-normalizes the manifest with both blocks deleted and requires a byte-identical obligation set).",
+ "manifest_version": "ai3_m41_m61_v4_current_schema",
+ "schema": {
+  "row_type": [
+   "SINGLE",
+   "TYPE_B_MULTI_PREDICATE",
+   "VARIANT_SET",
+   "SHARED_GUARD_SCENARIO",
+   "RETIRED_BY_ARCHITECTURE"
+  ],
+  "SINGLE": "exactly one obligation; the row IS the obligation. `designation`, `witness` and `expected_verdict` are explicit row fields. The obligation resolves its mutation through the explicit `mutation_owner` reference; a row that defines `mutation` is that owner's definition.",
+  "TYPE_B_MULTI_PREDICATE": "one obligation per `subobligations` entry, each with its own explicit `obligation_id`, `designation`, `witness`, `expected_verdict` and `mutation_owner`.",
+  "VARIANT_SET": "one obligation per `variants` entry. `components` on a variant declares WHICH row-owned component mutations are active; the semantic `expected_verdict` is declared explicitly per variant and is NEVER inferred from the component set.",
+  "SHARED_GUARD_SCENARIO": "one mutation definition on the row, one obligation per `scenarios` entry, every scenario pointing at the same explicit `mutation_owner`.",
+  "RETIRED_BY_ARCHITECTURE": "non-destructive pin. `expected_verdict` is RETIRED_BY_ARCHITECTURE; it never enters the destructive executor and never owns a mutation.",
+  "expected_verdict": "REQUIRED and EXPLICIT on every verdict-bearing obligation. One of CAUGHT | SURVIVED_AS_EXPECTED | PIN_GREEN | RETIRED_BY_ARCHITECTURE. There is no default and no prose inference; an absent or unknown token is STRUCTURAL_INVALID.",
+  "mutation_owner": "REQUIRED on every destructive obligation. It is the id of the record that DEFINES the mutation. Owners are SINGLE rows, SHARED_GUARD_SCENARIO rows, VARIANT_SET rows and self-mutating subobligations. A sharer MUST NOT carry its own `mutation` definition."
+ },
+ "witness_default_timeout_s": 300,
+ "$migration_v4": {
+  "reconciled_missing_nine": "The strict current-schema parser produced 23 obligations from 21 historical rows. The nine genuinely missing strict obligations are M43, M47a, M47b, M51, M56a, M56b, M59, M60 and M61; 23 + 9 = 32.",
+  "m43_m51_m59_m60_m61": "Migrated from the legacy `mutate` shape to explicit SINGLE rows with an inline `mutation` and an explicit expected_verdict of CAUGHT.",
+  "m47a_m47b": "M47's legacy `submutations` had no explicit expected verdict (they carried prose), so both sub-obligations were previously dropped. They are now explicit subobligations with obligation ids M47a / M47b, exact designations AI3-M47A-HIST / AI3-M47B-HIST, their own witness, their own mutation and expected_verdict CAUGHT. The prior prose moved to `reason` / `notes`.",
+  "m56a_m56b": "M56's legacy submutations were keyed by `sub`, not `id`, so both were dropped. They are now explicit subobligations with obligation ids M56a / M56b, exact designations AI3-M56A-HIST / AI3-M56B-HIST and expected_verdict CAUGHT. The legacy `sub` key is no longer authoritative.",
+  "m42_m57": "Both rows already existed as semantic obligations but resolved no mutation definition, so both were unexecutable. They are now SINGLE sharers carrying mutation_owner = M41. M41 remains the sole owner of the shared stronger-source conflict mutation; neither sharer duplicates its file, anchor or replacement. No obligation was added for either row.",
+  "m54": "M54 was one historical row with one shared mutation but four scenario obligations the strict parser classified as non-destructive because the shared mutation was not in the schema it consumed. It is now row_type SHARED_GUARD_SCENARIO with ONE mutation definition and FOUR explicitly destructive scenario obligations (userMasses / portions / countPortions / householdPortions), each with its own designation, witness and expected_verdict CAUGHT, each pointing at mutation_owner M54.",
+  "m50_m53": "The old parser compared a variant's letter string against the `applies_components` list, which is a type-impossible comparison. The component set now only declares WHICH mutations are active; the semantic expected verdict is declared explicitly per variant (M50 AB / ABC = SURVIVED_AS_EXPECTED, ABCD = CAUGHT; M53 A / B = SURVIVED_AS_EXPECTED, AB = CAUGHT).",
+  "no_verdict_defaults": "The implicit `row.get('expected_verdict', CAUGHT)` default was removed. Every verdict-bearing obligation now declares its expected verdict explicitly in current metadata; an absent or unknown token is a structural problem."
+ },
+ "rows": [
+  {
+   "id": "M41",
+   "row_type": "SINGLE",
+   "obligation_id": "M41",
+   "designation": "AI3-M41-HIST",
+   "witness": [
+    "tests/unit/advancedNutritionAi3HistoricalWitnesses.test.ts"
+   ],
+   "expected_verdict": "CAUGHT",
+   "mutation_owner": "M41",
+   "mutation": {
+    "file": "src/core/nutritionV2/calculation/effectiveMass.ts",
+    "anchor": "      return hasAiEstimate && nonDirectCount === 2\n        ? { kind: 'conflict', reason: 'ai_estimate_with_stronger_source' }\n        : { kind: 'conflict', reason: 'multiple_sources' };",
+    "replacement": "      return hasAiEstimate && nonDirectCount === 2\n        ? { kind: 'user_mass' }\n        : { kind: 'conflict', reason: 'multiple_sources' };"
+   },
+   "description": "estimate over stronger authority",
+   "reason": "an authority-shaped key is no longer rejected as authority_field",
+   "notes": {
+    "defect": "MODEL-PROPOSED AUTHORITY KEY ACCEPTED",
+    "proof_contract": "A_ONLY survives, B_ONLY survives, COMBINED must be CAUGHT",
+    "historical_meaning": "estimate over stronger authority",
+    "aligned": false,
+    "mapped_file": "src/core/nutritionV2/calculation/effectiveMass.ts",
+    "mapped_function": "resolveEffectiveMassDecision",
+    "mapped_guard_description": "conflict reason 'ai_estimate_with_stronger_source' (:101) — AI estimate is a NON-DIRECT claim joining the shared conflict rules",
+    "witness_status": "clean_witness_passes_not_yet_causally_verified",
+    "mapping_note": "second layer: aiEstimateAccept.ts:196 re-checks the same invariant at acceptance time -> likely TYPE-A",
+    "mapped_witness_file": "tests/unit/advancedNutritionAi3HistoricalWitnesses.test.ts",
+    "mutation_family": "effective_mass_ai_stronger_conflict",
+    "shared_mutation_family_file": "src/core/nutritionV2/calculation/effectiveMass.ts",
+    "shared_mutation_family_function": "resolveEffectiveMassDecision",
+    "historical_scenario": "ESTIMATE OVER STRONGER AUTHORITY (non-user stronger source: source/count/household portion)",
+    "scenario_witnesses": {
+     "M41": "estimate vs NON-user stronger source (source/count/household portion)",
+     "M42": "estimate vs explicit user mass",
+     "M57": "coexistence is not a valid non-conflicting state"
+    }
+   },
+   "legacy": {
+    "expected_failure": "an authority-shaped key is no longer rejected as authority_field",
+    "classification": "COMPOSITE",
+    "composite_type": "A_REDUNDANT_DEFENSE",
+    "preliminary_classification": "SINGLE candidate",
+    "shared_family_note": "ONE shared current production guard family. M41 is the mutation OWNER. M42 and M57 are additional historical SCENARIOS over the same family and must NOT be counted as independent mutation points.",
+    "mutation_owner": true,
+    "shared_mutation_owner": null,
+    "owner": true,
+    "expected": "the effective-mass decision stops reporting a conflict for an AI estimate beside a stronger authority",
+    "stale_components_removed": "A components DICT referencing aiAdvancedEstimate.ts provenance guards was found on this row. It belongs to M50 and was not an M41 guard. Removed; M41's own spec is at row level (mutation_owner: true).",
+    "previous_row_type": "SHARED_GUARD_SCENARIO"
+   }
+  },
+  {
+   "id": "M42",
+   "row_type": "SINGLE",
+   "obligation_id": "M42",
+   "designation": "AI3-M42-HIST",
+   "witness": [
+    "tests/unit/advancedNutritionAi3HistoricalWitnesses.test.ts"
+   ],
+   "expected_verdict": "CAUGHT",
+   "mutation_owner": "M41",
+   "description": "user mass overwritten",
+   "reason": "an unknown top-level proposal key is no longer refused",
+   "notes": {
+    "defect": "UNKNOWN PROPOSAL KEY ACCEPTED (closed allowlist bypassed)",
+    "historical_meaning": "user mass overwritten",
+    "aligned": false,
+    "mapped_file": "src/core/nutritionV2/calculation/effectiveMass.ts",
+    "mapped_function": "resolveEffectiveMassDecision",
+    "mapped_guard_description": "NO dedicated 'ai_estimate_with_user_mass' reason exists; user mass is subsumed by the generic 'ai_estimate_with_stronger_source' at :101",
+    "witness_status": "SCENARIO_WITNESS_ONLY — no own mutation point by design",
+    "mapping_note": "user mass is one of the four stronger claims tested by the SAME generic conflict branch M41 uses",
+    "mapped_witness_file": "tests/unit/advancedNutritionAi3HistoricalWitnesses.test.ts",
+    "mutation_family": "effective_mass_ai_stronger_conflict",
+    "shared_mutation_family_file": "src/core/nutritionV2/calculation/effectiveMass.ts",
+    "shared_mutation_family_function": "resolveEffectiveMassDecision",
+    "historical_scenario": "USER MASS OVERWRITTEN (explicit user mass must never be replaced by the estimate)",
+    "shared_scenario_note": "M42 and M57 are INDEPENDENT first-class semantic obligations that SHARE M41's single mutation definition. They own their own designation, witness and expected verdict, and resolve their mutation solely through the explicit mutation_owner reference. Neither carries its own file/anchor/replacement."
+   },
+   "legacy": {
+    "expected_failure": "an unknown top-level proposal key is no longer refused",
+    "classification": "SINGLE",
+    "preliminary_classification": "HISTORICAL ROW NO LONGER MAPS 1:1",
+    "shared_family_note": "ONE shared current production guard family. M41 is the mutation OWNER. M42 and M57 are additional historical SCENARIOS over the same family and must NOT be counted as independent mutation points.",
+    "mutation_owner": false,
+    "shared_mutation_owner": "M41",
+    "owner": false,
+    "has_own_anchor": false,
+    "previous_row_type": "SHARED_GUARD_SCENARIO"
+   }
+  },
+  {
+   "id": "M43",
+   "row_type": "SINGLE",
+   "obligation_id": "M43",
+   "designation": "AI3-M43-HIST",
+   "witness": [
+    "tests/unit/advancedNutritionAi3Eligibility.test.ts",
+    "tests/unit/advancedNutritionAi3SnapshotRegression.test.ts"
+   ],
+   "expected_verdict": "CAUGHT",
+   "mutation_owner": "M43",
+   "mutation": {
+    "file": "src/core/nutritionV2/phase4/aiEstimateValidation.ts",
+    "anchor": "  if (match === undefined || typeof match.fdc_id !== 'number' || match.fdc_id <= 0) {",
+    "replacement": "  if (false) {"
+   },
+   "description": "unresolved identity accepted",
+   "reason": "a line with no authenticated fdc id becomes eligible / reaches provider execution",
+   "notes": {
+    "defect": "UNRESOLVED IDENTITY ACCEPTED",
+    "historical_meaning": "unresolved identity accepted",
+    "aligned": true
+   },
+   "legacy": {
+    "mutate": "  if (false) {",
+    "expected_failure": "a line with no authenticated fdc id becomes eligible / reaches provider execution",
+    "classification": "SINGLE"
+   }
+  },
+  {
+   "id": "M44",
+   "row_type": "TYPE_B_MULTI_PREDICATE",
+   "subobligations": [
+    {
+     "obligation_id": "M44:NONFINITE",
+     "sub_id": "NONFINITE",
+     "designation": "AI3-M44-NONFINITE-HIST",
+     "witness": [
+      "tests/unit/advancedNutritionAi3HistoricalWitnesses.test.ts"
+     ],
+     "expected_verdict": "PIN_GREEN",
+     "mutation_owner": "M44:NONFINITE",
+     "inert_mutation": {
+      "file": "src/core/nutritionV2/aiAdvancedEstimate.ts",
+      "anchor": "    !Number.isFinite(value) ||\n    value <= 0 ||",
+      "replacement": "    value <= 0 ||"
+     },
+     "inert_mutation_note": "DOCUMENTATION ONLY. This obligation is a non-destructive control, so its mutation definition is never materialized into a capsule and never executed.",
+     "reason": "non-finite numeric bound protection",
+     "historical_meaning": "The engine must continue rejecting non-finite estimate bounds."
+    },
+    {
+     "obligation_id": "M44:NONPOSITIVE",
+     "sub_id": "NONPOSITIVE",
+     "designation": "AI3-M44-NONPOSITIVE-HIST",
+     "witness": [
+      "tests/unit/advancedNutritionAi3HistoricalWitnesses.test.ts"
+     ],
+     "expected_verdict": "CAUGHT",
+     "mutation_owner": "M44:NONPOSITIVE",
+     "mutation": {
+      "file": "src/core/nutritionV2/aiAdvancedEstimate.ts",
+      "anchor": "    !Number.isFinite(value) ||\n    value <= 0 ||\n    Object.is(value, -0) ||",
+      "replacement": "    !Number.isFinite(value) ||\n    Object.is(value, -0) ||"
+     },
+     "reason": "non-positive (zero/negative) numeric bound protection",
+     "historical_meaning": null
+    },
+    {
+     "obligation_id": "M44:RATIO",
+     "sub_id": "RATIO",
+     "designation": "AI3-M44-RATIO-HIST",
+     "witness": [
+      "tests/unit/advancedNutritionAi3HistoricalWitnesses.test.ts"
+     ],
+     "expected_verdict": "CAUGHT",
+     "mutation_owner": "M44:RATIO",
+     "mutation": {
+      "file": "src/core/nutritionV2/phase4/aiEstimateValidation.ts",
+      "anchor": "  if (!(lower > 0) || !(upper > 0) || upper / lower > MAX_AI_ESTIMATE_RANGE_RATIO)",
+      "replacement": "  if (false)"
+     },
+     "reason": "range-ratio protection",
+     "historical_meaning": null
+    }
+   ],
+   "description": "numeric / 4x bound bypass",
+   "notes": {
+    "defect": "ESTIMATION KILL-SWITCH IGNORED",
+    "historical_meaning": "numeric / 4x bound bypass",
+    "aligned": false,
+    "mapped_file": "src/core/nutritionV2/phase4/aiEstimateValidation.ts",
+    "mapped_function": "evaluateAiEstimateEligibility",
+    "mapped_guard_description": "finite/positive numeric validity and the range-ratio bound; MAX_AI_ESTIMATE_RANGE_RATIO=4 declared at aiEstimateBounds.ts:19",
+    "witness_status": "clean_witness_passes",
+    "mapping_note": "must be distinguished from M48 stale binding; the constant and its consuming guard are in different files",
+    "mapped_witness_file": "tests/unit/advancedNutritionAi3HistoricalWitnesses.test.ts",
+    "scope_note": "Historical scope is exactly non-finite, non-positive and range-ratio. Other predicates in boundedGrams (type check, -0, max ceiling) are NOT in this row's scope. M44:NONFINITE is a NON-DESTRUCTIVE REDUNDANT-DEFENSE PIN; only NONPOSITIVE and RATIO are destructive verdict-bearing obligations.",
+    "sub_obligation_semantics": {
+     "NONFINITE": "non-finite numeric bound protection",
+     "NONPOSITIVE": "non-positive (zero/negative) numeric bound protection",
+     "RATIO": "range-ratio protection"
+    },
+    "pin_evidence": {
+     "NONFINITE": {
+      "path": "real production validateAiBoundedEstimateProposal",
+      "inputs_required_refused": [
+       "NaN",
+       "+Infinity",
+       "-Infinity"
+      ],
+      "sole_predicate_claimed": false
+     }
+    },
+    "defense_in_depth_note": {
+     "NONFINITE": "`!Number.isFinite(value)` is an EXPLICIT clause in boundedGrams, but it is redundant defense-in-depth. Direct production probing under the mutation proves every non-finite input is still refused: NaN by the ordering relation guard, +Infinity by MAX_AI_ESTIMATE_BOUND_GRAMS, -Infinity by the positivity guard. Removing the clause therefore changes NO observable behaviour, so this submutation CANNOT be mutation-caught and must not be reported as a production weakness. It is documentation / defense-in-depth metadata, not the behavioural verdict."
+    }
+   },
+   "legacy": {
+    "expected_failure": "estimation proceeds while the capability is disabled",
+    "classification": "SINGLE",
+    "preliminary_classification": "TYPE-B candidate (numeric validity + ratio)",
+    "submutations": [
+     {
+      "id": "NONFINITE",
+      "semantic": "non-finite numeric bound protection",
+      "file": "src/core/nutritionV2/aiAdvancedEstimate.ts",
+      "anchor": "    !Number.isFinite(value) ||\n    value <= 0 ||",
+      "replacement": "    value <= 0 ||",
+      "witness": "tests/unit/advancedNutritionAi3HistoricalWitnesses.test.ts",
+      "expected": "PIN_GREEN",
+      "designation": "AI3-M44-NONFINITE-HIST",
+      "destructive": false,
+      "classification": "NON_DESTRUCTIVE_REDUNDANT_DEFENSE_PIN",
+      "historical_meaning": "The engine must continue rejecting non-finite estimate bounds.",
+      "defense_in_depth_note": "`!Number.isFinite(value)` is an EXPLICIT clause in boundedGrams, but it is redundant defense-in-depth. Direct production probing under the mutation proves every non-finite input is still refused: NaN by the ordering relation guard, +Infinity by MAX_AI_ESTIMATE_BOUND_GRAMS, -Infinity by the positivity guard. Removing the clause therefore changes NO observable behaviour, so this submutation CANNOT be mutation-caught and must not be reported as a production weakness. It is documentation / defense-in-depth metadata, not the behavioural verdict.",
+      "mutation_classification": "INERT_BY_CONSTRUCTION",
+      "pin_evidence": {
+       "path": "real production validateAiBoundedEstimateProposal",
+       "inputs_required_refused": [
+        "NaN",
+        "+Infinity",
+        "-Infinity"
+       ],
+       "sole_predicate_claimed": false
+      }
+     },
+     {
+      "id": "NONPOSITIVE",
+      "semantic": "non-positive (zero/negative) numeric bound protection",
+      "file": "src/core/nutritionV2/aiAdvancedEstimate.ts",
+      "anchor": "    !Number.isFinite(value) ||\n    value <= 0 ||\n    Object.is(value, -0) ||",
+      "replacement": "    !Number.isFinite(value) ||\n    Object.is(value, -0) ||",
+      "witness": "tests/unit/advancedNutritionAi3HistoricalWitnesses.test.ts",
+      "expected": "CAUGHT",
+      "designation": "AI3-M44-NONPOSITIVE-HIST",
+      "destructive": true,
+      "classification": "VERDICT_BEARING_DESTRUCTIVE"
+     },
+     {
+      "id": "RATIO",
+      "semantic": "range-ratio protection",
+      "file": "src/core/nutritionV2/phase4/aiEstimateValidation.ts",
+      "anchor": "  if (!(lower > 0) || !(upper > 0) || upper / lower > MAX_AI_ESTIMATE_RANGE_RATIO)",
+      "replacement": "  if (false)",
+      "witness": "tests/unit/advancedNutritionAi3HistoricalWitnesses.test.ts",
+      "expected": "CAUGHT",
+      "designation": "AI3-M44-RATIO-HIST",
+      "destructive": true,
+      "classification": "VERDICT_BEARING_DESTRUCTIVE"
+     }
+    ]
+   }
+  },
+  {
+   "id": "M45",
+   "row_type": "SINGLE",
+   "obligation_id": "M45",
+   "designation": "AI3-M45-HIST",
+   "witness": [
+    "tests/unit/advancedNutritionAi3HistoricalWitnesses.test.ts"
+   ],
+   "expected_verdict": "CAUGHT",
+   "mutation_owner": "M45",
+   "mutation": {
+    "file": "src/core/nutritionV2/phase4/aiEstimateValidation.ts",
+    "anchor": "  if (!midpointAgrees(lower, upper, proposal.representative_grams)) {",
+    "replacement": "  if (false) {"
+   },
+   "description": "non-midpoint / conflicting midpoint",
+   "reason": "COMPOSITE: identity and fingerprint layers also refuse, so the specific early return is redundant",
+   "notes": {
+    "defect": "LOCAL SNAPSHOT BINDING NOT ENFORCED (defense-in-depth)",
+    "historical_meaning": "non-midpoint / conflicting midpoint",
+    "aligned": false,
+    "mapped_file": "src/core/nutritionV2/phase4/aiEstimateValidation.ts",
+    "mapped_function": "midpointAgrees (:292)",
+    "mapped_guard_description": "model representative must AGREE with deterministicMidpointGrams; refusal reason 'midpoint_mismatch' (:79)",
+    "witness_status": "clean_witness_passes_not_yet_causally_verified",
+    "mapping_note": "sharply distinct from M58 (who owns the midpoint) and M50 (mislabelling)",
+    "mapped_witness_file": "tests/unit/advancedNutritionAi3HistoricalWitnesses.test.ts",
+    "overlap_note": "agreement validation only; explicitly NOT merged into M58"
+   },
+   "legacy": {
+    "expected_failure": "COMPOSITE: identity and fingerprint layers also refuse, so the specific early return is redundant",
+    "classification": "COMPOSITE",
+    "preliminary_classification": "SINGLE candidate",
+    "expected": "a model representative disagreeing with the deterministic midpoint is accepted (midpoint_mismatch no longer returned)"
+   }
+  },
+  {
+   "id": "M46",
+   "row_type": "SINGLE",
+   "obligation_id": "M46",
+   "designation": "AI3-M46-HIST",
+   "witness": [
+    "tests/unit/advancedNutritionAi3HistoricalWitnesses.test.ts"
+   ],
+   "expected_verdict": "CAUGHT",
+   "mutation_owner": "M46",
+   "mutation": {
+    "file": "src/core/nutritionV2/aiAdvancedEstimate.ts",
+    "anchor": "  'nutrients',\n  'calories',",
+    "replacement": "  'calories',"
+   },
+   "description": "model nutrient authority",
+   "reason": "COMPOSITE: the snapshot binding also covers identity, so the specific early return is redundant",
+   "notes": {
+    "defect": "IDENTITY-CHANGE CHECK NOT ENFORCED (defense-in-depth)",
+    "historical_meaning": "model nutrient authority",
+    "aligned": false,
+    "mapped_file": "src/core/nutritionV2/aiAdvancedEstimate.ts",
+    "mapped_function": "sanitizeAiEstimateProposal / FORBIDDEN_ESTIMATE_KEYS (:91-107)",
+    "mapped_guard_description": "'nutrients' is a forbidden authority key (:95); model output carries NO nutrient value (doc :65)",
+    "witness_status": "clean_witness_passes_not_yet_causally_verified",
+    "mapping_note": "second layer: independent provenance_class authority rejection (seen at :174-175)",
+    "mapped_witness_file": "tests/unit/advancedNutritionAi3HistoricalWitnesses.test.ts"
+   },
+   "legacy": {
+    "expected_failure": "COMPOSITE: the snapshot binding also covers identity, so the specific early return is redundant",
+    "classification": "COMPOSITE",
+    "preliminary_classification": "TYPE-A candidate",
+    "expected": "a model-supplied nutrients field is no longer an authority field and is accepted or mis-handled"
+   }
+  },
+  {
+   "id": "M47",
+   "row_type": "TYPE_B_MULTI_PREDICATE",
+   "subobligations": [
+    {
+     "obligation_id": "M47a",
+     "sub_id": "M47a",
+     "designation": "AI3-M47A-HIST",
+     "witness": [
+      "tests/unit/advancedNutritionAi3HistoricalWitnesses.test.ts"
+     ],
+     "expected_verdict": "CAUGHT",
+     "mutation_owner": "M47a",
+     "mutation": {
+      "file": "src/core/nutritionV2/aiAdvancedEstimate.ts",
+      "anchor": "  'fdc_id',\n  'food_id',",
+      "replacement": "  'food_id',"
+     },
+     "reason": "a model-supplied fdc_id is no longer rejected as an authority field"
+    },
+    {
+     "obligation_id": "M47b",
+     "sub_id": "M47b",
+     "designation": "AI3-M47B-HIST",
+     "witness": [
+      "tests/unit/advancedNutritionAi3HistoricalWitnesses.test.ts"
+     ],
+     "expected_verdict": "CAUGHT",
+     "mutation_owner": "M47b",
+     "mutation": {
+      "file": "src/core/nutritionV2/aiAdvancedEstimate.ts",
+      "anchor": "  'source_portion_grams',\n  'portion_index',",
+      "replacement": "  'portion_index',"
+     },
+     "reason": "a model-supplied USDA portion field is no longer rejected as an authority field"
+    }
+   ],
+   "description": "model FDC / portion authority",
+   "reason": "COMPOSITE: buildAiEstimateSelection also refuses an unbuildable selection, so the early return is redundant",
+   "notes": {
+    "defect": "MISSING FIVE-FIELD EVIDENCE ACCEPTED (defense-in-depth)",
+    "historical_meaning": "model FDC / portion authority",
+    "aligned": false,
+    "mapped_file": "src/core/nutritionV2/aiAdvancedEstimate.ts",
+    "mapped_function": "FORBIDDEN_ESTIMATE_KEYS (:91-107)",
+    "mapped_guard_description": "'fdc_id' (:92), 'source_portion_grams' (:106), 'portion_index' (:107) all forbidden",
+    "witness_status": "clean_witness_passes_not_yet_causally_verified",
+    "mapping_note": "FDC and portion are distinct keys -> may be TYPE-B rather than redundant TYPE-A; needs execution to decide",
+    "mapped_witness_file": "tests/unit/advancedNutritionAi3HistoricalWitnesses.test.ts",
+    "overlap_note": "FDC and portion are DISTINCT authority classes; do not collapse them even though both use FORBIDDEN_ESTIMATE_KEYS",
+    "sub_obligation_semantics": {
+     "M47a": "MODEL FDC AUTHORITY",
+     "M47b": "MODEL PORTION AUTHORITY"
+    },
+    "sub_scenarios": {
+     "M47a": "MODEL FDC AUTHORITY (fdc_id, food_id)",
+     "M47b": "MODEL PORTION AUTHORITY (source_portion_grams, portion_index)"
+    }
+   },
+   "legacy": {
+    "expected_failure": "COMPOSITE: buildAiEstimateSelection also refuses an unbuildable selection, so the early return is redundant",
+    "classification": "COMPOSITE",
+    "preliminary_classification": "TYPE-B candidate (FDC predicate + portion predicate)",
+    "subscenarios": {
+     "M47a": "MODEL FDC AUTHORITY (fdc_id, food_id)",
+     "M47b": "MODEL PORTION AUTHORITY (source_portion_grams, portion_index)"
+    },
+    "submutations": [
+     {
+      "id": "M47a",
+      "semantic": "MODEL FDC AUTHORITY",
+      "file": "src/core/nutritionV2/aiAdvancedEstimate.ts",
+      "anchor": "  'fdc_id',\n  'food_id',",
+      "replacement": "  'food_id',",
+      "witness": "tests/unit/advancedNutritionAi3HistoricalWitnesses.test.ts",
+      "expected": "a model-supplied fdc_id is no longer rejected as an authority field"
+     },
+     {
+      "id": "M47b",
+      "semantic": "MODEL PORTION AUTHORITY",
+      "file": "src/core/nutritionV2/aiAdvancedEstimate.ts",
+      "anchor": "  'source_portion_grams',\n  'portion_index',",
+      "replacement": "  'portion_index',",
+      "witness": "tests/unit/advancedNutritionAi3HistoricalWitnesses.test.ts",
+      "expected": "a model-supplied USDA portion field is no longer rejected as an authority field"
+     }
+    ]
+   }
+  },
+  {
+   "id": "M48",
+   "row_type": "SINGLE",
+   "obligation_id": "M48",
+   "designation": "AI3-M48-HIST",
+   "witness": [
+    "tests/unit/advancedNutritionAi3M48SnapshotBinding.test.ts"
+   ],
+   "expected_verdict": "CAUGHT",
+   "mutation_owner": "M48",
+   "mutation": {
+    "file": "src/core/nutritionV2/phase4/aiEstimateAccept.ts",
+    "anchor": "  if (aiEstimateSnapshotBinding(context.snapshot) !== context.offerSnapshotBinding) {",
+    "replacement": "  if (false) {"
+   },
+   "description": "STALE OFFER SNAPSHOT BINDING BYPASS",
+   "reason": null,
+   "notes": {
+    "historical_meaning": "STALE OFFER SNAPSHOT BINDING BYPASS",
+    "mapped_file": "src/core/nutritionV2/phase4/aiEstimateAccept.ts",
+    "mapped_function": "acceptAiEstimateOffer",
+    "mapped_guard_description": "guard 7: the offer snapshot binding must be unchanged since the offer was created",
+    "mapped_witness_file": "tests/unit/advancedNutritionAi3M48SnapshotBinding.test.ts",
+    "witness_status": "EXECUTABLE",
+    "retraction_note": "The earlier TYPE_A_REDUNDANT framing of M48 (A=stronger-source presence, B=working fingerprint, witness=StalenessMatrix) was WITHDRAWN on architect ruling and on execution: bypassing both guards left the StalenessMatrix witness green because that witness never reaches the mapped snapshot comparison. M48 is the single stale SNAPSHOT BINDING row and uses the dedicated snapshot-only witness above."
+   },
+   "legacy": {
+    "classification": "SINGLE",
+    "snapshot_only_dimension": "catalogDigest",
+    "anti_vacuity_control": "matching snapshot binding is ACCEPTED; catalogDigest-only stale snapshot is REFUSED snapshot_changed",
+    "designated_historical_assertion": "M48: a stale snapshot binding is REFUSED as snapshot_changed",
+    "executable_mutation_obligation": true
+   }
+  },
+  {
+   "id": "M49",
+   "row_type": "SINGLE",
+   "obligation_id": "M49",
+   "designation": "AI3-M49-HIST",
+   "witness": [
+    "tests/unit/advancedNutritionAi3MidflightAndBenchmark.test.ts"
+   ],
+   "expected_verdict": "CAUGHT",
+   "mutation_owner": "M49",
+   "mutation": {
+    "file": "src/application/nutritionAiEstimate.ts",
+    "anchor": "    currentState: deps.getCurrentState(),\n    capturedFingerprints: deps.capturedFingerprints,",
+    "replacement": "    currentState: requestStartState,\n    capturedFingerprints: deps.capturedFingerprints,"
+   },
+   "description": "mid-flight authority bypass",
+   "reason": "an absurd gram value is no longer refused as out_of_bounds",
+   "notes": {
+    "defect": "ABSOLUTE GRAM BOUND ACCEPTED",
+    "historical_meaning": "mid-flight authority bypass",
+    "aligned": false,
+    "mapped_file": "src/application/nutritionAiEstimate.ts",
+    "mapped_function": "runAiMassEstimation",
+    "mapped_guard_description": "POST-AWAIT LIVE-STATE RE-READ: currentState: deps.getCurrentState() is read after await deps.transport.request(...) and used for the reconcile call and the current-match lookup. requestStartState is captured pre-dispatch for request binding only and is never the reconcile input.",
+    "witness_status": "clean_witness_passes_not_yet_causally_verified",
+    "mapping_note": "re-derivation is the mid-flight guard; NOT acceptance-time snapshot staleness",
+    "mapped_witness_file": "tests/unit/advancedNutritionAi3MidflightAndBenchmark.test.ts",
+    "distinct_from": "M48 (offer already exists, then goes stale at acceptance) -- different sequence, different anchor, not merged",
+    "forensic_ruling": "MUTATION WRONG — NEEDS REANCHOR (corrected this pass): the previous anchor mutated the local currentState used for the current-match lookup, while reconciliation reads a SEPARATE inline deps.getCurrentState() at :287. The mutation never reached the reconcile input."
+   },
+   "legacy": {
+    "expected_failure": "an absurd gram value is no longer refused as out_of_bounds",
+    "classification": "SINGLE",
+    "preliminary_classification": "SINGLE candidate",
+    "mutation_target": "POST-AWAIT LIVE-STATE RE-READ BYPASS",
+    "mutation_contract": {
+     "clean": "A -> B while the transport promise is unresolved => the A-era response is refused, offers === []",
+     "mutated": "replace the post-await getter result with requestStartState (or semantic equivalent) => the A-era response incorrectly becomes actionable => this witness MUST FAIL directly"
+    },
+    "expected": "the A-era response becomes an actionable offer after live state changed to B mid-flight"
+   }
+  },
+  {
+   "id": "M50",
+   "row_type": "VARIANT_SET",
+   "obligation_id": "M50",
+   "mutation_owner": "M50",
+   "components": [
+    {
+     "id": "A",
+     "file": "src/core/nutritionV2/aiAdvancedEstimate.ts",
+     "anchor": "  if (materialized.provenance_class !== AI_ESTIMATE_PROVENANCE_CLASS) {",
+     "replacement": "  if (false) {"
+    },
+    {
+     "id": "B",
+     "file": "src/core/nutritionV2/aiAdvancedEstimate.ts",
+     "anchor": "      provenance_class: AI_ESTIMATE_PROVENANCE_CLASS,\n      line_ref: lineRef,",
+     "replacement": "      provenance_class: materialized.provenance_class as never,\n      line_ref: lineRef,"
+    },
+    {
+     "id": "C",
+     "file": "src/core/nutritionV2/phase4/aiEstimateValidation.ts",
+     "anchor": "  if (isAuthenticatedProvenanceClass(proposal.provenance_class)) {\n    return { ok: false, reason: 'authority_field' };\n  }\n  if (proposal.provenance_class !== AI_ESTIMATE_PROVENANCE_CLASS) {\n    return { ok: false, reason: 'authority_field' };\n  }",
+     "replacement": "  // AI-3 M50 component C: BOTH provenance-class firewall predicates bypassed."
+    },
+    {
+     "id": "D",
+     "file": "src/core/nutritionV2/phase4/aiEstimateValidation.ts",
+     "anchor": "      provenance: 'ai_estimate' as const,",
+     "replacement": "      provenance: proposal.provenance_class as never,"
+    }
+   ],
+   "variants": [
+    {
+     "obligation_id": "M50:AB",
+     "variant_id": "AB",
+     "designation": "AI3-M50-AB-HIST",
+     "components": [
+      "A",
+      "B"
+     ],
+     "witness": [
+      "tests/unit/advancedNutritionAi3M50FinalProvenance.test.ts"
+     ],
+     "expected_verdict": "SURVIVED_AS_EXPECTED",
+     "mutation_owner": "M50",
+     "reason": "A+B bypass the materializer's raw-model reject and its canonicalization owner, so the spoofed class REACHES the proposal. The remaining validation firewall (C) refuses progression, so no final evidence is ever produced."
+    },
+    {
+     "obligation_id": "M50:ABC",
+     "variant_id": "ABC",
+     "designation": "AI3-M50-ABC-HIST",
+     "components": [
+      "A",
+      "B",
+      "C"
+     ],
+     "witness": [
+      "tests/unit/advancedNutritionAi3M50FinalProvenance.test.ts"
+     ],
+     "expected_verdict": "SURVIVED_AS_EXPECTED",
+     "mutation_owner": "M50",
+     "reason": "With the validation firewall also bypassed, the remaining defense is the final-evidence canonicalization (D), which stamps the constant ai_estimate."
+    },
+    {
+     "obligation_id": "M50:ABCD",
+     "variant_id": "ABCD",
+     "designation": "AI3-M50-ABCD-HIST",
+     "components": [
+      "A",
+      "B",
+      "C",
+      "D"
+     ],
+     "witness": [
+      "tests/unit/advancedNutritionAi3M50FinalProvenance.test.ts"
+     ],
+     "expected_verdict": "CAUGHT",
+     "mutation_owner": "M50",
+     "reason": "The complete load-bearing family. Required result: expected ai_estimate, mutated usda_derived -> CAUGHT."
+    }
+   ],
+   "description": "AI ESTIMATE MUST NEVER RECEIVE AUTHENTICATED / USDA PROVENANCE AUTHORITY",
+   "reason": "a model representative that disagrees with the local midpoint is no longer refused",
+   "notes": {
+    "defect": "MODEL REPRESENTATIVE DISAGREES WITH THE LOCAL MIDPOINT",
+    "historical_meaning": "AI ESTIMATE MUST NEVER RECEIVE AUTHENTICATED / USDA PROVENANCE AUTHORITY",
+    "aligned": false,
+    "mapped_file": "src/core/nutritionV2/aiAdvancedEstimateWire.ts",
+    "mapped_function": "AI_ESTIMATE_PROVENANCE_CLASS (:161)",
+    "mapped_guard_description": "an AI estimate is stamped with a fixed provenance class so it can never be represented as USDA-authenticated/authoritative",
+    "witness_status": "clean_witness_passes_not_yet_causally_verified -- NORMALIZED: three first-class obligations AB / ABC / ABCD, each with its own unique active runtime designation and its own truthful witness.",
+    "mapping_note": "MUST NOT be mapped onto midpoint validation (that is M45/M58)",
+    "mapped_witness_file": "tests/unit/advancedNutritionAi3M50FinalProvenance.test.ts",
+    "forensic_ruling": "MUTATION WRONG — NEEDS REANCHOR (corrected this pass): the previous anchor mutated the model-REQUEST builder's provenance stamp, a different surface from the evidence provenance the witness reads. The validated-evidence provenance guard is the historical target.",
+    "provenance_authority_trace": [
+     {
+      "layer": "A1",
+      "site": "src/core/nutritionV2/aiAdvancedEstimate.ts:173",
+      "role": "REJECT",
+      "desc": "materialized.provenance_class !== AI_ESTIMATE_PROVENANCE_CLASS -> refuse at materialization"
+     },
+     {
+      "layer": "A2",
+      "site": "src/core/nutritionV2/phase4/aiEstimateValidation.ts:338",
+      "role": "REJECT",
+      "desc": "isAuthenticatedProvenanceClass(proposal.provenance_class) -> authority_field (usda_derived, vetted_standard)"
+     },
+     {
+      "layer": "A3",
+      "site": "src/core/nutritionV2/phase4/aiEstimateValidation.ts:341",
+      "role": "REJECT",
+      "desc": "proposal.provenance_class !== AI_ESTIMATE_PROVENANCE_CLASS -> authority_field"
+     },
+     {
+      "layer": "B",
+      "site": "src/core/nutritionV2/phase4/aiEstimateValidation.ts:376",
+      "role": "CANONICAL STAMP",
+      "desc": "final evidence.provenance is the hardcoded constant 'ai_estimate'"
+     }
+    ],
+    "final_failing_assertion": "result.evidence.provenance === 'usda_derived' (probe: P3 FINAL= usda_derived)",
+    "observed_final_evidence_field": "evidence.provenance",
+    "final_disposition": "NOT_PROVEN_AS_PREVIOUSLY_CLAIMED — RETRACTED",
+    "retraction": {
+     "previous_claim": "A1+A2+A3 bypassed -> final accepted evidence.provenance = 'usda_derived'",
+     "status": "FALSE — WITHDRAWN",
+     "why": "The witness's failing assertion was on `r.ok === true` (proposal admitted), never on evidence.provenance. A capsule probe under the same mutation shows the final evidence is {\"lower_grams\":100,\"upper_grams\":200,\"representative_grams\":150,\"representative_policy\":\"midpoint\",\"provenance\":\"ai_estimate\"} — line 376 DID execute and DID canonicalize. Even bypassing A1+A2+A3 AND line 376 together still yields provenance = ai_estimate."
+    },
+    "root_cause_of_the_false_claim": "The real owner is the MATERIALIZER at aiAdvancedEstimate.ts:233, which hardcodes provenance_class: AI_ESTIMATE_PROVENANCE_CLASS onto the frozen proposal object. A model's 'usda_derived' is canonicalized away BEFORE validation ever sees it, so the validation reject layers A1/A2/A3 were being exercised against a value production had already replaced. The reject layers are defense-in-depth; they are not the historical authority.",
+    "corrected_provenance_authority": [
+     {
+      "layer": "O1",
+      "site": "src/core/nutritionV2/aiAdvancedEstimate.ts:233",
+      "role": "CANONICAL STAMP (TRUE OWNER)",
+      "desc": "materializer hardcodes provenance_class onto the frozen proposal; model-supplied classes never reach the proposal object"
+     },
+     {
+      "layer": "D1",
+      "site": "src/core/nutritionV2/aiAdvancedEstimate.ts:173",
+      "role": "REJECT (defense-in-depth)",
+      "desc": "materialized.provenance_class !== canonical -> authority_field"
+     },
+     {
+      "layer": "D2",
+      "site": "src/core/nutritionV2/phase4/aiEstimateValidation.ts:338",
+      "role": "REJECT (defense-in-depth)",
+      "desc": "isAuthenticatedProvenanceClass -> authority_field"
+     },
+     {
+      "layer": "D3",
+      "site": "src/core/nutritionV2/phase4/aiEstimateValidation.ts:341",
+      "role": "REJECT (defense-in-depth)",
+      "desc": "non-canonical class -> authority_field"
+     },
+     {
+      "layer": "O2",
+      "site": "src/core/nutritionV2/phase4/aiEstimateValidation.ts:376",
+      "role": "CANONICAL STAMP (final evidence)",
+      "desc": "final evidence.provenance is the hardcoded constant 'ai_estimate'"
+     }
+    ],
+    "observed_final_failing_assertion": null,
+    "next_required_work": "Mutate the TRUE owner O1 (aiAdvancedEstimate.ts:233) so the materializer preserves the model-supplied class, and add a witness assertion that reads evidence.provenance directly for a malicious class. Only then can M50 be SINGLE CAUGHT or TYPE-A PROVEN.",
+    "prior_false_proof_retracted": "The earlier 'A1+A2+A3 -> final evidence.provenance = usda_derived' claim was FALSE and is formally retracted. That witness hand-built a post-materializer proposal and asserted on result.ok, never on final provenance. The old A1/A2/A3-only component model is WITHDRAWN.",
+    "current_protection_pipeline": [
+     {
+      "p": "P0",
+      "id": "D1",
+      "site": "src/core/nutritionV2/aiAdvancedEstimate.ts:173",
+      "role": "RAW MODEL REJECT",
+      "desc": "materialized.provenance_class !== AI_ESTIMATE_PROVENANCE_CLASS -> authority_field"
+     },
+     {
+      "p": "P1",
+      "id": "O1",
+      "site": "src/core/nutritionV2/aiAdvancedEstimate.ts:233",
+      "role": "PROPOSAL CANONICALIZATION OWNER",
+      "desc": "frozen proposal hardcodes provenance_class: AI_ESTIMATE_PROVENANCE_CLASS; model value discarded here"
+     },
+     {
+      "p": "P2",
+      "id": "C",
+      "site": "src/core/nutritionV2/phase4/aiEstimateValidation.ts:338 and :341",
+      "role": "VALIDATION FIREWALL",
+      "desc": "two physical predicates forming ONE logical group: isAuthenticatedProvenanceClass(...) then non-canonical class"
+     },
+     {
+      "p": "P3",
+      "id": "O2",
+      "site": "src/core/nutritionV2/phase4/aiEstimateValidation.ts:376",
+      "role": "FINAL EVIDENCE CANONICALIZATION",
+      "desc": "final accepted evidence.provenance is the constant 'ai_estimate'"
+     }
+    ],
+    "terminology_clarification": "The SAFETY ASSERTION is: expected final provenance 'ai_estimate'. Under the complete load-bearing bypass the RECEIVED value is 'usda_derived'. The observed DEFECT is: final accepted evidence.provenance === 'usda_derived'. Status and execution results are unchanged.",
+    "p5_classification": "CASE 2 — the P5 `authority_field` refusal originates at aiEstimateValidation.ts:341, which IS one of C's two intended predicates. An earlier CASE 1 reading (a separate FORBIDDEN_ESTIMATE_KEYS defense) was WRONG: `provenance_class` is not a member of FORBIDDEN_ESTIMATE_KEYS (the set holds 'usda_derived' and 'authority_class', not the key name).",
+    "component_notes": {
+     "A": {
+      "name": "raw model rejection",
+      "witness": "tests/unit/advancedNutritionAi3M50FinalProvenance.test.ts"
+     },
+     "B": {
+      "name": "proposal canonicalization owner",
+      "witness": "tests/unit/advancedNutritionAi3M50FinalProvenance.test.ts"
+     },
+     "C": {
+      "name": "validation firewall (both predicates)",
+      "witness": "tests/unit/advancedNutritionAi3M50FinalProvenance.test.ts",
+      "mutation_correction": "C previously anchored ONLY aiEstimateValidation.ts:338 (isAuthenticatedProvenanceClass) while claiming to cover 'both predicates'. Predicate :341 (proposal.provenance_class !== AI_ESTIMATE_PROVENANCE_CLASS) was unmapped and was the actual P5 refusal. Corrected to span both. This is CASE 2 from the architect's classification, not CASE 1."
+     },
+     "D": {
+      "name": "final evidence canonicalization",
+      "witness": "tests/unit/advancedNutritionAi3M50FinalProvenance.test.ts"
+     }
+    }
+   },
+   "legacy": {
+    "expected_failure": "a model representative that disagrees with the local midpoint is no longer refused",
+    "classification": "SINGLE",
+    "preliminary_classification": "SINGLE candidate",
+    "expected": "the accepted estimate is stamped as authenticated rather than the AI estimate provenance class",
+    "combined": {
+     "applies_components": [
+      "A",
+      "B",
+      "C",
+      "D"
+     ],
+     "witness": "tests/unit/advancedNutritionAi3M50FinalProvenance.test.ts",
+     "components_are_validated_individually": true,
+     "note": "Smallest truthful load-bearing set. Verified by direct capsule probe on the FULL production path."
+    },
+    "witness_file": "tests/unit/advancedNutritionAi3M50FinalProvenance.test.ts",
+    "type_a_note": "TYPE_A here means a REDUNDANT DEFENSE FAMILY of four named current components, not two layers. Encoded as TYPE_A_REDUNDANT because the harness contract is the closest existing one.",
+    "witness_path": "raw model response -> resolveAiBoundedEstimate() -> validateAiEstimateForWorkingState() -> result.evidence",
+    "measured_variant_outcomes": {
+     "clean": "0 GREEN (spoofed class never yields authenticated final evidence)",
+     "A-only": "0 survived",
+     "B-only": "0 survived",
+     "C-only": "0 survived",
+     "D-only": "0 survived",
+     "A+B": "validation firewall C still stops it",
+     "A+B+C": "O2 still canonicalizes to ai_estimate",
+     "A+B+C+D": "DEFECT EXPOSED"
+    },
+    "smallest_load_bearing_component_set": [
+     "A",
+     "B",
+     "C",
+     "D"
+    ],
+    "normalization": {
+     "obligations": [
+      {
+       "obligation_id": "M50:AB",
+       "components": [
+        "A",
+        "B"
+       ],
+       "designation": "AI3-M50-AB-HIST",
+       "expect": "SURVIVED_AS_EXPECTED",
+       "rationale": "A+B bypass the materializer's raw-model reject and its canonicalization owner, so the spoofed class REACHES the proposal. The remaining validation firewall (C) refuses progression, so no final evidence is ever produced."
+      },
+      {
+       "obligation_id": "M50:ABC",
+       "components": [
+        "A",
+        "B",
+        "C"
+       ],
+       "designation": "AI3-M50-ABC-HIST",
+       "expect": "SURVIVED_AS_EXPECTED",
+       "rationale": "With the validation firewall also bypassed, the remaining defense is the final-evidence canonicalization (D), which stamps the constant ai_estimate."
+      },
+      {
+       "obligation_id": "M50:ABCD",
+       "components": [
+        "A",
+        "B",
+        "C",
+        "D"
+       ],
+       "designation": "AI3-M50-ABCD-HIST",
+       "expect": "CAUGHT",
+       "rationale": "The complete load-bearing family. Required result: expected ai_estimate, mutated usda_derived -> CAUGHT."
+      }
+     ],
+     "generic_family_designation_removed": "AI3-M50-HIST",
+     "post_normalization_verdict_bearing_extras": 0,
+     "no_generic_extra_family_verdict": true,
+     "complete_family_result": {
+      "expected": "ai_estimate",
+      "mutated": "usda_derived",
+      "verdict": "CAUGHT"
+     },
+     "ab_witness_must_prove": [
+      "malicious provenance = usda_derived",
+      "A+B active",
+      "malicious provenance reaches proposal/materialized state",
+      "remaining validation defense refuses progression",
+      "exact terminal stage",
+      "exact refusal reason",
+      "final authenticated evidence absent"
+     ]
+    },
+    "variant_expectations": {
+     "AB": "SURVIVED_AS_EXPECTED",
+     "ABC": "SURVIVED_AS_EXPECTED",
+     "ABCD": "CAUGHT"
+    },
+    "retired_row_level_mutation": {
+     "file": "src/core/nutritionV2/phase4/aiEstimateValidation.ts",
+     "anchor": "  if (proposal.provenance_class !== AI_ESTIMATE_PROVENANCE_CLASS) {\n    return { ok: false, reason: 'authority_field' };\n  }",
+     "replacement": "  if (false) {\n    return { ok: false, reason: 'authority_field' };\n  }"
+    }
+   }
+  },
+  {
+   "id": "M51",
+   "row_type": "SINGLE",
+   "obligation_id": "M51",
+   "designation": "AI3-M51-HIST",
+   "witness": [
+    "tests/unit/advancedNutritionAi3UiIntegration.test.ts"
+   ],
+   "expected_verdict": "CAUGHT",
+   "mutation_owner": "M51",
+   "mutation": {
+    "file": "src/core/nutritionV2/phase4/aiEstimateApplyGate.ts",
+    "anchor": "  for (const key of Object.keys(store)) {\n    if (store[key] !== undefined && store[key] !== null) return true;\n  }",
+    "replacement": "  for (const key of Object.keys(store)) {\n    if (store[key] !== undefined && store[key] !== null) return false;\n  }"
+   },
+   "description": "UI Apply gate bypass",
+   "reason": "an active ai_estimate no longer makes the UI Apply gate eligible",
+   "notes": {
+    "defect": "LAYER-A UI APPLY GATE BYPASS",
+    "historical_meaning": "UI Apply gate bypass",
+    "aligned": true
+   },
+   "legacy": {
+    "mutate": "  for (const key of Object.keys(store)) {\n    if (store[key] !== undefined && store[key] !== null) return false;\n  }",
+    "expected_failure": "an active ai_estimate no longer makes the UI Apply gate eligible",
+    "classification": "SINGLE"
+   }
+  },
+  {
+   "id": "M52",
+   "row_type": "SINGLE",
+   "obligation_id": "M52",
+   "designation": "AI3-M52-HIST",
+   "witness": [
+    "tests/unit/advancedNutritionAi3ApplyBlock.test.ts"
+   ],
+   "expected_verdict": "CAUGHT",
+   "mutation_owner": "M52",
+   "mutation": {
+    "file": "src/application/advancedNutritionApply.ts",
+    "anchor": "    if (hasActiveAiEstimateForPreview(stateField.value as never)) {\n      return fail('ai_estimate_preview_only');\n    }",
+    "replacement": "    if (false) {\n      return fail('ai_estimate_preview_only');\n    }"
+   },
+   "description": "application writer guard bypass",
+   "reason": "an estimate is accepted over a stronger stored mass source",
+   "notes": {
+    "defect": "LAYER-B WRITER GUARD: STRONGER SOURCE ACCEPTED",
+    "historical_meaning": "application writer guard bypass",
+    "aligned": false,
+    "mapped_file": "src/application/advancedNutritionApply.ts",
+    "mapped_function": "applyAdvancedNutrition (:283)",
+    "mapped_guard_description": "hasActiveAiEstimateForPreview(state) -> fail('ai_estimate_preview_only') BEFORE authorization/writer/readBack (:71,:86,:95)",
+    "witness_status": "clean_witness_passes_not_yet_causally_verified",
+    "mapping_note": "correct boundary per the ruling; my previous row targeted the acceptance-time guard, which is the WRONG boundary",
+    "mapped_witness_file": "tests/unit/advancedNutritionAi3ApplyBlock.test.ts"
+   },
+   "legacy": {
+    "expected_failure": "an estimate is accepted over a stronger stored mass source",
+    "classification": "SINGLE",
+    "preliminary_classification": "SINGLE candidate",
+    "expected": "the application advances beyond the Layer-B firewall so the writer/readBack are reached"
+   }
+  },
+  {
+   "id": "M53",
+   "row_type": "VARIANT_SET",
+   "obligation_id": "M53",
+   "mutation_owner": "M53",
+   "components": [
+    {
+     "id": "A",
+     "file": "src/application/nutritionAiEstimate.ts",
+     "anchor": "  if (capabilities.aiEstimation !== 'available') {\n    return { kind: 'unavailable', reason: 'estimation_capability_unavailable' };\n  }",
+     "replacement": "  if (false) {\n    return { kind: 'unavailable', reason: 'estimation_capability_unavailable' };\n  }"
+    },
+    {
+     "id": "B",
+     "file": "src/application/nutritionAiEstimate.ts",
+     "anchor": "  if (capabilities.aiEstimation !== 'available') {\n    return { ok: true, offers: [], refused: [], message: 'AI estimation is not available for this tier.' };\n  }",
+     "replacement": "  if (false) {\n    return { ok: true, offers: [], refused: [], message: 'AI estimation is not available for this tier.' };\n  }"
+    }
+   ],
+   "variants": [
+    {
+     "obligation_id": "M53:A",
+     "variant_id": "A",
+     "designation": "AI3-M53-A-HIST",
+     "components": [
+      "A"
+     ],
+     "witness": [
+      "tests/unit/advancedNutritionAi3M53RealSession.test.ts"
+     ],
+     "expected_verdict": "SURVIVED_AS_EXPECTED",
+     "mutation_owner": "M53",
+     "reason": "Bypassing only runAiMassEstimation leaves the requestAiMassEstimateOffers capability gate, so the transport is never reached."
+    },
+    {
+     "obligation_id": "M53:B",
+     "variant_id": "B",
+     "designation": "AI3-M53-B-HIST",
+     "components": [
+      "B"
+     ],
+     "witness": [
+      "tests/unit/advancedNutritionAi3M53RealSession.test.ts"
+     ],
+     "expected_verdict": "SURVIVED_AS_EXPECTED",
+     "mutation_owner": "M53",
+     "reason": "Bypassing only requestAiMassEstimateOffers leaves the runAiMassEstimation capability gate, so the transport is never reached either."
+    },
+    {
+     "obligation_id": "M53:AB",
+     "variant_id": "AB",
+     "designation": "AI3-M53-AB-HIST",
+     "components": [
+      "A",
+      "B"
+     ],
+     "witness": [
+      "tests/unit/advancedNutritionAi3M53RealSession.test.ts"
+     ],
+     "expected_verdict": "CAUGHT",
+     "mutation_owner": "M53",
+     "reason": "A and B are applied together in ONE capsule. Both client-side gates are gone, so exactly ONE prohibited request is made for a disabled tier."
+    }
+   ],
+   "description": "capability-off network bypass",
+   "reason": "a selection bound to a different pinned record is no longer refused",
+   "notes": {
+    "defect": "RECORD-DIGEST SELECTION BINDING BROKEN",
+    "historical_meaning": "capability-off network bypass",
+    "aligned": false,
+    "mapped_file": "src/application/nutritionAiEstimate.ts",
+    "mapped_function": "runAiMassEstimation (:173-175)",
+    "mapped_guard_description": "client/application capability gate in src/application/nutritionAiEstimate.ts; Basic/unavailable -> ZERO client estimate transport requests",
+    "witness_status": "clean_witness_passes_not_yet_causally_verified -- NORMALIZED: three first-class obligations A / B / AB over the REAL pinned USDA session, each with a unique structured runtime identity. The retired advancedNutritionAi3ProductionReachability.test.ts is NOT used for family verdicts.",
+    "mapping_note": "app gate (:174) + a server route gate are two independent boundaries -> must be proven by execution, not assumed",
+    "mapped_witness_file": "tests/unit/advancedNutritionAi3M53RealSession.test.ts",
+    "hardening_outside_ledger": [
+     "server-side capability/refusal defense (defense-in-depth; cannot restore the ZERO-NETWORK invariant once a request exists)"
+    ],
+    "forensic_ruling": "REDUNDANT DEFENSE CANDIDATE (TYPE-A): there are TWO client-side zero-network gates -- runAiMassEstimation:186 and requestAiMassEstimateOffers:358. Mutating :186 leaves :358, so the invariant holds. Both are client-side, so this is genuine redundancy, NOT a server-side rescue. Awaiting the combined A+B proof.",
+    "final_failing_assertion": "expect(transport.request).toHaveBeenCalledTimes(0) — observed: expected +0 times, got 1 times",
+    "component_notes": {
+     "A": {
+      "name": "runAiMassEstimation capability gate",
+      "witness": "tests/unit/advancedNutritionAi3M53RealSession.test.ts"
+     },
+     "B": {
+      "name": "requestAiMassEstimateOffers capability gate",
+      "witness": "tests/unit/advancedNutritionAi3M53RealSession.test.ts"
+     }
+    }
+   },
+   "legacy": {
+    "expected_failure": "a selection bound to a different pinned record is no longer refused",
+    "classification": "SINGLE",
+    "preliminary_classification": "TYPE-A candidate",
+    "expected": "the Basic/unavailable tier makes a transport request instead of zero",
+    "combined": {
+     "applies_components": [
+      "A",
+      "B"
+     ],
+     "witness": "tests/unit/advancedNutritionAi3M53RealSession.test.ts",
+     "components_are_validated_individually": true
+    },
+    "type_a_note": "BOTH layers are CLIENT-side, so the combined bypass is the only way to reach the network. Server rejection is NOT a component.",
+    "witness_note": "Rebuilt over the REAL pinned USDA session and the real Phase-4 pipeline. The retired advancedNutritionAi3ZeroNetwork.test.ts (session: undefined) remains historically vacuous and is NOT used.",
+    "witness_file": "tests/unit/advancedNutritionAi3M53RealSession.test.ts",
+    "anti_vacuity": "AVAILABLE over the same fixture => transport.request called EXACTLY 1 time and a real offer is produced",
+    "measured": {
+     "clean": "0 requests (exit 0)",
+     "A-only": "0 requests (exit 0)",
+     "B-only": "0 requests (exit 0)",
+     "A+B": "1 request (exit 1)"
+    },
+    "normalization": {
+     "obligations": [
+      {
+       "obligation_id": "M53:A",
+       "components": [
+        "A"
+       ],
+       "designation": "AI3-M53-A-HIST",
+       "expect": "SURVIVED_AS_EXPECTED",
+       "expected_requests": 0,
+       "rationale": "Bypassing only runAiMassEstimation leaves the requestAiMassEstimateOffers capability gate, so the transport is never reached."
+      },
+      {
+       "obligation_id": "M53:B",
+       "components": [
+        "B"
+       ],
+       "designation": "AI3-M53-B-HIST",
+       "expect": "SURVIVED_AS_EXPECTED",
+       "expected_requests": 0,
+       "rationale": "Bypassing only requestAiMassEstimateOffers leaves the runAiMassEstimation capability gate, so the transport is never reached either."
+      },
+      {
+       "obligation_id": "M53:AB",
+       "components": [
+        "A",
+        "B"
+       ],
+       "designation": "AI3-M53-AB-HIST",
+       "expect": "CAUGHT",
+       "expected_requests": 1,
+       "atomic": true,
+       "rationale": "A and B are applied together in ONE capsule. Both client-side gates are gone, so exactly ONE prohibited request is made for a disabled tier."
+      }
+     ],
+     "clean_unavailable_expected_requests": 0,
+     "generic_family_designation_removed": "AI3-M53-UNAVAILABLE-HIST",
+     "retired_family_witness_not_used": "tests/unit/advancedNutritionAi3ProductionReachability.test.ts",
+     "post_normalization_verdict_bearing_extras": 0
+    },
+    "variant_expectations": null
+   }
+  },
+  {
+   "id": "M54",
+   "row_type": "SHARED_GUARD_SCENARIO",
+   "obligation_id": "M54",
+   "mutation_owner": "M54",
+   "mutation": {
+    "file": "src/core/nutritionV2/phase4/state.ts",
+    "anchor": "        state.userMasses[action.lineRef] !== undefined ||\n        state.portions[action.lineRef] !== undefined ||\n        state.countPortions[action.lineRef] !== undefined ||\n        state.householdPortions[action.lineRef] !== undefined",
+    "replacement": "        false"
+   },
+   "scenarios": [
+    {
+     "obligation_id": "M54:countPortions",
+     "scenario_id": "countPortions",
+     "designation": "AI3-M54-COUNT-PORTION-HIST",
+     "witness": "tests/unit/advancedNutritionAi3BranchCoverage.test.ts",
+     "expected_verdict": "CAUGHT",
+     "mutation_owner": "M54",
+     "reason": "M54 countPortions scenario: the four-source stronger-authority refusal guard is bypassed, so the estimate is written over a stored countPortions source.",
+     "scenario_meaning": "select_ai_estimate over a stored count portion"
+    },
+    {
+     "obligation_id": "M54:householdPortions",
+     "scenario_id": "householdPortions",
+     "designation": "AI3-M54-HOUSEHOLD-HIST",
+     "witness": "tests/unit/advancedNutritionAi3BranchCoverage.test.ts",
+     "expected_verdict": "CAUGHT",
+     "mutation_owner": "M54",
+     "reason": "M54 householdPortions scenario: the four-source stronger-authority refusal guard is bypassed, so the estimate is written over a stored householdPortions source.",
+     "scenario_meaning": "select_ai_estimate over a stored household portion"
+    },
+    {
+     "obligation_id": "M54:portions",
+     "scenario_id": "portions",
+     "designation": "AI3-M54-PORTION-HIST",
+     "witness": "tests/unit/advancedNutritionAi3BranchCoverage.test.ts",
+     "expected_verdict": "CAUGHT",
+     "mutation_owner": "M54",
+     "reason": "M54 portions scenario: the four-source stronger-authority refusal guard is bypassed, so the estimate is written over a stored portions source.",
+     "scenario_meaning": "select_ai_estimate over a stored source portion"
+    },
+    {
+     "obligation_id": "M54:userMasses",
+     "scenario_id": "userMasses",
+     "designation": "AI3-M54-USER-MASS-HIST",
+     "witness": "tests/unit/advancedNutritionAi3BranchCoverage.test.ts",
+     "expected_verdict": "CAUGHT",
+     "mutation_owner": "M54",
+     "reason": "M54 userMasses scenario: the four-source stronger-authority refusal guard is bypassed, so the estimate is written over a stored userMasses source.",
+     "scenario_meaning": "select_ai_estimate over a stored explicit user mass"
+    }
+   ],
+   "description": "select_ai_estimate cannot override / bypass an already stronger mass source",
+   "reason": "select_ai_estimate overwrites a stored user mass; returned state identity and operationSeq change",
+   "notes": {
+    "defect": "AI ESTIMATE SELECTION BYPASSES STRONGER-MASS-SOURCE MUTUAL EXCLUSIVITY (historic label 'IDEMPOTENCY BYPASS' was inaccurate and is retired)",
+    "historical_meaning": "select_ai_estimate cannot override / bypass an already stronger mass source",
+    "aligned": true,
+    "mapped_function": "phase4Reducer (select_ai_estimate branch)",
+    "mapped_guard_description": "complete four-source stronger-authority refusal guard (userMasses || portions || countPortions || householdPortions)"
+   },
+   "legacy": {
+    "mutate": "        false",
+    "expected_failure": "select_ai_estimate overwrites a stored user mass; returned state identity and operationSeq change",
+    "classification": "SHARED_GUARD_SCENARIO",
+    "withdrawn_partial_mutation": "The prior mutation replaced only `state.userMasses[action.lineRef] !== undefined ||`, leaving portions / countPortions / householdPortions live. It was a partial one-disjunct bypass and did not represent the historical shared guard. Withdrawn.",
+    "withdrawn_generic_designation": "`[AI3-M54-HIST] REFUSES to write an estimate over a stored ${source}` was a SOURCE TEXT template, not a runtime Vitest identity; it matched zero runtime failures. Withdrawn in favour of four per-scenario runtime tokens.",
+    "owner": true,
+    "shared_mutation_owner": "M54",
+    "scenario_designations": {
+     "userMasses": "[AI3-M54-USER-MASS-HIST]",
+     "portions": "[AI3-M54-PORTION-HIST]",
+     "countPortions": "[AI3-M54-COUNT-PORTION-HIST]",
+     "householdPortions": "[AI3-M54-HOUSEHOLD-HIST]"
+    },
+    "scenario_obligation_count": 4
+   }
+  },
+  {
+   "id": "M55",
+   "row_type": "SINGLE",
+   "obligation_id": "M55",
+   "designation": "AI3-M55-HIST",
+   "witness": [
+    "tests/unit/advancedNutritionAi3MidflightAndBenchmark.test.ts"
+   ],
+   "expected_verdict": "CAUGHT",
+   "mutation_owner": "M55",
+   "mutation": {
+    "file": "scripts/benchmark_resolution_coverage.ts",
+    "anchor": "      direct_mass: 'resolved_direct_mass',\n      source_portion: 'resolved_source_portion',\n      count_portion: 'resolved_count_portion',\n      household_portion: 'resolved_household_portion',",
+    "replacement": "      direct_mass: 'resolved_direct_mass',\n      source_portion: 'resolved_source_portion',\n      count_portion: 'resolved_count_portion',\n      household_portion: 'resolved_household_portion',\n      ai_estimate: 'resolved_direct_mass',"
+   },
+   "description": "benchmark estimate incorrectly credited as authenticated",
+   "reason": "COMPOSITE candidate: a changed working choice no longer refuses at the fingerprint layer",
+   "notes": {
+    "defect": "WORKING-CHOICE FINGERPRINT STALENESS IGNORED",
+    "historical_meaning": "benchmark estimate incorrectly credited as authenticated",
+    "aligned": false,
+    "mapped_file": "scripts/benchmark_resolution_coverage.ts",
+    "mapped_function": "benchmark accounting (:286-289, :201)",
+    "mapped_guard_description": "AI-ADVANCED accounting uses SEPARATE buckets; the deterministic run credits no AI estimate to 'deterministic'; 'authenticated_count_absent' (:201) is its own bucket",
+    "witness_status": "clean_witness_passes_not_yet_causally_verified",
+    "mapping_note": "belongs to BENCHMARK/verifier code, NOT runtime selection — must NOT point at working-choice fingerprint",
+    "mapped_witness_file": "tests/unit/advancedNutritionAi3MidflightAndBenchmark.test.ts"
+   },
+   "legacy": {
+    "expected_failure": "COMPOSITE candidate: a changed working choice no longer refuses at the fingerprint layer",
+    "classification": "SINGLE",
+    "preliminary_classification": "SINGLE candidate",
+    "expected": "a bounded AI estimate becomes eligible for authenticated credit"
+   }
+  },
+  {
+   "id": "M56",
+   "row_type": "TYPE_B_MULTI_PREDICATE",
+   "subobligations": [
+    {
+     "obligation_id": "M56a",
+     "sub_id": "M56a",
+     "designation": "AI3-M56A-HIST",
+     "witness": [
+      "tests/unit/advancedNutritionAi3Eligibility.test.ts"
+     ],
+     "expected_verdict": "CAUGHT",
+     "mutation_owner": "M56a",
+     "mutation": {
+      "file": "src/core/nutritionV2/phase4/aiEstimateValidation.ts",
+      "anchor": "  if (!hasUsableQuantity(input.parse)) return { eligible: false, reason: 'no_usable_quantity' };",
+      "replacement": "  if (false) return { eligible: false, reason: 'no_usable_quantity' };"
+     },
+     "reason": "a line with no usable quantity becomes eligible",
+     "defect": "NO-USABLE-QUANTITY ABSTENTION BYPASS"
+    },
+    {
+     "obligation_id": "M56b",
+     "sub_id": "M56b",
+     "designation": "AI3-M56B-HIST",
+     "witness": [
+      "tests/unit/advancedNutritionAi3M56bContainer.test.ts"
+     ],
+     "expected_verdict": "CAUGHT",
+     "mutation_owner": "M56b",
+     "mutation": {
+      "file": "src/core/nutritionV2/phase4/aiEstimateValidation.ts",
+      "anchor": "  if (input.parse.container !== null && input.parse.container !== undefined) {",
+      "replacement": "  if (false) {"
+     },
+     "reason": "a parsed container/package/can line becomes eligible",
+     "defect": "CONTAINER/PACKAGE/CAN ABSTENTION BYPASS"
+    }
+   ],
+   "description": "container / no-usable-quantity bypass  (TYPE-B: two independent submutations)",
+   "notes": {
+    "defect": "PRE-NETWORK ABSTENTION BYPASS (composite: quantity AND container)",
+    "historical_meaning": "container / no-usable-quantity bypass  (TYPE-B: two independent submutations)",
+    "aligned": true,
+    "historical_top_level_meaning": "M56a no usable quantity + M56b container/package/can",
+    "sub_obligation_semantics": {
+     "M56a": "NO-USABLE-QUANTITY ABSTENTION BYPASS",
+     "M56b": "CONTAINER/PACKAGE/CAN ABSTENTION BYPASS"
+    }
+   },
+   "legacy": {
+    "classification": "COMPOSITE",
+    "submutations": [
+     {
+      "sub": "M56a",
+      "defect": "NO-USABLE-QUANTITY ABSTENTION BYPASS",
+      "file": "src/core/nutritionV2/phase4/aiEstimateValidation.ts",
+      "anchor": "  if (!hasUsableQuantity(input.parse)) return { eligible: false, reason: 'no_usable_quantity' };",
+      "mutate": "  if (false) return { eligible: false, reason: 'no_usable_quantity' };",
+      "witness": [
+       "tests/unit/advancedNutritionAi3Eligibility.test.ts"
+      ],
+      "expected_failure": "a line with no usable quantity becomes eligible",
+      "row_id": "M56"
+     },
+     {
+      "sub": "M56b",
+      "defect": "CONTAINER/PACKAGE/CAN ABSTENTION BYPASS",
+      "file": "src/core/nutritionV2/phase4/aiEstimateValidation.ts",
+      "anchor": "  if (input.parse.container !== null && input.parse.container !== undefined) {",
+      "mutate": "  if (false) {",
+      "witness": [
+       "tests/unit/advancedNutritionAi3M56bContainer.test.ts"
+      ],
+      "expected_failure": "a parsed container/package/can line becomes eligible",
+      "row_id": "M56",
+      "forensic_note": "OPTION A/B, not redundancy: the original eligibility witness had container:null everywhere, so it never executed the guard; bypassing BOTH container guards (aiEstimateValidation.ts:179 and aiEstimateResolve.ts:105) still left it green. A direct witness now drives the validation branch."
+     }
+    ]
+   }
+  },
+  {
+   "id": "M57",
+   "row_type": "SINGLE",
+   "obligation_id": "M57",
+   "designation": "AI3-M57-HIST",
+   "witness": [
+    "tests/unit/advancedNutritionAi3HistoricalWitnesses.test.ts"
+   ],
+   "expected_verdict": "CAUGHT",
+   "mutation_owner": "M41",
+   "description": "estimate coexistence without conflict",
+   "reason": "an over-cap request is no longer truncated to the line cap",
+   "notes": {
+    "defect": "REQUEST LINE CAP BYPASS",
+    "historical_meaning": "estimate coexistence without conflict",
+    "aligned": false,
+    "mapped_file": "src/core/nutritionV2/calculation/effectiveMass.ts",
+    "mapped_function": "resolveEffectiveMassDecision (:85-129)",
+    "mapped_guard_description": "the whole conflict-detection block: the AI estimate joins the shared conflict rules and coexistence is represented as {kind:'conflict', reason:...} rather than coexistence",
+    "witness_status": "SCENARIO_WITNESS_ONLY — no own mutation point by design",
+    "mapping_note": "M57 is the UMBRELADE; M41/M42 are specific conflict REASONS inside it -> one guard would serve three row IDs",
+    "mapped_witness_file": "tests/unit/advancedNutritionAi3HistoricalWitnesses.test.ts",
+    "mutation_family": "effective_mass_ai_stronger_conflict",
+    "shared_mutation_family_file": "src/core/nutritionV2/calculation/effectiveMass.ts",
+    "shared_mutation_family_function": "resolveEffectiveMassDecision",
+    "historical_scenario": "ESTIMATE COEXISTENCE WITHOUT CONFLICT (coexistence with an incompatible mass authority must not be a valid state)",
+    "shared_scenario_note": "M42 and M57 are INDEPENDENT first-class semantic obligations that SHARE M41's single mutation definition. They own their own designation, witness and expected verdict, and resolve their mutation solely through the explicit mutation_owner reference. Neither carries its own file/anchor/replacement."
+   },
+   "legacy": {
+    "expected_failure": "an over-cap request is no longer truncated to the line cap",
+    "classification": "SINGLE",
+    "preliminary_classification": "HISTORICAL ROW NO LONGER MAPS 1:1 (subsumed)",
+    "shared_family_note": "ONE shared current production guard family. M41 is the mutation OWNER. M42 and M57 are additional historical SCENARIOS over the same family and must NOT be counted as independent mutation points.",
+    "mutation_owner": false,
+    "shared_mutation_owner": "M41",
+    "owner": false,
+    "has_own_anchor": false,
+    "previous_row_type": "SHARED_GUARD_SCENARIO"
+   }
+  },
+  {
+   "id": "M58",
+   "row_type": "RETIRED_BY_ARCHITECTURE",
+   "obligation_id": "M58:pin",
+   "designation": "AI3-M58-PIN-HIST",
+   "witness": [
+    "tests/unit/advancedNutritionAi3M58ArchitecturePins.test.ts",
+    "tests/unit/advancedNutritionAi3M58StagePins.test.ts"
+   ],
+   "expected_verdict": "RETIRED_BY_ARCHITECTURE",
+   "description": "MODEL REPRESENTATIVE OVERRIDES DETERMINISTIC MIDPOINT | pin: the model representative does not own authoritative grams.",
+   "reason": "Model `proposal.representative_grams` is never an authority-bearing assignment in current production. It is read ONLY as a comparison operand by `midpointAgrees(...)` at aiEstimateValidation.ts:362. Accepted evidence receives the locally derived deterministic midpoint; the resolver reassigns it; acceptance recomputes and verifies it; selection verifies it. The historical defect therefore has no representable mutation, and manufacturing one would require an architecture production does not have.",
+   "notes": {
+    "historical_meaning": "MODEL REPRESENTATIVE OVERRIDES DETERMINISTIC MIDPOINT | pin: the model representative does not own authoritative grams.",
+    "retirement_rationale": "Model `proposal.representative_grams` is never an authority-bearing assignment in current production. It is read ONLY as a comparison operand by `midpointAgrees(...)` at aiEstimateValidation.ts:362. Accepted evidence receives the locally derived deterministic midpoint; the resolver reassigns it; acceptance recomputes and verifies it; selection verifies it. The historical defect therefore has no representable mutation, and manufacturing one would require an architecture production does not have.",
+    "physical_locations": [
+     {
+      "n": 1,
+      "site": "src/core/nutritionV2/phase4/aiEstimateValidation.ts:361-374",
+      "role": "ASSIGN",
+      "note": "accepted evidence assigns representative_grams: localMidpoint"
+     },
+     {
+      "n": 2,
+      "site": "src/core/nutritionV2/phase4/aiEstimateResolve.ts:259",
+      "role": "ASSIGN",
+      "note": "resolver reassigns/reconstructs the deterministic midpoint"
+     },
+     {
+      "n": 3,
+      "site": "src/core/nutritionV2/phase4/aiEstimateAccept.ts:74",
+      "role": "RECOMPUTE",
+      "note": "acceptance re-derives the representative from the bounds"
+     },
+     {
+      "n": 4,
+      "site": "src/core/nutritionV2/phase4/aiEstimateAccept.ts:182",
+      "role": "VERIFY",
+      "note": "acceptance rejects a representative that is not the midpoint"
+     },
+     {
+      "n": 5,
+      "site": "src/core/nutritionV2/phase4/aiEstimateSelection.ts:50",
+      "role": "VERIFY",
+      "note": "selection refuses a non-midpoint representative"
+     }
+    ],
+    "physical_location_count": 5,
+    "logical_protection_group_count": 3,
+    "logical_protection_groups": [
+     {
+      "group": "A",
+      "name": "ASSIGNMENT",
+      "sites": [
+       1,
+       2
+      ],
+      "why": "aiEstimateValidation.ts:361-374 and aiEstimateResolve.ts:259 are two writes of the SAME binding rule, so they form one logical group, not two"
+     },
+     {
+      "group": "B",
+      "name": "RECOMPUTE",
+      "sites": [
+       3
+      ],
+      "why": "acceptance derives the representative from the bounds rather than trusting the carried value"
+     },
+     {
+      "group": "C",
+      "name": "VERIFY",
+      "sites": [
+       4,
+       5
+      ],
+      "why": "acceptance and selection each reject a representative that is not the midpoint"
+     }
+    ],
+    "architecture_witnesses": {
+     "note": "Each pin is a behavioural observation mapped to ONE production stage, with a valid control so no pin is proved by refusal alone.",
+     "commands": [
+      "bun x vitest run tests/unit/advancedNutritionAi3M58ArchitecturePins.test.ts",
+      "bun x vitest run tests/unit/advancedNutritionAi3M58StagePins.test.ts"
+     ],
+     "measured_pass_counts": {
+      "advancedNutritionAi3M58ArchitecturePins.test.ts": "5/5",
+      "advancedNutritionAi3M58StagePins.test.ts": "3/3",
+      "advancedNutritionAi3M53RealSession.test.ts": "3/3"
+     },
+     "stage_pins": {
+      "A1": {
+       "stage": "validation assignment",
+       "site": "aiEstimateValidation.ts:361-374",
+       "pin": "accepted evidence representative === deterministicMidpointGrams(lower,upper) and !== the model value",
+       "control": "the same model value is refused at the firewall",
+       "status": "GREEN"
+      },
+      "A2": {
+       "stage": "resolver assignment",
+       "site": "aiEstimateResolve.ts:259",
+       "pin": "over a REAL session and a valid bounded response, the production resolver emitted an offer whose bounds are 150/200 and whose authoritative representative is the value deterministicMidpointGrams(150,200) returns",
+       "control": "the same AVAILABLE fixture made exactly ONE request and produced a real offer, so the resolver path demonstrably executed",
+       "status": "GREEN",
+       "file": "tests/unit/advancedNutritionAi3M53RealSession.test.ts",
+       "command": "bun x vitest run tests/unit/advancedNutritionAi3M53RealSession.test.ts"
+      },
+      "B": {
+       "stage": "acceptance recompute",
+       "site": "aiEstimateAccept.ts:74",
+       "pin": "acceptance advances on the bounds-derived midpoint; accepted choice.representative_grams === MID and !== model value",
+       "control": "the same call with the midpoint control advances",
+       "status": "GREEN"
+      },
+      "C1": {
+       "stage": "acceptance verify",
+       "site": "aiEstimateAccept.ts:182",
+       "pin": "a carried non-midpoint representative is refused with offer_mismatch",
+       "control": "the midpoint representative on the identical context is accepted",
+       "status": "GREEN"
+      },
+      "C2": {
+       "stage": "selection verify",
+       "site": "aiEstimateSelection.ts:50",
+       "pin": "a non-midpoint estimate is refused with invalid_estimate, and the authorised selection carries only bounds + midpoint policy — the model value appears nowhere in it",
+       "control": "the midpoint representative is accepted by the same call",
+       "status": "GREEN"
+      }
+     },
+     "release_evidence": "COMPLETE — A1/A2/B/C1/C2 all GREEN"
+    },
+    "historical_row_id_retained": true,
+    "runtime_designation_note": "M58 is RETIRED_BY_ARCHITECTURE and needs NO destructive mutation. `runtime_designations` on this row means ACTIVE NON-DESTRUCTIVE RUNTIME PIN EVIDENCE (the model representative remains non-authority-bearing), not a mutation identity."
+   },
+   "legacy": {
+    "executable_mutation_obligation": false,
+    "disposition": "RETIRED_BY_ARCHITECTURE",
+    "is_not": [
+     "CAUGHT",
+     "PROVEN",
+     "NOT_PROVEN",
+     "TYPE_A_REDUNDANT",
+     "SINGLE",
+     "TYPE_B_MULTI_PREDICATE"
+    ],
+    "designation_note": "M58 is RETIRED_BY_ARCHITECTURE and needs NO destructive mutation. `runtime_designations` on this row means ACTIVE NON-DESTRUCTIVE RUNTIME PIN EVIDENCE (the model representative remains non-authority-bearing), not a mutation identity.",
+    "runtime_designations": [
+     "AI3-M58-PIN-HIST"
+    ]
+   }
+  },
+  {
+   "id": "M59",
+   "row_type": "SINGLE",
+   "obligation_id": "M59",
+   "designation": "AI3-M59-HIST",
+   "witness": [
+    "tests/unit/advancedNutritionAi3Eligibility.test.ts"
+   ],
+   "expected_verdict": "CAUGHT",
+   "mutation_owner": "M59",
+   "mutation": {
+    "file": "src/core/nutritionV2/phase4/aiEstimateValidation.ts",
+    "anchor": "  if (input.parse.hasDirectMass) {",
+    "replacement": "  if (false) {"
+   },
+   "description": "direct authored mass eligibility bypass",
+   "reason": "a line whose parser already established authored mass becomes eligible",
+   "notes": {
+    "defect": "DIRECT AUTHORED MASS ELIGIBILITY BYPASS",
+    "historical_meaning": "direct authored mass eligibility bypass",
+    "aligned": true
+   },
+   "legacy": {
+    "mutate": "  if (false) {",
+    "expected_failure": "a line whose parser already established authored mass becomes eligible",
+    "classification": "SINGLE"
+   }
+  },
+  {
+   "id": "M60",
+   "row_type": "SINGLE",
+   "obligation_id": "M60",
+   "designation": "AI3-M60-HIST",
+   "witness": [
+    "tests/unit/advancedNutritionAi3Eligibility.test.ts"
+   ],
+   "expected_verdict": "CAUGHT",
+   "mutation_owner": "M60",
+   "mutation": {
+    "file": "src/core/nutritionV2/phase4/aiEstimateValidation.ts",
+    "anchor": "    range.upper >= range.lower",
+    "replacement": "    range.upper >= range.lower && false"
+   },
+   "description": "valid quantity_range dropped",
+   "reason": "a written quantity range is no longer usable quantity",
+   "notes": {
+    "defect": "WRITTEN QUANTITY RANGE DROPPED",
+    "historical_meaning": "valid quantity_range dropped",
+    "aligned": true
+   },
+   "legacy": {
+    "mutate": "    range.upper >= range.lower && false",
+    "expected_failure": "a written quantity range is no longer usable quantity",
+    "classification": "SINGLE"
+   }
+  },
+  {
+   "id": "M61",
+   "row_type": "SINGLE",
+   "obligation_id": "M61",
+   "designation": "AI3-M61-HIST",
+   "witness": [
+    "tests/unit/advancedNutritionAi3Eligibility.test.ts"
+   ],
+   "expected_verdict": "CAUGHT",
+   "mutation_owner": "M61",
+   "mutation": {
+    "file": "src/core/nutritionV2/phase4/aiEstimateValidation.ts",
+    "anchor": "  if (input.rowStatus !== AI_ESTIMATE_ROW_ACTIONABLE) {",
+    "replacement": "  if (false) {"
+   },
+   "description": "non-actionable live row admitted",
+   "reason": "an already-resolved live row is admitted; the 97-line corpus invariant also fails",
+   "notes": {
+    "defect": "NON-ACTIONABLE RESOLVED ROW ADMITTED",
+    "historical_meaning": "non-actionable live row admitted",
+    "aligned": true
+   },
+   "legacy": {
+    "mutate": "  if (false) {",
+    "expected_failure": "an already-resolved live row is admitted; the 97-line corpus invariant also fails",
+    "classification": "SINGLE"
+   }
+  }
+ ],
+ "$schema_note": "EVIDENCE STATE (F1-B1, authoritative repository-contained run, RC=0). Three DISTINCT layers must not be conflated. (1) CLEAN-TREE WITNESS: every witness below passes on the unmodified tree; that alone proves nothing about a catch. (2) DESTRUCTIVE CAPSULE: each of the 30 destructive obligations is executed in its own freshly created disposable capsule, materialized from src/ server/ tests/ scripts/ data/ plus root config, with node_modules as an external symlink; the current mutation spec is applied ONLY inside that capsule, every anchor must match exactly once, the capsule target bytes must change, and the source bytes must not. Capsules are closed in a finally block. (3) SEMANTIC MUTATION RESULT: produced solely by the exact designated test outcome under mutation (FAILED => CAUGHT, PASSED => SURVIVED) and then compared against this manifest's explicit expected_verdict. OBSERVED, repository-contained, reproducible: 21 historical rows / 32 semantic obligations / 30 destructive mutants + 2 non-destructive controls => 26 CAUGHT, 4 SURVIVED_AS_EXPECTED (M50:AB, M50:ABC, M53:A, M53:B), 1 PIN_GREEN (M44:NONFINITE, a non-destructive redundant-defense pin) and 1 RETIRED_BY_ARCHITECTURE (M58, a non-destructive architecture pin). 0 NOT_PROVEN, 0 STRUCTURAL_INVALID, 0 VERDICT_MISMATCH, 0 designation or attribution failures, 0 witness failures, 0 missing or extra semantic executions, 0 source mutations, 0 leaked capsules. Attribution is exact: designation discovery by exact string equality of bracket-delimited segments parsed from the structured Vitest fullName, then runtime attribution by exact equality of the complete retained fullName; no substring, prefix, suffix or containment matching is used anywhere, and collateral failing tests are recorded separately and never own a verdict. The four SURVIVED_AS_EXPECTED results are INTENDED redundancy outcomes, not gaps: the bypassed layers leave a remaining independent guard, and the witnesses prove that remaining guard refuses progression. M41 remains the sole owner of the shared stronger-source conflict mutation; M42 and M57 are independent first-class obligations that each execute M41's single mutation in their own fresh capsule, and M54 is one shared mutation executed in four separate capsules, one per scenario. Reproduction depends on nothing outside this repository: no Hermes or OpenCode scratch tooling, no external mutation harness, no fixed scratch path. Reproduce with: python3 -B scripts/verify_ai3_mutations.py --run-battery (expect RC=0 and 'BATTERY OK: True'). M53's family verdicts use tests/unit/advancedNutritionAi3M53RealSession.test.ts, whose designated assertions carry the prohibited-request-count contract; the retired tests/unit/advancedNutritionAi3ZeroNetwork.test.ts (session: undefined) is historically vacuous and is NOT used. This note records repository-contained destructive PROOF for the first time; it does not claim that any clean witness by itself proves a catch."
+}

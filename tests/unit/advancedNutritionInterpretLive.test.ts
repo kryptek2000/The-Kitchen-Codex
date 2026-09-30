@@ -54,7 +54,11 @@ if (!SESSION_RESULT.ok) throw new Error('session failed');
 const SESSION: AdvancedNutritionSession = SESSION_RESULT.session;
 
 const AI_CAPABILITIES = resolveNutritionCapabilities({ aiConfigured: true, aiReachable: true });
-if (AI_CAPABILITIES.aiInterpretation !== true || AI_CAPABILITIES.aiEstimation !== 'disabled') {
+// AI-3 changed `aiEstimation` for the AI Advanced tier from 'disabled' to
+// 'available'. The interpretation capability this fixture exists to pin is
+// unchanged, and this test drives the INTERPRETATION path, which must stay
+// entirely independent of estimation.
+if (AI_CAPABILITIES.aiInterpretation !== true || AI_CAPABILITIES.tier !== 'ai_advanced') {
   throw new Error('unexpected AI capability tier fixture');
 }
 

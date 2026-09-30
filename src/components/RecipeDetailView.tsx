@@ -40,6 +40,7 @@ import { assessRecipeHealth } from '../utils/vaultIntelligence';
 import { buildRecipeRelationshipIndex, recipeIdentity } from '../utils/recipeRelationships';
 import {
   type AdvancedNutritionAiResolveHandler,
+  type AdvancedNutritionAiEstimateHandler,
   type AdvancedNutritionApplyHandler,
   type AdvancedNutritionBundleUiStatus,
 } from './AdvancedNutritionCard';
@@ -91,6 +92,8 @@ interface RecipeDetailViewProps {
   onApplyAdvancedNutrition?: AdvancedNutritionApplyHandler;
   /** Optional AI-assisted USDA resolution port (browser shell only). */
   onResolveAdvancedNutritionAi?: AdvancedNutritionAiResolveHandler;
+  /** Optional AI-3 bounded mass-estimate port (injected by the shell). */
+  onEstimateMassesWithAi?: AdvancedNutritionAiEstimateHandler;
 }
 
 export function RecipeDetailView({
@@ -115,6 +118,7 @@ export function RecipeDetailView({
   onLoadAdvancedNutritionBundle,
   onApplyAdvancedNutrition,
   onResolveAdvancedNutritionAi,
+  onEstimateMassesWithAi,
 }: RecipeDetailViewProps) {
   const [currentServings, setCurrentServings] = useState<number>(recipe.servings || 4);
   const [activeViewMode, setActiveViewMode] = useState<'visual' | 'markdown'>('visual');
@@ -643,6 +647,7 @@ export function RecipeDetailView({
                 onLoadAdvancedNutritionBundle={onLoadAdvancedNutritionBundle}
                 onApplyAdvancedNutrition={onApplyAdvancedNutrition}
                 onResolveAdvancedNutritionAi={onResolveAdvancedNutritionAi}
+                onEstimateMassesWithAi={onEstimateMassesWithAi}
               />
 
               <div className="bg-[#141414] rounded-2xl border border-white/5 p-5 shadow-xs">

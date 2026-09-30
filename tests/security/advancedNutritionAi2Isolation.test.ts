@@ -208,10 +208,22 @@ describe('AI-2A isolation — pure core modules with no side channels', () => {
         expect(source.includes(token), `${file} imports ${token}`).toBe(false);
       }
     }
-    // Bounded estimation stays disabled and unwired.
-    expect(isAiEstimationEnabled()).toBe(false);
-    for (const file of [...AI2A_MODULES, ...FROZEN_MODULES]) {
-      expect(read(file).includes('resolveAiBoundedEstimate')).toBe(file.includes('aiAdvancedEstimate'));
+    // AI-3 deliberately activated the frozen estimate contract. The BACKWARD
+    // direction is what this test protects, so it is now stated precisely: the
+    // estimate resolver is still reachable ONLY from the estimate contract
+    // module and the AI-3 validation layer -- never from an AI-2A module.
+    expect(isAiEstimationEnabled()).toBe(true);
+    const estimateConsumers = [...AI2A_MODULES, ...FROZEN_MODULES].filter((file) =>
+      read(file).includes('resolveAiBoundedEstimate')
+    );
+    expect(
+      estimateConsumers.every(
+        (file) => file.endsWith('aiAdvancedEstimate.ts') || file.endsWith('aiEstimateValidation.ts')
+      )
+    ).toBe(true);
+    // No AI-2A module gained an estimate consumer.
+    for (const file of AI2A_MODULES) {
+      expect(read(file).includes('resolveAiBoundedEstimate')).toBe(false);
     }
   });
 

@@ -171,8 +171,12 @@ describe('AI-1 isolation — the prompt carries semantics only', () => {
 });
 
 describe('AI-1 isolation — scope discipline', () => {
-  it('keeps bounded estimation disabled and unwired', () => {
-    expect(isAiEstimationEnabled()).toBe(false);
+  // AI-0 shipped this as "estimation is disabled and unwired". AI-3
+  // deliberately activated the FROZEN estimate contract, so the old pin is
+  // replaced by two PRECISE invariants rather than deleted:
+  //   1. AI-1's own identity-interpretation path stays UNWIRED from estimation;
+  //   2. activation is confined to the two expressly thawed files.
+  it('keeps AI-1 identity interpretation unwired from estimation', () => {
     const application = read('src/application/nutritionAiResolve.ts');
     const adapter = read('server/nutritionInterpret.ts');
     for (const source of [application, adapter]) {
@@ -180,6 +184,26 @@ describe('AI-1 isolation — scope discipline', () => {
       expect(source).not.toContain('aiAdvancedCandidates');
       expect(source).not.toContain('aiAdvancedPlan');
     }
+  });
+
+  it('activates the frozen estimate contract without inventing a second one', () => {
+    expect(isAiEstimationEnabled()).toBe(true);
+    // Exactly ONE frozen estimate CONTRACT module exists. The AI-3 wire owner
+    // is a transport envelope, not a second proposal contract.
+    const estimateContracts = readdirSync(join(REPO, 'src/core/nutritionV2'))
+      .filter((file) => /Estimate/.test(file) && file.endsWith('.ts'))
+      // The wire owner is a transport envelope and the bounds owner holds one
+      // numeric constant; neither is a second proposal contract.
+      .filter((file) => !file.includes('Wire') && !file.includes('Bounds'))
+      .sort();
+    expect(estimateContracts).toEqual(['aiAdvancedEstimate.ts']);
+    // The bounds owner exports ONLY the ratio constant: no type, no interface,
+    // no proposal shape, so it cannot become a second contract.
+    const bounds = read('src/core/nutritionV2/aiEstimateBounds.ts');
+    const boundExports = (bounds.match(/^export\s+(?:const\s+)?(\w+)/gm) ?? []).map((line) =>
+      line.replace(/^export\s+(?:const\s+)?/, '')
+    );
+    expect(boundExports).toEqual(['MAX_AI_ESTIMATE_RANGE_RATIO']);
   });
 
   it('adds no focused or skipped test', () => {

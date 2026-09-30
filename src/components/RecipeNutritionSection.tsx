@@ -5,6 +5,7 @@ import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
 import { RecipeNutritionCard } from './RecipeNutritionCard';
 import {
   AdvancedNutritionCard,
+  type AdvancedNutritionAiEstimateHandler,
   type AdvancedNutritionAiResolveHandler,
   type AdvancedNutritionApplyHandler,
   type AdvancedNutritionBundleUiStatus,
@@ -25,6 +26,12 @@ interface RecipeNutritionSectionProps {
   onApplyAdvancedNutrition?: AdvancedNutritionApplyHandler;
   /** Optional AI-assisted USDA resolution port (injected by the shell). */
   onResolveAdvancedNutritionAi?: AdvancedNutritionAiResolveHandler;
+  /**
+   * Optional AI-3 bounded mass-estimate port (injected by the shell).
+   * Injection-only: this component never parses, hashes, calls a provider or
+   * dispatches an estimate selection.
+   */
+  onEstimateMassesWithAi?: AdvancedNutritionAiEstimateHandler;
 }
 
 /**
@@ -52,6 +59,7 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
   onLoadAdvancedNutritionBundle,
   onApplyAdvancedNutrition,
   onResolveAdvancedNutritionAi,
+  onEstimateMassesWithAi,
 }) => {
   const advancedPreferred = presentation.advanced_preferred;
   // Compact normal values derived from the saved Advanced block (single
@@ -148,6 +156,7 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
         onApplyAdvancedNutrition={onApplyAdvancedNutrition}
         savedAdvancedBlock={presentation.advanced}
         onResolveWithAi={onResolveAdvancedNutritionAi}
+        onEstimateMassesWithAi={onEstimateMassesWithAi}
       />
     </section>
   );

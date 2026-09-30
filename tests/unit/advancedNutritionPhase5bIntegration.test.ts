@@ -191,7 +191,14 @@ describe('phase 5B — real hamburger Apply (authenticated USDA bundle)', () => 
     const pickleLine = state.rows.find((row) => row.original_text === '4 pickles, sliced')?.line_ref as string;
     expect(unresolvedLines.has(tomatoLine)).toBe(true);
     expect(unresolvedLines.has(pickleLine)).toBe(true);
-  });
+    // TEST-STABILITY ONLY. This test drives the real authenticated USDA bundle
+    // through the full Apply contract. Measured 2622ms in isolation and ~5850ms
+    // under full-suite parallel load, against Vitest's accidental 5000ms unit
+    // default. 10s gives ~1.7x headroom over the worst observed loaded run
+    // while still failing a genuine hang (real work is ~2.6s, so a stuck run is
+    // caught at roughly 4x the honest cost). Scoped to this test only: no
+    // global timeout was raised, no assertion changed, no production touched.
+  }, 10000);
 
   it('writes a whole block and preserves unrelated content through the serializer', async () => {
     if (!session) throw new Error('no session');
@@ -217,5 +224,9 @@ describe('phase 5B — real hamburger Apply (authenticated USDA bundle)', () => 
     expect(reparsed.instructions[0]?.text).toBe('Grill and assemble.');
     const decoded = decodeCodexNutrition(reparsed.codexNutrition);
     expect(decoded.kind).toBe('v1');
-  });
+    // TEST-STABILITY ONLY. Same characteristic as the test above: real
+    // authenticated bundle + serializer round-trip. Measured 2307ms in isolation
+    // and over the 5000ms unit default under full-suite parallel load. Same
+    // scoped 10s budget; no global timeout, no assertion change.
+  }, 10000);
 });

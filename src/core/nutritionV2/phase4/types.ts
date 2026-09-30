@@ -16,7 +16,12 @@ import { canonicalStringify, sha256Hex } from '../usda/digest';
 import type { NutrientId } from '../nutrients';
 import type { CanonicalUnit } from '../units';
 import type { UsdaDataType } from '../usda/types';
-import type { AdvisoryNutritionPreview, CalculationResult, PortionReviewResult } from '../calculation/types';
+import type {
+  AdvisoryNutritionPreview,
+  AiEstimateSelection,
+  CalculationResult,
+  PortionReviewResult,
+} from '../calculation/types';
 import type { CountPortionReviewResult } from '../calculation/countPortion';
 import type { ConfirmationResult, IngredientReviewResult } from '../matching/types';
 
@@ -442,6 +447,61 @@ export interface HouseholdPortionChoice {
   };
 }
 
+/**
+ * A BOUNDED AI MASS ESTIMATE working choice (AI-3). The LOWEST mass authority:
+ * it is never written while any other mass source exists, and the user may
+ * replace it at any time.
+ *
+ * It carries LOCAL, already-authenticated evidence only. The model never
+ * authors the identity (the fdc id and digests are bound from the CURRENT
+ * authenticated match), never authors the grams used for calculation (that is
+ * the locally derived midpoint), and never authors nutrients.
+ */
+/**
+ * The sanitized bounded RANGE an estimate contributes, before it is bound to a
+ * line identity. It is deliberately identity-free: a range can never imply an
+ * FDC id, a portion, a nutrient or a persistence authority.
+ */
+export interface AiEstimateRangeEvidence {
+  /** The sanitized bounded range (never a bare scalar). */
+  readonly lower_grams: number;
+  readonly upper_grams: number;
+  /** Locally derived deterministic midpoint; the calculation value. */
+  readonly representative_grams: number;
+  /** AI-3 v1 accepts only the deterministic midpoint policy. */
+  readonly representative_policy: 'midpoint';
+  /** Always the weaker, visibly-distinct estimate provenance class. */
+  readonly provenance: 'ai_estimate';
+}
+
+export interface AiEstimateChoice extends AiEstimateRangeEvidence {
+  /** The already-authenticated USDA identity this estimate is bound to. */
+  readonly fdc_id: number;
+  /** Current record/review binding copied from the authenticated match. */
+  readonly record_digest: string;
+  readonly review_digest: string;
+  /**
+   * LOCAL snapshot binding: a digest of the semantic inputs the estimate was
+   * derived from (line text, parsed quantity semantics, identity, record/review
+   * binding, bundle/catalog and recipe/session identity). It NEVER reaches the
+   * model, the transport body, persistence or Apply. A changed snapshot means
+   * the estimate is stale and must not be applied.
+   */
+  readonly snapshot_binding: string;
+  /**
+   * The Phase 3 `ai_estimate_selection` for this line, built at acceptance time
+   * from the authenticated dry-run evidence (identity, record digest, bundle and
+   * ingredient identity digest). The calculator re-derives the identity, the
+   * bounds and the midpoint from it; it is never model-authored and it is never
+   * persisted.
+   */
+  readonly selection: AiEstimateSelection;
+  /** Bounded display-only metadata; never persisted. */
+  readonly evidence_absent_reason?: string;
+  /** Display-only marker: an AI estimate was accepted for this line. */
+  readonly aiAssisted?: true;
+}
+
 export interface Phase4State {
   readonly version: string;
   readonly status: Phase4Status;
@@ -455,6 +515,8 @@ export interface Phase4State {
   readonly countPortions: Readonly<Record<string, CountPortionChoice>>;
   readonly userMasses: Readonly<Record<string, UserMassChoice>>;
   readonly householdPortions: Readonly<Record<string, HouseholdPortionChoice>>;
+  /** BOUNDED AI mass estimates (AI-3, lowest mass authority). */
+  readonly aiEstimates?: Readonly<Record<string, AiEstimateChoice>>;
   readonly basis: BasisMode;
   readonly selectedServings: number;
   readonly preview: AdvisoryNutritionPreview | null;
@@ -483,6 +545,12 @@ export type Phase4Action =
     }
   | { readonly type: 'clear_count_portion'; readonly lineRef: string }
   | { readonly type: 'select_user_mass'; readonly lineRef: string; readonly choice: UserMassChoice }
+  | {
+      readonly type: 'select_ai_estimate';
+      readonly lineRef: string;
+      readonly choice: AiEstimateChoice;
+    }
+  | { readonly type: 'clear_ai_estimate'; readonly lineRef: string }
   | { readonly type: 'clear_user_mass'; readonly lineRef: string }
   | {
       readonly type: 'select_household_portion';

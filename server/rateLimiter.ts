@@ -266,6 +266,57 @@ export function nutritionPlanRateLimiter(req: Request, res: Response, next: Next
 }
 
 /**
+ * Express middleware for rate limiting on the AI-3 BOUNDED MASS ESTIMATE
+ * endpoint (`/api/nutrition/estimate-mass`).
+ *
+ * It is a DEDICATED bucket with a distinct name, store key and store key
+ * prefix, separate from BOTH the AI-2B planning limiter AND the pre-existing
+ * `nutritionEstimateRateLimiter` (which guards the legacy
+ * `/api/estimate-nutrition` route). Estimate traffic can therefore never
+ * exhaust identity-planning capacity, and the legacy limiter is untouched.
+ * Configurable via `NUTRITION_MASS_ESTIMATE_RATE_LIMIT` (default 8 per minute).
+ */
+export function nutritionMassEstimateRateLimiter(
+  req: Request,
+  res: Response,
+  next: NextFunction
+) {
+  const parsedLimit = parseInt(process.env.NUTRITION_MASS_ESTIMATE_RATE_LIMIT || "8", 10);
+  const maxRequestsPerWindow = isNaN(parsedLimit) || parsedLimit <= 0 ? 8 : parsedLimit;
+  const windowMs = 60 * 1000; // 1 minute window
+
+  const clientIp = getClientIp(req);
+  const now = Date.now();
+
+  let entry = clientIpStore.get(`nutr_mass_estimate_${clientIp}`);
+
+  if (!entry || entry.resetTime <= now) {
+    entry = { count: 1, resetTime: now + windowMs };
+    clientIpStore.set(`nutr_mass_estimate_${clientIp}`, entry);
+  } else {
+    entry.count += 1;
+  }
+
+  const remaining = Math.max(0, maxRequestsPerWindow - entry.count);
+  const resetSeconds = Math.ceil((entry.resetTime - now) / 1000);
+
+  res.setHeader("RateLimit-Limit", maxRequestsPerWindow);
+  res.setHeader("RateLimit-Remaining", remaining);
+  res.setHeader("RateLimit-Reset", resetSeconds);
+
+  if (entry.count > maxRequestsPerWindow) {
+    res.setHeader("Retry-After", resetSeconds);
+    return res.status(429).json({
+      ok: false,
+      error: "Too many AI mass estimate requests. Please wait a moment before trying again.",
+      retryAfterSeconds: resetSeconds,
+    });
+  }
+
+  next();
+}
+
+/**
  * Express middleware for rate limiting on AI metadata recovery endpoints.
  * Configurable via `METADATA_RECOVERY_RATE_LIMIT` (default 25 requests per minute).
  */

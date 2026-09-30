@@ -15,6 +15,11 @@
 
 import { isPlainObject, toInertValue, type WrittenMassRangeEvidence } from '../schema';
 import { canonicalStringify, sha256Hex } from '../usda/digest';
+import {
+  digestOf,
+  ingredientIdentityPayload as identityPayload,
+  type IngredientIdentityFacts,
+} from './identityEvidence';
 import { isNutrientId, NUTRIENT_IDS, NUTRIENT_REGISTRY, type NutrientId } from '../nutrients';
 import { isValidNutrientAmount, MAX_NUTRIENT_AMOUNT, type CanonicalUnit } from '../units';
 import { normalizeQuery } from '../matching/normalize';
@@ -27,6 +32,12 @@ import type { CanonicalUsdaFoodRecord } from '../usda/types';
 import { isQualitativeIngredientText } from '../../../utils/ingredientSemantics';
 import { resolvePortionMassGrams, resolveUserMassGrams, type PortionMassResolution, type UserMassResolution } from './mass';
 import { resolveEffectiveMassDecision } from './effectiveMass';
+import {
+  AI_ESTIMATE_PROVENANCE_CLASS,
+  MAX_AI_ESTIMATE_BOUND_GRAMS,
+} from '../aiAdvancedEstimate';
+import { MAX_AI_ESTIMATE_RANGE_RATIO } from '../aiEstimateBounds';
+import type { AiEstimateSelection } from './types';
 import { PORTION_SEMANTICS_VERSION, type PortionMeasurement } from './portionSemantics';
 import {
   deriveCountRequirement,
@@ -81,6 +92,9 @@ const INGREDIENT_INPUT_KEYS = new Set([
   'count_requirement_hint',
   'user_mass_selection',
   'household_portion_selection',
+  // AI-3: the bounded AI mass estimate. Closed, additive, and only ever a
+  // RANGE -- the calculator re-derives the midpoint it multiplies nutrients by.
+  'ai_estimate_selection',
   'household_requirement_hint',
 ]);
 const PORTION_SELECTION_KEYS = new Set([
@@ -102,6 +116,19 @@ const PORTION_SELECTION_KEYS = new Set([
   'semantics_volume_ml',
   'semantics_amount',
   'semantics_gram_weight',
+]);
+const AI_ESTIMATE_SELECTION_KEYS = new Set([
+  'calculation_version',
+  'line_ref',
+  'ingredient_identity_digest',
+  'bundle_release',
+  'fdc_id',
+  'record_digest',
+  'lower_grams',
+  'upper_grams',
+  'representative_policy',
+  'provenance',
+  'snapshot_binding',
 ]);
 const USER_MASS_SELECTION_KEYS = new Set([
   'calculation_version',
@@ -194,6 +221,12 @@ interface PreparedIngredient {
   /** Phase 6 verified household-portion selection (closed shape). */
   readonly householdPortionSelection: unknown;
   /**
+   * AI-3 BOUNDED AI MASS ESTIMATE selection (closed shape). The lowest mass
+   * authority; the calculator re-derives the representative from the range and
+   * never trusts a caller-supplied gram value.
+   */
+  readonly aiEstimateSelection: unknown;
+  /**
    * Bounded interpretation-only household hint (closed unit/size/state
    * vocabulary). It may only FILL a source-missing dimension and is only used to
    * re-derive the exact-key registry lookup; it never supplies a mass.
@@ -201,7 +234,12 @@ interface PreparedIngredient {
   readonly householdRequirementHint: HouseholdRequirementHint | undefined;
 }
 
-interface EvaluatedIngredient {
+/**
+ * The calculator's per-line evaluated ingredient. It structurally satisfies the
+ * shared `IngredientIdentityFacts`, so the SAME canonical identity digest is
+ * produced here and in Phase 4. The calculator remains the final verifier.
+ */
+interface EvaluatedIngredient extends IngredientIdentityFacts {
   readonly lineRef: string;
   readonly originalText: string;
   readonly amount: number | null;
@@ -239,6 +277,16 @@ interface EvaluatedIngredient {
   readonly householdAuthorityClass: string | undefined;
   readonly householdQuantity: number | undefined;
   readonly householdSelectionDigest: string | undefined;
+  /** AI-3 bounded estimate evidence (resolved `ai_estimate` lines only). */
+  readonly aiEstimate:
+    | {
+        readonly lower_grams: number;
+        readonly upper_grams: number;
+        readonly representative_grams: number;
+        readonly representative_policy: 'midpoint';
+        readonly provenance: 'ai_estimate';
+      }
+    | undefined;
   /**
    * Deterministic written-mass-range evidence; set ONLY when the resolved mass
    * is a `direct_mass` midpoint of a recipe-authored range.
@@ -247,25 +295,6 @@ interface EvaluatedIngredient {
   readonly contributions: Partial<Record<NutrientId, number>>;
   readonly contributingNutrients: ReadonlyArray<NutrientId>;
   readonly outcome: IngredientOutcome;
-}
-
-function identityPayload(e: EvaluatedIngredient) {
-  return {
-    line_ref: e.lineRef,
-    original_text: e.originalText,
-    amount: e.amount,
-    ...(e.rawUnit !== undefined ? { raw_unit: e.rawUnit } : {}),
-    normalized_unit: e.normalizedUnit,
-    measurement_kind: e.measurementKind,
-    query: e.query,
-    normalized_query: e.normalizedQuery,
-    ...(e.note !== undefined ? { note: e.note } : {}),
-    qualitative: e.qualitative,
-    match_status: e.matchStatus,
-    ...(e.fdcId !== undefined ? { fdc_id: e.fdcId } : {}),
-    ...(e.recordDigest !== undefined ? { record_digest: e.recordDigest } : {}),
-    ...(e.confirmationDigest !== undefined ? { confirmation_digest: e.confirmationDigest } : {}),
-  };
 }
 
 function fullPayload(e: EvaluatedIngredient) {
@@ -310,10 +339,6 @@ function fullPayload(e: EvaluatedIngredient) {
     outcome: e.outcome,
     contributing_nutrients: [...e.contributingNutrients],
   };
-}
-
-function digestOf(payload: unknown): string {
-  return `sha256:${sha256Hex(canonicalStringify(payload))}`;
 }
 
 function validateNutrientScope(raw: unknown): { ok: true; ids: NutrientId[] } | { ok: false; code: Phase3FailureCode } {
@@ -413,6 +438,90 @@ function sanitizePortionSelection(
       semantics_amount: value.semantics_amount,
       semantics_gram_weight: value.semantics_gram_weight,
     },
+  };
+}
+
+/**
+ * AI-3: sanitizes ONE bounded AI mass estimate selection supplied to the
+ * calculator. The calculator never trusts the caller's claimed grams: this
+ * function only establishes that the selection is well-formed, and the
+ * representative used for calculation is RE-DERIVED below from the range.
+ *
+ * Fails closed on: unsafe shapes, unknown fields, a wrong calculation version,
+ * a mismatched line, an unbound or non-authenticated identity, non-positive or
+ * non-finite grams, a non-`midpoint` policy, a non-`ai_estimate` provenance
+ * claim, an over-wide range, and a missing snapshot binding.
+ */
+function sanitizeAiEstimateSelection(
+  raw: unknown
+): { ok: true; selection: AiEstimateSelection } | { ok: false; code: Phase3FailureCode } {
+  const materialized = materialize(raw);
+  if (!materialized.ok) {
+    return {
+      ok: false,
+      code: (materialized as { ok: false; unsafe: boolean }).unsafe ? 'unsafe_request' : 'invalid_portion_selection',
+    };
+  }
+  if (!isPlainObject(materialized.value)) return { ok: false, code: 'invalid_portion_selection' };
+  const value = materialized.value;
+  for (const key of Object.keys(value)) {
+    if (!AI_ESTIMATE_SELECTION_KEYS.has(key)) return { ok: false, code: 'unknown_field' };
+  }
+  if (value.calculation_version !== CALCULATION_VERSION) {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
+  if (typeof value.line_ref !== 'string' || value.line_ref.length === 0) {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
+  if (typeof value.ingredient_identity_digest !== 'string') {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
+  if (typeof value.bundle_release !== 'string') return { ok: false, code: 'invalid_portion_selection' };
+  if (!isSafePositiveInt(value.fdc_id)) return { ok: false, code: 'invalid_portion_selection' };
+  if (typeof value.record_digest !== 'string') return { ok: false, code: 'invalid_portion_selection' };
+  if (typeof value.snapshot_binding !== 'string' || value.snapshot_binding.length === 0) {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
+  // AI-3 v1 grants product authority to the deterministic midpoint only.
+  if (value.representative_policy !== 'midpoint') return { ok: false, code: 'invalid_portion_selection' };
+  // An estimate may never claim an authenticated provenance class.
+  if (value.provenance !== AI_ESTIMATE_PROVENANCE_CLASS) {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
+  // Only the TWO BOUNDS are supplied. The selection deliberately carries NO
+  // `representative_grams`: the calculator derives the representative from the
+  // range itself, so there is no caller-authored gram value to forge. (The
+  // closed key set above already rejects a smuggled representative.)
+  for (const field of ['lower_grams', 'upper_grams'] as const) {
+    const amount = value[field];
+    if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0 || Object.is(amount, -0)) {
+      return { ok: false, code: 'invalid_portion_selection' };
+    }
+  }
+  const lower = value.lower_grams as number;
+  const upper = value.upper_grams as number;
+  if (lower > MAX_AI_ESTIMATE_BOUND_GRAMS || upper > MAX_AI_ESTIMATE_BOUND_GRAMS) {
+    return { ok: false, code: 'numeric_overflow' };
+  }
+  // The 4x range-width bound, re-validated here. Wider => refuse; never clamp.
+  if (upper / lower > MAX_AI_ESTIMATE_RANGE_RATIO) {
+    return { ok: false, code: 'invalid_portion_selection' };
+  }
+  return {
+    ok: true,
+    selection: Object.freeze({
+      calculation_version: CALCULATION_VERSION,
+      line_ref: value.line_ref,
+      ingredient_identity_digest: value.ingredient_identity_digest,
+      bundle_release: value.bundle_release,
+      fdc_id: value.fdc_id,
+      record_digest: value.record_digest,
+      lower_grams: lower,
+      upper_grams: upper,
+      representative_policy: 'midpoint' as const,
+      provenance: AI_ESTIMATE_PROVENANCE_CLASS,
+      snapshot_binding: value.snapshot_binding,
+    }),
   };
 }
 
@@ -802,6 +911,7 @@ function evaluateIngredient(
     contributions: {},
     contributingNutrients: [],
     outcome: 'no_match',
+    aiEstimate: undefined,
   };
   const identityDigest = digestOf(identityPayload(base));
 
@@ -827,12 +937,17 @@ function evaluateIngredient(
   let householdAuthorityClass: string | undefined;
   let householdQuantity: number | undefined;
   let householdSelectionDigest: string | undefined;
+  let aiEstimateLower: number | undefined;
+  let aiEstimateUpper: number | undefined;
+  let aiEstimateRepresentative: number | undefined;
+  let aiEstimateSnapshot: string | undefined;
 
   if (!qualitative && matched && record) {
     const hasPortion = prepared.portionSelection !== undefined;
     const hasCountPortion = prepared.countPortionSelection !== undefined;
     const hasUserMass = prepared.userMassSelection !== undefined;
     const hasHouseholdPortion = prepared.householdPortionSelection !== undefined;
+    const hasAiEstimate = prepared.aiEstimateSelection !== undefined;
     // The canonical query projection + count requirement are derived ONCE and
     // shared by the count-portion and household-portion paths. Every dimension
     // comes from the existing contracts, never from a second grammar.
@@ -859,6 +974,7 @@ function evaluateIngredient(
       hasSourcePortion: hasPortion,
       hasCountPortion,
       hasHouseholdPortion,
+      hasAiEstimate,
     });
     if (authority.kind === 'conflict') {
       return { ok: false, code: 'invalid_portion_selection' };
@@ -1018,6 +1134,45 @@ function evaluateIngredient(
         }
       }
     }
+
+    // AI-3 BOUNDED AI MASS ESTIMATE -- the LOWEST mass authority, resolved LAST
+    // and only when no other source exists. The estimate carries a RANGE; the
+    // representative used for calculation is RE-DERIVED HERE from that range,
+    // so a caller's claimed grams are never trusted. Identity is the
+    // already-authenticated USDA record, so nutrients still come exclusively
+    // from authenticated USDA data multiplied by estimated grams.
+    if (hasAiEstimate) {
+      const sanitized = sanitizeAiEstimateSelection(prepared.aiEstimateSelection);
+      if (sanitized.ok !== true) return { ok: false, code: sanitized.code };
+      const selection = sanitized.selection;
+      // Re-authenticate the identity the estimate is bound to.
+      if (selection.line_ref !== prepared.lineRef) return { ok: false, code: 'invalid_portion_selection' };
+      if (selection.fdc_id !== record.fdc_id) return { ok: false, code: 'invalid_portion_selection' };
+      if (selection.bundle_release !== inputs.bundleRelease) {
+        return { ok: false, code: 'invalid_portion_selection' };
+      }
+      // The identity binding is re-authenticated exactly as the user-mass and
+      // portion arms do it: the stored record digest must be the AUTHENTICATED
+      // record's digest, and the ingredient identity digest must be the one the
+      // calculator re-derives for this line. A forged or stale binding fails
+      // closed here rather than producing a mass.
+      if (selection.record_digest !== record.record_digest) {
+        return { ok: false, code: 'invalid_portion_selection' };
+      }
+      if (selection.ingredient_identity_digest !== identityDigest) {
+        return { ok: false, code: 'invalid_portion_selection' };
+      }
+      const localMidpoint = (selection.lower_grams + selection.upper_grams) / 2;
+      if (!isWithinCanonicalBound(localMidpoint) || localMidpoint <= 0) {
+        return { ok: false, code: 'numeric_overflow' };
+      }
+      grams = localMidpoint;
+      massSource = 'ai_estimate';
+      aiEstimateLower = selection.lower_grams;
+      aiEstimateUpper = selection.upper_grams;
+      aiEstimateRepresentative = localMidpoint;
+      aiEstimateSnapshot = selection.snapshot_binding;
+    }
   }
 
   // Contributions.
@@ -1069,6 +1224,19 @@ function evaluateIngredient(
     // mass: an unresolved line, a portion-backed mass, or an exact scalar never
     // carries the marker.
     rangeRepresentative: massSource === 'direct_mass' ? parsed.range_representative : undefined,
+    aiEstimate:
+      massSource === 'ai_estimate' &&
+      aiEstimateLower !== undefined &&
+      aiEstimateUpper !== undefined &&
+      aiEstimateRepresentative !== undefined
+        ? {
+            lower_grams: aiEstimateLower,
+            upper_grams: aiEstimateUpper,
+            representative_grams: aiEstimateRepresentative,
+            representative_policy: 'midpoint' as const,
+            provenance: AI_ESTIMATE_PROVENANCE_CLASS,
+          }
+        : undefined,
     contributions,
     contributingNutrients,
     outcome,
@@ -1138,6 +1306,7 @@ export function runAdvisoryCalculation(inputs: AdvisoryCalculationInputs): Calcu
         countRequirementHint: hintResult.hint,
         userMassSelection: raw.user_mass_selection,
         householdPortionSelection: raw.household_portion_selection,
+        aiEstimateSelection: raw.ai_estimate_selection,
         householdRequirementHint: householdHintResult.hint,
       });
     }

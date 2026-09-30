@@ -14,6 +14,12 @@
  *   3. An authenticated USDA source portion follows.
  *   4. An authenticated USDA count portion follows.
  *   5. A verified Kitchen Codex household portion (Phase 6) follows.
+ *   6. A BOUNDED AI mass estimate (AI-3) follows -- the lowest authority.
+ *
+ * AI ESTIMATE (AI-3): an estimate is a NON-DIRECT claim. It is therefore
+ * mutually exclusive with every other source by the rules below: an estimate
+ * alongside any stronger or user-explicit source is a CONFLICT, never a silent
+ * preference, so a stronger source that appears later always wins.
  *
  * Exclusivity:
  *   - more than one non-direct selection (user mass / source portion / count
@@ -37,7 +43,9 @@ export type EffectiveMassConflictReason =
   | 'direct_mass_with_source_portion'
   | 'direct_mass_with_count_portion'
   | 'direct_mass_with_household_portion'
-  | 'direct_mass_with_multiple_alternates';
+  | 'direct_mass_with_ai_estimate'
+  | 'direct_mass_with_multiple_alternates'
+  | 'ai_estimate_with_stronger_source';
 
 export type EffectiveMassDecision =
   | { readonly kind: 'direct_mass'; readonly grams: number }
@@ -45,6 +53,8 @@ export type EffectiveMassDecision =
   | { readonly kind: 'source_portion' }
   | { readonly kind: 'count_portion' }
   | { readonly kind: 'household_portion' }
+  /** BOUNDED AI MASS ESTIMATE (AI-3). The LOWEST mass authority in the system. */
+  | { readonly kind: 'ai_estimate' }
   | { readonly kind: 'none' }
   | { readonly kind: 'conflict'; readonly reason: EffectiveMassConflictReason };
 
@@ -54,8 +64,17 @@ export interface EffectiveMassClaims {
   readonly hasUserMass: boolean;
   readonly hasSourcePortion: boolean;
   readonly hasCountPortion: boolean;
-  /** Verified Kitchen Codex household portion (Phase 6, lowest authority). */
+  /** Verified Kitchen Codex household portion (Phase 6). */
   readonly hasHouseholdPortion: boolean;
+  /**
+   * A BOUNDED AI mass estimate (AI-3), the LOWEST mass authority: below direct
+   * mass, user mass, USDA source portion, USDA count portion and the verified
+   * household portion. It participates in the existing conflict rules rather
+   * than bypassing them, so a stronger or user-explicit source that appears
+   * later always wins and the estimate is refused. Absent/undefined means
+   * "no estimate", which preserves every pre-AI-3 outcome exactly.
+   */
+  readonly hasAiEstimate?: boolean;
 }
 
 /**
@@ -63,19 +82,30 @@ export interface EffectiveMassClaims {
  * closed; conflicts fail closed rather than silently preferring a source.
  */
 export function resolveEffectiveMassDecision(claims: EffectiveMassClaims): EffectiveMassDecision {
+  // The AI estimate is a NON-DIRECT claim, so it joins the existing conflict
+  // arithmetic instead of bypassing it. With `hasAiEstimate` false (the
+  // pre-AI-3 case) every count below is identical to the historic behaviour.
+  const hasAiEstimate = claims.hasAiEstimate === true;
   const nonDirectCount =
     (claims.hasUserMass ? 1 : 0) +
     (claims.hasSourcePortion ? 1 : 0) +
     (claims.hasCountPortion ? 1 : 0) +
-    (claims.hasHouseholdPortion ? 1 : 0);
+    (claims.hasHouseholdPortion ? 1 : 0) +
+    (hasAiEstimate ? 1 : 0);
   if (claims.directMassGrams === undefined) {
     if (nonDirectCount > 1) {
-      return { kind: 'conflict', reason: 'multiple_sources' };
+      // An estimate mixed with a stronger source is named explicitly so the
+      // caller can report "a stronger source exists"; every other combination
+      // keeps its historic reason.
+      return hasAiEstimate && nonDirectCount === 2
+        ? { kind: 'conflict', reason: 'ai_estimate_with_stronger_source' }
+        : { kind: 'conflict', reason: 'multiple_sources' };
     }
     if (claims.hasUserMass) return { kind: 'user_mass' };
     if (claims.hasSourcePortion) return { kind: 'source_portion' };
     if (claims.hasCountPortion) return { kind: 'count_portion' };
     if (claims.hasHouseholdPortion) return { kind: 'household_portion' };
+    if (hasAiEstimate) return { kind: 'ai_estimate' };
     return { kind: 'none' };
   }
   // A declared direct recipe mass is exclusive with EVERY alternate choice.
@@ -94,6 +124,9 @@ export function resolveEffectiveMassDecision(claims: EffectiveMassClaims): Effec
   }
   if (claims.hasHouseholdPortion) {
     return { kind: 'conflict', reason: 'direct_mass_with_household_portion' };
+  }
+  if (hasAiEstimate) {
+    return { kind: 'conflict', reason: 'direct_mass_with_ai_estimate' };
   }
   return { kind: 'direct_mass', grams: claims.directMassGrams };
 }

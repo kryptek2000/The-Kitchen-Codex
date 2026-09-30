@@ -14,8 +14,8 @@
  *    state. AI Advanced Nutrition must never remove or hide manual correction.
  *  - Tier/capability is independent of billing. There is no pricing, checkout,
  *    subscription, account entitlement, or payment logic here.
- *  - `aiEstimation` is `'disabled'` in AI-0 and always `'future'`-gated; no
- *    capability state enables production AI mass estimation.
+ *  - `aiEstimation` is `'disabled'` for Basic Nutrition and `'available'`
+    for AI Advanced Nutrition (AI-3 activation).
  */
 
 export type NutritionExperienceTier = 'basic' | 'ai_advanced';
@@ -28,7 +28,7 @@ export const AI_ADVANCED_NUTRITION_LABEL = 'AI Advanced Nutrition';
  * enables it; `'future'` means the capability may exist only behind a later,
  * explicitly reviewed activation.
  */
-export type AiEstimationAvailability = 'disabled' | 'future';
+export type AiEstimationAvailability = 'disabled' | 'available' | 'future';
 
 export interface NutritionCapabilities {
   readonly tier: NutritionExperienceTier;
@@ -74,7 +74,7 @@ export function resolveNutritionCapabilities(
     manualEditing: true as const,
     aiInterpretation: true,
     aiCandidateOrchestration: true,
-    aiEstimation: 'disabled' as const,
+    aiEstimation: 'available' as const,
   });
 }
 
@@ -86,4 +86,14 @@ export function isManualEditingAvailable(capabilities: NutritionCapabilities): b
 /** True only when the AI interpretation path may be attempted at all. */
 export function isAiInterpretationAvailable(capabilities: NutritionCapabilities): boolean {
   return capabilities.tier === 'ai_advanced' && capabilities.aiInterpretation === true;
+}
+
+/**
+ * True only when BOUNDED AI mass estimation may be attempted at all. The
+ * estimate path is an AI Advanced capability; Basic Nutrition is always
+ * `'disabled'`. This gates the REQUEST only -- it grants no mass authority by
+ * itself (see the AI-3 eligibility rules).
+ */
+export function isAiEstimationAvailable(capabilities: NutritionCapabilities): boolean {
+  return capabilities.tier === 'ai_advanced' && capabilities.aiEstimation === 'available';
 }

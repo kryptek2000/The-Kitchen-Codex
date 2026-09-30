@@ -381,6 +381,8 @@ export function lineCalculationInput(
   const countPortion = state.countPortions[entry.line_ref];
   const userMass = state.userMasses[entry.line_ref];
   const household = state.householdPortions?.[entry.line_ref];
+  // AI-3: the working estimate, if the user explicitly accepted one.
+  const aiEstimate = state.aiEstimates?.[entry.line_ref];
   // The ONE canonical count-identity context for this line: the sanitized
   // bounded hint bound to the stored count-portion choice. The calculator
   // re-derives the SAME candidate set/digest the live projection displays.
@@ -414,6 +416,14 @@ export function lineCalculationInput(
         }
       : {}),
     ...(userMass ? { user_mass_selection: userMass.selection } : {}),
+    // AI-3 BOUNDED ESTIMATE: the LOWEST mass authority, and preview-only. It is
+    // supplied only when the working state actually carries an accepted
+    // estimate. The selection shape is built from the authenticated dry-run
+    // evidence, so the calculator independently re-derives the identity binding,
+    // the 4x bound and the deterministic midpoint.
+    ...(aiEstimate
+      ? { ai_estimate_selection: aiEstimate.selection }
+      : {}),
     // LOWEST authority: supplied only when the working state actually carries a
     // verified household choice, so a line with no stored household choice is
     // never silently given one.

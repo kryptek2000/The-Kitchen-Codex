@@ -35,6 +35,11 @@ import {
   type UserMassChoice,
 } from '../core/nutritionV2/phase4';
 import { authorizeNutritionPersistence } from '../core/nutritionV2/phase5';
+import {
+  AI_ESTIMATE_APPLY_BLOCK_MESSAGE,
+  activeAiEstimatesForPreview,
+  hasActiveAiEstimateForPreview,
+} from '../core/nutritionV2/phase4/aiEstimateApplyGate';
 import type { CodexNutritionV1, CodexNutritionV2, CodexNutritionV3 } from '../core/nutritionV2/schema';
 import {
   actionableExceptionRows,
@@ -57,6 +62,14 @@ import {
   mergeAiHouseholdPortions,
   workingChoiceFingerprint,
 } from '../core/nutritionV2/phase4/aiMidFlight';
+import {
+  AI_ESTIMATE_OFFER_LABEL,
+  acceptAiEstimateOffer,
+  buildAiEstimateUiSnapshot,
+  type AiEstimateOffer,
+} from '../core/nutritionV2/phase4/aiEstimateAccept';
+import { aiEstimateSnapshotBinding } from '../core/nutritionV2/phase4/aiEstimateValidation';
+import type { AiEstimateSelectionEvidence } from '../core/nutritionV2/phase4/aiEstimateSelection';
 import {
   AdvancedNutritionModal,
   type AdvancedNutritionAiAmountOffer,
@@ -126,7 +139,56 @@ interface AdvancedNutritionCardProps {
    * working-state path.
    */
   onPlanWithAi?: AdvancedNutritionAiPlanHandler;
+  /**
+   * Optional AI-3 BOUNDED MASS ESTIMATE port, injected by the shell for the
+   * same reason as the other AI ports: the UI never imports the application
+   * layer or any provider/server code. It is called ONLY on an explicit first
+   * click, never on render and never on re-analysis, and it returns OFFERS
+   * ONLY. An offer is inert: it grants no authority and changes no state
+   * until the user performs a SECOND explicit click.
+   */
+  onEstimateMassesWithAi?: AdvancedNutritionAiEstimateHandler;
 }
+
+/**
+ * The AI-3 estimate port. It returns already-reconciled, already-sanitised
+ * OFFERS. The card never turns an offer into a working choice on its own.
+ */
+export type AdvancedNutritionAiEstimateHandler = (args: {
+  readonly state: Phase4State;
+  readonly lines: ReadonlyArray<{
+    readonly line_ref: string;
+    readonly original_text: string;
+    readonly outcome: string;
+  }>;
+  readonly servings: number;
+  readonly request_token: string;
+}) => Promise<{
+  readonly ok: true;
+  readonly offers: ReadonlyArray<{
+    readonly line_ref: string;
+    readonly label: string;
+    readonly lower_grams: number;
+    readonly upper_grams: number;
+    readonly representative_grams: number;
+    readonly representative_policy: 'midpoint';
+    readonly notes?: string;
+    /**
+     * Local, already-derived identity evidence. It is NEVER rendered and never
+     * leaves the card. The card re-verifies it against `state.matches` at the
+     * second click, so a stale capture cannot be applied.
+     */
+    readonly evidence?: {
+      readonly line_ref: string;
+      readonly fdc_id: number;
+      readonly record_digest: string;
+      readonly ingredient_identity_digest: string;
+      readonly bundle_release: string;
+    };
+  }>;
+  readonly refused: ReadonlyArray<{ readonly line_ref: string; readonly reason: string }>;
+  readonly message?: string;
+}>;
 
 /** One accepted (confirmed) AI-2C line, ready for the existing match transition. */
 export interface AdvancedNutritionAiPlanAccepted {
@@ -240,6 +302,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
   savedAdvancedBlock,
   onResolveWithAi,
   onPlanWithAi,
+  onEstimateMassesWithAi,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [isSavedReportOpen, setIsSavedReportOpen] = useState(false);
@@ -270,6 +333,28 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
   const [aiAmountOffers, setAiAmountOffers] = useState<
     Record<string, ReadonlyArray<AdvancedNutritionAiAmountOffer>>
   >({});
+  /**
+   * AI-3 estimate OFFERS. These are INERT display values: they are not
+   * working choices, they are not passed to the calculator, and they do not
+   * affect the preview or Apply eligibility. Only `handleUseAiEstimateOffer`
+   * may promote one into working state, and only after every re-check passes.
+   */
+  const [aiEstimateOffers, setAiEstimateOffers] = useState<
+    Record<string, Readonly<AiEstimateOffer>>
+  >({});
+  const [aiEstimateRunning, setAiEstimateRunning] = useState(false);
+  /** Local, non-displayed identity evidence captured with each offer. */
+  const [aiEstimateEvidence, setAiEstimateEvidence] = useState<
+    Record<string, AiEstimateSelectionEvidence>
+  >({});
+  const [aiEstimateMessage, setAiEstimateMessage] = useState<string | null>(null);
+  /**
+   * The working-choice fingerprint and snapshot binding captured when each
+   * offer was created. The second click compares the CURRENT values against
+   * these; any drift refuses the acceptance.
+   */
+  const [aiEstimateOfferBindings, setAiEstimateOfferBindings] = useState<
+    Record<string, { readonly fingerprint: string; readonly snapshot_binding: string }>>({});
   const aiRequestSeq = useRef(0);
   /**
    * Monotonic AI lifecycle generation. Bumped on every recipe-identity change so
@@ -331,6 +416,9 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
     setPendingGenerateRecipeKey(null);
     setAiSuggestions({});
     setAiAmountOffers({});
+    setAiEstimateOffers({});
+    setAiEstimateOfferBindings({});
+    setAiEstimateEvidence({});
     setAiMessage(null);
     setAiRunning(false);
     setIsOpen(false);
@@ -349,6 +437,9 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
     aiRunningRef.current = false;
     setAiSuggestions({});
     setAiAmountOffers({});
+    setAiEstimateOffers({});
+    setAiEstimateOfferBindings({});
+    setAiEstimateEvidence({});
     setAiMessage(null);
     setAiRunning(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -506,8 +597,19 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
       return null;
     }
     if (stored.kind === 'opaque') return false;
+    // AI-3 LAYER A (UX): an accepted BOUNDED AI MASS ESTIMATE is preview-only,
+    // so Apply is unavailable while the current preview depends on one. This is
+    // the friendly layer; `applyAdvancedNutrition` independently refuses in
+    // LAYER B even if this gate is removed entirely.
+    if (hasActiveAiEstimateForPreview(state)) return false;
     return authorizeNutritionPersistence({ session, recipe, state }).ok;
   }, [session, recipe, adaptation, state, stored.kind]);
+
+  // The reason Apply is unavailable because of an AI estimate, so the UI can
+  // show the user exactly how to unblock it.
+  const aiEstimateApplyBlock = hasActiveAiEstimateForPreview(state)
+    ? activeAiEstimatesForPreview(state)
+    : null;
 
   const applyMode: 'create' | 'replace' | null =
     stored.kind === 'v1' || stored.kind === 'v2' || stored.kind === 'v3'
@@ -612,6 +714,17 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
         : Object.freeze([] as Phase4Row[]),
     [session, adaptation, state.rows, liveRows]
   );
+  /**
+   * The CURRENT live-row status per line, straight from the live projection.
+   * This is the authoritative actionability fact the AI-3 estimate port
+   * receives; a line absent from this map is never assumed actionable.
+   */
+  const liveRowStatusByRef = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const live of liveRows) map.set(live.line_ref, live.status);
+    return map;
+  }, [liveRows]);
+
   const actionableByRef = useMemo(() => {
     const map = new Map<string, AiResolutionIssueKind>();
     for (const live of liveRows) {
@@ -710,6 +823,9 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
     // reviewed decisions and must not linger against a new review identity).
     setAiSuggestions({});
     setAiAmountOffers({});
+    setAiEstimateOffers({});
+    setAiEstimateOfferBindings({});
+    setAiEstimateEvidence({});
     setAiMessage(null);
   };
 
@@ -1251,6 +1367,115 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
     });
   };
 
+  /**
+   * FIRST EXPLICIT CLICK: ask the injected port for estimate OFFERS.
+   *
+   * This is the ONLY caller of the port. Nothing here writes working state,
+   * the calculator, or the preview. There is no render-time call, no
+   * re-analysis call, and no automatic retry: a failed call reports a message
+   * and stops.
+   */
+  const handleEstimateMassesWithAi = async (): Promise<void> => {
+    if (!onEstimateMassesWithAi) return;
+    if (aiEstimateRunning) return;
+    if (!session || !adaptation.ok) return;
+    setAiEstimateRunning(true);
+    setAiEstimateMessage(null);
+    try {
+      const result = await onEstimateMassesWithAi({
+        state,
+        lines: adaptation.recipe.adapted.map((ingredient) => ({
+          line_ref: ingredient.line_ref,
+          original_text: ingredient.ingredient.original,
+          // The AUTHORITATIVE current live-row status from the SAME live
+          // projection the UI already uses for its exception count. Never a
+          // hardcoded assumption that a line is actionable.
+          outcome: liveRowStatusByRef.get(ingredient.line_ref) ?? 'unknown',
+        })),
+        servings: adaptation.recipe.base_servings,
+        request_token: `estimate:${aiGeneration.current}`,
+      });
+      if (result.ok !== true) {
+        setAiEstimateMessage('AI estimate unavailable.');
+        return;
+      }
+      // Offers only. No dispatch, no selection, no state change.
+      const nextOffers: Record<string, Readonly<AiEstimateOffer>> = {};
+      const nextEvidence: Record<string, AiEstimateSelectionEvidence> = {};
+      const nextBindings: Record<string, { readonly fingerprint: string; readonly snapshot_binding: string }> = {};
+      for (const offer of result.offers) {
+        nextOffers[offer.line_ref] = Object.freeze({ ...offer, label: AI_ESTIMATE_OFFER_LABEL } as AiEstimateOffer);
+        if (offer.evidence !== undefined) nextEvidence[offer.line_ref] = offer.evidence;
+        nextBindings[offer.line_ref] = Object.freeze({
+          fingerprint: workingChoiceFingerprint(state, offer.line_ref),
+          snapshot_binding: aiEstimateSnapshotBinding(
+            buildAiEstimateUiSnapshot(offer.line_ref, analyzedByRef.get(offer.line_ref), state.matches[offer.line_ref])
+          ),
+        });
+      }
+      setAiEstimateOffers(nextOffers);
+      setAiEstimateOfferBindings(nextBindings);
+      setAiEstimateEvidence(nextEvidence);
+      const refused = result.refused.length;
+      setAiEstimateMessage(
+        result.offers.length === 0
+          ? `No lines are eligible for an AI estimate${refused > 0 ? ` (${refused} refused)` : ''}.`
+          : `${result.offers.length} AI estimate offer${result.offers.length === 1 ? '' : 's'}${
+              refused > 0 ? `, ${refused} refused` : ''
+            }. Nothing is used until you choose one.`
+      );
+    } catch {
+      // No automatic retry. The user can press the button again explicitly.
+      setAiEstimateMessage('AI estimate failed.');
+    } finally {
+      setAiEstimateRunning(false);
+    }
+  };
+
+  /**
+   * SECOND EXPLICIT CLICK: accept one offer.
+   *
+   * Every staleness/currentness/authority re-check lives in the pure
+   * `acceptAiEstimateOffer`. If it refuses, working state is NOT touched. If it
+   * passes, the existing AI-estimate selection action is dispatched -- this
+   * path does not invent a parallel state mutation.
+   */
+  const handleUseAiEstimateOffer = (lineRef: string): void => {
+    const offer = aiEstimateOffers[lineRef];
+    const binding = aiEstimateOfferBindings[lineRef];
+    if (!offer || !binding) return;
+    const match = state.matches[lineRef];
+    const analyzedRow = analyzedByRef.get(lineRef);
+    const snapshot = buildAiEstimateUiSnapshot(lineRef, analyzedRow, match);
+    const accepted = acceptAiEstimateOffer(offer, {
+      currentState: state,
+      offerFingerprint: binding.fingerprint,
+      offerSnapshotBinding: binding.snapshot_binding,
+      evidence: aiEstimateEvidence[lineRef],
+      snapshot,
+    });
+    if (accepted.ok !== true) {
+      // Stale: drop the offer and leave working state untouched.
+      setAiEstimateOffers((prev) => {
+        const next = { ...prev };
+        delete next[lineRef];
+        return next;
+      });
+      setAiEstimateMessage('That estimate is out of date and was not used.');
+      return;
+    }
+    // The EXISTING Phase-4 selection action. AI-3 does not invent a parallel
+    // mutation path: the reducer remains the single authority for what enters
+    // working state, including its own refusals.
+    dispatch({ type: 'select_ai_estimate', lineRef, choice: accepted.choice });
+    setWorkingTouched(true);
+    setAiEstimateOffers((prev) => {
+      const next = { ...prev };
+      delete next[lineRef];
+      return next;
+    });
+  };
+
   const handleUseAiAmountOffer = (lineRef: string, portionIndex: number) => {
     if (!session || !adaptation.ok) return;
     const offers = aiAmountOffers[lineRef];
@@ -1290,6 +1515,18 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
           message: aiMessage,
           suggestions: aiSuggestions,
           amountOffers: aiAmountOffers,
+          // AI-3 estimate offers. INERT until the second explicit click.
+          ...(onEstimateMassesWithAi
+            ? {
+                estimateOffers: aiEstimateOffers,
+                estimateRunning: aiEstimateRunning,
+                estimateMessage: aiEstimateMessage,
+                onEstimateMassesWithAi: () => {
+                  void handleEstimateMassesWithAi();
+                },
+                onUseEstimateOffer: handleUseAiEstimateOffer,
+              }
+            : {}),
           exceptionCount: actionableRows.length,
           // AI-2C candidate planning lives in the SAME panel (no parallel review
           // subsystem): same explicit user invocation, same request token, same
@@ -1515,7 +1752,24 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
               <p className="text-[10px] text-gray-500 mt-1">
                 Review only — nothing is saved until you Apply.
               </p>
-              {applyEligibility !== null && (
+              {aiEstimateApplyBlock !== null && (
+                <p
+                  data-testid="advanced-nutrition-ai-estimate-apply-block"
+                  className="text-[10px] mt-1 text-amber-300"
+                >
+                  {AI_ESTIMATE_APPLY_BLOCK_MESSAGE}
+                </p>
+              )}
+              {aiEstimateApplyBlock !== null && (
+                <ul data-testid="advanced-nutrition-ai-estimate-apply-block-lines" className="text-[10px] text-amber-300/80 mt-1 list-disc pl-4">
+                  {aiEstimateApplyBlock.map((estimate) => (
+                    <li key={estimate.lineRef} data-testid={`ai-estimate-block-${estimate.lineRef}`}>
+                      {`${estimate.lower_grams}\u2013${estimate.upper_grams} g \u00b7 estimate uses ${estimate.representative_grams} g`}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {applyEligibility !== null && aiEstimateApplyBlock === null && (
                 <p
                   data-testid="advanced-nutrition-apply-eligibility"
                   className={`text-[10px] mt-1 ${applyEligibility ? 'text-emerald-300' : 'text-amber-300'}`}

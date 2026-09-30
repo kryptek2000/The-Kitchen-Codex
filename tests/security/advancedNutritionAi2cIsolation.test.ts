@@ -65,7 +65,6 @@ const FROZEN_AI0_AI2A: Record<string, string> = {
   'src/core/nutritionV2/aiAdvancedPlan.ts': '7716a99c51255917ba50cca2c23e322860045d45a2bdc8b6dbf48daa20a8d504',
   'src/core/nutritionV2/aiAdvancedCandidates.ts': '6e65daaa8391591cb94b823d704123f8db5dd5e6e811fc9d31e4cf3139d29683',
   'src/core/nutritionV2/aiAdvanced.ts': '857763140830fa04ec743495b6527b1800d63ee3de7207f090f0c37b396697cb',
-  'src/core/nutritionV2/aiAdvancedEstimate.ts': '40713b50f41858326c1024b2dd0b17ec242aa1b5b7a3091f55d24e54557cab98',
   'src/core/nutritionV2/aiAdvancedPlanSource.ts': 'b032f32c4cdbcb53cc3b4e89cb8b807396b45bc2ed57b9296c806d48af83aff7',
   'src/core/nutritionV2/aiAdvancedPlanRequest.ts': 'e8c714e5b3d45a4cdc02930193718adf6a198238de9c2c93f93b4f7a60ff8ca7',
   'src/core/nutritionV2/aiAdvancedPlanApply.ts': '18847e5836bb254fc6eea88dbd4aab050d475ca06a7dc5c02fb225f75971ba33',
@@ -79,7 +78,23 @@ const STABLE_AI2B: Record<string, string> = {
   'src/application/nutritionAiPlan.ts': '7e8a6a372e2f00cba68686b32a73967141897c113dc308277d67bd80afa465b8',
 };
 
+/**
+ * DELIBERATELY THAWED FOR AI-3 (architect-authorized, section 5B): the frozen
+ * estimate contract's activation points. Every other AI-0/AI-2A contract stays
+ * frozen at the AI-2C baseline, so this map is the ONLY authorized exception.
+ */
+const THAWED_BY_AI3: Record<string, string> = {
+  'src/core/nutritionV2/aiAdvancedEstimate.ts': 'c16ff999f50c902a02cc47ee7855a61fb2d6600de9689109ae27c1c4bb59106d',
+};
+
 describe('AI-2C isolation — frozen and stable modules', () => {
+  it('the AI-3 thaw is confined to the expressly authorized estimate contract', () => {
+    expect(Object.keys(THAWED_BY_AI3)).toEqual(['src/core/nutritionV2/aiAdvancedEstimate.ts']);
+    for (const [file, digest] of Object.entries(THAWED_BY_AI3)) {
+      expect({ file, digest: sha256(file) }).toEqual({ file, digest });
+    }
+  });
+
   it('frozen AI-0 / AI-2A contracts are byte-identical to the baseline', () => {
     for (const [file, digest] of Object.entries(FROZEN_AI0_AI2A)) {
       expect({ file, digest: sha256(file) }).toEqual({ file, digest });

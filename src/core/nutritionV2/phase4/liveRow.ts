@@ -58,7 +58,9 @@ export type LiveRowMassSource =
   | 'count_portion'
   | 'user_mass'
   | 'direct_mass'
-  | 'household_portion';
+  | 'household_portion'
+  /** BOUNDED AI MASS ESTIMATE (AI-3, lowest mass authority, preview-only). */
+  | 'ai_estimate';
 
 /** The live food-identity authority of a resolved row. */
 export type LiveRowFoodAuthority =

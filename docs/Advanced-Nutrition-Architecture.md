@@ -5845,17 +5845,25 @@ without redesigning the nutrition contract.
 ### 41.8 Future bounded-estimate policy skeleton (`ai_estimate`)
 
 `src/core/nutritionV2/aiAdvancedEstimate.ts` defines the FUTURE contract only.
-Any future activation must include: explicit lower/upper uncertainty bounds; a
+**SUPERSEDED BY AI-3 (§47): the estimate contract is now ACTIVE.** The
+requirements below were AI-0's activation contract; AI-3 satisfies them and they
+remain the design rationale.
+
+The activation requirements include: explicit lower/upper uncertainty bounds; a
 declared representative policy; the input semantics used; the reason
 authenticated evidence was unavailable; provider/model metadata where
 appropriate; visibly weaker provenance (`ai_estimate`) than authenticated
 USDA/local portions; deterministic validation; explicit UI labeling
 (`AI estimate (not USDA-authenticated)`); and Review before Apply.
 
-AI-0 ships estimation hard-disabled: `AI_ESTIMATION_AVAILABILITY === 'disabled'`,
-`isAiEstimationEnabled() === false`, and `resolveAiBoundedEstimate` ALWAYS
-returns `estimation_disabled` — even for a structurally perfect proposal. No
-food-specific estimate tables, density guessing, or production grams were added.
+**SUPERSEDED BY AI-3 (§47): estimation is now ACTIVE**
+(`AI_ESTIMATION_AVAILABILITY === 'available'`). Historically AI-0 shipped it
+hard-disabled (`'disabled'`), `isAiEstimationEnabled() === false`, and
+`resolveAiBoundedEstimate` ALWAYS returned `estimation_disabled` — even for a
+structurally perfect proposal. **AI-3 deliberately changed exactly those three
+things and nothing else.** Even now, no food-specific estimate tables, no
+density guessing and no model-authored grams exist: the calculator still
+derives every gram it uses.
 
 ### 41.9 Benchmark foundation
 
@@ -7086,3 +7094,379 @@ behaviour, and by the composite mutation chain, but it is NOT demonstrated by a 
 resolution — because no live production resolution of that shape exists today. Any future
 change that makes it reachable must come from an architect decision about AI-2C's candidate
 source, and must bring AI-1's semantic parity discipline with it.
+
+## §47. AI-3 — BOUNDED AI MASS ESTIMATION
+
+AI-3 activates the estimate contract that AI-0 shipped disabled. It estimates
+**MASS ONLY**, and only after food identity is already authenticated and every
+deterministic mass source is exhausted. The deterministic calculator still owns
+`authenticated USDA identity x accepted estimated grams -> nutrients`; the
+model never authors a nutrient, an identity, a portion or a density.
+
+### 47.1 Deliberate thaw (frozen again at the AI-3 release baseline)
+
+| File | Authorized change |
+|---|---|
+| `src/core/nutritionV2/aiAdvancedEstimate.ts` | `AI_ESTIMATION_AVAILABILITY` `disabled` -> `available`; `resolveAiBoundedEstimate` now returns the validated proposal. Comments updated. Nothing else. |
+| `src/core/nutritionV2/nutritionCapabilities.ts` | `aiEstimation: 'available'` in the AI-Advanced preset only. Basic stays `'disabled'`. |
+| `src/core/nutritionV2/aiEstimateBounds.ts` | **NEW third thaw.** Owns `MAX_AI_ESTIMATE_RANGE_RATIO = 4` and nothing else, because Phase 3 and Phase 4 must both enforce the identical ratio without importing across the layering boundary. |
+
+Frozen and unchanged: proposal shape, sanitizer, forbidden authority keys,
+provider keys, string/gram bounds, `MAX_AI_ESTIMATE_BOUND_GRAMS`, the
+`ai_estimate` provenance class, policy version
+(`nutrition_ai_estimate_policy_v1`), display label, representative-policy
+vocabulary, authenticated-provenance helper semantics.
+
+### 47.2 `ai_estimate` is the LOWEST mass authority
+
+`resolveEffectiveMassDecision` gained `hasAiEstimate`. The arm is **last**:
+
+`direct_mass > user_mass > source_portion > count_portion > household_portion > ai_estimate`
+
+The estimate participates in the EXISTING mutual-exclusion rules rather than
+bypassing them: an estimate alongside any stronger source is a **conflict**,
+never a silent win. With `hasAiEstimate` absent or false, every pre-AI-3
+outcome is byte-for-byte unchanged.
+
+The reducer is stricter still: `select_ai_estimate` **refuses** to write when a
+stronger source exists, because silently deleting a user's explicit mass would
+be a user-authority violation. The reverse direction does clear the estimate —
+a user selecting user mass, a source portion, a count portion or a household
+portion always wins and removes the estimate.
+
+### 47.3 Range-first, midpoint-only, 4x maximum
+
+The model returns a bounded RANGE, never a scalar. AI-3 v1 grants product
+authority to `representative_policy === 'midpoint'` only; the frozen sanitizer
+still recognises its other historic literals, but they gain no authority.
+
+The calculation value is **re-derived locally** in two independent places:
+
+1. `validateAiEstimateForWorkingState` computes `deterministicMidpointGrams` and
+   requires the model representative to agree within tolerance.
+2. The Phase 3 calculator derives `localMidpoint = (lower + upper) / 2` from
+   the range it was handed. The `ai_estimate_selection` shape deliberately
+   carries **no** `representative_grams`, so there is no caller-authored gram
+   value to forge; a smuggled one is rejected by the closed key set.
+
+`MAX_AI_ESTIMATE_RANGE_RATIO = 4`. A wider range is an admission of ignorance,
+not an estimate, so the line is **REFUSED** — never clamped, never silently
+narrowed.
+
+### 47.4 Identity prerequisite and pre-network abstention
+
+An estimate requires an **already-authenticated** current food identity. AI-3
+never estimates identity and mass together; unresolved identity belongs to
+AI-1/AI-2C.
+
+Two closed, deterministic abstention classes gate the network:
+
+- `parsed_container` — the deterministic parse identified a can/package noun.
+  Some container lines carry explicit authored net mass that deserves a future
+  deterministic parser repair; others need a commercial-size convention the
+  project does not have. AI-3 solves NEITHER by pretending it is a mass
+  estimate. There is no package-size table, no default can size and no second
+  container grammar.
+- `no_usable_quantity` — no amount, no quantity range and no count.
+
+The abstention vocabulary is deliberately **two** entries. Nine speculative
+token-regex grammars were rejected: the census showed 8 of 9 proposed classes had
+zero corpus witnesses, so encoding them would have been guesswork.
+
+### 47.5 Model-facing payload
+
+`src/core/nutritionV2/aiAdvancedEstimateWire.ts` is the single wire owner. The
+model receives, per line: an opaque `line_ref`, bounded authored source text,
+deterministic parsed amount/unit/count/container/state semantics, bounded
+authored food semantics, the bounded **local USDA description** of the
+already-authenticated food, and the deterministic `evidence_absent_reason`.
+
+It never receives: FDC id, record/review/catalog/bundle digests, nutrient
+tables, calories/macros, the full USDA record, working-state internals, recipe
+private metadata, vault/filesystem/user data, provider secrets, or any
+persistence/Apply data.
+
+Caps: 12 lines, 32 KiB measured against the **complete dynamic payload** before
+provider execution, 32 KiB response. `evidence_absent_reason` from the model
+carries **no** authority: the local deterministic system owns the truthful
+reason estimation was eligible.
+
+### 47.6 Dedicated transport
+
+`POST /api/nutrition/estimate-mass` with its own rate-limit bucket
+(`nutritionMassEstimateRateLimiter`, store key `nutr_mass_estimate_*`). The
+pre-existing `nutritionEstimateRateLimiter` belongs to the legacy
+`/api/estimate-nutrition` route and is **untouched** — an early draft collided
+with it and was reverted.
+
+One model-facing payload builder, one canonical response sanitizer. The
+sanitizer rejects authority-shaped keys outright (`fdc_id`, `portion_id`,
+`nutrients`, `calories`, `density`, `apply`, `persist`, `user_confirmed`, ...)
+rather than dropping them, and drops any line whose `line_ref` was not
+requested.
+
+### 47.7 Offer-first UX, second-click acceptance
+
+An estimate is **never** automatically selected. The first action
+(`Estimate remaining amounts with AI`) performs provider work and yields
+OFFERS only: no preselection, no working-state mutation, no automatic preview,
+no persistence. Each offer displays the literal label
+`AI estimate (not USDA-authenticated)` and the range plus the deterministic
+midpoint in the form `150-200 g - estimate uses 175 g`.
+
+Only a **second, explicit** click selects the estimate into working state. The
+user may replace it at any time, and a stale or mid-flight offer can never apply.
+
+### 47.8 Two-layer Apply block (preview-only)
+
+AI estimates are PREVIEW-ONLY. There is no schema v4, no estimate persistence,
+no conversion-basis laundering and no Phase-5 change.
+
+- **Layer A (UX)** — `hasActiveAiEstimateForPreview` makes Apply eligibility
+  false and shows
+  `AI estimates are preview-only. Replace estimates with a confirmed amount before Apply.`
+- **Layer B (SAFETY, load-bearing)** — `applyAdvancedNutrition` refuses with
+  `ai_estimate_preview_only` **before** authorization and before the writer port
+  is resolved. A caller that bypasses the card entirely still cannot write; the
+  test asserts writer call count 0.
+
+These are two independent layers, not one mechanism counted twice. If the
+estimate is replaced with a confirmed amount, eligibility is restored.
+
+### 47.9 Measured eligibility ceiling
+
+Recomputed from the real 97-line corpus with the real pinned bundle, by RULE,
+with no hard-coded line ids:
+
+| | Count |
+|---|---|
+| Total corpus | 97 |
+| A — authenticated identity + actionable unresolved amount | **33** |
+| B1 — excluded, no usable quantity | **4** |
+| B2 — excluded, parsed container/package/can | **5** |
+| B — total pre-network exclusions | **9** |
+| **C — AI-3 v1 candidate ceiling** | **24** |
+
+`C == A - B` holds. This is an ELIGIBILITY CEILING, not benchmark credit,
+predicted success or a promise the model resolves all 24.
+
+**A census-definition correction worth recording:** the naive predicate
+"identity authenticated AND effective mass kind is `none`" yields A=41, not 33.
+It wrongly admits 8 lines whose pipeline category is `resolved_count_portion`
+(they already have a deterministic mass via the count-portion path). The
+correct rule is "authenticated identity AND the line is still an ACTIONABLE
+amount exception". The 5 container exclusions are
+`1 (15 oz) can tomato sauce`, `3 cans tomato sauce`, `1 can black beans`,
+`1 package cream cheese`, `1 (8 oz) package cream cheese`; note `1 can tuna` is
+**not** among them because it is already a resolved line, not an exception.
+
+### 47.10 Reopen, hydration and benchmark
+
+Estimates are never persisted, so there is no hydration representation.
+`reset` and re-analysis/hydration drop every estimate, and Clear removes one.
+A bundle, identity or text change invalidates it via the local snapshot binding,
+which never reaches the model.
+
+The existing benchmark classifier stays authoritative: a line may enter
+`ai_assisted_bounded_estimate` only with authenticated identity, no stronger
+source, a valid current estimate, a deterministic midpoint, calculator-resolved
+grams from authenticated USDA data and `ai_estimate` provenance. Offers earn
+nothing, and `ai_assisted_authenticated` continues to exclude estimates.
+
+### 47.11 Mid-flight protection
+
+`workingChoiceFingerprint` gained the estimate choice, so a user who replaces an
+estimate, or an estimate that changes, invalidates a later in-flight result.
+Note the honest caveat: this is an **additive field**, so the fingerprint string
+differs from its pre-AI-3 value for every line. It remains a deterministic
+function of the same inputs and the equality CHECK is unchanged in meaning, but
+the pre-AI-3 string is not a stable constant. AI-2C M29/M30/M31/M38 must be
+re-witnessed after this change.
+
+---
+
+## 48. AI-3 — the offer-first user flow (final)
+
+This section documents only behaviour proven by tests. Every claim below has a
+named witness.
+
+### 48.1 Two explicit clicks, never one
+
+The estimate feature is reachable from the existing AI panel through a single
+button, `Estimate remaining amounts with AI`. It is wired through the injected
+`onEstimateMassesWithAi` port, the same injection discipline as the AI-1 and
+AI-2C ports: the UI imports no server, provider or requester code.
+
+The port has **exactly one** call site. There is no render-time request, no
+re-analysis request, and no automatic retry — a failure reports a message and
+stops. Proved by `advancedNutritionAi3Isolation.test.ts`.
+
+A returned estimate is an **OFFER**. An offer is inert: it is not a working
+choice, it never reaches the calculator, it does not change the preview, it is
+never preselected, it does not block Apply, and it cannot persist.
+
+### 48.2 What the offer shows
+
+Each offer renders inside the existing per-line suggestion surface — there is
+no parallel review subsystem — and displays:
+
+- the literal label `AI estimate (not USDA-authenticated)`;
+- the bounded range and the deterministic midpoint, e.g.
+  `150–200 g · estimate uses 175 g`;
+- an optional bounded advisory note, which carries no authority.
+
+An offer never renders an FDC id, a digest, or any provider internal. Proved by
+`advancedNutritionAi3Ui.test.ts`.
+
+### 48.3 The second click is the only authority transfer
+
+`acceptAiEstimateOffer` (in `phase4/aiEstimateAccept.ts`) is a **pure** function
+that performs every required re-check in one place, so no future editor can
+add a path that skips one:
+
+1. the line still exists — a removed line is never recreated;
+2. the identity is still authenticated;
+3. the offer still describes this line's range and its midpoint is consistent;
+4. **no stronger mass source has appeared** — user mass, USDA source portion,
+   count portion or household portion. If one has, the estimate LOSES;
+5. the working-choice fingerprint is unchanged since the offer;
+6. the authenticated identity the offer was derived from is current;
+7. the snapshot binding is unchanged;
+8. the Phase-3 selection builds from current authenticated evidence.
+
+On success the card dispatches the **existing** `select_ai_estimate` reducer
+action. AI-3 introduces no parallel mutation path, and a security test asserts
+no `accept_ai_estimate` / `apply_ai_estimate` action exists.
+
+On any refusal the working state is **not touched** and the offer is dropped.
+
+### 48.4 Active-estimate semantics
+
+Once accepted, an estimate is the lowest mass authority and is covered by
+`workingChoiceFingerprint`. Replacing it with any persistable source — a user
+mass, a USDA source or count portion — removes it and recalculates the preview,
+at which point normal Apply eligibility returns.
+
+### 48.5 The two-layer Apply block
+
+Unchanged and still verified end to end: Layer A is the pure preview-dependence
+predicate in `aiEstimateApplyGate.ts`; Layer B is the load-bearing application
+writer guard that refuses with `ai_estimate_preview_only` **before**
+authorization and before the writer port is resolved. A direct call to the Apply
+coordinator with an active estimate leaves the writer and read-back call counts
+at **0**. Proved by `advancedNutritionAi3ApplyBlock.test.ts` and by the
+integration path in `advancedNutritionAi3UiIntegration.test.ts`.
+
+Estimates are **preview-only**. There is no schema v4, no Phase-5 estimate
+representation, and no persistence path for an estimate.
+
+### 48.6 Mutation accounting
+
+**M41–M58: 15 single-layer causal witnesses + 3 declared composite defenses.**
+M45, M46 and M47 are defended by a second layer, so the specific early return is
+redundant; the intended guard is not independently witnessed and is not claimed
+to be.
+
+### 48.7 The AI-2C mid-flight rows were re-witnessed, not merely re-run
+
+Because `workingChoiceFingerprint` gained a field, AI-2C M29/M30/M31/M38 were
+re-proven causally: record the anchor, record the pre-mutation SHA-256, prove a
+clean GREEN, inject the same semantic defect, prove the witness FAILS, restore
+byte-identically, and prove GREEN again. All four are witnessed; every row
+restored to `4c046e5096926dd531c8a780d1453b3471f23348b0d7c44a556d341fbc843491`.
+
+Two of them (a user-entered mass, and fingerprint determinism) had **no
+witness** until `advancedNutritionAi3FingerprintReWitness.test.ts` was added.
+That gap mattered: `acceptAiEstimateOffer` uses a fingerprint change as its
+staleness signal, so a non-deterministic fingerprint would have silently
+weakened the second-click gate.
+
+### 48.8 Corpus populations — raw fixture vs canonical benchmark
+
+These are two different things and must never be conflated.
+
+| | Count | What it is |
+|---|---|---|
+| **RAW FIXTURE** | **145** | `RESOLUTION_COVERAGE_CORPUS` as authored: `CLASS_LINES` (90) + `IDENTITY_SAFETY_CORPUS` (55). |
+| **CANONICAL BENCHMARK** | **97** | the distinct authored ingredient lines, after the benchmark's de-duplication by exact line text. |
+
+**Reason:** 48 authored texts intentionally overlap between measurement/class
+coverage and identity-safety coverage. `1.5 lb ground beef` is deliberately both
+a `mass` class line and an `identity:meat` line. The benchmark de-duplicates so
+those lines are not counted twice.
+
+**97 is not a filtered home-recipe subset.** It is simply the
+de-duplicated distinct authored-line population, and the de-duplication has
+existed since the benchmark was created. 145 is a fixture-construction detail
+and is never a coverage denominator.
+
+### 48.9 The eligibility-authority repair
+
+Three real defects were found and repaired.
+
+**1. Authored mass was invisible to the eligibility gate.**
+`effectiveMassDecisionFor` accepted `hasDirectMass` in its parameter type and
+**never read it** — a dead parameter. Only `directMassGrams` was forwarded, and
+the AI-3 caller did not supply it, so lines the deterministic parser had
+already weighed (`1.5 lb ground beef`, `100 g tomatoes`, `1 lb pork shoulder`
+and eight more) appeared to have no mass authority and were offered estimates.
+Authored mass is now **absolute ineligibility**, checked before the mass
+resolver, covering a scalar mass, a written mass range, and authoritative
+secondary mass. The flag is no longer decorative, and **no placeholder gram
+value is ever fabricated** to satisfy the resolver.
+
+**2. The row had to be a current actionable amount exception.**
+Eligibility now takes the authoritative live-row status from the Phase-4 live
+projection and admits only `needs_amount`. A row already resolved (`matched`),
+awaiting identity, review-suggested or qualitative is refused as
+`not_actionable`, and a missing status **fails closed** — an unknown row is
+never assumed actionable.
+
+**3. A written quantity range is usable quantity.**
+`2-3 tomatoes` parses with a null scalar `amount` and a real `quantity_range`.
+It is now correctly treated as usable quantity rather than abstained. The range
+is never collapsed to a scalar and no grams are invented. A written **mass**
+range remains authored mass authority and is therefore ineligible.
+
+Guard order is now: line exists -> actionable -> identity authenticated ->
+no authored mass -> stronger-source firewall -> usable quantity -> no parsed
+container -> capability. No network work happens before every cheap
+deterministic check.
+
+### 48.10 Measured AI-3 census (canonical 97-line population)
+
+Measured by `scripts/recount_ai3_corpus_prod.ts` from production rules against
+the real pinned bundle. **These are measurements, not targets.**
+
+| Class | N |
+|---|---|
+| A (eligible) | **26** |
+| B1 no usable quantity | **4** |
+| B2 parsed container/package/can | **5** |
+| B total abstention | **9** |
+| C remaining candidates | **17** |
+| excluded: not actionable | 61 |
+| excluded: identity unresolved | 1 |
+
+**B1 = 4 and B2 = 5 reproduce the architect's earlier figures exactly.** A and C
+do not: A is 26, not 33, and C is 17, not 24. The earlier 33/9/24 derivation
+classified abstention with nine speculative token-regex grammars, an approach
+since disallowed. **24 is not architecturally guaranteed and no code was tuned
+to reach it.**
+
+The cross-check invariant holds: **0 of the 44 already-resolved benchmark lines
+are AI-3 eligible.**
+
+### 48.11 Mutation accounting
+
+**M41–M61: 18 single-layer causal witnesses + 3 declared composite defenses.**
+
+- M41–M58: 15 single-layer, 3 composite (M45, M46, M47). Unchanged.
+- M59 direct-mass eligibility bypass — single-layer.
+- M60 written quantity range dropped — single-layer.
+- M61 non-actionable resolved row admitted — single-layer, and additionally
+  caught by the canonical 97-line corpus invariant.
+
+The composite rows remain honestly composite: the specific early return is
+redundant with a second layer, so the intended guard is not independently
+witnessed and is not claimed to be.

@@ -40,6 +40,10 @@ import { isPlainObject } from '../core/nutritionV2/schema';
 import { canonicalStringify, sha256Hex } from '../core/nutritionV2/usda/digest';
 import { decodeCodexNutrition, encodeCodexNutrition } from '../core/nutritionV2/validate';
 import { authorizeNutritionPersistence } from '../core/nutritionV2/phase5';
+import {
+  AI_ESTIMATE_APPLY_BLOCK_MESSAGE,
+  hasActiveAiEstimateForPreview,
+} from '../core/nutritionV2/phase4/aiEstimateApplyGate';
 import { readOwnDataField } from '../core/nutritionV2/phase4/materialize';
 import { parseObsidianRecipeMarkdown, serializeRecipeToObsidianMarkdown } from '../utils/markdownParser';
 import type { ObsidianRecipe } from '../types';
@@ -59,6 +63,12 @@ export type AdvancedNutritionApplyFailureCode =
   | 'write_failed'
   | 'post_write_verification_failed'
   | 'unsafe_request'
+  /**
+   * AI-3: the working state carries an accepted BOUNDED AI MASS ESTIMATE.
+   * AI estimates are preview-only in AI-3, so this coordinator REFUSES before
+   * it authorizes anything and before the persistence writer is reached.
+   */
+  | 'ai_estimate_preview_only'
   | 'unavailable_write_target';
 
 export const ADVANCED_NUTRITION_APPLY_FAILURE_MESSAGE: Readonly<
@@ -73,6 +83,7 @@ export const ADVANCED_NUTRITION_APPLY_FAILURE_MESSAGE: Readonly<
   post_write_verification_failed: 'advanced_nutrition_post_write_verification_failed',
   unsafe_request: 'advanced_nutrition_unsafe_request',
   unavailable_write_target: 'advanced_nutrition_unavailable_write_target',
+  ai_estimate_preview_only: 'advanced_nutrition_ai_estimate_preview_only',
 });
 
 /** Fixed, bounded, user-readable messages. Never echo caller/exception content. */
@@ -80,6 +91,8 @@ export const ADVANCED_NUTRITION_APPLY_UI_MESSAGE: Readonly<
   Record<AdvancedNutritionApplyFailureCode, string>
 > = Object.freeze({
   not_authorized: 'This reviewed result cannot be applied right now. Recalculate and review it again.',
+  // AI-3: estimates are preview-only. The user is told exactly how to unblock.
+  ai_estimate_preview_only: AI_ESTIMATE_APPLY_BLOCK_MESSAGE,
   stale_authorization: 'The recipe or review changed before Apply completed. Nothing was written.',
   unknown_future_schema:
     'This recipe uses a newer Advanced Nutrition format this version cannot safely replace. Nothing was written.',
@@ -255,6 +268,20 @@ export async function applyAdvancedNutrition(requestRaw: unknown): Promise<Advan
     }
     if (readBackField.ok && readBackField.present && typeof readBackField.value !== 'function') {
       return fail('unsafe_request');
+    }
+
+    // --- AI-3 LOAD-BEARING PERSISTENCE GUARD (LAYER B) ----------------------
+    // This is the safety boundary, not the UX one. The card hides Apply when an
+    // estimate is active, but a caller can invoke this coordinator DIRECTLY
+    // (bypassing the card entirely), so the refusal has to live HERE, before
+    // any authorization and before the writer is ever resolved.
+    //
+    // It inspects ONLY the caller-supplied working state and the ONE pure
+    // predicate. It does not touch Phase 5, the schema, or the Markdown
+    // writer, and it does not launder an estimate into user_mass or
+    // range_representative: an estimate simply cannot be persisted.
+    if (hasActiveAiEstimateForPreview(stateField.value as never)) {
+      return fail('ai_estimate_preview_only');
     }
 
     const existing = readExistingBlock(recipeField.value);

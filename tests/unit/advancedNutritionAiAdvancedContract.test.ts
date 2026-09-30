@@ -44,10 +44,12 @@ import {
 import {
   BASIC_NUTRITION_CAPABILITIES,
   isAiInterpretationAvailable,
+  isAiEstimationAvailable,
   isManualEditingAvailable,
   resolveNutritionCapabilities,
 } from '../../src/core/nutritionV2/nutritionCapabilities';
 import {
+  AI_ESTIMATE_POLICY_VERSION,
   AI_ESTIMATE_PROVENANCE_CLASS,
   AI_ESTIMATION_AVAILABILITY,
   isAiEstimateProvenanceClass,
@@ -766,9 +768,15 @@ describe('AI-0 capability boundary', () => {
     expect(ai.tier).toBe('ai_advanced');
     expect(ai.aiInterpretation).toBe(true);
     expect(ai.aiCandidateOrchestration).toBe(true);
-    // Manual editing is a permanent invariant; AI-0 never enables estimation.
+    // Manual editing is a permanent invariant. The fails-safe property is
+    // UNCHANGED by AI-3: every Basic-tier path above still yields
+    // `aiEstimation: 'disabled'`, and only a fully configured AND reachable
+    // provider reaches the AI Advanced tier. AI-3 moved the AI-Advanced value
+    // from 'disabled' to 'available'; it did not weaken the gate.
     expect(isManualEditingAvailable(ai)).toBe(true);
-    expect(ai.aiEstimation).toBe('disabled');
+    expect(ai.aiEstimation).toBe('available');
+    expect(isAiEstimationAvailable(resolveNutritionCapabilities())).toBe(false);
+    expect(isAiEstimationAvailable(ai)).toBe(true);
     expect(isAiInterpretationAvailable(resolveNutritionCapabilities())).toBe(false);
   });
 });
@@ -838,10 +846,38 @@ describe('AI-0 future bounded-estimate skeleton', () => {
     expect(isAiEstimateProvenanceClass('ai_estimate')).toBe(true);
   });
 
-  it('estimation is hard-disabled in AI-0 even for a perfect proposal', () => {
-    expect(AI_ESTIMATION_AVAILABILITY).toBe('disabled');
-    expect(isAiEstimationEnabled()).toBe(false);
-    expect(resolveAiBoundedEstimate(VALID_PROPOSAL)).toEqual({ ok: false, code: 'estimation_disabled' });
+  // AI-0 shipped this as "estimation is hard-disabled even for a perfect
+  // proposal". AI-3 deliberately activated the FROZEN contract, so the old pin
+  // is replaced by a STRONGER invariant: activation happened, AND the frozen
+  // shape guarantees still hold, AND a malformed proposal is still refused.
+  it('estimation is ACTIVE in AI-3 and still validates the frozen shape', () => {
+    expect(AI_ESTIMATION_AVAILABILITY).toBe('available');
+    expect(isAiEstimationEnabled()).toBe(true);
+
+    // A structurally perfect proposal now RESOLVES to the frozen shape.
+    const resolved = resolveAiBoundedEstimate(VALID_PROPOSAL);
+    expect(resolved.ok).toBe(true);
+    if (resolved.ok === true) {
+      expect(resolved.proposal.provenance_class).toBe('ai_estimate');
+      expect(resolved.proposal.policy_version).toBe(AI_ESTIMATE_POLICY_VERSION);
+      expect(resolved.proposal.line_ref).toBe(VALID_PROPOSAL.line_ref);
+    }
+
+    // The frozen refusals are UNCHANGED.
+    expect(resolveAiBoundedEstimate({ ...VALID_PROPOSAL, lower_grams: 0 })).toEqual({
+      ok: false,
+      code: 'invalid_proposal',
+    });
+    expect(resolveAiBoundedEstimate({ ...VALID_PROPOSAL, lower_grams: 500, upper_grams: 100 })).toEqual({
+      ok: false,
+      code: 'invalid_proposal',
+    });
+    // Authority-shaped keys are still refused by the frozen sanitizer.
+    expect(
+      resolveAiBoundedEstimate({ ...VALID_PROPOSAL, fdc_id: 1 } as unknown as typeof VALID_PROPOSAL)
+    ).toEqual({ ok: false, code: 'authority_field' });
+    // And it still refuses anything that is not an object.
+    expect(resolveAiBoundedEstimate(null)).toEqual({ ok: false, code: 'invalid_proposal' });
   });
 });
 

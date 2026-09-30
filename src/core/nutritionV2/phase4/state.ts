@@ -40,6 +40,9 @@ export const INITIAL_PHASE4_STATE: Phase4State = Object.freeze({
   countPortions: Object.freeze({}),
   userMasses: Object.freeze({}),
   householdPortions: Object.freeze({}),
+  // AI-3: bounded AI mass estimates. Preview-only, never persisted, never
+  // hydrated, and always the LOWEST mass authority for a line.
+  aiEstimates: Object.freeze({}),
   basis: 'entire_recipe',
   selectedServings: 1,
   preview: null,
@@ -102,6 +105,11 @@ export function phase4Reducer(state: Phase4State, action: Phase4Action): Phase4S
         countPortions: action.countPortions,
         userMasses: action.userMasses,
         householdPortions: action.householdPortions,
+        // AI-3: hydration reconstructs the working review from a SAVED
+        // result. Estimates are preview-only and never persisted, so a
+        // re-analysis/hydration drops every one of them rather than reviving
+        // a stale estimate against a freshly reconstructed review.
+        aiEstimates: {},
         failure: null,
       };
     }
@@ -142,12 +150,17 @@ export function phase4Reducer(state: Phase4State, action: Phase4Action): Phase4S
       delete userMasses[action.lineRef];
       const householdPortions = { ...state.householdPortions };
       delete householdPortions[action.lineRef];
+      // A user-explicit mass source ALWAYS removes any AI estimate (AI-3): the
+      // estimate is the lowest mass authority and never coexists with one.
+      const aiEstimates = { ...state.aiEstimates };
+      delete aiEstimates[action.lineRef];
       const next: Phase4State = {
         ...state,
         portions,
         countPortions,
         userMasses,
         householdPortions,
+        aiEstimates,
         failure: null,
         operationSeq: state.operationSeq + 1,
       };
@@ -173,12 +186,17 @@ export function phase4Reducer(state: Phase4State, action: Phase4Action): Phase4S
       delete userMasses[action.lineRef];
       const householdPortions = { ...state.householdPortions };
       delete householdPortions[action.lineRef];
+      // A user-explicit mass source ALWAYS removes any AI estimate (AI-3): the
+      // estimate is the lowest mass authority and never coexists with one.
+      const aiEstimates = { ...state.aiEstimates };
+      delete aiEstimates[action.lineRef];
       const next: Phase4State = {
         ...state,
         countPortions,
         portions,
         userMasses,
         householdPortions,
+        aiEstimates,
         failure: null,
         operationSeq: state.operationSeq + 1,
       };
@@ -204,12 +222,17 @@ export function phase4Reducer(state: Phase4State, action: Phase4Action): Phase4S
       delete countPortions[action.lineRef];
       const householdPortions = { ...state.householdPortions };
       delete householdPortions[action.lineRef];
+      // A user-explicit mass source ALWAYS removes any AI estimate (AI-3): the
+      // estimate is the lowest mass authority and never coexists with one.
+      const aiEstimates = { ...state.aiEstimates };
+      delete aiEstimates[action.lineRef];
       const next: Phase4State = {
         ...state,
         userMasses,
         portions,
         countPortions,
         householdPortions,
+        aiEstimates,
         failure: null,
         operationSeq: state.operationSeq + 1,
       };
@@ -228,12 +251,60 @@ export function phase4Reducer(state: Phase4State, action: Phase4Action): Phase4S
       delete countPortions[action.lineRef];
       const userMasses = { ...state.userMasses };
       delete userMasses[action.lineRef];
+      // A user-explicit mass source ALWAYS removes any AI estimate (AI-3): the
+      // estimate is the lowest mass authority and never coexists with one.
+      const aiEstimates = { ...state.aiEstimates };
+      delete aiEstimates[action.lineRef];
       const next: Phase4State = {
         ...state,
         householdPortions,
         portions,
         countPortions,
         userMasses,
+        aiEstimates,
+        failure: null,
+        operationSeq: state.operationSeq + 1,
+      };
+      return withPreviewStale(next);
+    }
+
+    case 'select_ai_estimate': {
+      // AI-3: a BOUNDED AI MASS ESTIMATE is the LOWEST mass authority. It is
+      // written ONLY when the user explicitly accepts an offer, and it clears
+      // every other stored mass source for the line (mutual exclusivity).
+      if (state.recipeKey === null) return state;
+      if (!state.rows.some((row) => row.line_ref === action.lineRef)) return state;
+      // AI-3 REFUSES to overwrite a stronger mass source. A bounded estimate
+      // is the LOWEST authority, so silently deleting a user's explicit mass
+      // (or an authenticated USDA portion) would be a user-authority
+      // violation. The estimate is simply not written and the state is
+      // returned untouched -- `operationSeq` does not even move, so an
+      // accepted estimate is never able to invalidate an in-flight result.
+      if (
+        state.userMasses[action.lineRef] !== undefined ||
+        state.portions[action.lineRef] !== undefined ||
+        state.countPortions[action.lineRef] !== undefined ||
+        state.householdPortions[action.lineRef] !== undefined
+      ) {
+        return state;
+      }
+      const aiEstimates = { ...state.aiEstimates, [action.lineRef]: action.choice };
+      const next: Phase4State = {
+        ...state,
+        aiEstimates,
+        failure: null,
+        operationSeq: state.operationSeq + 1,
+      };
+      return withPreviewStale(next);
+    }
+
+    case 'clear_ai_estimate': {
+      if (state.aiEstimates?.[action.lineRef] === undefined) return state;
+      const aiEstimates = { ...state.aiEstimates };
+      delete aiEstimates[action.lineRef];
+      const next: Phase4State = {
+        ...state,
+        aiEstimates,
         failure: null,
         operationSeq: state.operationSeq + 1,
       };

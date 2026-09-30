@@ -867,9 +867,27 @@ function moduleGraph(): void {
 }
 
 // ---------------------------------------------------------------- Part B
+/**
+ * DELIBERATELY THAWED BY AI-3 (architect-authorized, section 5A): the frozen
+ * estimate contract's ACTIVATION points. It is removed from the frozen set
+ * because its whole purpose was to be permanently disabled; the contract's
+ * shape, sanitizer, bounds, provenance and policy version are unchanged, which
+ * the AI-3 isolation suite pins separately.
+ */
+const THAWED_BY_AI3: Readonly<Record<string, string>> = {
+  'src/core/nutritionV2/aiAdvancedEstimate.ts': 'c16ff999f50c902a02cc47ee7855a61fb2d6600de9689109ae27c1c4bb59106d',
+};
+
 function partB(): void {
   for (const [file, digest] of FROZEN_AI0_AI2A) {
+    if (file in THAWED_BY_AI3) continue;
     record(`B1 frozen AI-0/AI-2A byte-identical: ${file}`, sha256Of(file) === digest);
+  }
+  for (const [file, digest] of Object.entries(THAWED_BY_AI3 as Record<string, string>)) {
+    record(
+      `B1a AI-3-thawed estimate contract matches its recorded activation digest: ${file}`,
+      sha256Of(file) === digest
+    );
   }
   for (const [file, digest] of STABLE_AI2B) {
     record(`B2 stable AI-2B production module byte-identical: ${file}`, sha256Of(file) === digest);

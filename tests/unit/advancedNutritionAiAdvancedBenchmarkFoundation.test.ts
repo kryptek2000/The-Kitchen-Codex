@@ -172,6 +172,27 @@ describe('AI-0 benchmark foundation', () => {
     // Estimates are never counted as authenticated resolutions.
     expect(aiSummary.resolved_authenticated).toBe(2);
 
+    // AI-3 (M55): a line resolved from a BOUNDED AI MASS ESTIMATE is an
+    // estimate, never an authenticated resolution. This assertion is the
+    // witness for the benchmark separation: without it, an `ai_estimate` line
+    // could be counted as authenticated and no test would notice.
+    const aiEstimateOnly: AiAdvancedBenchmarkEntry[] = [
+      { resolved: true, mass_source: 'ai_estimate', ai_assisted: true },
+    ];
+    const estimateSummary = summarizeAiAdvancedBenchmark(aiEstimateOnly);
+    expect(estimateSummary.ai_assisted_bounded_estimate).toBe(1);
+    expect(estimateSummary.ai_assisted_authenticated).toBe(0);
+    expect(estimateSummary.resolved_authenticated).toBe(0);
+    expect(estimateSummary.deterministic).toBe(0);
+    // And by provenance class too, not only by mass source.
+    const byAuthority: AiAdvancedBenchmarkEntry[] = [
+      { resolved: true, mass_source: 'household_portion', authority_class: 'ai_estimate', ai_assisted: true },
+    ];
+    const authoritySummary = summarizeAiAdvancedBenchmark(byAuthority);
+    expect(authoritySummary.ai_assisted_bounded_estimate).toBe(1);
+    expect(authoritySummary.ai_assisted_authenticated).toBe(0);
+    expect(authoritySummary.resolved_authenticated).toBe(0);
+
     expect(classifyAiAdvancedBenchmarkOutcome({ resolved: false, ai_assisted: true })).toBe(
       'unresolved'
     );

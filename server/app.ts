@@ -13,10 +13,12 @@ import { estimateRecipeNutrition } from "./nutritionEstimator.js";
 import { resolveIngredientFoodsOnServer } from "./nutritionResolve.js";
 import { interpretIngredientsOnServer } from "./nutritionInterpret.js";
 import { planIngredientsOnServer } from "./nutritionPlan.js";
+import { estimateMassOnServer } from "./nutritionEstimate.js";
 import { recoverRecipeMetadata } from "./metadataRecovery.js";
 import {
   recipeImportRateLimiter,
   nutritionEstimateRateLimiter,
+  nutritionMassEstimateRateLimiter,
   nutritionResolveRateLimiter,
   nutritionInterpretRateLimiter,
   nutritionPlanRateLimiter,
@@ -793,6 +795,59 @@ export function createApp(opts: CreateAppOptions): express.Express {
       return res.status(500).json({
         ok: false,
         error: "An unexpected error occurred during ingredient planning.",
+      });
+    }
+  });
+
+  // AI-3 bounded mass estimate endpoint. DEDICATED route, limiter and wire
+  // owner: it never shares the AI-2B planning route, and it grants no identity,
+  // portion, nutrient, persistence or Apply authority.
+  app.post("/api/nutrition/estimate-mass", requireAiAccessToken, textPricingGuard, nutritionMassEstimateRateLimiter, async (req, res) => {
+    const clientIp = getClientIp(req);
+
+    try {
+      const userSelection = parseTextSelectionHeader(req.headers);
+      const result = await estimateMassOnServer(req.body, userSelection);
+
+      if (result.ok !== true) {
+        const failure = result as {
+          readonly ok: false;
+          readonly code: string;
+          readonly aiAttempted: boolean;
+          readonly aiFailed: boolean;
+        };
+        if (failure.code === "invalid_request" || failure.code === "too_many_lines" || failure.code === "request_too_large") {
+          return res.status(400).json({ ok: false, error: "Invalid estimate request." });
+        }
+        // Estimation is an optional assistant. There is no fallback to an
+        // invented gram value, an authenticated portion, or a manual estimate.
+        return res.status(503).json({
+          ok: false,
+          aiAttempted: failure.aiAttempted === true,
+          aiFailed: failure.aiFailed === true,
+          error: "AI mass estimation is unavailable. You can continue with the deterministic analyzer and manual review.",
+        });
+      }
+
+      const accepted = result as {
+        readonly ok: true;
+        readonly request_id: string;
+        readonly estimates: unknown;
+      };
+      // `request_id` is transport identity only: it is echoed from the
+      // server-validated request and never sent to the model.
+      return res.json({
+        ok: true,
+        request_id: accepted.request_id,
+        estimates: accepted.estimates,
+        aiAttempted: true,
+      });
+    } catch (error: any) {
+      const errorMsg = error?.message || "";
+      console.error(`[${new Date().toISOString()}] [Client: ${clientIp}] Nutrition Estimate Error:`, errorMsg);
+      return res.status(500).json({
+        ok: false,
+        error: "An unexpected error occurred during mass estimation.",
       });
     }
   });
