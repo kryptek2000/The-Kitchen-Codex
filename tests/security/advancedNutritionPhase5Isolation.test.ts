@@ -51,7 +51,11 @@ function collectTransitiveGraph(entries: ReadonlyArray<string>): Set<string> {
   const visited = new Set<string>();
   const queue = [...entries];
   const patterns = [
-    /(?:from|import)\s*(?:\(\s*)?\s*['"]([^'"]+)['"]/g,
+    // WORD BOUNDARY on the keyword matters: a quoted string literal ending in
+    // `from` — e.g. the closed relation vocabulary entry `'reserved_from'` —
+    // is NOT an import specifier. Without `\b` this pattern matched inside that
+    // literal and produced a garbage module specifier.
+    /(?:\bfrom|\bimport)\s*(?:\(\s*)?\s*['"]([^'"]+)['"]/g,
     /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
     /\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
   ];
@@ -210,7 +214,9 @@ describe('phase 5A isolation — dependency graph direction', () => {
       resolve(ROOT, 'src/core/nutritionV2/calculation'),
       resolve(ROOT, 'src/core/nutritionV2/phase4'),
     ];
-    const importRe = /(?:from|import)\s*(?:\(\s*)?\s*['"]([^'"]+)['"]/g;
+    // Word boundary matters: a quoted string literal ending in `from` (e.g. the
+    // closed relation vocabulary entry `'reserved_from'`) is NOT an import.
+    const importRe = /(?:\bfrom|\bimport)\s*(?:\(\s*)?\s*['"]([^'"]+)['"]/g;
     for (const dir of lowerLayers) {
       for (const file of listFiles(dir)) {
         const source = readFileSync(file, 'utf8');

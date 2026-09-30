@@ -7470,3 +7470,134 @@ are AI-3 eligible.**
 The composite rows remain honestly composite: the specific early return is
 redundant with a second layer, so the intended guard is not independently
 witnessed and is not claimed to be.
+
+---
+
+## §49. AI-4A — WHOLE-RECIPE CONTEXT CONTRACT (PHASE 1, INERT)
+
+AI-4 is **whole-recipe intelligence as an INPUT-SHAPING layer**. It is NOT a
+second gram estimator, NOT an identity authority, NOT a nutrient authority, NOT
+a persistence authority, and NOT a new rung on the effective-mass ladder.
+
+> AI interprets. Deterministic code validates. Existing deterministic nutrition
+> systems own authority. The user explicitly accepts interpretations before they
+> may affect downstream AI behavior.
+
+**AI-4A ships NO behavior.** It is two inert modules and their tests. It has
+zero provider calls, zero fetch, zero route, zero limiter, zero UI, zero reducer
+or state mutation, zero persistence and zero calculator behavior, and it is not
+reachable from the live Advanced Nutrition workflow.
+
+### 49.1 Ruling 1 — `AdaptedRecipe` stays narrow
+
+`adapt.ts`'s narrow read (`title`, `servings`, identity keys, `ingredients`) is
+a **privacy and authority boundary, not an oversight**. AI-4 therefore does NOT
+widen it. AI-4's recipe-context channel is a SEPARATE explicit local structure:
+
+`RecipeContextEnvelope` — `src/core/nutritionV2/phase4/recipeContextContract.ts`
+
+Closed key set: `contract_version`, `provenance_class`, `title?`,
+`base_servings?`, `targets`. Each target: `line_ref`, `source_text`,
+`food_semantics?`, `instruction_slots?`.
+
+Explicitly excluded and refused by `sanitizeRecipeContextEnvelope`:
+`filePath`, `recipe_key`, `sessionIdentity`, `request_id`, `rawMarkdown`,
+`frontmatter`, dataview fields, wikilinks, `notes`, `description`, `tags`,
+`category`, source URL, image data, FDC ids, record/catalog digests, bundle
+releases, nutrient tables, portion grams, household records, user-entered masses,
+API keys, credentials and provider metadata. Builders reconstruct fields
+explicitly; spreading a source recipe object is refused.
+
+Instruction-evidence SLOTS are deterministic, locally produced, opaque bounded
+tokens for snapshot binding. AI never chooses which instructions it may read.
+
+### 49.2 Ruling 2 — raw model output has ZERO suppression authority
+
+A future AI-4 interpretation may gate a later AI-3 request ONLY after:
+
+```
+user triggers analysis -> model proposes -> deterministic validation
+  -> user EXPLICITLY accepts -> accepted SESSION-ONLY context may gate a later AI-3 request
+```
+
+No silent suppression. No automatic preview change. No model output directly
+altering AI-3 eligibility. AI-4A implements none of this; it only makes the
+future contract capable of representing interpretation safely.
+
+### 49.3 Ruling 3 — no consumption fraction in v1
+
+`consumption_fraction`, `consumed_fraction` and `yield_factor` are EXPLICITLY
+REJECTED authority fields. A fraction that can influence consumed mass is
+effectively a new mass authority and requires a separately authorized phase.
+
+### 49.4 Provenance: `ai_recipe_context` is never authenticated
+
+`AI_RECIPE_CONTEXT_PROVENANCE_CLASS = 'ai_recipe_context'`. The only
+authenticated classes remain `usda_derived` and `vetted_standard`, so
+`isAuthenticatedProvenanceClass('ai_recipe_context') === false`. Claiming either
+authenticated class is refused as `authority_field`, exactly as AI-3 refuses a
+forged stronger class.
+
+### 49.5 Closed vocabularies
+
+- **role**: `main`, `garnish`, `cooking_medium`, `serving_component`, `reserved`,
+  `divided`, `optional`, `unknown`. `garnish` and `serving_component` are
+  deliberately distinct so no single role is overloaded.
+- **relation**: `divided_into`, `reserved_from`, `duplicate_of`, `same_as`.
+  `divided_into` and `reserved_from` require at most one parent per target.
+- **abstain_reason**: `no_recipe_context`, `insufficient_evidence`,
+  `contradictory_context`, `ambiguous_role`, `already_deterministic`,
+  `untrusted_context`.
+- **confidence**: `high`, `medium`, `low` — advisory only, never authority.
+- **preparation_hints**: a closed token set (including `bone_in`, `skin_on`,
+  `skinless`, `boneless`, which the deterministic matcher does not cover).
+
+### 49.6 Snapshot binding (local only)
+
+`recipeContextSnapshot.ts` binds `contract`, `provenance`, `title`,
+`base_servings`, `recipe_instance` and ordered `targets`
+(`line_ref`/`source_text`/`instruction_slots`). It reuses the established
+`stableChoiceKey` and `sha256:<hex>` conventions rather than inventing a new
+digest convention, and both forms derive from ONE canonical payload.
+
+It never crosses the wire, never persists, and never binds a file name or path —
+`recipe_instance` is an opaque local token, so a file rename can never
+masquerade as recipe identity. Unrelated private recipe metadata and catalog
+internals do not participate and cannot even enter the input.
+
+### 49.7 Deterministic relation-graph validation
+
+Pure validator over already-sanitized interpretations. Refuses, in order:
+`unknown_relation_target`, `self_relation`, `duplicate_relation`,
+`multiple_parents`, `circular_relation`, `relation_depth_exceeded`. Bounded
+depth (8) so a hostile graph cannot exhaust the stack. It mutates nothing and
+can only accept or refuse.
+
+### 49.8 Authority firewall and differential proof
+
+The deny vocabulary is derived from the ONE owner
+`AI_ADVANCED_FORBIDDEN_AUTHORITY_KEYS` and extended with AI-4-specific authority
+keys. `provenance_class` is the contract's own required field, so it is excluded
+from the deny list and its VALUE is pinned separately.
+
+`tests/unit/advancedNutritionAi4aAuthorityDifferential.test.ts` drives the REAL
+production functions (real pinned bundle session, real analyzer, real
+`buildCalculationRequest` + `session.calculate`) with a VALID accepted AI-4
+context, and proves byte-identical resolved grams, FDC identity set,
+`ingredient_identity_digest`, aggregate `ingredient_digest`, release/catalog
+pins, totals, effective-mass decision, AI-3 eligibility, working state, Apply
+verdict and persistence-payload reach.
+
+### 49.9 AI-3 is untouched
+
+AI-4A modifies no AI-3 production file: not the estimate contract or wire, not
+estimate validation/acceptance/resolve/selection, not the reducer or types, not
+`calculate.ts`, not `effectiveMass.ts`, not the Apply gate, not Phase 5
+persistence or `conversionBasisFor`, not `adapt.ts`, not the matching identity
+authority. AI-3 adds no seventh `EffectiveMassClaims` source. The cleared AI-3
+mutation manifest, executor and production verifier are unmodified; AI-4 will use
+its own manifest and designations.
+
+Ruling 4 stands: the missing AI-3 `clear_ai_estimate` UI is a SEPARATE future
+cleanup. When AI-4 reaches acceptance, visible accepted interpretations, per-item
+undo, dismiss and byte-truthful state restoration ship IN THE SAME PHASE.

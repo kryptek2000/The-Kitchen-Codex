@@ -162,6 +162,10 @@ describe('phase 4 isolation — source purity', () => {
         'liveRow.ts',
         'materialize.ts',
         'portion.ts',
+        // AI-4A whole-recipe context contract + local snapshot binding. Both are
+        // inert/pure: no network, no secret, no persistence, no nondeterminism.
+        'recipeContextContract.ts',
+        'recipeContextSnapshot.ts',
         'rows.ts',
         'session.ts',
         'state.ts',
