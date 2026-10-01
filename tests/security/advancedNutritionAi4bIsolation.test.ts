@@ -194,14 +194,29 @@ describe('AI-4B isolation — AI-4B is not reachable from any live surface', () 
     }
   });
 
-  it('the module is NOT reachable from any server module', () => {
+  it('the module is reachable ONLY from the ONE authorized AI-4C transport', () => {
+    // AI-4B itself introduced no server reachability. AI-4C (a later, separately
+    // audited phase) is the single authorized server consumer, and it uses the
+    // extractor to DERIVE the model-facing context rather than to trust a
+    // caller-supplied envelope. This is a STRICTER pin than "no server module".
     const offenders: string[] = [];
     for (const rel of walk(join(REPO, 'server'))) {
       if (src(rel).includes('recipeContextExtraction') || src(rel).includes('extractRecipeContext')) {
         offenders.push(rel);
       }
     }
-    expect(offenders).toEqual([]);
+    expect(offenders).toEqual(['server/nutritionContext.ts']);
+    // And that authorized consumer holds no authority surface of its own.
+    const consumer = code('server/nutritionContext.ts');
+    for (const forbidden of [
+      '/phase4/state',
+      '/phase5/',
+      'applyAdvancedNutrition',
+      'authorizeNutritionPersistence',
+      'aiEstimateAccept',
+    ]) {
+      expect(consumer.includes(forbidden), forbidden).toBe(false);
+    }
   });
 
   it('the module is NOT reachable from the live Advanced Nutrition workflow', () => {
@@ -232,11 +247,18 @@ describe('AI-4B isolation — AI-4B is not reachable from any live surface', () 
     }
   });
 
-  it('AI-4B adds NO route and NO limiter entry', () => {
-    expect(src('server/app.ts')).not.toContain('recipe-context');
-    expect(src('server/app.ts')).not.toContain('recipeContext');
-    expect(src('server/rateLimiter.ts')).not.toContain('RecipeContext');
-    expect(src('server/rateLimiter.ts')).not.toContain('context_');
+  it('AI-4B itself adds NO route and NO limiter entry', () => {
+    // AI-4B remains INERT and unreachable from the live workflow. The ONE
+    // `/api/nutrition/recipe-context` route and the `nutritionContextRateLimiter`
+    // bucket belong to AI-4C (architecture section 51); neither names the AI-4B
+    // extractor, and no AI-4B-shaped route or limiter entry exists.
+    const app = src('server/app.ts');
+    expect(app).not.toContain('recipeContextExtraction');
+    expect(app).not.toContain('extractRecipeContext');
+    expect(app).not.toContain('recipe-context-extract');
+    const limiter = src('server/rateLimiter.ts');
+    expect(limiter).not.toContain('recipeContextExtraction');
+    expect(limiter).not.toContain('extractRecipeContext');
   });
 
   it('AI-4B adds NO capability gate and NO capability key', () => {

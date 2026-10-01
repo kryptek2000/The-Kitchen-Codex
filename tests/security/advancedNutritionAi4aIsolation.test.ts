@@ -134,7 +134,11 @@ describe('AI-4A isolation — ZERO network capability exists', () => {
     expect(barrel).not.toContain('RecipeContext');
   });
 
-  it('the new modules are NOT reachable from any server module', () => {
+  it('the new modules are reachable ONLY from the ONE authorized AI-4C transport', () => {
+    // AI-4A itself added no server reachability. AI-4C (a later, separately
+    // audited phase) is the single authorized server consumer: it must VALIDATE
+    // model output through the AI-4A contract, and no other server module may
+    // reach it. This is a STRICTER pin than "no server module at all".
     const offenders: string[] = [];
     for (const rel of walk(join(REPO, 'server'))) {
       const source = src(rel);
@@ -142,7 +146,12 @@ describe('AI-4A isolation — ZERO network capability exists', () => {
         offenders.push(rel);
       }
     }
-    expect(offenders).toEqual([]);
+    expect(offenders).toEqual(['server/nutritionContext.ts']);
+    // And the authorized consumer is a TRANSPORT: it holds no authority surface.
+    const transport = code('server/nutritionContext.ts');
+    for (const forbidden of ['/phase4/state', '/phase5/', 'applyAdvancedNutrition', 'authorizeNutritionPersistence']) {
+      expect(transport.includes(forbidden), forbidden).toBe(false);
+    }
   });
 
   it('the new modules are NOT reachable from the live Advanced Nutrition workflow', () => {
@@ -174,13 +183,22 @@ describe('AI-4A isolation — ZERO network capability exists', () => {
     }
   });
 
-  it('AI-4A adds NO route and NO limiter', () => {
+  it('AI-4A itself adds NO route and NO limiter', () => {
+    // AI-4A remains INERT. The ONE `/api/nutrition/recipe-context` route and the
+    // `nutritionContextRateLimiter` bucket belong to AI-4C (documented in the
+    // architecture section 51), not to the AI-4A contract: neither module is named
+    // by the route, and no AI-4A-shaped route or limiter entry exists.
     const app = src('server/app.ts');
-    expect(app).not.toContain('recipe-context');
-    expect(app).not.toContain('recipeContext');
+    expect(app).not.toContain('RecipeContract');
+    expect(app).not.toContain('RecipeSnapshot');
+    expect(app).not.toContain('recipe-context-envelope');
+    expect(app).not.toContain('recipe-context-snapshot');
+    // No limiter may be named after the AI-4A contract or snapshot either.
     const limiter = src('server/rateLimiter.ts');
-    expect(limiter).not.toContain('RecipeContext');
-    expect(limiter).not.toContain('nutr_context_');
+    expect(limiter).not.toContain('RecipeContract');
+    expect(limiter).not.toContain('RecipeSnapshot');
+    expect(limiter).not.toContain('recipeContextContract');
+    expect(limiter).not.toContain('recipeContextSnapshot');
   });
 
   it('AI-4A adds NO capability gate and NO capability key', () => {

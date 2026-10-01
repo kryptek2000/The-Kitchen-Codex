@@ -7740,3 +7740,278 @@ treat instruction text as nutritional truth. It is not an `AiRecipeContextInterp
 and cannot be serialized as one: AI-4B re-owns no AI-4A token, redefines no AI-4A
 sanitizer, and adds no seventh `EffectiveMassClaims` source. The AI-3 authority
 chain and the cleared AI-3 mutation evidence are unmodified.
+
+---
+
+## §51. AI-4C — WHOLE-RECIPE SEMANTIC INTERPRETATION (TRANSPORT ONLY)
+
+AI-4A defined the contract. AI-4B produced the deterministic evidence. **AI-4C
+adds the tightly controlled model transport that interprets that deterministic
+context and returns a bounded `RecipeContextProposal`.**
+
+**AI-4C ships a TRANSPORT and nothing else.** It does not apply a proposal,
+reconcile it with nutrition state, mutate any working state, persist anything,
+integrate with Apply, choose between deterministic and AI readings, or alter
+serving counts. **AI-4D owns reconciliation and conflict handling.**
+
+### 51.1 The four AI-4 phases
+
+| phase | owns |
+| --- | --- |
+| AI-4A | the bounded contract (`RecipeContextEnvelope`, `RecipeContextProposal`, snapshot binding) — inert |
+| AI-4B | deterministic extraction of recipe-context evidence — pure, offline, no provider |
+| **AI-4C** | **bounded semantic transport: one provider call → one validated proposal** |
+| AI-4D | future reconciliation / conflict handling (NOT STARTED) |
+
+> AI interprets. Deterministic systems decide which evidence AI may see,
+> validate model output, and retain all authority over identity, quantity,
+> nutrition, provenance, eligibility, persistence and Apply.
+
+A successful provider response is **NOT** authenticated nutrition provenance.
+`ai_recipe_context` remains non-authenticated; claiming `usda_derived` or
+`vetted_standard` is refused as an authority forgery at the response validator
+*and* at the wire reader.
+
+### 51.2 Files
+
+| file | role |
+| --- | --- |
+| `src/core/nutritionV2/aiRecipeContextRequest.ts` | pure bounded request contract, deterministic projection, prompt payload, structured-output schema |
+| `src/core/nutritionV2/aiRecipeContextWire.ts` | pure canonical wire payload (builder + strict reader) |
+| `server/nutritionContext.ts` | the transport adapter: edge sanitizer, **server-side deterministic derivation**, capability gate, one provider call, response validation |
+| `server/rateLimiter.ts` | one dedicated limiter (`nutritionContextRateLimiter`, bucket `nutr_context_`) |
+| `server/app.ts` | one route: `POST /api/nutrition/recipe-context` |
+
+### 51.3 Deterministic context provenance (load-bearing)
+
+**DETERMINISTIC CODE CHOOSES THE CONTEXT THE MODEL SEES.** The caller supplies
+AUTHORED RECIPE SOURCE DATA ONLY — ingredients and steps. It does not supply,
+choose, order, extend or annotate the model-facing evidence. The authority flow is:
+
+```
+UNTRUSTED RECIPE INPUT (authored ingredients + authored steps)
+  -> server-edge closed-key sanitizer
+  -> adaptRecipe            (real Phase 4 narrow adaptation; SERVER-computed line refs)
+  -> AI-4B deterministic extraction (WHICH targets, IN WHICH ORDER)
+  -> AI-4A sanitized RecipeContextEnvelope
+  -> AI-4C bounded model request
+  -> provider
+```
+
+`context`, `envelope`, `recipe_context`, `targets` and `interpretations` are
+REFUSED BY NAME at the edge, so a caller-authored `RecipeContextEnvelope` is not
+merely ignored — it is not an accepted input. There is no generic provider proxy
+and no route that accepts a freeform prompt.
+
+The `adaptRecipe` step matters: line refs are COMPUTED by deterministic code from
+position plus content, and its closed ingredient key set refuses unknown ingredient
+fields, so a caller cannot supply a line ref, a food phrase, or a smuggled field at
+the ingredient level. The AI-4B step matters: target selection, target order and
+the deterministic evidence are the extractor's, so a caller cannot pre-select a
+subset, reorder targets, or extend the context.
+
+**WHAT IS AND IS NOT AUTHENTICATED HERE.** User-authored recipe text stays
+untrusted DATA: the server is not claiming the words are objectively true. The
+caller may author the recipe; the caller may not choose the derived evidence.
+
+### 51.4 Request bounds (hard, fail-closed, never truncating)
+
+- **12 context lines** — `MAX_AI_RECIPE_CONTEXT_REQUEST_LINES` IS AI-4A's
+  `MAX_RECIPE_CONTEXT_TARGETS` (no second owner, so the transport can never
+  widen the contract). Over the limit ⇒ `too_many_targets`, zero provider calls.
+- **32 KiB serialized request** — `MAX_AI_RECIPE_CONTEXT_REQUEST_BYTES`, measured
+  on the exact model-facing payload. Over the cap ⇒ `request_too_large`, zero
+  provider calls, and **never** a silent truncation of a semantic payload.
+  Honest accounting: with 12 targets and the contract's per-field bounds
+  (200 + 240 + 120 characters plus small JSON overhead) the model-facing payload
+  cannot approach 32 KiB, so the byte guard is defense in depth that a future
+  bound increase would have to break. That arithmetic is pinned by a test.
+
+### 51.5 Request data minimization
+
+The provider receives **only** `line_ref`, `source_text` and `food_semantics`.
+Deliberately excluded, each for a stated reason: `title` (a whole-recipe identity
+claim is not needed and may not be authored by the model), `base_servings` (the
+model must never do serving arithmetic), `instruction_slots` (opaque local
+change-detector digests), and every FDC id, USDA record, nutrient value, identity
+or aggregate digest, release/catalog/nutrient-map/calculation pin, credential,
+session secret, persistence/Apply/effective-mass field, and any other
+recipe-private metadata. The projection is a field-by-field rebuild from an
+explicit key list — never a spread — so no other property can leak.
+
+### 51.6 One call per interpretation (honest accounting)
+
+One AI-4 request performs **exactly one** semantic provider invocation for the
+whole recipe context. There is no per-line, per-signal or per-relation call, no
+tool loop, and no fan-out. AI-4C passes **no `retry` policy** to
+`runWithAiFallback`, so `maxAttemptsPerCandidate` is 1 and a same-model retry can
+never occur. A fallback-eligible failure may advance to the **next ordered
+candidate** — that is the pre-existing transport resilience shared with AI-1 /
+AI-2B / AI-3, not a semantic fan-out, and it is pinned against the real
+`runWithAiFallback` in `tests/security/advancedNutritionAi4cIsolation.test.ts`.
+
+### 51.7 Tier / capability gate (server-side, zero calls)
+
+AI-4 is an Advanced Nutrition capability. The gate uses the ONE capability owner
+(`resolveNutritionCapabilities` / `isAiInterpretationAvailable`), and a
+caller-supplied already-resolved capability set is honored verbatim (the same
+discipline `runAiMassEstimation` uses). On the Basic tier the request is refused
+with **zero provider calls**; the route maps that refusal to a bounded 400. This
+is server-side enforcement and never relies on UI hiding.
+
+### 51.8 Response validation (fail closed, never salvaged)
+
+```
+raw provider output
+  -> hard 32 KiB response byte cap
+  -> AI-4A sanitizeAiRecipeContextProposal (exact issued line refs, closed
+     vocabularies, authority-key denial at any nesting depth, whole-response refusal)
+  -> AI-4A validateAiRecipeContextRelationGraph (no unknown target, self relation,
+     duplicate relation, multiple parents, cycle, or over-depth graph)
+  -> field-by-field wire rebuild
+```
+
+An invented target (`unknown_line_ref`), a forbidden authority key
+(`authority_field`), an unsupported vocabulary, a malformed structure or an
+oversized response refuses the **whole** response. There is no per-line partial
+acceptance and no salvage of a forbidden field.
+
+### 51.9 Deterministic context binding (preserved for AI-4D)
+
+`aiRecipeContextModelInputBinding` is the ONE owner of the AI-4 context binding. It
+is a `sha256:<hex>` digest over the EXACT provider-facing semantic payload plus the
+local recipe-instance identity:
+
+```
+{ binding: 'nutrition_ai_recipe_context_binding_v1',
+  contract_version, recipe_instance,
+  targets: [ { line, text, semantics? } ] }   // model order preserved
+```
+
+So a change to **any** model-visible datum moves it: a line ref, the authored
+text, a food phrase, target ORDER, the contract version, or the instance identity.
+`food_semantics` is covered because it IS model-visible — that gap in AI-4A's
+envelope snapshot payload is precisely why AI-4C owns this binding instead of
+reusing it. AI-4A's separate envelope binding is deliberately NOT shipped on the
+wire, because two competing "context bindings" would be ambiguous.
+
+**WHAT THE BINDING AUTHENTICATES — stated precisely:**
+
+- it binds **freshness/equality of deterministic context**: "this interpretation
+  is about exactly these targets, in this order, with these phrases, for this
+  recipe instance";
+- it does **NOT** authenticate nutrition provenance, food identity, quantity, or
+  the truth of the authored words. `ai_recipe_context` remains non-authenticated,
+  and no binding can make it `usda_derived` or `vetted_standard`.
+
+The wire field is `context_binding`. It is computed locally, is never
+model-produced, is never sent to the model, and never embeds recipe text. AI-4C
+only carries it; AI-4D owns freshness verification.
+
+### 51.10 Prompt-injection posture
+
+The instruction block is a fixed constant that states the authority boundary
+exhaustively (interpretation only; no nutrition calculation, no database choice,
+no grams, no invented measurements, only supplied targets, never a new target,
+abstain rather than invent, deterministic systems retain all authority, return
+only the requested schema). Recipe text is appended as a structurally separate,
+closed-JSON untrusted DATA block, so it can never be concatenated into the
+instruction text. Even a fully successful response is re-validated field-by-field,
+so a model that FOLLOWS an injection produces a refused response, not a proposal.
+
+### 51.11 Error model (bounded, nothing leaks)
+
+`invalid_request`, `unsupported_request_version`, `invalid_recipe`, `no_targets`,
+`too_many_targets`, `request_too_large`, `capability_unavailable`, `unavailable`,
+`provider_error`, `invalid_response`, plus the two booleans `aiAttempted` /
+`aiFailed`. Deterministic refusals are 400 with
+fixed copy; an unavailable, failed or unusable interpretation is a bounded 503
+with fixed copy. No provider text, model id, credential, stack trace or raw
+response material reaches a caller, and the internal classification is never
+returned as a value. Provider diagnostics stay server-side and redacted through
+the existing `logModelAttempt` / `normalizeProviderError` helpers.
+
+### 51.12 `request_version` is a genuine protocol discriminator
+
+Option (A) was chosen. `request_version` is REQUIRED, validated against the exact
+closed supported token, and echoed on the built request context and on the
+response. An absent, legacy (`v0`), future (`…_v2`) or wrong-typed version is
+refused with `unsupported_request_version` and zero provider calls. No
+accepted-and-ignored protocol field remains anywhere in the AI-4 request.
+
+### 51.13 Isolation and the AI-3 firewall
+
+AI-4C's import sets are closed and pinned. The transport imports only the provider
+abstraction, the capability owner, and the deterministic derivation chain
+(`adapt` -> AI-4B extraction -> AI-4A contract); the two core modules import nothing
+but local pure core. The resulting consumer graph is exactly:
+
+```
+AI-4A contracts  <-  AI-4B deterministic extraction  <-  AI-4C server transport
+```
+
+with NO additional consumer: no UI consumer, no state consumer, no persistence
+consumer, no Apply consumer. There is also no reducer import, no state mutation,
+no Phase 5 persistence, no Apply integration, and no reconciliation. **No AI-3 cap
+is raised, widened or bypassed**: the AI-1/AI-2B/AI-3 routes, their limiters, their
+store keys, their request/response bounds and the AI-3 estimation contract are
+untouched, and AI-4's bounds are additive and independently enforced.
+
+### 51.14 Authority differential proof
+
+`tests/unit/advancedNutritionAi4cStateDifferential.test.ts` drives the real
+pinned-bundle session, analyzer, `buildCalculationRequest` + `session.calculate`,
+`authorizeNutritionPersistence` and `applyAdvancedNutrition` three times:
+baseline (no AI-4), AI-4C on (a real AI-4B extraction and a real AI-4C request
+that obtained a VALID, ACCEPTED proposal), and adversarial (the injection corpus
+whose provider response attempts forbidden output and MUST be refused). With a
+real accepted proposal in existence, every nutrition truth is byte-identical:
+resolved grams, per-line mass evidence, FDC identity, identity digests, the
+aggregate digest, release/catalog/nutrient-map/calculation pins, totals, unresolved
+rows, the whole preview, the persistence authorization payload, the Apply verdict
+(with the writer never reached), the effective-mass decision, the AI-3 eligibility
+verdict and the whole working state. The serialized preview contains no AI-4
+concept at all.
+
+### 51.15 AI-4C audit repair — deterministic context provenance closure
+
+An independent audit (PASS, 0 blocking, 1 important, 2 flags) found that AI-4C
+accepted a CALLER-SUPPLIED `RecipeContextEnvelope`. An untrusted client could
+therefore choose the semantic evidence a model was asked to interpret — an
+architectural deviation from the rule that deterministic code decides what evidence
+AI may see. The repair closed all three findings.
+
+**IMPORTANT-1 — client-fabricable envelope.** Root cause: the transport's edge
+contract had `context` as an input key and treated any contract-valid envelope as
+the model-facing evidence, so the AI-4B extraction step was optional and the
+snapshot digest was self-attesting (derived from caller-supplied data). Closure: the
+request shape is now `{ request_version, request_id, recipe_instance, recipe,
+instructions }`; `context`, `envelope`, `recipe_context`, `targets` and
+`interpretations` are refused by name; the server runs the real `adaptRecipe` and
+the real AI-4B extractor to derive the context. Proven by the forged-envelope
+regressions (Muse's exact payload plus a reordered/fabricated 13-target envelope):
+400 at the HTTP edge, zero provider calls, and the attacker's `line_ref` and
+`food_semantics` never appear in the outbound payload.
+
+**FLAG-1 — `food_semantics` invisible to the binding.** Closure: AI-4C now owns ONE
+binding (§51.9) over the exact provider-facing payload plus instance identity, so
+every model-visible field including the food phrase and target order participates.
+AI-4A's envelope binding is not shipped on the wire, so exactly one value claims to
+represent the interpreted context. Changing `food_semantics` — by a single
+character, or by dropping it — changes the binding; unchanged context reproduces it
+byte-for-byte.
+
+**FLAG-2 — `request_version` accepted but ignored.** Closure: option (A), a genuine
+protocol discriminator (§51.12).
+
+**Terminology correction.** The binding is described only as a deterministic context
+/ freshness binding. It is never called authenticated provenance, and it never makes
+`ai_recipe_context` an authenticated class.
+
+**Capability and minimization preserved.** The Basic tier still yields zero
+provider calls (server-side, through the one capability owner), request JSON cannot
+upgrade entitlement, the 12-target and 32 KiB bounds still refuse deterministically
+with zero provider calls and no semantic truncation, recipe text remains DATA
+through server-side extraction, forbidden provider output still fails closed, and
+the outbound payload is still exactly `line_ref` / `source_text` /
+`food_semantics`.

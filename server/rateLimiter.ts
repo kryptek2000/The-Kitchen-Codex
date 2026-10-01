@@ -317,6 +317,59 @@ export function nutritionMassEstimateRateLimiter(
 }
 
 /**
+ * Express middleware for rate limiting on the AI-4C WHOLE-RECIPE SEMANTIC
+ * INTERPRETATION endpoint (`/api/nutrition/recipe-context`).
+ *
+ * A DEDICATED bucket with a distinct name and store key prefix, separate from the
+ * AI-3 mass-estimate bucket, the AI-2B planning bucket, the AI-1 interpretation
+ * bucket and the legacy estimator bucket, so whole-recipe interpretation traffic
+ * can never exhaust (or be exhausted by) any other Advanced Nutrition surface.
+ *
+ * The default is deliberately SMALL (8/min/IP) because ONE request performs ONE
+ * whole-recipe provider interpretation — the most expensive AI-4 operation — and
+ * the limiter is the only per-request budget the transport has.
+ * Configurable via `NUTRITION_CONTEXT_RATE_LIMIT`.
+ */
+export function nutritionContextRateLimiter(
+  req: Request,
+  res: Response,
+  next: NextFunction
+) {
+  const parsedLimit = parseInt(process.env.NUTRITION_CONTEXT_RATE_LIMIT || "8", 10);
+  const maxRequestsPerWindow = isNaN(parsedLimit) || parsedLimit <= 0 ? 8 : parsedLimit;
+  const windowMs = 60 * 1000; // 1 minute window
+
+  const clientIp = getClientIp(req);
+  const now = Date.now();
+
+  let entry = clientIpStore.get(`nutr_context_${clientIp}`);
+  if (!entry || entry.resetTime <= now) {
+    entry = { count: 1, resetTime: now + windowMs };
+    clientIpStore.set(`nutr_context_${clientIp}`, entry);
+  } else {
+    entry.count += 1;
+  }
+
+  const remaining = Math.max(0, maxRequestsPerWindow - entry.count);
+  const resetSeconds = Math.ceil((entry.resetTime - now) / 1000);
+
+  res.setHeader("RateLimit-Limit", maxRequestsPerWindow);
+  res.setHeader("RateLimit-Remaining", remaining);
+  res.setHeader("RateLimit-Reset", resetSeconds);
+
+  if (entry.count > maxRequestsPerWindow) {
+    res.setHeader("Retry-After", resetSeconds);
+    return res.status(429).json({
+      ok: false,
+      error: "Too many AI recipe-context requests. Please wait a moment before trying again.",
+      retryAfterSeconds: resetSeconds,
+    });
+  }
+
+  next();
+}
+
+/**
  * Express middleware for rate limiting on AI metadata recovery endpoints.
  * Configurable via `METADATA_RECOVERY_RATE_LIMIT` (default 25 requests per minute).
  */

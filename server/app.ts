@@ -13,6 +13,7 @@ import { estimateRecipeNutrition } from "./nutritionEstimator.js";
 import { resolveIngredientFoodsOnServer } from "./nutritionResolve.js";
 import { interpretIngredientsOnServer } from "./nutritionInterpret.js";
 import { planIngredientsOnServer } from "./nutritionPlan.js";
+import { interpretRecipeContextOnServer } from "./nutritionContext.js";
 import { estimateMassOnServer } from "./nutritionEstimate.js";
 import { recoverRecipeMetadata } from "./metadataRecovery.js";
 import {
@@ -22,6 +23,7 @@ import {
   nutritionResolveRateLimiter,
   nutritionInterpretRateLimiter,
   nutritionPlanRateLimiter,
+  nutritionContextRateLimiter,
   metadataRecoveryRateLimiter,
   kitchenInterpretRateLimiter,
   kitchenRankRateLimiter,
@@ -848,6 +850,88 @@ export function createApp(opts: CreateAppOptions): express.Express {
       return res.status(500).json({
         ok: false,
         error: "An unexpected error occurred during mass estimation.",
+      });
+    }
+  });
+
+  // AI-4C WHOLE-RECIPE SEMANTIC INTERPRETATION (transport only). DEDICATED
+  // route, limiter and wire owner: it never shares the AI-3 estimate route, the
+  // AI-2B planning route or the AI-1 interpretation route, and it grants no
+  // identity, mass, nutrient, eligibility, persistence or Apply authority.
+  //
+  // The client supplies AUTHORED RECIPE SOURCE DATA ONLY (ingredients + steps).
+  // It does NOT supply, choose, order, extend or annotate the model-facing
+  // evidence: the server runs the real Phase 4 adaptation and the real AI-4B
+  // deterministic extractor, so the AI-4A context the model sees is SERVER-
+  // DERIVED. A caller-supplied envelope/targets payload is refused by name.
+  // There is no generic provider proxy here: the model cannot be given arbitrary
+  // instructions, an arbitrary recipe object, or any application state.
+  //
+  // The response is a bounded semantic PROPOSAL plus the deterministic CONTEXT
+  // BINDING of the exact model input (a freshness/equality binding — NOT
+  // authenticated nutrition provenance). This route NEVER applies the proposal,
+  // reconciles it with nutrition state, mutates working state, persists, or
+  // changes serving counts; reconciliation is AI-4D.
+  app.post("/api/nutrition/recipe-context", requireAiAccessToken, textPricingGuard, nutritionContextRateLimiter, async (req, res) => {
+    const clientIp = getClientIp(req);
+
+    try {
+      const userSelection = parseTextSelectionHeader(req.headers);
+      const result = await interpretRecipeContextOnServer(req.body, { userSelection });
+
+      if (result.ok !== true) {
+        const failure = result as {
+          readonly ok: false;
+          readonly code: string;
+          readonly aiAttempted: boolean;
+          readonly aiFailed: boolean;
+        };
+        // Deterministic refusals (malformed request, unsafe context, bounds) are
+        // 400 and cost ZERO provider calls. Interpretation is an optional
+        // assistant: there is no fallback to an invented reading, a
+        // deterministic-signal copy, or any nutrition authority.
+        if (
+          failure.code === "invalid_request" ||
+          failure.code === "unsupported_request_version" ||
+          failure.code === "invalid_recipe" ||
+          failure.code === "no_targets" ||
+          failure.code === "too_many_targets" ||
+          failure.code === "request_too_large" ||
+          failure.code === "capability_unavailable"
+        ) {
+          return res.status(400).json({ ok: false, error: "Invalid recipe-context request." });
+        }
+        return res.status(503).json({
+          ok: false,
+          aiAttempted: failure.aiAttempted === true,
+          aiFailed: failure.aiFailed === true,
+          error: "AI recipe-context interpretation is unavailable. You can continue with the deterministic analyzer and manual review.",
+        });
+      }
+
+      const accepted = result as {
+        readonly ok: true;
+        readonly requestId: string;
+        readonly wire: unknown;
+      };
+      // `request_id` and `context_binding` are transport-local: the id is echoed
+      // from the server-validated request, and the context binding is computed
+      // locally by deterministic code over the exact server-derived model input.
+      // Neither is ever model-produced or sent to the model, and the binding form
+      // keeps recipe text out of the response body.
+      return res.json({
+        ok: true,
+        request_id: accepted.requestId,
+        proposal: (accepted.wire as { proposal: unknown }).proposal,
+        context_binding: (accepted.wire as { context_binding: string }).context_binding,
+        aiAttempted: true,
+      });
+    } catch (error: any) {
+      const errorMsg = error?.message || "";
+      console.error(`[${new Date().toISOString()}] [Client: ${clientIp}] Nutrition Recipe Context Error:`, errorMsg);
+      return res.status(500).json({
+        ok: false,
+        error: "An unexpected error occurred during recipe-context interpretation.",
       });
     }
   });
