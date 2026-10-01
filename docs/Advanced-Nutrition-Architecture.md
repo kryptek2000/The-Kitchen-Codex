@@ -8015,3 +8015,185 @@ with zero provider calls and no semantic truncation, recipe text remains DATA
 through server-side extraction, forbidden provider output still fails closed, and
 the outbound payload is still exactly `line_ref` / `source_text` /
 `food_semantics`.
+
+---
+
+## §52. AI-4D1 — DETERMINISTIC RECONCILIATION FOUNDATION (INERT)
+
+AI-4C can return a validated proposal. That proposal is still **inert**. Before any
+user acceptance or downstream behavior can exist, a deterministic layer must answer:
+does this proposal still belong to the CURRENT recipe context, does it belong to the
+request we think it does, which rows are proposals, which abstained, and which
+current targets were omitted — without granting any authority.
+
+**AI-4D1 ships that layer and nothing else.**
+
+### 52.1 The five AI-4 phases
+
+| phase | owns |
+| --- | --- |
+| AI-4A | the bounded contract (envelope, proposal, snapshot) — inert |
+| AI-4B | deterministic extraction of recipe-context evidence — pure, offline |
+| AI-4C | bounded semantic transport: one provider call -> one validated proposal |
+| **AI-4D1** | **freshness + request correlation + inert review classification** |
+| AI-4D2 | FUTURE explicit user acceptance, review UI, per-item undo/dismiss, session-only context — **NOT STARTED** |
+
+> Model output is never authority by itself. AI-4D1 grants authority over nothing:
+> not identity, not FDC identity, not matching, not mass, not grams, not portions,
+> not nutrients, not servings, not effective mass, not AI-3 eligibility, not
+> suppression, not persistence, not Apply.
+
+### 52.2 Files
+
+| file | role |
+| --- | --- |
+| `src/core/nutritionV2/aiRecipeContextReconcile.ts` | PURE reconciliation core: strict wire revalidation, request correlation, whole-proposal freshness, inert review classification |
+| `server/recipeContextDerivation.ts` | the ONE deterministic derivation owner, shared by AI-4C and AI-4D1 |
+| `server/recipeContextReconcile.ts` | internal server adapter: closed-key validation -> shared derivation -> pure reconcile |
+
+**No HTTP route and no rate limiter.** There is no UI consumer yet, so an endpoint
+would be attack surface with no consumer. Pinned by test: the `/api/nutrition/*`
+route inventory and the limiter inventory are unchanged.
+
+### 52.3 The single derivation owner
+
+AI-4C and AI-4D1 must compute the context the SAME way, or a freshness comparison
+over a differently derived context would be meaningless. There is therefore exactly
+one implementation of the chain:
+
+```
+adaptRecipe  ->  extractRecipeContext (AI-4B)  ->  buildAiRecipeContextRequest (AI-4C)
+```
+
+in `server/recipeContextDerivation.ts`, consumed by exactly two server modules
+(the AI-4C transport and the AI-4D1 adapter). A freshness check is only as
+trustworthy as the derivation it compares, so the derivation has a single owner by
+construction rather than by convention. The adapter reads the binding from
+`derived.request.model_input_binding` and the targets from
+`derived.request.provider_request.targets`: it never re-projects, never
+re-hashes, and never accepts a caller-supplied context, binding or line-ref set.
+
+### 52.4 Freshness and request correlation
+
+Two INDEPENDENT equality checks, both required:
+
+- `context_binding` — "was the semantic context identical?" The one existing AI-4C
+  binding over contract version, recipe instance, ordered provider targets, line
+  refs, authored text and food phrases. AI-4D1 invents **no** new AI-4 digest and
+  does **not** resurrect `snapshot_digest`.
+- `request_id` — "is this the response to THIS operation?" A wire from another
+  operation over a byte-identical context must never masquerade as this request's
+  response.
+
+**THE WHOLE-PROPOSAL FRESHNESS RULE.** AI-4 is a WHOLE-RECIPE interpretation. If
+the current binding differs from the captured one, THE WHOLE PROPOSAL IS STALE. No
+row is salvaged, because one changed model-visible element can have changed how the
+model read every other line; a per-row comparison would be a guess. There is no
+"partially current" result type at all.
+
+**ORDER IS EXPLICIT**: input validation -> expected request identity -> current
+context facts -> re-materialize the untrusted wire -> read + bound the wire's own
+identity claims -> `request_id` correlation -> binding freshness -> strict wire
+read against current line refs -> relation-graph re-check -> review plan.
+
+Identity is checked BEFORE structure, and this is deliberate. Correlation and
+freshness describe WHICH RESPONSE this is; structure describes whether that response
+is well formed. Reporting a legitimate stale wire as "invalid wire" would be
+untruthful, and inspecting model interpretations before freshness is established
+would let model content influence the outcome at all. Both orders fail closed; this
+one is more honest and more cautious. Test L pins the consequence: a removed target
+behind a *matching* binding is `invalid_wire` (unknown target), while a removed
+target behind a *stale* binding is `stale_context`.
+
+### 52.5 The wire is untrusted AGAIN
+
+AI-4C validated the response once inside the transport, but a client, a browser or
+a caller may have altered it since. AI-4D1 re-materializes it with the Phase 0
+descriptor-based materializer (accessors, symbol keys, cycles, non-plain prototypes
+and oversized values fail closed), then re-reads it with the **released** strict
+AI-4C wire reader against the **current** server-derived line refs, then re-checks
+the **released** AI-4A relation-graph validator. It adds no second vocabulary, no
+second validator and no looser path. A forged provenance class, an invented target,
+a duplicate line ref, a relation to a non-existent target, an unknown key at any
+depth, or an out-of-bounds field all fail closed.
+
+### 52.6 Closed review categories — and no "accepted"
+
+| category | meaning |
+| --- | --- |
+| `reviewable` | a current, valid interpretation with no explicit abstention. **THIS IS NOT ACCEPTANCE** — it means a user may now be shown it, nothing more. |
+| `abstained` | the model explicitly supplied an `abstain_reason`, preserved verbatim from the closed vocabulary. |
+| `uninterpreted` | a current deterministic target the valid proposal did not interpret. Absence stays absence: no role is inferred. |
+
+The status vocabulary is closed to exactly one member, `current`: a non-current
+outcome is a bounded FAILURE, never a second status. There is deliberately no
+`accepted`, `approved`, `applied`, `authoritative`, `automatic`, `selected` or
+`suppressed` category, and none of those words appear in the exported surface, so
+future code cannot mistake a reconciled row for a user-approved row. `reviewable`
+count + `abstained_count` + `uninterpreted_count` always equals the row count.
+
+### 52.7 Deterministic order, and AI-4B signals are never promoted
+
+Rows are emitted in the CURRENT AI-4B deterministic target order, so the model
+never controls review/UI ordering and an omitted target still has a deterministic
+position. Semantic content is never rewritten to reorder rows; relations keep their
+canonical target refs. Each row carries the CURRENT authored text and, when the model
+interpreted that line, the validated AI-4A interpretation.
+
+AI-4B signals are EVIDENCE of authored language, not semantic authority, and this
+module therefore does not carry the signal vocabulary at all: `partial_use` does not
+become role `reserved`, `division` does not become `divided`, `garnish_only` never
+overwrites a model role, and `not_consumed` never suppresses anything. An explicit
+abstention is never "rescued" into a reviewable row by consulting deterministic
+evidence, and a target the model omitted is `uninterpreted`, not an abstention.
+
+### 52.8 No semantic adjudication (conservative v1)
+
+The current closed vocabularies do not make every apparent mismatch logically
+exclusive: an ingredient can be `main` AND `divided`, a reserved ingredient can
+still be a main ingredient, a cooking medium can later be discarded. AI-4D1
+therefore builds **no** conflict matrix and labels **no** disagreement. Its
+refusals are structural only — stale context, request mismatch, invalid wire, invalid
+graph/reference, invalid input or current context. Everything else is preserved for
+a human to judge in AI-4D2. When uncertain: preserve, never adjudicate.
+
+### 52.9 Failure model
+
+A small closed vocabulary, consistent with the repository: `invalid_input`,
+`invalid_context`, `invalid_wire`, `request_mismatch`, `stale_context`. Lower-level
+derivation codes are mapped honestly rather than exposed as internal strings. No
+provider error, stack trace, hidden prompt, credential or filesystem path can reach
+a caller — there is no provider in this path at all. The modules are pure and
+offline: no `fetch`, no storage, no `process.env`, no clock, no randomness, no
+locale dependence.
+
+### 52.10 Immutability
+
+The result is deeply frozen; rows, rows arrays and carried interpretations are all
+frozen. Inputs are never mutated: the wire, the current context facts, the recipe
+and the instructions are all left byte-equivalent, which is asserted by test.
+
+### 52.11 Authority differential proof
+
+`tests/unit/advancedNutritionAi4d1AuthorityDifferential.test.ts` drives the real
+pinned-bundle session, analyzer, `session.calculate`,
+`authorizeNutritionPersistence` and `applyAdvancedNutrition` three times: baseline
+(no AI-4), a REAL reconciliation that succeeded, and a STALE reconciliation that
+failed closed. With a reconciliation in existence, every nutrition truth is
+byte-identical: resolved grams, per-line mass evidence, FDC identity, identity
+digests, the aggregate digest, release/catalog/nutrient-map/calculation pins,
+totals, unresolved rows, the whole preview, the persistence authorization payload,
+the Apply verdict (with the writer never reached), the effective-mass decision, the
+AI-3 eligibility verdict and the whole working state. The serialized preview
+contains no AI-4 or AI-4D1 concept.
+
+### 52.12 What AI-4D1 does NOT do
+
+No user acceptance, no session "accepted context" object, no reducer action, no
+undo/dismiss, no persistence, no Apply integration, no AI-3 gating or suppression of
+any kind, no UI, no HTTP route, no rate limiter, no provider call, no time-based
+freshness. The released AI-4A rule stands: RAW MODEL OUTPUT HAS ZERO SUPPRESSION
+AUTHORITY, and AI-4D1 adds no path that could change it. AI-4D1 stops immediately
+before the acceptance boundary, because AI-4A's architecture requires acceptance UI,
+per-item undo/dismiss and byte-truthful restoration to ship together WHEN acceptance
+is introduced.

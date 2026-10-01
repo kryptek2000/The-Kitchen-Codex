@@ -194,20 +194,21 @@ describe('AI-4B isolation — AI-4B is not reachable from any live surface', () 
     }
   });
 
-  it('the module is reachable ONLY from the ONE authorized AI-4C transport', () => {
-    // AI-4B itself introduced no server reachability. AI-4C (a later, separately
-    // audited phase) is the single authorized server consumer, and it uses the
-    // extractor to DERIVE the model-facing context rather than to trust a
-    // caller-supplied envelope. This is a STRICTER pin than "no server module".
+  it('the module is reachable ONLY from the ONE derivation owner', () => {
+    // AI-4B itself introduced no server reachability. `server/recipeContextDerivation.ts`
+    // is the single authorized server consumer: the ONE owner of the deterministic
+    // derivation chain, consumed by the AI-4C transport and the AI-4D1 reconciler
+    // so neither can implement its own context derivation. This is a STRICTER pin
+    // than "no server module", and it also forbids a second implementation.
     const offenders: string[] = [];
     for (const rel of walk(join(REPO, 'server'))) {
       if (src(rel).includes('recipeContextExtraction') || src(rel).includes('extractRecipeContext')) {
         offenders.push(rel);
       }
     }
-    expect(offenders).toEqual(['server/nutritionContext.ts']);
-    // And that authorized consumer holds no authority surface of its own.
-    const consumer = code('server/nutritionContext.ts');
+    expect(offenders).toEqual(['server/recipeContextDerivation.ts']);
+    // And that authorized owner holds no authority, provider or persistence surface.
+    const consumer = code('server/recipeContextDerivation.ts');
     for (const forbidden of [
       '/phase4/state',
       '/phase5/',

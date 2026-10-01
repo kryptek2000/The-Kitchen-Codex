@@ -49,10 +49,14 @@ import {
   MAX_RECIPE_CONTEXT_RELATIONS,
   MAX_RECIPE_CONTEXT_RELATION_TARGETS,
   MAX_RECIPE_CONTEXT_TARGETS,
+  type AiRecipeContextAbstainReason,
+  type AiRecipeContextConfidence,
   type AiRecipeContextInterpretation,
+  type AiRecipeContextPreparationHint,
   type AiRecipeContextProposal,
   type AiRecipeContextRelation,
   type AiRecipeContextRelationKind,
+  type AiRecipeContextRole,
 } from './phase4/recipeContextContract';
 import { AI_RECIPE_CONTEXT_REQUEST_VERSION } from './aiRecipeContextRequest';
 
@@ -89,13 +93,19 @@ export interface AiRecipeContextWireRelation {
   readonly target_ref: string;
 }
 
+/**
+ * One wire interpretation. Its types are the AI-4A CLOSED types themselves, not
+ * widened strings: the reader validates every field against those vocabularies, so
+ * the types are exactly true, and a wire interpretation is structurally identical
+ * to an AI-4A interpretation (no cast is ever needed to re-check it).
+ */
 export interface AiRecipeContextWireInterpretation {
   readonly line_ref: string;
-  readonly role: (typeof AI_RECIPE_CONTEXT_ROLES)[number];
+  readonly role: AiRecipeContextRole;
   readonly relations: ReadonlyArray<AiRecipeContextWireRelation>;
-  readonly preparation_hints: ReadonlyArray<string>;
-  readonly confidence?: (typeof AI_RECIPE_CONTEXT_CONFIDENCE_VALUES)[number];
-  readonly abstain_reason?: (typeof AI_RECIPE_CONTEXT_ABSTAIN_REASONS)[number];
+  readonly preparation_hints: ReadonlyArray<AiRecipeContextPreparationHint>;
+  readonly confidence?: AiRecipeContextConfidence;
+  readonly abstain_reason?: AiRecipeContextAbstainReason;
   readonly explanation?: string;
 }
 
@@ -298,14 +308,14 @@ export function readAiRecipeContextWirePayload(
 
     const rawHints = entry['preparation_hints'];
     if (!Array.isArray(rawHints)) return { ok: false, code: 'invalid_response' };
-    const preparationHints: string[] = [];
+    const preparationHints: AiRecipeContextPreparationHint[] = [];
     for (const hint of rawHints) {
       const bounded = boundedText(hint, MAX_RECIPE_CONTEXT_PREPARATION_HINT_LENGTH);
       if (bounded === undefined) return { ok: false, code: 'invalid_response' };
       if (!(AI_RECIPE_CONTEXT_PREPARATION_HINTS as ReadonlyArray<string>).includes(bounded)) {
         return { ok: false, code: 'invalid_response' };
       }
-      preparationHints.push(bounded);
+      preparationHints.push(bounded as AiRecipeContextPreparationHint);
     }
 
     let confidence: string | undefined;
@@ -327,13 +337,13 @@ export function readAiRecipeContextWirePayload(
     interpretations.push(
       Object.freeze({
         line_ref: lineRef,
-        role: role as (typeof AI_RECIPE_CONTEXT_ROLES)[number],
+        role: role as AiRecipeContextRole,
         relations: Object.freeze(relations),
         preparation_hints: Object.freeze(preparationHints),
-        ...(confidence === undefined ? {} : { confidence: confidence as (typeof AI_RECIPE_CONTEXT_CONFIDENCE_VALUES)[number] }),
+        ...(confidence === undefined ? {} : { confidence: confidence as AiRecipeContextConfidence }),
         ...(abstainReason === undefined
           ? {}
-          : { abstain_reason: abstainReason as (typeof AI_RECIPE_CONTEXT_ABSTAIN_REASONS)[number] }),
+          : { abstain_reason: abstainReason as AiRecipeContextAbstainReason }),
         ...(explanation === undefined ? {} : { explanation }),
       })
     );

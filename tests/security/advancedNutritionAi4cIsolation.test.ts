@@ -40,6 +40,7 @@ const src = (rel: string): string => readFileSync(join(REPO, rel), 'utf8');
 const APP = 'server/app.ts';
 const LIMITER = 'server/rateLimiter.ts';
 const TRANSPORT = 'server/nutritionContext.ts';
+const DERIVATION = 'server/recipeContextDerivation.ts';
 const REQUEST = 'src/core/nutritionV2/aiRecipeContextRequest.ts';
 const WIRE = 'src/core/nutritionV2/aiRecipeContextWire.ts';
 
@@ -263,51 +264,70 @@ describe('AI-4C isolation — no UI, no working state, no Apply, no reconciliati
 // 3. NO AI-3 AUTHORITY IMPORT / NO AI-3 CAP INCREASE
 // ---------------------------------------------------------------------------
 describe('AI-4C isolation — AI-3 authority and caps are untouched', () => {
-  it('the transport imports EXACTLY the provider abstraction + the AI-4 chain', () => {
+  it('the transport imports EXACTLY the provider abstraction + the AI-4 contract', () => {
     // The strongest form of the "no AI-3 authority import" pin: the import set
     // is closed, so an AI-3 estimate / plan / calculator / session / analyzer
     // module cannot be reached without failing this test.
     //
-    // The ONE legitimate Phase 4 surface is the deterministic derivation chain
-    // itself (`adapt` -> AI-4B extraction -> AI-4A contract), which is what makes
-    // the context server-derived instead of caller-chosen.
+    // The transport reaches the deterministic derivation ONLY through the single
+    // shared owner (`./recipeContextDerivation.js`), which is what stops a second,
+    // drift-prone derivation implementation from appearing.
     expect(importsOf(TRANSPORT)).toEqual([
       '../src/core/nutritionV2/aiRecipeContextRequest.js',
       '../src/core/nutritionV2/aiRecipeContextWire.js',
       '../src/core/nutritionV2/nutritionCapabilities.js',
-      '../src/core/nutritionV2/phase4/adapt.js',
       '../src/core/nutritionV2/phase4/recipeContextContract.js',
-      '../src/core/nutritionV2/phase4/recipeContextExtraction.js',
       '../src/core/nutritionV2/schema.js',
       './ai/effectiveSelection.js',
       './ai/provider.js',
       './ai/providerErrors.js',
       './ai/types.js',
       './providerDiagnostics.js',
-    ]);
+      './providerDiagnostics.js',
+      './providerDiagnostics.js',
+      './recipeContextDerivation.js',
+    ].filter((value, index, all) => all.indexOf(value) === index).sort());
   });
 
-  it('the transport is the ONE authorized AI-4B consumer, and it derives rather than trusts', () => {
-    // The repaired graph: AI-4A contracts <- AI-4B extraction <- AI-4C transport.
-    // No other server module may consume the extractor, and the transport must
-    // actually CALL the deterministic derivation instead of accepting an envelope.
+  it('the derivation owner is the ONE server module that runs the AI-4B extraction', () => {
+    // The repaired graph: AI-4A contracts <- AI-4B extraction <- ONE derivation
+    // owner <- { AI-4C transport, AI-4D1 reconciler }. The transport and the
+    // reconciler both call that owner, so the freshness comparison is computed over
+    // exactly the context the transport would have sent.
     const consumers: string[] = [];
     for (const rel of walk(join(REPO, 'server'))) {
       if (src(rel).includes('extractRecipeContext') || src(rel).includes('recipeContextExtraction')) {
         consumers.push(rel);
       }
     }
-    expect(consumers).toEqual([TRANSPORT]);
+    expect(consumers).toEqual([DERIVATION]);
+    // Exactly TWO server modules may consume the owner, and both must actually
+    // call it — no second derivation implementation can hide elsewhere.
+    const ownerConsumers: string[] = [];
+    for (const rel of walk(join(REPO, 'server'))) {
+      // The owner declares the function; only CALLERS count as consumers.
+      if (rel === DERIVATION) continue;
+      if (/deriveRecipeContextModelInput\(/.test(code(rel))) ownerConsumers.push(rel);
+    }
+    expect(ownerConsumers.sort()).toEqual(
+      ['server/nutritionContext.ts', 'server/recipeContextReconcile.ts'].sort()
+    );
+    expect(code(TRANSPORT)).toContain('deriveRecipeContextModelInput(');
+    // The owner itself performs no provider work.
+    for (const forbidden of ['provider', 'fetch(', 'runWithAiFallback']) {
+      expect(code(DERIVATION).includes(forbidden), forbidden).toBe(false);
+    }
+  });
+
+  it('the transport derives rather than trusts: no caller-authored envelope is accepted', () => {
     const transportCode = code(TRANSPORT);
-    expect(transportCode).toContain('adaptRecipe(');
-    expect(transportCode).toContain('extractRecipeContext(');
     // A caller-supplied envelope is not an accepted input: the closed edge key
     // set has no context/envelope/targets key at all.
     const requestKeys = (transportCode.match(/const REQUEST_KEYS = new Set\(\[[^\]]*\]\)/) ?? [''])[0];
     expect(requestKeys).not.toContain('context');
     expect(requestKeys).not.toContain('envelope');
     expect(requestKeys).not.toContain('targets');
-    expect(transportCode).toContain("REFUSED_REQUEST_KEYS");
+    expect(transportCode).toContain('REFUSED_REQUEST_KEYS');
     // And the edge refuses them BY NAME.
     for (const refused of ['context', 'envelope', 'recipe_context', 'targets', 'interpretations']) {
       expect(transportCode, refused).toContain(`'${refused}'`);

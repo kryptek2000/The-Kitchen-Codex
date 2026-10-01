@@ -96,8 +96,7 @@ import type { AiJsonSchema } from './ai/types.js';
 import type { SelectionInput } from './ai/effectiveSelection.js';
 import { logModelAttempt } from './providerDiagnostics.js';
 import { utf8ByteLength } from '../src/core/nutritionV2/schema.js';
-import { adaptRecipe } from '../src/core/nutritionV2/phase4/adapt.js';
-import { extractRecipeContext } from '../src/core/nutritionV2/phase4/recipeContextExtraction.js';
+import { deriveRecipeContextModelInput } from './recipeContextDerivation.js';
 import {
   isAiInterpretationAvailable,
   resolveNutritionCapabilities,
@@ -388,40 +387,39 @@ export async function interpretRecipeContextOnServer(
   // ---------------------------------------------------------------------
   // SERVER-SIDE DETERMINISTIC CONTEXT DERIVATION (the caller never chooses it).
   //
-  // 1. ADAPT: the real Phase 4 narrow adaptation runs on the authored recipe, so
-  //    line refs are COMPUTED BY DETERMINISTIC CODE from position + content and a
-  //    caller can never supply one. `adaptRecipe` also refuses unknown ingredient
-  //    fields, symbol keys, dangerous keys and accessors, so nothing can be
-  //    smuggled alongside the authored text.
-  // 2. EXTRACT: the real AI-4B deterministic extractor selects WHICH targets the
-  //    model may see and IN WHICH ORDER. A caller cannot pre-select a subset,
-  //    reorder targets, add a target, or attach a food phrase of their choosing.
-  // 3. SANITIZE + BOUND: AI-4A re-validates the derived envelope and the bounded
-  //    request contract enforces the line budget, the byte cap and the exact
-  //    request version.
+  // `deriveRecipeContextModelInput` is the ONE owner of this chain:
+  //   1. ADAPT: the real Phase 4 narrow adaptation runs on the authored recipe, so
+  //      line refs are COMPUTED BY DETERMINISTIC CODE from position + content and
+  //      a caller can never supply one. `adaptRecipe` also refuses unknown
+  //      ingredient fields, symbol keys, dangerous keys and accessors, so nothing
+  //      can be smuggled alongside the authored text.
+  //   2. EXTRACT: the real AI-4B deterministic extractor selects WHICH targets the
+  //      model may see and IN WHICH ORDER. A caller cannot pre-select a subset,
+  //      reorder targets, add a target, or attach a food phrase of their choosing.
+  //   3. SANITIZE + BOUND: AI-4A re-validates the derived envelope and the bounded
+  //      request contract enforces the line budget, the byte cap and the exact
+  //      request version.
+  //
+  // AI-4D1 consumes the SAME owner, so the freshness comparison is computed over
+  // exactly the context this transport would have sent.
   // Every failure up to here implies ZERO provider calls.
   // ---------------------------------------------------------------------
-  const adapted = adaptRecipe(edge.recipe);
-  if (!adapted.ok) {
-    return { ok: false, code: 'invalid_recipe', aiAttempted: false, aiFailed: false };
-  }
-
-  const extracted = extractRecipeContext({
-    recipe: adapted.recipe,
+  const derived = deriveRecipeContextModelInput({
+    recipe: edge.recipe,
     instructions: edge.instructions,
-  });
-  if (!extracted.ok) {
-    return { ok: false, code: 'invalid_recipe', aiAttempted: false, aiFailed: false };
-  }
-
-  const built = buildAiRecipeContextRequest({
     requestVersion: edge.requestVersion,
     requestId: edge.requestId,
     recipeInstance: edge.recipeInstance,
-    context: extracted.extraction.envelope,
   });
-  if (!built.ok) {
-    const code = (built as { code: string }).code;
+  if (!derived.ok) {
+    const code = (derived as { code: string }).code;
+    // `invalid_recipe` (unusable authored source data) keeps its own bounded code;
+    // the request-contract codes map through the closed set; anything else is a
+    // generic invalid request. This is the SAME mapping the transport applied
+    // before the derivation was extracted into its own owner.
+    if (code === 'invalid_recipe') {
+      return { ok: false, code: 'invalid_recipe', aiAttempted: false, aiFailed: false };
+    }
     return {
       ok: false,
       code: REQUEST_FAILURE_CODES.has(code) ? (code as NutritionContextFailureCode) : 'invalid_request',
@@ -429,7 +427,7 @@ export async function interpretRecipeContextOnServer(
       aiFailed: false,
     };
   }
-  const request = built.context;
+  const request = derived.request;
 
   // TIER / CAPABILITY GATE — strictly before any provider work. On the Basic
   // tier this returns with zero provider calls, server-side.
