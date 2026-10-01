@@ -370,6 +370,59 @@ export function nutritionContextRateLimiter(
 }
 
 /**
+ * Express middleware for rate limiting on the AI-4D2 RECIPE-CONTEXT
+ * RECONCILIATION endpoint (`/api/nutrition/recipe-context/reconcile`).
+ *
+ * Reconciliation is PURE DETERMINISTIC CODE: it performs NO provider call, so it
+ * must never consume, deplete or be blocked by the AI-4C interpretation bucket.
+ * This is therefore its own bucket with a distinct name and store key prefix,
+ * separate from `nutritionContextRateLimiter` (the provider budget) and from every
+ * other Advanced Nutrition surface. Reconciling is cheap, so the default is
+ * generous (30/min/IP): a user legitimately reconciles once per explicit AI-4C
+ * interpretation, and the budget exists only to bound abusive CPU work.
+ *
+ * Configurable via `NUTRITION_CONTEXT_RECONCILE_RATE_LIMIT`.
+ */
+export function nutritionContextReconcileRateLimiter(
+  req: Request,
+  res: Response,
+  next: NextFunction
+) {
+  const parsedLimit = parseInt(process.env.NUTRITION_CONTEXT_RECONCILE_RATE_LIMIT || "30", 10);
+  const maxRequestsPerWindow = isNaN(parsedLimit) || parsedLimit <= 0 ? 30 : parsedLimit;
+  const windowMs = 60 * 1000; // 1 minute window
+
+  const clientIp = getClientIp(req);
+  const now = Date.now();
+
+  let entry = clientIpStore.get(`nutr_context_reconcile_${clientIp}`);
+  if (!entry || entry.resetTime <= now) {
+    entry = { count: 1, resetTime: now + windowMs };
+    clientIpStore.set(`nutr_context_reconcile_${clientIp}`, entry);
+  } else {
+    entry.count += 1;
+  }
+
+  const remaining = Math.max(0, maxRequestsPerWindow - entry.count);
+  const resetSeconds = Math.ceil((entry.resetTime - now) / 1000);
+
+  res.setHeader("RateLimit-Limit", maxRequestsPerWindow);
+  res.setHeader("RateLimit-Remaining", remaining);
+  res.setHeader("RateLimit-Reset", resetSeconds);
+
+  if (entry.count > maxRequestsPerWindow) {
+    res.setHeader("Retry-After", resetSeconds);
+    return res.status(429).json({
+      ok: false,
+      error: "Too many recipe-context reconciliation requests. Please wait a moment before trying again.",
+      retryAfterSeconds: resetSeconds,
+    });
+  }
+
+  next();
+}
+
+/**
  * Express middleware for rate limiting on AI metadata recovery endpoints.
  * Configurable via `METADATA_RECOVERY_RATE_LIMIT` (default 25 requests per minute).
  */

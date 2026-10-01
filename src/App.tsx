@@ -65,6 +65,11 @@ import { hydrateAiSelections } from './application/aiSelection';
 import { resolveNutritionAiCapabilities, resolveUnresolvedRowsWithAi } from './application/nutritionAiResolve';
 import { requestAiMassEstimateOffers } from './application/nutritionAiEstimate';
 import { buildAiSelectionRequestOptions } from './application/aiSelection';
+import {
+  createRecipeContextInstanceToken,
+  createRecipeContextRequestId,
+  requestRecipeContextReview,
+} from './application/nutritionAiRecipeContext';
 
 /** The ONE dedicated AI-3 route. It never shares the AI-2 planning route. */
 const AI_ESTIMATE_ENDPOINT = '/api/nutrition/estimate-mass';
@@ -95,6 +100,7 @@ import { RecipeDetailView } from './components/RecipeDetailView';
 import type {
   AdvancedNutritionAiResolveHandler,
   AdvancedNutritionAiEstimateHandler,
+  AdvancedNutritionRecipeContextReviewHandler,
   AdvancedNutritionApplyHandler,
   AdvancedNutritionApplyHandlerArgs,
   AdvancedNutritionApplyUiResult,
@@ -938,6 +944,59 @@ export default function App() {
     [advancedNutritionBundle.session, networkAdapter, resolveNutritionCapabilitiesOnce],
   );
 
+  /**
+   * The AI-4D2 EXPLICIT recipe-context REVIEW port.
+   *
+   * Called ONLY from the review control the user clicks. It performs the two-step
+   * chain (one provider interpretation, then deterministic reconciliation) and
+   * returns an INERT review session with an empty decision overlay: nothing is
+   * accepted here, and no nutrition state is touched.
+   *
+   * `recipeInstance` is an opaque memory-only token minted per review session. It
+   * is not a path, URL or recipe id, and it is never persisted.
+   *
+   * Capability: the adapter gates FIRST, so a Basic tier costs zero provider
+   * calls, exactly like every other AI surface in this shell.
+   */
+  const handleReviewRecipeContextWithAi: AdvancedNutritionRecipeContextReviewHandler = useCallback(
+    async ({ recipe: target }) => {
+      if (!(await resolveNutritionCapabilitiesOnce()).aiInterpretation) {
+        return {
+          ok: false,
+          message: "Recipe context review isn't available right now.",
+        };
+      }
+      try {
+        // The same AI selection headers every other text AI surface sends.
+        const options = await buildAiSelectionRequestOptions();
+        return await requestRecipeContextReview({
+          network: networkAdapter,
+          source: {
+            recipe: {
+              title: target.title,
+              servings: target.servings,
+              ingredients: target.ingredients.map((ingredient) => ({
+                original: ingredient.original ?? ingredient.name ?? '',
+                name: ingredient.name,
+              })),
+            },
+            instructions: target.instructions.map((step) => ({ text: step.text })),
+            recipeInstance: createRecipeContextInstanceToken(),
+          },
+          requestId: createRecipeContextRequestId(),
+          headers: options.headers,
+          signal: options.signal,
+        });
+      } catch {
+        return {
+          ok: false,
+          message: "Recipe context review isn't available right now.",
+        };
+      }
+    },
+    [networkAdapter, resolveNutritionCapabilitiesOnce]
+  );
+
   // Save or Create a Vault Note (e.g. ingredient or technique created from wikilink modal)
   const handleSaveNoteToVault = async (note: VaultNote) => {
     setNotes((prev) => {
@@ -1616,6 +1675,7 @@ export default function App() {
             onApplyAdvancedNutrition={handleApplyAdvancedNutrition}
             onResolveAdvancedNutritionAi={handleResolveAdvancedNutritionAi}
             onEstimateMassesWithAi={handleEstimateMassesWithAi}
+            onReviewRecipeContextWithAi={handleReviewRecipeContextWithAi}
           />
         ) : activeTab === 'grid' ? (
           /* Recipe Gallery View */

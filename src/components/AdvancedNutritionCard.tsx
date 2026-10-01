@@ -76,8 +76,20 @@ import {
   type AdvancedNutritionApplyUi,
   type AdvancedNutritionAiUi,
   type AdvancedNutritionAiSuggestion,
+  type AdvancedNutritionRecipeContextUi,
 } from './AdvancedNutritionModal';
 import { AdvancedNutritionSavedReport } from './AdvancedNutritionSavedReport';
+import {
+  acceptRecipeContextRow,
+  dismissRecipeContextRow,
+  recipeContextReviewView,
+  undoRecipeContextRow,
+  type RecipeContextReviewSession,
+  type RecipeContextSessionResult,
+} from '../core/nutritionV2/aiRecipeContextSession';
+
+/** The user-facing label for removing an accepted AI-3 estimate. */
+export const AI_ESTIMATE_CLEAR_LABEL = 'Remove estimate';
 
 export type AdvancedNutritionBundleUiStatus =
   | 'idle'
@@ -148,7 +160,30 @@ interface AdvancedNutritionCardProps {
    * until the user performs a SECOND explicit click.
    */
   onEstimateMassesWithAi?: AdvancedNutritionAiEstimateHandler;
+  /**
+   * Optional AI-4D2 RECIPE-CONTEXT REVIEW port, injected by the shell for the same
+   * reason as every other AI port: the UI never imports the application layer or
+   * any provider/server code. It is called ONLY on an explicit click, never on
+   * open, render or re-analysis, and it returns an inert review session with an
+   * EMPTY decision overlay: nothing is accepted on the user's behalf.
+   */
+  onReviewRecipeContextWithAi?: AdvancedNutritionRecipeContextReviewHandler;
 }
+
+/**
+ * The outcome of one explicit recipe-context review. Deliberately narrow: a
+ * bounded message on failure, or an inert review session on success. No nutrition
+ * state, no preview, no persistence field and no authority crosses this boundary.
+ */
+export interface AdvancedNutritionRecipeContextOutcome {
+  readonly ok: boolean;
+  readonly message?: string;
+  readonly session?: RecipeContextReviewSession;
+}
+
+export type AdvancedNutritionRecipeContextReviewHandler = (args: {
+  readonly recipe: ObsidianRecipe;
+}) => Promise<AdvancedNutritionRecipeContextOutcome>;
 
 /**
  * The AI-3 estimate port. It returns already-reconciled, already-sanitised
@@ -303,6 +338,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
   onResolveWithAi,
   onPlanWithAi,
   onEstimateMassesWithAi,
+  onReviewRecipeContextWithAi,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [isSavedReportOpen, setIsSavedReportOpen] = useState(false);
@@ -381,6 +417,129 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
    * editor opens for THAT recipe (one click, not two). It is consumed once and
    * NEVER set by viewing or by Edit / Re-analyze.
    */
+  // ---------------------------------------------------------------------------
+  // AI-4D2 EXPLICIT RECIPE-CONTEXT REVIEW (session-only, memory-only, NO authority)
+  //
+  // The review is INERT data owned by this component and by nothing else: it is
+  // never dispatched into `Phase4State`, never hydrated, never persisted and never
+  // sent anywhere. Accept/Dismiss/Undo are pure local decisions, so they make no
+  // network call at all — only `handleReviewRecipeContext` performs a request, and
+  // only from an explicit click.
+  // ---------------------------------------------------------------------------
+  const [recipeContextSession, setRecipeContextSession] = useState<RecipeContextReviewSession | null>(
+    null
+  );
+  const [recipeContextRunning, setRecipeContextRunning] = useState(false);
+  const [recipeContextMessage, setRecipeContextMessage] = useState<string | null>(null);
+  const [recipeContextStarted, setRecipeContextStarted] = useState(false);
+  /**
+   * Monotonic review generation. Bumped on every new run, every clear, and every
+   * recipe change, so an older completion can never replace newer review state.
+   */
+  const recipeContextGeneration = useRef(0);
+  /** The recipe identity this review belongs to; a decision must match it. */
+  const recipeContextRecipeId = useRef<string | null>(null);
+
+  /**
+   * A new recipe ends the review. Decisions from the previous recipe are dropped
+   * with it, so a stale review can never be accepted against different source text.
+   */
+  useEffect(() => {
+    recipeContextGeneration.current += 1;
+    recipeContextRecipeId.current = null;
+    setRecipeContextSession(null);
+    setRecipeContextMessage(null);
+    setRecipeContextStarted(false);
+    setRecipeContextRunning(false);
+  }, [recipe.id]);
+
+  /** Clears the review and every decision in it. */
+  const clearRecipeContextReview = useCallback(() => {
+    recipeContextGeneration.current += 1;
+    recipeContextRecipeId.current = null;
+    setRecipeContextSession(null);
+    setRecipeContextMessage(null);
+    setRecipeContextStarted(false);
+  }, []);
+
+  const handleReviewRecipeContext = useCallback(async () => {
+    if (!onReviewRecipeContextWithAi || recipeContextRunning) return;
+    recipeContextGeneration.current += 1;
+    const token = recipeContextGeneration.current;
+    setRecipeContextRunning(true);
+    // A run has now been requested: the surface offers Clear review from here on,
+    // whether or not the run produces a review.
+    setRecipeContextStarted(true);
+    setRecipeContextMessage(null);
+    try {
+      const outcome = await onReviewRecipeContextWithAi({ recipe });
+      // An older run finishing late can never write state.
+      if (token !== recipeContextGeneration.current) return;
+      if (outcome.ok !== true || outcome.session === undefined) {
+        setRecipeContextMessage(
+          outcome.message ?? "Recipe context review isn't available right now."
+        );
+        return;
+      }
+      setRecipeContextSession(outcome.session);
+      recipeContextRecipeId.current = recipe.id;
+    } finally {
+      if (token === recipeContextGeneration.current) setRecipeContextRunning(false);
+    }
+  }, [onReviewRecipeContextWithAi, recipe, recipeContextRunning]);
+
+  /**
+   * Applies ONE user decision through the pure acceptance core. The identity is
+   * re-checked there, so a stale review fails closed instead of being applied.
+   */
+  const applyRecipeContextDecision = useCallback(
+    (decide: (session: RecipeContextReviewSession) => RecipeContextSessionResult) => {
+      const current = recipeContextSession;
+      if (current === null || recipeContextRunning) return;
+      if (recipeContextRecipeId.current !== recipe.id) return;
+      const result = decide(current);
+      if (!result.ok) return;
+      setRecipeContextSession(result.session);
+    },
+    [recipe.id, recipeContextRunning, recipeContextSession]
+  );
+
+  const handleAcceptRecipeContextRow = useCallback(
+    (lineRef: string) => {
+      applyRecipeContextDecision((session) =>
+        acceptRecipeContextRow(session, lineRef, {
+          requestId: session.request_id,
+          contextBinding: session.context_binding,
+        })
+      );
+    },
+    [applyRecipeContextDecision]
+  );
+
+  const handleDismissRecipeContextRow = useCallback(
+    (lineRef: string) => {
+      applyRecipeContextDecision((session) =>
+        dismissRecipeContextRow(session, lineRef, {
+          requestId: session.request_id,
+          contextBinding: session.context_binding,
+        })
+      );
+    },
+    [applyRecipeContextDecision]
+  );
+
+  const handleUndoRecipeContextRow = useCallback(
+    (lineRef: string) => {
+      applyRecipeContextDecision((session) =>
+        undoRecipeContextRow(session, lineRef, {
+          requestId: session.request_id,
+          contextBinding: session.context_binding,
+        })
+      );
+    },
+    [applyRecipeContextDecision]
+  );
+
   const [pendingGenerateRecipeKey, setPendingGenerateRecipeKey] = useState<string | null>(null);
 
   // The saved report renders from this ALREADY-VALIDATED block alone; no USDA
@@ -1507,6 +1666,83 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
     });
   };
 
+  /**
+   * The AI-4D2 review view model: a pure projection of the inert review session.
+   * It exists only to render; every decision it exposes is the user's own, and
+   * nothing in it can change nutrition state.
+   */
+  const recipeContextUi: AdvancedNutritionRecipeContextUi | undefined = onReviewRecipeContextWithAi
+    ? (() => {
+        const session = recipeContextSession;
+        if (session === null) {
+          return {
+            available: true,
+            running: recipeContextRunning,
+            message: recipeContextMessage,
+            rows: [],
+            pending_count: 0,
+            accepted_count: 0,
+            dismissed_count: 0,
+            abstained_count: 0,
+            uninterpreted_count: 0,
+            reviewStarted: recipeContextStarted,
+            onReview: () => {
+              void handleReviewRecipeContext();
+            },
+            onAccept: handleAcceptRecipeContextRow,
+            onDismiss: handleDismissRecipeContextRow,
+            onUndo: handleUndoRecipeContextRow,
+            onClearReview: clearRecipeContextReview,
+          };
+        }
+        const view = recipeContextReviewView(session, {
+          requestId: session.request_id,
+          contextBinding: session.context_binding,
+        });
+        // A review that is no longer current renders as no review at all.
+        if (!view.ok) {
+          return {
+            available: true,
+            running: recipeContextRunning,
+            message: recipeContextMessage,
+            rows: [],
+            pending_count: 0,
+            accepted_count: 0,
+            dismissed_count: 0,
+            abstained_count: 0,
+            uninterpreted_count: 0,
+            reviewStarted: recipeContextStarted,
+            onReview: () => {
+              void handleReviewRecipeContext();
+            },
+            onAccept: handleAcceptRecipeContextRow,
+            onDismiss: handleDismissRecipeContextRow,
+            onUndo: handleUndoRecipeContextRow,
+            onClearReview: clearRecipeContextReview,
+          };
+        }
+        return {
+          available: true,
+          running: recipeContextRunning,
+          message: recipeContextMessage,
+          rows: view.view.rows,
+          pending_count: view.view.pending_count,
+          accepted_count: view.view.accepted_count,
+          dismissed_count: view.view.dismissed_count,
+          abstained_count: view.view.abstained_count,
+          uninterpreted_count: view.view.uninterpreted_count,
+          reviewStarted: recipeContextStarted,
+          onReview: () => {
+            void handleReviewRecipeContext();
+          },
+          onAccept: handleAcceptRecipeContextRow,
+          onDismiss: handleDismissRecipeContextRow,
+          onUndo: handleUndoRecipeContextRow,
+          onClearReview: clearRecipeContextReview,
+        };
+      })()
+    : undefined;
+
   const aiUi: AdvancedNutritionAiUi | undefined =
     session && adaptation.ok && onResolveWithAi
       ? {
@@ -1765,6 +2001,18 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
                   {aiEstimateApplyBlock.map((estimate) => (
                     <li key={estimate.lineRef} data-testid={`ai-estimate-block-${estimate.lineRef}`}>
                       {`${estimate.lower_grams}\u2013${estimate.upper_grams} g \u00b7 estimate uses ${estimate.representative_grams} g`}
+                      {/* The accepted AI estimate is only ever removed by the user,
+                          through the EXISTING reducer action. Nothing about AI-3
+                          changes: the line simply returns to needing a confirmed
+                          amount, exactly as before the estimate was accepted. */}
+                      <button
+                        type="button"
+                        data-testid={`advanced-nutrition-ai-estimate-clear-${estimate.lineRef}`}
+                        onClick={() => dispatch({ type: 'clear_ai_estimate', lineRef: estimate.lineRef })}
+                        className="ml-1.5 px-1.5 py-0.5 rounded border border-amber-500/30 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20"
+                      >
+                        {AI_ESTIMATE_CLEAR_LABEL}
+                      </button>
                     </li>
                   ))}
                 </ul>
@@ -1829,6 +2077,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
           workingDirty={workingDirty}
           hydratedFromSaved={hydratedFromSaved}
           ai={aiUi}
+          recipeContext={recipeContextUi}
         />
       )}
 

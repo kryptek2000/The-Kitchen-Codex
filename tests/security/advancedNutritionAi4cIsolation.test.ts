@@ -74,11 +74,24 @@ function importsOf(rel: string): ReadonlyArray<string> {
 // 1. EXACTLY ONE ROUTE, EXACTLY ONE LIMITER
 // ---------------------------------------------------------------------------
 describe('AI-4C isolation — exactly one route and one limiter path', () => {
-  it('exactly one AI-4 recipe-context route exists', () => {
+  it('exactly one PROVIDER-BACKED AI-4 recipe-context route exists', () => {
     const app = src(APP);
-    const routes = app.match(/app\.(post|get|put|delete|patch)\([^)]*recipe-context[^)]*/g) ?? [];
-    expect(routes).toHaveLength(1);
-    expect(routes[0]).toContain('app.post("/api/nutrition/recipe-context"');
+    const routes = [
+      ...(app.match(/app\.(post|get|put|delete|patch)\([^)]*recipe-context[^)]*/g) ?? []),
+    ].map((route) => route.replace(/\s+/g, ''));
+    // AI-4C remains the ONLY route that can spend a provider call. AI-4D1 shipped
+    // no route; AI-4D2 added the provider-FREE reconciliation route beside it, so
+    // the AI-4C route is still the single provider-backed path.
+    expect(routes).toHaveLength(2);
+    // Only the AI-4C route is guarded by the paid-text pricing guard, so only it
+    // can reach (and spend) a provider.
+    expect(routes.filter((route) => route.includes('textPricingGuard'))).toHaveLength(1);
+    expect(routes[0]).toContain('app.post("/api/nutrition/recipe-context",requireAiAccessToken,textPricingGuard');
+    // The AI-4D2 route is provider-free: no pricing guard, its own limiter.
+    expect(routes[1]).toContain(
+      'app.post("/api/nutrition/recipe-context/reconcile",requireAiAccessToken,nutritionContextReconcileRateLimiter'
+    );
+    expect(routes[1]).not.toContain('textPricingGuard');
   });
 
   it('that route is guarded by the standard AI endpoint middleware chain', () => {

@@ -41,6 +41,7 @@ import { buildRecipeRelationshipIndex, recipeIdentity } from '../utils/recipeRel
 import {
   type AdvancedNutritionAiResolveHandler,
   type AdvancedNutritionAiEstimateHandler,
+  type AdvancedNutritionRecipeContextReviewHandler,
   type AdvancedNutritionApplyHandler,
   type AdvancedNutritionBundleUiStatus,
 } from './AdvancedNutritionCard';
@@ -94,6 +95,8 @@ interface RecipeDetailViewProps {
   onResolveAdvancedNutritionAi?: AdvancedNutritionAiResolveHandler;
   /** Optional AI-3 bounded mass-estimate port (injected by the shell). */
   onEstimateMassesWithAi?: AdvancedNutritionAiEstimateHandler;
+  /** Optional AI-4D2 recipe-context REVIEW port (injected by the shell). */
+  onReviewRecipeContextWithAi?: AdvancedNutritionRecipeContextReviewHandler;
 }
 
 export function RecipeDetailView({
@@ -119,6 +122,7 @@ export function RecipeDetailView({
   onApplyAdvancedNutrition,
   onResolveAdvancedNutritionAi,
   onEstimateMassesWithAi,
+  onReviewRecipeContextWithAi,
 }: RecipeDetailViewProps) {
   const [currentServings, setCurrentServings] = useState<number>(recipe.servings || 4);
   const [activeViewMode, setActiveViewMode] = useState<'visual' | 'markdown'>('visual');
@@ -648,6 +652,7 @@ export function RecipeDetailView({
                 onApplyAdvancedNutrition={onApplyAdvancedNutrition}
                 onResolveAdvancedNutritionAi={onResolveAdvancedNutritionAi}
                 onEstimateMassesWithAi={onEstimateMassesWithAi}
+                onReviewRecipeContextWithAi={onReviewRecipeContextWithAi}
               />
 
               <div className="bg-[#141414] rounded-2xl border border-white/5 p-5 shadow-xs">

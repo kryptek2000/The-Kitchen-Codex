@@ -8036,7 +8036,7 @@ current targets were omitted — without granting any authority.
 | AI-4B | deterministic extraction of recipe-context evidence — pure, offline |
 | AI-4C | bounded semantic transport: one provider call -> one validated proposal |
 | **AI-4D1** | **freshness + request correlation + inert review classification** |
-| AI-4D2 | FUTURE explicit user acceptance, review UI, per-item undo/dismiss, session-only context — **NOT STARTED** |
+| **AI-4D2** | **explicit USER acceptance + per-item undo/dismiss + session-only accepted context — see §53** |
 
 > Model output is never authority by itself. AI-4D1 grants authority over nothing:
 > not identity, not FDC identity, not matching, not mass, not grams, not portions,
@@ -8197,3 +8197,153 @@ AUTHORITY, and AI-4D1 adds no path that could change it. AI-4D1 stops immediatel
 before the acceptance boundary, because AI-4A's architecture requires acceptance UI,
 per-item undo/dismiss and byte-truthful restoration to ship together WHEN acceptance
 is introduced.
+
+## §53. AI-4D2 — EXPLICIT USER ACCEPTANCE AND SESSION-ONLY CONTEXT (NO AUTHORITY)
+
+AI-4D1 produces an inert CURRENT review plan. A human can now **accept** or **dismiss**
+individual interpretations, and undo a decision. Acceptance is real and user-driven — and
+it still moves **nothing** in nutrition.
+
+**AI-4D2 ships explicit acceptance, its review UI, and a session-only accepted-context
+object — and nothing else.**
+
+### 53.1 The chain, and who may move
+
+```
+AI proposes                      AI-4C   one provider call -> one validated proposal
+deterministic reconciliation     AI-4D1  CURRENT plan, no provider, no authority
+USER reviews                     AI-4D2  Accept / Dismiss / Undo, per line
+session-only accepted context    AI-4D2  inert; no consumer in this phase
+```
+
+There is no confidence threshold that bypasses the user, no `high`-confidence shortcut,
+no bulk "accept all", no AI-4B signal that can promote itself, and no automatic acceptance
+on open, focus, render, resolve or re-analysis. The review control is the ONLY caller of
+the AI-4 port.
+
+### 53.2 Files
+
+| file | role |
+| --- | --- |
+| `src/core/nutritionV2/aiRecipeContextSession.ts` | PURE immutable acceptance session: creation, Accept/Dismiss/Undo, review view, session-only accepted projection, bounded display copy |
+| `src/application/nutritionAiRecipeContext.ts` | the explicit two-step flow (interpret -> reconcile), bounded failure mapping, opaque memory-only identity tokens |
+| `server/app.ts` | the single provider-free route `POST /api/nutrition/recipe-context/reconcile` |
+| `server/rateLimiter.ts` | `nutritionContextReconcileRateLimiter` — its own bucket, never the AI-4C provider budget |
+| `src/components/AdvancedNutritionCard.tsx` | review state, generation sequencing, the AI-4 port, and the existing `clear_ai_estimate` control |
+| `src/components/AdvancedNutritionModal.tsx` | the review surface: rows, statuses, Accept/Dismiss/Undo, Clear review |
+| `src/application` -> `src/App.tsx` -> `RecipeNutritionSection` -> `RecipeDetailView` | the port is injected, never imported by the UI |
+
+### 53.3 Session identity: BOTH, always
+
+A review session binds `request_id` **and** `context_binding`.
+
+- `context_binding` proves the recipe semantic context is unchanged.
+- `request_id` proves the decisions belong to THIS interpretation operation. A second AI
+  run over an identical recipe may answer differently, so a new request id starts a NEW
+  review and prior decisions never silently transfer.
+
+AI-4 is whole-recipe interpretation, so acceptance is whole-context too: every action
+re-verifies the expected identity, and a stale review fails closed and no-ops. A recipe
+change, a new run, or an explicit Clear review ends the session and drops every decision.
+
+### 53.4 Acceptable, and only by the user
+
+Only a `reviewable` row may be accepted, and only by an explicit user action. An
+`abstained` row (the model gave a canonical `abstain_reason`) and an `uninterpreted` row
+(the model said nothing) are never accept-capable, and no D2 code invents an
+interpretation for either.
+
+The accept action carries **only `line_ref`**. The canonical interpretation is read from
+the immutable AI-4D1 plan, so no caller can supply a replacement role, relation, hint,
+confidence or explanation.
+
+### 53.5 Minimal overlay, byte-truthful undo
+
+The immutable reconciliation is the source of truth; the session is only an overlay of
+explicit choices: `accepted` | `dismissed`, keyed by `line_ref`. Absence means "still
+pending". Because the plan is never mutated, Undo restores the row byte-equivalently —
+there is no timestamp, counter or generated id that could make restoration untruthful.
+
+No direct switch: a decided row's only next move is Undo, so `accepted -> dismissed` and
+`dismissed -> accepted` without an Undo are refused.
+
+### 53.6 Accepted semantics are conservative
+
+The projection carries exactly what the user accepted:
+
+```
+{ accepted_version, request_id, context_binding, accepted: [{ line_ref, role, relations, preparation_hints }] }
+```
+
+`confidence` and `explanation` remain display metadata and deliberately do **not** become
+operational authority; `abstain_reason` can never appear. Accepting a row accepts the
+canonical relation assertions on that row; a relation target does not need its own
+interpretation accepted, and its own interpretation stays independently pending.
+
+Dismiss is a review choice, not semantic authority: it asserts nothing, suppresses
+nothing, does not claim the AI was wrong, and removes the row from accepted context only.
+
+### 53.7 The one transport
+
+```
+POST /api/nutrition/recipe-context/reconcile
+  -> reconcileRecipeContextOnServer(req.body)
+```
+
+Pure deterministic code: the server re-derives the CURRENT context from the authored
+recipe source data and reconciles the untrusted wire against it. There is **no provider**,
+so the route deliberately omits `textPricingGuard` and uses its own bucket — reconciling
+can neither consume nor be blocked by the AI-4C provider budget. Failure mapping is
+bounded: `invalid_input` / `invalid_wire` / `invalid_context` -> 400, `request_mismatch` /
+`stale_context` -> 409 so the client can honestly say "run the review again". No provider
+text, credential, model name or filesystem path can reach a caller.
+
+### 53.8 Accessibility and calm failure
+
+Every action is a real `<button type="button">` with a spoken `aria-label` naming the line,
+so keyboard and screen-reader users get the same three decisions. Status is TEXT
+(`Awaiting your review`, `Accepted for this session`, `Dismissed`, `AI abstained from this
+line`, `AI did not interpret this line`) — never colour alone. Messages are announced via
+`role="status"` and are fixed copy: `Recipe context review isn't available right now.`,
+`The recipe changed while AI was reviewing it. Run the review again.`
+
+### 53.9 Async races fail toward the newest run
+
+The card owns a monotonic generation counter, bumped on every run, every Clear review and
+every recipe change. An older completion can never replace newer review state. The
+`recipeInstance` and `requestId` are opaque memory-only tokens: never a path, URL, file
+name or recipe id, and never persisted.
+
+### 53.10 Zero nutrition authority — and yet
+
+The accepted context has **no downstream consumer in this phase**. Acceptance does not
+alter AI-3 eligibility or suppression, mass estimation, grams, matching, FDC identity,
+portions, nutrients, calculations, effective mass, the preview, persistence or Apply.
+`Phase4State` gains no store and no action, and the review path dispatches no Phase-4
+action of any kind. A future, separately authorized phase may consume accepted context and
+must re-prove currentness while preserving existing nutrition authority.
+
+### 53.11 AI-3 visibility: the accepted estimate can be removed
+
+An accepted AI-3 estimate was visible with no way back. The existing `clear_ai_estimate`
+reducer action is now reachable from the estimate list next to each blocked line
+(`Remove estimate`). AI-3 semantics are unchanged: the line simply returns to needing a
+confirmed amount, exactly as before the estimate was accepted.
+
+### 53.12 Proof
+
+| proof | file |
+| --- | --- |
+| acceptance core, cases A-R | `tests/unit/advancedNutritionAi4d2Acceptance.test.ts` |
+| explicit two-step flow, failures, sequencing | `tests/unit/advancedNutritionAi4d2ReviewFlow.test.ts` |
+| REAL jsdom behaviour: review, accept, dismiss, undo | `tests/unit/advancedNutritionAi4d2ReviewUi.test.tsx` |
+| authority differential over the real pinned bundle | `tests/unit/advancedNutritionAi4d2AuthorityDifferential.test.ts` |
+| route, limiter isolation, token gate | `tests/security/advancedNutritionAi4d2Route.test.ts` |
+| structural separation from nutrition state | `tests/security/advancedNutritionAi4d2Isolation.test.ts` |
+
+### 53.13 What AI-4D2 does NOT do
+
+No downstream consumption of accepted context, no AI-3 gating or suppression, no nutrition
+authority of any kind, no persistence, no hydration, no automatic acceptance, no bulk
+actions, no time-based freshness, no provider call during Accept/Dismiss/Undo, no network
+call for those three actions at all, and no new reducer action.

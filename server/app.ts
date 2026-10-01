@@ -14,6 +14,7 @@ import { resolveIngredientFoodsOnServer } from "./nutritionResolve.js";
 import { interpretIngredientsOnServer } from "./nutritionInterpret.js";
 import { planIngredientsOnServer } from "./nutritionPlan.js";
 import { interpretRecipeContextOnServer } from "./nutritionContext.js";
+import { reconcileRecipeContextOnServer } from "./recipeContextReconcile.js";
 import { estimateMassOnServer } from "./nutritionEstimate.js";
 import { recoverRecipeMetadata } from "./metadataRecovery.js";
 import {
@@ -24,6 +25,7 @@ import {
   nutritionInterpretRateLimiter,
   nutritionPlanRateLimiter,
   nutritionContextRateLimiter,
+  nutritionContextReconcileRateLimiter,
   metadataRecoveryRateLimiter,
   kitchenInterpretRateLimiter,
   kitchenRankRateLimiter,
@@ -935,6 +937,82 @@ export function createApp(opts: CreateAppOptions): express.Express {
       });
     }
   });
+
+  // AI-4D2 EXPLICIT-REVIEW RECONCILIATION endpoint.
+  //
+  // This is the ONLY transport for turning an untrusted AI-4C wire into an inert
+  // AI-4D1 CURRENT review plan. It is PURE DETERMINISTIC CODE: the server re-
+  // derives the CURRENT context from the authored recipe source data and
+  // reconciles the wire against it. NO PROVIDER IS INVOLVED, so this route
+  // deliberately omits `textPricingGuard` (there is no model, no spend and no
+  // pricing to verify) and uses its own small bucket so reconciling can neither
+  // consume nor be blocked by the AI-4C interpretation budget.
+  //
+  // It NEVER applies anything: the response is an inert plan the client can only
+  // show to the user. Acceptance is a separate, later, USER-initiated step in the
+  // client, and nothing here mutates nutrition state, persists, or changes Apply.
+  app.post(
+    "/api/nutrition/recipe-context/reconcile",
+    requireAiAccessToken,
+    nutritionContextReconcileRateLimiter,
+    async (req, res) => {
+      const clientIp = getClientIp(req);
+
+      try {
+        const result = reconcileRecipeContextOnServer(req.body);
+        if (result.ok !== true) {
+          // Non-strict narrowing: read the bounded code through an accessor.
+          const code = (result as { ok: false; code: string }).code;
+          // Deterministic refusals cost nothing. A MISMATCH or STALE context is a
+          // 409 because the client's review is out of date, not malformed.
+          if (code === "request_mismatch") {
+            return res.status(409).json({
+              ok: false,
+              code,
+              error: "This AI review answers a different request. Run the review again.",
+            });
+          }
+          if (code === "stale_context") {
+            return res.status(409).json({
+              ok: false,
+              code,
+              error: "The recipe changed while AI was reviewing it. Run the review again.",
+            });
+          }
+          if (code === "invalid_context") {
+            return res.status(400).json({
+              ok: false,
+              code,
+              error: "The recipe context could not be prepared for review.",
+            });
+          }
+          // `invalid_input` (shape/keys/bounds) and `invalid_wire` (unusable model
+          // output) are both deterministic refusals with no provider text echoed.
+          return res.status(400).json({
+            ok: false,
+            code,
+            error:
+              code === "invalid_wire"
+                ? "AI returned an unusable recipe interpretation. Run the review again."
+                : "Invalid recipe-context reconciliation request.",
+          });
+        }
+
+        const accepted = result as { readonly ok: true; readonly reconciliation: unknown };
+        return res.json({ ok: true, reconciliation: accepted.reconciliation });
+      } catch (error: any) {
+        const errorMsg = error?.message || "";
+        console.error(
+          `[${new Date().toISOString()}] [Client: ${clientIp}] Nutrition Recipe Context Reconcile Error:`,
+          errorMsg,
+        );
+        return res.status(500).json({
+          ok: false,
+          error: "An unexpected error occurred during recipe-context reconciliation.",
+        });
+      }
+    },
+  );
 
   // AI Vault Intelligence Metadata Recovery endpoint with rate limiting & validation
   app.post("/api/recover-metadata", requireAiAccessToken, textPricingGuard, metadataRecoveryRateLimiter, async (req, res) => {

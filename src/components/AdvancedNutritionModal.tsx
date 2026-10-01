@@ -47,6 +47,20 @@ import {
   formatAiEstimateOfferSummary,
   type AiEstimateOffer,
 } from '../core/nutritionV2/phase4/aiEstimateAccept';
+import {
+  AI_RECIPE_CONTEXT_ABSTAIN_LABEL,
+  AI_RECIPE_CONTEXT_ACCEPT_LABEL,
+  AI_RECIPE_CONTEXT_CLEAR_REVIEW_LABEL,
+  AI_RECIPE_CONTEXT_DISMISS_LABEL,
+  AI_RECIPE_CONTEXT_INTERPRETATION_LABEL,
+  AI_RECIPE_CONTEXT_NOTE,
+  AI_RECIPE_CONTEXT_REVIEW_LABEL,
+  AI_RECIPE_CONTEXT_SECTION_LABEL,
+  AI_RECIPE_CONTEXT_STATUS_LABEL,
+  AI_RECIPE_CONTEXT_UNDO_LABEL,
+  formatRecipeContextTerm,
+  type AiRecipeContextReviewStatus,
+} from '../core/nutritionV2/aiRecipeContextSession';
 
 /** Apply status shown by the explicit Phase 5B control. */
 export type AdvancedNutritionApplyStatus = 'idle' | 'confirming' | 'applying' | 'success' | 'error';
@@ -64,6 +78,52 @@ export interface AdvancedNutritionApplyUi {
   readonly onRequest: () => void;
   readonly onConfirm: () => void;
   readonly onCancel: () => void;
+}
+
+/**
+ * ONE AI-4D2 review row, as pure display data.
+ *
+ * `status` is a closed vocabulary rendered as TEXT, so review state is never
+ * communicated by colour alone. The three action flags come straight from the
+ * acceptance core: only a pending reviewable row can be accepted or dismissed,
+ * and only a decided row can be undone.
+ */
+export interface AdvancedNutritionRecipeContextRow {
+  readonly line_ref: string;
+  readonly source_text: string;
+  readonly status: AiRecipeContextReviewStatus;
+  readonly role?: string;
+  readonly preparation_hints: ReadonlyArray<string>;
+  readonly relations: ReadonlyArray<{ readonly kind: string; readonly target_ref: string }>;
+  readonly confidence?: string;
+  readonly explanation?: string;
+  readonly abstain_reason?: keyof typeof AI_RECIPE_CONTEXT_ABSTAIN_LABEL;
+  readonly accept_capable: boolean;
+  readonly dismiss_capable: boolean;
+  readonly undo_capable: boolean;
+}
+
+/**
+ * The AI-4D2 review surface, injected by the card. Absent when no AI-4 port is
+ * wired. Every callback is a USER action: opening the modal never calls any of
+ * them, and Accept/Dismiss/Undo are pure local decisions that make no request.
+ */
+export interface AdvancedNutritionRecipeContextUi {
+  readonly available: boolean;
+  readonly running: boolean;
+  readonly message: string | null;
+  readonly rows: ReadonlyArray<AdvancedNutritionRecipeContextRow>;
+  readonly pending_count: number;
+  readonly accepted_count: number;
+  readonly dismissed_count: number;
+  readonly abstained_count: number;
+  readonly uninterpreted_count: number;
+  readonly reviewStarted: boolean;
+  readonly onReview: () => void;
+  readonly onAccept: (lineRef: string) => void;
+  readonly onDismiss: (lineRef: string) => void;
+  readonly onUndo: (lineRef: string) => void;
+  readonly onClearReview: () => void;
 }
 
 /** One advisory AI-assisted candidate shown for a specific unresolved row. */
@@ -154,6 +214,12 @@ interface AdvancedNutritionModalProps {
   apply?: AdvancedNutritionApplyUi;
   /** Optional AI-assisted USDA resolution (advisory only). */
   ai?: AdvancedNutritionAiUi;
+  /**
+   * Optional AI-4D2 explicit recipe-context REVIEW surface. Display + the user's
+   * own Accept/Dismiss/Undo actions only. It has no nutrition authority: nothing
+   * here changes a match, a portion, a mass, a nutrient, the preview or Apply.
+   */
+  recipeContext?: AdvancedNutritionRecipeContextUi;
 }
 
 const OUTCOME_LABEL: Record<string, string> = {
@@ -926,6 +992,7 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
   hydratedFromSaved = false,
   apply,
   ai,
+  recipeContext,
 }) => {
   const { dialogRef, onKeyDown } = useDialogFocus(isOpen, onClose);
   const [expandedLineRef, setExpandedLineRef] = useState<string | null>(null);
@@ -1137,6 +1204,182 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                     Dismiss
                   </button>
                 </p>
+              )}
+            </div>
+          )}
+
+          {/* AI-4D2 EXPLICIT RECIPE-CONTEXT REVIEW (session-only, no authority).
+
+              The user asks for a review with ONE explicit click; the model output
+              is then shown line by line as an INTERPRETATION, and only the user can
+              accept or dismiss it. There is no auto-accept, no confidence
+              threshold, no bulk action, and nothing here changes nutrition: no
+              match, portion, mass, nutrient, preview, Apply or saved value. */}
+          {recipeContext && (
+            <div
+              data-testid="advanced-nutrition-recipe-context"
+              className="p-3 rounded-xl bg-[#0E0E0E] border border-white/10 space-y-2"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p
+                    data-testid="advanced-nutrition-recipe-context-title"
+                    className="text-[11px] font-semibold text-gray-200"
+                  >
+                    {AI_RECIPE_CONTEXT_SECTION_LABEL}
+                  </p>
+                  <p className="text-[10px] text-gray-500">
+                    AI reads the whole recipe and suggests how each line relates to the
+                    others. Nothing is accepted for you, and nothing here changes
+                    nutrition values.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    data-testid="advanced-nutrition-recipe-context-review"
+                    disabled={!recipeContext.available || recipeContext.running}
+                    aria-disabled={!recipeContext.available || recipeContext.running}
+                    onClick={recipeContext.onReview}
+                    className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/40 text-indigo-100 disabled:opacity-50"
+                  >
+                    {recipeContext.running ? 'Reviewing recipe context…' : AI_RECIPE_CONTEXT_REVIEW_LABEL}
+                  </button>
+                  {recipeContext.reviewStarted && !recipeContext.running && (
+                    <button
+                      type="button"
+                      data-testid="advanced-nutrition-recipe-context-clear"
+                      onClick={recipeContext.onClearReview}
+                      className="px-2.5 py-1 rounded-lg text-[11px] font-medium bg-white/5 hover:bg-white/10 border border-white/15 text-gray-300"
+                    >
+                      {AI_RECIPE_CONTEXT_CLEAR_REVIEW_LABEL}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {!recipeContext.available && (
+                <p className="text-[10px] text-gray-500">
+                  AI recipe context is not configured in this build. Manual review is always
+                  available.
+                </p>
+              )}
+
+              {recipeContext.message !== null && (
+                <p
+                  data-testid="advanced-nutrition-recipe-context-message"
+                  role="status"
+                  className="text-[11px] text-indigo-200"
+                >
+                  {recipeContext.message}
+                </p>
+              )}
+
+              {recipeContext.rows.length > 0 && (
+                <>
+                  <p
+                    data-testid="advanced-nutrition-recipe-context-summary"
+                    className="text-[10px] text-gray-400"
+                  >
+                    {`${recipeContext.accepted_count} accepted · ${recipeContext.dismissed_count} dismissed · ${recipeContext.pending_count} awaiting review · ${recipeContext.abstained_count} abstained · ${recipeContext.uninterpreted_count} not interpreted`}
+                  </p>
+                  <p className="text-[10px] text-gray-500">{AI_RECIPE_CONTEXT_NOTE}</p>
+                  <ul className="space-y-1.5" data-testid="advanced-nutrition-recipe-context-rows">
+                    {recipeContext.rows.map((row) => (
+                      <li
+                        key={row.line_ref}
+                        data-testid={`advanced-nutrition-recipe-context-row-${row.line_ref}`}
+                        data-status={row.status}
+                        className="p-2 rounded-lg bg-[#141414] border border-white/10 space-y-1"
+                      >
+                        <div className="flex flex-wrap items-baseline justify-between gap-2">
+                          <span className="text-[11px] text-gray-100">{row.source_text}</span>
+                          <span
+                            data-testid={`advanced-nutrition-recipe-context-status-${row.line_ref}`}
+                            className="text-[10px] text-gray-400"
+                          >
+                            {AI_RECIPE_CONTEXT_STATUS_LABEL[row.status]}
+                          </span>
+                        </div>
+                        {row.status === 'pending' && row.role !== undefined && (
+                          <p className="text-[10px] text-gray-400">
+                            {`${AI_RECIPE_CONTEXT_INTERPRETATION_LABEL}: ${formatRecipeContextTerm(row.role)}`}
+                            {row.preparation_hints.length > 0
+                              ? ` · ${row.preparation_hints.map(formatRecipeContextTerm).join(', ')}`
+                              : ''}
+                          </p>
+                        )}
+                        {row.status === 'accepted' && row.role !== undefined && (
+                          <p className="text-[10px] text-emerald-200/90">
+                            {`${AI_RECIPE_CONTEXT_INTERPRETATION_LABEL}: ${formatRecipeContextTerm(row.role)}`}
+                            {row.preparation_hints.length > 0
+                              ? ` · ${row.preparation_hints.map(formatRecipeContextTerm).join(', ')}`
+                              : ''}
+                          </p>
+                        )}
+                        {row.relations.length > 0 && row.status !== 'uninterpreted' && (
+                          <p className="text-[10px] text-gray-400">
+                            {`${AI_RECIPE_CONTEXT_INTERPRETATION_LABEL}: ${row.relations
+                              .map((relation) => `${formatRecipeContextTerm(relation.kind)} ${relation.target_ref}`)
+                              .join('; ')}`}
+                          </p>
+                        )}
+                        {row.explanation !== undefined && row.status !== 'uninterpreted' && (
+                          <p className="text-[10px] text-gray-400 italic">
+                            {`${AI_RECIPE_CONTEXT_INTERPRETATION_LABEL}: ${row.explanation}`}
+                          </p>
+                        )}
+                        {row.confidence !== undefined && row.status !== 'uninterpreted' && (
+                          <p className="text-[10px] text-gray-500">
+                            {`${AI_RECIPE_CONTEXT_INTERPRETATION_LABEL} confidence: ${row.confidence}`}
+                          </p>
+                        )}
+                        {row.abstain_reason !== undefined && (
+                          <p className="text-[10px] text-gray-500">
+                            {`${AI_RECIPE_CONTEXT_INTERPRETATION_LABEL}: abstained — ${
+                              AI_RECIPE_CONTEXT_ABSTAIN_LABEL[row.abstain_reason]
+                            }`}
+                          </p>
+                        )}
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {row.accept_capable && (
+                            <button
+                              type="button"
+                              data-testid={`advanced-nutrition-recipe-context-accept-${row.line_ref}`}
+                              aria-label={`${AI_RECIPE_CONTEXT_ACCEPT_LABEL} AI interpretation for ${row.source_text}`}
+                              onClick={() => recipeContext.onAccept(row.line_ref)}
+                              className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-100"
+                            >
+                              {AI_RECIPE_CONTEXT_ACCEPT_LABEL}
+                            </button>
+                          )}
+                          {row.dismiss_capable && (
+                            <button
+                              type="button"
+                              data-testid={`advanced-nutrition-recipe-context-dismiss-${row.line_ref}`}
+                              aria-label={`${AI_RECIPE_CONTEXT_DISMISS_LABEL} AI interpretation for ${row.source_text}`}
+                              onClick={() => recipeContext.onDismiss(row.line_ref)}
+                              className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-white/5 hover:bg-white/10 border border-white/15 text-gray-200"
+                            >
+                              {AI_RECIPE_CONTEXT_DISMISS_LABEL}
+                            </button>
+                          )}
+                          {row.undo_capable && (
+                            <button
+                              type="button"
+                              data-testid={`advanced-nutrition-recipe-context-undo-${row.line_ref}`}
+                              aria-label={`${AI_RECIPE_CONTEXT_UNDO_LABEL} your decision for ${row.source_text}`}
+                              onClick={() => recipeContext.onUndo(row.line_ref)}
+                              className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-white/5 hover:bg-white/10 border border-white/15 text-gray-300"
+                            >
+                              {AI_RECIPE_CONTEXT_UNDO_LABEL}
+                            </button>
+                          )}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </>
               )}
             </div>
           )}

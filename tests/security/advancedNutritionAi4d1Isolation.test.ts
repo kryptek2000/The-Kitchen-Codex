@@ -135,13 +135,28 @@ describe('AI-4D1 isolation — ZERO provider execution', () => {
     ]);
   });
 
-  it('the AI-4D1 modules are reachable ONLY from the AI-4D1 adapter (no UI, no other consumer)', () => {
+  it('the reconciliation core has exactly its three intended consumers, and NO UI', () => {
+    // AI-4D1 shipped the server adapter only. AI-4D2 then added the two CLIENT
+    // consumers that legitimately need the reconciliation contract: the pure
+    // acceptance session (the plan it overlays decisions onto) and the application
+    // layer (the transport response assertion). No component, view or hook reaches
+    // the reconciliation core directly.
     const consumers: string[] = [];
     for (const rel of [...walk(join(REPO, 'src')), ...walk(join(REPO, 'server'))]) {
       if (rel === RECONCILE) continue;
       if (/aiRecipeContextReconcile/.test(src(rel))) consumers.push(rel);
     }
-    expect(consumers).toEqual([SERVER_ADAPTER]);
+    expect(consumers.sort()).toEqual(
+      [
+        SERVER_ADAPTER,
+        'src/application/nutritionAiRecipeContext.ts',
+        'src/core/nutritionV2/aiRecipeContextSession.ts',
+      ].sort()
+    );
+    for (const rel of consumers) {
+      expect(rel.startsWith('src/components/'), rel).toBe(false);
+      expect(rel.startsWith('src/hooks/'), rel).toBe(false);
+    }
   });
 });
 
@@ -310,26 +325,37 @@ describe('AI-4D1 isolation — NO acceptance, state, persistence, Apply, UI, rou
     expect(AI_RECIPE_CONTEXT_RECONCILE_VERSION).toBe('nutrition_ai_recipe_context_reconcile_v1');
   });
 
-  it('NO new HTTP route: the AI-4 route inventory is unchanged', () => {
+  it('exactly ONE AI-4D route exists: the AI-4D2 provider-free reconciliation endpoint', () => {
     const app = src('server/app.ts');
-    const routes = app.match(/app\.(post|get|put|delete|patch)\("\/api\/[^"]*"/g) ?? [];
-    // No AI-4D route exists, and the AI-4C route is the only recipe-context one.
-    for (const route of routes) {
-      expect(route.toLowerCase()).not.toContain('reconcil');
-      expect(route.toLowerCase()).not.toContain('ai4d');
-    }
-    expect(app).toContain('"/api/nutrition/recipe-context"');
-    const nutritionRoutes = app.match(/app\.post\("\/api\/nutrition\/[^"]*"/g) ?? [];
-    expect(nutritionRoutes).toHaveLength(5);
+    const routes = [
+      ...(app.match(/app\.(post|get|put|delete|patch)\(\s*\n?\s*"\/api\/[^"]*"/g) ?? []),
+    ].map((route) => route.replace(/\s+/g, ''));
+    // AI-4C interpretation remains the only PROVIDER-backed recipe-context route.
+    const recipeContextRoutes = routes.filter((route) => route.includes('/api/nutrition/recipe-context'));
+    expect(recipeContextRoutes).toEqual([
+      'app.post("/api/nutrition/recipe-context"',
+      'app.post("/api/nutrition/recipe-context/reconcile"',
+    ]);
+    // The single AI-4D route is the reconciliation one, and nothing else mentions
+    // AI-4D in the route inventory.
+    expect(routes.filter((route) => route.toLowerCase().includes('ai4d'))).toEqual([]);
   });
 
-  it('NO new rate limiter', () => {
+  it('AI-4D1 added no limiter; AI-4D2 added exactly one, on its own key', () => {
     const limiter = src('server/rateLimiter.ts');
-    for (const forbidden of ['reconcil', 'Reconcile', 'ai4d', 'Ai4D', 'nutr_reconcile']) {
-      expect(limiter, forbidden).not.toContain(forbidden);
-    }
-    // The AI-4C bucket is still the only AI-4 bucket.
-    expect(limiter.match(/nutr_context_/g) ?? []).toHaveLength(2);
+    // Exactly one reconcile limiter exists, and it is the AI-4D2 provider-free one.
+    expect(limiter.match(/export function \w*Reconcile\w*RateLimiter/g) ?? []).toEqual([
+      'export function nutritionContextReconcileRateLimiter',
+    ]);
+    // It is a DEDICATED key: it never shares the AI-4C provider budget's entry.
+    expect(limiter).toContain('nutr_context_reconcile_${clientIp}');
+    expect(limiter).toContain('nutr_context_${clientIp}');
+    // The AI-4C provider bucket itself is untouched by this phase.
+    expect(limiter).toContain('NUTRITION_CONTEXT_RATE_LIMIT');
+    expect(limiter).toContain('NUTRITION_CONTEXT_RECONCILE_RATE_LIMIT');
+    // No bucket was ever named for a later phase, and AI-4D1 added no bucket.
+    expect(limiter.toLowerCase()).not.toContain('ai4d');
+    expect(limiter).not.toContain('nutr_reconcile');
   });
 
   it('NO UI: no client module references the AI-4D1 modules', () => {

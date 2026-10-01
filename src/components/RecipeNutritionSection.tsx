@@ -6,6 +6,7 @@ import { RecipeNutritionCard } from './RecipeNutritionCard';
 import {
   AdvancedNutritionCard,
   type AdvancedNutritionAiEstimateHandler,
+  type AdvancedNutritionRecipeContextReviewHandler,
   type AdvancedNutritionAiResolveHandler,
   type AdvancedNutritionApplyHandler,
   type AdvancedNutritionBundleUiStatus,
@@ -32,6 +33,12 @@ interface RecipeNutritionSectionProps {
    * dispatches an estimate selection.
    */
   onEstimateMassesWithAi?: AdvancedNutritionAiEstimateHandler;
+  /**
+   * Optional AI-4D2 recipe-context REVIEW port (injected by the shell).
+   * Injection-only: this component never calls a provider, never accepts anything
+   * on the user's behalf, and never touches nutrition state.
+   */
+  onReviewRecipeContextWithAi?: AdvancedNutritionRecipeContextReviewHandler;
 }
 
 /**
@@ -60,6 +67,7 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
   onApplyAdvancedNutrition,
   onResolveAdvancedNutritionAi,
   onEstimateMassesWithAi,
+  onReviewRecipeContextWithAi,
 }) => {
   const advancedPreferred = presentation.advanced_preferred;
   // Compact normal values derived from the saved Advanced block (single
@@ -157,6 +165,7 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
         savedAdvancedBlock={presentation.advanced}
         onResolveWithAi={onResolveAdvancedNutritionAi}
         onEstimateMassesWithAi={onEstimateMassesWithAi}
+        onReviewRecipeContextWithAi={onReviewRecipeContextWithAi}
       />
     </section>
   );
