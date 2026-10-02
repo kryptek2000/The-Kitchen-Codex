@@ -16,6 +16,23 @@
  *    subscription, account entitlement, or payment logic here.
  *  - `aiEstimation` is `'disabled'` for Basic Nutrition and `'available'`
     for AI Advanced Nutrition (AI-3 activation).
+ *
+ * WHAT THIS IS — AND WHAT IT IS NOT (AI-5A cross-reference)
+ * -----------------------------------------------------------
+ * This module answers the OPERATIONAL READINESS question only: "is an allowed AI
+ * provider/model/credential actually available RIGHT NOW?". Its `basic` /
+ * `ai_advanced` split is derived from provider configuration and availability, and
+ * that behaviour is deliberately unchanged.
+ *
+ * It is NOT the PRODUCT ACCESS / ENTITLEMENT boundary. The engine-facing product
+ * contract ("is this user entitled to AI Advanced Nutrition?") is a separate, pure,
+ * versioned value in `nutritionProductAccess.ts` (contract
+ * `nutrition_product_access_v1`). The two are independent: a configured provider does
+ * not grant the paid product, and an entitlement does not make a provider available.
+ * Future effective capability is `PRODUCT ENTITLED AND OPERATIONALLY READY`, never OR.
+ *
+ * AI-5A is INERT and is intentionally NOT imported, re-exported, wrapped or consulted
+ * here, so production behaviour remains byte-behaviourally unchanged.
  */
 
 export type NutritionExperienceTier = 'basic' | 'ai_advanced';

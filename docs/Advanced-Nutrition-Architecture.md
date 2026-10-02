@@ -8600,3 +8600,311 @@ suppression, does not alter matching, FDC identity, portions, grams, nutrients o
 calculations, does not alter Apply or persistence, adds no AI-4 field to
 `codex_nutrition`, adds no endpoint, adds no limiter, adds no provider call, and does not
 make `ai_recipe_context` an authenticated provenance class.
+
+---
+
+## §55. AI-5A — PRODUCT ACCESS / ENTITLEMENT CONTRACT
+
+### 55.1 Why this phase exists
+
+AI-0 established a strong **operational** capability boundary
+(`src/core/nutritionV2/nutritionCapabilities.ts`). That resolver effectively derives
+
+```
+Basic  vs  AI Advanced
+```
+
+from **provider configuration / availability**:
+
+```ts
+const aiAvailable = input.aiConfigured === true && input.aiReachable === true;
+```
+
+That was sufficient during engine construction. It is **not** a real paid-product
+entitlement boundary, because provider readiness says nothing about ownership.
+
+AI-5 productization must separate **three independent questions**:
+
+| # | Question | Owner | AI-5A |
+| --- | --- | --- | --- |
+| 1 | **PRODUCT ACCESS** — "Is this user entitled to AI Advanced Nutrition?" | `nutritionProductAccess.ts` | **this phase (contract only)** |
+| 2 | **OPERATIONAL READINESS** — "Is an allowed AI provider/model/credential actually available right now?" | `nutritionCapabilities.ts` (AI-0), unchanged | out of scope |
+| 3 | **NUTRITION AUTHORITY** — "May this AI result affect identity, mass, nutrients, Apply, persistence, etc.?" | AI-1 / AI-2 / AI-3 / AI-4 | out of scope, untouched |
+
+These are **not** the same question, and AI-5A establishes #1 as a **pure contract**.
+It must **not yet** wire that contract into production behaviour.
+
+### 55.2 Permanent product rule
+
+```
+BASIC NUTRITION                     AI ADVANCED NUTRITION
+- free/basic product access         - paid/product-entitled AI layer
+- deterministic USDA analysis       - includes the existing AI interpretation
+- deterministic matching              and orchestration features
+- manual food correction            - does NOT replace deterministic USDA authority
+- manual total-weight entry         - does NOT remove manual editing
+- authenticated source/count/       - does NOT itself grant nutrition authority
+  household portions
+- deterministic calculation
+- provenance
+- Review
+- Apply
+- existing/imported Basic Nutrition
+- ZERO AI entitlement
+```
+
+AI remains an **interpretation/orchestration layer over the deterministic
+foundation**. AI Advanced is *added to* Basic; it never withdraws a Basic
+capability.
+
+### 55.3 The critical separation: PRODUCT ENTITLEMENT ≠ PROVIDER AVAILABILITY
+
+| Scenario | Product access (AI-5A) | Why |
+| --- | --- | --- |
+| Basic user + Gemini configured | **Basic** | provider existence does **not** grant paid product access |
+| Basic user + valid BYOK session key | **Basic** | possession of an API key does **not** grant the AI Advanced product |
+| AI Advanced user + no configured provider | **AI Advanced** (entitled), AI operationally **unavailable** | readiness ≠ ownership |
+| AI Advanced user + expired BYOK key | **AI Advanced** (entitled), that credential cannot execute | possession ≠ usability, and never ≠ ownership |
+| AI Advanced user + valid provider | **AI Advanced**, entitled **and** operationally ready | the only fully-ready case |
+
+**Provider readiness may later determine whether an entitled feature can EXECUTE. It
+must NEVER determine whether the user OWNS the feature.**
+
+### 55.4 BYOK is not entitlement
+
+The repository already contains the historical **BYOK-5** architecture and
+implementation: session-only keys, `credentialSource`, `server_environment`,
+`session_only`, provider selection, connection testing, Provider Settings key UI and
+request-scoped credential resolution. **AI-5A does not redo it and does not rename any
+BYOK phase.**
+
+A BYOK credential answers:
+
+> "Whose credential may authorize this provider request?"
+
+It does **not** answer:
+
+> "Is this user entitled to AI Advanced Nutrition?"
+
+Uploading or configuring an API key **must not** grant product access.
+
+### 55.5 The contract
+
+Module: `src/core/nutritionV2/nutritionProductAccess.ts`.
+
+- **Closed contract version:** `nutrition_product_access_v1`
+  (`NUTRITION_PRODUCT_ACCESS_VERSION`).
+- **Closed product tier vocabulary** — exactly two, frozen:
+
+  | Tier | Meaning |
+  | --- | --- |
+  | `basic` | free/basic product access, ZERO AI entitlement |
+  | `ai_advanced` | the paid/product-entitled AI layer |
+
+  There are deliberately **no pricing-plan tiers** — no `monthly`, `annual`,
+  `lifetime`, `community`, `premium`, `enterprise`, `pro` or `paid`. Those belong to
+  later commercial/account layers, and a pricing plan must never become a nutrition
+  entitlement input.
+
+- **Closed AI product-feature vocabulary** — exactly four, frozen, and every one names
+  a capability that **already exists**:
+
+  | Feature | Existing architecture |
+  | --- | --- |
+  | `ai_interpretation` | AI-1 semantic ingredient interpretation |
+  | `ai_candidate_orchestration` | AI-2 candidate planning / orchestration |
+  | `ai_bounded_mass_estimation` | AI-3 bounded AI mass estimation |
+  | `ai_recipe_context_review` | AI-4 explicit recipe-context review |
+
+  There is deliberately **no `ai_recipe_context_application`**: accepted AI-4 context
+  still has **ZERO** downstream consumers, so it grants no authority and is not an
+  entitled product capability. Its absence from the closed vocabulary *is* the AI-4
+  trust boundary expressed as a type.
+
+- **Shape** (frozen, immutable):
+
+```ts
+NutritionProductAccess {
+  version                  // 'nutrition_product_access_v1'
+  tier                     // 'basic' | 'ai_advanced'
+  aiInterpretation          // boolean
+  aiCandidateOrchestration  // boolean
+  aiBoundedMassEstimation   // boolean
+  aiRecipeContextReview     // boolean
+}
+```
+
+**Every AI feature boolean is DERIVED from the closed tier.** There is no independent
+feature input and no caller-authored feature array, so an impossible product state
+cannot be expressed.
+
+### 55.6 The two canonical access states
+
+| | `BASIC_NUTRITION_PRODUCT_ACCESS` | `AI_ADVANCED_NUTRITION_PRODUCT_ACCESS` |
+| --- | --- | --- |
+| `tier` | `basic` | `ai_advanced` |
+| `aiInterpretation` | `false` | `true` |
+| `aiCandidateOrchestration` | `false` | `true` |
+| `aiBoundedMassEstimation` | `false` | `true` |
+| `aiRecipeContextReview` | `false` | `true` |
+
+These are the **only** two legal values. Both are `Object.freeze`d, both closed
+vocabulary arrays are frozen, and the resolver returns the canonical *instances*, so
+a repeated resolution never hands back a fresh, mutable copy.
+
+### 55.7 Fail-closed resolution
+
+`resolveNutritionProductAccess(value)` accepts a tier-shaped scalar and returns one of
+the two canonical instances.
+
+**Only the exact supported `'ai_advanced'` value may resolve to AI Advanced.**
+Missing, `null`, `undefined`, malformed, unknown, wrong-case, aliased, object, array,
+number, boolean and symbol input all resolve/refuse safely as **Basic**. There is **no
+loose coercion**. Specifically refused:
+
+- truthy booleans (`true`, `'yes'`, `'on'`, `'enabled'`) and numbers (`1`, `0`, `NaN`);
+- pricing aliases (`'pro'`, `'premium'`, `'paid'`, `'enterprise'`, `'lifetime'`);
+- case variants (`'AI_ADVANCED'`, `'Ai_Advanced'`), whitespace variants
+  (`' ai_advanced'`), and spelling variants (`'ai-advanced'`, `'aiAdvanced'`);
+- arbitrary feature-shaped payloads (`{ tier: 'ai_advanced', aiInterpretation: true }`,
+  `{ features: [...] }`, `['ai_interpretation']`);
+- `String` wrapper objects (`new String('ai_advanced')`) — only a primitive `===`
+  match is ever accepted.
+
+### 55.8 Impossible-state defense
+
+`basic + aiInterpretation: true` cannot be authored:
+
+- the **only** public construction entry point takes a tier scalar and returns a
+  canonical instance; extra arguments are ignored;
+- there is no `withFeatures`, `enable`, `overrides`, `features` or partial-update API;
+- `isNutritionProductAccess` is a deliberate **identity** check against the two
+  canonical instances, so a hand-authored object literal that mimics the shape — even
+  a structurally correct one — is **not** a product-access value and can never pass as
+  a decision;
+- `isNutritionProductFeatureEntitled` refuses any non-canonical value and any unknown
+  feature name.
+
+### 55.9 Product access is NOT proof
+
+`NutritionProductAccess` is a **product domain value**. It is **not**:
+
+- a signed entitlement;
+- an authenticated server receipt;
+- an account token;
+- a license token;
+- a billing receipt;
+- a JWT;
+- a provider credential;
+- authenticated nutrition provenance.
+
+**There is deliberately NO CRYPTOGRAPHY in AI-5A.** A client must **never** be able to
+send `{ tier: "ai_advanced" }` to an AI endpoint and thereby unlock it. A future phase
+(AI-5B) will define the **server-authoritative** source allowed to produce or use this
+decision; see §55.14.
+
+### 55.10 Product access is NOT nutrition authority
+
+Even a genuine AI Advanced entitlement grants permission only to **attempt** an allowed
+AI operation. It grants **ZERO** authority over:
+
+- USDA identity;
+- matching truth;
+- FDC identity;
+- grams / mass;
+- portions and household conversions;
+- nutrients and calculations;
+- Apply;
+- persistence;
+- provenance.
+
+Every existing AI-1 / AI-2 / AI-3 / AI-4 authority restriction remains intact. The
+access value carries no authority field at all — no `grams`, `mass`, `nutrients`,
+`digest`, `apply`, `persistence`, `candidate`, `provenance` or `authorization`.
+
+### 55.11 AI-5A is INERT — not wired
+
+AI-5A is a contract/foundation phase, analogous to AI-0. Production behaviour is
+**byte-behaviourally unchanged**. The new contract is deliberately **not** exported from
+`src/core/nutritionV2/index.ts`, and it is imported by **no** production module.
+
+Specifically, it is **not** wired into `src/App.tsx`, any server AI route, any provider
+route, `AdvancedNutritionCard`, `AdvancedNutritionModal`, `ProviderSettings`, AI-1,
+AI-2, AI-3, AI-4, Apply or persistence. It adds no reducer action, no state field, no
+schema field, no persistence field, no Apply field, no route, no limiter bucket, no
+provider call, no usage/cost/quota counter and no token/budget limit.
+
+### 55.12 The existing `nutritionCapabilities.ts` is unchanged
+
+AI-0's module keeps its exact runtime behaviour: it still derives the tier from
+`aiConfigured === true && aiReachable === true`, still exports the same symbols and the
+same labels, and still guarantees `manualEditing: true` and `deterministicReview: true`
+in every tier. AI-5A changed **documentation only** in that file, to distinguish the
+existing **operational capability** concept from the new **product-access** contract. It
+is not reinterpreted, not re-exported, not wrapped and not shadowed. The two modules do
+not reference each other's implementation symbols.
+
+### 55.13 AI-4E / D2 invariance and the AI-4 trust boundary
+
+AI-5A does not modify `server/recipeContextOriginReceipt.ts`,
+`src/core/nutritionV2/aiRecipeContextOriginReceiptShape.ts`, AI-4 reconciliation, the
+AI-4 D2 session, the D2 independent identity anchor or D2 generation sequencing. **I-1
+remains closed.**
+
+`projectAcceptedRecipeContext` continues to have **ZERO** production consumers.
+Accepted AI-4 context remains behaviourally inert and is used for **nothing** — not
+AI-3 eligibility, not suppression, not matching, not semantic mass, not Apply, not
+persistence.
+
+**AI-5 productization is NOT permission to cross the AI-4 trust boundary.**
+
+### 55.14 FUTURE composition truth table (documented, NOT implemented)
+
+| | Scenario | AI feature executable? | Reason |
+| --- | --- | --- | --- |
+| **A** | Basic entitlement + provider ready | **NO** | **not entitled** |
+| **B** | AI Advanced entitlement + provider unavailable | **NO** | **operationally unavailable** |
+| **C** | AI Advanced entitlement + provider ready | **YES** | entitled **and** operationally ready |
+| **D** | missing / untrusted / malformed entitlement | **NO** | Basic / **fail closed** |
+
+Future effective capability is therefore:
+
+```
+EFFECTIVE AI CAPABILITY
+    =  PRODUCT ENTITLED
+   AND
+       OPERATIONALLY READY
+```
+
+**never OR.**
+
+Case A is the load-bearing row: a Basic user with a fully working provider is still
+Basic, and the denial must cost **ZERO** provider calls.
+
+### 55.15 FUTURE server rule (documented, NOT implemented)
+
+A future phase must make the **server authoritative** for entitlement.
+
+- The browser/UI may **display** entitlement state but must **never** be the authority
+  that unlocks an AI endpoint.
+- Every paid AI route must eventually enforce entitlement **server-side, BEFORE
+  provider work**.
+- A Basic denial must cost **ZERO** provider calls.
+
+**AI-5A implements no route gate.** The gate belongs to AI-5B.
+
+### 55.16 What AI-5A does NOT do
+
+It does not implement billing (no Stripe, Paddle or Lemon Squeezy), subscriptions,
+checkout, customer IDs, account login, license keys, trials, promo codes, receipts,
+invoices, pricing tables, plan prices, managed AI billing or token charging. It adds no
+usage, cost, quota, daily/monthly budget, free-message limit or paid-model ceiling. It
+does not implement AI-5B. It adds no downstream AI-4 consumption.
+
+### 55.17 Coverage
+
+| Concern | File |
+| --- | --- |
+| contract, closed vocabularies, canonical states, fail-closed parsing, impossible-state defense, feature mapping, immutability | `tests/unit/advancedNutritionAi5aProductAccess.test.ts` |
+| purity, provider neutrality, BYOK separation, billing/account neutrality, zero consumer, no route/schema/state/Apply wiring, AI-4E invariance | `tests/security/advancedNutritionAi5aIsolation.test.ts` |
+| Basic vs AI Advanced authority differential over the real pinned bundle, plus the structural inertness proof | `tests/unit/advancedNutritionAi5aAuthorityDifferential.test.ts` |
