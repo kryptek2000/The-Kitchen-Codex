@@ -212,13 +212,19 @@ describe('AI-4C route — bounded success response', () => {
       expect(response.status).toBe(200);
       // The server derived the context itself, from the authored recipe only.
       expect(transport.derivedTargets).toBeGreaterThan(0);
+      // AI-4E added exactly one field: the server-authenticated origin receipt.
+      // It is a transport authentication artifact, not nutrition provenance, and it
+      // is NOT inside the proposal.
       expect(Object.keys(response.json).sort()).toEqual([
         'aiAttempted',
         'context_binding',
         'ok',
+        'origin_receipt',
         'proposal',
         'request_id',
       ]);
+      expect(String(response.json['origin_receipt']).startsWith('rctx1.')).toBe(true);
+      expect(JSON.stringify(response.json['proposal'])).not.toContain('origin_receipt');
       expect(response.json['ok']).toBe(true);
       expect(response.json['aiAttempted']).toBe(true);
       // The transport received the body, but nothing about the provider, the

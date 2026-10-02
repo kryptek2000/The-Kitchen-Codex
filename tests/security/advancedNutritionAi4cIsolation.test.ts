@@ -598,11 +598,33 @@ describe('AI-4C isolation — the error model leaks nothing', () => {
       expect(route).toContain(bounded);
     }
     // The success response is an EXACT, closed key set: request identity, the
-    // validated proposal, the AI-4A digest and the attempt flag. Nothing else —
-    // no provider, no model, no credential, and never the request body echoed.
+    // validated proposal, the AI-4A digest, the attempt flag, and — since AI-4E —
+    // the server-authenticated origin receipt. Nothing else: no provider, no model,
+    // no credential, and never the request body echoed. The receipt is a transport
+    // authentication artifact only; it is NOT nutrition provenance.
     const body = (route.match(/res\.json\(\{([\s\S]*?)\}\);/) ?? ['', ''])[1];
     const keys = [...body.matchAll(/^ {8}([A-Za-z_]+):/gm)].map((match) => match[1]);
-    expect(keys.sort()).toEqual(['aiAttempted', 'context_binding', 'ok', 'proposal', 'request_id']);
+    expect(keys.sort()).toEqual([
+      'aiAttempted',
+      'context_binding',
+      'ok',
+      'origin_receipt',
+      'proposal',
+      'request_id',
+    ]);
+    // AI-4E: the receipt is issued ONLY on the success branch, from the app-owned
+    // authority, and it is a sibling of the wire — never inside the AI-4A proposal
+    // and never something the model sees.
+    expect(route).toContain('recipeContextOriginReceipts.issue(accepted.wire)');
+    expect(route).toContain('origin_receipt: origin.receipt');
+    // It is never put into the proposal, the prompt, or the provider payload.
+    expect(route).not.toMatch(/proposal:\s*\{[^}]*origin_receipt/);
+    expect(route).not.toMatch(/prompt[^\n]*origin_receipt/);
+    // Every refusal branch returns before issuance, so a refused request has none.
+    const refusalBeforeIssue = route.indexOf('if (result.ok !== true)');
+    const issueAt = route.indexOf('recipeContextOriginReceipts.issue(');
+    expect(refusalBeforeIssue).toBeGreaterThan(0);
+    expect(issueAt).toBeGreaterThan(refusalBeforeIssue);
     expect(route).not.toMatch(/res\.json\([^)]*req\.body/);
     expect(route).not.toMatch(/\.\.\.req\.body/);
   });

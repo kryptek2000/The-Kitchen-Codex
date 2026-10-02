@@ -15,6 +15,10 @@ import { interpretIngredientsOnServer } from "./nutritionInterpret.js";
 import { planIngredientsOnServer } from "./nutritionPlan.js";
 import { interpretRecipeContextOnServer } from "./nutritionContext.js";
 import { reconcileRecipeContextOnServer } from "./recipeContextReconcile.js";
+import {
+  createRecipeContextOriginReceiptAuthority,
+  readRecipeContextOriginEnvelope,
+} from "./recipeContextOriginReceipt.js";
 import { estimateMassOnServer } from "./nutritionEstimate.js";
 import { recoverRecipeMetadata } from "./metadataRecovery.js";
 import {
@@ -302,6 +306,14 @@ export function capabilityVerificationHttpStatus(code: CapabilityVerificationErr
  */
 export function createApp(opts: CreateAppOptions): express.Express {
   const app = express();
+
+  // AI-4E ORIGIN RECEIPT AUTHORITY — ONE instance for THIS application instance.
+  //
+  // It is created here, not at module scope, so every `createApp()` call gets its
+  // own 256-bit key and the key is owned by the same lifetime as the app. The AI-4C
+  // route uses it to ISSUE and the AI-4 reconcile route uses it to VERIFY, so there
+  // is exactly one signing/verifying implementation and no loose global helper.
+  const recipeContextOriginReceipts = createRecipeContextOriginReceiptAuthority();
 
   // Security headers (X-Content-Type-Options, clickjacking protection, referrer
   // policy, and a production-only Content Security Policy).
@@ -874,6 +886,11 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // authenticated nutrition provenance). This route NEVER applies the proposal,
   // reconciles it with nutrition state, mutates working state, persists, or
   // changes serving counts; reconciliation is AI-4D.
+  //
+  // AI-4E: on SUCCESS ONLY it also issues an opaque server-authenticated ORIGIN
+  // RECEIPT over the exact canonical wire, so the reconciliation route can prove
+  // the wire really came through THIS authorized execution path. The receipt is not
+  // in the proposal, not in the prompt, and not something the model ever sees.
   app.post("/api/nutrition/recipe-context", requireAiAccessToken, textPricingGuard, nutritionContextRateLimiter, async (req, res) => {
     const clientIp = getClientIp(req);
 
@@ -916,6 +933,27 @@ export function createApp(opts: CreateAppOptions): express.Express {
         readonly requestId: string;
         readonly wire: unknown;
       };
+      // AI-4E ORIGIN RECEIPT — issued on SUCCESS ONLY, after provider bounds, the
+      // AI-4A proposal sanitizer, line-ref validation, relation-graph validation and
+      // the canonical wire rebuild all accepted this wire. No failure path above
+      // reaches this line, so a refused request never receives a receipt.
+      //
+      // `origin_receipt` is a SERVER TRANSPORT AUTHENTICATION ARTIFACT that travels
+      // as a SIBLING of the wire, never inside the AI-4A proposal, never into the
+      // provider prompt, and never into the model. It is NOT a provider signature and
+      // NOT nutrition provenance: `ai_recipe_context` stays non-authenticated.
+      const origin = recipeContextOriginReceipts.issue(accepted.wire);
+      if (!origin.ok) {
+        // An internal invariant: the authorized AI-4C path always yields a canonical
+        // wire. Fail closed rather than ship an unauthenticated review.
+        console.error(
+          `[${new Date().toISOString()}] [Client: ${clientIp}] Nutrition Recipe Context: refusing to issue an origin receipt for a non-canonical wire`,
+        );
+        return res.status(500).json({
+          ok: false,
+          error: "An unexpected error occurred during recipe-context interpretation.",
+        });
+      }
       // `request_id` and `context_binding` are transport-local: the id is echoed
       // from the server-validated request, and the context binding is computed
       // locally by deterministic code over the exact server-derived model input.
@@ -926,6 +964,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
         request_id: accepted.requestId,
         proposal: (accepted.wire as { proposal: unknown }).proposal,
         context_binding: (accepted.wire as { context_binding: string }).context_binding,
+        origin_receipt: origin.receipt,
         aiAttempted: true,
       });
     } catch (error: any) {
@@ -938,7 +977,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
     }
   });
 
-  // AI-4D2 EXPLICIT-REVIEW RECONCILIATION endpoint.
+  // AI-4D2 EXPLICIT-REVIEW RECONCILIATION endpoint, now ORIGIN-GATED by AI-4E.
   //
   // This is the ONLY transport for turning an untrusted AI-4C wire into an inert
   // AI-4D1 CURRENT review plan. It is PURE DETERMINISTIC CODE: the server re-
@@ -946,7 +985,20 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // reconciles the wire against it. NO PROVIDER IS INVOLVED, so this route
   // deliberately omits `textPricingGuard` (there is no model, no spend and no
   // pricing to verify) and uses its own small bucket so reconciling can neither
-  // consume nor be blocked by the AI-4C interpretation budget.
+  // consume nor be blocked by the AI-4C interpretation budget. Receipt verification
+  // is LOCAL CRYPTOGRAPHY inside that existing budget: no new endpoint, no new
+  // limiter.
+  //
+  // AI-4E TRUST CHAIN — BOTH GATES ARE REQUIRED, IN THIS ORDER
+  //   1. closed-key validation of the public body
+  //   2. SERVER-AUTHENTICATED AI-4C ORIGIN: the receipt is verified against the EXACT
+  //      submitted wire, and the wire is strictly re-read and canonicalized first, so
+  //      a fabricated wire can never be authenticated
+  //   3. only then AI-4D1 CURRENTNESS: fresh context derivation + request correlation
+  //
+  // This closes audit finding I-1: before AI-4E, a knowledgeable authenticated caller
+  // could fabricate a contract-valid wire and be told CURRENT. Origin failure is NOT
+  // staleness, so it never reuses `stale_context`.
   //
   // It NEVER applies anything: the response is an inert plan the client can only
   // show to the user. Acceptance is a separate, later, USER-initiated step in the
@@ -959,7 +1011,34 @@ export function createApp(opts: CreateAppOptions): express.Express {
       const clientIp = getClientIp(req);
 
       try {
-        const result = reconcileRecipeContextOnServer(req.body);
+        // ORIGIN AUTHENTICATION FIRST. `readRecipeContextOriginEnvelope` consumes the
+        // receipt and returns a field-by-field rebuild of the EXISTING closed D1 body,
+        // so the receipt never flows into the adapter and the adapter keeps its pure,
+        // offline, provider-free contract.
+        const envelope = readRecipeContextOriginEnvelope(req.body, recipeContextOriginReceipts);
+        if (envelope.ok !== true) {
+          // Non-strict narrowing: read the bounded code through an accessor.
+          const envelopeCode = (envelope as { readonly code: string }).code;
+          if (envelopeCode === "origin_unverified") {
+            // ONE bounded public class for a missing, malformed and wrong receipt, and
+            // for a wire the server never issued. No MAC, secret, payload, hash,
+            // parser detail, provider text, stack or path is ever echoed, and no
+            // provider call is made.
+            return res.status(400).json({
+              ok: false,
+              code: "origin_unverified",
+              error:
+                "This AI review was not issued by this server. Run the review again.",
+            });
+          }
+          return res.status(400).json({
+            ok: false,
+            code: envelopeCode,
+            error: "Invalid recipe-context reconciliation request.",
+          });
+        }
+
+        const result = reconcileRecipeContextOnServer(envelope.body);
         if (result.ok !== true) {
           // Non-strict narrowing: read the bounded code through an accessor.
           const code = (result as { ok: false; code: string }).code;

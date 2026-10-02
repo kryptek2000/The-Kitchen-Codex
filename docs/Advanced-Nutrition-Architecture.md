@@ -8347,3 +8347,256 @@ No downstream consumption of accepted context, no AI-3 gating or suppression, no
 authority of any kind, no persistence, no hydration, no automatic acceptance, no bulk
 actions, no time-based freshness, no provider call during Accept/Dismiss/Undo, no network
 call for those three actions at all, and no new reducer action.
+
+---
+
+## §54. AI-4E — SERVER-AUTHENTICATED AI-4C ORIGIN RECEIPT (CLOSE I-1)
+
+### 54.1 Why this phase exists
+
+AI-4D2's independent audit raised exactly one **non-blocking, mandatory future gate**:
+
+> **I-1.** `context_binding` proves freshness/equality. `request_id` proves correlation.
+> **NEITHER proves that the proposal actually came through the authorized AI-4C provider
+> execution path.**
+
+Concretely, before AI-4E a *knowledgeable authenticated caller* could:
+
+1. reproduce the deterministic current context binding (it is a plain content hash over
+   model-visible data, all of which the caller supplied);
+2. choose any `request_id`;
+3. fabricate a contract-valid AI-4A proposal;
+4. assemble a structurally valid `AiRecipeContextWirePayload`;
+5. `POST` it straight to `/api/nutrition/recipe-context/reconcile`;
+6. receive `status: 'current'` — indistinguishable from a genuine review.
+
+This was non-blocking in D2 **only** because the blast radius was nil: explicit human
+Accept was still required, accepted context was session-only, and it had zero downstream
+consumers, zero nutrition authority, zero AI-3 influence and zero persistence.
+
+**AI-4E CLOSES I-1 FOR THE PUBLIC RECONCILIATION FLOW.**
+
+### 54.2 The three identities, precisely
+
+| Field | Proves | Does NOT prove | Owner |
+| --- | --- | --- | --- |
+| `context_binding` | deterministic freshness/equality of the current recipe context | that anyone issued the wire | `aiRecipeContextModelInputBinding` (AI-4C) |
+| `request_id` | operation correlation within one run | that anyone issued the wire | transport-local, echoed |
+| `origin_receipt` | **this server issued this exact wire after the authorized AI-4C path succeeded** | anything about the external provider | `server/recipeContextOriginReceipt.ts` (AI-4E) |
+
+### 54.3 Required chain
+
+```
+AUTHORIZED AI-4C provider execution
+  -> validated canonical wire (provider bounds, AI-4A sanitizer, line-ref check,
+     relation-graph validation, canonical rebuild)
+  -> SERVER issues origin receipt over the EXACT wire
+  -> client transports wire + opaque receipt unchanged
+  -> reconcile endpoint: closed-key read, strict wire re-read, RECEIPT VERIFIED
+  -> current recipe re-derived
+  -> AI-4D1 freshness/correlation reconciliation
+  -> AI-4D2 human review
+  -> explicit user acceptance
+```
+
+**ORIGIN AUTHENTICATION, THEN CURRENTNESS RECONCILIATION. Both are required.**
+A fabricated wire without a genuine receipt can never reach `CURRENT` through the public
+route.
+
+### 54.4 Receipt authority
+
+- **Module.** `server/recipeContextOriginReceipt.ts` (server-only).
+- **Format.** `src/core/nutritionV2/aiRecipeContextOriginReceiptShape.ts` — pure,
+  crypto-free, and the ONE definition of the token format, shared so the client cannot
+  drift from the parser the server enforces.
+- **Ownership.** `createApp()` creates **exactly one** authority instance
+  (`const recipeContextOriginReceipts = createRecipeContextOriginReceiptAuthority()`).
+  The AI-4C route issues with it; the reconcile route verifies with it. There is no
+  second signing or verifying implementation and no loose global "sign anything" helper.
+- **Secret.** A cryptographically random 256-bit key from `node:crypto`
+  (`randomBytes(32)`), generated inside the authority. There is deliberately **no option
+  to inject a key**.
+- **Key lifetime.** Process-local. It rotates on restart, which invalidates every
+  outstanding receipt — exactly the session-only lifetime the AI-4D2 review session
+  already has.
+
+### 54.5 The secret rule
+
+The receipt is signed with a **freshly generated server-private key**. It is NEVER:
+
+- `AI_ENDPOINT_TOKEN` (that authenticates the **CALLER**, a different trust boundary);
+- a Gemini or OpenRouter key, a user BYOK key, or any provider credential;
+- any client-visible environment value;
+- `Math.random()` or an unkeyed SHA-256 hash.
+
+The key never leaves the server: not into a response, a log, an error message, a thrown
+exception, the client bundle, or persisted recipe data.
+
+### 54.6 The exact signed payload
+
+`recipeContextOriginReceiptPayload(wire)` rebuilds the payload **field-by-field** from the
+released wire contract — no caller object is ever spread — and binds:
+
+- `receipt_version` (`nutrition_ai_recipe_context_origin_receipt_v1`), which therefore
+  **participates in the MAC**; a payload-shape change requires a new version and can never
+  be silently reinterpreted;
+- the AI-4 `request_version`;
+- `request_id`;
+- `context_binding`;
+- the **COMPLETE canonical proposal**: `contract_version`, `provenance_class`, and every
+  interpretation with `line_ref`, `role`, every relation's `kind` **and** `target_ref`,
+  `preparation_hints`, `confidence`, `abstain_reason` and `explanation`.
+
+Signing only `request_id + context_binding` is deliberately **not** done — that would
+leave the proposal replaceable. Signing a caller-supplied digest is also not done: the
+server builds this payload itself.
+
+`issue` and `verify` share this one builder. Both strict-read the wire with the released
+contract first, so the payload is always built from the **canonical** wire (a `null`
+optional canonicalizes to absent). Model-output **order is preserved and signed**; it is
+not normalized away, because order is part of the canonical wire semantics.
+
+### 54.7 Receipt format
+
+```
+rctx1.<43 base64url characters>      # unpadded base64url of a 32-byte HMAC-SHA-256
+```
+
+- closed prefix/version; `receipt_version` is additionally inside the MAC;
+- fixed length (50 chars), so the token is unbufferable;
+- strict base64url alphabet, with an exact decode/re-encode round trip to reject every
+  non-canonical alias encoding;
+- no JSON, no signed payload, no key, no request id, no recipe text inside the token.
+
+### 54.8 Verification
+
+- Malformed receipts fail closed in the parser, **before** any MAC exists.
+- The submitted wire is treated as **hostile**: it is safely materialized and strict-read
+  with the released wire contract before any MAC is computed. A malformed wire is never
+  authenticated.
+- The security boundary is `crypto.timingSafeEqual` — **never** `===` on MAC bytes.
+- On success the authority returns the **canonical** wire it authenticated, and the route
+  hands *that* to D1 rather than the raw hostile payload.
+
+### 54.9 No clock, no TTL, no replay database
+
+There is deliberately **no timestamp and no TTL**: the receipt binds request identity,
+context identity and the exact proposal, and D1 separately proves currentness. No
+consumed-receipt store was invented, so a byte-identical genuine wire plus its genuine
+receipt may verify more than once. That is acceptable: the receipt proves *"this exact
+wire came through this server's authorized AI-4C issuance path"*, not *"this wire has never
+been seen before"*. Uniqueness remains owned by `request_id`, `context_binding`, D1 and
+the D2 session identity.
+
+### 54.10 Failure class
+
+One bounded public class, `origin_unverified`, HTTP 400:
+
+- a **missing** receipt and an **invalid** receipt map to the same class;
+- a malformed receipt reveals no parser detail;
+- a wrong MAC never reveals the expected MAC;
+- the response carries no secret, payload, hash, provider text, stack or path;
+- no provider call is made;
+- it never reuses `stale_context`, because **origin failure is not staleness**.
+
+### 54.11 What stays pure
+
+| Module | Guarantee |
+| --- | --- |
+| `src/core/nutritionV2/aiRecipeContextReconcile.ts` (AI-4D1) | no HMAC, no secret, no crypto — still a pure deterministic layer |
+| `server/recipeContextReconcile.ts` | unchanged; still imports only core + the shared derivation, still has its exact closed 5-key body |
+| `src/core/nutritionV2/aiRecipeContextWire.ts` (AI-4C) | **unchanged** — the released wire contract and the AI-4A proposal contract are untouched |
+| `src/core/nutritionV2/aiRecipeContextRequest.ts` | **unchanged** — no request-version bump |
+
+The receipt is a **server transport authentication artifact that travels as a SIBLING of
+`wire`**. The reconcile route consumes it and hands D1 a field-by-field rebuild of the
+existing closed body, so the receipt never flows downward. There was therefore **no need
+to change any AI-4 semantic contract version**.
+
+### 54.12 Client behaviour
+
+`src/application/nutritionAiRecipeContext.ts` requires a well-shaped `origin_receipt` in
+the AI-4C success reader and transports it unchanged. The client **cannot** verify it —
+the key is server-only — and does not pretend to: it performs a bounded shape check (which
+proves nothing about origin) purely so no unbounded caller string is forwarded.
+
+No `origin_verified: true` boolean exists anywhere. Such a flag would be caller-controlled
+and worthless. If the reconcile route succeeds, the server verified origin, because the
+route contract requires it.
+
+Ordinary UI wording is unchanged. There is no cryptography badge, no receipt text shown to
+users, and no UI redesign.
+
+### 54.13 Terminology — what we may and may not say
+
+We may say **"server-authenticated AI-4C origin"** or **"server-issued AI-4C execution
+receipt"**.
+
+We may **NOT** say model-signed, provider-signed, cryptographically verified by
+OpenRouter, cryptographically verified by Gemini, or authenticated nutrition provenance.
+The HMAC proves *our* server issued the receipt after the authorized path succeeded; it
+proves nothing about what the external provider signed (nothing).
+
+**`ai_recipe_context` remains NON-AUTHENTICATED NUTRITION PROVENANCE.**
+
+### 54.14 Multi-instance limitation (documented, not fixed)
+
+The current architecture is **single-process / one application instance** (`server.ts`
+creates one Express app and calls `app.listen` once; there is no cluster, no
+`worker_threads`, no PM2, no serverless manifest, and existing state such as the
+rate-limit buckets and session-only BYOK secrets is already process-local `Map`s).
+
+A process-local key is therefore sufficient **today**. If this service is ever scaled to
+multiple instances behind a load balancer, a reconcile request could land on an instance
+whose key differs, and it would **fail closed** (`origin_unverified`) — safe, but a
+functional outage. In that future the correct fix is one of:
+
+- a shared server-only signing secret, or
+- a shared bounded receipt store.
+
+The per-process random key was chosen deliberately over an env-derived key so the
+"a new authority cannot verify an old receipt" property holds by construction.
+
+### 54.15 FUTURE DOWNSTREAM RULE (binding)
+
+A future downstream consumer **MUST NOT** trust a client boolean, a flag, or any
+client-supplied value claiming origin was verified.
+
+**Before any accepted AI-4 context influences AI-3, matching, mass, nutrition, Apply or
+persistence, the authoritative server-side boundary for that operation must itself possess
+or re-verify a genuine server-issued origin proof for the exact underlying
+proposal/review.**
+
+AI-4E closes the current public reconciliation forgery. It does **not** give future
+client-side code permission to treat an arbitrary `RecipeContextReviewSession` as
+cryptographically trustworthy.
+
+Passing AI-4E does **not** authorize downstream consumption. That remains a separate,
+future phase.
+
+### 54.6a Unchanged by AI-4E
+
+AI-4D2 accepted context remains **behaviorally inert**. No downstream consumer was added.
+No AI-3 suppression or gating, no matching, FDC identity, portion, gram, nutrient,
+calculation, Apply or persistence effect. No AI-4 fields in `codex_nutrition`. No new
+endpoint and no new limiter: receipt verification is local cryptography inside the existing
+reconcile budget. Reconciliation still makes **zero** provider calls. The Basic tier still
+makes **zero** provider calls, issues **zero** receipts and creates **zero** review
+sessions. Accept/Dismiss/Undo/Clear remain byte-equivalent to released D2 and still perform
+zero network calls.
+
+### 54.17 Coverage
+
+| Concern | File |
+| --- | --- |
+| issue, verify, full mutation matrix, cross-wire, key isolation, constant time | `tests/security/advancedNutritionAi4eOriginReceipt.test.ts` |
+| legitimate two-step flow, forged I-1 at the route, token gate, Basic, provider isolation, public error boundary | `tests/security/advancedNutritionAi4eRoute.test.ts` |
+| authority + persistence differential over the real pinned bundle | `tests/unit/advancedNutritionAi4eAuthorityDifferential.test.ts` |
+
+### 54.18 What AI-4E does NOT do
+
+It does not authorize downstream consumption, does not alter AI-3 eligibility or
+suppression, does not alter matching, FDC identity, portions, grams, nutrients or
+calculations, does not alter Apply or persistence, adds no AI-4 field to
+`codex_nutrition`, adds no endpoint, adds no limiter, adds no provider call, and does not
+make `ai_recipe_context` an authenticated provenance class.

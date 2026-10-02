@@ -7,6 +7,23 @@
  *   1. `POST /api/nutrition/recipe-context`      — ONE provider interpretation
  *   2. `POST /api/nutrition/recipe-context/reconcile` — deterministic, provider-free
  *
+ * AI-4E ORIGIN RECEIPT (TRANSPORT ONLY)
+ *   The server now issues an opaque receipt over the EXACT canonical AI-4C wire on
+ *   success, and the reconcile route refuses to proceed without it. This client
+ *   shape-checks the receipt and transports it UNCHANGED. It never verifies it: the
+ *   HMAC key is server-only, so no cryptographic check is possible or attempted in
+ *   the browser, and NO `origin_verified` flag is invented — such a flag would be
+ *   caller-controlled and worthless.
+ *
+ * FUTURE DOWNSTREAM RULE (recorded here so it cannot be forgotten)
+ *   A future consumer of accepted recipe context MUST NOT trust anything the client
+ *   says about origin, including any boolean. Before accepted semantics may influence
+ *   AI-3, matching, mass, nutrition, Apply or persistence, the AUTHORITATIVE
+ *   SERVER-SIDE boundary for that operation must itself possess or re-verify a genuine
+ *   server-issued origin proof for the exact underlying proposal. AI-4E closes the
+ *   public reconciliation forgery; it does not make a client-side session
+ *   cryptographically trustworthy.
+ *
  * The result is a `RecipeContextReviewSession`: an inert CURRENT review plan plus
  * an EMPTY decision overlay. Nothing is accepted here. Acceptance is a later,
  * separate, user-initiated action that runs entirely inside the pure session
@@ -28,7 +45,7 @@
  *   never replace newer review state: the UI drops any result whose generation is
  *   no longer current, and any recipe/session change invalidates the in-flight run.
  *
- * BOUNDED MESSUES ONLY
+ * BOUNDED MESSAGES ONLY
  *   Failures map to fixed user-facing copy. No provider text, model name,
  *   credential, stack trace or filesystem path is ever surfaced.
  */
@@ -42,6 +59,7 @@ import {
   AI_RECIPE_CONTEXT_RECONCILE_VERSION,
   type RecipeContextReconciliation,
 } from '../core/nutritionV2/aiRecipeContextReconcile';
+import { isAiRecipeContextOriginReceiptShaped } from '../core/nutritionV2/aiRecipeContextOriginReceiptShape';
 import {
   AI_RECIPE_CONTEXT_REVIEW_LABEL,
   AI_RECIPE_CONTEXT_SECTION_LABEL,
@@ -128,6 +146,7 @@ const CONTEXT_RESPONSE_KEYS: ReadonlySet<string> = new Set([
   'request_id',
   'proposal',
   'context_binding',
+  'origin_receipt',
   'aiAttempted',
 ]);
 /** Closed keys of an AI-4D1 reconciliation success response. */
@@ -143,7 +162,19 @@ function boundedString(value: unknown, max: number): string | undefined {
 /**
  * Reads the AI-4C response into the EXACT transport-local shape the reconcile
  * route expects. Nothing is inferred: the request id and context binding are the
- * server's own values, and the proposal is forwarded verbatim as untrusted input.
+ * server's own values, the proposal is forwarded verbatim as untrusted input, and
+ * the server-issued origin receipt is transported UNCHANGED.
+ *
+ * AI-4E ORIGIN RECEIPT
+ *   The client CANNOT and DOES NOT verify the receipt: the HMAC key is server-only
+ *   and never reaches the browser. The client performs a BOUNDED SHAPE check only —
+ *   which proves nothing about origin and is satisfied by any well-formed string —
+ *   so that no unbounded caller-supplied value is ever forwarded, then carries the
+ *   receipt verbatim into the reconcile body. The reconcile route is the authority:
+ *   if its contract holds, the server already verified origin.
+ *
+ *   This is deliberately NOT a caller-controlled trust flag. No `origin_verified`
+ *   boolean exists anywhere, and a future consumer must not treat one as proof.
  */
 export function buildRecipeContextReconcileRequest(args: {
   readonly response: unknown;
@@ -165,6 +196,9 @@ export function buildRecipeContextReconcileRequest(args: {
   }
   if (requestId !== expected) return { ok: false };
   if (!isPlainObject(proposal)) return { ok: false };
+  // Shape only. A missing or malformed receipt means there is nothing the server
+  // could authenticate, so no reconcile request is attempted at all.
+  if (!isAiRecipeContextOriginReceiptShaped(response['origin_receipt'])) return { ok: false };
   return {
     ok: true,
     body: {
@@ -178,6 +212,7 @@ export function buildRecipeContextReconcileRequest(args: {
         context_binding: contextBinding,
         proposal,
       },
+      origin_receipt: response['origin_receipt'],
     },
   };
 }

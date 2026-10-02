@@ -121,6 +121,9 @@ function interpretResponse(overrides: Record<string, unknown> = {}): Record<stri
       })),
     },
     context_binding: currentDerivation().context_binding,
+    // AI-4E: the server now issues an origin receipt on success, and the client
+    // requires a well-shaped one before it will build a reconcile request.
+    origin_receipt: `rctx1.${'A'.repeat(43)}`,
     aiAttempted: true,
     ...overrides,
   };
@@ -226,6 +229,7 @@ describe('AI-4D2 review flow — the explicit two-step chain', () => {
     expect(Object.keys(reconcileBody).sort()).toEqual([
       'expected_request_id',
       'instructions',
+      'origin_receipt',
       'recipe',
       'recipe_instance',
       'wire',
@@ -235,6 +239,45 @@ describe('AI-4D2 review flow — the explicit two-step chain', () => {
     expect(wire['request_id']).toBe(REQUEST_ID);
     expect(wire['context_binding']).toBe(currentDerivation().context_binding);
     expect(wire['proposal']).toEqual((interpretResponse()['proposal']));
+    // AI-4E: the receipt is transported UNCHANGED, as a sibling of the wire — never
+    // inside the wire, never inside the proposal, never rewritten.
+    expect(reconcileBody['origin_receipt']).toBe(interpretResponse()['origin_receipt']);
+    expect(Object.keys(wire).sort()).toEqual([
+      'context_binding',
+      'proposal',
+      'request_id',
+      'request_version',
+    ]);
+    expect(JSON.stringify(wire['proposal'])).not.toContain('origin_receipt');
+  });
+
+  it('the client transports the receipt verbatim and never invents a verification flag', async () => {
+    const { adapter, calls } = fakeNetwork([
+      { status: 200, ok: true, data: interpretResponse() },
+      { status: 200, ok: true, data: { ok: true, reconciliation: currentReconciliation() } },
+    ]);
+    await run(adapter);
+    const body = calls[1].body as Record<string, unknown>;
+    // No caller-controlled trust flag is ever sent: the server is the authority.
+    for (const forbidden of ['origin_verified', 'originVerified', 'verified', 'authenticated']) {
+      expect(body).not.toHaveProperty(forbidden);
+      expect(JSON.stringify(body)).not.toContain(forbidden);
+    }
+  });
+
+  it('a missing or malformed receipt means no reconcile request is attempted at all', async () => {
+    for (const origin_receipt of [undefined, '', 'nope', 'rctx1.short', 42, {}, null]) {
+      const { adapter, calls } = fakeNetwork([
+        { status: 200, ok: true, data: interpretResponse({ origin_receipt }) },
+        { status: 200, ok: true, data: { ok: true, reconciliation: currentReconciliation() } },
+      ]);
+      const result = await run(adapter);
+      expect(result.ok).toBe(false);
+      expect(codeOf(result)).toBe('unusable');
+      // Exactly ONE call: interpretation only. The client never posts an
+      // unauthenticated wire it cannot prove.
+      expect(calls).toHaveLength(1);
+    }
   });
 
   it('the recipe instance is opaque and memory-only, never a path or URL', async () => {
@@ -432,6 +475,9 @@ describe('AI-4D2 review flow — the reconcile request builder', () => {
       interpretResponse({ request_id: '' }),
       interpretResponse({ context_binding: 42 }),
       interpretResponse({ proposal: 'not an object' }),
+      interpretResponse({ origin_receipt: undefined }),
+      interpretResponse({ origin_receipt: 'rctx1.tooshort' }),
+      interpretResponse({ origin_receipt: 42 }),
     ]) {
       const refused = buildRecipeContextReconcileRequest({
         response,

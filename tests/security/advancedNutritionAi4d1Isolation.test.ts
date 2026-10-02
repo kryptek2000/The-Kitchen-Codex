@@ -141,10 +141,14 @@ describe('AI-4D1 isolation — ZERO provider execution', () => {
     // acceptance session (the plan it overlays decisions onto) and the application
     // layer (the transport response assertion). No component, view or hook reaches
     // the reconciliation core directly.
+    //
+    // Detection uses COMMENT-STRIPPED source (`code`, not `src`), so prose cannot
+    // register a consumer. AI-4E's server authority DOCUMENTS that D1 stays pure,
+    // but it does not import it, and it must not appear here.
     const consumers: string[] = [];
     for (const rel of [...walk(join(REPO, 'src')), ...walk(join(REPO, 'server'))]) {
       if (rel === RECONCILE) continue;
-      if (/aiRecipeContextReconcile/.test(src(rel))) consumers.push(rel);
+      if (/aiRecipeContextReconcile/.test(code(rel))) consumers.push(rel);
     }
     expect(consumers.sort()).toEqual(
       [
@@ -157,6 +161,21 @@ describe('AI-4D1 isolation — ZERO provider execution', () => {
       expect(rel.startsWith('src/components/'), rel).toBe(false);
       expect(rel.startsWith('src/hooks/'), rel).toBe(false);
     }
+    // AI-4E: the origin-receipt authority verifies the wire BEFORE reconciliation
+    // and deliberately does NOT consume the D1 core. Origin authentication and
+    // currentness reconciliation stay separate authorities.
+    expect(code('server/recipeContextOriginReceipt.ts')).not.toContain('aiRecipeContextReconcile');
+    expect(
+      [...code('server/recipeContextOriginReceipt.ts').matchAll(/from\s*['"]([^'"]+)['"]/g)].map(
+        (match) => match[1]
+      ).sort()
+    ).toEqual([
+      '../src/core/nutritionV2/aiRecipeContextOriginReceiptShape.js',
+      '../src/core/nutritionV2/aiRecipeContextWire.js',
+      '../src/core/nutritionV2/schema.js',
+      '../src/core/nutritionV2/usda/digest.js',
+      'node:crypto',
+    ]);
   });
 });
 
