@@ -19,12 +19,18 @@ import {
   buildRecipeContextReconcileRequest,
   createRecipeContextInstanceToken,
   createRecipeContextRequestId,
-  createRecipeContextReviewRunner,
   requestRecipeContextReview,
 } from '../../src/application/nutritionAiRecipeContext';
 import type { NetworkAdapter, NetworkResponse } from '../../src/application/adapters/NetworkAdapter';
 import { AI_RECIPE_CONTEXT_REQUEST_VERSION } from '../../src/core/nutritionV2/aiRecipeContextRequest';
-import { recipeContextReviewView } from '../../src/core/nutritionV2/aiRecipeContextSession';
+import {
+  acceptRecipeContextRow,
+  createRecipeContextReviewSession,
+  dismissRecipeContextRow,
+  recipeContextReviewView,
+  undoRecipeContextRow,
+  type RecipeContextReviewSession,
+} from '../../src/core/nutritionV2/aiRecipeContextSession';
 import { deriveRecipeContextModelInput } from '../../server/recipeContextDerivation';
 import { reconcileRecipeContext } from '../../src/core/nutritionV2/aiRecipeContextReconcile';
 import {
@@ -489,56 +495,113 @@ describe('AI-4D2 review flow — the reconcile request builder', () => {
   });
 });
 
-describe('AI-4D2 review flow — generation sequencing', () => {
-  it('a newer run retires an older completion', () => {
-    const runner = createRecipeContextReviewRunner();
-    const first = runner.begin();
-    expect(runner.isCurrent(first)).toBe(true);
-    const second = runner.begin();
-    // The first run finished late and must NOT be allowed to write state.
-    expect(runner.isCurrent(first)).toBe(false);
-    expect(runner.isCurrent(second)).toBe(true);
-    expect(runner.generation).toBe(second);
+describe('AI-4D2 review flow — the expected identity is an INDEPENDENT expectation', () => {
+  /**
+   * The removed application-layer runner covered sequencing that the CARD actually
+   * owns (see advancedNutritionAi4d2ReviewUi.test.tsx for real jsdom proof of
+   * generation-based stale-completion protection). What is proven here instead is the
+   * property that runner tests never touched and that made the released card check
+   * meaningless: the expectation handed to the D2 core must be INDEPENDENT of the
+   * session under test, so a mismatch actually refuses.
+   */
+  function sessionFor(): {
+    readonly requestId: string;
+    readonly contextBinding: string;
+    readonly lineRef: string;
+    readonly session: RecipeContextReviewSession;
+  } {
+    const current = currentDerivation();
+    const reconciliation = currentReconciliation();
+    const created = createRecipeContextReviewSession({
+      reconciliation,
+      expected: { requestId: REQUEST_ID, contextBinding: current.context_binding },
+    });
+    if (!created.ok) throw new Error('session failed');
+    return {
+      requestId: reconciliation.request_id,
+      contextBinding: reconciliation.context_binding,
+      lineRef: reconciliation.rows[0].line_ref,
+      session: created.session,
+    };
+  }
+
+  it('a matching independent expectation produces a usable review view', () => {
+    const anchor = sessionFor();
+    const view = recipeContextReviewView(anchor.session, {
+      requestId: anchor.requestId,
+      contextBinding: anchor.contextBinding,
+    });
+    expect(view.ok).toBe(true);
   });
 
-  it('invalidation retires every in-flight run', () => {
-    const runner = createRecipeContextReviewRunner();
-    const token = runner.begin();
-    expect(runner.isCurrent(token)).toBe(true);
-    runner.invalidate();
-    expect(runner.isCurrent(token)).toBe(false);
-    const next = runner.begin();
-    expect(runner.isCurrent(next)).toBe(true);
+  it('a mismatched request id refuses the view', () => {
+    const anchor = sessionFor();
+    const view = recipeContextReviewView(anchor.session, {
+      requestId: 'some-other-request',
+      contextBinding: anchor.contextBinding,
+    });
+    expect(view.ok).toBe(false);
   });
 
-  it('a stale generation never produces review state', async () => {
-    const { adapter } = fakeNetwork([
-      { status: 200, ok: true, data: interpretResponse() },
-      { status: 200, ok: true, data: { ok: true, reconciliation: currentReconciliation() } },
-    ]);
-    const runner = createRecipeContextReviewRunner();
-    const token = runner.begin();
-    const result = await run(adapter);
-    // The UI's rule: a completed run is only allowed to write state while current.
-    if (result.ok) expect(runner.isCurrent(token)).toBe(true);
-    runner.invalidate();
-    if (result.ok) {
-      // After invalidation the same result must no longer be applicable.
-      expect(runner.isCurrent(token)).toBe(false);
-      const view = recipeContextReviewView(result.session, {
-        requestId: REQUEST_ID,
-        contextBinding: currentDerivation().context_binding,
-      });
-      expect(view.ok).toBe(true);
-    }
+  it('a mismatched context binding refuses the view', () => {
+    const anchor = sessionFor();
+    const view = recipeContextReviewView(anchor.session, {
+      requestId: anchor.requestId,
+      contextBinding: `sha256:${'0'.repeat(64)}`,
+    });
+    expect(view.ok).toBe(false);
   });
 
-  it('each runner is independent', () => {
-    const a = createRecipeContextReviewRunner();
-    const b = createRecipeContextReviewRunner();
-    const tokenA = a.begin();
-    b.invalidate();
-    expect(a.isCurrent(tokenA)).toBe(true);
+  it('a missing expectation refuses the view rather than defaulting to the session', () => {
+    const anchor = sessionFor();
+    expect(recipeContextReviewView(anchor.session, undefined).ok).toBe(false);
+  });
+
+  it('BEHAVIORAL: a mismatched expectation REFUSES accept, dismiss and undo', () => {
+    const anchor = sessionFor();
+    const wrong = {
+      requestId: 'some-other-request',
+      contextBinding: anchor.contextBinding,
+    };
+    // Every decision fails closed under a mismatched expectation, and the session is
+    // returned unchanged so no decision is silently applied or repaired.
+    const accepted = acceptRecipeContextRow(anchor.session, anchor.lineRef, wrong);
+    expect(accepted.ok).toBe(false);
+    expect(codeOf(accepted)).toBe('not_current');
+    const dismissed = dismissRecipeContextRow(anchor.session, anchor.lineRef, wrong);
+    expect(dismissed.ok).toBe(false);
+    expect(codeOf(dismissed)).toBe('not_current');
+    const undone = undoRecipeContextRow(anchor.session, anchor.lineRef, wrong);
+    expect(undone.ok).toBe(false);
+    expect(codeOf(undone)).toBe('not_current');
+  });
+
+  it('BEHAVIORAL: the SAME decision succeeds under the matching captured anchor', () => {
+    const anchor = sessionFor();
+    const accepted = acceptRecipeContextRow(anchor.session, anchor.lineRef, {
+      requestId: anchor.requestId,
+      contextBinding: anchor.contextBinding,
+    });
+    expect(accepted.ok).toBe(true);
+    if (!accepted.ok) return;
+    expect(Object.values(accepted.session.decisions)).toEqual(['accepted']);
+  });
+
+  it('a drifted session identity is refused — proof the check is not self-referential', () => {
+    // A session whose identity does not match the anchor must be refused. With the
+    // released self-referential caller this could never fail, because the expectation
+    // was read off the very session being checked.
+    const anchor = sessionFor();
+    const drifted = Object.freeze({
+      ...anchor.session,
+      request_id: 'drifted-request-id',
+    });
+    const accepted = acceptRecipeContextRow(drifted, anchor.lineRef, {
+      requestId: anchor.requestId,
+      contextBinding: anchor.contextBinding,
+    });
+    expect(accepted.ok).toBe(false);
+    expect(codeOf(accepted)).toBe('not_current');
   });
 });
 

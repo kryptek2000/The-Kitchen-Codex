@@ -216,6 +216,84 @@ describe('AI-4D2 isolation — Phase 4 gains no AI-4 concept', () => {
       expect(effect[0]).not.toContain('handleReviewRecipeContext');
     }
   });
+
+  it('the expected identity is captured SEPARATELY, never read off the session', () => {
+    // The released pattern supplied the expectation from the very session under test,
+    // so the D2 core's identity check compared the session with itself and could never
+    // fail. The card now captures a frozen anchor ONCE, when a review is installed.
+    for (const handler of [
+      'handleAcceptRecipeContextRow',
+      'handleDismissRecipeContextRow',
+      'handleUndoRecipeContextRow',
+    ]) {
+      expect(CARD_SOURCE, handler).toContain(`const ${handler}`);
+      const body = handlerBody(CARD_SOURCE, handler);
+      // The self-referential pattern must be gone from every decision handler.
+      expect(body, handler).not.toContain('requestId: session.request_id');
+      expect(body, handler).not.toContain('contextBinding: session.context_binding');
+      // And the decision is routed through the shared applier, which owns the anchor.
+      expect(body, handler).toContain('applyRecipeContextDecision');
+      expect(body, handler).toContain('expected');
+      // Never a literal identity object invented at decision time.
+      expect(body, handler).not.toMatch(/requestId:\s*'/);
+    }
+    // It is absent from the WHOLE card, including the review view projection.
+    expect(CARD_SOURCE).not.toContain('requestId: session.request_id');
+    expect(CARD_SOURCE).not.toContain('contextBinding: session.context_binding');
+
+    // The anchor exists, is captured once from the review RESULT, and is frozen.
+    expect(CARD_SOURCE).toContain('const recipeContextExpectedIdentity = useRef<');
+    expect(CARD_SOURCE).toContain('recipeContextExpectedIdentity.current = Object.freeze({');
+    expect(CARD_SOURCE).toContain('requestId: outcome.session.request_id');
+    expect(CARD_SOURCE).toContain('contextBinding: outcome.session.context_binding');
+    // The applier reads it and refuses when absent.
+    expect(CARD_SOURCE).toContain('const expected = recipeContextExpectedIdentity.current;');
+    expect(CARD_SOURCE).toContain('if (expected === null) return;');
+  });
+
+  it('the identity anchor is cleared with the review, and never fabricated', () => {
+    // Cleared on a recipe change and on Clear review: at least two clear sites besides
+    // the one that installs it.
+    const clears = [...CARD_SOURCE.matchAll(/recipeContextExpectedIdentity\.current = null;/g)];
+    expect(clears.length).toBeGreaterThanOrEqual(2);
+    // The recipe-change effect clears it.
+    const effectStart = CARD_SOURCE.indexOf('}, [recipe.id]);');
+    const effectBody = CARD_SOURCE.slice(
+      CARD_SOURCE.lastIndexOf('useEffect(() => {', effectStart),
+      effectStart
+    );
+    expect(effectBody).toContain('recipeContextExpectedIdentity.current = null;');
+    // Clear review clears it.
+    const clearBody = handlerBody(CARD_SOURCE, 'const clearRecipeContextReview');
+    expect(clearBody).toContain('recipeContextExpectedIdentity.current = null;');
+    // It is assigned EXACTLY ONCE, and only on the success branch.
+    const installs = [...CARD_SOURCE.matchAll(/recipeContextExpectedIdentity\.current = Object\.freeze\(/g)];
+    expect(installs).toHaveLength(1);
+    const installAt = CARD_SOURCE.indexOf('recipeContextExpectedIdentity.current = Object.freeze(');
+    const failureBranch = CARD_SOURCE.indexOf('if (outcome.ok !== true || outcome.session === undefined)');
+    const successWrite = CARD_SOURCE.indexOf('setRecipeContextSession(outcome.session);');
+    expect(failureBranch).toBeGreaterThan(0);
+    expect(installAt).toBeGreaterThan(failureBranch);
+    // A failed run returns from inside that branch and installs nothing.
+    expect(CARD_SOURCE.slice(failureBranch, installAt)).toContain('return;');
+    // It is a ref, so it is memory-only: never persisted or transmitted.
+    expect(CARD_SOURCE).not.toMatch(/recipeContextExpectedIdentity[^\n]*localStorage/);
+    expect(CARD_SOURCE).not.toMatch(/recipeContextExpectedIdentity[^\n]*sessionStorage/);
+  });
+
+  it('the removed application runner has no remaining reference anywhere', () => {
+    // The dead `createRecipeContextReviewRunner` export and its contract are gone; the
+    // CARD's monotonic generation counter is the single real owner of sequencing.
+    const APP_LAYER = read('src/application/nutritionAiRecipeContext.ts');
+    expect(APP_LAYER).not.toContain('RecipeContextReviewRunner');
+    expect(APP_LAYER).not.toContain('createRecipeContextReviewRunner');
+    // And the card still owns the released generation mechanism.
+    expect(CARD_SOURCE).toContain('const recipeContextGeneration = useRef(0);');
+    expect(CARD_SOURCE).toContain('recipeContextGeneration.current += 1;');
+    expect(CARD_SOURCE).toContain('if (token !== recipeContextGeneration.current) return;');
+    // The application header truthfully describes that ownership.
+    expect(APP_LAYER).toContain('UI RACE SEQUENCING IS OWNED BY THE CARD');
+  });
 });
 
 describe('AI-4D2 isolation — the review is memory-only and never persisted', () => {

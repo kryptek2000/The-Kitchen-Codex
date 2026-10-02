@@ -38,12 +38,19 @@
  *   Nothing runs on open, focus, render or resolve: `requestRecipeContextReview`
  *   is only called from the explicit control. Accept/Dismiss/Undo call nothing.
  *
- * ASYNC RACES FAIL TOWARD THE NEWEST RUN
- *   `createRecipeContextReviewRunner` owns a generation counter. Overlapping runs
- *   are possible (a slow interpretation followed by a new one, or a review that
- *   finishes after the user edited the recipe). An older completion can therefore
- *   never replace newer review state: the UI drops any result whose generation is
- *   no longer current, and any recipe/session change invalidates the in-flight run.
+ * UI RACE SEQUENCING IS OWNED BY THE CARD, NOT HERE
+ *   Overlapping runs are possible (a slow interpretation followed by a new one, or a
+ *   review that finishes after the user edited the recipe). The MONOTONIC GENERATION
+ *   COUNTER that retires stale completions lives in `AdvancedNutritionCard`, which is
+ *   the only production caller and the actual owner of that behaviour. An older
+ *   completion can therefore never replace newer review state, because the CARD drops
+ *   any result whose generation is no longer current and invalidates in-flight runs on
+ *   a recipe change or a clear.
+ *
+ *   This requester deliberately does NOT own a generation counter: UI sequencing is a
+ *   presentation concern, and keeping a second competing copy here would be two
+ *   sources of truth for one rule. The dependency direction is preserved — the card
+ *   depends on this module, never the reverse.
  *
  * BOUNDED MESSAGES ONLY
  *   Failures map to fixed user-facing copy. No provider text, model name,
@@ -344,40 +351,6 @@ export async function requestRecipeContextReview(
     return { ok: false, code: 'stale', message: recipeContextReviewMessage('stale') };
   }
   return { ok: true, session: created.session };
-}
-
-/**
- * Generation sequencing for overlapping runs.
- *
- * `begin` mints a new generation and returns it. `isCurrent` is false for any
- * older generation, so an older completion can be dropped instead of replacing
- * newer state. `invalidate` retires every in-flight run (used when the recipe,
- * the session, or the review is reset).
- */
-export interface RecipeContextReviewRunner {
-  begin(): number;
-  isCurrent(token: number): boolean;
-  invalidate(): void;
-  readonly generation: number;
-}
-
-export function createRecipeContextReviewRunner(): RecipeContextReviewRunner {
-  let generation = 0;
-  return {
-    begin(): number {
-      generation += 1;
-      return generation;
-    },
-    isCurrent(token: number): boolean {
-      return token === generation;
-    },
-    invalidate(): void {
-      generation += 1;
-    },
-    get generation(): number {
-      return generation;
-    },
-  };
 }
 
 /**

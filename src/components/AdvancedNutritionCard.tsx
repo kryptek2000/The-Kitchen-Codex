@@ -85,6 +85,7 @@ import {
   recipeContextReviewView,
   undoRecipeContextRow,
   type RecipeContextReviewSession,
+  type RecipeContextSessionIdentity,
   type RecipeContextSessionResult,
 } from '../core/nutritionV2/aiRecipeContextSession';
 
@@ -439,24 +440,43 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
   const recipeContextGeneration = useRef(0);
   /** The recipe identity this review belongs to; a decision must match it. */
   const recipeContextRecipeId = useRef<string | null>(null);
+  /**
+   * The independently captured IDENTITY ANCHOR for the INSTALLED review operation.
+   *
+   * Captured ONCE, from the successful review result, when the session is installed —
+   * and then NEVER recomputed. Accept/Dismiss/Undo and the review view read THIS,
+   * never the session being checked. Deriving the expectation from the object under
+   * test made the D2 core's identity check compare the session with itself, so it
+   * could never fail; with a separately captured anchor the same check is meaningful
+   * again, because a session whose identity drifted from the anchor is refused.
+   *
+   * It is an anchor, NOT a second digest and NOT a second freshness algorithm: it
+   * holds the `request_id` and `context_binding` the D2 core already requires, and it
+   * adds no computation, no network call and no receipt verification. It is memory-only
+   * and is never persisted, transmitted or handed to Apply.
+   */
+  const recipeContextExpectedIdentity = useRef<RecipeContextSessionIdentity | null>(null);
 
   /**
    * A new recipe ends the review. Decisions from the previous recipe are dropped
    * with it, so a stale review can never be accepted against different source text.
+   * The identity anchor is cleared with the session, never carried across recipes.
    */
   useEffect(() => {
     recipeContextGeneration.current += 1;
     recipeContextRecipeId.current = null;
+    recipeContextExpectedIdentity.current = null;
     setRecipeContextSession(null);
     setRecipeContextMessage(null);
     setRecipeContextStarted(false);
     setRecipeContextRunning(false);
   }, [recipe.id]);
 
-  /** Clears the review and every decision in it. */
+  /** Clears the review, every decision in it, and its identity anchor. */
   const clearRecipeContextReview = useCallback(() => {
     recipeContextGeneration.current += 1;
     recipeContextRecipeId.current = null;
+    recipeContextExpectedIdentity.current = null;
     setRecipeContextSession(null);
     setRecipeContextMessage(null);
     setRecipeContextStarted(false);
@@ -476,12 +496,20 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
       // An older run finishing late can never write state.
       if (token !== recipeContextGeneration.current) return;
       if (outcome.ok !== true || outcome.session === undefined) {
+        // A FAILED run fabricates nothing: no session and no new identity anchor.
+        // A previously installed review keeps its own consistent anchor.
         setRecipeContextMessage(
           outcome.message ?? "Recipe context review isn't available right now."
         );
         return;
       }
       setRecipeContextSession(outcome.session);
+      // Capture the identity anchor for THIS review operation exactly once, frozen,
+      // at install time — from the review result, never from a later session read.
+      recipeContextExpectedIdentity.current = Object.freeze({
+        requestId: outcome.session.request_id,
+        contextBinding: outcome.session.context_binding,
+      });
       recipeContextRecipeId.current = recipe.id;
     } finally {
       if (token === recipeContextGeneration.current) setRecipeContextRunning(false);
@@ -489,15 +517,27 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
   }, [onReviewRecipeContextWithAi, recipe, recipeContextRunning]);
 
   /**
-   * Applies ONE user decision through the pure acceptance core. The identity is
-   * re-checked there, so a stale review fails closed instead of being applied.
+   * Applies ONE user decision through the pure acceptance core, using the separately
+   * captured identity anchor. The core re-checks the session against that anchor, so
+   * a stale or drifted review fails closed instead of being applied.
+   *
+   * FAILS CLOSED on all of: no session, a run in flight, a recipe identity mismatch,
+   * no captured anchor, and the core's own identity verdict. A mismatch is never
+   * silently repaired or rewritten.
    */
   const applyRecipeContextDecision = useCallback(
-    (decide: (session: RecipeContextReviewSession) => RecipeContextSessionResult) => {
+    (
+      decide: (
+        session: RecipeContextReviewSession,
+        expected: RecipeContextSessionIdentity
+      ) => RecipeContextSessionResult
+    ) => {
       const current = recipeContextSession;
       if (current === null || recipeContextRunning) return;
       if (recipeContextRecipeId.current !== recipe.id) return;
-      const result = decide(current);
+      const expected = recipeContextExpectedIdentity.current;
+      if (expected === null) return;
+      const result = decide(current, expected);
       if (!result.ok) return;
       setRecipeContextSession(result.session);
     },
@@ -506,11 +546,8 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
 
   const handleAcceptRecipeContextRow = useCallback(
     (lineRef: string) => {
-      applyRecipeContextDecision((session) =>
-        acceptRecipeContextRow(session, lineRef, {
-          requestId: session.request_id,
-          contextBinding: session.context_binding,
-        })
+      applyRecipeContextDecision((session, expected) =>
+        acceptRecipeContextRow(session, lineRef, expected)
       );
     },
     [applyRecipeContextDecision]
@@ -518,11 +555,8 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
 
   const handleDismissRecipeContextRow = useCallback(
     (lineRef: string) => {
-      applyRecipeContextDecision((session) =>
-        dismissRecipeContextRow(session, lineRef, {
-          requestId: session.request_id,
-          contextBinding: session.context_binding,
-        })
+      applyRecipeContextDecision((session, expected) =>
+        dismissRecipeContextRow(session, lineRef, expected)
       );
     },
     [applyRecipeContextDecision]
@@ -530,11 +564,8 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
 
   const handleUndoRecipeContextRow = useCallback(
     (lineRef: string) => {
-      applyRecipeContextDecision((session) =>
-        undoRecipeContextRow(session, lineRef, {
-          requestId: session.request_id,
-          contextBinding: session.context_binding,
-        })
+      applyRecipeContextDecision((session, expected) =>
+        undoRecipeContextRow(session, lineRef, expected)
       );
     },
     [applyRecipeContextDecision]
@@ -1674,7 +1705,10 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
   const recipeContextUi: AdvancedNutritionRecipeContextUi | undefined = onReviewRecipeContextWithAi
     ? (() => {
         const session = recipeContextSession;
-        if (session === null) {
+        // The captured identity anchor, never session-derived values. With no anchor
+        // there is no authenticated review operation, so the surface renders nothing.
+        const expectedIdentity = recipeContextExpectedIdentity.current;
+        if (session === null || expectedIdentity === null) {
           return {
             available: true,
             running: recipeContextRunning,
@@ -1695,10 +1729,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
             onClearReview: clearRecipeContextReview,
           };
         }
-        const view = recipeContextReviewView(session, {
-          requestId: session.request_id,
-          contextBinding: session.context_binding,
-        });
+        const view = recipeContextReviewView(session, expectedIdentity);
         // A review that is no longer current renders as no review at all.
         if (!view.ok) {
           return {

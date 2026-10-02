@@ -37,6 +37,9 @@ import { buildCalculationBundle, CALC_FOODS } from '../fixtures/usdaCalculationF
 const REQUEST_ID = 'ai4d2-ui-1';
 const INSTANCE = 'ai4d2-ui-instance';
 
+/** A second, genuinely different review identity (different request id). */
+const ALT_REQUEST_ID = 'ai4d2-ui-2';
+
 function genuineSession(): AdvancedNutritionSession {
   const bundle = buildCalculationBundle(CALC_FOODS);
   const result = createAdvancedNutritionSession(bundle.manifest, bundle.records);
@@ -76,8 +79,9 @@ function recipe(overrides: Partial<ObsidianRecipe> = {}): ObsidianRecipe {
  */
 function realReview(
   target: ObsidianRecipe,
-  options: { omit?: number; abstain?: number } = {}
+  options: { omit?: number; abstain?: number; requestId?: string } = {}
 ): AdvancedNutritionRecipeContextOutcome {
+  const requestId = options.requestId ?? REQUEST_ID;
   const derived = deriveRecipeContextModelInput({
     recipe: {
       title: target.title,
@@ -89,7 +93,7 @@ function realReview(
     },
     instructions: target.instructions.map((step) => ({ text: step.text })),
     requestVersion: AI_RECIPE_CONTEXT_REQUEST_VERSION,
-    requestId: REQUEST_ID,
+    requestId,
     recipeInstance: INSTANCE,
   });
   if (!derived.ok) throw new Error('derivation failed');
@@ -113,7 +117,7 @@ function realReview(
   const reconciled = reconcileRecipeContext({
     wire: {
       request_version: AI_RECIPE_CONTEXT_REQUEST_VERSION,
-      request_id: REQUEST_ID,
+      request_id: requestId,
       context_binding: derived.request.model_input_binding,
       proposal: {
         contract_version: AI_RECIPE_CONTEXT_CONTRACT_VERSION,
@@ -121,7 +125,7 @@ function realReview(
         interpretations,
       },
     },
-    expectedRequestId: REQUEST_ID,
+    expectedRequestId: requestId,
     current: {
       context_binding: derived.request.model_input_binding,
       targets: derived.request.provider_request.targets.map((entry) => ({
@@ -451,5 +455,184 @@ describe('AI-4D2 UI — a different recipe ends the review', () => {
     await waitFor(() =>
       expect(screen.queryByTestId('advanced-nutrition-recipe-context-rows')).toBeNull()
     );
+  });
+});
+
+describe('AI-4D2 UI — the independently captured identity anchor', () => {
+  function firstLineRef(): string {
+    const row = screen.getByTestId('advanced-nutrition-recipe-context-rows').children[0] as HTMLElement;
+    return row.getAttribute('data-testid')?.replace('advanced-nutrition-recipe-context-row-', '') ?? '';
+  }
+  function rowStatus(lineRef: string): string | null {
+    return screen
+      .queryByTestId(`advanced-nutrition-recipe-context-row-${lineRef}`)
+      ?.getAttribute('data-status') ?? null;
+  }
+
+  it('A. a recipe change invalidates an in-flight review result', async () => {
+    let release: ((value: AdvancedNutritionRecipeContextOutcome) => void) | null = null;
+    const port = vi.fn(
+      () =>
+        new Promise<AdvancedNutritionRecipeContextOutcome>((resolve) => {
+          release = resolve;
+        })
+    );
+    const { rerender } = renderCard(port, recipe({ id: 'r1' }));
+    await openEditor();
+    fireEvent.click(screen.getByTestId(REVIEW_BUTTON));
+    // A DIFFERENT recipe lands while the review is still in flight.
+    rerender(
+      <AdvancedNutritionCard
+        recipe={recipe({ id: 'r2', title: 'Another recipe' })}
+        session={genuineSession()}
+        onReviewRecipeContextWithAi={port}
+      />
+    );
+    await waitFor(() => expect(screen.queryByTestId('advanced-nutrition-recipe-context-rows')).toBeNull());
+    // The late completion is dropped: it can never install a review or an anchor.
+    release?.(realReview(recipe({ id: 'r1' })));
+    await Promise.resolve();
+    await waitFor(() => expect(screen.queryByTestId('advanced-nutrition-recipe-context-rows')).toBeNull());
+  });
+
+  it('B. a stale completion cannot replace state for the new recipe', async () => {
+    let releaseFirst: ((value: AdvancedNutritionRecipeContextOutcome) => void) | null = null;
+    let call = 0;
+    const port = vi.fn(() => {
+      call += 1;
+      if (call === 1) {
+        return new Promise<AdvancedNutritionRecipeContextOutcome>((resolve) => {
+          releaseFirst = resolve;
+        });
+      }
+      return Promise.resolve(realReview(recipe(), { requestId: ALT_REQUEST_ID }));
+    });
+    const { rerender } = renderCard(port, recipe({ id: 'r1' }));
+    await openEditor();
+    fireEvent.click(screen.getByTestId(REVIEW_BUTTON));
+    rerender(
+      <AdvancedNutritionCard
+        recipe={recipe({ id: 'r2', title: 'Another recipe' })}
+        session={genuineSession()}
+        onReviewRecipeContextWithAi={port}
+      />
+    );
+    await waitFor(() => expect(screen.queryByTestId('advanced-nutrition-recipe-context-rows')).toBeNull());
+    // The FIRST (now stale) run completes last. It must not resurrect a review.
+    releaseFirst?.(realReview(recipe({ id: 'r1' })));
+    await Promise.resolve();
+    await waitFor(() => expect(screen.queryByTestId('advanced-nutrition-recipe-context-rows')).toBeNull());
+    // And a fresh review on the new recipe installs cleanly.
+    fireEvent.click(screen.getByTestId(REVIEW_BUTTON));
+    await screen.findByTestId('advanced-nutrition-recipe-context-rows');
+  });
+
+  it('C. Clear review drops the installed review and its captured identity', async () => {
+    const port = vi.fn(async () => realReview(recipe()));
+    renderCard(port);
+    await openEditor();
+    fireEvent.click(screen.getByTestId(REVIEW_BUTTON));
+    await screen.findByTestId('advanced-nutrition-recipe-context-rows');
+    const lineRef = firstLineRef();
+    fireEvent.click(screen.getByTestId(`advanced-nutrition-recipe-context-accept-${lineRef}`));
+    await waitFor(() => expect(rowStatus(lineRef)).toBe('accepted'));
+
+    fireEvent.click(screen.getByTestId('advanced-nutrition-recipe-context-clear'));
+    await waitFor(() => expect(screen.queryByTestId('advanced-nutrition-recipe-context-rows')).toBeNull());
+
+    // The anchor went with it: the row cannot be accepted without a fresh review.
+    expect(screen.queryByTestId(`advanced-nutrition-recipe-context-accept-${lineRef}`)).toBeNull();
+    expect(port).toHaveBeenCalledTimes(1);
+  });
+
+  it('D. a new successful review replaces the anchor with the new identity', async () => {
+    let call = 0;
+    const port = vi.fn(async () => {
+      call += 1;
+      return realReview(recipe(), { requestId: call === 1 ? REQUEST_ID : ALT_REQUEST_ID });
+    });
+    renderCard(port);
+    await openEditor();
+    fireEvent.click(screen.getByTestId(REVIEW_BUTTON));
+    await screen.findByTestId('advanced-nutrition-recipe-context-rows');
+    const lineRef = firstLineRef();
+    // Accept under the FIRST anchor.
+    fireEvent.click(screen.getByTestId(`advanced-nutrition-recipe-context-accept-${lineRef}`));
+    await waitFor(() => expect(rowStatus(lineRef)).toBe('accepted'));
+
+    // A NEW review under a different request id replaces both session and anchor, so
+    // no decision is carried across request ids.
+    fireEvent.click(screen.getByTestId(REVIEW_BUTTON));
+    await waitFor(() => expect(rowStatus(lineRef)).toBe('pending'));
+    expect(port).toHaveBeenCalledTimes(2);
+    // And a decision now succeeds under the NEW anchor.
+    fireEvent.click(screen.getByTestId(`advanced-nutrition-recipe-context-accept-${lineRef}`));
+    await waitFor(() => expect(rowStatus(lineRef)).toBe('accepted'));
+  });
+
+  it('E. decisions use the captured anchor, and the self-referential pattern is gone', async () => {
+    const port = vi.fn(async () => realReview(recipe()));
+    renderCard(port);
+    await openEditor();
+    fireEvent.click(screen.getByTestId(REVIEW_BUTTON));
+    await screen.findByTestId('advanced-nutrition-recipe-context-rows');
+    const lineRef = firstLineRef();
+    // Real decisions still work end to end through the anchor.
+    fireEvent.click(screen.getByTestId(`advanced-nutrition-recipe-context-accept-${lineRef}`));
+    await waitFor(() => expect(rowStatus(lineRef)).toBe('accepted'));
+    fireEvent.click(screen.getByTestId(`advanced-nutrition-recipe-context-undo-${lineRef}`));
+    await waitFor(() => expect(rowStatus(lineRef)).toBe('pending'));
+    // Decisions still make ZERO port calls.
+    expect(port).toHaveBeenCalledTimes(1);
+  });
+
+  it('F. a mismatched identity fails closed and is never silently repaired', async () => {
+    // A session whose identity does not match what the card anchors is refused. The
+    // card still has its own anchor for the genuine review, so the tampered result is
+    // dropped rather than rendered or applied.
+    const genuine = realReview(recipe());
+    const drifted = {
+      ok: true as const,
+      session: Object.freeze({
+        ...genuine.session,
+        request_id: 'drifted-request-id',
+      }),
+    };
+    const port = vi.fn(async () => drifted);
+    renderCard(port);
+    await openEditor();
+    fireEvent.click(screen.getByTestId(REVIEW_BUTTON));
+    // The drifted session fails the card's anchor check, so no review rows render.
+    await waitFor(() => expect(screen.queryByTestId('advanced-nutrition-recipe-context-rows')).toBeNull());
+    expect(port).toHaveBeenCalledTimes(1);
+  });
+
+  it('a failed re-run fabricates no new anchor and leaves no review', async () => {
+    const installed = realReview(recipe()).session;
+    let call = 0;
+    const port = vi.fn(async (): Promise<AdvancedNutritionRecipeContextOutcome> => {
+      call += 1;
+      return call === 1
+        ? { ok: true, session: installed }
+        : ({ ok: false, message: 'unavailable' } as unknown as AdvancedNutritionRecipeContextOutcome);
+    });
+    renderCard(port);
+    await openEditor();
+    fireEvent.click(screen.getByTestId(REVIEW_BUTTON));
+    await screen.findByTestId('advanced-nutrition-recipe-context-rows');
+    const lineRef = firstLineRef();
+    fireEvent.click(screen.getByTestId(`advanced-nutrition-recipe-context-accept-${lineRef}`));
+    await waitFor(() => expect(rowStatus(lineRef)).toBe('accepted'));
+
+    fireEvent.click(screen.getByTestId(REVIEW_BUTTON));
+    await waitFor(() => expect(port).toHaveBeenCalledTimes(2));
+    // A FAILED run fabricates NOTHING: it installs no new session and no new anchor,
+    // so the previously installed review and its decision survive untouched and stay
+    // consistent under their own original anchor.
+    expect(rowStatus(lineRef)).toBe('accepted');
+    // Proof the original anchor is still the live one: undo still works, because the
+    // anchor was neither replaced nor discarded by the failed run.
+    fireEvent.click(screen.getByTestId(`advanced-nutrition-recipe-context-undo-${lineRef}`));
+    await waitFor(() => expect(rowStatus(lineRef)).toBe('pending'));
   });
 });
