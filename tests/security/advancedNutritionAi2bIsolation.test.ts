@@ -487,9 +487,29 @@ describe('AI-2B route separation and frozen contracts', () => {
     ]) {
       expect(routeLine.includes(middleware), `plan route is missing ${middleware}`).toBe(true);
     }
-    // The AI-1 route is untouched and keeps ITS limiter.
-    expect(app).toContain(
-      'app.post("/api/nutrition/interpret-ingredients", requireAiAccessToken, textPricingGuard, nutritionInterpretRateLimiter,'
+    // The AI-1 route keeps ITS limiter, and its middleware posture is unchanged apart
+    // from the AI-5B product-entitlement gate the server now inserts after endpoint
+    // authentication. The RELATIVE order of the pre-existing middleware is what this
+    // suite owns, so it is asserted by index rather than by one literal route line.
+    const interpretRoute = app.slice(app.indexOf('"/api/nutrition/interpret-ingredients"'));
+    const interpretLine = interpretRoute.slice(0, interpretRoute.search(/\basync\s*\(/));
+    const orderOf = (line: string, needle: string) => line.indexOf(needle);
+    for (const middleware of [
+      'requireAiAccessToken',
+      'requireNutritionProductFeature',
+      'textPricingGuard',
+      'nutritionInterpretRateLimiter',
+    ]) {
+      expect(interpretLine.includes(middleware), `interpret route is missing ${middleware}`).toBe(true);
+    }
+    expect(orderOf(interpretLine, 'requireAiAccessToken')).toBeLessThan(
+      orderOf(interpretLine, 'requireNutritionProductFeature'),
+    );
+    expect(orderOf(interpretLine, 'requireNutritionProductFeature')).toBeLessThan(
+      orderOf(interpretLine, 'textPricingGuard'),
+    );
+    expect(orderOf(interpretLine, 'textPricingGuard')).toBeLessThan(
+      orderOf(interpretLine, 'nutritionInterpretRateLimiter'),
     );
     // Two separate endpoints — no mixed discriminator, no shared schema.
     expect(app).not.toContain('/api/nutrition/plan-or-interpret');

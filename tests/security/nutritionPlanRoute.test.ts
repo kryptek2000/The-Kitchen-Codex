@@ -107,7 +107,9 @@ describe('POST /api/nutrition/plan-ingredients — security', () => {
     process.env.GEMINI_API_KEY = '';
     process.env.NUTRITION_PLAN_RATE_LIMIT = '1000';
     process.env.NUTRITION_INTERPRET_RATE_LIMIT = '1000';
-    const app = createApp({ isProduction: false });
+    // AI-5B: this suite exercises the ENTILED AI route, so the deployment product
+    // tier is stated explicitly rather than relying on the fail-closed Basic default.
+    const app = createApp({ isProduction: false, nutritionProductTier: 'ai_advanced' });
     server = http.createServer(app);
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

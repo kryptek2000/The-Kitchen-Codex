@@ -131,6 +131,38 @@ Open `.env` in any text editor and add your API key (optional, only needed for A
 GEMINI_API_KEY=your_gemini_api_key_here
 ```
 
+##### Advanced Nutrition product access (optional)
+
+**Basic Nutrition** — the default. No extra setting is needed. Deterministic USDA
+analysis, matching, manual correction, manual weight entry, Review and Apply all work
+without any product setting, and the product tier stays `basic`.
+
+**AI Advanced Nutrition** — if you want to use the AI Advanced Nutrition AI features,
+set this one server variable:
+```env
+KITCHEN_CODEX_NUTRITION_PRODUCT_TIER=ai_advanced
+```
+That exact value is required. Anything else — missing, misspelled, wrong case, or
+extra spaces — falls back safely to `basic`, so the feature stays off until you opt in.
+Without it, the Advanced Nutrition AI requests are refused with a clear
+`AI Advanced Nutrition is not available` error and no AI request is sent.
+
+A few things worth knowing:
+- **A key alone does not enable it.** Uploading an API key or configuring BYOK does
+  *not* grant AI Advanced product access; this setting is separate.
+- **Enabling it doesn't promise an AI call.** A configured, working
+  provider/model/credential is still required. If none is available, the app reports
+  that the AI step is unavailable rather than failing silently.
+- **It grants permission to try, nothing more.** It does not let AI decide food or
+  nutrient values — your deterministic nutrition data, Review and Apply rules are
+  unchanged.
+- **It is per-installation, not per-account.** This setting applies to this deployment
+  (for the local/single-user setup the app currently supports). There is no sign-in,
+  no subscription and no billing here; hosted multi-user accounts are not implemented.
+
+The template ships with the safe `basic` value already filled in, so it never turns
+Advanced Nutrition on by accident — change it to `ai_advanced` only when you want it.
+
 #### 4. Run the local development server
 ```bash
 npm run dev

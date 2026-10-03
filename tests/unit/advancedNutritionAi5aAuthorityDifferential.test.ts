@@ -40,7 +40,7 @@
  */
 import { describe, it, expect, beforeAll, vi } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, isAbsolute } from 'node:path';
+import { join, isAbsolute, relative } from 'node:path';
 
 import { composeAdvancedNutritionSessionFromBundle } from '../../src/core/nutritionV2/runtime/bundle';
 import { USDA_BUNDLE_RELEASE_LOCK } from '../../src/core/nutritionV2/usda/releaseLock';
@@ -525,15 +525,27 @@ function walkFiles(dir: string, out: string[] = []): string[] {
 }
 
 describe('AI-5A inertness — structural: no consumer, no wiring, no field', () => {
-  it('K. the contract module has ZERO production consumer', () => {
-    // The whole client + server + scripts surface, plus the plugin build.
+  it('K. the contract has ZERO CLIENT/plugin consumers and exactly ONE server boundary', () => {
+    // AI-5A was inert. AI-5B gives the SERVER authority, and only the server: the
+    // dedicated gate module plus the composition point that closes over its value.
+    // The client, the scripts and the plugin build stay completely unaware.
     const offenders: string[] = [];
     for (const root of ['src', 'server', 'scripts', 'plugin']) {
       for (const full of walkFiles(join(REPO, root))) {
         if (codeOf(full).includes('nutritionProductAccess')) offenders.push(full);
       }
     }
-    expect(offenders).toEqual([]);
+    expect(offenders.map((full) => relative(REPO, full)).sort()).toEqual([
+      'server/app.ts',
+      'server/nutritionProductAccess.ts',
+    ]);
+
+    // Nothing outside the server tree is aware at all.
+    for (const root of ['src', 'scripts', 'plugin']) {
+      for (const full of walkFiles(join(REPO, root))) {
+        expect(codeOf(full), full).not.toContain('nutritionProductAccess');
+      }
+    }
   });
 
   it('L. no App, server or AI execution path imports the new module', () => {
@@ -547,7 +559,6 @@ describe('AI-5A inertness — structural: no consumer, no wiring, no field', () 
       'src/application/advancedNutritionApply.ts',
       'src/core/nutritionV2/nutritionCapabilities.ts',
       'src/core/nutritionV2/index.ts',
-      'server/app.ts',
       'server/nutritionContext.ts',
       'server/nutritionEstimate.ts',
       'server/nutritionPlan.ts',
@@ -562,6 +573,18 @@ describe('AI-5A inertness — structural: no consumer, no wiring, no field', () 
       }
       expect(codeOf(rel), rel).not.toContain('nutritionProductAccess');
     }
+
+    // The AI-5B composition point closes over the gate's resolved value and imports the
+    // GATE module only — never the AI-5A core contract, so the route factory carries no
+    // entitlement vocabulary of its own.
+    const appModules = source('server/app.ts')
+      .split('\n')
+      .map((line) => /\bfrom\s+['"]([^'"]+)['"]/.exec(line)?.[1] ?? '')
+      .filter(Boolean);
+    for (const modulePath of appModules) {
+      expect(modulePath, 'server/app.ts').not.toContain('core/nutritionV2/nutritionProductAccess');
+    }
+    expect(appModules).toContain('./nutritionProductAccess.js');
   });
 
   it('M. there is NO reducer action and NO state field for product access', () => {

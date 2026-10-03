@@ -115,6 +115,10 @@ import {
 import { sanitizeKitchenIntent } from "../src/utils/kitchenIntent.js";
 import { safeFetchImage, WafProtectionError } from "./ssrfGuard.js";
 import { createSecurityMiddleware } from "./securityHeaders.js";
+import {
+  requireNutritionProductFeature,
+  resolveServerNutritionProductAccess,
+} from "./nutritionProductAccess.js";
 import { requireAiAccessToken } from "./aiEndpointAuth.js";
 import { registerSessionKeyRoutes } from "./ai/sessionKeyRoutes.js";
 import { createApiErrorHandler } from "./errorHandler.js";
@@ -135,6 +139,23 @@ export interface CreateAppOptions {
    * always constructs its own bounded store.
    */
   imagePreviewStore?: ImagePreviewStore;
+  /**
+   * AI-5B SERVER-AUTHORITATIVE PRODUCT-ACCESS INPUT (test seam + deployment seam).
+   *
+   * This is the RAW value of the single non-secret server-owned environment input
+   * `KITCHEN_CODEX_NUTRITION_PRODUCT_TIER`; `server.ts` reads it and passes it here.
+   * `createApp()` resolves it through the unchanged AI-5A contract EXACTLY ONCE for
+   * this application instance, and every AI Advanced Nutrition route gate closes over
+   * that one canonical value.
+   *
+   * `unknown` is deliberate so the fail-closed resolver is reachable with arbitrary
+   * injected input. ONLY the exact string `'ai_advanced'` grants AI Advanced; absent,
+   * empty, malformed, wrong-case, whitespace-padded, aliased, boolean, numeric and
+   * feature-shaped values all resolve to Basic. There is no `disableEntitlementCheck`
+   * switch and no test-only bypass: tests exercise the SAME gate production uses, and
+   * must state `'ai_advanced'` explicitly when they intend an entitled AI route.
+   */
+  nutritionProductTier?: unknown;
 }
 
 /**
@@ -314,6 +335,23 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // route uses it to ISSUE and the AI-4 reconcile route uses it to VERIFY, so there
   // is exactly one signing/verifying implementation and no loose global helper.
   const recipeContextOriginReceipts = createRecipeContextOriginReceiptAuthority();
+
+  // AI-5B SERVER-AUTHORITATIVE PRODUCT-ACCESS DECISION — resolved EXACTLY ONCE for
+  // this application instance.
+  //
+  // The raw `KITCHEN_CODEX_NUTRITION_PRODUCT_TIER` value arrives through
+  // `CreateAppOptions.nutritionProductTier` (read once, by `server.ts`), is resolved
+  // here through the unchanged AI-5A contract, and is stored as ONE of the two
+  // canonical frozen access values. Every AI Advanced Nutrition route gate below closes
+  // over this value, so no route reads `process.env`, no route re-parses the raw input,
+  // and no two routes can disagree about product access.
+  //
+  // FAIL-CLOSED: an absent or malformed value yields the canonical BASIC access value.
+  // Absent configuration must NEVER mean AI Advanced. Production behaviour for a
+  // Basic deployment is therefore: every gated route refuses with a bounded 403
+  // `NUTRITION_AI_NOT_ENTITLED` before pricing, rate limiting, provider selection,
+  // credential resolution or any model execution.
+  const nutritionProductAccess = resolveServerNutritionProductAccess(opts.nutritionProductTier);
 
   // Security headers (X-Content-Type-Options, clickjacking protection, referrer
   // policy, and a production-only Content Security Policy).
@@ -632,7 +670,12 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // authority (no FDC id, nutrient amount, mass, portion, digest, or Apply
   // token). The client feeds the phrases back through the pinned local USDA
   // catalog + the existing deterministic confidence contract.
-  app.post("/api/nutrition/resolve-ingredients", requireAiAccessToken, textPricingGuard, nutritionResolveRateLimiter, async (req, res) => {
+  //
+  // AI-5B: `ai_interpretation`. This older advisory transport is gated exactly like the
+  // canonical AI-1 route below — being the older route is not a reason to remain an
+  // entitlement bypass. Order: endpoint auth -> product entitlement -> pricing ->
+  // limiter -> handler, so a Basic denial costs zero provider calls.
+  app.post("/api/nutrition/resolve-ingredients", requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccess, "ai_interpretation"), textPricingGuard, nutritionResolveRateLimiter, async (req, res) => {
     const clientIp = getClientIp(req);
 
     try {
@@ -694,7 +737,11 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // FDC id, gram/mass/density, nutrient, portion, digest, schema, provenance,
   // authorization, or persistence field, at any nesting depth. The v4 advisory
   // resolution route above is unchanged and remains a separate contract.
-  app.post("/api/nutrition/interpret-ingredients", requireAiAccessToken, textPricingGuard, nutritionInterpretRateLimiter, async (req, res) => {
+  //
+  // AI-5B: `ai_interpretation`. Entitlement only permits an ATTEMPT: it grants no
+  // authority over FDC identity, grams, nutrients, Apply or persistence, so every
+  // canonical sanitization and line-ref check below is unchanged.
+  app.post("/api/nutrition/interpret-ingredients", requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccess, "ai_interpretation"), textPricingGuard, nutritionInterpretRateLimiter, async (req, res) => {
     const clientIp = getClientIp(req);
 
     try {
@@ -762,7 +809,9 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // `plan_version`), the request identity echoed back is the SERVER-VALIDATED id
   // and never a model-produced value, and the returned plan is INERT: this route
   // never applies a plan, mutates working state, persists, or resolves nutrition.
-  app.post("/api/nutrition/plan-ingredients", requireAiAccessToken, textPricingGuard, nutritionPlanRateLimiter, async (req, res) => {
+  //
+  // AI-5B: `ai_candidate_orchestration`.
+  app.post("/api/nutrition/plan-ingredients", requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccess, "ai_candidate_orchestration"), textPricingGuard, nutritionPlanRateLimiter, async (req, res) => {
     const clientIp = getClientIp(req);
 
     try {
@@ -818,7 +867,10 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // AI-3 bounded mass estimate endpoint. DEDICATED route, limiter and wire
   // owner: it never shares the AI-2B planning route, and it grants no identity,
   // portion, nutrient, persistence or Apply authority.
-  app.post("/api/nutrition/estimate-mass", requireAiAccessToken, textPricingGuard, nutritionMassEstimateRateLimiter, async (req, res) => {
+  //
+  // AI-5B: `ai_bounded_mass_estimation`. Entitlement is not mass authority: a genuine
+  // AI Advanced pass-through here still cannot decide grams.
+  app.post("/api/nutrition/estimate-mass", requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccess, "ai_bounded_mass_estimation"), textPricingGuard, nutritionMassEstimateRateLimiter, async (req, res) => {
     const clientIp = getClientIp(req);
 
     try {
@@ -891,7 +943,9 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // RECEIPT over the exact canonical wire, so the reconciliation route can prove
   // the wire really came through THIS authorized execution path. The receipt is not
   // in the proposal, not in the prompt, and not something the model ever sees.
-  app.post("/api/nutrition/recipe-context", requireAiAccessToken, textPricingGuard, nutritionContextRateLimiter, async (req, res) => {
+  //
+  // AI-5B: `ai_recipe_context_review`.
+  app.post("/api/nutrition/recipe-context", requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccess, "ai_recipe_context_review"), textPricingGuard, nutritionContextRateLimiter, async (req, res) => {
     const clientIp = getClientIp(req);
 
     try {
@@ -977,7 +1031,20 @@ export function createApp(opts: CreateAppOptions): express.Express {
     }
   });
 
-  // AI-4D2 EXPLICIT-REVIEW RECONCILIATION endpoint, now ORIGIN-GATED by AI-4E.
+  // AI-4D2 EXPLICIT-REVIEW RECONCILIATION endpoint, ORIGIN-GATED by AI-4E and
+  // PRODUCT-GATED by AI-5B.
+  //
+  // AI-5B — RECONCILE STILL REQUIRES CURRENT ENTITLEMENT. This route performs no
+  // provider call, but it is part of the entitled AI-4 review feature, so a receipt
+  // from an earlier entitled request must NOT become a permanent entitlement bypass
+  // after product access is absent. Product access is therefore re-checked on EVERY
+  // reconcile request, not carried by the receipt and not inherited from the AI-4C
+  // response. Entitlement is an ADDITIONAL product gate; it does not replace, weaken
+  // or reorder origin authentication.
+  //
+  // ORDER: endpoint auth -> AI-5B product entitlement -> origin-receipt verification ->
+  // D1 reconciliation. `textPricingGuard` remains deliberately absent (no model, no
+  // spend), and the pre-existing reconcile limiter is untouched.
   //
   // This is the ONLY transport for turning an untrusted AI-4C wire into an inert
   // AI-4D1 CURRENT review plan. It is PURE DETERMINISTIC CODE: the server re-
@@ -990,6 +1057,8 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // limiter.
   //
   // AI-4E TRUST CHAIN — BOTH GATES ARE REQUIRED, IN THIS ORDER
+  //   0. AI-5B PRODUCT ENTITLEMENT: `requireAiAccessToken`, then the AI-5B gate. Both
+  //      run before any receipt work, and neither is client-controlled.
   //   1. closed-key validation of the public body
   //   2. SERVER-AUTHENTICATED AI-4C ORIGIN: the receipt is verified against the EXACT
   //      submitted wire, and the wire is strictly re-read and canonicalized first, so
@@ -1006,6 +1075,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   app.post(
     "/api/nutrition/recipe-context/reconcile",
     requireAiAccessToken,
+    requireNutritionProductFeature(nutritionProductAccess, "ai_recipe_context_review"),
     nutritionContextReconcileRateLimiter,
     async (req, res) => {
       const clientIp = getClientIp(req);

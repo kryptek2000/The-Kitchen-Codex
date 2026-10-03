@@ -8891,7 +8891,8 @@ A future phase must make the **server authoritative** for entitlement.
   provider work**.
 - A Basic denial must cost **ZERO** provider calls.
 
-**AI-5A implements no route gate.** The gate belongs to AI-5B.
+**AI-5A implements no route gate.** The gate belongs to AI-5B — now implemented; see
+**§56**.
 
 ### 55.16 What AI-5A does NOT do
 
@@ -8908,3 +8909,256 @@ does not implement AI-5B. It adds no downstream AI-4 consumption.
 | contract, closed vocabularies, canonical states, fail-closed parsing, impossible-state defense, feature mapping, immutability | `tests/unit/advancedNutritionAi5aProductAccess.test.ts` |
 | purity, provider neutrality, BYOK separation, billing/account neutrality, zero consumer, no route/schema/state/Apply wiring, AI-4E invariance | `tests/security/advancedNutritionAi5aIsolation.test.ts` |
 | Basic vs AI Advanced authority differential over the real pinned bundle, plus the structural inertness proof | `tests/unit/advancedNutritionAi5aAuthorityDifferential.test.ts` |
+
+## §56. AI-5B — SERVER-AUTHORITATIVE ENTITLEMENT BOUNDARY
+
+### 56.1 What this phase is
+
+AI-5A (§55) defined the **pure product-access contract** and deliberately wired it
+into nothing. **AI-5B is the first real server-authoritative enforcement boundary.**
+The server — not the browser, not Provider Settings, not BYOK, not provider status —
+now decides whether an AI Advanced Nutrition feature may be **attempted**.
+
+```
+server.ts                       ONE read of the deployment configuration
+  -> createApp(...)             ONE resolution per application instance
+    -> closed feature gate      auth -> entitlement -> pricing -> limiter -> handler
+      -> existing pipeline      unchanged selection / provider / credential / AI
+```
+
+The three questions remain **separate**, and are never collapsed:
+
+| # | Question | Owner | AI-5B |
+| --- | --- | --- | --- |
+| 1 | **PRODUCT ACCESS** — may this AI feature be attempted? | AI-5A contract + this server gate | **this phase** |
+| 2 | **OPERATIONAL READINESS** — can the selected provider/model/credential execute? | `nutritionCapabilities.ts` (AI-0), provider selection, credential resolution | unchanged, orthogonal |
+| 3 | **NUTRITION AUTHORITY** — may the result affect identity, mass, nutrients, Apply, persistence? | AI-1 / AI-2 / AI-3 / AI-4 | unchanged, orthogonal |
+
+The execution rule is therefore
+
+```
+EFFECTIVE AI CAPABILITY
+    =  PRODUCT ENTITLED
+   AND
+       OPERATIONALLY READY
+```
+
+**never OR.** Case A below is the load-bearing row.
+
+### 56.2 The deployment-scoped source (and its honest limit)
+
+| | |
+| --- | --- |
+| Module | `server/nutritionProductAccess.ts` |
+| Configuration input | `KITCHEN_CODEX_NUTRITION_PRODUCT_TIER` (one non-secret, server-owned variable) |
+| Allowed exact values | `basic`, `ai_advanced` (exactly the AI-5A tier vocabulary) |
+| Read location | `server.ts` — the **only** `process.env` read in the product-access path |
+| Resolution location | `createApp()`, **exactly once** per application instance |
+| Resolution function | AI-5A's `resolveNutritionProductAccess` (parsing is **not** reimplemented) |
+| Default when absent | **`basic`** |
+
+The current Kitchen Codex server has **no authenticated multi-user account identity**.
+AI-5B is therefore truthful about what it is: a **server-owned,
+deployment-scoped, single-user product-access source**.
+
+It is **NOT** per-user hosted entitlement, and it does **NOT** pretend to be. Identity
+is never inferred from an IP address, from `AI_ENDPOINT_TOKEN`, from browser state,
+from Provider Settings, from an API key, from a vault, or from any header, cookie or
+`localStorage` value.
+
+**A shared environment tier is NOT per-user authorization. A shared
+`AI_ENDPOINT_TOKEN` is NOT an entitlement identity.**
+
+### 56.3 Fail-closed resolution
+
+Only the exact string `ai_advanced` grants AI Advanced. Everything else is **Basic**:
+
+| Input | Resolves to |
+| --- | --- |
+| missing / `undefined` / `null` / empty / whitespace | `basic` |
+| exact `basic` | `basic` |
+| **exact `ai_advanced`** | **`ai_advanced`** |
+| wrong case (`AI_ADVANCED`, `Ai_Advanced`) | `basic` |
+| whitespace-padded (`' ai_advanced'`, `'ai_advanced '`) | `basic` |
+| aliases / spellings (`pro`, `premium`, `paid`, `free`, `subscription`, `ai-advanced`) | `basic` |
+| booleans, numbers, objects, arrays, `String` wrappers | `basic` |
+| feature-shaped objects (`{ tier, aiInterpretation: true }`) | `basic` |
+
+There is **no trimming, no case folding, no alias table and no coercion**. An invalid
+value is never "repaired" into entitlement.
+
+**Absent configuration MUST NOT mean AI Advanced.** The default is Basic, so an
+operator who has not opted in gets zero paid AI routes.
+
+### 56.4 Route → feature mapping
+
+Only the four closed AI-5A AI features are gated. The older advisory route is gated too:
+being the older transport is not a reason to remain an entitlement bypass.
+
+| Feature (AI-5A, closed) | Route | Middleware order |
+| --- | --- | --- |
+| `ai_interpretation` | `POST /api/nutrition/resolve-ingredients` | `requireAiAccessToken` → **gate** → `textPricingGuard` → `nutritionResolveRateLimiter` |
+| `ai_interpretation` | `POST /api/nutrition/interpret-ingredients` | `requireAiAccessToken` → **gate** → `textPricingGuard` → `nutritionInterpretRateLimiter` |
+| `ai_candidate_orchestration` | `POST /api/nutrition/plan-ingredients` | `requireAiAccessToken` → **gate** → `textPricingGuard` → `nutritionPlanRateLimiter` |
+| `ai_bounded_mass_estimation` | `POST /api/nutrition/estimate-mass` | `requireAiAccessToken` → **gate** → `textPricingGuard` → `nutritionMassEstimateRateLimiter` |
+| `ai_recipe_context_review` | `POST /api/nutrition/recipe-context` | `requireAiAccessToken` → **gate** → `textPricingGuard` → `nutritionContextRateLimiter` |
+| `ai_recipe_context_review` | `POST /api/nutrition/recipe-context/reconcile` | `requireAiAccessToken` → **gate** → `nutritionContextReconcileRateLimiter` → origin receipt → D1 |
+
+The reconcile route legitimately keeps **no** `textPricingGuard` (it makes no model
+call and has no spend); its pre-existing dedicated limiter is untouched.
+
+**Explicitly NOT gated** — Basic Nutrition and unrelated AI surfaces are unchanged:
+deterministic analysis, USDA matching, manual search, manual mass entry, saved/basic
+nutrition, Apply, provider status/catalog, provider connection testing, BYOK key
+storage, the legacy `POST /api/estimate-nutrition` estimator, unrelated recipe AI
+(Grab Recipe, metadata recovery, Kitchen Ask, recipe generation) and image generation.
+
+### 56.5 Middleware order and the zero-provider-call rule
+
+```
+requireAiAccessToken
+  -> requireNutritionProductFeature(access, feature)      AI-5B
+    -> textPricingGuard                                    existing (v0.8.0)
+      -> route rate limiter                                existing
+        -> route handler                                   existing
+```
+
+Two orderings are load-bearing:
+
+1. **Endpoint authentication stays FIRST.** An unauthenticated caller must not learn
+   product-access state by probing a route. It receives the existing `401
+   UNAUTHORIZED`, never `NUTRITION_AI_NOT_ENTITLED`.
+2. **Entitlement precedes pricing, rate limiting, selection, credentials and
+   execution.** A Basic denial therefore costs **ZERO** provider calls, resolves no
+   credential, leases no BYOK secret, consumes no session credential, and does **not**
+   consume the paid AI route's rate-limit bucket.
+
+### 56.6 The bounded denial contract
+
+One denial class, one machine code:
+
+```http
+HTTP/1.1 403 Forbidden
+```
+
+```json
+{
+  "ok": false,
+  "code": "NUTRITION_AI_NOT_ENTITLED",
+  "error": "AI Advanced Nutrition is not available for this product access.",
+  "aiAttempted": false
+}
+```
+
+The body carries **no** pricing, plan name, subscription state, billing data, configured
+tier, account identity, API-key information, provider information, raw configuration or
+environment value. `aiAttempted` is a hard `false` because the gate runs before any AI
+work.
+
+### 56.7 Client input has zero authority
+
+None of these unlock a route, and none are even parsed:
+
+- body `{ "tier": "ai_advanced" }`, `{ "productTier": "ai_advanced" }`,
+  `{ "entitled": true }`, or any feature-shaped object;
+- headers `x-kitchen-nutrition-tier`, `x-product-tier`, `x-entitlement`, or a provider
+  selection header;
+- cookies, query strings, or `localStorage`.
+
+Entitlement comes **only** from server composition.
+
+### 56.8 BYOK remains orthogonal
+
+| Case | Result |
+| --- | --- |
+| Basic + a **valid** `session_only` key | `403 NUTRITION_AI_NOT_ENTITLED`, **zero provider calls**, and the secret is **not consumed** |
+| AI Advanced + a **missing/expired** `session_only` credential | **passes the product gate**; the existing credential layer fails closed — a **different** failure class |
+| AI Advanced + a **valid** `session_only` credential | the existing request-scoped provider path, unchanged |
+
+BYOK **key-storage routes are not gated**. Possessing an API key never grants product
+access, and entitlement never supplies a credential.
+
+### 56.9 Provider readiness remains orthogonal
+
+| | Scenario | Outcome |
+| --- | --- | --- |
+| **A** | Basic + provider ready | product gate denies `403`, **zero** provider work |
+| **B** | AI Advanced + provider unavailable | product gate **passes**; the existing bounded unavailable behavior is returned |
+| **C** | AI Advanced + provider ready | the existing AI pipeline is reached, unchanged |
+| **D** | missing / malformed server tier | Basic, denied |
+
+Case **B** is the proof that entitlement is **not sufficient for success**. `AI-5B`
+grants permission to **attempt**, nothing more.
+
+### 56.10 Reconcile order: entitlement AND origin receipt
+
+`POST /api/nutrition/recipe-context/reconcile` performs no provider call, but it is part
+of the entitled AI-4 review feature. A receipt from an earlier entitled request must
+**not** become a permanent entitlement bypass after product access is absent, so the
+public route requires:
+
+1. endpoint authentication
+2. **CURRENT** AI recipe-context entitlement
+3. existing origin-receipt verification (AI-4E)
+4. existing D1 reconciliation
+
+Entitlement is an **additional** product gate. It does not replace, weaken or reorder
+origin authentication, and it does **not** make a forged receipt valid. **I-1 remains
+closed.**
+
+### 56.11 Invariances
+
+- **AI-5A core unchanged.** `src/core/nutritionV2/nutritionProductAccess.ts` is
+  consumed, not rewritten. It gained no knowledge of the server boundary.
+- **`nutritionCapabilities.ts` unchanged.** It still answers operational readiness
+  (`aiConfigured && aiReachable`) and is never merged with entitlement.
+- **AI-4E unchanged.** `server/recipeContextOriginReceipt.ts` and
+  `aiRecipeContextOriginReceiptShape.ts` keep `randomBytes(32)`, HMAC-SHA-256,
+  `timingSafeEqual`, the `rctx1` prefix, the exact canonical wire binding, origin
+  verification before D1, and `origin_unverified`.
+- **AI-4 trust boundary still closed.**
+  `projectAcceptedRecipeContext` has **ZERO** production consumers. There is no
+  `ai_recipe_context_application` feature, and accepted AI-4 context is not consumed for
+  AI-3 eligibility, suppression, matching, mass, Apply or persistence.
+- **AI-1 / AI-2 / AI-3 authority unchanged.** Entitlement permits an attempt only; it
+  grants no authority over candidate identity, FDC identity, grams, mass, portions,
+  nutrients, provenance, Apply or persistence.
+- **Provider / BYOK modules unchanged.**
+- **No entitlement persistence.** The deployment tier is runtime/deployment policy only.
+  It is never written to Markdown, the vault, the recipe schema, `SettingsAdapter`,
+  `localStorage`, `IndexedDB`, plugin data or nutrition persistence.
+
+### 56.12 What AI-5B deliberately does NOT do
+
+- **No client/UI wiring.** `src/App.tsx`, `AdvancedNutritionCard`,
+  `AdvancedNutritionModal`, Provider Settings, badges, upgrade prompts, pricing copy,
+  lock icons and paywall UI are untouched. The browser may temporarily attempt an
+  Advanced operation and receive the bounded server denial. **AI-5C** can make the UI
+  product-aware; the server is the authority now.
+- **No product-access status endpoint.** There is no `/api/nutrition/product-access` or
+  equivalent. This phase is enforcement only — no client product-state synchronization.
+- **No account or billing machinery.** No login, user IDs, customer IDs, Stripe, Paddle,
+  Lemon Squeezy, checkout, subscriptions, licenses, JWTs, receipts, trials, pricing
+  plans, promo codes, quotas or usage charging.
+- **No test-only bypass.** There is no `disableEntitlementCheck` switch. Tests exercise
+  the **same** gate production uses and state `ai_advanced` explicitly when they intend
+  an entitled AI route.
+- **No AI-5C work and no downstream AI-4 consumption.**
+
+### 56.13 MANDATORY future hosted gate
+
+Before hosted multi-user AI Advanced Nutrition can ship, this deployment-scoped source
+**MUST** be replaced by **authenticated per-user / per-account entitlement**.
+
+A shared environment tier is **NOT** per-user authorization, and a shared
+`AI_ENDPOINT_TOKEN` is **NOT** an entitlement identity. Shipping hosted multi-user AI
+Advanced Nutrition on the current source would be a false claim of entitlement
+security, and is explicitly out of bounds for this architecture.
+
+### 56.14 Coverage
+
+| Concern | File |
+| --- | --- |
+| fail-closed source resolution matrix, canonical access identity, gate behavior, bounded denial, module narrowness | `tests/unit/advancedNutritionAi5bServerAccess.test.ts` |
+| route matrix, zero-provider-call proof, client forgery, authentication order, middleware order, positive path, reconcile entitlement + receipt | `tests/security/advancedNutritionAi5bRouteGate.test.ts` |
+| BYOK orthogonality, unrelated-route invariance, composition ownership, no persistence, AI-5A / `nutritionCapabilities` / AI-4E invariance | `tests/security/advancedNutritionAi5bIsolation.test.ts` |

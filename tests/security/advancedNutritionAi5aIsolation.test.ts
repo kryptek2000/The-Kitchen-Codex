@@ -54,6 +54,17 @@ const ALL_SOURCE_FILES: ReadonlyArray<string> = [
   ...walk(join(REPO, 'scripts')),
 ];
 
+/**
+ * The ONE production module that became AI-5A-aware at AI-5B: the server boundary.
+ *
+ * AI-5A was inert, so every surface above had to be unaware of the contract. AI-5B
+ * makes the server authoritative, which necessarily gives exactly ONE server module a
+ * consumer: the dedicated gate. Every client surface, every AI transport, `rateLimiter`,
+ * the AI-4E authority and `nutritionCapabilities` stay unaware — that is the whole point
+ * of routing the gate through a separate boundary module.
+ */
+const AI5B_GATE = 'server/nutritionProductAccess.ts';
+
 /** Live production surfaces that must remain completely unaware of AI-5A. */
 const LIVE_SURFACES: ReadonlyArray<string> = [
   'src/App.tsx',
@@ -73,7 +84,6 @@ const LIVE_SURFACES: ReadonlyArray<string> = [
   'src/core/nutritionV2/phase4/state.ts',
   'src/core/nutritionV2/phase5/authorize.ts',
   'src/core/nutritionV2/phase5/types.ts',
-  'server/app.ts',
   'server/nutritionContext.ts',
   'server/nutritionEstimate.ts',
   'server/nutritionPlan.ts',
@@ -361,6 +371,11 @@ describe('AI-5A isolation — BYOK cannot become entitlement', () => {
     // of them gained a product-access dependency.
     let checked = 0;
     for (const rel of ALL_SOURCE_FILES) {
+      // `server/app.ts` is the AI-5B composition point: it wires ROUTES, so it already
+      // carried the credential vocabulary before AI-5B. Its product-access awareness is
+      // pinned separately (gate-only, never the contract). Every BYOK OWNER below must
+      // remain completely unaware of product access.
+      if (rel === 'server/app.ts' || rel === AI5B_GATE) continue;
       const source = code(rel);
       if (source.includes('credentialSource') || source.includes('session_only')) {
         checked += 1;
@@ -371,13 +386,51 @@ describe('AI-5A isolation — BYOK cannot become entitlement', () => {
     }
     expect(checked, 'the historical BYOK vocabulary must still exist somewhere').toBeGreaterThan(0);
     expect(byok.length).toBeGreaterThan(0);
+
+    // The BYOK owners themselves gained nothing.
+    for (const rel of byok) {
+      const source = code(rel);
+      expect(source, rel).not.toContain('nutritionProductAccess');
+      expect(source, rel).not.toContain('ProductAccess');
+      expect(source, rel).not.toContain('NUTRITION_PRODUCT_ACCESS_VERSION');
+      expect(source, rel).not.toContain('KITCHEN_CODEX_NUTRITION_PRODUCT_TIER');
+    }
   });
 
   it('product access is not derived from, and does not feed, any credential resolver', () => {
-    // No credential resolver, session-secret authority, provider registry or
-    // Provider Settings surface reaches the contract.
-    const owners = ALL_SOURCE_FILES.filter((rel) => code(rel).includes('nutritionProductAccess'));
-    expect(owners).toEqual([]);
+    // No credential resolver, session-secret authority, provider registry, pricing
+    // layer or Provider Settings surface reaches the contract — and the contract's
+    // single server consumer does not reach THEM either, so the gate can neither read
+    // nor be influenced by credential state.
+    const credentialOwners = [
+      'server/ai/sessionSecrets.ts',
+      'server/ai/credentialResolver.ts',
+      'server/ai/providerRegistry.ts',
+      'server/ai/providerStatus.ts',
+      'server/ai/effectiveSelection.ts',
+      'server/ai/parseSelectionMetadata.ts',
+      'server/ai/sessionKeyRoutes.ts',
+      'server/aiEndpointAuth.ts',
+      'server/rateLimiter.ts',
+      'server/geminiClient.ts',
+      'src/application-ui/ProviderSettings.tsx',
+      'src/application/aiSelection.ts',
+    ];
+    for (const rel of credentialOwners) {
+      const source = code(rel);
+      expect(source, rel).not.toContain('nutritionProductAccess');
+      expect(source, rel).not.toContain('ProductAccess');
+      expect(source, rel).not.toContain('NUTRITION_PRODUCT_ACCESS_VERSION');
+      expect(source, rel).not.toContain('KITCHEN_CODEX_NUTRITION_PRODUCT_TIER');
+    }
+    // The gate imports the contract and express — no credential or provider module.
+    const gateImports = src(AI5B_GATE)
+      .split('\n')
+      .filter((line) => /^\s*import\b/.test(line) || /\bfrom\s+['"]/.test(line))
+      .join('\n');
+    for (const forbidden of ['credentialResolver', 'sessionSecret', 'provider', 'rateLimiter', 'gemini']) {
+      expect(gateImports, forbidden).not.toContain(forbidden);
+    }
   });
 });
 
@@ -458,6 +511,50 @@ describe('AI-5A isolation — ZERO production consumer', () => {
     expect(barrel).not.toContain('NUTRITION_PRODUCT_ACCESS_VERSION');
   });
 
+  it('AI-5B gives EXACTLY ONE server module a consumer, and nothing else does', () => {
+    // The gate is the single production consumer of the contract.
+    const consumers = [...ALL_SOURCE_FILES, ...walk(join(REPO, 'plugin'))].filter((rel) =>
+      code(rel).includes('nutritionProductAccess'),
+    );
+    expect(consumers.sort()).toEqual(['server/app.ts', AI5B_GATE]);
+
+    // No CLIENT surface, no plugin surface, no script and no AI transport is aware.
+    for (const rel of LIVE_SURFACES) {
+      expect(code(rel), rel).not.toContain('nutritionProductAccess');
+    }
+    for (const rel of [...walk(join(REPO, 'plugin')), ...walk(join(REPO, 'scripts'))]) {
+      expect(code(rel), rel).not.toContain('nutritionProductAccess');
+    }
+
+    // The composition point imports the GATE only — never the core contract directly,
+    // so entitlement vocabulary cannot leak into the route factory.
+    const appModules = src('server/app.ts')
+      .split('\n')
+      .map((line) => /\bfrom\s+['"]([^'"]+)['"]/.exec(line)?.[1] ?? '')
+      .filter(Boolean);
+    for (const modulePath of appModules) {
+      // The composition point imports the GATE only — never the core contract
+      // directly, so entitlement vocabulary cannot leak into the route factory.
+      expect(modulePath, 'server/app.ts').not.toContain('core/nutritionV2/nutritionProductAccess');
+    }
+    expect(appModules).toContain('./nutritionProductAccess.js');
+  });
+
+  it('the AI-5B gate imports the contract and NOTHING else that could grant authority', () => {
+    const imports = src(AI5B_GATE)
+      .split('\n')
+      .filter((line) => /^\s*import\b/.test(line) || /\bfrom\s+['"]/.test(line));
+    const modules = imports
+      .map((line) => /from\s+['"]([^'"]+)['"]/.exec(line)?.[1] ?? '')
+      .filter(Boolean);
+    // Exactly the express request type and the AI-5A contract. No provider, no
+    // credential resolver, no BYOK authority, no billing, no nutrition authority.
+    expect(modules).toEqual([
+      'express',
+      '../src/core/nutritionV2/nutritionProductAccess.js',
+    ]);
+  });
+
   it('NO live production surface references the contract in CODE', () => {
     // Comment-stripped: documentation may legitimately cross-reference the new
     // contract. Only CODE may name it, so a prose mention can neither satisfy nor
@@ -488,15 +585,12 @@ describe('AI-5A isolation — ZERO production consumer', () => {
     }
   });
 
-  it('NOTHING outside the tests and the docs consumes the contract', () => {
-    // The repository's ENTIRE production surface — client, server and scripts —
-    // contains zero CODE reference to the AI-5A contract. Tests and docs may
-    // import it; production may not.
+  it('only the AI-5B server boundary consumes the contract (client/scripts/plugin may not)', () => {
     const offenders: string[] = [];
     for (const rel of [...ALL_SOURCE_FILES, ...walk(join(REPO, 'plugin'))]) {
       if (code(rel).includes('nutritionProductAccess')) offenders.push(rel);
     }
-    expect(offenders).toEqual([]);
+    expect(offenders.sort()).toEqual(['server/app.ts', AI5B_GATE]);
   });
 
   it('adds NO reducer action, NO state field and NO session field', () => {
@@ -539,16 +633,26 @@ describe('AI-5A isolation — ZERO production consumer', () => {
     }
   });
 
-  it('adds NO route, NO limiter bucket and NO AI endpoint', () => {
+  it('adds NO route, NO limiter bucket and NO product-access endpoint', () => {
+    // Enforcement adds no endpoint and no bucket. A Basic denial must not consume the
+    // paid route's limiter, so no entitlement bucket may exist either.
     const app = code('server/app.ts');
     for (const absent of [
+      '/api/nutrition/product-access',
       'product-access',
-      'productAccess',
-      'ProductAccess',
-      'nutrition_product_access',
-      'entitlement',
+      'nutritionProductAccessRateLimiter',
+      'entitlementRateLimiter',
+      'productAccessRateLimiter',
+      'NUTRITION_PRODUCT_ACCESS_VERSION',
+      'AI_ADVANCED_NUTRITION_PRODUCT_ACCESS',
+      'BASIC_NUTRITION_PRODUCT_ACCESS',
     ]) {
       expect(app, absent).not.toContain(absent);
+    }
+    // No route exposes product access to a client.
+    for (const route of [...app.matchAll(/"(\/api\/[^"]*)"/g)].map((m) => m[1])) {
+      expect(route).not.toContain('product-access');
+      expect(route).not.toContain('entitlement');
     }
     const limiter = code('server/rateLimiter.ts');
     for (const absent of ['productAccess', 'ProductAccess', 'entitlement']) {
@@ -556,15 +660,29 @@ describe('AI-5A isolation — ZERO production consumer', () => {
     }
   });
 
-  it('the contract version token is declared exactly once in the whole repository', () => {
+  it('the contract version token is DECLARED exactly once in the whole repository', () => {
     const owners: string[] = [];
     for (const rel of ALL_SOURCE_FILES) {
       if (/export const NUTRITION_PRODUCT_ACCESS_VERSION\s*=/.test(src(rel))) owners.push(rel);
     }
+    // The AI-5B gate RE-EXPORTS the token under its own name; it must never re-declare it.
     expect(owners).toEqual([CONTRACT]);
-    // And there is exactly ONE product-access module.
-    const modules = ALL_SOURCE_FILES.filter((rel) => /ProductAccess|productAccess/.test(rel));
-    expect(modules).toEqual([CONTRACT]);
+    expect(src(AI5B_GATE)).toContain('NUTRITION_PRODUCT_ACCESS_BOUND_VERSION');
+    expect(src(AI5B_GATE)).not.toMatch(/export const NUTRITION_PRODUCT_ACCESS_VERSION\s*=/);
+  });
+
+  it('there is exactly ONE product-access DEFINITION module', () => {
+    // Two modules carry the vocabulary: the AI-5A definition and the AI-5B server
+    // boundary. Only the first may define the contract types or resolvers.
+    const modules = ALL_SOURCE_FILES
+      .filter((rel) => /ProductAccess|productAccess/.test(rel))
+      .sort();
+    expect(modules).toEqual([AI5B_GATE, CONTRACT].sort());
+    const gate = code(AI5B_GATE);
+    expect(gate).not.toMatch(/interface\s+NutritionProductAccess\b/);
+    expect(gate).not.toMatch(/type\s+NutritionProductTier\s*=/);
+    expect(gate).not.toMatch(/type\s+NutritionProductAiFeature\s*=/);
+    expect(gate).toContain('resolveNutritionProductAccess');
   });
 
   it('adds no focused or skipped test', () => {

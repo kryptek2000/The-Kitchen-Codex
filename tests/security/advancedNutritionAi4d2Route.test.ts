@@ -112,7 +112,10 @@ async function startApp(env: Record<string, string> = {}) {
   Object.assign(process.env, env);
   resetRateLimitersForTests();
   const { createApp } = await import('../../server/app.js');
-  const app = createApp({ isProduction: false });
+  // AI-5B: this suite exercises the ENTILED AI-4 product surface, so the
+  // deployment product tier is stated explicitly. AI-5B's default is Basic and
+  // this seam is not a bypass: the SAME gate production uses is exercised.
+  const app = createApp({ isProduction: false, nutritionProductTier: 'ai_advanced' });
   const server = http.createServer(app);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address() as AddressInfo;
