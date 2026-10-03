@@ -826,6 +826,8 @@ export function SelectionControlCard({
   recipeVerifications?: Record<string, ModelVerificationView>;
   onVerifyRecipeModel?: (modelId: string) => void;
   onSessionStatusChange?: (configured: boolean) => void;
+  /** AI-5D: forward a surface runtime-selection change up to the shell. */
+  onSurfaceRuntimeChanged?: (kind: 'text' | 'image') => void;
 }) {
   const selectedProvider = providers.find((p) => p.providerId === draft.providerId);
   const activeProvider = providers.find((p) => p.providerId === effective.providerId);
@@ -1114,6 +1116,9 @@ export function ProviderSelectionPanel({
   onRefresh,
   sessionClearSignal = 0,
   onCredentialSourceChange,
+  onSessionStatusChange,
+  onSurfaceRuntimeChanged,
+  onTextConnectionTestSettled,
 }: {
   catalog: ProviderCatalogView;
   settings: SettingsAdapter;
@@ -1125,6 +1130,15 @@ export function ProviderSelectionPanel({
   sessionClearSignal?: number;
   /** BYOK-5E: notified when the TEXT credential source changes (to clear typed keys). */
   onCredentialSourceChange?: (source: SavedCredentialSource | undefined) => void;
+  /**
+   * AI-5D: a session-only key became configured or unconfigured. Carries NO secret.
+   * The listener may only treat this as "readiness may be stale".
+   */
+  onSessionStatusChange?: (configured: boolean) => void;
+  /** AI-5D: a surface's provider/model/credential-source selection or reset changed. */
+  onSurfaceRuntimeChanged?: (kind: 'text' | 'image') => void;
+  /** AI-5D: a TEXT connection test settled and may indicate changed availability. */
+  onTextConnectionTestSettled?: () => void;
 }) {
   // The selection-control slice is a pure reducer (component-used) so the
   // Apply/Reset interaction is directly testable without a DOM harness. The
@@ -1209,8 +1223,10 @@ export function ProviderSelectionPanel({
         next.selectedCostClass
       );
       dispatch({ type: 'applied', kind, opId, selections, persistenceFailed });
+      // AI-5D: notify that this surface's runtime selection may have changed.
+      onSurfaceRuntimeChanged?.(kind);
     },
-    [settings]
+    [settings, onSurfaceRuntimeChanged]
   );
 
   const resetSelection = useCallback(
@@ -1224,8 +1240,10 @@ export function ProviderSelectionPanel({
       // session key (same signal as switching away from session_only). The
       // server-side session key is NOT revoked and no provider traffic occurs.
       onCredentialSourceChange?.(undefined);
+      // AI-5D: a selection reset changes the surface's runtime truth.
+      onSurfaceRuntimeChanged?.(kind);
     },
-    [settings, onCredentialSourceChange]
+    [settings, onCredentialSourceChange, onSurfaceRuntimeChanged]
   );
 
   const changeDraft = useCallback(
@@ -1282,9 +1300,14 @@ export function ProviderSelectionPanel({
           ...prev,
           [key]: { state: 'failure', code: 'NETWORK_ERROR', message: 'Could not reach the server.' },
         }));
+      } finally {
+        // AI-5D: a connection test is a DIAGNOSTIC probe, never an entitlement. It may
+        // indicate recovered OR lost availability, so a settled TEXT test asks the
+        // shell to re-read readiness. It never sets a nutrition capability itself.
+        if (kind === 'text') onTextConnectionTestSettled?.();
       }
     },
-    [network]
+    [network, onTextConnectionTestSettled]
   );
 
   /**
@@ -1579,9 +1602,26 @@ export function ProviderSelectionPanel({
 export function ProviderSettings({
   network,
   settings,
+  onTextAiRuntimeChanged,
 }: {
   network: NetworkAdapter;
   settings: SettingsAdapter;
+  /**
+   * AI-5D NARROW READINESS-INVALIDATION NOTIFICATION (optional).
+   *
+   * Fires ONLY for changes that can alter TEXT execution truth — text provider /
+   * model / credential-source selection, a text selection reset, a session-only text
+   * key becoming configured or unconfigured, or a completed text connection test.
+   *
+   * It carries NO secret, it grants NO authority, and it means exactly one thing:
+   * "a cached client-side nutrition operational-readiness result may now be stale."
+   * The listener must re-read readiness through its own existing status surfaces; it
+   * must not treat this as a readiness result, an entitlement, or a capability.
+   *
+   * IMAGE-only changes deliberately never fire this, because Advanced Nutrition
+   * depends on TEXT AI only.
+   */
+  onTextAiRuntimeChanged?: () => void;
 }) {
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [statuses, setStatuses] = useState<ProviderStatusView[]>([]);
@@ -1590,6 +1630,10 @@ export function ProviderSettings({
   // BYOK-5E: incremented when the TEXT credential source switches away from
   // session_only, so the session panel clears any typed (in-memory) key.
   const [sessionClearSignal, setSessionClearSignal] = useState(0);
+  // AI-5D: remembers the last observed non-secret session-configured value so a
+  // RE-RENDER (not an actual transition) never triggers a readiness refresh. Only a
+  // real configured -> unconfigured / unconfigured -> configured edge notifies.
+  const lastSessionConfiguredRef = useRef<boolean | null>(null);
 
   const load = useCallback(() => {
     const requestId = sequencerRef.current.begin();
@@ -1648,6 +1692,27 @@ export function ProviderSettings({
           sessionClearSignal={sessionClearSignal}
           onCredentialSourceChange={(source) => {
             if (shouldClearSessionKeyOnCredentialSource(source)) setSessionClearSignal((n) => n + 1);
+          }}
+          onSessionStatusChange={(configured) => {
+            // AI-5D: a session-only key became configured or revoked. This can flip
+            // TEXT operational readiness, so notify the shell. The value carries no
+            // secret and grants no authority.
+            if (configured !== lastSessionConfiguredRef.current) {
+              lastSessionConfiguredRef.current = configured;
+              onTextAiRuntimeChanged?.();
+            }
+          }}
+          onSurfaceRuntimeChanged={(kind) => {
+            // AI-5D: provider / model / credential-source selection and selection
+            // resets change the surface's runtime truth. IMAGE-only mutations are
+            // ignored, because Advanced Nutrition depends on TEXT AI only.
+            if (kind === 'text') onTextAiRuntimeChanged?.();
+          }}
+          onTextConnectionTestSettled={() => {
+            // AI-5D: a connection test is a DIAGNOSTIC probe. It may indicate
+            // recovered or lost availability, so it triggers a readiness REFRESH —
+            // it must never set a nutrition capability directly.
+            onTextAiRuntimeChanged?.();
           }}
         />
       )}

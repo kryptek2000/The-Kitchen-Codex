@@ -9402,3 +9402,207 @@ limitation *visible* rather than hiding it behind a generic message.
 | strict parser rejection matrix, canonical re-derivation, unknown-vs-Basic, per-feature AND mapping, lazy short-circuit, bounded messaging, no persistence | `tests/unit/advancedNutritionAi5cClientAccess.test.ts` |
 | forged client vs Basic server across all six gates and every forged channel, no client→server authority channel, AI-5B / AI-4E / no-persistence invariance | `tests/security/advancedNutritionAi5cAuthorityIsolation.test.ts` |
 | real card + modal rendering of the three distinct reasons, disabled AI controls, deterministic/manual surface never gated, no billing copy | `tests/unit/advancedNutritionAi5cUi.test.tsx` |
+
+---
+
+## §58. AI-5D — LIVE READINESS REFRESH + RECOVERY
+
+### 58.1 What this phase is
+
+AI-5C established `PRODUCT ENTITLED AND OPERATIONALLY READY` and made the client
+aware of that decision without making it authoritative. But AI-5C cached the **whole
+composed result** for the page session — correct for PRODUCT ACCESS, wrong for
+OPERATIONAL READINESS.
+
+Provider readiness changes while the page stays open: the user configures a provider,
+switches provider or model, changes credential source, adds or revokes a session-only
+key, recovers from an outage, or successfully retests a connection. AI-5D makes
+readiness **refreshable and recoverable** without a page reload.
+
+AI-5D creates **no** new entitlement source. PRODUCT ACCESS remains server-owned,
+NUTRITION AUTHORITY remains deterministic, and the server remains final authority.
+
+### 58.2 THE CRITICAL DISTINCTION: DIFFERENT LIFETIMES
+
+| Question | Source | Lifetime | AI-5D policy |
+| --- | --- | --- | --- |
+| PRODUCT ACCESS | `GET /api/nutrition/product-access` | deployment-scoped, stable per server instance | **may remain cached** after a resolved read |
+| OPERATIONAL READINESS | `/api/providers`, `/api/providers/session-key/status` | dynamic, may go stale during a session | **MUST be re-readable**, and invalidated immediately on relevant change |
+
+Readiness is never cached forever. `src/App.tsx` keeps product truth and operational
+truth in **separate** caches and re-derives the composed state from both.
+
+### 58.3 THE RECON FINDING: `/api/providers` IS NOT THE WHOLE STORY
+
+`getAiProviderStatus()` reports `configured` from the **server environment** secret and
+hardcodes `storageScope: "server_environment"`. So `/api/providers` speaks only for a
+`server_environment` selection.
+
+Meanwhile real execution genuinely uses session-only credentials
+(`resolveCredential(source)` -> `createSessionBoundTextProvider`), and the codebase's
+**own** definition of availability for a session credential is PRESENCE, not a network
+probe — see `GeminiProvider.isAvailable()`: *"A session credential is availability by
+presence (never env fallback)."*
+
+Relying on `/api/providers` alone would therefore be wrong in **both** directions: a
+pure session-BYOK user with no env key would be reported not-configured (AI wrongly off),
+and an env-configured user with a `session_only` selection would be reported ready while
+their request would actually fail closed at the server.
+
+AI-5D composes both existing truths:
+
+```text
+server_environment selection -> /api/providers                  (unchanged env path)
+session_only selection       -> /api/providers/session-key/status
+                               (existing auth-gated, NON-SECRET surface)
+```
+
+The session reader is the **existing** `fetchSessionKeyStatus` /
+`normalizeSessionKeyStatus` (allowlisted, non-secret, already strictly parsed, never
+persisted). **No new server endpoint, no secret read, no change to
+`nutritionCapabilities` semantics** — only truthful per-surface INPUTS are fed to the
+existing `resolveNutritionCapabilities`, which is already documented as being "for a
+surface". `isSelectionValidAgainstCatalog` already branches correctly on credential
+source, so no selection semantics changed either.
+
+A configured session credential is ONE operational **prerequisite** — never
+authorization, and never a guarantee a provider call succeeds. The server remains the
+final authority on whether a credential may execute.
+
+### 58.4 ONE COMPOSITION OWNER
+
+`src/application/nutritionAiClientState.ts` remains the single composition owner. There
+is no second competing effective-capability engine. AI-5D added only narrow helpers:
+
+- `readNutritionOperationalReadiness(network)` — the refreshable readiness read.
+- `recomposeNutritionAiClientState(network, productAccess?)` — recomposes, optionally
+  **reusing** a known canonical product access.
+- `createNutritionRefreshSequencer()` — the single monotonic sequencing authority.
+
+`composition` itself still requires `PRODUCT ENTITLED AND OPERATIONALLY READY`, per
+feature, never OR. `NUTRITION_AI_REFRESHING_MESSAGE` and
+`UNAVAILABLE_EFFECTIVE_CAPABILITIES` exist for fail-closed transient use.
+
+### 58.5 EVENT-DRIVEN REFRESH — NO POLLING
+
+Recovery is **event-driven and user-triggered**. There is deliberately no
+`setInterval`, no periodic refresh loop, no background availability watcher, and no
+network probe. The readiness read only ever touches existing non-secret status
+surfaces.
+
+### 58.6 PRODUCT-ACCESS REFRESH RULES
+
+A provider change does **not** re-fetch product access.
+
+| Known product state | On a relevant text-runtime change | On Retry |
+| --- | --- | --- |
+| **Basic** | NO readiness query, NO product re-read — a provider cannot grant Advanced | no Retry offered |
+| **AI Advanced** | readiness re-read; product access **reused** | readiness re-read only |
+| **Unknown** | stays unknown; providers are NOT queried to guess | product access re-read, then readiness if Advanced |
+
+Opening Provider Settings **before** Advanced Nutrition has ever resolved its product
+state must **not** trigger product-access resolution. If nothing is cached, the
+invalidation is a no-op; the first Advanced Nutrition entry still owns the lazy
+boundary.
+
+### 58.7 EXPLICIT RETRY
+
+A bounded user-triggered `Retry AI availability` control is offered only where a
+re-check can actually help:
+
+- product access is AI Advanced but readiness is unavailable, or
+- product access could not be verified.
+
+It is **never** offered for a definitive Basic product answer: Basic is genuine
+product policy, not a transient failure.
+
+While a refresh is running, Retry and every AI control are disabled, so repeated clicks
+cannot launch duplicate refreshes.
+
+### 58.8 IMMEDIATE FAIL-CLOSED INVALIDATION
+
+On a relevant invalidation the shell publishes the refreshing state **before any
+await**, so there is **no stale window** in which a revoked credential leaves AI buttons
+executable. An AI click during that window costs **zero** provider requests.
+
+Presentation during a refresh uses bounded neutral wording —
+`Checking AI availability…` — and deliberately makes **no** product or provider claim.
+Showing "Basic" or "provider unavailable" while the answer is genuinely still being
+checked would fabricate exactly the kind of fact AI-5C existed to remove.
+
+### 58.9 RACE SAFETY — ONE SEQUENCING AUTHORITY
+
+Initial load, explicit Retry, and every Provider-Settings-triggered refresh share **one**
+monotonic sequencer. There are deliberately no competing per-entry-point counters:
+without one, a slow initial load could land after a newer Retry and silently roll the UI
+back to a stale answer.
+
+Both adversarial directions are pinned: when a slow older refresh completes after a
+newer one, the older result must not rewrite the ref, the presentation, or re-enable AI.
+The sequencer is a **separate** owner from Provider Settings' own request sequence, so
+nutrition readiness has an independent lifecycle.
+
+### 58.10 PROVIDER SETTINGS INTEGRATION
+
+Provider Settings already owns provider/model selection, credential-source selection,
+session-key UI, connection tests, and stale-request sequencing. AI-5D adds **one narrow
+notification** upward — `onTextAiRuntimeChanged?: () => void` — and does **not**
+duplicate any Provider Settings state in `App.tsx`.
+
+The callback takes **no argument**, carries no secret, and grants no authority. It means
+exactly one thing: *"a cached client-side nutrition operational-readiness result may now
+be stale."*
+
+**TEXT ONLY.** Advanced Nutrition depends on TEXT AI, so provider/model/credential
+changes fire it and **image-only mutations never do**. The wiring reuses the existing,
+previously unused `onSessionStatusChange` seam.
+
+### 58.11 CONNECTION TESTS ARE DIAGNOSTICS
+
+A connection test is a probe, never entitlement. A settled **text** test asks the shell
+to re-read readiness; the refreshed canonical operational state decides. It never sets a
+nutrition capability directly, and it never establishes product access.
+
+### 58.12 SERVER AUTHORITY UNCHANGED
+
+AI-5B remains final authority, with zero weakening of the six gates. A client that has
+just completed a successful readiness refresh and believes AI is AVAILABLE still cannot
+run anything on a Basic deployment: every gated route returns `403
+NUTRITION_AI_NOT_ENTITLED` with `aiAttempted: false` and zero provider work.
+
+The AI-5C product-access endpoint is **unchanged** by AI-5D: auth-first, informational
+only, `no-store`, three-key response, same canonical access, no token or receipt. AI-5D
+required **no** server change at all.
+
+### 58.13 NO PERSISTENCE, NO BILLING, NO ACCOUNTS
+
+Readiness state, effective state, and refresh generation are **memory only** for the
+page/session — never `localStorage`, `sessionStorage`, IndexedDB, `SettingsAdapter`
+readiness records, cookies, Markdown, YAML, vault, recipe schema, or plugin storage.
+Provider/model selection persistence that already exists is untouched.
+
+No billing, account identity, subscription, checkout, pricing, trial, upgrade flow,
+license key, per-user entitlement, or hosted customer record was introduced. AI-5D has no
+commercial surface of any kind.
+
+### 58.14 UNCHANGED INVARIANTS
+
+`nutrition_product_access_v1` / AI-5A core, `nutritionCapabilities.ts` (operational
+readiness only), AI-4E receipt crypto (`randomBytes(32)`, HMAC-SHA-256,
+`timingSafeEqual`, `rctx1`, canonical exact-wire binding, origin-before-D1), and
+`projectAcceptedRecipeContext`'s ZERO production consumers are all unchanged.
+
+### 58.15 Coverage
+
+| Concern | File |
+| --- | --- |
+| session-only BYOK readiness truth, credential-source branching, short-circuits, re-readability, revocation/restore, sequencing semantics, fail-closed constants, no polling | `tests/unit/advancedNutritionAi5dReadiness.test.ts` |
+| server authority after refresh, single refresh owner, fail-closed-before-await, stale-completion guards, shell wiring, Provider Settings text-only integration, no polling/secret/persistence/authority-channel/billing | `tests/security/advancedNutritionAi5dRefresh.test.ts` |
+| Retry availability rules, refreshing neutral copy, disabled-during-refresh, recovery without reload, Basic/manual invariance | `tests/unit/advancedNutritionAi5dUi.test.tsx` |
+
+### 58.16 AI-5E NOT STARTED
+
+This phase ends at refreshable readiness plus explicit recovery. Any product-access
+status synchronization beyond this read-only awareness, any hosted per-user
+entitlement, and any downstream AI-4 context consumption remain unauthorized and
+unimplemented.

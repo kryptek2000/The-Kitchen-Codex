@@ -69,6 +69,7 @@ import {
   BASIC_NUTRITION_CAPABILITIES,
   isAiEstimationAvailable,
   isAiInterpretationAvailable,
+  resolveNutritionCapabilities,
   type NutritionCapabilities,
 } from '../core/nutritionV2/nutritionCapabilities';
 import {
@@ -76,12 +77,25 @@ import {
   type NutritionProductAccess,
 } from '../core/nutritionV2/nutritionProductAccess';
 import type { NetworkAdapter } from './adapters/NetworkAdapter';
+import { getCachedAiSelections } from './aiSelection';
 import { resolveNutritionAiCapabilities } from './nutritionAiResolve';
+import { fetchSessionKeyStatus } from '../application-ui/sessionKey';
 import {
+  isAiAdvancedProductAccessRead,
+  isBasicProductAccessRead,
   isResolvedNutritionProductAccess,
   readNutritionProductAccess,
   type NutritionProductAccessRead,
 } from './nutritionProductAccess';
+
+/**
+ * Re-exported so the shell can ask "is the cached product state Advanced/Basic?"
+ * WITHOUT importing the product-access module (and therefore without the shell
+ * becoming a product-contract consumer). The App shell is a composition edge; the
+ * product-contract vocabulary stays inside these two application modules.
+ */
+export { isAiAdvancedProductAccessRead, isBasicProductAccessRead };
+export type { NutritionProductAccessRead };
 
 /**
  * WHY the AI assistance layer is unavailable, as a closed vocabulary.
@@ -144,8 +158,17 @@ export interface NutritionAiClientState {
   readonly productAccessIsAiAdvanced: boolean;
 }
 
-/** No AI availability under any circumstance. */
-const UNAVAILABLE_EFFECTIVE: NutritionAiEffectiveCapabilities = Object.freeze({
+/**
+ * AI-5D: the bounded, NEUTRAL copy shown while a readiness refresh is in flight.
+ *
+ * It deliberately makes NO product claim. Showing "Basic" or "provider unavailable"
+ * while the answer is genuinely still being checked would be a fabricated product or
+ * provider fact — the exact confusion AI-5C existed to remove.
+ */
+export const NUTRITION_AI_REFRESHING_MESSAGE = 'Checking AI availability…';
+
+/** No AI availability under any circumstance. Exported for AI-5D fail-closed use. */
+export const UNAVAILABLE_EFFECTIVE_CAPABILITIES: NutritionAiEffectiveCapabilities = Object.freeze({
   aiInterpretation: false,
   aiCandidateOrchestration: false,
   aiBoundedMassEstimation: false,
@@ -206,7 +229,7 @@ export function composeNutritionAiClientState(input: {
       productAccessStatus: read,
       productAccess: null,
       operationalCapabilities: operational,
-      effectiveCapabilities: UNAVAILABLE_EFFECTIVE,
+      effectiveCapabilities: UNAVAILABLE_EFFECTIVE_CAPABILITIES,
       availability: 'product_access_unverified',
       available: false,
       recipeContextReviewAvailable: false,
@@ -224,7 +247,7 @@ export function composeNutritionAiClientState(input: {
       productAccessStatus: read,
       productAccess: access,
       operationalCapabilities: operational,
-      effectiveCapabilities: UNAVAILABLE_EFFECTIVE,
+      effectiveCapabilities: UNAVAILABLE_EFFECTIVE_CAPABILITIES,
       availability: 'product_not_enabled',
       available: false,
       recipeContextReviewAvailable: false,
@@ -240,7 +263,7 @@ export function composeNutritionAiClientState(input: {
       productAccessStatus: read,
       productAccess: access,
       operationalCapabilities: null,
-      effectiveCapabilities: UNAVAILABLE_EFFECTIVE,
+      effectiveCapabilities: UNAVAILABLE_EFFECTIVE_CAPABILITIES,
       availability: 'provider_unavailable',
       available: false,
       recipeContextReviewAvailable: false,
@@ -354,4 +377,205 @@ export async function resolveNutritionAiClientState(
     productAccess,
     operational: await requestOperationalCapabilities(network),
   });
+}
+// ===========================================================================
+// AI-5D — DYNAMIC OPERATIONAL READINESS (REFRESHABLE, NOT IMMUTABLE)
+// ===========================================================================
+//
+// AI-5C cached the WHOLE composed result for the page session. That is correct for
+// PRODUCT ACCESS, which is deployment-scoped and stable for a server instance —
+// but wrong for OPERATIONAL READINESS, which changes while the page stays open:
+// the user configures a provider, switches provider/model, changes credential
+// source, adds or revokes a session-only key, recovers from an outage, or
+// successfully retests a connection.
+//
+// The two questions therefore have DIFFERENT LIFETIMES, and AI-5D splits them:
+//
+//   PRODUCT ACCESS  — may remain cached in page memory after a resolved read.
+//   READINESS       — MUST be re-readable, and MUST be invalidated immediately
+//                     when something can have changed it.
+//
+// Neither ever becomes authority. `NutritionAiClientState` is still a client-side
+// projection; every AI request still reaches the AI-5B gate, which re-resolves
+// product access from its own server configuration and still routes credentials
+// server-side. A stale or forged client "ready" fails closed at the server.
+//
+// ---------------------------------------------------------------------------
+// WHY `/api/providers` ALONE IS NOT TRUTHFUL (the AI-5D recon finding)
+// ---------------------------------------------------------------------------
+// `getAiProviderStatus()` reports `configured` from the SERVER ENVIRONMENT secret
+// and hardcodes `storageScope: "server_environment"`. So `/api/providers` speaks
+// only for a `server_environment` selection. Meanwhile real execution genuinely
+// uses session-only credentials (`resolveCredential(source)` ->
+// `createSessionBoundTextProvider`), and the codebase's OWN definition of
+// availability for a session credential is PRESENCE, not a network probe — see
+// `GeminiProvider.isAvailable()`: "A session credential is availability by
+// presence (never env fallback)."
+//
+// So `/api/providers` would report a pure session-BYOK user as not configured
+// (AI wrongly off), and would report an env-configured user as ready while their
+// session-only selection would actually fail closed. AI-5D composes BOTH truths:
+//
+//   server_environment selection -> `/api/providers` (unchanged env path)
+//   session_only selection      -> `/api/providers/session-key/status`
+//                                  (the EXISTING auth-gated, non-secret surface)
+//
+// The session status reader is the EXISTING `fetchSessionKeyStatus` /
+// `normalizeSessionKeyStatus` (allowlisted, non-secret, already strictly parsed,
+// never persisted). No new server endpoint, no secret read, no change to
+// `nutritionCapabilities` semantics — only truthful per-surface INPUTS are fed to
+// the existing `resolveNutritionCapabilities`, which is already documented as
+// being "for a surface".
+//
+// A configured session credential is ONE operational PREREQUISITE, never
+// authorization and never a guarantee that a provider call succeeds. The server
+// remains the final authority on whether a credential may execute.
+
+/**
+ * The credential source selected for the TEXT surface, or `undefined` when no
+ * user selection applies. NON-SECRET selection metadata only.
+ */
+export function selectedTextCredentialSource(): 'server_environment' | 'session_only' | undefined {
+  try {
+    return getCachedAiSelections().textAi.credentialSource;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * True when the selected TEXT surface will resolve its credential from the
+ * operator environment (the `/api/providers` path). Anything else — including a
+ * `session_only` selection — means readiness must come from session status.
+ */
+function usesServerEnvironmentCredential(): boolean {
+  return selectedTextCredentialSource() !== 'session_only';
+}
+
+/**
+ * Reads SESSION-ONLY operational readiness for the selected text provider.
+ *
+ * Fails SAFE to Basic in every failure mode: an auth failure, an unsupported
+ * deployment (the status route reports it as unavailable), a malformed body, a
+ * provider row that is absent, a duplicate row, or a non-boolean `configured`.
+ * Absence of a row for the selected provider is itself "not configured".
+ */
+async function readSessionOnlyReadiness(
+  network: NetworkAdapter
+): Promise<NutritionCapabilities> {
+  const selectedProviderId = (() => {
+    try {
+      return getCachedAiSelections().textAi.providerId;
+    } catch {
+      return undefined;
+    }
+  })();
+  if (typeof selectedProviderId !== 'string' || selectedProviderId.length === 0) {
+    return BASIC_NUTRITION_CAPABILITIES;
+  }
+
+  const status = await fetchSessionKeyStatus(network);
+  if (!status.ok) return BASIC_NUTRITION_CAPABILITIES;
+
+  let configured = false;
+  for (const row of status.providers) {
+    if (row.providerId !== selectedProviderId) continue;
+    // A duplicate row for one provider is untrusted input: refuse rather than let
+    // the last row win.
+    if (configured) return BASIC_NUTRITION_CAPABILITIES;
+    configured = row.configured === true;
+  }
+  if (!configured) return BASIC_NUTRITION_CAPABILITIES;
+
+  // PRESENCE IS AVAILABILITY for a session credential — the codebase's own
+  // `isAvailable()` semantic. This is a local prerequisite signal, never a network
+  // probe, and never a promise that the provider call will succeed.
+  return resolveNutritionCapabilities({ aiConfigured: true, aiReachable: true });
+}
+
+/**
+ * The REFRESHABLE operational-readiness read for Advanced Nutrition.
+ *
+ * This is the AI-5D replacement for "cache readiness forever". It performs NO
+ * network probe, NO connection test and NO polling: it reads only existing
+ * non-secret status surfaces, and it is safe to call on demand after any relevant
+ * runtime change.
+ *
+ * Never throws; every failure composes to Basic (fail closed).
+ */
+export async function readNutritionOperationalReadiness(
+  network: NetworkAdapter
+): Promise<NutritionCapabilities> {
+  try {
+    if (usesServerEnvironmentCredential()) {
+      return await resolveNutritionAiCapabilities(network);
+    }
+    return await readSessionOnlyReadiness(network);
+  } catch {
+    return BASIC_NUTRITION_CAPABILITIES;
+  }
+}
+
+/**
+ * RE-COMPOSES the client state, optionally REUSING a known canonical product
+ * access so an ordinary provider recovery never re-asks the product-status
+ * endpoint.
+ *
+ * Product-access rules are preserved exactly:
+ *   - known Basic      -> readiness is NOT read (a provider cannot grant Advanced)
+ *   - unknown          -> readiness is NOT read (unknown must not query providers)
+ *   - known AI Advanced-> readiness IS read, and product status is NOT re-read
+ *   - no cached product truth -> product status is read first (the AI-5C lazy path)
+ *
+ * Pass `productAccess` to reuse a previously RESOLVED read. Omit it to perform the
+ * lazy first read.
+ */
+export async function recomposeNutritionAiClientState(
+  network: NetworkAdapter,
+  productAccess?: NutritionProductAccessRead
+): Promise<NutritionAiClientState> {
+  const read = productAccess ?? (await readNutritionProductAccess(network));
+
+  if (!isAiAdvancedProductAccessRead(read)) {
+    // Known Basic, or unknown: provider readiness is never queried, because it
+    // cannot change the answer.
+    return composeNutritionAiClientState({ productAccess: read, operational: null });
+  }
+  return composeNutritionAiClientState({
+    productAccess: read,
+    operational: await readNutritionOperationalReadiness(network),
+  });
+}
+
+/**
+ * The ONE monotonic sequencing authority for nutrition AI-5D refreshes.
+ *
+ * The initial lazy load, an explicit Retry, and every Provider-Settings-triggered
+ * readiness refresh MUST share a single counter. There are deliberately no competing
+ * per-entry-point counters: with separate counters, a slow initial load could land
+ * after a newer retry and silently roll the UI back to a stale answer.
+ *
+ * Contract: `begin()` returns a strictly increasing id; `isCurrent(id)` is true only
+ * for the most recently begun refresh. An older async completion that checks
+ * `isCurrent` is therefore refused, and must not rewrite the ref, the presentation,
+ * or re-enable AI.
+ *
+ * This mirrors the existing Provider-Settings `createRequestSequencer`, but is a
+ * SEPARATE owner: nutrition readiness has its own lifecycle and must never share
+ * (or be invalidated by) an unrelated surface's sequence.
+ */
+export function createNutritionRefreshSequencer(): {
+  begin(): number;
+  isCurrent(id: number): boolean;
+} {
+  let current = 0;
+  return {
+    begin(): number {
+      current += 1;
+      return current;
+    },
+    isCurrent(id: number): boolean {
+      return id === current;
+    },
+  };
 }

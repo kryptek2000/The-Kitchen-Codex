@@ -207,6 +207,21 @@ export interface AdvancedNutritionAiAvailability {
   readonly available: boolean;
   /** Fixed bounded reason sentence, or `null` when AI is available. */
   readonly reason: string | null;
+  /**
+   * AI-5D: a readiness refresh is in flight. While true, AI controls are disabled and
+   * the reason copy is NEUTRAL — the UI must not claim Basic, "not entitled", or
+   * "provider unavailable" while the answer is genuinely still being checked.
+   */
+  readonly refreshing?: boolean;
+  /**
+   * AI-5D: whether the user may request a re-check. True only for states a re-check
+   * can actually improve (provider unavailable, or an unverified status). A
+   * definitive Basic product answer is policy, not a transient failure, so it is
+   * never offered.
+   */
+  readonly canRetry?: boolean;
+  /** AI-5D: the explicit user-triggered re-check. Never called while refreshing. */
+  readonly onRetry?: () => void;
 }
 
 /**
@@ -1742,8 +1757,14 @@ onReviewRecipeContextWithAi,
    * Absent (an embedder that supplies no AI-5C state) keeps the pre-AI-5C behaviour
    * of an available surface with no reason copy.
    */
-  const aiAvailabilityAvailable = advancedNutritionAiAvailability?.available ?? true;
+  // AI-5D: a refresh in flight always disables the AI layer, even before the shell's
+  // published `available` flips, so no control can be clicked mid-reconciliation.
+  const aiRefreshing = advancedNutritionAiAvailability?.refreshing === true;
+  const aiAvailabilityAvailable =
+    !aiRefreshing && (advancedNutritionAiAvailability?.available ?? true);
   const aiAvailabilityReason = advancedNutritionAiAvailability?.reason ?? null;
+  const aiCanRetry = advancedNutritionAiAvailability?.canRetry === true;
+  const aiOnRetry = advancedNutritionAiAvailability?.onRetry;
 
   /**
    * The AI-4D2 review view model: a pure projection of the inert review session.
@@ -1760,6 +1781,9 @@ onReviewRecipeContextWithAi,
           return {
             available: aiAvailabilityAvailable,
             unavailableReason: aiAvailabilityReason,
+            refreshing: aiRefreshing,
+            canRetry: aiCanRetry,
+            ...(aiOnRetry !== undefined ? { onRetry: aiOnRetry } : {}),
             running: recipeContextRunning,
             message: recipeContextMessage,
             rows: [],
@@ -1784,6 +1808,9 @@ onReviewRecipeContextWithAi,
           return {
             available: aiAvailabilityAvailable,
             unavailableReason: aiAvailabilityReason,
+            refreshing: aiRefreshing,
+            canRetry: aiCanRetry,
+            ...(aiOnRetry !== undefined ? { onRetry: aiOnRetry } : {}),
             running: recipeContextRunning,
             message: recipeContextMessage,
             rows: [],
@@ -1805,6 +1832,9 @@ onReviewRecipeContextWithAi,
         return {
           available: aiAvailabilityAvailable,
           unavailableReason: aiAvailabilityReason,
+          refreshing: aiRefreshing,
+          canRetry: aiCanRetry,
+          ...(aiOnRetry !== undefined ? { onRetry: aiOnRetry } : {}),
           running: recipeContextRunning,
           message: recipeContextMessage,
           rows: view.view.rows,
@@ -1830,6 +1860,9 @@ onReviewRecipeContextWithAi,
       ? {
           available: aiAvailabilityAvailable,
           unavailableReason: aiAvailabilityReason,
+          refreshing: aiRefreshing,
+          canRetry: aiCanRetry,
+          ...(aiOnRetry !== undefined ? { onRetry: aiOnRetry } : {}),
           running: aiRunning,
           message: aiMessage,
           suggestions: aiSuggestions,

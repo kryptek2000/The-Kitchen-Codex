@@ -383,9 +383,15 @@ describe('AI-5A isolation — BYOK cannot become entitlement', () => {
     for (const rel of ALL_SOURCE_FILES) {
       // `server/app.ts` is the AI-5B composition point: it wires ROUTES, so it already
       // carried the credential vocabulary before AI-5B. Its product-access awareness is
-      // pinned separately (gate-only, never the contract). Every BYOK OWNER below must
-      // remain completely unaware of product access.
-      if (rel === 'server/app.ts' || rel === AI5B_GATE) continue;
+      // pinned separately (gate-only, never the contract).
+      //
+      // AI-5D adds ONE deliberate exception: the Advanced Nutrition COMPOSITION OWNER.
+      // Composing "product entitled AND operationally ready" genuinely requires reading
+      // both the product decision and the selected credential source, so this module is
+      // the one place allowed to know both vocabularies. It still grants no authority:
+      // it is separately pinned as a read-only reader that never gates, never persists,
+      // never inspects secrets, and never reports a tier to the server.
+      if (rel === 'server/app.ts' || rel === AI5B_GATE || rel === AI5C_COMPOSER) continue;
       const source = code(rel);
       if (source.includes('credentialSource') || source.includes('session_only')) {
         checked += 1;
@@ -574,16 +580,49 @@ describe('AI-5A isolation — ZERO production consumer', () => {
     // Comment-stripped: documentation may legitimately cross-reference the new
     // contract. Only CODE may name it, so a prose mention can neither satisfy nor
     // defeat this pin.
+    //
+    // AI-5D carve-out — `src/App.tsx`. The shell must now decide whether the CACHED
+    // product read is Basic or Advanced in order to short-circuit readiness refreshes,
+    // so it legitimately names a bounded APPLICATION-LAYER predicate
+    // (`isAiAdvancedProductAccessRead` / `isBasicProductAccessRead` / the read type).
+    // What it still may NOT do — and what the pins below plus the sibling IMPORT test
+    // still enforce for every live surface including App.tsx — is name the AI-5A
+    // CONTRACT: no resolver, no frozen access instance, no version token, and no
+    // import of the core module.
     for (const rel of LIVE_SURFACES) {
       const source = code(rel);
-      expect(source, rel).not.toContain('nutritionProductAccess');
-      expect(source, rel).not.toContain('ProductAccess');
+      if (rel !== 'src/App.tsx') {
+        expect(source, rel).not.toContain('nutritionProductAccess');
+        expect(source, rel).not.toContain('ProductAccess');
+      }
       expect(source, rel).not.toContain('NUTRITION_PRODUCT_ACCESS_VERSION');
       expect(source, rel).not.toContain('resolveNutritionProductAccess');
       expect(source, rel).not.toContain('resolveNutritionProductTier');
       expect(source, rel).not.toContain('AI_ADVANCED_NUTRITION_PRODUCT_ACCESS');
       expect(source, rel).not.toContain('BASIC_NUTRITION_PRODUCT_ACCESS');
       expect(source, rel).not.toContain('nutrition_product_access_v1');
+    }
+  });
+
+  it('App.tsx uses only the bounded application predicate, never the contract', () => {
+    // The narrow, explicit form of the AI-5D carve-out above.
+    const app = code('src/App.tsx');
+    // Allowed: the application-layer read type and the two boolean predicates.
+    expect(app).toContain('isAiAdvancedProductAccessRead');
+    expect(app).toContain('isBasicProductAccessRead');
+    // Forbidden: anything that could construct, inspect, or forge a product state.
+    for (const forbidden of [
+      'AI_ADVANCED_NUTRITION_PRODUCT_ACCESS',
+      'BASIC_NUTRITION_PRODUCT_ACCESS',
+      'NUTRITION_PRODUCT_ACCESS_VERSION',
+      'resolveNutritionProductAccess',
+      'resolveNutritionProductTier',
+      'isNutritionProductAccess',
+      'isAiAdvancedProductAccess(',
+      'core/nutritionV2/nutritionProductAccess',
+      'nutrition_product_access_v1',
+    ]) {
+      expect(app, `App.tsx must not use ${forbidden}`).not.toContain(forbidden);
     }
   });
 

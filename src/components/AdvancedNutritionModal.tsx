@@ -110,6 +110,12 @@ export interface AdvancedNutritionRecipeContextRow {
  */
 export interface AdvancedNutritionRecipeContextUi {
   readonly available: boolean;
+  /** AI-5D: a readiness refresh is in flight. */
+  readonly refreshing?: boolean;
+  /** AI-5D: an explicit re-check is worth offering. */
+  readonly canRetry?: boolean;
+  /** AI-5D: the explicit user-triggered re-check. */
+  readonly onRetry?: () => void;
   /**
    * AI-5C bounded reason copy for an unavailable surface, or `null`. Pre-computed by
    * the shell so this component never re-derives WHY.
@@ -164,6 +170,12 @@ export interface AdvancedNutritionAiAmountOffer {
  */
 export interface AdvancedNutritionAiUi {
   readonly available: boolean;
+  /** AI-5D: a readiness refresh is in flight. */
+  readonly refreshing?: boolean;
+  /** AI-5D: an explicit re-check is worth offering. */
+  readonly canRetry?: boolean;
+  /** AI-5D: the explicit user-triggered re-check. */
+  readonly onRetry?: () => void;
   /**
    * AI-5C bounded reason copy for an unavailable AI layer, or `null`. Pre-computed by
    * the shell; this component never re-derives WHY.
@@ -1194,19 +1206,38 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                 )}
               </div>
               {!ai.available && (
-                <p
-                  data-testid="advanced-nutrition-ai-unavailable"
-                  className="text-[10px] text-gray-500"
-                >
+                <div className="flex flex-wrap items-center gap-2">
+                  <p
+                    data-testid="advanced-nutrition-ai-unavailable"
+                    className="text-[10px] text-gray-500"
+                  >
                   {/* AI-5C: the shell distinguishes Basic product access, AI
                       Advanced with no usable provider, and an unverifiable
                       product status. Each message states only what the client
                       actually knows, and every one keeps the Basic manual path
                       visible. No billing, upgrade or paywall language exists,
                       because no billing or account system does. */}
-                  {ai.unavailableReason ??
-                    'AI Advanced Nutrition access couldn\'t be verified. Basic manual review and correction are still available.'}
-                </p>
+                    {ai.unavailableReason ??
+                      'AI Advanced Nutrition access couldn\'t be verified. Basic manual review and correction are still available.'}
+                  </p>
+                  {/* AI-5D: an explicit, user-triggered re-check. Offered only where a
+                      re-check can help — a provider that may come back, or a status we
+                      may not yet have verified. A definitive Basic product answer never
+                      offers it. Disabled while a refresh is already running, so repeated
+                      clicks cannot launch duplicate refreshes. */}
+                  {ai.canRetry === true && ai.onRetry !== undefined && (
+                    <button
+                      type="button"
+                      data-testid="advanced-nutrition-ai-retry"
+                      disabled={ai.refreshing === true}
+                      aria-disabled={ai.refreshing === true}
+                      onClick={ai.onRetry}
+                      className="px-2 py-0.5 rounded text-[10px] font-semibold bg-white/5 hover:bg-white/10 border border-white/15 text-gray-300 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      {ai.refreshing === true ? 'Checking AI availability…' : 'Retry AI availability'}
+                    </button>
+                  )}
+                </div>
               )}
               {ai.message && (
                 <p

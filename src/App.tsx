@@ -64,13 +64,23 @@ import { saveGeneratedRecipeImageToVault, hashCanonicalMarkdown, type GeneratedI
 import { hydrateAiSelections } from './application/aiSelection';
 import { resolveUnresolvedRowsWithAi } from './application/nutritionAiResolve';
 import {
-  composeNutritionAiClientState,
+  NUTRITION_AI_REFRESHING_MESSAGE,
+  UNAVAILABLE_EFFECTIVE_CAPABILITIES,
   nutritionAiUnavailableMessage,
-  resolveNutritionAiClientState,
+  recomposeNutritionAiClientState,
   unresolvedNutritionAiClientState,
   type NutritionAiClientState,
   type NutritionAiEffectiveCapabilities,
 } from './application/nutritionAiClientState';
+// AI-5D: product-state predicates are re-exported by the composition owner, so the
+// shell never imports the product-access module and never becomes a contract consumer.
+import {
+  createNutritionRefreshSequencer,
+  isAiAdvancedProductAccessRead,
+  isBasicProductAccessRead,
+  type NutritionProductAccessRead,
+} from './application/nutritionAiClientState';
+
 import { requestAiMassEstimateOffers } from './application/nutritionAiEstimate';
 import { buildAiSelectionRequestOptions } from './application/aiSelection';
 import {
@@ -886,13 +896,116 @@ export default function App() {
   // LAZY: the product-status request happens only when the user actually loads the
   // Advanced Nutrition experience, never on ordinary startup or recipe browsing. A
   // page that never opens Advanced Nutrition performs no AI-5C request at all.
+  // AI-5D SPLITS THE TWO LIFETIMES. Product access is deployment-scoped and stable,
+  // so it stays cached. Operational readiness is DYNAMIC, so it is never cached
+  // forever: it is re-read on demand and invalidated immediately on any relevant
+  // text-runtime change.
+  const nutritionProductReadRef = useRef<NutritionProductAccessRead | null>(null);
   const nutritionAiClientStateRef = useRef<NutritionAiClientState | null>(null);
-  const resolveNutritionAiClientStateOnce = useCallback(async (): Promise<NutritionAiClientState> => {
-    if (nutritionAiClientStateRef.current !== null) return nutritionAiClientStateRef.current;
-    const resolved = await resolveNutritionAiClientState(networkAdapter);
-    nutritionAiClientStateRef.current = resolved;
-    return resolved;
-  }, [networkAdapter]);
+  const nutritionRefreshingRef = useRef(false);
+  // ONE monotonic sequencing authority for the initial load, an explicit Retry, and
+  // every Provider-Settings-triggered refresh. There are deliberately no competing
+  // counters: an older async completion can never overwrite a newer one.
+  const nutritionRefreshGenerationRef = useRef(createNutritionRefreshSequencer());
+
+  const publishNutritionAiPresentation = useCallback((state: NutritionAiClientState, refreshing: boolean) => {
+    setNutritionAiPresentation({
+      available: refreshing ? false : state.available,
+      reason: refreshing
+        ? NUTRITION_AI_REFRESHING_MESSAGE
+        : nutritionAiUnavailableMessage(state.availability),
+      refreshing,
+      // Retry is offered only where it can actually help: a provider that may come
+      // back, or a status we may not yet have verified. A definitive Basic product
+      // answer is policy, not a transient failure, so it never offers Retry.
+      canRetry: !refreshing && (state.availability === 'provider_unavailable' || state.availability === 'product_access_unverified'),
+      ...(refreshing ? {} : {}),
+    });
+  }, []);
+
+  /**
+   * The single refresh entry point. ALL of initial load, Retry, and
+   * Provider-Settings invalidation funnel through here, so they share one
+   * generation counter and cannot race each other.
+   *
+   * `reuseProductAccess` is the AI-5D distinction in one flag: an ordinary provider
+   * recovery re-reads READINESS ONLY and reuses the known canonical product access,
+   * while an explicit Retry after an unverified status re-reads product access too.
+   */
+  const runNutritionAiRefresh = useCallback(
+    async (options: { reuseProductAccess: boolean }): Promise<void> => {
+      const generation = nutritionRefreshGenerationRef.current.begin();
+      nutritionRefreshingRef.current = true;
+
+      const cachedProductAccess = nutritionProductReadRef.current;
+      // Fail closed IMMEDIATELY, before any await: a known readiness-affecting
+      // change must never leave AI executable against yesterday's answer. This is
+      // what closes the stale-window on credential revocation.
+      const currentState = nutritionAiClientStateRef.current;
+      if (currentState !== null) publishNutritionAiPresentation(currentState, true);
+
+      try {
+        const state = await recomposeNutritionAiClientState(
+          networkAdapter,
+          options.reuseProductAccess && cachedProductAccess !== null ? cachedProductAccess : undefined,
+        );
+        // STALE COMPLETION GUARD: a newer refresh superseded this one, so this
+        // result must not rewrite the ref, the presentation, or re-enable AI.
+        if (!nutritionRefreshGenerationRef.current.isCurrent(generation)) return;
+        // Only a RESOLVED product read may become the cached stable truth. Unknown
+        // stays unknown and is deliberately not cached as a product answer.
+        if (state.productAccessStatus.status === 'resolved') {
+          nutritionProductReadRef.current = state.productAccessStatus;
+        }
+        nutritionAiClientStateRef.current = state;
+        nutritionRefreshingRef.current = false;
+        publishNutritionAiPresentation(state, false);
+      } catch {
+        if (!nutritionRefreshGenerationRef.current.isCurrent(generation)) return;
+        nutritionRefreshingRef.current = false;
+        const fallback = unresolvedNutritionAiClientState();
+        nutritionAiClientStateRef.current = fallback;
+        publishNutritionAiPresentation(fallback, false);
+      }
+    },
+    [networkAdapter, publishNutritionAiPresentation],
+  );
+
+  /**
+   * AI-5D IMMEDIATE INVALIDATION on a readiness-affecting change.
+   *
+   * Called by Provider Settings when something that can change TEXT execution truth
+   * changed. It carries NO secret and grants NO authority: it means only "the cached
+   * nutrition operational-readiness result may now be stale".
+   *
+   * Crucially it does NOT trigger product-access resolution. If Advanced Nutrition
+   * has never been opened there is no cached product truth and nothing is fetched —
+   * the first entry into Advanced Nutrition still owns the lazy boundary. If the
+   * known answer is Basic, a provider change cannot grant Advanced, so no readiness
+   * request is made at all.
+   */
+  const invalidateNutritionReadiness = useCallback(() => {
+    if (nutritionProductReadRef.current === null) return; // never resolved: stay lazy
+    const cached = nutritionProductReadRef.current;
+    const knownBasic = isBasicProductAccessRead(cached);
+    if (knownBasic) return; // provider configuration cannot turn Basic into Advanced
+    void runNutritionAiRefresh({ reuseProductAccess: true });
+  }, [runNutritionAiRefresh]);
+
+  /**
+   * The user-triggered recovery control ("Retry AI availability").
+   *
+   * From a provider-unavailable state it reuses known canonical product access and
+   * refreshes READINESS ONLY. From an unverified state it re-reads product access
+   * first, stopping at Basic if that is what the server now says. It is never
+   * offered for a definitive Basic product answer.
+   */
+  const handleRetryNutritionAiAvailability = useCallback(() => {
+    if (nutritionRefreshingRef.current) return; // no duplicate refreshes
+    const cached = nutritionProductReadRef.current;
+    const knownAdvanced = cached !== null && isAiAdvancedProductAccessRead(cached);
+    void runNutritionAiRefresh({ reuseProductAccess: knownAdvanced });
+  }, [runNutritionAiRefresh]);
 
   /**
    * Projects the AND-composed effective availability into the EXISTING
@@ -920,11 +1033,27 @@ export default function App() {
     [],
   );
 
-  /** The single centralized effective-capability decision every AI port gates on. */
-  const resolveEffectiveNutritionCapabilitiesOnce = useCallback(async (): Promise<NutritionCapabilities> => {
-    const state = await resolveNutritionAiClientStateOnce();
+  /**
+   * The single centralized effective-capability decision every AI port gates on.
+   *
+   * AI-5D: this reads the CURRENT composed state at CALL time rather than capturing
+   * a value, so a port can never execute against a stale readiness result, and it
+   * fails closed whenever a refresh is in flight. It never re-derives availability
+   * itself and never becomes an authority.
+   */
+  const currentEffectiveNutritionCapabilities = useCallback((): NutritionCapabilities => {
+    if (nutritionRefreshingRef.current) {
+      return toEffectiveNutritionCapabilities(UNAVAILABLE_EFFECTIVE_CAPABILITIES);
+    }
+    const state = nutritionAiClientStateRef.current;
+    if (state === null) return toEffectiveNutritionCapabilities(UNAVAILABLE_EFFECTIVE_CAPABILITIES);
     return toEffectiveNutritionCapabilities(state.effectiveCapabilities);
-  }, [resolveNutritionAiClientStateOnce, toEffectiveNutritionCapabilities]);
+  }, [toEffectiveNutritionCapabilities]);
+
+  /** Async facade so existing AI ports keep their single-decision call shape. */
+  const resolveEffectiveNutritionCapabilitiesOnce = useCallback(async (): Promise<NutritionCapabilities> =>
+    currentEffectiveNutritionCapabilities(),
+  [currentEffectiveNutritionCapabilities]);
 
   /**
    * The bounded presentation state handed to the Advanced Nutrition UI.
@@ -939,17 +1068,17 @@ export default function App() {
   const [nutritionAiPresentation, setNutritionAiPresentation] = useState<{
     readonly available: boolean;
     readonly reason: string | null;
+    readonly refreshing: boolean;
+    readonly canRetry: boolean;
   }>(() => {
     const initial = unresolvedNutritionAiClientState();
-    return { available: initial.available, reason: nutritionAiUnavailableMessage(initial.availability) };
+    return {
+      available: initial.available,
+      reason: nutritionAiUnavailableMessage(initial.availability),
+      refreshing: false,
+      canRetry: true,
+    };
   });
-
-  const publishNutritionAiPresentation = useCallback((state: NutritionAiClientState) => {
-    setNutritionAiPresentation({
-      available: state.available,
-      reason: nutritionAiUnavailableMessage(state.availability),
-    });
-  }, []);
 
   /**
    * The Advanced Nutrition user-triggered boundary.
@@ -961,12 +1090,13 @@ export default function App() {
    */
   const handleLoadAdvancedNutritionBundle = useCallback(() => {
     advancedNutritionBundle.load();
-    void resolveNutritionAiClientStateOnce()
-      .then(publishNutritionAiPresentation)
-      .catch(() => {
-        publishNutritionAiPresentation(unresolvedNutritionAiClientState());
-      });
-  }, [advancedNutritionBundle, resolveNutritionAiClientStateOnce, publishNutritionAiPresentation]);
+    // AI-5D: entering Advanced Nutrition owns the lazy product-access boundary. On a
+    // SECOND entry the stable product read is reused, so re-entering never re-asks
+    // the product-status endpoint for an already-known answer.
+    const cached = nutritionProductReadRef.current;
+    const knownAdvanced = cached !== null && isAiAdvancedProductAccessRead(cached);
+    void runNutritionAiRefresh({ reuseProductAccess: knownAdvanced });
+  }, [advancedNutritionBundle, runNutritionAiRefresh]);
 
   // Optional AI-assisted USDA resolution port. This shell owns the network +
   // application layer; the Advanced Nutrition UI receives ONLY this bounded port
@@ -1070,8 +1200,14 @@ export default function App() {
    */
   const handleReviewRecipeContextWithAi: AdvancedNutritionRecipeContextReviewHandler = useCallback(
     async ({ recipe: target }) => {
-      const effective = (await resolveNutritionAiClientStateOnce()).effectiveCapabilities;
-      if (!effective.aiRecipeContextReview) {
+      // AI-5D: gate on the CURRENT composed per-feature bit, read at call time so a
+      // stale closure can never authorize a review after invalidation.
+      const state = nutritionAiClientStateRef.current;
+      const reviewAvailable =
+        !nutritionRefreshingRef.current &&
+        state !== null &&
+        state.effectiveCapabilities.aiRecipeContextReview;
+      if (!reviewAvailable) {
         return {
           ok: false,
           message: "Recipe context review isn't available right now.",
@@ -1105,7 +1241,7 @@ export default function App() {
         };
       }
     },
-    [networkAdapter, resolveNutritionAiClientStateOnce]
+    [networkAdapter, currentEffectiveNutritionCapabilities]
   );
 
   // Save or Create a Vault Note (e.g. ingredient or technique created from wikilink modal)
@@ -1787,7 +1923,10 @@ export default function App() {
             onResolveAdvancedNutritionAi={handleResolveAdvancedNutritionAi}
             onEstimateMassesWithAi={handleEstimateMassesWithAi}
             onReviewRecipeContextWithAi={handleReviewRecipeContextWithAi}
-            advancedNutritionAiAvailability={nutritionAiPresentation}
+            advancedNutritionAiAvailability={{
+              ...nutritionAiPresentation,
+              onRetry: handleRetryNutritionAiAvailability,
+            }}
           />
         ) : activeTab === 'grid' ? (
           /* Recipe Gallery View */
@@ -1884,7 +2023,11 @@ export default function App() {
           />
         ) : activeTab === 'providers' ? (
           /* AI Provider Status / Selection View (read-only truth + safe client preferences) */
-          <ProviderSettings network={networkAdapter} settings={settingsAdapter} />
+          <ProviderSettings
+            network={networkAdapter}
+            settings={settingsAdapter}
+            onTextAiRuntimeChanged={invalidateNutritionReadiness}
+          />
         ) : (
           /* Themes View */
           <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">

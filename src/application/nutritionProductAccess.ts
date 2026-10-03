@@ -84,6 +84,7 @@
 
 import type { NetworkAdapter } from './adapters/NetworkAdapter';
 import {
+  isAiAdvancedProductAccess,
   isNutritionProductTier,
   NUTRITION_PRODUCT_ACCESS_VERSION,
   resolveNutritionProductAccess,
@@ -193,4 +194,24 @@ export async function readNutritionProductAccess(
     status: 'resolved',
     access: resolveNutritionProductAccess(tier),
   });
+}
+/**
+ * True only when the server DEFINITIVELY reported AI Advanced product access.
+ *
+ * This exists so the shell never has to reach into the AI-5A core contract itself.
+ * `App.tsx` deciding "is this product state Advanced?" from the core module would
+ * break the AI-5A consumer-graph isolation invariant (the shell is a composition
+ * edge, not a product-contract consumer), so the question is answered here, in the
+ * narrow application-layer reader that owns the product read.
+ *
+ * `unavailable` and a genuine Basic read are both false: only a RESOLVED AI Advanced
+ * read makes AI Advanced product access true.
+ */
+export function isAiAdvancedProductAccessRead(read: NutritionProductAccessRead): boolean {
+  return isResolvedNutritionProductAccess(read) && isAiAdvancedProductAccess(read.access);
+}
+
+/** True only when the server DEFINITIVELY reported Basic product access. */
+export function isBasicProductAccessRead(read: NutritionProductAccessRead): boolean {
+  return isResolvedNutritionProductAccess(read) && !isAiAdvancedProductAccess(read.access);
 }
