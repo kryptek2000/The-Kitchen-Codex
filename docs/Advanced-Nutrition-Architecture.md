@@ -9600,9 +9600,392 @@ readiness only), AI-4E receipt crypto (`randomBytes(32)`, HMAC-SHA-256,
 | server authority after refresh, single refresh owner, fail-closed-before-await, stale-completion guards, shell wiring, Provider Settings text-only integration, no polling/secret/persistence/authority-channel/billing | `tests/security/advancedNutritionAi5dRefresh.test.ts` |
 | Retry availability rules, refreshing neutral copy, disabled-during-refresh, recovery without reload, Basic/manual invariance | `tests/unit/advancedNutritionAi5dUi.test.tsx` |
 
-### 58.16 AI-5E NOT STARTED
+### 58.16 SUPERSEDED BY §59
 
-This phase ends at refreshable readiness plus explicit recovery. Any product-access
-status synchronization beyond this read-only awareness, any hosted per-user
-entitlement, and any downstream AI-4 context consumption remain unauthorized and
-unimplemented.
+At the time this phase was written, product-access synchronization beyond read-only
+awareness, hosted per-user entitlement, and any downstream AI-4 context consumption
+remained unimplemented. §59 (AI-5E) has since created the **server-side authority
+abstraction** for where product access comes from. That is an abstraction seam only:
+it adds no account identity, no billing, no hosted entitlement, no client behaviour and
+no new entitlement source. Hosted per-user entitlement remains unauthorized and
+unimplemented — see §59.15, §59.18 and §59.22.
+
+---
+
+## §59. AI-5E — SERVER PRODUCT-ACCESS AUTHORITY ABSTRACTION
+
+### 59.1 What this phase is
+
+AI-5A defined the product-access contract. AI-5B made it server-authoritative. AI-5C
+gave the client read-only awareness. AI-5D made operational readiness refreshable.
+
+All four work, and they work from one place: a **deployment-scoped environment value**
+read once by `server.ts` and injected as a raw tier into `createApp()`.
+
+This phase is an **abstraction phase, not a product-policy change**. It creates the ONE
+server-owned socket that answers "where does authoritative product access come from?",
+so the day authenticated per-account entitlement exists, the six AI-5B gates and the
+AI-5C status route do **not** need to be redesigned a second time.
+
+### 59.2 WHY RAW TIER INJECTION WAS NOT SUFFICIENT LONG-TERM
+
+`CreateAppOptions.nutritionProductTier` answered a question about the **process**:
+"what tier is this deployment?".
+
+- Its only reachable implementation was an environment read.
+- It had nowhere to put a **principal**, so it could never express a per-user answer.
+- It was **synchronous**, so a future account-backed or remote lookup would need a
+  different shape.
+- Adding a second option beside it (`nutritionProductAccount`) would have produced
+  **two live entitlement seams with precedence rules** — ambiguous authority, which is
+  precisely the failure mode AI-5A exists to prevent.
+
+So the seam became a single **authority object** with one method, and the environment
+value became merely the **current implementation** of that object, chosen by server
+composition and never by a request.
+
+### 59.3 THE AUTHORITY INTERFACE
+
+`server/nutritionProductAccessAuthority.ts`:
+
+```ts
+export interface NutritionProductAccessAuthority {
+  resolve(request: Request): Promise<NutritionProductAccessAuthorityDecision>;
+}
+```
+
+Properties that make this the right seam:
+
+| Property | Why it matters |
+| --- | --- |
+| server-owned | injected by `createApp()`; never selectable by a browser |
+| request-capable | a future implementation can read a **server-authenticated** identity |
+| asynchronous | a future remote/account lookup needs no interface change |
+| runtime validated | a broken or hostile implementation degrades to `unavailable` |
+| fail closed | absence, error and garbage all refuse work |
+| canonical AI-5A access only | it emits the two frozen access values, nothing else |
+| injected at composition time | `server.ts` selects the implementation |
+| never request-selected | no header, cookie, query or body field selects it |
+
+### 59.4 REQUEST-CAPABLE NOW, REQUEST-INDEPENDENT TODAY
+
+`resolve` accepts the Express request **deliberately**. An interface that could only
+ever answer "what tier is this process?" would simply rename the existing env variable
+and force another gate redesign when authenticated per-user entitlement arrives.
+
+The **current** deployment authority ignores the request completely. Its implementation
+reads no header, cookie, query, body, param, IP, or `Authorization` content, and the
+test suite proves that the same authority returns the identical decision object across
+radically different — including deliberately forged — requests.
+
+No code in this repository infers entitlement from a `Request`.
+
+### 59.5 THE DECISION CONTRACT: RESOLVED IS NOT UNAVAILABLE
+
+AI-5C established a distinction the server must also honour: a **known Basic** tier is a
+genuine product fact, while "access could not be verified" is not. Collapsing them would
+force the UI to blame the product for an authority fault.
+
+```ts
+export type NutritionProductAccessAuthorityDecision =
+  | { readonly status: "resolved"; readonly access: NutritionProductAccess }
+  | { readonly status: "unavailable" };
+```
+
+`resolved.access` **must** be one of the two canonical frozen AI-5A instances.
+Canonical identity is load-bearing, so a hand-authored, structurally identical
+"AI Advanced" object is refused rather than trusted.
+
+Every authority failure becomes `unavailable` — **never** Advanced, **never** a
+fabricated Basic: absent/non-object authority, a `resolve`-less authority, a synchronous
+throw, a rejected promise, a non-promise return, `null`, `undefined`, a boolean, a
+number, a string, an array, an empty object, an unknown/missing/padded/uppercase
+status, `resolved` with no access, and `resolved` with a non-canonical access.
+
+### 59.6 THE DEPLOYMENT AUTHORITY (CURRENT PRODUCTION)
+
+```ts
+createDeploymentNutritionProductAccessAuthority(rawTier)
+```
+
+- resolves the raw deployment tier **exactly once**, through the unchanged AI-5A
+  resolver (never reimplemented);
+- retains **one** canonical frozen access value;
+- returns **the same decision object** for every request;
+- ignores the request completely;
+- performs no I/O, no provider work, no credential work, no billing work, no
+  persistence.
+
+Only the exact primitive `ai_advanced` grants AI Advanced. Absent, `null`, empty,
+whitespace, `AI_ADVANCED`, `Ai_Advanced`, `' ai_advanced'`, `'ai_advanced '`, `pro`,
+`premium`, `paid`, `subscription`, `true`, `false`, `1`, arrays, objects and
+feature-shaped objects are all Basic. **No trim. No case fold. No alias.**
+
+**One-time resolution proof.** The raw value is never reparsed per request: mutating
+`process.env` **after** authority construction cannot change that authority's answer, in
+either direction (Advanced stays Advanced, Basic stays Basic).
+
+### 59.7 ONE ENVIRONMENT READ, ONE COMPOSITION POINT
+
+`server.ts` remains the only production composition point that reads
+`KITCHEN_CODEX_NUTRITION_PRODUCT_TIER`:
+
+```ts
+const nutritionProductAccessAuthority =
+  createDeploymentNutritionProductAccessAuthority(
+    process.env[NUTRITION_PRODUCT_TIER_ENV]
+  );
+
+const app = createApp({
+  isProduction,
+  nutritionProductAccessAuthority,
+});
+```
+
+No route reads `process.env`. No authority middleware reads `process.env`. The gate
+module and the authority module both read no environment state at all.
+
+### 59.8 createApp SEAM MIGRATION — AND NO DUAL SOURCE
+
+`CreateAppOptions.nutritionProductTier?: unknown` is **gone**. It is replaced by the
+single authority seam:
+
+```ts
+nutritionProductAccessAuthority?: NutritionProductAccessAuthority;
+```
+
+There is deliberately **no** companion raw-tier option and no precedence/fallback chain
+between two entitlement sources. The only fallback is the fail-closed Basic deployment
+authority:
+
+```ts
+const nutritionProductAccessAuthority =
+  opts.nutritionProductAccessAuthority ?? createBasicNutritionProductAccessAuthority();
+```
+
+**Default `createApp({ isProduction })` is canonical Basic.** No implicit Advanced, no
+dev-only bypass, no test-only bypass, no `disableEntitlementCheck` switch.
+
+### 59.9 THE GATE
+
+```ts
+requireNutritionProductFeature(authority, feature)
+```
+
+1. runs **only after** `requireAiAccessToken`;
+2. resolves the authority **exactly once** for that request;
+3. runtime-validates the result;
+4. if resolved → the canonical AI-5A feature entitlement check;
+5. if not entitled → 403 `NUTRITION_AI_NOT_ENTITLED`, `aiAttempted: false`;
+6. if unavailable → fail closed **before** pricing, rate limiting and provider work;
+7. never inspects request entitlement fields itself — it only *forwards* the request to
+   the authority.
+
+The request is forwarded, never read. The gate module contains no `request.headers`,
+`request.cookies`, `request.query`, `request.body`, `request.params`, `request.ip` or
+`request.get(`.
+
+### 59.10 AUTHORITY UNAVAILABLE — TRUTHFUL FAILURE
+
+`NUTRITION_PRODUCT_ACCESS_UNAVAILABLE` is **one bounded machine class**, distinct from
+`NUTRITION_AI_NOT_ENTITLED`. For a gated AI POST:
+
+```http
+HTTP/1.1 503 Service Unavailable
+```
+
+```json
+{
+  "ok": false,
+  "code": "NUTRITION_PRODUCT_ACCESS_UNAVAILABLE",
+  "error": "AI Advanced Nutrition access could not be verified.",
+  "aiAttempted": false
+}
+```
+
+No raw exception, no authority source, no account, plan, pricing or billing detail, no
+provider or model, no credential, no secret, no environment value.
+
+### 59.11 STATUS ENDPOINT INTEGRATION
+
+Success is **unchanged and exact** — three keys, nothing more:
+
+```json
+{ "ok": true, "version": "nutrition_product_access_v1", "tier": "basic" }
+```
+
+```json
+{ "ok": true, "version": "nutrition_product_access_v1", "tier": "ai_advanced" }
+```
+
+Authority unavailable:
+
+```http
+HTTP/1.1 503 Service Unavailable
+Cache-Control: no-store
+```
+
+```json
+{
+  "ok": false,
+  "code": "NUTRITION_PRODUCT_ACCESS_UNAVAILABLE",
+  "error": "AI Advanced Nutrition access could not be verified."
+}
+```
+
+No `tier`, **no** `version`. That absence is what makes the unchanged AI-5C reader
+compose to `product_access_unverified` instead of a fabricated `product_not_enabled`.
+
+`Cache-Control: no-store` applies to successful **and** unavailable status responses.
+
+**No client source disclosure.** The endpoint never reveals `source: deployment`, the
+environment variable name, the raw environment value, the authority implementation, an
+account source, or any future billing provider.
+
+### 59.12 MIDDLEWARE ORDER AND EXACTLY-ONCE
+
+```
+AUTH  ->  PRODUCT AUTHORITY / ENTITLEMENT  ->  PRICING  ->  PAID ROUTE LIMITER  ->  HANDLER / PROVIDER
+```
+
+- Unauthenticated request → **401**, authority invocation count **ZERO**.
+- Product access is resolved **exactly once** per request, for the status route and for
+  each gated POST. It is never asked once in the gate and again in the handler.
+- A Basic denial or an unavailable authority consumes **zero** provider work and does
+  **not** consume the downstream paid route limiter.
+
+**Reconcile order** is preserved:
+
+```
+auth -> product authority -> reconcile limiter -> AI-4E origin receipt verification -> D1 currentness
+```
+
+Authority unavailable or not entitled occurs **before** receipt verification, so an
+unauthorized caller gets **no receipt oracle**: a request that would otherwise earn
+`400 origin_unverified` earns `403` (Basic) or `503` (unavailable) instead.
+
+### 59.13 THE EXACTLY SIX GATES — NO SEVENTH
+
+| Feature | Routes |
+| --- | --- |
+| `ai_interpretation` | `POST /api/nutrition/resolve-ingredients`, `POST /api/nutrition/interpret-ingredients` |
+| `ai_candidate_orchestration` | `POST /api/nutrition/plan-ingredients` |
+| `ai_bounded_mass_estimation` | `POST /api/nutrition/estimate-mass` |
+| `ai_recipe_context_review` | `POST /api/nutrition/recipe-context`, `POST /api/nutrition/recipe-context/reconcile` |
+
+Historical `POST /api/estimate-nutrition` remains outside all four AI-5A features.
+
+### 59.14 SERVER COMPOSITION SELECTS THE AUTHORITY; THE REQUEST NEVER CAN
+
+An explicitly injected server authority **is** allowed to return canonical Advanced —
+that is the entire purpose of the abstraction, and it is trusted *composition*, not
+client authority. What does not exist is any request field that selects:
+
+- the authority implementation,
+- the authority source,
+- a raw tier,
+- a product access value.
+
+Under a Basic deployment authority, every forged channel — headers (`x-product-tier`,
+`x-entitlement`, `x-kitchen-nutrition-tier`, `x-ai-product-access`,
+`x-nutrition-product-access`, `x-user-id`, `x-account-id`, `x-plan`, `x-authority`,
+`x-authority-source`, `x-product-access-source`), cookies, query parameters
+(`entitled`, `tier`, `productTier`, `plan`) and body fields (`tier`, `productTier`,
+`entitled`, `productAccess`, `capabilities`, `account`, `userId`, `subscription`) —
+leaves the status route reporting Basic and all six gates refusing.
+
+### 59.15 NO ACCOUNTS, NO BILLING, NO CHECKOUT, NO PRICING MAP
+
+AI-5E builds the socket. It does **not** plug a commercial service into it.
+
+No user database, account repository, identity provider, OAuth account identity, JWT
+entitlement claims, Stripe lookup, Paddle lookup, license server, subscription service,
+remote entitlement API, customer table, plan mapping or checkout exists. There is also
+no new package dependency: the authority imports only the `express` request type and
+the AI-5A contract.
+
+**Provider/model cost class is never mapped to product access.** Free / Budget / Paid /
+Variable remains operational and commercial execution safety. A free model does not
+grant AI Advanced.
+
+**BYOK is never mapped to product access.** A valid session-only credential can make an
+operational credential usable; it never grants ownership of AI Advanced. Basic plus a
+perfect BYOK is still Basic.
+
+### 59.16 NO FAKE PRINCIPAL
+
+There is no synthetic identity. `userId = req.ip`, `account = AI_ENDPOINT_TOKEN`,
+`account = cookie`, `account = vault` and every equivalent shortcut are forbidden, and
+the current deployment authority has **no user principal at all**.
+
+### 59.17 NO ENTITLEMENT PERSISTENCE
+
+No authority decision is written to browser storage, server disk, SQLite, the vault,
+Markdown, YAML, cookies, `SettingsAdapter` or plugin data. The current deployment
+authority holds its canonical access in server process memory only, behind one frozen
+`resolve` function.
+
+### 59.18 FUTURE MANDATORY GATE — AUTHENTICATED PRINCIPAL ONLY
+
+A future account authority may use **only** an identity established by trusted **server
+authentication middleware**. It must **never** trust:
+
+- `x-user-id`
+- `x-account-id`
+- `x-plan`
+- `x-entitlement`
+- arbitrary Authorization payload claims that the server has not verified
+- a cookie merely because it exists
+- query or body identity
+
+**AI-5E does not create such an identity.** Creating one is a separate, later, and
+explicitly unauthorized phase.
+
+### 59.19 FUTURE CACHE WARNING — DOCUMENT ONLY
+
+AI-5D currently allows a **resolved** product-access read to remain cached in client
+page memory. That is correct **only because the current deployment authority is stable
+for the life of the server process**.
+
+A future per-user / account-backed authority may change when:
+
+- the user signs in or out,
+- the account changes,
+- the subscription entitlement changes.
+
+**AI-5E must not be shipped as "plug in the account authority and ship".** Before hosted
+per-user authority goes live, a later phase must define:
+
+- authenticated identity lifecycle,
+- client product-access invalidation / refetch lifecycle,
+- account switch semantics,
+- entitlement change semantics.
+
+Those are **not** implemented here.
+
+### 59.20 UNCHANGED INVARIANTS
+
+| Surface | Status |
+| --- | --- |
+| `src/core/nutritionV2/nutritionProductAccess.ts` (AI-5A) | **zero diff**; `nutrition_product_access_v1`; tiers `basic` / `ai_advanced`; exactly four features |
+| `src/core/nutritionV2/nutritionCapabilities.ts` | **zero diff**; operational readiness only |
+| `server/recipeContextOriginReceipt.ts` (AI-4E) | **zero diff** |
+| `src/core/nutritionV2/aiRecipeContextOriginReceiptShape.ts` | **zero diff** |
+| `projectAcceptedRecipeContext` | **ZERO production consumers** |
+| AI-5D refresh architecture | **zero intended change** — split lifetimes, session-only readiness, Retry, text-only invalidation, race sequencer, immediate fail-closed invalidation, no polling |
+| Basic / manual nutrition | never product-gated: deterministic USDA analysis, deterministic matching, manual food correction, manual total weight, source/count/household portions, calculation, provenance, Review, Apply, and saved Advanced report viewing |
+| Client production code | **zero diff** — `src/App.tsx`, `src/application/nutritionProductAccess.ts`, `src/application/nutritionAiClientState.ts`, Advanced Nutrition UI, Provider Settings |
+
+### 59.21 Coverage
+
+| Concern | File |
+| --- | --- |
+| authority contract, closed decision, adversarial injected-authority matrix, deployment raw-tier matrix, one-time resolution, request independence, module isolation | `tests/unit/advancedNutritionAi5eAuthority.test.ts` |
+| auth-first, exactly-once, status success/unavailable, six gates, middleware order, reconcile order, forged-client differential, `server.ts` composition, no dual seam, current client compatibility | `tests/security/advancedNutritionAi5eAuthorityGate.test.ts` |
+| no commercial implementation, no fake principal, no persistence, bounded wire classes, AI-5A/AI-4E/AI-5D invariance, composition-only selection | `tests/security/advancedNutritionAi5eIsolation.test.ts` |
+
+### 59.22 AI-5F NOT STARTED
+
+This phase ends at the socket. Account identity, authentication middleware, hosted
+per-user entitlement, client product-access invalidation, billing, checkout and any
+downstream AI-4 context consumption all remain unauthorized and unimplemented.

@@ -65,6 +65,16 @@ const ALL_SOURCE_FILES: ReadonlyArray<string> = [
  */
 const AI5B_GATE = 'server/nutritionProductAccess.ts';
 /**
+ * AI-5E adds the ONE server-side PRODUCT-ACCESS AUTHORITY ABSTRACTION.
+ *
+ * It owns where authoritative product access comes from (today: a deployment-scoped
+ * environment value resolved once at construction) and hands the gate a canonical
+ * AI-5A access value. It is not a second gate and not a second policy: it defines no
+ * feature, no tier and no vocabulary of its own, and it can never be selected by a
+ * request. Everything below keeps that distinction permanent.
+ */
+const AI5E_AUTHORITY = 'server/nutritionProductAccessAuthority.ts';
+/**
  * AI-5C adds the ONE authorized client-side READER of the contract.
  *
  * It is read-only product AWARENESS, not authority: it never gates a route, never
@@ -391,7 +401,14 @@ describe('AI-5A isolation — BYOK cannot become entitlement', () => {
       // the one place allowed to know both vocabularies. It still grants no authority:
       // it is separately pinned as a read-only reader that never gates, never persists,
       // never inspects secrets, and never reports a tier to the server.
-      if (rel === 'server/app.ts' || rel === AI5B_GATE || rel === AI5C_COMPOSER) continue;
+      if (
+        rel === 'server/app.ts' ||
+        rel === AI5B_GATE ||
+        rel === AI5E_AUTHORITY ||
+        rel === AI5C_COMPOSER
+      ) {
+        continue;
+      }
       const source = code(rel);
       if (source.includes('credentialSource') || source.includes('session_only')) {
         checked += 1;
@@ -528,13 +545,14 @@ describe('AI-5A isolation — ZERO production consumer', () => {
   });
 
   it('exactly TWO server modules and ONE read-only client reader consume the contract', () => {
-    // The gate is the single AUTHORITY. AI-5C adds exactly one client READER, which is
-    // awareness only. Nothing else in the repository may import the contract.
+    // The gate is the single ENFORCEMENT boundary and the AI-5E authority is the single
+    // SOURCE boundary; AI-5C adds exactly one client READER, which is awareness only.
+    // Nothing else in the repository may import the contract.
     const consumers = [...ALL_SOURCE_FILES, ...walk(join(REPO, 'plugin'))].filter((rel) =>
       code(rel).includes('nutritionProductAccess'),
     );
     expect(consumers.sort()).toEqual(
-      ['server/app.ts', AI5B_GATE, AI5C_COMPOSER, AI5C_CLIENT_READER].sort(),
+      ['server/app.ts', AI5B_GATE, AI5E_AUTHORITY, AI5C_COMPOSER, AI5C_CLIENT_READER].sort(),
     );
 
     // No OTHER client surface, no plugin surface, no script and no AI transport is aware.
@@ -559,6 +577,9 @@ describe('AI-5A isolation — ZERO production consumer', () => {
       expect(modulePath, 'server/app.ts').not.toContain('core/nutritionV2/nutritionProductAccess');
     }
     expect(appModules).toContain('./nutritionProductAccess.js');
+    // AI-5E: the composition point also holds the AUTHORITY object it injects, but still
+    // never the contract itself.
+    expect(appModules).toContain('./nutritionProductAccessAuthority.js');
   });
 
   it('the AI-5B gate imports the contract and NOTHING else that could grant authority', () => {
@@ -568,11 +589,13 @@ describe('AI-5A isolation — ZERO production consumer', () => {
     const modules = imports
       .map((line) => /from\s+['"]([^'"]+)['"]/.exec(line)?.[1] ?? '')
       .filter(Boolean);
-    // Exactly the express request type and the AI-5A contract. No provider, no
-    // credential resolver, no BYOK authority, no billing, no nutrition authority.
+    // Exactly the express request type, the AI-5A contract and the AI-5E authority.
+    // No provider, no credential resolver, no BYOK authority, no billing, no nutrition
+    // authority, and no account or billing module of any kind.
     expect(modules).toEqual([
       'express',
       '../src/core/nutritionV2/nutritionProductAccess.js',
+      './nutritionProductAccessAuthority.js',
     ]);
   });
 
@@ -639,13 +662,13 @@ describe('AI-5A isolation — ZERO production consumer', () => {
     }
   });
 
-  it('only the AI-5B gate and the AI-5C read-only reader consume the contract', () => {
+  it('only the AI-5B gate, the AI-5E authority and the AI-5C read-only reader consume the contract', () => {
     const offenders: string[] = [];
     for (const rel of [...ALL_SOURCE_FILES, ...walk(join(REPO, 'plugin'))]) {
       if (code(rel).includes('nutritionProductAccess')) offenders.push(rel);
     }
     expect(offenders.sort()).toEqual(
-      ['server/app.ts', AI5B_GATE, AI5C_COMPOSER, AI5C_CLIENT_READER].sort(),
+      ['server/app.ts', AI5B_GATE, AI5E_AUTHORITY, AI5C_COMPOSER, AI5C_CLIENT_READER].sort(),
     );
   });
 
@@ -769,20 +792,31 @@ describe('AI-5A isolation — ZERO production consumer', () => {
   });
 
   it('there is exactly ONE product-access DEFINITION module', () => {
-    // Two modules carry the vocabulary: the AI-5A definition and the AI-5B server
-    // boundary. Only the first may define the contract types or resolvers.
+    // Three modules carry the vocabulary: the AI-5A definition, the AI-5B server gate
+    // and the AI-5E authority boundary. Only the first may define the contract types,
+    // the frozen access values or the tier resolver.
     const modules = ALL_SOURCE_FILES
       .filter((rel) => /ProductAccess|productAccess/.test(rel))
       // The AI-5C files are a READER and a COMPOSER over the contract; neither
       // DEFINES a product-access value. Exactly one module may do that.
       .filter((rel) => rel !== AI5C_CLIENT_READER && rel !== AI5C_COMPOSER)
       .sort();
-    expect(modules).toEqual([AI5B_GATE, CONTRACT].sort());
+    expect(modules).toEqual([AI5B_GATE, AI5E_AUTHORITY, CONTRACT].sort());
     const gate = code(AI5B_GATE);
     expect(gate).not.toMatch(/interface\s+NutritionProductAccess\b/);
     expect(gate).not.toMatch(/type\s+NutritionProductTier\s*=/);
     expect(gate).not.toMatch(/type\s+NutritionProductAiFeature\s*=/);
-    expect(gate).toContain('resolveNutritionProductAccess');
+    // AI-5E: the GATE no longer resolves a tier at all; it asks the authority.
+    expect(gate).not.toMatch(/\bresolveNutritionProductAccess\(/);
+    expect(gate).toContain('invokeNutritionProductAccessAuthority');
+
+    // The AUTHORITY boundary owns resolution — and still defines no vocabulary of its
+    // own, so a second tier or feature set can never be expressed.
+    const authority = code(AI5E_AUTHORITY);
+    expect(authority).not.toMatch(/interface\s+NutritionProductAccess\b/);
+    expect(authority).not.toMatch(/type\s+NutritionProductTier\s*=/);
+    expect(authority).not.toMatch(/type\s+NutritionProductAiFeature\s*=/);
+    expect(authority).toContain('resolveNutritionProductAccess');
   });
 
   it('adds no focused or skipped test', () => {

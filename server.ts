@@ -3,7 +3,10 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { createApp } from "./server/app.js";
-import { NUTRITION_PRODUCT_TIER_ENV } from "./server/nutritionProductAccess.js";
+import {
+  createDeploymentNutritionProductAccessAuthority,
+  NUTRITION_PRODUCT_TIER_ENV,
+} from "./server/nutritionProductAccessAuthority.js";
 
 dotenv.config();
 
@@ -34,23 +37,36 @@ const isProduction = process.env.NODE_ENV === "production" || isCompiledBundle;
 // Asset serving (Vite dev middleware vs. prod static + SPA fallback) is attached
 // below so it can differ per mode and the API stays independently testable.
 //
-// AI-5B SERVER-AUTHORITATIVE PRODUCT ACCESS — this is the ONE and ONLY place the
-// deployment reads it. `KITCHEN_CODEX_NUTRITION_PRODUCT_TIER` is a non-secret,
-// server-owned, deployment-scoped input; the RAW value is passed through and
-// `createApp()` resolves it through the unchanged AI-5A contract exactly once for
-// this app instance. Only the exact string `ai_advanced` grants AI Advanced, so an
-// absent, empty, malformed, wrong-case, whitespace-padded or aliased value is
-// FAIL-CLOSED Basic.
+// AI-5E SERVER PRODUCT-ACCESS AUTHORITY — this is the ONE and ONLY place the
+// deployment reads product-access configuration, and the ONE place it COMPOSES the
+// authority. `KITCHEN_CODEX_NUTRITION_PRODUCT_TIER` is a non-secret, server-owned,
+// deployment-scoped input; the RAW value is read here exactly once, resolved through
+// the unchanged AI-5A contract exactly once inside the deployment-authority factory,
+// and the resulting authority is injected into `createApp()`.
+//
+// Only the exact string `ai_advanced` grants AI Advanced, so an absent, empty,
+// malformed, wrong-case, whitespace-padded or aliased value is FAIL-CLOSED Basic. The
+// raw value is never reparsed per request: changing the environment after startup
+// cannot change this process's authority.
+//
+// The authority is REQUEST-CAPABLE but the deployment implementation is
+// REQUEST-INDEPENDENT: it ignores headers, cookies, query, body, IP and Authorization
+// content entirely, and no request field can select an authority implementation, its
+// source, a raw tier, or a product access value. SERVER COMPOSITION selects the
+// authority; the REQUEST never can.
 //
 // Identity is NEVER inferred from an IP address, from AI_ENDPOINT_TOKEN, from browser
 // state, from Provider Settings, from an API key, from a vault, or from any header,
 // cookie or localStorage value. A shared environment tier is NOT per-user
 // authorization: this server currently has no authenticated account identity, and
-// hosted multi-user entitlement must replace this source (see
-// docs/Advanced-Nutrition-Architecture.md §56).
+// hosted per-user entitlement must replace this source (see
+// docs/Advanced-Nutrition-Architecture.md §56 and §59).
+const nutritionProductAccessAuthority =
+  createDeploymentNutritionProductAccessAuthority(process.env[NUTRITION_PRODUCT_TIER_ENV]);
+
 const app = createApp({
   isProduction,
-  nutritionProductTier: process.env[NUTRITION_PRODUCT_TIER_ENV],
+  nutritionProductAccessAuthority,
 });
 
 // Serve frontend with Vite in dev, static files in prod

@@ -121,8 +121,10 @@ describe('AI-4C isolation — exactly one route and one limiter path', () => {
     );
 
     // The AI-4D2 route is provider-free: no pricing guard, its own limiter.
+    // AI-5E: the gate is registered against the server-owned AUTHORITY, not a resolved
+    // access value, so its position in the chain is unchanged.
     expect(reconcileRoute).toContain(
-      'app.post("/api/nutrition/recipe-context/reconcile",requireAiAccessToken,requireNutritionProductFeature(nutritionProductAccess,"ai_recipe_context_review"),nutritionContextReconcileRateLimiter'
+      'app.post("/api/nutrition/recipe-context/reconcile",requireAiAccessToken,requireNutritionProductFeature(nutritionProductAccessAuthority,"ai_recipe_context_review"),nutritionContextReconcileRateLimiter'
     );
     expect(reconcileRoute).not.toContain('textPricingGuard');
   });

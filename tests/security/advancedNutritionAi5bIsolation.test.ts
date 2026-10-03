@@ -106,7 +106,7 @@ const SESSION_SELECTION = JSON.stringify({
 const AI1_ROWS = [{ line_ref: 'line:1', ingredient_text: '2 medium yellow onions, thinly sliced' }];
 
 async function startApp(
-  nutritionProductTier?: unknown,
+  tier?: unknown,
   env: Record<string, string> = {},
 ): Promise<{ server: http.Server; baseUrl: string }> {
   vi.resetModules();
@@ -116,9 +116,14 @@ async function startApp(
   Object.assign(process.env, env);
   resetRateLimitersForTests();
   const { createApp } = await import('../../server/app.js');
+  const { createDeploymentNutritionProductAccessAuthority } = await import(
+    '../../server/nutritionProductAccessAuthority.js'
+  );
   const app = createApp({
     isProduction: false,
-    ...(nutritionProductTier === undefined ? {} : { nutritionProductTier }),
+    ...(tier === undefined
+      ? {}
+      : { nutritionProductAccessAuthority: createDeploymentNutritionProductAccessAuthority(tier) }),
   });
   const server = http.createServer(app);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -389,13 +394,14 @@ describe('AI-5B — composition ownership', () => {
     expect(nutritionRouteRegion).not.toContain('process.env[');
   });
 
-  it('resolves the product decision EXACTLY ONCE per app instance', () => {
+  it('resolves the product decision EXACTLY ONCE per request through ONE authority', () => {
     const appSource = src('server/app.ts');
-    expect(appSource.split('resolveServerNutritionProductAccess(').length - 1).toBe(1);
-    // Every gate closes over that ONE resolved value.
+    // AI-5E: the seam is the single server-owned AUTHORITY, composed once per app
+    // instance and consulted exactly once per request.
+    expect(appSource.split('opts.nutritionProductAccessAuthority ??').length - 1).toBe(1);
     const gates = [...appSource.matchAll(/requireNutritionProductFeature\(([^,)]+)/g)].map((m) => m[1]);
     expect(gates.length).toBe(6);
-    expect(new Set(gates)).toEqual(new Set(['nutritionProductAccess']));
+    expect(new Set(gates)).toEqual(new Set(['nutritionProductAccessAuthority']));
   });
 
   it('exposes NO test-only bypass or entitlement-check kill switch', () => {
@@ -433,10 +439,13 @@ describe('AI-5B — composition ownership', () => {
     }
   });
 
-  it('the CreateAppOptions seam is a VALUE, not a resolved access object', () => {
+  it('the CreateAppOptions seam is a SERVER AUTHORITY, not a raw tier or access object', () => {
     const appSource = src('server/app.ts');
-    // Accepts the raw tier only: a caller cannot inject an access object or features.
-    expect(appSource).toContain('nutritionProductTier?: unknown;');
+    // AI-5E: the seam accepts exactly one server-owned authority object. A caller can
+    // neither inject a raw tier string nor an access object nor a feature list, and no
+    // raw tier option coexists with it.
+    expect(appSource).toContain('nutritionProductAccessAuthority?: NutritionProductAccessAuthority;');
+    expect(appSource).not.toContain('nutritionProductTier');
     expect(appSource).not.toContain('nutritionProductAccess?:');
   });
 });
@@ -454,13 +463,18 @@ describe('AI-5B — product access is never persisted', () => {
         'KITCHEN_CODEX_NUTRITION_PRODUCT_TIER',
       );
     }
-    // And no server module persists a resolved decision either. The gate module may
-    // DECLARE the constant's name (it is the single source of the input name) but must
-    // never read it, write it, or hand it to anything.
+    // And no server module persists a resolved decision either. AI-5E moved ownership
+    // of the constant's NAME to the authority module, so that module and the gate
+    // module may DECLARE the input name — but neither may read environment state,
+    // write it, or hand it to anything.
+    const nameDeclaringModules = [
+      'server/nutritionProductAccess.ts',
+      'server/nutritionProductAccessAuthority.ts',
+    ];
     for (const rel of repoFiles(['server'])) {
       const content = code(rel);
-      if (rel === 'server/nutritionProductAccess.ts') {
-        expect(content).not.toMatch(/process\.env/);
+      if (nameDeclaringModules.includes(rel)) {
+        expect(content, `${rel} must not read environment state`).not.toMatch(/process\.env/);
         expect(content).not.toMatch(/writeFileSync|writeFile\(/);
         continue;
       }

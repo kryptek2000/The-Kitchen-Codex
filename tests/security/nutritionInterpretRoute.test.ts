@@ -13,6 +13,7 @@ import http from 'http';
 import type { AddressInfo } from 'net';
 import type { GoogleGenAI } from '@google/genai';
 
+import { createDeploymentNutritionProductAccessAuthority } from '../../server/nutritionProductAccessAuthority.js';
 import { createApp } from '../../server/app.js';
 import { getGemini } from '../../server/geminiClient.js';
 import { AI_ADVANCED_CONTRACT_VERSION } from '../../src/core/nutritionV2/aiAdvanced';
@@ -84,7 +85,11 @@ describe('POST /api/nutrition/interpret-ingredients — security', () => {
     process.env.NUTRITION_ESTIMATE_RATE_LIMIT = '1000';
     // AI-5B: this suite exercises the ENTILED AI route, so the deployment product
     // tier is stated explicitly rather than relying on the fail-closed Basic default.
-    const app = createApp({ isProduction: false, nutritionProductTier: 'ai_advanced' });
+    const app = createApp({
+    isProduction: false,
+    nutritionProductAccessAuthority:
+      createDeploymentNutritionProductAccessAuthority('ai_advanced'),
+  });
     server = http.createServer(app);
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

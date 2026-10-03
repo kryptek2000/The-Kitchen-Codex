@@ -68,9 +68,14 @@ interface Running {
 
 async function startApp(tier?: unknown): Promise<Running> {
   const { createApp } = await import('../../server/app.js');
+  const { createDeploymentNutritionProductAccessAuthority } = await import(
+    '../../server/nutritionProductAccessAuthority.js'
+  );
   const app = createApp({
     isProduction: false,
-    ...(tier === undefined ? {} : { nutritionProductTier: tier }),
+    ...(tier === undefined
+      ? {}
+      : { nutritionProductAccessAuthority: createDeploymentNutritionProductAccessAuthority(tier) }),
   });
   const server = http.createServer(app);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -127,7 +132,14 @@ describe('AI-5D — a refreshed client NEVER becomes server authority', () => {
     // Readiness refresh reads only existing non-secret status surfaces. There is no
     // refresh, retry, recovery or readiness endpoint of any kind.
     const { createApp } = await import('../../server/app.js');
-    const app = createApp({ isProduction: false, nutritionProductTier: 'ai_advanced' });
+    const { createDeploymentNutritionProductAccessAuthority } = await import(
+      '../../server/nutritionProductAccessAuthority.js'
+    );
+    const app = createApp({
+      isProduction: false,
+      nutritionProductAccessAuthority:
+        createDeploymentNutritionProductAccessAuthority('ai_advanced'),
+    });
     const source = read('server/app.ts');
     for (const forbidden of [
       '/api/nutrition/refresh',

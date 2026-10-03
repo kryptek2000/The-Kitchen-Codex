@@ -117,10 +117,15 @@ import { safeFetchImage, WafProtectionError } from "./ssrfGuard.js";
 import { createSecurityMiddleware } from "./securityHeaders.js";
 import {
   buildNutritionProductAccessStatus,
+  buildNutritionProductAccessUnavailableStatusBody,
   NUTRITION_PRODUCT_ACCESS_STATUS_ENDPOINT,
   requireNutritionProductFeature,
-  resolveServerNutritionProductAccess,
+  resolveNutritionProductAccessDecision,
 } from "./nutritionProductAccess.js";
+import {
+  createBasicNutritionProductAccessAuthority,
+  type NutritionProductAccessAuthority,
+} from "./nutritionProductAccessAuthority.js";
 import { requireAiAccessToken } from "./aiEndpointAuth.js";
 import { registerSessionKeyRoutes } from "./ai/sessionKeyRoutes.js";
 import { createApiErrorHandler } from "./errorHandler.js";
@@ -142,22 +147,24 @@ export interface CreateAppOptions {
    */
   imagePreviewStore?: ImagePreviewStore;
   /**
-   * AI-5B SERVER-AUTHORITATIVE PRODUCT-ACCESS INPUT (test seam + deployment seam).
+   * AI-5E SERVER-OWNED PRODUCT-ACCESS AUTHORITY — the ONE production entitlement seam.
    *
-   * This is the RAW value of the single non-secret server-owned environment input
-   * `KITCHEN_CODEX_NUTRITION_PRODUCT_TIER`; `server.ts` reads it and passes it here.
-   * `createApp()` resolves it through the unchanged AI-5A contract EXACTLY ONCE for
-   * this application instance, and every AI Advanced Nutrition route gate closes over
-   * that one canonical value.
+   * This is a SERVER-COMPOSED authority object, not a raw configuration value and never
+   * anything a client can select. Production builds it once from the single
+   * non-secret environment read in `server.ts`; the app holds it for its lifetime and
+   * every AI Advanced Nutrition gate and the product-status route ask THAT SAME object,
+   * so product access is resolved from exactly one authority per request.
    *
-   * `unknown` is deliberate so the fail-closed resolver is reachable with arbitrary
-   * injected input. ONLY the exact string `'ai_advanced'` grants AI Advanced; absent,
-   * empty, malformed, wrong-case, whitespace-padded, aliased, boolean, numeric and
-   * feature-shaped values all resolve to Basic. There is no `disableEntitlementCheck`
-   * switch and no test-only bypass: tests exercise the SAME gate production uses, and
-   * must state `'ai_advanced'` explicitly when they intend an entitled AI route.
+   * FAIL CLOSED when omitted: `createApp({ isProduction })` with no authority is the
+   * canonical Basic deployment authority, so an absent configuration can never mean AI
+   * Advanced. There is no `disableEntitlementCheck` switch, no dev-only bypass and no
+   * test-only bypass: tests exercise the SAME gate production uses and compose the real
+   * deployment authority when they intend an entitled AI route.
+   *
+   * There is deliberately NO companion raw-tier option. Two live entitlement seams with
+   * precedence rules would be ambiguous authority.
    */
-  nutritionProductTier?: unknown;
+  nutritionProductAccessAuthority?: NutritionProductAccessAuthority;
 }
 
 /**
@@ -338,22 +345,25 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // is exactly one signing/verifying implementation and no loose global helper.
   const recipeContextOriginReceipts = createRecipeContextOriginReceiptAuthority();
 
-  // AI-5B SERVER-AUTHORITATIVE PRODUCT-ACCESS DECISION — resolved EXACTLY ONCE for
-  // this application instance.
+  // AI-5E SERVER-OWNED PRODUCT-ACCESS AUTHORITY — ONE authority for THIS application
+  // instance, resolved EXACTLY ONCE PER REQUEST at each use site.
   //
-  // The raw `KITCHEN_CODEX_NUTRITION_PRODUCT_TIER` value arrives through
-  // `CreateAppOptions.nutritionProductTier` (read once, by `server.ts`), is resolved
-  // here through the unchanged AI-5A contract, and is stored as ONE of the two
-  // canonical frozen access values. Every AI Advanced Nutrition route gate below closes
-  // over this value, so no route reads `process.env`, no route re-parses the raw input,
-  // and no two routes can disagree about product access.
+  // `server.ts` performs the single `process.env[KITCHEN_CODEX_NUTRITION_PRODUCT_TIER]`
+  // read and builds the deployment authority once; `createApp()` merely receives it.
+  // Every AI Advanced Nutrition gate below and the product-status route consult THIS
+  // ONE object, so no route reads `process.env`, no route re-parses a raw tier, and no
+  // two routes can disagree about product access.
   //
-  // FAIL-CLOSED: an absent or malformed value yields the canonical BASIC access value.
-  // Absent configuration must NEVER mean AI Advanced. Production behaviour for a
-  // Basic deployment is therefore: every gated route refuses with a bounded 403
+  // FAIL CLOSED: when no authority is supplied, the canonical Basic deployment
+  // authority is used. Absent configuration must NEVER mean AI Advanced, and there is
+  // no second entitlement seam to fall back to. Production behaviour for a Basic
+  // deployment is therefore: every gated route refuses with a bounded 403
   // `NUTRITION_AI_NOT_ENTITLED` before pricing, rate limiting, provider selection,
-  // credential resolution or any model execution.
-  const nutritionProductAccess = resolveServerNutritionProductAccess(opts.nutritionProductTier);
+  // credential resolution or any model execution; and an authority that cannot be
+  // consulted refuses with a bounded 503 `NUTRITION_PRODUCT_ACCESS_UNAVAILABLE` at the
+  // same point in the chain.
+  const nutritionProductAccessAuthority =
+    opts.nutritionProductAccessAuthority ?? createBasicNutritionProductAccessAuthority();
 
   // Security headers (X-Content-Type-Options, clickjacking protection, referrer
   // policy, and a production-only Content Security Policy).
@@ -676,30 +686,48 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // collapsing them into one generic "not configured" message.
   //
   // THIS ROUTE AUTHORIZES NOTHING.
-  //   * It is NOT consulted by any of the six AI-5B gates below. Those gates close
-  //     over `nutritionProductAccess` and refuse work independently.
+  //   * It is NOT consulted by any of the six AI-5B gates below. Those gates ask the
+  //     same server-owned AI-5E authority themselves and refuse work independently.
   //   * It mints no receipt, no token, no capability and no signature, and it
   //     never appears in any AI request path.
   //   * A forged, stale or structurally fabricated client belief of `ai_advanced`
-  //     changes NOTHING here or on any gated POST: the server already knows the
-  //     authoritative tier and never asks the browser for it.
+  //     changes NOTHING here or on any gated POST: the server already owns the
+  //     authoritative decision and never asks the browser for it.
+  //   * It never discloses the authority's SOURCE, implementation, environment
+  //     variable name or raw value, account source, or any future billing provider.
   //
   // AUTH FIRST: `requireAiAccessToken` runs before the handler, exactly like
   // `/api/providers`, so an unauthenticated caller learns nothing about product
-  // state — not Basic, not AI Advanced, not even the contract version.
+  // state — not Basic, not AI Advanced, not even the contract version — and the
+  // authority is invoked ZERO times for an unauthenticated request.
   //
-  // ZERO PROVIDER WORK: the handler reads the already-resolved canonical closure.
-  // No provider selection, no credential resolution, no BYOK lease, no model
-  // lookup, no network probe, and no AI route rate-limit bucket is consumed.
+  // EXACTLY ONCE: this handler resolves the authority once per request, reads the
+  // resulting canonical access value, and returns. It never asks the authority again.
   //
-  // NO STORE: product access is runtime deployment policy, so the response is
-  // explicitly non-cacheable and must never become stale browser/proxy state.
+  // ZERO PROVIDER WORK: no provider selection, no credential resolution, no BYOK
+  // lease, no model lookup, no network probe, and no AI route rate-limit bucket is
+  // consumed.
+  //
+  // NO STORE: product access is runtime deployment policy, so BOTH the successful and
+  // the authority-unavailable response are explicitly non-cacheable and must never
+  // become stale browser/proxy state.
   app.get(
     NUTRITION_PRODUCT_ACCESS_STATUS_ENDPOINT,
     requireAiAccessToken,
-    (_req, res) => {
+    async (req, res) => {
       res.setHeader("Cache-Control", "no-store");
-      res.json(buildNutritionProductAccessStatus(nutritionProductAccess));
+      const decision = await resolveNutritionProductAccessDecision(
+        nutritionProductAccessAuthority,
+        req,
+      );
+      if (decision.status !== "resolved") {
+        // TRUTHFUL FAILURE, not a fake Basic: a non-2xx body with NO `tier` and NO
+        // `version` is exactly what the unchanged AI-5C reader composes to
+        // `product_access_unverified`.
+        res.status(503).json(buildNutritionProductAccessUnavailableStatusBody());
+        return;
+      }
+      res.json(buildNutritionProductAccessStatus(decision.access));
     },
   );
 
@@ -714,7 +742,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // canonical AI-1 route below — being the older route is not a reason to remain an
   // entitlement bypass. Order: endpoint auth -> product entitlement -> pricing ->
   // limiter -> handler, so a Basic denial costs zero provider calls.
-  app.post("/api/nutrition/resolve-ingredients", requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccess, "ai_interpretation"), textPricingGuard, nutritionResolveRateLimiter, async (req, res) => {
+  app.post("/api/nutrition/resolve-ingredients", requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccessAuthority, "ai_interpretation"), textPricingGuard, nutritionResolveRateLimiter, async (req, res) => {
     const clientIp = getClientIp(req);
 
     try {
@@ -780,7 +808,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // AI-5B: `ai_interpretation`. Entitlement only permits an ATTEMPT: it grants no
   // authority over FDC identity, grams, nutrients, Apply or persistence, so every
   // canonical sanitization and line-ref check below is unchanged.
-  app.post("/api/nutrition/interpret-ingredients", requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccess, "ai_interpretation"), textPricingGuard, nutritionInterpretRateLimiter, async (req, res) => {
+  app.post("/api/nutrition/interpret-ingredients", requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccessAuthority, "ai_interpretation"), textPricingGuard, nutritionInterpretRateLimiter, async (req, res) => {
     const clientIp = getClientIp(req);
 
     try {
@@ -850,7 +878,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // never applies a plan, mutates working state, persists, or resolves nutrition.
   //
   // AI-5B: `ai_candidate_orchestration`.
-  app.post("/api/nutrition/plan-ingredients", requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccess, "ai_candidate_orchestration"), textPricingGuard, nutritionPlanRateLimiter, async (req, res) => {
+  app.post("/api/nutrition/plan-ingredients", requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccessAuthority, "ai_candidate_orchestration"), textPricingGuard, nutritionPlanRateLimiter, async (req, res) => {
     const clientIp = getClientIp(req);
 
     try {
@@ -909,7 +937,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   //
   // AI-5B: `ai_bounded_mass_estimation`. Entitlement is not mass authority: a genuine
   // AI Advanced pass-through here still cannot decide grams.
-  app.post("/api/nutrition/estimate-mass", requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccess, "ai_bounded_mass_estimation"), textPricingGuard, nutritionMassEstimateRateLimiter, async (req, res) => {
+  app.post("/api/nutrition/estimate-mass", requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccessAuthority, "ai_bounded_mass_estimation"), textPricingGuard, nutritionMassEstimateRateLimiter, async (req, res) => {
     const clientIp = getClientIp(req);
 
     try {
@@ -984,7 +1012,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // in the proposal, not in the prompt, and not something the model ever sees.
   //
   // AI-5B: `ai_recipe_context_review`.
-  app.post("/api/nutrition/recipe-context", requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccess, "ai_recipe_context_review"), textPricingGuard, nutritionContextRateLimiter, async (req, res) => {
+  app.post("/api/nutrition/recipe-context", requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccessAuthority, "ai_recipe_context_review"), textPricingGuard, nutritionContextRateLimiter, async (req, res) => {
     const clientIp = getClientIp(req);
 
     try {
@@ -1114,7 +1142,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   app.post(
     "/api/nutrition/recipe-context/reconcile",
     requireAiAccessToken,
-    requireNutritionProductFeature(nutritionProductAccess, "ai_recipe_context_review"),
+    requireNutritionProductFeature(nutritionProductAccessAuthority, "ai_recipe_context_review"),
     nutritionContextReconcileRateLimiter,
     async (req, res) => {
       const clientIp = getClientIp(req);

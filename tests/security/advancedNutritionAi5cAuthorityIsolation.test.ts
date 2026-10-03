@@ -128,9 +128,14 @@ interface Running {
 
 async function startApp(tier?: unknown): Promise<Running> {
   const { createApp } = await import('../../server/app.js');
+  const { createDeploymentNutritionProductAccessAuthority } = await import(
+    '../../server/nutritionProductAccessAuthority.js'
+  );
   const app = createApp({
     isProduction: false,
-    ...(tier === undefined ? {} : { nutritionProductTier: tier }),
+    ...(tier === undefined
+      ? {}
+      : { nutritionProductAccessAuthority: createDeploymentNutritionProductAccessAuthority(tier) }),
   });
   const server = http.createServer(app);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -404,10 +409,16 @@ describe('AI-5C — the status endpoint stays minimal and non-authoritative', ()
     }
   });
 
-  it('AI-5B gate module semantics are unchanged by AI-5C', async () => {
+  it('AI-5B gate module semantics are unchanged by AI-5C/AI-5E', async () => {
     // The status builder is additive; the gate function and denial body are untouched.
+    // AI-5E renamed the gate's Express parameter (`res` -> `response`) and added exactly
+    // ONE further bounded class — the truthful authority-unavailable 503 — without
+    // changing the 403 denial.
     const module = readFileSync(join(process.cwd(), 'server/nutritionProductAccess.ts'), 'utf8');
-    expect(module).toContain('res.status(403).json(buildNutritionAiNotEntitledBody())');
+    expect(module).toContain('response.status(403).json(buildNutritionAiNotEntitledBody())');
+    expect(module).toContain(
+      'response.status(503).json(buildNutritionProductAccessUnavailableBody())',
+    );
     expect(module).toContain('export const NUTRITION_AI_NOT_ENTITLED_CODE = "NUTRITION_AI_NOT_ENTITLED"');
     expect(buildNutritionAiNotEntitledBody()).toEqual({
       ok: false,

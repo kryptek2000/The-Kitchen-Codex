@@ -145,7 +145,9 @@ KITCHEN_CODEX_NUTRITION_PRODUCT_TIER=ai_advanced
 That exact value is required. Anything else — missing, misspelled, wrong case, or
 extra spaces — falls back safely to `basic`, so the feature stays off until you opt in.
 Without it, the Advanced Nutrition AI requests are refused with a clear
-`AI Advanced Nutrition is not available` error and no AI request is sent.
+`AI Advanced Nutrition is not available` error and no AI request is sent. The value is
+read once at server startup, so restart the server after changing it. No browser
+setting, header, cookie or URL parameter can change it.
 
 A few things worth knowing:
 - **A key alone does not enable it.** Uploading an API key or configuring BYOK does

@@ -303,7 +303,7 @@ function requestBody(path: string, overrides: Record<string, unknown> = {}): unk
 }
 
 async function startApp(
-  nutritionProductTier?: unknown,
+  tier?: unknown,
   env: Record<string, string> = {},
 ): Promise<{ server: http.Server; baseUrl: string }> {
   vi.resetModules();
@@ -317,10 +317,15 @@ async function startApp(
   Object.assign(process.env, env);
   resetRateLimitersForTests();
   const { createApp } = await import('../../server/app.js');
+  const { createDeploymentNutritionProductAccessAuthority } = await import(
+    '../../server/nutritionProductAccessAuthority.js'
+  );
   const app = createApp({
     isProduction: false,
     // `undefined` here is meaningful: it is the PRODUCTION default and must be Basic.
-    ...(nutritionProductTier === undefined ? {} : { nutritionProductTier }),
+    ...(tier === undefined
+      ? {}
+      : { nutritionProductAccessAuthority: createDeploymentNutritionProductAccessAuthority(tier) }),
   });
   const server = http.createServer(app);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -424,7 +429,7 @@ afterEach(() => {
 
 describe('AI-5B — route matrix under the FAIL-CLOSED Basic default', () => {
   it('refuses all six paid AI Advanced Nutrition routes when product access is ABSENT', async () => {
-    // No `nutritionProductTier` at all: the exact production default.
+    // No authority at all: the exact production default (AI-5E fail-closed Basic).
     const { server, baseUrl } = await startApp(undefined);
     try {
       for (const [path] of GATED_ROUTES) {
@@ -693,7 +698,7 @@ describe('AI-5B — middleware order is structural, not incidental', () => {
   }
 
   it.each(GATED_ROUTES)('%s is gated by its closed AI-5A feature', (path, feature) => {
-    expect(registrationOf(path)).toContain(`requireNutritionProductFeature(nutritionProductAccess, "${feature}")`);
+    expect(registrationOf(path)).toContain(`requireNutritionProductFeature(nutritionProductAccessAuthority, "${feature}")`);
   });
 
   it.each(GATED_ROUTES)('%s order: auth -> entitlement -> pricing -> limiter -> handler', (path) => {
@@ -966,7 +971,7 @@ describe('AI-5B — reconcile needs CURRENT entitlement AND a genuine receipt', 
   });
 
   it('verifies the receipt BEFORE D1 reconciliation, and entitlement before both', () => {
-    const gateAt = APP_SOURCE.indexOf('requireNutritionProductFeature(nutritionProductAccess, "ai_recipe_context_review"),\n    nutritionContextReconcileRateLimiter');
+    const gateAt = APP_SOURCE.indexOf('requireNutritionProductFeature(nutritionProductAccessAuthority, "ai_recipe_context_review"),\n    nutritionContextReconcileRateLimiter');
     const originAt = APP_SOURCE.indexOf('readRecipeContextOriginEnvelope(req.body, recipeContextOriginReceipts)');
     const reconcileAt = APP_SOURCE.indexOf('reconcileRecipeContextOnServer(envelope.body)');
     expect(gateAt).toBeGreaterThan(-1);

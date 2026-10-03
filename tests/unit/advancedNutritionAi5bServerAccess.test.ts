@@ -2,19 +2,26 @@
  * AI-5B — SERVER-AUTHORITATIVE ENTITLEMENT BOUNDARY (server-authority unit).
  *
  * These tests pin the AI-5B server module in isolation from HTTP:
- *   - the ONE server-owned source resolves fail-closed through the unchanged AI-5A
- *     contract, for every malformed/absent/aliased/wrong-case/coercible input;
+ *   - the ONE server-owned AUTHORITY (AI-5E) resolves the deployment tier fail-closed
+ *     through the unchanged AI-5A contract, for every malformed/absent/aliased/
+ *     wrong-case/coercible input;
  *   - the closed feature gate authorizes only a canonical AI-5A access value and fails
  *     closed for a hand-authored look-alike or an unknown feature name;
  *   - the denial is ONE bounded class that leaks no pricing, plan, subscription,
  *     billing, configured tier, account identity, credential, provider or raw config;
  *   - the module is narrow: it reads NO environment state, imports NO provider,
  *     credential, billing or account layer, and performs NO persistence or network I/O.
+ *
+ * AI-5E MIGRATION: the gate now takes the server-owned AUTHORITY instead of a resolved
+ * access value, so every assertion below drives it through the real deployment-authority
+ * factory. The fail-closed 403 semantics are unchanged; a non-canonical access value
+ * coming back from an authority is now the truthful `unavailable` class, never Advanced.
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { Request } from 'express';
 
 import {
   NUTRITION_PRODUCT_TIER_ENV,
@@ -24,8 +31,12 @@ import {
   buildNutritionAiNotEntitledBody,
   buildNutritionProductAccessStatus,
   requireNutritionProductFeature,
-  resolveServerNutritionProductAccess,
 } from '../../server/nutritionProductAccess.js';
+import {
+  createDeploymentNutritionProductAccessAuthority,
+  invokeNutritionProductAccessAuthority,
+  type NutritionProductAccessAuthority,
+} from '../../server/nutritionProductAccessAuthority.js';
 import {
   AI_ADVANCED_NUTRITION_PRODUCT_ACCESS,
   BASIC_NUTRITION_PRODUCT_ACCESS,
@@ -33,6 +44,7 @@ import {
   isAiAdvancedProductAccess,
   isBasicProductAccess,
   isNutritionProductFeatureEntitled,
+  type NutritionProductAccess,
   type NutritionProductAiFeature,
 } from '../../src/core/nutritionV2/nutritionProductAccess.js';
 
@@ -70,17 +82,32 @@ function harness() {
   return { calls, res, req };
 }
 
-function runGate(
-  access: unknown,
+/** The REAL deployment authority — never a fake gate bypass. */
+function deploymentAuthority(rawTier?: unknown): NutritionProductAccessAuthority {
+  return createDeploymentNutritionProductAccessAuthority(rawTier);
+}
+
+/** The canonical access a deployment authority resolves, or a hard failure. */
+async function deploymentAccess(rawTier?: unknown): Promise<NutritionProductAccess> {
+  const decision = await invokeNutritionProductAccessAuthority(
+    deploymentAuthority(rawTier),
+    {} as Request,
+  );
+  if (decision.status !== 'resolved') throw new Error('deployment authority was unavailable');
+  return decision.access;
+}
+
+async function runGate(
+  authority: unknown,
   feature: NutritionProductAiFeature,
   req: Record<string, unknown> = {},
 ) {
   const { calls, res } = harness();
   const handler = requireNutritionProductFeature(
-    access as typeof BASIC_NUTRITION_PRODUCT_ACCESS,
+    authority as NutritionProductAccessAuthority,
     feature,
-  ) as unknown as (r: unknown, s: unknown, n: () => void) => void;
-  handler(req, res, () => {
+  ) as unknown as (r: unknown, s: unknown, n: () => void) => Promise<void>;
+  await handler(req, res, () => {
     calls.next += 1;
   });
   return calls;
@@ -143,8 +170,8 @@ describe('AI-5B — the one server-owned product-access source', () => {
   ];
 
   for (const [label, value] of resolvesToBasic) {
-    it(`resolves ${label} to BASIC (fail closed, no coercion)`, () => {
-      const access = resolveServerNutritionProductAccess(value);
+    it(`resolves ${label} to BASIC (fail closed, no coercion)`, async () => {
+      const access = await deploymentAccess(value);
       expect(access).toBe(BASIC_NUTRITION_PRODUCT_ACCESS);
       expect(access.tier).toBe('basic');
       expect(isBasicProductAccess(access)).toBe(true);
@@ -152,8 +179,8 @@ describe('AI-5B — the one server-owned product-access source', () => {
     });
   }
 
-  it('resolves ONLY the exact string "ai_advanced" to AI ADVANCED', () => {
-    const access = resolveServerNutritionProductAccess('ai_advanced');
+  it('resolves ONLY the exact string "ai_advanced" to AI ADVANCED', async () => {
+    const access = await deploymentAccess('ai_advanced');
     expect(access).toBe(AI_ADVANCED_NUTRITION_PRODUCT_ACCESS);
     expect(access.tier).toBe('ai_advanced');
     expect(isAiAdvancedProductAccess(access)).toBe(true);
@@ -163,17 +190,17 @@ describe('AI-5B — the one server-owned product-access source', () => {
     expect(access.aiRecipeContextReview).toBe(true);
   });
 
-  it('returns the CANONICAL frozen instances, never a fresh copy', () => {
-    const a = resolveServerNutritionProductAccess('ai_advanced');
-    const b = resolveServerNutritionProductAccess('ai_advanced');
+  it('returns the CANONICAL frozen instances, never a fresh copy', async () => {
+    const a = await deploymentAccess('ai_advanced');
+    const b = await deploymentAccess('ai_advanced');
     expect(a).toBe(b);
     expect(Object.isFrozen(a)).toBe(true);
-    const basic = resolveServerNutritionProductAccess();
+    const basic = await deploymentAccess();
     expect(Object.isFrozen(basic)).toBe(true);
     expect(basic).toBe(BASIC_NUTRITION_PRODUCT_ACCESS);
   });
 
-  it('is NOT influenced by credentials, provider config or the endpoint token', () => {
+  it('is NOT influenced by credentials, provider config or the endpoint token', async () => {
     // Operational state must never become product access: a fully configured,
     // credential-bearing deployment with a bogus tier is still Basic.
     process.env.GEMINI_API_KEY = 'configured';
@@ -182,9 +209,9 @@ describe('AI-5B — the one server-owned product-access source', () => {
     process.env.AI_ENDPOINT_TOKEN = 'token';
     process.env.KITCHEN_CODEX_TEXT_PROVIDER = 'openrouter';
     try {
-      expect(resolveServerNutritionProductAccess(undefined)).toBe(BASIC_NUTRITION_PRODUCT_ACCESS);
-      expect(resolveServerNutritionProductAccess('basic')).toBe(BASIC_NUTRITION_PRODUCT_ACCESS);
-      expect(resolveServerNutritionProductAccess('ai_advanced')).toBe(AI_ADVANCED_NUTRITION_PRODUCT_ACCESS);
+      expect(await deploymentAccess(undefined)).toBe(BASIC_NUTRITION_PRODUCT_ACCESS);
+      expect(await deploymentAccess('basic')).toBe(BASIC_NUTRITION_PRODUCT_ACCESS);
+      expect(await deploymentAccess('ai_advanced')).toBe(AI_ADVANCED_NUTRITION_PRODUCT_ACCESS);
     } finally {
       delete process.env.GEMINI_API_KEY;
       delete process.env.OPENROUTER_API_KEY;
@@ -194,10 +221,10 @@ describe('AI-5B — the one server-owned product-access source', () => {
     }
   });
 
-  it('never normalizes: a near-miss value is never trimmed into entitlement', () => {
+  it('never normalizes: a near-miss value is never trimmed into entitlement', async () => {
     // The load-bearing rule: an invalid value must not be "repaired" into AI Advanced.
     for (const near of [' ai_advanced', 'ai_advanced ', 'Ai_Advanced', 'ai-advanced']) {
-      expect(resolveServerNutritionProductAccess(near).tier).toBe('basic');
+      expect((await deploymentAccess(near)).tier).toBe('basic');
     }
   });
 });
@@ -211,8 +238,8 @@ describe('AI-5B — the closed feature gate', () => {
   ];
 
   for (const feature of features) {
-    it(`denies ${feature} under BASIC with the bounded 403`, () => {
-      const calls = runGate(BASIC_NUTRITION_PRODUCT_ACCESS, feature);
+    it(`denies ${feature} under BASIC with the bounded 403`, async () => {
+      const calls = await runGate(deploymentAuthority(undefined), feature);
       expect(calls.next).toBe(0);
       expect(calls.status).toBe(403);
       expect(calls.body).toEqual({
@@ -223,17 +250,19 @@ describe('AI-5B — the closed feature gate', () => {
       });
     });
 
-    it(`admits ${feature} under AI ADVANCED`, () => {
-      const calls = runGate(AI_ADVANCED_NUTRITION_PRODUCT_ACCESS, feature);
+    it(`admits ${feature} under AI ADVANCED`, async () => {
+      const calls = await runGate(deploymentAuthority('ai_advanced'), feature);
       expect(calls.next).toBe(1);
       expect(calls.status).toBe(0);
       expect(calls.body).toBeUndefined();
     });
   }
 
-  it('fails closed for a hand-authored look-alike access object', () => {
-    // AI-5A refuses structurally correct non-canonical values by identity; the server
-    // gate inherits that, so a caller cannot mint an accepted access value.
+  it('fails closed for a hand-authored look-alike access object', async () => {
+    // AI-5A refuses structurally correct non-canonical values by identity. AI-5E makes
+    // that refusal happen at the authority BOUNDARY: an authority that reports a
+    // hand-authored Advanced is `unavailable`, so the caller is never admitted — and is
+    // never told a fake Basic either.
     const forged = {
       version: NUTRITION_PRODUCT_ACCESS_VERSION,
       tier: 'ai_advanced',
@@ -242,40 +271,48 @@ describe('AI-5B — the closed feature gate', () => {
       aiBoundedMassEstimation: true,
       aiRecipeContextReview: true,
     };
-    const calls = runGate(forged, 'ai_interpretation');
+    const authority: NutritionProductAccessAuthority = {
+      resolve: () => Promise.resolve({ status: 'resolved', access: forged } as never),
+    };
+    const calls = await runGate(authority, 'ai_interpretation');
     expect(calls.next).toBe(0);
-    expect(calls.status).toBe(403);
-    expect((calls.body as { code: string }).code).toBe(NUTRITION_AI_NOT_ENTITLED_CODE);
+    expect(calls.status).toBe(503);
+    expect((calls.body as { code: string }).code).toBe('NUTRITION_PRODUCT_ACCESS_UNAVAILABLE');
+    expect(calls.body).not.toEqual(expect.objectContaining({ tier: 'ai_advanced' }));
   });
 
-  it('fails closed for an impossible product state (basic + AI feature booleans)', () => {
+  it('fails closed for an impossible product state (basic + AI feature booleans)', async () => {
     const impossible = {
       ...BASIC_NUTRITION_PRODUCT_ACCESS,
       aiInterpretation: true,
     };
-    const calls = runGate(impossible, 'ai_interpretation');
+    const authority: NutritionProductAccessAuthority = {
+      resolve: () => Promise.resolve({ status: 'resolved', access: impossible } as never),
+    };
+    const calls = await runGate(authority, 'ai_interpretation');
     expect(calls.next).toBe(0);
-    expect(calls.status).toBe(403);
+    expect(calls.status).toBe(503);
   });
 
-  it('fails closed for an unknown feature name', () => {
-    const calls = runGate(
-      AI_ADVANCED_NUTRITION_PRODUCT_ACCESS,
+  it('fails closed for an unknown feature name', async () => {
+    const calls = await runGate(
+      deploymentAuthority('ai_advanced'),
       'ai_recipe_context_application' as NutritionProductAiFeature,
     );
     expect(calls.next).toBe(0);
     expect(calls.status).toBe(403);
   });
 
-  it('fails closed for a completely absent access value', () => {
-    for (const bad of [undefined, null, 'ai_advanced', 1, {}]) {
-      const calls = runGate(bad, 'ai_interpretation');
+  it('fails closed for a completely absent or unusable authority', async () => {
+    for (const bad of [undefined, null, 'ai_advanced', 1, {}, { resolve: 'nope' }]) {
+      const calls = await runGate(bad, 'ai_interpretation');
       expect(calls.next).toBe(0);
-      expect(calls.status).toBe(403);
+      expect(calls.status).toBe(503);
+      expect((calls.body as { code: string }).code).toBe('NUTRITION_PRODUCT_ACCESS_UNAVAILABLE');
     }
   });
 
-  it('ignores the request entirely: no field, header or cookie can admit a gate', () => {
+  it('ignores the request entirely: no field, header or cookie can admit a gate', async () => {
     const forgedRequests: ReadonlyArray<Record<string, unknown>> = [
       { body: { tier: 'ai_advanced' } },
       { body: { productTier: 'ai_advanced' } },
@@ -288,7 +325,7 @@ describe('AI-5B — the closed feature gate', () => {
       { query: { tier: 'ai_advanced' } },
     ];
     for (const req of forgedRequests) {
-      const calls = runGate(BASIC_NUTRITION_PRODUCT_ACCESS, 'ai_interpretation', req);
+      const calls = await runGate(deploymentAuthority(undefined), 'ai_interpretation', req);
       expect(calls.next).toBe(0);
       expect(calls.status).toBe(403);
     }
@@ -356,11 +393,12 @@ describe('AI-5B — server-authority module design', () => {
     expect(MODULE_CODE).not.toMatch(/process\.env\.[A-Z_]+\s*=/);
   });
 
-  it('imports ONLY the AI-5A product contract and the express request type', () => {
+  it('imports ONLY the AI-5A product contract, the express request type and the AI-5E authority', () => {
     const sources = [...MODULE_CODE.matchAll(/from\s+"([^"]+)"/g)].map((m) => m[1]);
     expect(sources).toEqual([
       'express',
       '../src/core/nutritionV2/nutritionProductAccess.js',
+      './nutritionProductAccessAuthority.js',
     ]);
   });
 
@@ -405,16 +443,17 @@ describe('AI-5B — server-authority module design', () => {
   it('does not define a fifth feature or a product-access vocabulary of its own', () => {
     // The gate reuses AI-5A's feature check; it never defines its own.
     expect(MODULE_CODE).toContain('isNutritionProductFeatureEntitled');
-    expect(MODULE_CODE).toContain('resolveNutritionProductAccess');
     expect(MODULE_CODE).not.toContain('ai_recipe_context_application');
     expect(MODULE_CODE).not.toMatch(/interface\s+NutritionProductAccess\b/);
     expect(MODULE_CODE).not.toMatch(/type\s+NutritionProductAiFeature\s*=/);
     expect(MODULE_CODE).not.toMatch(/type\s+NutritionProductTier\s*=/);
   });
 
-  it('delegates parsing rather than reimplementing it', () => {
-    // Fail-closed semantics come from the AI-5A resolver, so the server boundary and
-    // the product contract can never drift apart.
+  it('delegates authority resolution rather than reimplementing it', () => {
+    // Fail-closed semantics come from the AI-5A resolver via the AI-5E authority, so
+    // the server boundary and the product contract can never drift apart.
+    expect(MODULE_CODE).toContain('isNutritionProductFeatureEntitled');
+    expect(MODULE_CODE).toContain('invokeNutritionProductAccessAuthority');
     expect(MODULE_CODE).not.toMatch(/toLowerCase\(\)/);
     expect(MODULE_CODE).not.toMatch(/\.trim\(\)/);
     expect(MODULE_CODE).not.toMatch(/=== ['"]ai_advanced['"]/);
@@ -428,12 +467,32 @@ describe('AI-5B — server-authority module design', () => {
     expect(MODULE_CODE).not.toMatch(/app\.(get|post|use)\b/);
     expect(MODULE_CODE).not.toMatch(/function\s+(get|read|fetch)[A-Za-z]*ProductAccess/);
     // The gate is the ONLY place that touches an Express response, and it does so
-    // exactly once. Nothing here reads the request, performs I/O, or probes the network.
+    // exactly twice: the bounded 403 denial and the bounded 503 unavailability.
     const executable = MODULE_CODE.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-    expect((executable.match(/\bres\./g) ?? []).length).toBe(1);
-    expect(executable).not.toContain('req.');
+    expect((executable.match(/\bresponse\./g) ?? []).length).toBe(2);
     expect(executable).not.toContain('fetch(');
     expect(executable).not.toContain('process.env');
+  });
+
+  it('reads NO request field — it only FORWARDS the request to the authority', () => {
+    // AI-5E: the gate is request-capable by delegation, never request-authoritative by
+    // inspection. No header, cookie, query, body, param, IP or authorization read is
+    // permitted here; a future account authority consumes the request instead.
+    const executable = MODULE_CODE.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    for (const forbidden of [
+      'request.headers',
+      'request.cookies',
+      'request.query',
+      'request.body',
+      'request.params',
+      'request.ip',
+      'request.get(',
+      'request.user',
+    ]) {
+      expect(executable, `gate must not read ${forbidden}`).not.toContain(forbidden);
+    }
+    // ...and it DOES forward the request to the authority exactly once per gate.
+    expect(executable.match(/invokeNutritionProductAccessAuthority\(/g)?.length).toBe(2);
   });
 
   it('the AI-5C status builder is a PURE projection and never authorizes', () => {

@@ -51,13 +51,18 @@ interface Running {
 
 /** Boots a real HTTP server around `createApp` with an explicit raw tier value. */
 async function startApp(
-  nutritionProductTier?: unknown,
+  tier?: unknown,
   env: Record<string, string> = {},
 ): Promise<Running> {
   const { createApp } = await import('../../server/app.js');
+  const { createDeploymentNutritionProductAccessAuthority } = await import(
+    '../../server/nutritionProductAccessAuthority.js'
+  );
   const app = createApp({
     isProduction: false,
-    ...(nutritionProductTier === undefined ? {} : { nutritionProductTier }),
+    ...(tier === undefined
+      ? {}
+      : { nutritionProductAccessAuthority: createDeploymentNutritionProductAccessAuthority(tier) }),
   });
   const server = http.createServer(app);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));

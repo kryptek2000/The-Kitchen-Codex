@@ -525,11 +525,13 @@ function walkFiles(dir: string, out: string[] = []): string[] {
 }
 
 describe('AI-5A inertness — structural: no consumer, no wiring, no field', () => {
-  it('K. exactly ONE server boundary plus ONE read-only client reader; no plugin/scripts', () => {
+  it('K. exactly TWO server boundaries plus ONE read-only client reader; no plugin/scripts', () => {
     // AI-5A was inert. AI-5B gave the SERVER authority: the dedicated gate module plus
-    // the composition point that closes over its value. AI-5C adds exactly ONE client
-    // READER (awareness) and ONE application-layer composer over it. Neither grants
-    // authority. The scripts and the plugin build stay completely unaware.
+    // the composition point that closes over its value. AI-5E adds the ONE authority
+    // ABSTRACTION module — where the decision comes from — without adding a second gate
+    // or a second policy. AI-5C adds exactly ONE client READER (awareness) and ONE
+    // application-layer composer over it. None of them grants authority. The scripts and
+    // the plugin build stay completely unaware.
     const offenders: string[] = [];
     for (const root of ['src', 'server', 'scripts', 'plugin']) {
       for (const full of walkFiles(join(REPO, root))) {
@@ -539,6 +541,7 @@ describe('AI-5A inertness — structural: no consumer, no wiring, no field', () 
     expect(offenders.map((full) => relative(REPO, full)).sort()).toEqual([
       'server/app.ts',
       'server/nutritionProductAccess.ts',
+      'server/nutritionProductAccessAuthority.ts',
       'src/application/nutritionAiClientState.ts',
       'src/application/nutritionProductAccess.ts',
     ]);
