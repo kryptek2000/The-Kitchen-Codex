@@ -62,7 +62,15 @@ import {
 } from './application/recipeImageRecovery';
 import { saveGeneratedRecipeImageToVault, hashCanonicalMarkdown, type GeneratedImageSaveResult } from './application/recipeImageSave';
 import { hydrateAiSelections } from './application/aiSelection';
-import { resolveNutritionAiCapabilities, resolveUnresolvedRowsWithAi } from './application/nutritionAiResolve';
+import { resolveUnresolvedRowsWithAi } from './application/nutritionAiResolve';
+import {
+  composeNutritionAiClientState,
+  nutritionAiUnavailableMessage,
+  resolveNutritionAiClientState,
+  unresolvedNutritionAiClientState,
+  type NutritionAiClientState,
+  type NutritionAiEffectiveCapabilities,
+} from './application/nutritionAiClientState';
 import { requestAiMassEstimateOffers } from './application/nutritionAiEstimate';
 import { buildAiSelectionRequestOptions } from './application/aiSelection';
 import {
@@ -849,18 +857,116 @@ export default function App() {
     return { ok: false, message: ADVANCED_NUTRITION_APPLY_UI_MESSAGE[failureCode] };
   };
 
-  // AI Advanced Nutrition capability tier (AI-1). Resolved from the server's
-  // read-only, secret-free provider status surface and cached in memory for the
-  // page session. Fail-safe: any failure yields Basic Nutrition, where the AI
-  // semantic path performs NO network call and the deterministic/manual workflow
-  // (analysis, manual correction, Review, Apply) remains fully usable.
-  const nutritionAiCapabilitiesRef = useRef<NutritionCapabilities | null>(null);
-  const resolveNutritionCapabilitiesOnce = useCallback(async () => {
-    if (nutritionAiCapabilitiesRef.current !== null) return nutritionAiCapabilitiesRef.current;
-    const resolved = await resolveNutritionAiCapabilities(networkAdapter);
-    nutritionAiCapabilitiesRef.current = resolved;
+  // ==========================================================================
+  // AI-5C — EFFECTIVE NUTRITION AI CLIENT STATE (the ONE shell decision owner)
+  // ==========================================================================
+  //
+  // Previously the shell resolved a provider-derived capability set once and used it
+  // directly as if it were entitlement. That conflated two different questions: it
+  // could not tell "this deployment is Basic" from "no provider is configured", and
+  // it silently reported both as one generic message.
+  //
+  // AI-5C composes them explicitly:
+  //
+  //     EFFECTIVE = PRODUCT ENTITLED (server-owned, read-only awareness)
+  //              AND OPERATIONALLY READY (pre-existing provider surface)
+  //
+  // per feature, never OR. The product read comes from the read-only
+  // `/api/nutrition/product-access` endpoint and is resolved through the unchanged
+  // AI-5A contract; readiness still comes from `resolveNutritionAiCapabilities`
+  // reading `/api/providers`, which this phase does not reinterpret.
+  //
+  // AWARENESS IS NOT AUTHORITY: this cached value is an in-memory UX optimization
+  // only. It is never persisted, never sent back to the server, and never treated as
+  // authorization. Every AI request still reaches the AI-5B gate, which resolves
+  // product access from its own server-side configuration and denies a Basic
+  // deployment independently — so a forged or stale `ai_advanced` belief here
+  // changes nothing about what the server will do.
+  //
+  // LAZY: the product-status request happens only when the user actually loads the
+  // Advanced Nutrition experience, never on ordinary startup or recipe browsing. A
+  // page that never opens Advanced Nutrition performs no AI-5C request at all.
+  const nutritionAiClientStateRef = useRef<NutritionAiClientState | null>(null);
+  const resolveNutritionAiClientStateOnce = useCallback(async (): Promise<NutritionAiClientState> => {
+    if (nutritionAiClientStateRef.current !== null) return nutritionAiClientStateRef.current;
+    const resolved = await resolveNutritionAiClientState(networkAdapter);
+    nutritionAiClientStateRef.current = resolved;
     return resolved;
   }, [networkAdapter]);
+
+  /**
+   * Projects the AND-composed effective availability into the EXISTING
+   * operational `NutritionCapabilities` shape, so every existing AI port gates on
+   * effective availability without any of them being rewritten.
+   *
+   * `deterministicReview` and `manualEditing` are literal `true` here, exactly as
+   * `nutritionCapabilities.ts` defines them: Basic Nutrition — deterministic USDA
+   * analysis, matching, manual correction, portions, calculation, provenance, Review
+   * and Apply — is never reduced by AI-5C. Only the AI assistance layer is gated.
+   *
+   * The core capability module is NOT modified or reinterpreted; this is an
+   * application-layer projection of the composed result.
+   */
+  const toEffectiveNutritionCapabilities = useCallback(
+    (effective: NutritionAiEffectiveCapabilities): NutritionCapabilities =>
+      Object.freeze({
+        tier: effective.aiInterpretation ? ('ai_advanced' as const) : ('basic' as const),
+        deterministicReview: true as const,
+        manualEditing: true as const,
+        aiInterpretation: effective.aiInterpretation,
+        aiCandidateOrchestration: effective.aiCandidateOrchestration,
+        aiEstimation: effective.aiBoundedMassEstimation ? ('available' as const) : ('disabled' as const),
+      }),
+    [],
+  );
+
+  /** The single centralized effective-capability decision every AI port gates on. */
+  const resolveEffectiveNutritionCapabilitiesOnce = useCallback(async (): Promise<NutritionCapabilities> => {
+    const state = await resolveNutritionAiClientStateOnce();
+    return toEffectiveNutritionCapabilities(state.effectiveCapabilities);
+  }, [resolveNutritionAiClientStateOnce, toEffectiveNutritionCapabilities]);
+
+  /**
+   * The bounded presentation state handed to the Advanced Nutrition UI.
+   *
+   * Components receive only `available` plus a fixed, bounded reason string: they
+   * never call the status endpoint, never import the application layer, never
+   * inspect the environment, never infer BYOK, and never resolve entitlement.
+   *
+   * Before the lazy read completes this is `unknown` rather than Basic, so the UI
+   * cannot claim a product fact the server has not stated.
+   */
+  const [nutritionAiPresentation, setNutritionAiPresentation] = useState<{
+    readonly available: boolean;
+    readonly reason: string | null;
+  }>(() => {
+    const initial = unresolvedNutritionAiClientState();
+    return { available: initial.available, reason: nutritionAiUnavailableMessage(initial.availability) };
+  });
+
+  const publishNutritionAiPresentation = useCallback((state: NutritionAiClientState) => {
+    setNutritionAiPresentation({
+      available: state.available,
+      reason: nutritionAiUnavailableMessage(state.availability),
+    });
+  }, []);
+
+  /**
+   * The Advanced Nutrition user-triggered boundary.
+   *
+   * Entering the experience loads the lazy USDA bundle AND resolves AI-5C client
+   * state. This is the ONLY trigger, which is what keeps the product-status request
+   * off the ordinary startup path. Readiness resolution failures are contained: the
+   * bundle still loads and deterministic/manual nutrition is unaffected.
+   */
+  const handleLoadAdvancedNutritionBundle = useCallback(() => {
+    advancedNutritionBundle.load();
+    void resolveNutritionAiClientStateOnce()
+      .then(publishNutritionAiPresentation)
+      .catch(() => {
+        publishNutritionAiPresentation(unresolvedNutritionAiClientState());
+      });
+  }, [advancedNutritionBundle, resolveNutritionAiClientStateOnce, publishNutritionAiPresentation]);
 
   // Optional AI-assisted USDA resolution port. This shell owns the network +
   // application layer; the Advanced Nutrition UI receives ONLY this bounded port
@@ -885,7 +991,7 @@ export default function App() {
       issueKinds,
       liveRows,
       state,
-      capabilities: await resolveNutritionCapabilitiesOnce(),
+      capabilities: await resolveEffectiveNutritionCapabilitiesOnce(),
       liveCanonicalInterpretation: true,
     });
 
@@ -909,9 +1015,10 @@ export default function App() {
         return await requestAiMassEstimateOffers({
           state,
           lines,
-          // The shell's single centralized capability decision, used verbatim.
-          // The adapter has no other way to learn the tier.
-          capabilities: await resolveNutritionCapabilitiesOnce(),
+          // The shell's single centralized EFFECTIVE capability decision (AI-5C:
+          // product entitled AND operationally ready), used verbatim. The adapter
+          // has no other way to learn availability, and it must never re-derive it.
+          capabilities: await resolveEffectiveNutritionCapabilitiesOnce(),
           session,
           transport: {
             request: async (request) => {
@@ -941,7 +1048,7 @@ export default function App() {
         return { ok: true, offers: [], refused: [], message: 'AI estimate failed.' };
       }
     },
-    [advancedNutritionBundle.session, networkAdapter, resolveNutritionCapabilitiesOnce],
+    [advancedNutritionBundle.session, networkAdapter, resolveEffectiveNutritionCapabilitiesOnce],
   );
 
   /**
@@ -955,12 +1062,16 @@ export default function App() {
    * `recipeInstance` is an opaque memory-only token minted per review session. It
    * is not a path, URL or recipe id, and it is never persisted.
    *
-   * Capability: the adapter gates FIRST, so a Basic tier costs zero provider
-   * calls, exactly like every other AI surface in this shell.
+   * Capability (AI-5C): the adapter gates FIRST on the composed EFFECTIVE
+   * `aiRecipeContextReview` bit — product entitlement AND compatible text-AI
+   * operational readiness — so a Basic deployment, an unready provider, or an
+   * unverifiable product status all cost zero provider calls, exactly like every
+   * other AI surface in this shell.
    */
   const handleReviewRecipeContextWithAi: AdvancedNutritionRecipeContextReviewHandler = useCallback(
     async ({ recipe: target }) => {
-      if (!(await resolveNutritionCapabilitiesOnce()).aiInterpretation) {
+      const effective = (await resolveNutritionAiClientStateOnce()).effectiveCapabilities;
+      if (!effective.aiRecipeContextReview) {
         return {
           ok: false,
           message: "Recipe context review isn't available right now.",
@@ -994,7 +1105,7 @@ export default function App() {
         };
       }
     },
-    [networkAdapter, resolveNutritionCapabilitiesOnce]
+    [networkAdapter, resolveNutritionAiClientStateOnce]
   );
 
   // Save or Create a Vault Note (e.g. ingredient or technique created from wikilink modal)
@@ -1671,11 +1782,12 @@ export default function App() {
             network={networkAdapter}
             advancedNutritionSession={advancedNutritionBundle.session}
             advancedNutritionBundleStatus={advancedNutritionBundle.status}
-            onLoadAdvancedNutritionBundle={advancedNutritionBundle.load}
+            onLoadAdvancedNutritionBundle={handleLoadAdvancedNutritionBundle}
             onApplyAdvancedNutrition={handleApplyAdvancedNutrition}
             onResolveAdvancedNutritionAi={handleResolveAdvancedNutritionAi}
             onEstimateMassesWithAi={handleEstimateMassesWithAi}
             onReviewRecipeContextWithAi={handleReviewRecipeContextWithAi}
+            advancedNutritionAiAvailability={nutritionAiPresentation}
           />
         ) : activeTab === 'grid' ? (
           /* Recipe Gallery View */

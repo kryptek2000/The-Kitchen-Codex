@@ -110,6 +110,11 @@ export interface AdvancedNutritionRecipeContextRow {
  */
 export interface AdvancedNutritionRecipeContextUi {
   readonly available: boolean;
+  /**
+   * AI-5C bounded reason copy for an unavailable surface, or `null`. Pre-computed by
+   * the shell so this component never re-derives WHY.
+   */
+  readonly unavailableReason: string | null;
   readonly running: boolean;
   readonly message: string | null;
   readonly rows: ReadonlyArray<AdvancedNutritionRecipeContextRow>;
@@ -159,6 +164,11 @@ export interface AdvancedNutritionAiAmountOffer {
  */
 export interface AdvancedNutritionAiUi {
   readonly available: boolean;
+  /**
+   * AI-5C bounded reason copy for an unavailable AI layer, or `null`. Pre-computed by
+   * the shell; this component never re-derives WHY.
+   */
+  readonly unavailableReason: string | null;
   readonly running: boolean;
   readonly message: string | null;
   readonly suggestions: Readonly<Record<string, AdvancedNutritionAiSuggestion>>;
@@ -1184,9 +1194,18 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                 )}
               </div>
               {!ai.available && (
-                <p className="text-[10px] text-gray-500">
-                  AI assistance is not configured in this build. Manual USDA search is always
-                  available.
+                <p
+                  data-testid="advanced-nutrition-ai-unavailable"
+                  className="text-[10px] text-gray-500"
+                >
+                  {/* AI-5C: the shell distinguishes Basic product access, AI
+                      Advanced with no usable provider, and an unverifiable
+                      product status. Each message states only what the client
+                      actually knows, and every one keeps the Basic manual path
+                      visible. No billing, upgrade or paywall language exists,
+                      because no billing or account system does. */}
+                  {ai.unavailableReason ??
+                    'AI Advanced Nutrition access couldn\'t be verified. Basic manual review and correction are still available.'}
                 </p>
               )}
               {ai.message && (
@@ -1259,9 +1278,17 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
               </div>
 
               {!recipeContext.available && (
-                <p className="text-[10px] text-gray-500">
-                  AI recipe context is not configured in this build. Manual review is always
-                  available.
+                <p
+                  data-testid="advanced-nutrition-recipe-context-unavailable"
+                  className="text-[10px] text-gray-500"
+                >
+                  {/* AI-5C: recipe-context review follows the SAME composed
+                      availability as the rest of the AI layer, so its reason
+                      copy is truthful too — never "not entitled" when the
+                      deployment IS entitled, and never a provider excuse when
+                      the status itself could not be verified. */}
+                  {recipeContext.unavailableReason ??
+                    'AI Advanced Nutrition access couldn\'t be verified. Basic manual review and correction are still available.'}
                 </p>
               )}
 

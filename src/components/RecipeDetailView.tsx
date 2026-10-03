@@ -44,6 +44,7 @@ import {
   type AdvancedNutritionRecipeContextReviewHandler,
   type AdvancedNutritionApplyHandler,
   type AdvancedNutritionBundleUiStatus,
+  type AdvancedNutritionAiAvailability,
 } from './AdvancedNutritionCard';
 import { RecipeNutritionSection } from './RecipeNutritionSection';
 import type { AdvancedNutritionSession } from '../core/nutritionV2/phase4';
@@ -89,6 +90,12 @@ interface RecipeDetailViewProps {
   /** Phase 4.5B lazy local-bundle state + explicit load (browser shell only). */
   advancedNutritionBundleStatus?: AdvancedNutritionBundleUiStatus;
   onLoadAdvancedNutritionBundle?: () => void;
+  /**
+   * AI-5C bounded AI presentation state, passed straight through to the Advanced
+   * Nutrition card. Purely presentational: this view never interprets it, never
+   * calls the product-status endpoint and never resolves entitlement.
+   */
+  advancedNutritionAiAvailability?: AdvancedNutritionAiAvailability;
   /** Explicit Phase 5B Apply handler (browser shell only). */
   onApplyAdvancedNutrition?: AdvancedNutritionApplyHandler;
   /** Optional AI-assisted USDA resolution port (browser shell only). */
@@ -119,6 +126,7 @@ export function RecipeDetailView({
   advancedNutritionSession = null,
   advancedNutritionBundleStatus,
   onLoadAdvancedNutritionBundle,
+  advancedNutritionAiAvailability,
   onApplyAdvancedNutrition,
   onResolveAdvancedNutritionAi,
   onEstimateMassesWithAi,
@@ -653,6 +661,7 @@ export function RecipeDetailView({
                 onResolveAdvancedNutritionAi={onResolveAdvancedNutritionAi}
                 onEstimateMassesWithAi={onEstimateMassesWithAi}
                 onReviewRecipeContextWithAi={onReviewRecipeContextWithAi}
+                advancedNutritionAiAvailability={advancedNutritionAiAvailability}
               />
 
               <div className="bg-[#141414] rounded-2xl border border-white/5 p-5 shadow-xs">

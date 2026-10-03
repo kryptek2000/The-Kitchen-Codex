@@ -64,6 +64,16 @@ const ALL_SOURCE_FILES: ReadonlyArray<string> = [
  * of routing the gate through a separate boundary module.
  */
 const AI5B_GATE = 'server/nutritionProductAccess.ts';
+/**
+ * AI-5C adds the ONE authorized client-side READER of the contract.
+ *
+ * It is read-only product AWARENESS, not authority: it never gates a route, never
+ * grants a capability, never persists anything and never reports a tier back to the
+ * server. Everything below is written to keep that distinction permanent.
+ */
+const AI5C_CLIENT_READER = 'src/application/nutritionProductAccess.ts';
+/** The AI-5C composition owner. Imports the reader, never the core contract. */
+const AI5C_COMPOSER = 'src/application/nutritionAiClientState.ts';
 
 /** Live production surfaces that must remain completely unaware of AI-5A. */
 const LIVE_SURFACES: ReadonlyArray<string> = [
@@ -511,15 +521,20 @@ describe('AI-5A isolation — ZERO production consumer', () => {
     expect(barrel).not.toContain('NUTRITION_PRODUCT_ACCESS_VERSION');
   });
 
-  it('AI-5B gives EXACTLY ONE server module a consumer, and nothing else does', () => {
-    // The gate is the single production consumer of the contract.
+  it('exactly TWO server modules and ONE read-only client reader consume the contract', () => {
+    // The gate is the single AUTHORITY. AI-5C adds exactly one client READER, which is
+    // awareness only. Nothing else in the repository may import the contract.
     const consumers = [...ALL_SOURCE_FILES, ...walk(join(REPO, 'plugin'))].filter((rel) =>
       code(rel).includes('nutritionProductAccess'),
     );
-    expect(consumers.sort()).toEqual(['server/app.ts', AI5B_GATE]);
+    expect(consumers.sort()).toEqual(
+      ['server/app.ts', AI5B_GATE, AI5C_COMPOSER, AI5C_CLIENT_READER].sort(),
+    );
 
-    // No CLIENT surface, no plugin surface, no script and no AI transport is aware.
+    // No OTHER client surface, no plugin surface, no script and no AI transport is aware.
+    const aware = new Set([AI5C_CLIENT_READER, AI5C_COMPOSER]);
     for (const rel of LIVE_SURFACES) {
+      if (aware.has(rel)) continue;
       expect(code(rel), rel).not.toContain('nutritionProductAccess');
     }
     for (const rel of [...walk(join(REPO, 'plugin')), ...walk(join(REPO, 'scripts'))]) {
@@ -585,12 +600,55 @@ describe('AI-5A isolation — ZERO production consumer', () => {
     }
   });
 
-  it('only the AI-5B server boundary consumes the contract (client/scripts/plugin may not)', () => {
+  it('only the AI-5B gate and the AI-5C read-only reader consume the contract', () => {
     const offenders: string[] = [];
     for (const rel of [...ALL_SOURCE_FILES, ...walk(join(REPO, 'plugin'))]) {
       if (code(rel).includes('nutritionProductAccess')) offenders.push(rel);
     }
-    expect(offenders.sort()).toEqual(['server/app.ts', AI5B_GATE]);
+    expect(offenders.sort()).toEqual(
+      ['server/app.ts', AI5B_GATE, AI5C_COMPOSER, AI5C_CLIENT_READER].sort(),
+    );
+  });
+
+  it('the AI-5C client reader is READ-ONLY awareness, never authority', () => {
+    const source = code(AI5C_CLIENT_READER);
+    const executable = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+    // It cannot gate anything, resolve a route, or decide authorization.
+    for (const forbidden of [
+      'requireNutritionProductFeature',
+      'process.env',
+      'express',
+      'NUTRITION_AI_NOT_ENTITLED',
+      'setHeader',
+      'app.get',
+      'app.post',
+    ]) {
+      expect(executable, `client reader must not use ${forbidden}`).not.toContain(forbidden);
+    }
+    // It must not persist the decision, and must not echo it back as authority.
+    for (const forbidden of [
+      'localStorage',
+      'sessionStorage',
+      'indexedDB',
+      'document.cookie',
+      'SettingsAdapter',
+      'x-product-tier',
+      'x-entitlement',
+      'x-kitchen-nutrition-tier',
+      'entitled=',
+    ]) {
+      expect(executable, `client reader must not use ${forbidden}`).not.toContain(forbidden);
+    }
+    // It must not touch billing, accounts or credentials.
+    for (const forbidden of ['stripe', 'paddle', 'checkout', 'subscription', 'customerId', 'apiKey']) {
+      expect(executable.toLowerCase(), `client reader must not know ${forbidden}`).not.toContain(
+        forbidden.toLowerCase(),
+      );
+    }
+    // It re-derives through the AI-5A resolver rather than minting an access object.
+    expect(executable).toContain('resolveNutritionProductAccess');
+    expect(executable).toContain('isNutritionProductTier');
   });
 
   it('adds NO reducer action, NO state field and NO session field', () => {
@@ -676,6 +734,9 @@ describe('AI-5A isolation — ZERO production consumer', () => {
     // boundary. Only the first may define the contract types or resolvers.
     const modules = ALL_SOURCE_FILES
       .filter((rel) => /ProductAccess|productAccess/.test(rel))
+      // The AI-5C files are a READER and a COMPOSER over the contract; neither
+      // DEFINES a product-access value. Exactly one module may do that.
+      .filter((rel) => rel !== AI5C_CLIENT_READER && rel !== AI5C_COMPOSER)
       .sort();
     expect(modules).toEqual([AI5B_GATE, CONTRACT].sort());
     const gate = code(AI5B_GATE);

@@ -10,6 +10,7 @@ import {
   type AdvancedNutritionAiResolveHandler,
   type AdvancedNutritionApplyHandler,
   type AdvancedNutritionBundleUiStatus,
+  type AdvancedNutritionAiAvailability,
 } from './AdvancedNutritionCard';
 import type { AdvancedNutritionSession } from '../core/nutritionV2/phase4';
 import { deriveAdvancedCompactNutrition, type NutritionPresentation } from '../core/nutritionV2/phase5c';
@@ -24,6 +25,8 @@ interface RecipeNutritionSectionProps {
   advancedNutritionSession?: AdvancedNutritionSession | null;
   advancedNutritionBundleStatus?: AdvancedNutritionBundleUiStatus;
   onLoadAdvancedNutritionBundle?: () => void;
+  /** AI-5C bounded AI presentation state; passed straight through to the card. */
+  advancedNutritionAiAvailability?: AdvancedNutritionAiAvailability;
   onApplyAdvancedNutrition?: AdvancedNutritionApplyHandler;
   /** Optional AI-assisted USDA resolution port (injected by the shell). */
   onResolveAdvancedNutritionAi?: AdvancedNutritionAiResolveHandler;
@@ -64,6 +67,7 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
   advancedNutritionSession,
   advancedNutritionBundleStatus,
   onLoadAdvancedNutritionBundle,
+  advancedNutritionAiAvailability,
   onApplyAdvancedNutrition,
   onResolveAdvancedNutritionAi,
   onEstimateMassesWithAi,
@@ -161,6 +165,7 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
         servings={servings}
         bundleStatus={advancedNutritionBundleStatus}
         onLoadBundle={onLoadAdvancedNutritionBundle}
+        advancedNutritionAiAvailability={advancedNutritionAiAvailability}
         onApplyAdvancedNutrition={onApplyAdvancedNutrition}
         savedAdvancedBlock={presentation.advanced}
         onResolveWithAi={onResolveAdvancedNutritionAi}

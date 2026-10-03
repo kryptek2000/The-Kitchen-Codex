@@ -169,6 +169,44 @@ interface AdvancedNutritionCardProps {
    * EMPTY decision overlay: nothing is accepted on the user's behalf.
    */
   onReviewRecipeContextWithAi?: AdvancedNutritionRecipeContextReviewHandler;
+  /**
+   * AI-5C BOUNDED PRESENTATION STATE (optional; shell-owned).
+   *
+   * Two plain fields, already decided by the shell/application layer:
+   *
+   *   - `available`: effective AI availability, composed as PRODUCT ENTITLED AND
+   *     OPERATIONALLY READY. False for a Basic deployment, for AI Advanced with no
+   *     usable provider, and for an unverifiable product status alike.
+   *   - `reason`: a fixed, bounded, pre-computed user-facing sentence explaining WHY,
+   *     so the three distinct situations stop sharing one generic message.
+   *
+   * This is presentation input ONLY. The component never calls the status endpoint,
+   * never imports the application layer or any server/provider/credential module,
+   * never inspects the environment, never infers BYOK, and never resolves
+   * entitlement for itself. It also never grants authority: even a forged `available`
+   * here cannot make a gated server route run, and it must never cause a paid route
+   * to be invoked from a visually disabled control.
+   *
+   * When absent, the AI surfaces render as they did before AI-5C (no reason copy),
+   * which keeps this purely additive for embedders that do not supply it.
+   */
+  advancedNutritionAiAvailability?: AdvancedNutritionAiAvailability;
+}
+
+/**
+ * AI-5C BOUNDED PRESENTATION STATE.
+ *
+ * Deliberately two primitives and nothing else: a boolean and a fixed sentence. No
+ * tier string, no feature flags, no provider state, no billing/plan field and
+ * nothing the UI could mistake for an entitlement of its own. The distinction between
+ * "not enabled for this deployment", "enabled but no provider available" and
+ * "access could not be verified" is resolved by the shell and arrives here as copy.
+ */
+export interface AdvancedNutritionAiAvailability {
+  /** Effective AI availability: product entitled AND operationally ready. */
+  readonly available: boolean;
+  /** Fixed bounded reason sentence, or `null` when AI is available. */
+  readonly reason: string | null;
 }
 
 /**
@@ -339,7 +377,8 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
   onResolveWithAi,
   onPlanWithAi,
   onEstimateMassesWithAi,
-  onReviewRecipeContextWithAi,
+onReviewRecipeContextWithAi,
+  advancedNutritionAiAvailability,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [isSavedReportOpen, setIsSavedReportOpen] = useState(false);
@@ -1698,6 +1737,15 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
   };
 
   /**
+   * AI-5C: the shell's already-decided effective availability and bounded reason.
+   *
+   * Absent (an embedder that supplies no AI-5C state) keeps the pre-AI-5C behaviour
+   * of an available surface with no reason copy.
+   */
+  const aiAvailabilityAvailable = advancedNutritionAiAvailability?.available ?? true;
+  const aiAvailabilityReason = advancedNutritionAiAvailability?.reason ?? null;
+
+  /**
    * The AI-4D2 review view model: a pure projection of the inert review session.
    * It exists only to render; every decision it exposes is the user's own, and
    * nothing in it can change nutrition state.
@@ -1710,7 +1758,8 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
         const expectedIdentity = recipeContextExpectedIdentity.current;
         if (session === null || expectedIdentity === null) {
           return {
-            available: true,
+            available: aiAvailabilityAvailable,
+            unavailableReason: aiAvailabilityReason,
             running: recipeContextRunning,
             message: recipeContextMessage,
             rows: [],
@@ -1733,7 +1782,8 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
         // A review that is no longer current renders as no review at all.
         if (!view.ok) {
           return {
-            available: true,
+            available: aiAvailabilityAvailable,
+            unavailableReason: aiAvailabilityReason,
             running: recipeContextRunning,
             message: recipeContextMessage,
             rows: [],
@@ -1753,7 +1803,8 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
           };
         }
         return {
-          available: true,
+          available: aiAvailabilityAvailable,
+          unavailableReason: aiAvailabilityReason,
           running: recipeContextRunning,
           message: recipeContextMessage,
           rows: view.view.rows,
@@ -1777,7 +1828,8 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
   const aiUi: AdvancedNutritionAiUi | undefined =
     session && adaptation.ok && onResolveWithAi
       ? {
-          available: true,
+          available: aiAvailabilityAvailable,
+          unavailableReason: aiAvailabilityReason,
           running: aiRunning,
           message: aiMessage,
           suggestions: aiSuggestions,

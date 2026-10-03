@@ -9162,3 +9162,243 @@ security, and is explicitly out of bounds for this architecture.
 | fail-closed source resolution matrix, canonical access identity, gate behavior, bounded denial, module narrowness | `tests/unit/advancedNutritionAi5bServerAccess.test.ts` |
 | route matrix, zero-provider-call proof, client forgery, authentication order, middleware order, positive path, reconcile entitlement + receipt | `tests/security/advancedNutritionAi5bRouteGate.test.ts` |
 | BYOK orthogonality, unrelated-route invariance, composition ownership, no persistence, AI-5A / `nutritionCapabilities` / AI-4E invariance | `tests/security/advancedNutritionAi5bIsolation.test.ts` |
+
+---
+
+## §57. AI-5C — CLIENT PRODUCT-AWARENESS + EFFECTIVE CAPABILITY COMPOSITION
+
+### 57.1 What this phase is
+
+AI-5A defined product access. AI-5B made it server-authoritative and enforced it
+before any provider work. AI-5B deliberately shipped **no** status endpoint, so the
+client could not tell three genuinely different situations apart and collapsed all of
+them into one generic "not configured in this build" message.
+
+AI-5C closes that gap. It lets the client become **AWARE** of the one server-owned
+decision so the UI can distinguish:
+
+1. **Basic** product access on this deployment;
+2. **AI Advanced** product access, but no usable provider/model/credential;
+3. **product-access status unavailable / unverifiable.**
+
+AI-5C is a **UX and truthfulness phase only**. It adds no entitlement, no authority,
+no nutrition power, no billing, and no account concept.
+
+### 57.2 THE PERMANENT SECURITY RULE: AWARENESS != AUTHORITY
+
+> **CLIENT AWARENESS IS NOT SERVER AUTHORITY.**
+
+Even if browser state is forged, edited in DevTools, replayed, stale, corrupted,
+structurally fabricated, or manually forced to `ai_advanced`, the AI-5B server gate
+**still independently denies** a Basic deployment with `403
+NUTRITION_AI_NOT_ENTITLED`.
+
+The browser optimizes UX. **The server authorizes execution.** Nothing in this phase
+can weaken, replace, bypass, or reorder an AI-5B gate.
+
+### 57.3 The read-only status endpoint
+
+AI-5C introduces the endpoint AI-5B deferred. It is **informational only**.
+
+```text
+GET /api/nutrition/product-access
+  -> requireAiAccessToken          (existing auth boundary, FIRST)
+    -> bounded read-only handler
+```
+
+**Auth is first.** Exactly like `/api/providers`. An unauthenticated caller receives
+the existing auth failure and learns **nothing** — not Basic, not AI Advanced, and not
+even the contract version. Endpoint authentication is never bypassed to expose product
+state.
+
+**Response — three keys, exactly:**
+
+```json
+{ "ok": true, "version": "nutrition_product_access_v1", "tier": "basic" }
+```
+
+or
+
+```json
+{ "ok": true, "version": "nutrition_product_access_v1", "tier": "ai_advanced" }
+```
+
+Deliberately **absent**: duplicated feature booleans (the client derives them from the
+unchanged AI-5A closed contract, so a second copy could only ever disagree), plus any
+provider, model, credential, BYOK state, price, plan, billing, subscription, account or
+user identity, customer id, secret, API key, or raw environment value.
+
+**`Cache-Control: no-store`.** Product access is runtime deployment policy and must
+never become stale browser or proxy state.
+
+**Same canonical access closure.** The body is a pure projection, built by
+`buildNutritionProductAccessStatus(access)`, of the **one** `NutritionProductAccess`
+value `createApp()` already resolved. The route does not read `process.env` again, does
+not resolve a second independent entitlement, and cannot disagree with the gates
+enforcing on the same app instance.
+
+**Zero provider work.** No provider selection, no credential resolution, no BYOK lookup,
+no model lookup, no network probe, and no AI route rate-limit bucket is consumed. It
+reads an already-resolved closure and returns three fields.
+
+### 57.4 The client reader
+
+`src/application/nutritionProductAccess.ts` is a narrow application-layer reader. It
+knows one URL, one minimal response shape, and the closed AI-5A tier vocabulary — and
+nothing else: no Express, no `process.env`, no provider registry, no credential
+resolver, no BYOK or session-key storage, no pricing or billing, no accounts, no USDA,
+no Apply, no persistence.
+
+**The response is untrusted transport data.** Accepted only as a plain object with the
+**exact** key set `{ ok, version, tier }`, `ok === true`, `version` exactly equal to the
+AI-5A contract version, and `tier` an exact closed-vocabulary member. Rejected
+wholesale: extra fields, missing fields, wrong or future version, wrong-case or
+whitespace-padded tier, aliases, booleans, numbers, arrays, nested entitlement
+objects, feature arrays, hand-authored `NutritionProductAccess`, and provider- or
+billing-shaped payloads.
+
+The tier is validated **before** resolution. This ordering is load-bearing: the AI-5A
+resolver is deliberately fail-closed and maps an unknown, padded, wrong-case or aliased
+value to `basic`, so passing such a value straight through would let a malformed
+`tier: "pro"` be reported as a genuine **server-stated Basic tier** — inventing a
+product fact the server never stated. A bad tier is therefore **rejected** (unavailable),
+never coerced. The canonical object is then produced by the **existing** AI-5A
+`resolveNutritionProductAccess(tier)`, so a client can never structurally mint an
+impossible product state.
+
+### 57.5 Unknown is NOT Basic
+
+A transport failure, a 401, a malformed body or an unsupported version means the client
+**does not know** the tier. Reporting that as "you are Basic" would invent a product
+fact and blame the deployment for a network problem.
+
+```ts
+type NutritionProductAccessRead =
+  | { readonly status: 'resolved'; readonly access: NutritionProductAccess }
+  | { readonly status: 'unavailable' };
+```
+
+All states fail **safe** to no AI availability. They differ only in what the UI is
+permitted to **say**.
+
+### 57.6 Effective composition: PRODUCT ENTITLED AND OPERATIONALLY READY
+
+```text
+EFFECTIVE AVAILABILITY = PRODUCT ENTITLED  AND  OPERATIONALLY READY
+```
+
+**Never OR.** `src/application/nutritionAiClientState.ts` is the ONE client composition
+owner. Per feature:
+
+```text
+effective ai_interpretation           = product.aiInterpretation           AND operational text-AI ready
+effective ai_candidate_orchestration  = product.aiCandidateOrchestration  AND operational text-AI ready
+effective ai_bounded_mass_estimation  = product.aiBoundedMassEstimation  AND operational aiEstimation available
+effective ai_recipe_context_review     = product.aiRecipeContextReview     AND operational text-AI ready
+```
+
+No product feature becomes operational through OR logic. Product `false` + readiness
+`true` is `false`; product `true` + readiness `false` is `false`.
+
+**`nutritionCapabilities.ts` is NOT redesigned.** It remains the pure historical
+**operational readiness** model and its provider configured + reachable logic is not
+replaced by entitlement logic. `resolveNutritionAiCapabilities` keeps its original
+responsibility and keeps reading `/api/providers`. `/api/providers` is **not**
+reinterpreted as entitlement, and provider configuration never grants product access.
+Composition happens only in the application layer — the one layer that may see both
+questions.
+
+### 57.7 Lazy resolution
+
+The Advanced Nutrition USDA bundle is already lazy and user-triggered. AI-5C client
+state resolves on that **same** user-triggered boundary. An ordinary page load that
+never opens Advanced Nutrition performs **no** product-access request.
+
+Additionally, once the server has **definitively** reported Basic, the provider-status
+request is **skipped entirely** — a Basic deployment spends exactly one request, because
+no provider configuration can change the answer. An unverifiable product read also stops
+there: the client will not turn "I could not check" into provider readiness by asking a
+second question it cannot answer.
+
+### 57.8 In-memory only
+
+Client awareness is cached in memory for the page/session. It is **never** persisted to
+`localStorage`, IndexedDB, `SettingsAdapter`, the vault, Markdown, a recipe schema,
+plugin data, or cookies.
+
+### 57.9 No client entitlement header
+
+There is deliberately **no** `x-product-tier`, `x-entitlement` or
+`x-kitchen-nutrition-tier`, no `?entitled=true`, no cookie and no entitlement receipt.
+The server already knows the authoritative tier and has **zero reason to ask the
+browser**. The status response is **not** an authorization artifact: it mints no token,
+no receipt, no capability and no signature.
+
+### 57.10 Truthful UI states
+
+| State | Availability | Bounded user-facing reason |
+| --- | --- | --- |
+| Server-stated **Basic** | off | AI Advanced Nutrition isn't enabled for this deployment. Basic manual review and correction are still available. |
+| **AI Advanced**, provider unavailable | off | AI Advanced Nutrition is enabled, but no compatible AI provider is currently available. Basic manual review and correction are still available. |
+| Status **unverifiable** | off | AI Advanced Nutrition access couldn't be verified. Basic manual review and correction are still available. |
+| **AI Advanced + ready** | on | (no reason copy; existing controls unchanged) |
+
+The provider-unavailable state must **not** imply the user lacks entitlement, and the
+unverifiable state must **not** claim Basic, blame billing, or blame the provider —
+the client knows none of those things.
+
+**No billing, upgrade, paywall, trial, purchase, premium or Pro language exists anywhere
+in this phase**, because no billing or account system exists and product-access state
+must never be presented as something the user could buy.
+
+**Basic Nutrition is never reduced.** Deterministic USDA analysis, deterministic
+matching, manual food correction, manual total weight, source/count/household portions,
+deterministic calculation, provenance, Review, Apply, and viewing/editing an
+already-saved Advanced result are all unaffected. Only the **AI assistance layer** is
+product-gated. The Advanced Nutrition card and modal are never locked.
+
+### 57.11 Presentation ownership
+
+Components receive two bounded primitives — `available` and a pre-computed `reason`
+sentence. They never call the status endpoint, never import the application layer or
+any server/provider/credential module, never inspect the environment, never infer BYOK,
+and never resolve entitlement themselves. A visually disabled control must not secretly
+invoke a paid route.
+
+### 57.12 What AI-5C explicitly did NOT do
+
+- **AI-5B gates unchanged.** `requireNutritionProductFeature(...)` semantics and order
+  are untouched; it never consults client state. The six gates remain the only
+  authorities: `ai_interpretation` (x2 routes), `ai_candidate_orchestration`,
+  `ai_bounded_mass_estimation`, `ai_recipe_context_review` (x2 routes).
+- **`/api/estimate-nutrition` stays ungated**, preserving AI-5B's audited
+  classification of it as outside the four AI-5A features.
+- **AI-5A core untouched** — zero diff; `nutrition_product_access_v1`, the closed tiers
+  and the closed four-feature vocabulary are unchanged. No fifth feature, and
+  `ai_recipe_context_application` remains deliberately absent.
+- **`nutritionCapabilities.ts` untouched** — zero behavioral change.
+- **AI-4E receipt crypto untouched** — `randomBytes(32)`, HMAC-SHA-256,
+  `timingSafeEqual`, `rctx1`, canonical exact-wire binding and origin verification
+  before D1 are all preserved; I-1 remains closed.
+- **No downstream AI-4 consumer.** `projectAcceptedRecipeContext` still has **zero**
+  production consumers; AI-4 context remains review-only.
+- **No entitlement persistence**, and no client→server authority channel.
+
+### 57.13 MANDATORY future hosted gate (UNCHANGED)
+
+§56.13 is **unchanged**. Before hosted multi-user AI Advanced Nutrition can ship, the
+deployment-scoped source **MUST** be replaced by **authenticated per-user / per-account
+entitlement**. A shared environment tier is **not** per-user authorization, and a shared
+`AI_ENDPOINT_TOKEN` is **not** an entitlement identity.
+
+Client awareness does not weaken that gate: it makes the current deployment-scoped
+limitation *visible* rather than hiding it behind a generic message.
+
+### 57.14 Coverage
+
+| Concern | File |
+| --- | --- |
+| status route auth order, exact keys, minimalism, no-store, fail-closed matrix, zero provider work, request-data independence, AI-5B gate invariance | `tests/security/advancedNutritionAi5cStatusRoute.test.ts` |
+| strict parser rejection matrix, canonical re-derivation, unknown-vs-Basic, per-feature AND mapping, lazy short-circuit, bounded messaging, no persistence | `tests/unit/advancedNutritionAi5cClientAccess.test.ts` |
+| forged client vs Basic server across all six gates and every forged channel, no client→server authority channel, AI-5B / AI-4E / no-persistence invariance | `tests/security/advancedNutritionAi5cAuthorityIsolation.test.ts` |
+| real card + modal rendering of the three distinct reasons, disabled AI controls, deterministic/manual surface never gated, no billing copy | `tests/unit/advancedNutritionAi5cUi.test.tsx` |

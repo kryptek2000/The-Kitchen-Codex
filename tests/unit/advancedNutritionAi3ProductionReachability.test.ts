@@ -260,8 +260,13 @@ describe('AI-3 reachability — capability authority', () => {
 
   it('the adapter has no raw capability flag a caller could forge', () => {
     const app = src('src/App.tsx');
-    // App supplies the shell's ONE resolved decision and nothing else.
-    expect(app).toContain('capabilities: await resolveNutritionCapabilitiesOnce()');
+    // App supplies the shell's ONE resolved decision and nothing else. Since AI-5C
+    // that decision is the COMPOSED effective capability (product entitled AND
+    // operationally ready), resolved through the single centralized callback.
+    expect(app).toContain('capabilities: await resolveEffectiveNutritionCapabilitiesOnce()');
+    // The projection is the only way a capability value reaches a port, and it never
+    // re-derives availability from provider state or product state on its own.
+    expect(app).toContain('const toEffectiveNutritionCapabilities = useCallback');
     const adapter = src('src/application/nutritionAiEstimate.ts');
     // The adapter's own gate reads that value verbatim.
     expect(adapter).toContain("const capabilities = input.capabilities;");

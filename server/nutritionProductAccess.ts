@@ -98,6 +98,72 @@ export const NUTRITION_PRODUCT_TIER_ENV = "KITCHEN_CODEX_NUTRITION_PRODUCT_TIER"
 /** The single bounded machine code for every non-entitled AI Advanced attempt. */
 export const NUTRITION_AI_NOT_ENTITLED_CODE = "NUTRITION_AI_NOT_ENTITLED";
 
+/**
+ * AI-5C: the read-only product-access STATUS route.
+ *
+ * AI-5B deliberately shipped no such endpoint, because a client that could not see
+ * product access could at least never mistake "Basic" for "provider problem". AI-5C
+ * closes that gap so the UI can tell three genuinely different states apart — Basic,
+ * AI Advanced with no usable provider, and unverifiable. This constant is the ONE
+ * spelling of that route path.
+ *
+ * The route is INFORMATIONAL ONLY. It authorizes nothing, mints no receipt, and is
+ * never consulted by any AI-5B gate: the six authoritative gates and this endpoint
+ * observe the SAME already-resolved app-instance access value, and only the gates
+ * refuse work.
+ */
+export const NUTRITION_PRODUCT_ACCESS_STATUS_ENDPOINT = "/api/nutrition/product-access";
+
+/**
+ * The EXACT key set of the status response. Three keys, no more.
+ *
+ * Feature booleans are deliberately absent: the client derives them from the
+ * unchanged AI-5A closed contract, so duplicating them here would create a second
+ * place where entitlement could disagree with the product contract.
+ */
+export const NUTRITION_PRODUCT_ACCESS_STATUS_KEYS = Object.freeze([
+  "ok",
+  "version",
+  "tier",
+] as const);
+
+/**
+ * The minimal read-only status body.
+ *
+ * It carries the closed contract version and the closed tier and NOTHING else: no
+ * feature payload, no provider, model, credential, BYOK state, pricing, plan,
+ * billing, subscription, account/user identity, customer id, secret, or raw
+ * environment value.
+ */
+export interface NutritionProductAccessStatusBody {
+  readonly ok: true;
+  readonly version: string;
+  readonly tier: string;
+}
+
+/**
+ * Builds the status body from the SAME canonical access value the AI-5B gates close
+ * over.
+ *
+ * `aiAttempted` is not present and nothing here performs work: no provider
+ * selection, no credential resolution, no BYOK lookup, no model lookup, no network
+ * probe, and no AI route rate-limit bucket is consumed. It reads a resolved closure
+ * and returns three fields.
+ *
+ * The `tier` is copied from the canonical access value rather than re-read from the
+ * environment, so this endpoint can never report a different tier than the gate
+ * enforcing on the same app instance.
+ */
+export function buildNutritionProductAccessStatus(
+  access: NutritionProductAccess,
+): NutritionProductAccessStatusBody {
+  return {
+    ok: true,
+    version: access.version,
+    tier: access.tier,
+  };
+}
+
 /** The single bounded denial message. Never parameterized by anything. */
 export const NUTRITION_AI_NOT_ENTITLED_ERROR =
   "AI Advanced Nutrition is not available for this product access.";

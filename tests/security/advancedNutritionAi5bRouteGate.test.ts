@@ -587,21 +587,64 @@ describe('AI-5B — client input has ZERO authority', () => {
     }
   });
 
-  it('exposes NO client-readable product-access state and no status endpoint', async () => {
+  it('exposes NO OTHER product-state surface beyond the AI-5C read-only status route', async () => {
+    // AI-5B deliberately had none; AI-5C (authorized separately) adds exactly ONE
+    // read-only informational route. No alternate, differently-named, or
+    // authorization-flavoured product-state surface may appear, and the one route
+    // that does exist must not authorize anything.
     const { server, baseUrl } = await startApp('ai_advanced');
     try {
       for (const path of [
-        '/api/nutrition/product-access',
         '/api/nutrition/entitlement',
         '/api/nutrition/product-tier',
         '/api/nutrition/access',
+        '/api/nutrition/product-access/status',
+        '/api/nutrition/entitlements',
       ]) {
         const response = await fetch(`${baseUrl}${path}`, { method: 'GET' });
-        // Enforcement only: no product-state synchronization surface exists in AI-5B.
         expect(response.status).toBe(404);
       }
     } finally {
       await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+
+  it('the AI-5C status route is informational only and never authorizes', async () => {
+    // Awareness, never authority: reporting AI Advanced must not unlock anything, and
+    // a Basic deployment must still be denied on every gated route afterwards.
+    const advanced = await startApp('ai_advanced');
+    try {
+      const status = await fetch(`${advanced.baseUrl}/api/nutrition/product-access`, {
+        method: 'GET',
+        headers: { authorization: 'Bearer ai5b-secret-token' },
+      });
+      expect(status.status).toBe(200);
+      const json = (await status.json()) as Record<string, unknown>;
+      expect(json.tier).toBe('ai_advanced');
+      // It mints nothing reusable.
+      expect(Object.keys(json).sort()).toEqual(['ok', 'tier', 'version']);
+    } finally {
+      await new Promise<void>((r) => advanced.server.close(() => r()));
+    }
+
+    const basic = await startApp('basic', { AI_ENDPOINT_TOKEN: 'ai5b-secret-token' });
+    try {
+      const status = await fetch(`${basic.baseUrl}/api/nutrition/product-access`, {
+        method: 'GET',
+        headers: { authorization: 'Bearer ai5b-secret-token' },
+      });
+      expect(((await status.json()) as Record<string, unknown>).tier).toBe('basic');
+      // Reading the status changed nothing about the gate.
+      for (const [path] of GATED_ROUTES) {
+        expectEntitlementDenial(
+          await post(basic.baseUrl, path, requestBody(path), {
+            authorization: 'Bearer ai5b-secret-token',
+          }),
+        );
+      }
+      expectZeroProviderWork();
+    } finally {
+      await new Promise<void>((r) => basic.server.close(() => r()));
     }
   });
 });

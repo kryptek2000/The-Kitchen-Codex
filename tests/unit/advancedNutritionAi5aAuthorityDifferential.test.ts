@@ -525,10 +525,11 @@ function walkFiles(dir: string, out: string[] = []): string[] {
 }
 
 describe('AI-5A inertness — structural: no consumer, no wiring, no field', () => {
-  it('K. the contract has ZERO CLIENT/plugin consumers and exactly ONE server boundary', () => {
-    // AI-5A was inert. AI-5B gives the SERVER authority, and only the server: the
-    // dedicated gate module plus the composition point that closes over its value.
-    // The client, the scripts and the plugin build stay completely unaware.
+  it('K. exactly ONE server boundary plus ONE read-only client reader; no plugin/scripts', () => {
+    // AI-5A was inert. AI-5B gave the SERVER authority: the dedicated gate module plus
+    // the composition point that closes over its value. AI-5C adds exactly ONE client
+    // READER (awareness) and ONE application-layer composer over it. Neither grants
+    // authority. The scripts and the plugin build stay completely unaware.
     const offenders: string[] = [];
     for (const root of ['src', 'server', 'scripts', 'plugin']) {
       for (const full of walkFiles(join(REPO, root))) {
@@ -538,11 +539,20 @@ describe('AI-5A inertness — structural: no consumer, no wiring, no field', () 
     expect(offenders.map((full) => relative(REPO, full)).sort()).toEqual([
       'server/app.ts',
       'server/nutritionProductAccess.ts',
+      'src/application/nutritionAiClientState.ts',
+      'src/application/nutritionProductAccess.ts',
     ]);
 
-    // Nothing outside the server tree is aware at all.
+    // Nothing outside those four is aware at all — in particular never the plugin or
+    // the scripts.
+    const authorized = new Set([
+      'src/application/nutritionAiClientState.ts',
+      'src/application/nutritionProductAccess.ts',
+    ]);
     for (const root of ['src', 'scripts', 'plugin']) {
       for (const full of walkFiles(join(REPO, root))) {
+        const rel = relative(REPO, full);
+        if (authorized.has(rel)) continue;
         expect(codeOf(full), full).not.toContain('nutritionProductAccess');
       }
     }

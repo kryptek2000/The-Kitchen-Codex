@@ -116,6 +116,8 @@ import { sanitizeKitchenIntent } from "../src/utils/kitchenIntent.js";
 import { safeFetchImage, WafProtectionError } from "./ssrfGuard.js";
 import { createSecurityMiddleware } from "./securityHeaders.js";
 import {
+  buildNutritionProductAccessStatus,
+  NUTRITION_PRODUCT_ACCESS_STATUS_ENDPOINT,
   requireNutritionProductFeature,
   resolveServerNutritionProductAccess,
 } from "./nutritionProductAccess.js";
@@ -663,6 +665,43 @@ export function createApp(opts: CreateAppOptions): express.Express {
       });
     }
   });
+
+  // ==========================================================================
+  // AI-5C — READ-ONLY PRODUCT-ACCESS STATUS (INFORMATIONAL, NOT AN AUTHORITY)
+  // ==========================================================================
+  //
+  // AI-5B shipped no such endpoint. AI-5C adds ONE so the client can tell three
+  // genuinely different states apart — Basic product access, AI Advanced product
+  // access with no usable provider, and an unverifiable status — instead of
+  // collapsing them into one generic "not configured" message.
+  //
+  // THIS ROUTE AUTHORIZES NOTHING.
+  //   * It is NOT consulted by any of the six AI-5B gates below. Those gates close
+  //     over `nutritionProductAccess` and refuse work independently.
+  //   * It mints no receipt, no token, no capability and no signature, and it
+  //     never appears in any AI request path.
+  //   * A forged, stale or structurally fabricated client belief of `ai_advanced`
+  //     changes NOTHING here or on any gated POST: the server already knows the
+  //     authoritative tier and never asks the browser for it.
+  //
+  // AUTH FIRST: `requireAiAccessToken` runs before the handler, exactly like
+  // `/api/providers`, so an unauthenticated caller learns nothing about product
+  // state — not Basic, not AI Advanced, not even the contract version.
+  //
+  // ZERO PROVIDER WORK: the handler reads the already-resolved canonical closure.
+  // No provider selection, no credential resolution, no BYOK lease, no model
+  // lookup, no network probe, and no AI route rate-limit bucket is consumed.
+  //
+  // NO STORE: product access is runtime deployment policy, so the response is
+  // explicitly non-cacheable and must never become stale browser/proxy state.
+  app.get(
+    NUTRITION_PRODUCT_ACCESS_STATUS_ENDPOINT,
+    requireAiAccessToken,
+    (_req, res) => {
+      res.setHeader("Cache-Control", "no-store");
+      res.json(buildNutritionProductAccessStatus(nutritionProductAccess));
+    },
+  );
 
   // AI-assisted USDA resolution endpoint (advisory only) with rate limiting &
   // input validation. The client sends ONLY bounded unresolved-ingredient text;

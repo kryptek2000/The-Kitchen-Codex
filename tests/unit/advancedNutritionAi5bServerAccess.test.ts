@@ -22,6 +22,7 @@ import {
   NUTRITION_AI_NOT_ENTITLED_ERROR,
   NUTRITION_PRODUCT_ACCESS_BOUND_VERSION,
   buildNutritionAiNotEntitledBody,
+  buildNutritionProductAccessStatus,
   requireNutritionProductFeature,
   resolveServerNutritionProductAccess,
 } from '../../server/nutritionProductAccess.js';
@@ -31,6 +32,7 @@ import {
   NUTRITION_PRODUCT_ACCESS_VERSION,
   isAiAdvancedProductAccess,
   isBasicProductAccess,
+  isNutritionProductFeatureEntitled,
   type NutritionProductAiFeature,
 } from '../../src/core/nutritionV2/nutritionProductAccess.js';
 
@@ -418,10 +420,48 @@ describe('AI-5B — server-authority module design', () => {
     expect(MODULE_CODE).not.toMatch(/=== ['"]ai_advanced['"]/);
   });
 
-  it('adds no product-access status endpoint and exposes no access reader', () => {
-    // Enforcement only: no client product-state synchronization in AI-5B.
-    expect(MODULE_CODE).not.toContain('/api/');
+  it('exposes NO client access READER and registers NO route of its own', () => {
+    // AI-5C (authorized after AI-5B) adds a read-only status RESPONSE builder plus an
+    // endpoint path constant. It must NOT add a client access READER and must NOT
+    // register a route inside this module: route registration stays in `server/app.ts`,
+    // so this boundary module remains the single gate/enforcement owner.
     expect(MODULE_CODE).not.toMatch(/app\.(get|post|use)\b/);
     expect(MODULE_CODE).not.toMatch(/function\s+(get|read|fetch)[A-Za-z]*ProductAccess/);
+    // The gate is the ONLY place that touches an Express response, and it does so
+    // exactly once. Nothing here reads the request, performs I/O, or probes the network.
+    const executable = MODULE_CODE.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    expect((executable.match(/\bres\./g) ?? []).length).toBe(1);
+    expect(executable).not.toContain('req.');
+    expect(executable).not.toContain('fetch(');
+    expect(executable).not.toContain('process.env');
+  });
+
+  it('the AI-5C status builder is a PURE projection and never authorizes', () => {
+    // The builder is the only AI-5C addition to this module. It must derive strictly
+    // from the canonical access value it is handed, and it must never mint a token,
+    // receipt or capability that a gate would accept.
+    const body = buildNutritionProductAccessStatus(AI_ADVANCED_NUTRITION_PRODUCT_ACCESS);
+    expect(Object.keys(body).sort()).toEqual(['ok', 'tier', 'version']);
+    expect(body.ok).toBe(true);
+    expect(body.tier).toBe('ai_advanced');
+    expect(body.version).toBe(NUTRITION_PRODUCT_ACCESS_VERSION);
+    for (const banned of ['token', 'receipt', 'capab', 'authoriz', 'signature']) {
+      expect(Object.keys(body).join(',').toLowerCase(), `must not expose ${banned}`)
+        .not.toContain(banned);
+    }
+  });
+
+  it('still refuses a non-canonical access value rather than trusting its shape', () => {
+    // The gate identity check is unchanged: awareness never becomes authority.
+    expect(isNutritionProductFeatureEntitled(BASIC_NUTRITION_PRODUCT_ACCESS, 'ai_interpretation')).toBe(false);
+    expect(
+      isNutritionProductFeatureEntitled(AI_ADVANCED_NUTRITION_PRODUCT_ACCESS, 'ai_interpretation'),
+    ).toBe(true);
+    expect(
+      isNutritionProductFeatureEntitled(
+        { ...BASIC_NUTRITION_PRODUCT_ACCESS, aiInterpretation: true } as never,
+        'ai_interpretation',
+      ),
+    ).toBe(false);
   });
 });
