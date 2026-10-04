@@ -82,6 +82,42 @@
  * accounts, plans, checkouts, billing vendors, license servers, customer records,
  * USDA/FDC data, AI-4 internals, or persistence. It holds one canonical access
  * value in server process memory and performs no I/O.
+ *
+ * ---------------------------------------------------------------------------
+ * AI-5F — EXCEPTION-TOTALITY, MAKING "IT NEVER THROWS" LITERALLY TRUE
+ * ---------------------------------------------------------------------------
+ * AI-5E contained the CALL to `resolve`, but two SERVER-INJECTED property accesses
+ * sat outside that containment: reading `authority.resolve` itself, and reading
+ * `raw.status` / `raw.access` while normalizing. A `Proxy` authority — or a revoked
+ * `Proxy` — turns either read into a synchronous throw, which escaped the boundary
+ * and surfaced as a generic Express 500 instead of a truthful
+ * `NUTRITION_PRODUCT_ACCESS_UNAVAILABLE`. AI-5E's own review flagged this as a
+ * non-blocking robustness NOTE; AI-5F closes it.
+ *
+ * Neither shape is request-reachable today — the authority is composed by the
+ * server, never selected by a client — but the interface is `unknown` at this
+ * boundary ON PURPOSE, precisely so an adversarial injected value is validated at
+ * runtime. A validation boundary that can itself throw is not a validation
+ * boundary, so the containment now spans the WHOLE synchronous path:
+ *
+ *   - authority shape validation, the `resolve` READ, its `typeof` check, the call,
+ *     the await, and normalization are all inside one failure containment;
+ *   - each authority field is sampled EXACTLY ONCE into a local, so a getter that
+ *     changes its answer cannot be sampled twice (no time-of-check/time-of-use);
+ *   - `normalizeNutritionProductAccessAuthorityDecision` is now literally
+ *     exception-total, so its documented "never throws" claim became true.
+ *
+ * Canonical identity stays load-bearing and unchanged: sampling once does not weaken
+ * anything, because the ONLY value that can resolve is one of the two frozen AI-5A
+ * instances. A hand-authored Advanced, a spread or structural clone, an impossible
+ * Basic+AI state, a forged version/tier/features value and a `Proxy` around any
+ * clone are all still refused as `unavailable`.
+ *
+ * AI-5F is HARDENING ONLY. No product-access, tier, feature, gate, middleware-order,
+ * wire, client or entitlement semantics change, and there is deliberately NO timeout
+ * policy, NO retry and NO second attempt: one request, one authority attempt, one
+ * failure, one `unavailable`. A NEVER-SETTLING authority is a separate, still-open
+ * architecture question that AI-5F does not attempt to answer.
  */
 
 import type { Request } from "express";
@@ -179,38 +215,59 @@ export function resolvedNutritionProductAccessDecision(
  *     `access` still holds, and no extra field is ever read or forwarded)
  *
  * It never throws and never returns Advanced for an untrustworthy result.
+ *
+ * AI-5F made "never throws" LITERALLY true. `raw` is attacker-shaped in the sense
+ * that matters here: it is whatever a SERVER-INJECTED authority produced, so
+ * `Array.isArray`, the `status` read and the `access` read may each execute a hostile
+ * `Proxy` getter — or a REVOKED `Proxy`, which throws even `Array.isArray`. Each of
+ * those reads now happens inside its own failure containment and yields the same
+ * canonical `unavailable`.
+ *
+ * Each field is SAMPLED EXACTLY ONCE into a local and every later comparison uses
+ * that local, so a getter that returns a different value on each read can never be
+ * sampled twice: normalization is deterministic and free of time-of-check/
+ * time-of-use. That is not a weakening of the canonical gate — the only value that
+ * can still resolve is one of the two frozen AI-5A instances, so a hostile getter
+ * must actually hand over the real canonical value, which is not a forgery.
  */
 export function normalizeNutritionProductAccessAuthorityDecision(
   raw: unknown,
 ): NutritionProductAccessAuthorityDecision {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+  let sampledStatus: unknown;
+  try {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      return NUTRITION_PRODUCT_ACCESS_AUTHORITY_UNAVAILABLE;
+    }
+    sampledStatus = (raw as { readonly status?: unknown }).status;
+  } catch {
     return NUTRITION_PRODUCT_ACCESS_AUTHORITY_UNAVAILABLE;
   }
-  const record = raw as { readonly status?: unknown; readonly access?: unknown };
-  if (record.status === "unavailable") {
+  if (sampledStatus === "unavailable") {
     return NUTRITION_PRODUCT_ACCESS_AUTHORITY_UNAVAILABLE;
   }
-  if (record.status !== "resolved") {
+  if (sampledStatus !== "resolved") {
     return NUTRITION_PRODUCT_ACCESS_AUTHORITY_UNAVAILABLE;
   }
-  return resolvedNutritionProductAccessDecision(record.access);
+  let sampledDecision: NutritionProductAccessAuthorityDecision;
+  try {
+    sampledDecision = resolvedNutritionProductAccessDecision(
+      (raw as { readonly access?: unknown }).access,
+    );
+  } catch {
+    return NUTRITION_PRODUCT_ACCESS_AUTHORITY_UNAVAILABLE;
+  }
+  return sampledDecision;
 }
 
 /**
- * The ONE authority invocation boundary.
+ * The UNCONTAINED half of the authority consultation.
  *
- * Every product-access question — the six AI-5B gates and the AI-5C status route —
- * goes through this function, exactly once per request. It:
- *
- *   1. refuses an absent, non-object or `resolve`-less authority;
- *   2. calls `resolve` with the request, inside a `try`, so a synchronous throw, a
- *      rejected promise, and a returned non-promise all behave identically;
- *   3. runtime-validates the result through the normalizer.
- *
- * It never throws, so no authority problem can escape as an unhandled 500, and it
- * never inspects the request itself.
+ * It exists only so that AI-5F can wrap the WHOLE synchronous path — including the
+ * `authority.resolve` PROPERTY READ, which is itself a `Proxy` trap — in a single
+ * failure containment owned by `invokeNutritionProductAccessAuthority`. Nothing
+ * outside this module calls it, and nothing here claims to be exception-total.
  */
-export async function invokeNutritionProductAccessAuthority(
+async function consultNutritionProductAccessAuthority(
   authority: unknown,
   request: Request,
 ): Promise<NutritionProductAccessAuthorityDecision> {
@@ -221,13 +278,46 @@ export async function invokeNutritionProductAccessAuthority(
   if (typeof resolve !== "function") {
     return NUTRITION_PRODUCT_ACCESS_AUTHORITY_UNAVAILABLE;
   }
-  let raw: unknown;
+  return normalizeNutritionProductAccessAuthorityDecision(
+    await (resolve as (r: Request) => unknown).call(authority, request),
+  );
+}
+
+/**
+ * The ONE authority invocation boundary.
+ *
+ * Every product-access question — the six AI-5B gates and the AI-5C status route —
+ * goes through this function, exactly once per request. It:
+ *
+ *   1. refuses an absent, non-object or `resolve`-less authority;
+ *   2. calls `resolve` with the request, so a synchronous throw, a rejected promise,
+ *      a hostile thenable and a returned non-promise all behave identically;
+ *   3. runtime-validates the result through the normalizer.
+ *
+ * It never throws, so no authority problem can escape as an unhandled 500, and it
+ * never inspects the request itself.
+ *
+ * AI-5F makes that "never throws" claim EXCEPTION-TOTAL for the whole synchronous
+ * path, not merely for the call. Every operation that can execute authority-supplied
+ * code — authority shape validation, the `resolve` property READ, its `typeof` check,
+ * the invocation, the await of a returned thenable/promise/value, and normalization —
+ * now happens inside ONE containment, so ANY authority-side exception resolves to the
+ * canonical `unavailable` instead of rejecting outward into Express.
+ *
+ * Still deliberately absent, and NOT added by AI-5F: any timeout, deadline, watchdog,
+ * abort, retry, fallback source or second attempt. An authority that never settles
+ * therefore still leaves the request pending; that is an open architecture question,
+ * and this boundary only ever guarantees that an authority FAILS CLOSED, never fast.
+ */
+export async function invokeNutritionProductAccessAuthority(
+  authority: unknown,
+  request: Request,
+): Promise<NutritionProductAccessAuthorityDecision> {
   try {
-    raw = await (resolve as (r: Request) => unknown).call(authority, request);
+    return await consultNutritionProductAccessAuthority(authority, request);
   } catch {
     return NUTRITION_PRODUCT_ACCESS_AUTHORITY_UNAVAILABLE;
   }
-  return normalizeNutritionProductAccessAuthorityDecision(raw);
 }
 
 /**

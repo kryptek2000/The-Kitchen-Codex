@@ -9702,6 +9702,12 @@ throw, a rejected promise, a non-promise return, `null`, `undefined`, a boolean,
 number, a string, an array, an empty object, an unknown/missing/padded/uppercase
 status, `resolved` with no access, and `resolved` with a non-canonical access.
 
+**Amended by AI-5F (§60).** As written above, the list did not yet cover two
+*property-access* failures — an authority whose `resolve` **getter** throws, and a
+returned decision whose `status` / `access` **getter** throws. Those two are now inside
+the same boundary, so the "every authority failure becomes `unavailable`" claim is
+literally true for property access too.
+
 ### 59.6 THE DEPLOYMENT AUTHORITY (CURRENT PRODUCTION)
 
 ```ts
@@ -9984,8 +9990,237 @@ Those are **not** implemented here.
 | auth-first, exactly-once, status success/unavailable, six gates, middleware order, reconcile order, forged-client differential, `server.ts` composition, no dual seam, current client compatibility | `tests/security/advancedNutritionAi5eAuthorityGate.test.ts` |
 | no commercial implementation, no fake principal, no persistence, bounded wire classes, AI-5A/AI-4E/AI-5D invariance, composition-only selection | `tests/security/advancedNutritionAi5eIsolation.test.ts` |
 
-### 59.22 AI-5F NOT STARTED
+### 59.22 AI-5F NOT STARTED (SUPERSEDED BY §60)
 
 This phase ends at the socket. Account identity, authentication middleware, hosted
 per-user entitlement, client product-access invalidation, billing, checkout and any
 downstream AI-4 context consumption all remain unauthorized and unimplemented.
+
+> **Historical note.** AI-5F (§60) has since landed and is a **hardening** phase only:
+> the socket, the deployment authority, the six gates, the status route and every
+> entitlement rule above are unchanged. AI-5G remains not started.
+
+---
+
+## §60. AI-5F — PRODUCT-ACCESS AUTHORITY EXCEPTION-TOTALITY HARDENING
+
+### 60.1 WHAT THIS PHASE IS
+
+AI-5F is **hardening**. It changes no product behaviour, no entitlement rule, no tier, no
+feature, no gate, no middleware order, no wire contract and no client code. It exists to
+close **one** non-blocking robustness NOTE that AI-5E's own review raised against
+`server/nutritionProductAccessAuthority.ts`.
+
+### 60.2 THE NOTE (EXACTLY AS RAISED)
+
+`invokeNutritionProductAccessAuthority` was **not literally exception-total** for two
+pathological **server-injected** `Proxy`-shaped values:
+
+1. an authority `Proxy` whose **`resolve` property getter** throws, because the property
+   read happened **before** the invocation `try`;
+2. a returned decision `Proxy` whose **`status` or `access` property getter** throws
+   during normalization, which ran **outside** that `try`.
+
+Explicitly recorded about that NOTE:
+
+- these shapes are **not request-reachable** today — the authority is composed by the
+  server and can never be selected by a browser;
+- they are **not entitlement bypasses**;
+- they are **not leaks**;
+- they are **not hangs**;
+- Express bounded them through the centralized generic error handler.
+
+And the claim they falsified was the boundary's own documented one:
+
+> It never throws.
+
+### 60.3 WHY SERVER-INJECTED OBJECTS ARE STILL RUNTIME-VALIDATED
+
+`invokeNutritionProductAccessAuthority` and
+`normalizeNutritionProductAccessAuthorityDecision` accept `unknown` **on purpose**. A
+boundary that could only be reached with a well-formed implementation would be untestable
+as a boundary. Runtime validation is therefore the whole point of the seam, and a
+validation boundary that can itself throw is not a validation boundary — which is exactly
+what the NOTE exposed.
+
+### 60.4 ROOT CAUSE
+
+Two authoritative property reads sat **outside** the failure containment:
+
+```ts
+// AI-5E, before AI-5F
+const resolve = (authority as { readonly resolve?: unknown }).resolve; // <-- OUTSIDE try
+if (typeof resolve !== "function") { /* ... */ }
+let raw: unknown;
+try {
+  raw = await (resolve as (r: Request) => unknown).call(authority, request);
+} catch { /* contained */ }
+return normalizeNutritionProductAccessAuthorityDecision(raw);          // <-- OUTSIDE try
+```
+
+and inside the normalizer, `Array.isArray(raw)`, `record.status` (read **twice**) and
+`record.access` were unguarded property operations on an attacker-shaped value.
+
+### 60.5 THE INVOCATION-BOUNDARY REPAIR
+
+One containment now spans the **whole synchronous path**. Every operation that can
+execute authority-supplied code happens inside it:
+
+- authority object validation,
+- **reading `resolve`**,
+- validating `typeof resolve`,
+- invoking / calling `resolve`,
+- awaiting the returned thenable, promise or value,
+- normalizing the returned decision.
+
+```ts
+export async function invokeNutritionProductAccessAuthority(
+  authority: unknown,
+  request: Request,
+): Promise<NutritionProductAccessAuthorityDecision> {
+  try {
+    return await consultNutritionProductAccessAuthority(authority, request);
+  } catch {
+    return NUTRITION_PRODUCT_ACCESS_AUTHORITY_UNAVAILABLE;
+  }
+}
+```
+
+`consultNutritionProductAccessAuthority` is module-private, is not exported, and claims no
+exception-totality of its own. It exists only so the single containment can cover the
+`resolve` **property read**.
+
+**ANY** authority-side exception therefore normalizes to canonical `unavailable`. The
+boundary never throws, never rejects outward, never 500s through Express, and never
+fabricates Basic or Advanced.
+
+### 60.6 THE NORMALIZER REPAIR
+
+`normalizeNutritionProductAccessAuthorityDecision`'s documented *"never throws"* promise is
+now literally true. The shape check and the `status` read share one containment; the
+`access` read and the canonical-identity decision share a second:
+
+- a `Proxy` whose `status` getter throws → `unavailable`;
+- a `Proxy` whose `access` getter throws → `unavailable`;
+- a getter that mutates between reads → `unavailable`, decided by the single sample;
+- a **revoked** `Proxy` (which throws even `Array.isArray`) → `unavailable`;
+- a getter that triggers any other exception → `unavailable`.
+
+Every direct call satisfies `expect(() => normalize…(raw)).not.toThrow()` and returns the
+canonical `NUTRITION_PRODUCT_ACCESS_AUTHORITY_UNAVAILABLE` singleton.
+
+### 60.7 READ-ONCE SEMANTICS
+
+Within normalization each field is sampled **exactly once** into a local, and every later
+comparison uses that local:
+
+- read `status` **once** inside the containment; on the `resolved` branch,
+- read `access` **once** inside the containment; then
+- validate canonical identity **from that local**.
+
+There is no second `status` read, no re-validation round trip, and therefore no
+time-of-check/time-of-use window in which a `Proxy` could answer differently twice. This is
+deterministic, and it is the reason a value that changed between reads can no longer be
+sampled inconsistently.
+
+**This is not a weakening.** The only value that can still resolve is one of the two
+**frozen AI-5A instances**. A hostile decision must actually hand over the real canonical
+object, which is a handover of the process's own truth, not a forgery. Hand-authored
+Advanced, spread clone, structural clone, `Proxy` around a clone, Basic with AI flags
+altered, forged version / tier / features, and prototype tricks all remain `unavailable`.
+
+### 60.8 THE WIRE NOW SAYS THE TRUTHFUL THING
+
+For exactly these pathological injected cases, the observable difference is:
+
+| Surface | Before AI-5F | After AI-5F |
+| --- | --- | --- |
+| status route | `500 {"error":"Internal server error"}` | `503 NUTRITION_PRODUCT_ACCESS_UNAVAILABLE`, no `tier`, no `version`, `Cache-Control: no-store` |
+| gated AI POST | `500 {"error":"Internal server error"}` | `503 NUTRITION_PRODUCT_ACCESS_UNAVAILABLE`, `aiAttempted: false` |
+
+**No generic 500 for any repaired case.** The bodies are bounded: no raw exception, no
+authority implementation or source, no stack, no account, plan, pricing or billing detail,
+no provider, model, credential, secret or environment value. The unchanged AI-5C client
+reader still composes the 503 to `product_access_unverified` — never to
+`product_not_enabled`.
+
+### 60.9 NO ENTITLEMENT BEHAVIOUR CHANGE
+
+Nothing about who is entitled changed.
+
+| Class | Wire | Unchanged |
+| --- | --- | --- |
+| canonical Basic | `403 NUTRITION_AI_NOT_ENTITLED`, `aiAttempted: false` | yes |
+| canonical AI Advanced | passes the product gate to its existing downstream semantics | yes |
+| malformed / unavailable / hostile authority | `503 NUTRITION_PRODUCT_ACCESS_UNAVAILABLE` | yes |
+
+The three classes stay **distinct and uncollapsed**. The six gates, the status route
+contract (`{ ok, version, tier }` exactly, three keys), the auth → product authority →
+pricing → paid limiter → handler order, the reconcile order (auth → product authority →
+reconcile limiter → AI-4E receipt → D1), the deployment authority's one-time raw-tier
+resolution and its total request-independence are all unchanged.
+
+**AUTH-FIRST remains load-bearing.** Even with an authority whose `resolve` getter throws,
+an unauthenticated request answers `401` and the authority is **never touched** — proven by
+a `Proxy` trap counter that stays at **0**.
+
+### 60.10 NO TIMEOUT POLICY, NO RETRY
+
+AI-5F addresses **exceptions only**. It deliberately adds:
+
+- no `Promise.race` deadline,
+- no `AbortController` / `AbortSignal`,
+- no `setTimeout` / `setInterval` deadline or watchdog,
+- no polling, no circuit breaker,
+- no retry, no fallback source, no second attempt.
+
+One request → **one** authority attempt → **one** failure → one `unavailable`. A retry after
+a throw, a rejection, a malformed result or a `Proxy` failure could produce inconsistent
+product decisions and duplicate remote work in a future authority.
+
+**Unchanged and still open:** an authority whose promise **never settles** leaves the
+request pending. AI-5F invents no duration and does not answer that architecture question;
+it only guarantees that an authority **fails closed**, never that it fails *fast*.
+
+### 60.11 STILL NO ACCOUNTS, NO BILLING, NO ENTITLEMENT SOURCES
+
+No accounts, authenticated principal, OAuth, JWT entitlement, Stripe, Paddle,
+subscription, checkout, customer record, license key, remote entitlement service, billing
+API or plan mapping. No new package dependency. No persistence of authority state to
+filesystem, SQLite, database, vault, Markdown, YAML, cookies, `localStorage`,
+`sessionStorage`, `IndexedDB`, `SettingsAdapter` or plugin data.
+
+Provider state, provider identity, model, credential source, BYOK key presence and
+connection success remain **operational** concerns only — Basic plus a perfect BYOK is
+still Basic. Free / Budget / Paid / Variable pricing is still never mapped to a product
+tier. No request field — header, cookie, query, body, IP, `x-user-id`, `x-account-id`,
+`x-plan`, `x-entitlement` — has any authority.
+
+### 60.12 UNCHANGED INVARIANTS
+
+| Surface | Status |
+| --- | --- |
+| `src/core/nutritionV2/nutritionProductAccess.ts` (AI-5A) | **zero diff**; `nutrition_product_access_v1`; two tiers; four features |
+| `src/core/nutritionV2/nutritionCapabilities.ts` | **zero diff** |
+| `server/recipeContextOriginReceipt.ts` (AI-4E) | **zero diff** |
+| `src/core/nutritionV2/aiRecipeContextOriginReceiptShape.ts` | **zero diff** |
+| `projectAcceptedRecipeContext` | **ZERO production consumers** |
+| AI-5D client surfaces (`src/App.tsx`, `src/application/nutritionProductAccess.ts`, `src/application/nutritionAiClientState.ts`, Provider Settings, Advanced Nutrition UI) | **zero diff** |
+| AI-5B gate module and route registration | **zero diff** — exactly six gates, no seventh |
+| Basic / manual nutrition | never product-gated: USDA analysis, deterministic matching, manual corrections, manual weight, source/count/household portions, calculation, provenance, Review, Apply, saved report viewing |
+
+### 60.13 COVERAGE
+
+| Concern | File |
+| --- | --- |
+| normalizer exception-totality, invocation exception-totality, the ten-case `Proxy` adversary matrix, read-once `status`/`access`, canonical identity still load-bearing, no-timeout / no-retry / exactly-once, module isolation | `tests/unit/advancedNutritionAi5fAuthorityHardening.test.ts` |
+| status route 503, all six gates 503 with `aiAttempted: false`, no generic 500, bounded non-leaking body, auth-first with a `Proxy` trap counter at zero, exactly-once per surface, Basic / Advanced / hostile classes distinct, reconcile order | `tests/security/advancedNutritionAi5fAuthorityHardening.test.ts` |
+
+Every new case is **additive**. No AI-5E adversary case was weakened, removed, skipped or
+marked `.only` / `.skip` / `.todo`.
+
+### 60.14 AI-5G NOT STARTED
+
+AI-5F closes a robustness NOTE. It does **not** begin AI-5G, and it does not create an
+authenticated identity, hosted per-user entitlement, client invalidation lifecycle or any
+commercial capability. Those remain unauthorized and unimplemented.
