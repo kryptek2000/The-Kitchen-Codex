@@ -10224,3 +10224,1142 @@ marked `.only` / `.skip` / `.todo`.
 AI-5F closes a robustness NOTE. It does **not** begin AI-5G, and it does not create an
 authenticated identity, hosted per-user entitlement, client invalidation lifecycle or any
 commercial capability. Those remain unauthorized and unimplemented.
+
+---
+## §61. AI-6A — INTELLIGENCE RECON + FAILURE TAXONOMY
+
+> **Revised by AI-6A-R3.** R2 exposed one remaining recon defect in its own report:
+> `1 cup all-purpose or bread flour` auto-resolves to 125 g / FDC `168894` and R2 still
+> counted it as `none_resolved` / `already_resolved` — **safe success credit for an authored
+> choice the author never made**. AI-6A-R3 makes the success sentinel conditional and stops
+> gating authored-alternative evidence on `resolved`, so the DIAGNOSTIC verdict is truthful
+> while the RAW production result stays exactly as measured. Three resolution axes are now
+> reported separately: `raw_matched` 92, `authenticated_mass_resolved` 92, `safe_resolved`
+> 91. No nutrition behavior changed. The historical benchmark JSON is byte-identical
+> (`0480527440eb8344a2210901f5796ae21b232fc81d218f5f082be32f01db8375`), and the historical
+> and legacy denominators are unchanged at **46/97** and **42/91**. Subsections 61.33–61.37
+> record what changed.
+>
+> **Revised by AI-6A-R2.** Review of the R1 *report* exposed five remaining
+> diagnostic-truth defects — a bounded measurement that could still be labeled
+> qualitative, a symptom that outranked its own root cause, a package net mass
+> routed to an AI-estimation lane, a parse failure reported where there was only
+> a policy gap, and a raw compatibility metric quoted as roadmap justification.
+> AI-6A-R2 repairs the **MEASUREMENT SYSTEM only**. No nutrition behavior
+> changed. The historical benchmark JSON is byte-identical
+> (`0480527440eb8344a2210901f5796ae21b232fc81d218f5f082be32f01db8375`), and the
+> historical and legacy denominators are unchanged at **46/97** and **42/91**.
+> Subsections 61.27–61.32 record what changed, why, and what it did not.
+>
+> **Correcting the record on one point.** R1's report gave `8 oz spaghetti` as an
+> example of a line carrying an unmeasurable-amount subtype. That example was
+> **wrong**: `8 oz spaghetti` was never labeled qualitative in the R1
+> measurement. It appeared only as a sample line in an `identity_needs_review`
+> cluster printed directly beside the qualitative-subtype counts, and the two
+> were read as one list. The **real** bounded-measurement violation was different
+> and larger: **14 correctly-parsed RANGE lines** were stamped
+> `has_qualitative_amount` + `has_authored_amount_absent`. Both the mistaken
+> example and the real defect are now prevented by tests, and the example line is
+> pinned explicitly (§61.27).
+
+### 61.1 WHY AI-6 BEGINS WITH MEASUREMENT, NOT A FIX
+
+AI-5 is closed. AI-6 returns to the actual product problem: **make Advanced Nutrition
+smarter.** But "smarter" is not yet a specification, because the engine's failures are
+currently reported in the vocabulary of the UI (`needs_match`, `needs_amount`,
+`review_suggested`, `qualitative`, `unresolved`) rather than in the vocabulary of causes.
+
+That vocabulary is the obstacle. "1 tbsp butter has no mass", "the catalog has no
+plausible record", "a compatible USDA duplicate existed but ranking chose the other one",
+"the line said `X or Y`", and "the author wrote `to taste`" are five completely different
+problems with five different owners, five different safety implications, and five
+different fixes — yet all of them surface as one undifferentiated `needs_amount` bucket.
+
+So AI-6A measures first. It changes **no behavior**, touches **no production module**, and
+produces a bounded, deterministic, evidence-backed distribution of where resolution
+actually fails. AI-6B chooses a target from that distribution.
+
+### 61.2 PERMANENT AUTHORITY RULE
+
+AI-6A **MUST NOT change nutrition truth.** AI remains interpretation/assistance.
+Deterministic systems continue to own ingredient identity, FDC identity, mass authority,
+USDA portions, calculation, nutrients, provenance, persistence and Apply authorization.
+This phase may **observe** those systems. It may not alter them.
+
+Concretely, AI-6A has **ZERO diff** under `src/`, `server/` and `plugin/`. All new code
+lives in `tests/fixtures/`, `scripts/`, `tests/` and this document. A corpus test fails
+the build if any production module so much as mentions a recon module.
+
+### 61.3 THE HISTORICAL 97-LINE BENCHMARK IS PRESERVED
+
+The existing deterministic benchmark is load-bearing and is **not** modified:
+
+| Asset | Role |
+| --- | --- |
+| `tests/fixtures/advancedNutritionResolutionCorpus.ts` | the 97-line canonical denominator |
+| `tests/fixtures/advancedNutritionIdentityCorpus.ts` | checked-in identity expectations |
+| `tests/fixtures/aiAdvancedSemanticCorpus.ts` | AI-1 semantic acceptance lines |
+| `scripts/benchmark_resolution_coverage.ts` | the historical runner |
+| `src/core/nutritionV2/aiAdvancedBenchmark.ts` | the historical summarizer |
+
+Baseline, measured before any AI-6A work, after AI-6A, and again after AI-6A-R1:
+
+| | Before | After AI-6A | After AI-6A-R1 | After AI-6A-R2 |
+| --- | --- | --- | --- | --- |
+| unique lines | 97 | 97 | 97 | 97 |
+| deterministically resolved | **46/97** | **46/97** | **46/97** | **46/97** |
+| direct / source / count / household portion | 11 / 22 / 9 / 4 | 11 / 22 / 9 / 4 | 11 / 22 / 9 / 4 | 11 / 22 / 9 / 4 |
+| legacy subset | **42/91** | **42/91** | **42/91** | **42/91** |
+
+The historical benchmark's JSON is **byte-identical** across all four runs, with SHA-256
+`0480527440eb8344a2210901f5796ae21b232fc81d218f5f082be32f01db8375` before and after AI-6A-R2.
+No line was rewritten to improve a score, no known-issue case was deleted, and no
+identity-safety assertion was weakened.
+
+**The 97 → 91 split is explicit.** The legacy Phase 7 denominator was pinned before six
+`nutrient_annotation` lines were appended, so `LEGACY_EXCLUDED_LINES` names exactly those
+six, making `91 = 97 − 6` and `42 = 46 − 4` checkable rather than folklore.
+
+### 61.4 THE NEW AI-6A RECON CORPUS
+
+AI-6A builds a **new supplemental** corpus rather than bloating or redefining the
+historical benchmark. The recon denominator is the unique union of three populations:
+
+| Population | Source | Count |
+| --- | --- | --- |
+| `historical` | `RESOLUTION_COVERAGE_CORPUS`, de-duplicated | 97 |
+| `semantic` | AI-1 semantic lines not already historical | 18 |
+| `supplemental` | AI-6A real-recipe reconnaissance | 92 |
+| **TOTAL UNIQUE** | | **207** |
+
+207 unique authored lines. AI-6A-R1 added three adversarial probes (§61.21) taking the
+corpus from 204 to 207. The AI-1 semantic corpus deliberately repeats one authored line
+under several semantic families; those families are **merged** onto a single line rather
+than counted twice, because repeating a line would inflate the denominator without adding
+information.
+
+Every line declares the coverage families it materially exercises, and the corpus test
+proves **all 30 required families** are represented. **No identity truth is invented**:
+expectations are joined from the identity-safety corpus by exact authored text, so an
+unlabeled supplemental probe is honestly `unverified`.
+
+### 61.5 THE MULTI-AXIS DIAGNOSTIC RECORD
+
+Reducing a line to one vague reason too early is the failure mode this phase exists to
+avoid, so each line yields a structured record across independent axes: identity (line,
+source, focus, families); parse (parsed query, quantity kind, measurement kind, amount,
+raw unit, count-noun class, range endpoints, container, package net mass, **qualitative
+reason**, **portion-resolvable quantity**); live terminal; candidate (count, bounded top-5
+window with per-candidate portion compatibility, expected rank, auto outcome, catalog
+probe total); portion (selected compatibility, alternate compatibility, **named** alternate
+FDC id); judgement (correctness, one blocker, secondary signals, repair lane).
+
+Output is deterministic and bounded: no clock, no randomness, no network, no provider, no
+Gemini, no OpenRouter, no AI request, no user files, no private vault.
+
+### 61.6 THE CORRECTNESS AXIS (INDEPENDENT OF THE TERMINAL STATE)
+
+```
+verified_correct   — checked-in corpus knowledge positively supports the bound identity
+verified_unsafe    — checked-in corpus knowledge positively forbids the bound identity
+unverified         — no checked-in knowledge either way
+```
+
+`verified_correct` / `verified_unsafe` are returned **only** when checked-in corpus
+expectations support the conclusion. Everything else is `unverified`. This axis is
+deliberately independent of the terminal state, because **an automatically-resolved line
+that violates a known identity expectation is MORE IMPORTANT than an unresolved line.**
+
+### 61.7 PRIMARY BLOCKER TAXONOMY (CLOSED)
+
+**EXACT ACCOUNTING: 18 declared values = 1 success sentinel (`none_resolved`) + 17 failure
+blockers.** This is pinned by test (`AI6A_BLOCKER_TOTAL`, `AI6A_FAILURE_BLOCKER_TOTAL`,
+`AI6A_SUCCESS_SENTINEL`), because the first AI-6A report said "closed, 16" while listing
+17 values. AI-6A-R2 added `measurement_policy_gap` (§61.29), taking the vocabulary 17 → 18.
+
+```
+none_resolved                      unsafe_auto_identity
+parse_failed                       measurement_parse_gap
+measurement_policy_gap             identity_unmatched
+qualitative_or_absent_amount       alternative_ambiguous
+identity_needs_review              container_net_mass_boundary
+compatible_candidate_not_selected  compatible_portion_unresolved
+selected_record_lacks_source_portion
+authenticated_count_portion_absent household_portion_absent
+container_mass_absent              catalog_or_specificity_gap
+unclassified
+```
+
+The declaration order is now asserted to be **exactly** the precedence order. R1's comment
+claimed that and was false (two container blockers were transposed), so the claim is now a
+test rather than a sentence.
+
+`needs_amount` and `needs_match` are **not** in this vocabulary. They are recorded as the
+`terminal`, and a test asserts they can never appear as a root cause.
+
+### 61.8 BLOCKER PRECEDENCE (SAFETY-FIRST, DETERMINISTIC)
+
+Ordering principle: **ROOT CAUSE, NOT FIRST AVAILABLE SYMPTOM.** The primary blocker answers
+"what must change for this line to become truthfully resolvable?", so an explicit POLICY or
+AUTHORED-INPUT cause is ranked above a generic downstream symptom.
+
+1. `unsafe_auto_identity` — checked-in knowledge forbids the bound identity
+2. `parse_failed` — the frozen deterministic parser refused the text
+3. `measurement_parse_gap` — the authored measurement was **not represented correctly**
+4. `measurement_policy_gap` — it **was** represented correctly; no authorized policy consumes it
+5. `identity_unmatched` — nothing surfaced, and a catalog probe found something plausible
+6. `qualitative_or_absent_amount` — **the amount has no bounded authority**
+7. `alternative_ambiguous` — choosing between the author's own alternatives is not ours
+8. `identity_needs_review` — candidates exist, none eligible for automatic binding
+9. `container_net_mass_boundary` — **policy** deliberately declined a declared net mass
+10. `compatible_candidate_not_selected` — named alternate had the compatible portion
+11. `compatible_portion_unresolved` — the bound record has a portion; no mass resulted
+12. `selected_record_lacks_source_portion` — the bound record has no compatible portion
+13. `authenticated_count_portion_absent` — count-unit noun, no count portion
+14. `household_portion_absent` — household noun, no count or household mapping
+15. `container_mass_absent` — container noun carrying no mass
+16. `catalog_or_specificity_gap` — nothing plausible found and none expected
+17. `unclassified` — always a finding
+
+Ranks 6–8 are the AI-6A-R2 reordering; see §61.28 for why, and for why `identity_unmatched`
+deliberately stays **above** the amount causes. Two invariants dominate everything: a
+verified-unsafe identity **always** wins, even over a line that otherwise *resolved*; and a UI
+terminal can never override a root cause. `none_resolved` is a success short-circuit guarded by
+the unsafe check, outside the failure ladder.
+
+### 61.9 SECONDARY SIGNALS AND DIAGNOSTIC LANES
+
+A bounded closed signal set (22 values) records contributing factors:
+`has_explicit_mass`, `has_volume`, `has_count`, `has_household_word`, `has_size_descriptor`,
+`has_container`, `has_package_mass`, `has_range`, `has_alternative`,
+`has_preparation_modifier`, `has_state_modifier`, `has_form_modifier`,
+`has_brand_or_commercial_specificity`, `has_qualitative_amount`,
+`has_explicit_qualitative_amount`, `has_authored_amount_absent`,
+**`identity_review_symptom_present`** (AI-6A-R2), `has_nutrient_annotation`,
+`selected_candidate_has_compatible_portion`, `alternate_candidate_has_compatible_portion`,
+`plausible_candidate_present`, `no_plausible_candidate_observed`.
+
+These are **diagnostics only** and never become runtime behavior.
+
+Each blocker routes to exactly one **planning-only** repair lane, declared as a single
+total function so the two vocabularies cannot drift: `already_resolved`,
+`deterministic_parser`, `deterministic_identity`, `deterministic_ranking`,
+`deterministic_portion`, `catalog_gap`, `ai_semantic_interpretation`,
+`ai_bounded_mass_estimation`, `intentional_human_review`, `needs_recon`.
+
+**A LANE IS NOT AN AUTHORITY.** `ai_semantic_interpretation` means "semantic interpretation
+may be worth evaluating" — it does **not** mean AI may choose FDC identity.
+`ai_bounded_mass_estimation` means "this may be a legitimate AI-3-style estimate candidate" —
+it does **not** mean the estimate auto-applies.
+
+After the AI-6A-R2 lane corrections (§61.28, §61.29) **both AI lanes have zero measured
+producers**, and a test asserts that. They remain *declared* because they are part of the
+planning vocabulary, but nothing routes to them today: the only blockers that once did were
+mislabeled.
+
+### 61.10 CATALOG GAP vs MATCHER FAILURE
+
+When the pipeline surfaces no identity, a bounded deterministic catalog probe runs over the
+food's core tokens: probe found plausible records → `identity_unmatched` (matcher failure);
+probe found nothing plausible → `catalog_or_specificity_gap`. A test fails if a catalog gap
+is ever labeled while a candidate is present.
+
+For branded wording, lack of an exact branded identity is measured **honestly**. AI-6A does
+**not** assert that USDA must contain any exact branded record.
+
+### 61.11 PORTION DIAGNOSTICS
+
+For unresolved-amount lines the recon inspects the current selected record and the bounded
+candidate set using the same deterministic portion-compatibility authority the calculation
+engine uses. **Grams are never fabricated**: every unresolved line reports
+`mass_source: 'none'` and a null gram value.
+
+**AI-6A-R2 — RAW OBSERVATION vs ACTIONABLE BLOCKER (two named metrics).** These are different
+questions and are never conflated again:
+
+| Metric | Count | Meaning |
+| --- | --- | --- |
+| `raw_selected_record_portion_incompatible` | 59 | **RAW.** The selected record has no portion compatible with the authored measure, under the current bounded probe. A compatibility signal. |
+| `actionable_portion_blocker` | 37 | **ACTIONABLE.** A **bounded** authored quantity exists **and** the primary blocker routes to the portion lane. The roadmap input. |
+| `actionable_with_compatible_record_but_unresolved` | 2 | The subset of actionable whose record *does* have a compatible portion yet produced no mass (`compatible_portion_unresolved`). |
+| `bounded_lines_incompatible_but_not_actionable` | 24 | **The raw over-count, named.** |
+
+The exact partition, asserted by test:
+
+```
+raw 59            = actionable-with-incompatible-record 35 + not-actionable 24
+actionable 37     = 35 + the 2 whose record DOES have a compatible portion
+not-actionable 24 = qualitative_or_absent_amount 10
+                   + compatible_candidate_not_selected 9
+                   + container_net_mass_boundary 3
+                   + measurement_policy_gap 2
+```
+
+The 9 `compatible_candidate_not_selected` lines are excluded from the actionable count on
+purpose: there a compatible portion genuinely **exists**, in a different record, so the defect
+is selection, not missing portion authority. Counting them would have overstated the portion
+lane by exactly those 9.
+
+**The 59 may never be used to justify AI-6B.** Only the 37 may.
+
+### 61.12 COUNT / HOUSEHOLD DIAGNOSTICS
+
+Noun classes are tracked by name so systematic gaps are exposed instead of hidden. Every
+authored plural folds onto its closed singular class:
+
+```
+slice  clove  piece | head  stalk  stick  sprig  bunch
+can    jar    package  packet | whole_item | none
+```
+
+`whole_item` is decided by **PARSE CONTEXT, never token presence** — see §61.22.
+
+### 61.13 PREPARATION / STATE / FORM DIAGNOSTICS
+
+Wording that changes food identity or ranking is tracked and measured, **not fixed**:
+`raw`, `cooked`, `dried`, `fresh`, `frozen`, `canned`, `drained`, `packed`, `ground`,
+`crushed`, `minced`, `chopped`, `sliced`, `salted`, `unsalted`, `whole`, `skim`, lean
+percentages. Nutrient annotations are recorded as adversarial signals and never become the
+parsed ingredient amount.
+
+### 61.14 ALTERNATIVES AND QUALITATIVE AMOUNTS
+
+`X or Y` stays ambiguous on purpose; detection is a standalone `or` word, never a substring
+match. Choosing one is never scored as intelligence.
+
+`to taste`, `pinch`, `handful`, `drizzle`, `for garnish`, `as needed`, `a dash of` are
+**intentional conservative** behavior and are never counted as the same defect as "2 tbsp
+butter has no mass". AI-6A-R1 separates the two subtypes of an unbounded authored amount:
+
+- `explicit_qualitative_amount` — the author deliberately under-specified, or wrote an
+  indefinite measure (`1 handful`, `1 dash`);
+- `authored_amount_absent` — no quantity and no intentional cue.
+
+Both are separate, mutually exclusive secondary signals, so a line can never claim to be
+both.
+
+**AI-6A-R2 BOUNDED-MEASUREMENT EXCLUSION.** A line whose authored measurement IS bounded can
+**never** acquire a qualitative/absent signal, for **any** reason — not because a later
+identity problem exists, and not because a policy boundary exists. This is not a special case
+in the signal builder: every qualitative signal is derived from one single answer,
+`boundedAuthoredMeasurement` (§61.27), so the concepts cannot drift apart again.
+
+### 61.15 BRANDED / COMMERCIAL DIAGNOSTICS
+
+A closed, declared brand-token vocabulary marks brand specificity as a **diagnostic signal
+only**. A word that is BOTH a brand fragment and a quantity word (`dash`) is resolved by
+direction: see §61.23.
+
+### 61.16 DETERMINISTIC JSON OUTPUT
+
+```bash
+bun x tsx scripts/benchmark_nutrition_intelligence.ts --json /tmp/ai6a.json
+```
+
+Contains the schema identifier, corpus size, the historical/legacy invariant check, all
+aggregate axes, the expectation-class breakdown, the failure-cluster table, the noun census,
+ranking and portion statistics, exact blocker accounting, and per-line records. It contains
+**no** timestamp, hostname, absolute repository path, API key, environment secret or random
+id. Two consecutive runs are **byte-identical**, proven by `cmp`, by matching SHA-256, and
+by a test that re-runs the whole corpus and compares serialized output.
+
+### 61.17 NO PROVIDER CALLS
+
+The recon performs **no** network, provider, Gemini or OpenRouter request, and uses no clock,
+randomness or user files. A test scans all three recon modules for `fetch(`,
+`XMLHttpRequest`, `node:http`, `node:https`, `AbortController`, `setTimeout`, `Date.now`,
+`new Date(`, `Math.random` and `performance.now`.
+
+### 61.18 AI-6A COVERAGE
+
+| Concern | File |
+| --- | --- |
+| closed vocabularies, exact 18/1/17 accounting, declaration order == precedence order, blocker precedence, unsafe-auto priority, identity-correctness rules, the boundedness authority, indefinite-unit detection, brand-vs-measure `dash`, noun disambiguation, **AI-6A-R2** bounded-measurement exclusion (mass/volume/count/range), root-cause-over-identity precedence, unsafe-outranks-amount, alternative precedence, package-boundary lane, parse-vs-policy split | `tests/unit/advancedNutritionAi6aReconTaxonomy.test.ts` |
+| corpus uniqueness, ≥160 lines, all 30 coverage families, 97/91 denominator isolation, no invented identity truth, AI-6A-R1 adversarial probe pairs, no production import, no recon code in the plugin bundle | `tests/unit/advancedNutritionAi6aCorpus.test.ts` |
+| real-bundle 46/97 + 42/91 + 11/22/9/4 reproduction, one closed blocker + lane per line, mass-source truth, AI-3 estimate invariance, unsafe priority, ranking/portion evidence, catalog-vs-matcher, qualitative subtype truthfulness, noun disambiguation on real lines, un-conflated expectation denominators, aggregate internal consistency, byte determinism, **AI-6A-R2** all five repairs measured on real lines, raw-vs-actionable reconciliation, roadmap-uses-root-causes, the `all-purpose or bread flour` auto-resolution finding | `tests/unit/advancedNutritionAi6aRealBundle.test.ts` |
+
+### 61.19 HOW AI-6B WILL USE THIS
+
+AI-6B chooses its target from the **measured root-cause distribution**, ranked on safety,
+ordinary-user impact, generalizability, tractability, and frequency — **in that order**, with
+frequency last. The ranking is **derived at report time** from the current aggregate plus a
+declared, reviewable per-lane criterion profile; no lane is named as the target in code, and a
+test scans the recon modules for recommendation constants. See §61.31a and §61.32.
+
+### 61.20 AI-6B NOT STARTED
+
+AI-6A is measurement-only. It begins no behavior change, repairs no failure, and creates no
+new authority. AI-6B remains **NOT STARTED**.
+
+---
+
+### 61.21 AI-6A-R1 REPAIR 1 — QUALITATIVE / ABSENT AMOUNTS WERE PORTION FAILURES
+
+**Root cause.** The portion evidence in the classifier was conditioned only on
+`selectedCompatible === false`. For an amount-less line the measurement kind is `unknown`,
+so the portion-compatibility probe returns `false` for *every* record — which the
+classifier read as "the record lacks a compatible portion". That is false. For
+`handful fresh spinach` or `skim milk` there is **no authored quantity at all**, so no
+portion, however perfect, could resolve the line without inventing quantity authority.
+
+**Repair.** A single gate, `portionResolvableQuantity`, now withholds ALL portion evidence
+(`selected_record_lacks_source_portion`, `compatible_portion_unresolved`,
+`authenticated_count_portion_absent`, `household_portion_absent`,
+`compatible_candidate_not_selected`) unless the authored parse carries a bounded quantity a
+portion could actually consume. Two situations are excluded: no quantity
+(`quantity_kind: 'absent'`), and a number in front of an **indefinite** unit
+(`AI6A_INDEFINITE_MEASURE_UNITS`: handful, pinch, dash, drizzle, splash, sprinkle, drop…),
+read from the parse's own extracted `raw_unit` rather than a text scan.
+
+`measurement_kind: 'unknown'` is deliberately **not** disqualifying. An explicit amount with
+no unit token (`2 carrots, sliced`, `1 large white onion`) is a genuine implicit COUNT and a
+USDA count portion is exactly the right authority. An earlier, over-strict draft of this
+gate excluded those and emptied the largest real failure cluster, leaving 17 ordinary lines
+`unclassified` — the tripwire that caught it.
+
+**Measured effect.** `qualitative_or_absent_amount` rose 5 → 15.
+`selected_record_lacks_source_portion` fell 38 → 26. `unclassified` is 0.
+
+### 61.22 AI-6A-R1 REPAIR 2 — `whole milk` IS NOT A `whole_item` COUNT
+
+**Root cause.** The noun classifier's authored-text fallback mapped the token `whole`
+straight to `whole_item` with no parse context, so food-state wording collided with count
+wording. `whole milk` was reported as `whole_item` and therefore filed under
+`authenticated_count_portion_absent`.
+
+**Repair.** `whole_item` now requires **parse context**: an exact authored quantity
+(`quantity_kind: 'exact'` and `amount !== null`), plus a compound-form guard so
+`whole milk` / `whole wheat bread` never qualify. Measured on the real bundle:
+
+| Line | Noun class | Truth |
+| --- | --- | --- |
+| `1 whole chicken` | `whole_item` | `whole` IS a count descriptor — parse context supports it |
+| `2 whole lemons` | `whole_item` | same |
+| `2 whole cloves` | `clove` | the parser's count noun wins; `whole` is food form |
+| `2 slices whole wheat bread` | `slice` | `whole wheat` is a compound food form |
+| `whole milk` | `none` | `whole` is food form; there is no count at all |
+
+`whole milk` moved from `authenticated_count_portion_absent` to
+`qualitative_or_absent_amount` — which is the truth: it has no quantity to resolve.
+
+### 61.23 AI-6A-R1 REPAIR 3 — BRAND `Mrs. Dash` vs QUALITATIVE `dash`
+
+**Root cause, two directions.** The qualitative-cue regex matched the bare token `dash`, so
+the **brand** `Mrs. Dash` was flagged as an under-specified amount despite carrying an
+explicit `1 tbsp`. Separately, the brand-token scan matched `dash` inside the genuine
+quantity phrase `a dash of pepper`, flagging a *measure* as a brand.
+
+**Repair.** Qualitative cues now require the real quantity phrase (`dash of`, `dasherful`);
+a bare brand fragment can no longer match. The brand scan strips indefinite-measure phrases
+before tokenizing, so the collision cannot reappear from either side. Measured:
+
+| Line | `has_brand_or_commercial_specificity` | `has_qualitative_amount` | Blocker |
+| --- | --- | --- | --- |
+| `1 tbsp Mrs. Dash` | **yes** | **no** | `catalog_or_specificity_gap` |
+| `a dash of pepper` | **no** | **yes** | `identity_needs_review` |
+
+`1 tbsp Mrs. Dash` keeps a resolvable `1 tbsp` quantity and is honestly reported as an
+identity/specificity gap against the real bundle — never as a portion or amount defect.
+
+### 61.24 AI-6A-R1 REPAIR 4 — THE CONTAINER NET-MASS BOUNDARY WAS INVISIBLE
+
+**Root cause.** `container_net_mass_boundary` sat at rank 12, *below*
+`selected_record_lacks_source_portion` (rank 9). Since a container line almost always also
+lacks a compatible portion, the generic symptom always won and the explicit policy boundary
+never fired: the aggregate count was **0** despite three corpus lines declaring a real
+parsed package net mass.
+
+**Repair.** Precedence now ranks the boundary at **6**, above every portion symptom, and
+above `container_mass_absent`. This is the root-cause rule made mechanical: when the
+declared package mass is *why* policy refuses to resolve, that boundary IS the blocker.
+
+| Line | Package net mass | Blocker | Lane |
+| --- | --- | --- | --- |
+| `1 (15 oz) can tomato sauce` | 15 oz / container | `container_net_mass_boundary` | `ai_bounded_mass_estimation` |
+| `1 (8 oz) package cream cheese` | 8 oz / container | `container_net_mass_boundary` | `ai_bounded_mass_estimation` |
+| `1 (16 oz) package cream cheese` | 16 oz / container | `container_net_mass_boundary` | `ai_bounded_mass_estimation` |
+| `1 can (400 g) diced tomatoes` | 400 g / container | `identity_needs_review` | `deterministic_identity` |
+
+The last row is correct: identity outranks the boundary, because the corpus forbids any
+automatic identity for that line. A test asserts that **every** package-net-mass line which
+is *not* reported as the boundary has a genuinely higher-precedence cause.
+
+### 61.25 AI-6A-R1 REPAIR 5–7 — ACCOUNTING AND WORDING
+
+**Path accounting (Issue 5).** The first report said "6 paths" while listing nine files, and
+counted the `scripts/nutritionIntelligence/` directory as one path. Corrected: **9 exact
+file paths**, with two-way path-set equality and no directory counted as a single path.
+
+**Blocker vocabulary count (Issue 6).** "closed, 16" while listing 17 values. Corrected to
+exact arithmetic — **17 total = 1 success sentinel + 16 failure blockers** — pinned by test.
+
+**Identity / ranking denominators (Issue 7).** The first report stated "46 labeled identity
+cases", "expected top-1 = 45", "absent = 1" and "46/46 bind the expected FDC" without saying
+these use different denominators. They are now reconciled through **mutually exclusive**
+expectation classes whose counts sum exactly to the corpus:
+
+| Class | Count | Meaning |
+| --- | --- | --- |
+| `expected_auto_identity` | 46 | has an exact `expectedAutoFdc` — the ONLY "binds expected" denominator |
+| `expect_no_automatic` | 1 | corpus forbids ANY automatic identity |
+| `known_issue_baseline` | 2 | recorded current value only, not a correctness contract |
+| `top_fdc_order_only` | 2 | order expectation only; says nothing about auto-binding |
+| `candidate_description_only` | 3 | candidate-PRESENCE expectation only |
+| `forbidden_only` | 3 | forbidden constraints only; no positive expectation |
+| `no_expectation` | 150 | nothing checked in; correctness unknowable |
+
+Overlapping knowledge flags are reported separately because they do **not** sum to the
+total: 46 expected-id, 2 baseline, 1 no-auto, 2 top-order, 4 candidate-description,
+2 forbidden-id, 11 forbidden-description, 9 known-issue.
+
+The two ranking numbers are now explicitly separated, because they measure different things:
+
+- **`46 / 46` bound the expected auto identity** — of the 46 lines with an
+  `expectedAutoFdc`, all 46 auto-bound that exact FDC id.
+- **`45` appear at rank 1 of the bounded candidate WINDOW** — one (`1 can tuna`, expected
+  `2706311`) is auto-bound correctly but is **absent from the top-5 window**, because the
+  window is the review candidate list while the auto selection came from a different
+  resolution path. Binding is therefore not a subset of window rank-1 in general, and a test
+  asserts `bound >= window_top_1` rather than conflating them.
+
+No case is ever described as "binding the expected FDC" unless it actually has an
+`expectedAutoFdc`; a test enforces this per line.
+
+### 61.26 POST-REPAIR DISTRIBUTION AND RE-RANKED AI-6B RECOMMENDATION (SUPERSEDED BY §61.32)
+
+> **Superseded.** §61.26 records the **R1** distribution and R1 recommendation. Both are kept
+> for audit and are **wrong in five specific ways**, each repaired and named in §61.27–§61.31.
+> The authoritative post-R2 distribution and recommendation are **§61.32**. Where the two
+> disagree, §61.32 governs.
+
+**Post-R1 measured distribution (207 unique lines) — HISTORICAL, DO NOT USE FOR ROADMAPS:**
+
+| | Count |
+| --- | --- |
+| Authenticated resolved | 92 (44.4%) — direct 21 / source 44 / count 18 / household 9 |
+| Verified unsafe auto identities | **0** |
+| Verified correct auto identities | 46 |
+| Terminals | matched 92, needs_amount 63, needs_match 24, review_suggested 24, qualitative 4 |
+| Blockers | none_resolved 92, identity_needs_review 38, selected_record_lacks_source_portion 26, qualitative_or_absent_amount 15, compatible_candidate_not_selected 9, household_portion_absent 7, measurement_parse_gap 6, catalog_or_specificity_gap 4, container_net_mass_boundary 3, authenticated_count_portion_absent 2, compatible_portion_unresolved 2, alternative_ambiguous 1, container_mass_absent 1, identity_unmatched 1, **unclassified 0** |
+| Lanes | already_resolved 92, **deterministic_identity 39**, **deterministic_portion 37**, intentional_human_review 16, deterministic_ranking 9, ai_semantic_interpretation 6, catalog_gap 5, ai_bounded_mass_estimation 3 |
+| Qualitative subtypes | explicit cue 13, authored amount absent 13 (26 lines have an unmeasurable amount; 15 carry it as the PRIMARY blocker, 11 lose to identity precedence) |
+
+**The AI-6B ranking CHANGED as a direct result of the repair.** Before AI-6A-R1,
+`deterministic_portion` led with 50 against `deterministic_identity` at 36. After removing
+the false portion attributions, **`deterministic_identity` (39) now exceeds
+`deterministic_portion` (37)** — the previous recommendation was partly an artifact of
+mislabelled amount-less lines, which is exactly why the measurement had to be repaired
+before it could be used.
+
+**Corrected AI-6B target #1 — `deterministic_portion`: COUNT / household portion authority
+for already-correctly-identified foods**, still the `selected_record_lacks_source_portion`
+cluster, now honestly sized at 26 (+7 household, +2 count, +2 compatible-but-unresolved =
+**37**).
+
+It does NOT win on raw lane count, and the report should not pretend otherwise. It wins on
+the four criteria that matter, against a *larger* but *less tractable* alternative:
+
+- **User impact.** Its lines are `2 carrots, sliced`, `1 lemon`, `1 large white onion`,
+  `1 red bell pepper`, `1 large russet potato` — the most ordinary ingredients a home cook
+  writes weekly. The identity lane's 38 lines are dominated by composite food-name traps
+  (`sardines in tomato sauce`, `pasta with tomato sauce`, `bacon-flavored cereal`),
+  branded/commercial wording, and genuinely absent catalog records (`2 cups penne pasta`).
+- **Safety.** The portion failures are already fail-closed (`needs_amount`, no mass, no
+  wrong number), and the identity is **already bound and verified correct** on them, so an
+  improvement there cannot introduce a wrong food. Identity work has the opposite risk
+  profile: the Phase 0A history shows that surface already caused a real safety defect
+  (`sardines in tomato sauce` binding tomato sauce).
+- **Generalizability.** One coherent class — count/household portion authority for bound
+  produce identities — covers all 37 lines across many foods, and the noun census already
+  names the gaps by frequency: `can` 9, `package` 5, `slice` 5, `head` 4, `jar` 4,
+  `packet` 4, `stalk` 3.
+- **Authority-safe.** It needs no AI, no new authority, no change to AI-3 estimate
+  eligibility, and no prompt or provider work. It lives entirely inside existing
+  deterministic portion authority, which is where the mission says truth already belongs.
+
+**Runner-up, now clearly first in frequency:** `deterministic_identity` (39). It should be
+attacked **after** the portion lane, and split before it is attacked at all — the
+measurement shows it is not one problem but at least four (composite-name traps, branded
+wording, container-only phrasings, and true catalog gaps), and only the first is a
+correctness risk.
+
+**Not targets.** `qualitative_or_absent_amount` (15) and `alternative_ambiguous` (1) are
+**correct behavior** — a phase that "fixed" them would be manufacturing quantity authority.
+`catalog_or_specificity_gap` (4) is mostly not ours: `breadcrumbs` is genuinely absent from
+the pinned catalog and branded products must not be forced onto generic records.
+`container_net_mass_boundary` (3) is an explicit policy decision that needs an authority
+decision, not a bug fix.
+
+**What the target must not weaken.** Never fabricate, average or infer a gram value; mass
+must come from an authenticated USDA portion, a verified household-registry record, or an
+authored mass. Never relax identity binding — all 46 labeled cases currently bind the
+expected FDC and that must stay true. Never convert an AI-3 bounded estimate into
+authenticated mass or change estimate eligibility. Never resolve `X or Y` by picking one, and
+never resolve intentional qualitative wording as if it were a defect. Never treat a
+container/package count or a declared package net mass as mass authority without an
+explicit, separately-reviewed authority decision. Never regress 46/97 and 42/91 — report
+them as before/after deltas. Never weaken an identity-safety assertion or mark a current
+failure "expected correct behavior" to make a number look better.
+
+**AI-6B remains NOT STARTED.**
+
+---
+
+## AI-6A-R2 — DIAGNOSTIC TRUTH REPAIR
+
+### 61.27 REPAIR 1 — THE BOUNDED-MEASUREMENT EXCLUSION (ONE AUTHORITY)
+
+**Root cause.** AI-6A-R1 carried **two** independent notions of "is this amount
+measurable", and they disagreed:
+
+| Consumer | R1 test | Answer for `2-3 cloves garlic` |
+| --- | --- | --- |
+| portion gate (`portionResolvableQuantity`) | `quantity_kind === 'range'` → bounded | **bounded** |
+| secondary-signal builder | `input.amount === null` | **unmeasurable** |
+
+A range stores its endpoints in `quantity_range` and leaves `amount` null, so the second test
+stamped `has_qualitative_amount` + `has_authored_amount_absent` onto **14 correctly-parsed
+range lines** whose measurement is fully and truthfully captured. That is precisely the class
+of statement that must never be made about a bounded authored measurement.
+
+**Repair.** One authority, `boundedAuthoredMeasurement`, now decides boundedness for *both*
+the blocker and the signals, and `portionResolvableQuantity` **delegates** to it. A test
+asserts the two can never disagree across eight probe shapes. `qualitative_reason` is `null`
+whenever the measurement is bounded, and all three qualitative signals are derived from that
+one value. A second test asserts the general invariant over **all 207 lines**: no line with
+`portion_resolvable_quantity === true` may carry a qualitative reason, a qualitative signal,
+or the qualitative blocker.
+
+A range is bounded **only when both endpoints were actually extracted** as finite numbers.
+R1 accepted `quantity_kind: 'range'` on its own, which made `measurement_parse_gap`
+unreachable for a range and is what collapsed the parse/policy distinction (§61.29).
+
+**Adversarial controls, measured on the real bundle:**
+
+| Line | Amount | Kind | Bounded | `qualitative_reason` | Primary blocker |
+| --- | --- | --- | --- | --- | --- |
+| `8 oz spaghetti` | 8 `oz` | exact mass | **yes** | **null** | `identity_needs_review` |
+| `2 tbsp butter` | 2 `tbsp` | exact volume | **yes** | **null** | `none_resolved` |
+| `1 cup milk` | 1 `cup` | exact volume | **yes** | **null** | `none_resolved` |
+| `4 cloves garlic` | 4 `cloves` | exact count | **yes** | **null** | `none_resolved` |
+| `1 whole chicken` | 1 (implicit) | exact count | **yes** | **null** | `identity_needs_review` |
+| `1-2 tbsp olive oil` | 1–2 `tbsp` | range | **yes** | **null** | `measurement_policy_gap` |
+| `2-3 cloves garlic` | 2–3 `cloves` | range | **yes** | **null** | `measurement_policy_gap` |
+| `1 tbsp Mrs. Dash` | 1 `tbsp` | exact volume | **yes** | **null** | `catalog_or_specificity_gap` |
+
+### 61.28 REPAIR 2 — ROOT CAUSE ABOVE ORDINARY IDENTITY REVIEW
+
+**Root cause.** R1's own ordering principle is *"what must change for this line to become
+truthfully resolvable?"* — but its ladder placed ordinary `identity_needs_review` (rank 5)
+**above** `qualitative_or_absent_amount` (rank 7) and above `alternative_ambiguous` (rank
+14). For `drizzle of olive oil` that means repairing identity alone was reported as the fix,
+when in truth **no identity repair can produce grams for an authored line that has no
+bounded amount**. A symptom was outranking its own root cause, which buried **10** genuinely
+unresolvable amounts inside a 38-line identity bucket.
+
+**Repair.** `qualitative_or_absent_amount` (6) and `alternative_ambiguous` (7) now sit
+**above** ordinary `identity_needs_review` (8). Eleven lines changed primary blocker:
+
+| Line | R1 blocker | R2 blocker | Why the root cause moved up |
+| --- | --- | --- | --- |
+| `drizzle of olive oil` | `identity_needs_review` | `qualitative_or_absent_amount` | no bounded amount exists to convert |
+| `fresh dill for garnish` | `identity_needs_review` | `qualitative_or_absent_amount` | same |
+| `a dash of pepper` | `identity_needs_review` | `qualitative_or_absent_amount` | `dash` is not a measurable unit |
+| `a pinch of crushed red pepper flakes` | `identity_needs_review` | `qualitative_or_absent_amount` | same |
+| `sardines in tomato sauce` | `identity_needs_review` | `qualitative_or_absent_amount` | no authored amount |
+| `bacon flavor` | `identity_needs_review` | `qualitative_or_absent_amount` | no authored amount |
+| `apple cider vinegar` | `identity_needs_review` | `qualitative_or_absent_amount` | no authored amount |
+| `pasta with tomato sauce` | `identity_needs_review` | `qualitative_or_absent_amount` | no authored amount |
+| `tomato sauce with basil` | `identity_needs_review` | `qualitative_or_absent_amount` | no authored amount |
+| `bacon-flavored cereal` | `identity_needs_review` | `qualitative_or_absent_amount` | no authored amount |
+| `2 tbsp butter or margarine` | `identity_needs_review` | `alternative_ambiguous` | choosing one food would manufacture authored intent |
+| `butter or olive oil` | `identity_needs_review` | `qualitative_or_absent_amount` | no amount at all, which is deeper than the choice |
+
+**IDENTITY SAFETY IS NOT WEAKENED, and this is the part that required care.**
+
+- `unsafe_auto_identity` (0) and `parse_failed` (1) remain above everything. A verified-unsafe
+  identity still outranks an unbounded amount — asserted directly in the taxonomy suite.
+- `identity_unmatched` (5) deliberately stays **above** the amount causes. It is the one
+  identity label that is not an ordinary symptom: the pipeline surfaced **no** identity while
+  a bounded probe proved plausible records **exist**. That is a defect in our own
+  deterministic matcher, not a characteristic of what the author wrote, and naming our own
+  defect first is both more actionable and more honest. An authored amount that is absent can
+  never be repaired by us at all.
+- `container_net_mass_boundary` (9) deliberately stays **below** identity review. On
+  `1 can (400 g) diced tomatoes` no identity binds at all, so the boundary is *latent* rather
+  than causal and the identity failure is the honest root cause.
+- The displaced identity symptom is **never discarded**: the new bounded secondary signal
+  `identity_review_symptom_present` records it on all **40** lines where ordinary identity
+  review was evidence, so the reordering is auditable rather than silent. A test asserts the
+  signal is present on exactly the set of lines where that symptom is true.
+
+### 61.29 REPAIR 3 — PACKAGE NET MASS IS A POLICY DECISION, NOT AN ESTIMATE
+
+**Root cause.** `container_net_mass_boundary` routed to `ai_bounded_mass_estimation`. That is
+conceptually wrong. `1 (15 oz) can tomato sauce` **already contains authored mass
+information**. The issue is not "AI should estimate the mass" — the author wrote it. The issue
+is "current authority policy intentionally does not promote declared package net mass into
+ingredient mass". Routing it to an AI-estimation lane told the roadmap to have AI fill in a
+number that was already present.
+
+**Repair.** The blocker routes to **`needs_recon`**, which truthfully means *a separate
+authority/policy decision is required*. AI-6A still authorizes nothing; it only names the
+decision. `measurement_parse_gap` was corrected at the same time: a mis-captured measurement
+is a deterministic parser defect (`deterministic_parser`), not an AI-interpretation problem.
+
+**Measured, on the real bundle:**
+
+| Line | Parsed package net mass | Identity | Primary blocker | Lane | Promoted to authority? |
+| --- | --- | --- | --- | --- | --- |
+| `1 (15 oz) can tomato sauce` | 15 oz, per_container | bound `170054` | `container_net_mass_boundary` | **`needs_recon`** | **NO** — `mass_source: none`, grams `null` |
+| `1 (8 oz) package cream cheese` | 8 oz, per_container | bound `173418` | `container_net_mass_boundary` | **`needs_recon`** | **NO** |
+| `1 (16 oz) package cream cheese` | 16 oz, per_container | bound `173418` | `container_net_mass_boundary` | **`needs_recon`** | **NO** |
+| `1 can (400 g) diced tomatoes` | 400 g, per_container | **none** (`review_required`) | `identity_needs_review` | `deterministic_identity` | **NO** |
+
+The last row is unchanged and still correct: no identity binds, so the boundary is latent and
+identity is the causal blocker. A test asserts that **every** declared-net-mass line which is
+*not* the boundary has a genuinely higher-precedence cause.
+
+### 61.30 REPAIR 4 — PARSE GAP vs POLICY GAP
+
+**Root cause.** R1 reported six range lines as `measurement_parse_gap` while its own prose said
+their endpoints **are** parsed and simply have no consuming policy. That is not a parse failure,
+and the lane `ai_semantic_interpretation` implied an AI reading that is not needed merely to
+know that the endpoints are 1 and 2 tbsp.
+
+**Repair.** The vocabulary is split, with the two definitions stated so they cannot blur again:
+
+| Blocker | Definition |
+| --- | --- |
+| `measurement_parse_gap` | the authored measurement was **NOT represented correctly** by deterministic parsing |
+| `measurement_policy_gap` | the measurement **WAS** represented correctly, but **no authorized deterministic policy consumes it** |
+
+A parsed-but-unapplied exact mass is a **policy** gap for the same reason: the mass was
+represented correctly and nothing consumed it. A range whose endpoints the parser *dropped*
+is a **parse** gap — which is why `rangeEndpointsRepresented` is now checked rather than
+assuming `quantity_kind: 'range'` implies success.
+
+**All six range-policy cases, measured:**
+
+| Line | Lower | Upper | Unit | Measurement kind | Parsing succeeded | Current policy consumes it | Primary blocker | Lane |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `1-2 tbsp olive oil` | 1 | 2 | `tbsp` | volume | **yes** | **no** | `measurement_policy_gap` | `needs_recon` |
+| `1/4-1/2 tsp chili flakes (optional)` | 0.25 | 0.5 | `tsp` | volume | **yes** | **no** | `measurement_policy_gap` | `needs_recon` |
+| `2-3 tomatoes` | 2 | 3 | *(none)* | unknown (implicit count) | **yes** | **no** | `measurement_policy_gap` | `needs_recon` |
+| `2-3 cloves garlic` | 2 | 3 | `cloves` | count | **yes** | **no** | `measurement_policy_gap` | `needs_recon` |
+| `1-2 cups chicken stock` | 1 | 2 | `cups` | volume | **yes** | **no** | `measurement_policy_gap` | `needs_recon` |
+| `2-3 tbsp soy sauce` | 2 | 3 | `tbsp` | volume | **yes** | **no** | `measurement_policy_gap` | `needs_recon` |
+
+**No AI call, no provider call, and no fabricated representative.** No midpoint, average or
+range consumption is implemented; every one of the six reports `amount: null`,
+`resolved_grams: null`, `mass_source: 'none'`, and a test asserts exactly that.
+
+`measurement_parse_gap` is **0** on this corpus, and that is a real measurement rather than an
+emptied bucket: every range in the corpus parses, and total parse refusal is counted
+separately under `parse_failed` (also 0 here). The parse gap remains reachable and is proven
+reachable in the taxonomy suite.
+
+### 61.31 REPAIR 5 — RAW OBSERVATION vs ACTIONABLE PORTION BLOCKER
+
+See §61.11 for the full table and the exact partition. In short: the raw probe says 59, the
+actionable root cause says **37**, and the 24-line gap is **named by real blocker** rather than
+described as "system load". Only 37 may rank a roadmap.
+
+### 61.31a AI-6B RANKING IS COMPUTED, NOT ASSERTED
+
+`roadmapRanking` is a pure function of the **primary-blocker counters** plus a declared,
+reviewable per-lane criterion profile (`AI6A_LANE_CRITERION_SCORES`). Three properties are
+test-enforced:
+
+1. **The raw compatibility metric is structurally not an input.** A test inflates it to
+   100 000 and asserts the ranking is byte-identical.
+2. **No lane is named as the target in code.** The winner is the argmax of a computed
+   comparison, so changing the measurement changes the recommendation.
+3. **The five criteria are compared lexicographically in the mission's order — safety first,
+   frequency last** — so picking the largest bucket is structurally impossible. A synthetic
+   distribution with **identity at 100 root causes against portion at 1** still returns
+   `deterministic_portion`, decided on `safety`. That is the proof that the recommendation is
+   not frequency-chasing.
+
+`already_resolved`, `intentional_human_review` and `needs_recon` are marked **ineligible**, so
+correct behavior and policy-decision queues can never be ranked as targets.
+
+### 61.31b MEASURED FINDING: THE ENGINE ALREADY PICKS ONE AUTHORED ALTERNATIVE
+
+**Superseded by §61.33.** This subsection recorded the R2 observation accurately but left
+the DIAGNOSTIC verdict wrong. `1 cup all-purpose or bread flour` auto-binds one authored
+alternative, and R2 still credited it as `none_resolved` / `already_resolved`. AI-6A-R3
+corrects the verdict without changing a single line of production behavior.
+
+**Production behavior, unchanged and reported truthfully.** The engine auto-binds *Wheat
+flour, white, all-purpose, enriched, bleached* (`168894`) and resolves **125 g**. The checked-in
+corpus declares **no** identity expectation for this line, so the binding is correctly
+`unverified` — correctness is invented in neither direction.
+
+**What R3 changed: the diagnostic verdict only.**
+
+| Axis | Value | Changed by R3? |
+| --- | --- | --- |
+| live `terminal` | `matched` | **no — preserved** |
+| `mass_source` | `source_portion` (authenticated) | **no — preserved** |
+| `resolved_grams` | `125` | **no — preserved** |
+| `primary_blocker` | `alternative_ambiguous` (was `none_resolved`) | **yes** |
+| `repair_lane` | `intentional_human_review` (was `already_resolved`) | **yes** |
+| safe success credit | **FALSE** | **yes** |
+
+AI-6A does not repair the production behavior — that would be a production change — and does
+not weaken any assertion to make the number look better.
+
+---
+
+### 61.32 FINAL POST-R2 AGGREGATES AND RE-RANKED AI-6B RECOMMENDATION
+
+**Corpus:** 207 unique authored lines — 97 `historical` + 18 `semantic` + 92 `supplemental`.
+
+**Load-bearing invariants, all unchanged:**
+
+| | Value |
+| --- | --- |
+| Historical total / resolved | **97 / 46** |
+| Legacy total / resolved | **91 / 42** |
+| Historical mass sources (direct / source / count / household) | **11 / 22 / 9 / 4** |
+| Historical benchmark JSON SHA-256 | `0480527440eb8344a2210901f5796ae21b232fc81d218f5f082be32f01db8375` (byte-identical, two runs, `cmp` clean) |
+| AI-6A recon JSON SHA-256 | byte-identical across two runs |
+
+**Terminals:** matched 92, needs_amount 63, needs_match 24, review_suggested 24,
+qualitative 4.
+
+**Mass sources (whole corpus):** direct_mass 21, source_portion 44, count_portion 18,
+household_portion 9, none 115.
+
+**Correctness:** verified_correct **46**, verified_unsafe **0**, unverified 161.
+
+**Primary blockers (18 declared = 1 sentinel + 17 failures):**
+
+| Blocker | Count |
+| --- | --- |
+| `none_resolved` | 92 |
+| `identity_needs_review` | 26 |
+| `qualitative_or_absent_amount` | **26** |
+| `selected_record_lacks_source_portion` | 26 |
+| `compatible_candidate_not_selected` | 9 |
+| `household_portion_absent` | 7 |
+| `measurement_policy_gap` | 6 |
+| `catalog_or_specificity_gap` | 4 |
+| `container_net_mass_boundary` | 3 |
+| `alternative_ambiguous` | 2 |
+| `authenticated_count_portion_absent` | 2 |
+| `compatible_portion_unresolved` | 2 |
+| `container_mass_absent` | 1 |
+| `identity_unmatched` | 1 |
+| `measurement_parse_gap` | **0** |
+| `parse_failed` | 0 |
+| `unsafe_auto_identity` | 0 |
+| `unclassified` | **0** |
+
+**Repair lanes:** already_resolved 92, **deterministic_portion 37**,
+intentional_human_review 28, deterministic_identity 27, deterministic_ranking 9,
+**needs_recon 9**, catalog_gap 5, deterministic_parser 0,
+ai_semantic_interpretation 0, ai_bounded_mass_estimation 0.
+
+**Headline counts requested by the mission:**
+
+| Metric | Value |
+| --- | --- |
+| Qualitative / absent amount (primary) | **26** — explicit cue 13, authored amount absent 13 |
+| Lines with a **bounded** authored measurement | **181** |
+| Authored-choice ambiguity (primary) | **2** (+ 1 silently auto-resolved, §61.31b) |
+| `measurement_parse_gap` | **0** |
+| `measurement_policy_gap` | **6** |
+| Container-policy lines (`container_net_mass_boundary`) | **3** (+1 `container_mass_absent`) |
+| **Actionable** portion blocker | **37** |
+| **Raw** selected-record incompatibility | **59** (must not rank a roadmap) |
+| Deterministic identity root causes | **27** (+1 `identity_unmatched`) |
+| Verified unsafe automatic identities | **0** |
+
+**Top failure clusters:** `selected_record_lacks_source_portion` 26; `identity_needs_review`
+15 (`review_suggested`) + 11 (`needs_match`); `qualitative_or_absent_amount` 10
+(`needs_amount`) + 6 (`review_suggested`) + 6 (`needs_match`) + 4 (`qualitative`).
+
+**Count/household noun census over failing lines:** `none` 71, `can` 9, `package` 5,
+`slice` 5, `head` 4, `jar` 4, `packet` 4, `stalk` 3, `whole_item` 3, `bunch` 2, `clove` 2,
+`sprig` 2, `piece` 1.
+
+#### FINAL AI-6B TARGET #1 — `deterministic_portion` (37)
+
+**Ranked on the corrected ROOT-CAUSE distribution, on five criteria in the mission's order.
+It wins on the FIRST criterion, before frequency is ever consulted.**
+
+| Criterion | `deterministic_portion` | `deterministic_identity` |
+| --- | --- | --- |
+| 1. Safety | **5** | 2 |
+| 2. Ordinary-user impact | **5** | 4 |
+| 3. Generalizability | **5** | 3 |
+| 4. Tractability | **5** | 2 |
+| 5. Frequency (root causes) | **37** | 27 |
+
+- **Safety (deciding criterion).** Portion failures are already **fail-closed** — `needs_amount`,
+  no mass, no wrong number — and the identity is **already bound** on every one of the 37, so
+  an improvement there cannot introduce a wrong food. The identity lane has the opposite risk
+  profile: the Phase 0A history shows this surface already caused a real safety defect
+  (`sardines in tomato sauce` binding tomato sauce).
+- **Ordinary-user impact.** Its lines are `2 carrots, sliced`, `1 lemon`,
+  `1 large white onion`, `1 red bell pepper`, `1 large russet potato`, `1 bunch parsley`,
+  `1 head garlic` — the most ordinary ingredients a home cook writes weekly. The identity
+  lane's 27 are dominated by composite food-name traps, branded/commercial wording, and
+  genuinely absent catalog records.
+- **Generalizability.** One coherent class — count/household portion authority for
+  already-correctly-identified foods — covers all 37 across many foods, and the noun census
+  already names the gaps by frequency.
+- **Tractability.** It lives entirely inside existing deterministic portion authority: no new
+  authority, no prompt, no provider, no network, no AI-3 eligibility change.
+- **Frequency.** 37 root causes against 27 — the largest actionable bucket, but *decided last*.
+
+**This is not "pick the largest bucket".** A synthetic distribution of **identity 100 vs
+portion 1** still ranks `deterministic_portion` first, decided on `safety`. Frequency is the
+last criterion precisely so it cannot decide alone.
+
+**Runner-up: `deterministic_identity` (27 root causes).** It should be attacked **after** the
+portion lane and **split before it is attacked at all** — the measurement shows it is not one
+problem but at least four (composite-name traps, branded wording, container-only phrasings,
+true catalog gaps), and only the first is a correctness risk.
+
+**Explicitly NOT targets.** `qualitative_or_absent_amount` (26) and `alternative_ambiguous`
+(2) are **correct behavior**; a phase that "fixed" them would be manufacturing quantity
+authority. `needs_recon` (9) is a **policy/authority decision queue**
+(`container_net_mass_boundary` 3 + `measurement_policy_gap` 6), not a defect lane — and it
+deliberately contains **no AI lane**, because both AI lanes now have zero producers.
+`catalog_or_specificity_gap` (4) is mostly not ours: `breadcrumbs` is genuinely absent from
+the pinned catalog and branded products must not be forced onto generic records.
+
+#### WHAT THE TARGET MUST NOT WEAKEN
+
+Never fabricate, average, midpoint or infer a gram value; mass must come from an
+authenticated USDA portion, a verified household-registry record, or an authored mass. Never
+resolve `X or Y` by picking one — and note §61.31b, where the engine **already does** for one
+line. Never relax identity binding: all 46 labeled cases bind the expected FDC and that must
+stay true. Never convert an AI-3 bounded estimate into authenticated mass or change estimate
+eligibility. Never resolve intentional qualitative wording as if it were a defect. Never treat
+a container/package count or a declared package net mass as mass authority without an
+explicit, separately-reviewed authority decision — and never implement range consumption to
+make the six policy-gap lines look resolved. Never regress **46/97** and **42/91**; report them
+as before/after deltas. Never weaken an identity-safety assertion or mark a current failure
+"expected correct behavior" to make a number look better. Never quote the raw 59.
+
+**AI-6B remains NOT STARTED.**
+
+---
+
+## AI-6A-R3 — ALTERNATIVE-RESOLUTION TRUTH REPAIR
+
+### 61.33 ROOT CAUSE — SUCCESS CREDIT FOR A COLLAPSED AUTHORED CHOICE
+
+**Root cause.** `none_resolved` was added to the evidence set on line 1 of
+`classifyPrimaryBlocker`, gated only on `resolved && authenticated mass source`. Two things
+were wrong with that:
+
+1. **The success sentinel short-circuited nothing — it merely ranked first by accident.**
+   `none_resolved` is deliberately outside the failure ladder, so `blockerPrecedenceRank`
+   returns `BLOCKER_PRECEDENCE.length` for it. It won only because every competing label
+   happened to carry a *higher* rank, and because `alternative_ambiguous` evidence was
+   gated on `!input.resolved`.
+2. **`alternative_ambiguous` was gated on `!input.resolved`.** So for a line the pipeline
+   *did* resolve, no alternative evidence existed at all, and a 125 g match on
+   `1 cup all-purpose or bread flour` was recorded as `none_resolved` / `already_resolved` —
+   **safe success credit for a food the author never chose.**
+
+That is a direct contradiction of the declared authority rule: *never resolve authored
+`X or Y` by silently picking one.* The recon was measuring the rule's violation and calling
+it a win.
+
+**Repair.** Two changes, both in the classifier:
+
+- **The success sentinel is now CONDITIONAL and computed LAST.** `none_resolved` may only be
+  recorded when the failure-evidence set is **empty** *and* the mass source is authenticated.
+  It therefore cannot short-circuit, rank past, or launder any diagnostic cause — which is
+  precisely the rule: no unsafe identity, no parse/policy defect, no unresolved authored
+  ambiguity, no unbounded amount, no other failure.
+- **`alternative_ambiguous` is no longer gated on `!resolved`.** An authored `X or Y` is an
+  unresolved AUTHORITY question whether or not the pipeline returned a match.
+
+**Nothing about the production result is falsified.** `resolved`, `mass_source`, `resolved_grams`
+and the live `terminal` still describe exactly what the pipeline did. Only the DIAGNOSTIC
+verdict changed.
+
+### 61.34 THREE DISTINCT RESOLUTION AXES
+
+`authenticated mass resolution` and `safe semantic resolution` are **not** the same claim, and
+the recon now reports them as three separately-named axes:
+
+| Axis | Count | Precise meaning |
+| --- | --- | --- |
+| `raw_matched` | **92** | The live pipeline returned `matched`. A **production fact**, never a success claim. |
+| `authenticated_mass_resolved` | **92** | The mass **SOURCE** is authenticated (USDA portion / household registry / authored mass). |
+| `safe_resolved` | **91** | Authenticated mass **AND** no competing diagnostic failure. **The only axis that may be called a success.** |
+
+```
+raw_matched 92 − safe_resolved 91 = authenticated_mass_with_unresolved_authored_choice 1
+```
+
+**Authenticated mass does NOT prove the authored semantic food choice was authorized.** A line
+can hold an authenticated mass AND an unresolved authored choice simultaneously —
+`1 cup all-purpose or bread flour` is exactly that case: an authenticated `source_portion`
+mass of 125 g for a food the author never selected. The two are independent fields and
+neither is derived from the other.
+
+**The load-bearing historical invariant stays on the PRODUCTION axis.** `subsetSummary`
+reports all three axes per subset, and `historicalBaselineCheck` asserts `46/97` and `42/91`
+against **`authenticated_resolved`** — deliberately *not* against `safe_resolved`. The
+historical benchmark measures current production resolution and must not be rewritten to hide
+production behavior. The safe axis is reported alongside it as a **separate, one-lower**
+number:
+
+| Subset | Production (invariant) | Raw matched | Safe resolved |
+| --- | --- | --- | --- |
+| historical 97 | **46/97** | 46 | 45 |
+| legacy 91 | **42/91** | 42 | 41 |
+
+### 61.35 ALL FOUR AUTHORED-ALTERNATIVE LINES
+
+`has_alternative` requires a **standalone `or` word** (`\bor\b`), never a substring, so
+`Worcestershire`, `coriander`, `porridge` and `flour` are not alternatives. A test pins ten
+ordinary lines as non-alternatives and confirms no ordinary matched line loses safe credit.
+
+| Authored line | Bounded amount | Raw terminal | Selected identity | Raw mass | Primary blocker | Safe success credit |
+| --- | --- | --- | --- | --- | --- | --- |
+| `1 cup all-purpose or bread flour` | **yes** (1 cup, volume) | `matched` | `168894` *Wheat flour, white, all-purpose, enriched, bleached* | **125 g, `source_portion`** | `alternative_ambiguous` | **NO** |
+| `2 tsp whole cloves or 1/2 tbsp ground clove` | **yes** (2 tsp, volume) | `needs_match` | none | none | `alternative_ambiguous` | **NO** |
+| `2 tbsp butter or margarine` | **yes** (2 tbsp, volume) | `review_suggested` | none | none | `alternative_ambiguous` | **NO** |
+| `butter or olive oil` | **no** (no authored amount) | `review_suggested` | none | none | `qualitative_or_absent_amount` | **NO** |
+
+**Why automatic resolution is NOT allowed** for any of them: the author wrote a *choice*.
+Selecting one branch is not a measurement, it is an authored decision the recon has no
+authority to make. The engine may do it — production currently does, for the flour line — but
+the recon declines to call the result safe.
+
+Note `butter or olive oil` reports `qualitative_or_absent_amount`, not
+`alternative_ambiguous`: it has **no amount at all**, and a missing quantity is the deeper
+cause (§61.28), so it is named first. Its authored-choice ambiguity is still recorded via
+`has_alternative`.
+
+### 61.36 FLAKE-REPORT WORDING CORRECTION
+
+R2's report contained an over-broad claim. Corrected, evidence-bounded wording:
+
+> **No assertion failure was observed in the captured R2 stress runs or the four consecutive
+> final-state full-suite runs.** The exact failure types from the uncaptured R1 run cannot be
+> determined: no run log, reporter output, or artifact from that run exists in the repository
+> or in `/tmp`. I therefore cannot confirm whether R1's disclosed first-run failures were
+> timing/resource pressure or assertion failures, and I will not invent a reconstruction.
+
+What IS established, from captured evidence: **4 consecutive clean full-suite runs at the
+final state (393 files / 7129 tests, 0 failures each)**, plus **4 consecutive stress runs** of
+the three heaviest bundle-loading suites (468 tests, 0 failures). No unrelated test-timeout or
+production change was made in response to the R1 disclosure, because the disclosure cannot be
+substantiated.
+
+### 61.37 FINAL POST-R3 AGGREGATES AND RE-RANKED AI-6B RECOMMENDATION
+
+**Corpus:** 207 unique lines. **Terminals (RAW, unchanged):** matched 92, needs_amount 63,
+needs_match 24, review_suggested 24, qualitative 4.
+
+**Mass sources (unchanged — real sources preserved):** direct_mass 21, source_portion 44,
+count_portion 18, household_portion 9, none 115.
+
+**Correctness (unchanged):** verified_correct 46, verified_unsafe **0**, unverified 161.
+
+**Resolution axes:** `raw_matched` **92**, `authenticated_mass_resolved` **92**,
+`safe_resolved` **91**, `authenticated_mass_with_unresolved_authored_choice` **1**.
+
+**Primary blockers (18 declared = 1 sentinel + 17 failures):**
+
+| Blocker | R2 | **R3** |
+| --- | --- | --- |
+| `none_resolved` | 92 | **91** |
+| `identity_needs_review` | 26 | 26 |
+| `qualitative_or_absent_amount` | 26 | 26 |
+| `selected_record_lacks_source_portion` | 26 | 26 |
+| `compatible_candidate_not_selected` | 9 | 9 |
+| `household_portion_absent` | 7 | 7 |
+| `measurement_policy_gap` | 6 | 6 |
+| `catalog_or_specificity_gap` | 4 | 4 |
+| `alternative_ambiguous` | 2 | **3** |
+| `container_net_mass_boundary` | 3 | 3 |
+| `authenticated_count_portion_absent` | 2 | 2 |
+| `compatible_portion_unresolved` | 2 | 2 |
+| `container_mass_absent` | 1 | 1 |
+| `identity_unmatched` | 1 | 1 |
+| `measurement_parse_gap` / `parse_failed` / `unsafe_auto_identity` / `unclassified` | 0 | 0 |
+
+**Repair lanes:** already_resolved 92 → **91**, deterministic_portion **37**,
+intentional_human_review 28 → **29**, deterministic_identity 27, deterministic_ranking 9,
+needs_recon 9, catalog_gap 5, deterministic_parser 0, ai_semantic_interpretation 0,
+ai_bounded_mass_estimation 0.
+
+**Top failure clusters:** `selected_record_lacks_source_portion` 26;
+`identity_needs_review` 15 (`review_suggested`) + 11 (`needs_match`);
+`qualitative_or_absent_amount` 10 (`needs_amount`) + 6 (`review_suggested`) +
+6 (`needs_match`) + 4 (`qualitative`); `alternative_ambiguous` 2 (`review_suggested`) +
+1 (`matched`); `compatible_candidate_not_selected` 9; `household_portion_absent` 7.
+
+**Actionable portion blocker 37 · raw selected-record incompatibility 59** — unchanged by R3
+and still governed by §61.11. Only the actionable 37 may rank a roadmap.
+
+#### AI-6B TARGET #1 — `deterministic_portion` (37). UNCHANGED BY R3.
+
+The one-line reclassification moved a line from `already_resolved` to
+`intentional_human_review`, and **neither lane is the target**, so the recommendation is
+stable — which is itself the desired outcome: correcting a diagnostic verdict must not
+reshuffle the roadmap for cosmetic reasons.
+
+It still wins on the **first** criterion, before frequency is consulted:
+
+| Criterion | `deterministic_portion` | `deterministic_identity` |
+| --- | --- | --- |
+| 1. Safety | **5** | 2 |
+| 2. Ordinary-user impact | **5** | 4 |
+| 3. Generalizability | **5** | 3 |
+| 4. Tractability | **5** | 2 |
+| 5. Frequency (root causes) | **37** | 27 |
+
+- **Safety (deciding).** Portion failures are already **fail-closed** — `needs_amount`, no
+  mass, no wrong number — and the identity is **already bound** on all 37, so an improvement
+  there cannot introduce a wrong food. The identity lane carries the opposite profile: the
+  Phase 0A history shows this surface already caused a real safety defect (`sardines in
+  tomato sauce` binding tomato sauce).
+- **Ordinary-user impact.** `2 carrots, sliced`, `1 lemon`, `1 large white onion`,
+  `1 red bell pepper`, `1 large russet potato`, `1 bunch parsley`, `1 head garlic` — the most
+  ordinary ingredients a home cook writes weekly.
+- **Generalizability.** One coherent class — count/household portion authority for
+  already-correctly-identified foods — across many foods, with the noun census naming the gaps
+  by frequency.
+- **Tractability.** Entirely inside existing deterministic portion authority: no new
+  authority, no prompt, no provider, no network, no AI-3 eligibility change.
+- **Frequency.** 37 root causes against 27 — the largest actionable bucket, but *decided
+  last*. Proven not frequency-chasing: a synthetic distribution of identity 100 vs portion 1
+  still ranks `deterministic_portion` first, decided on `safety`.
+
+**Runner-up: `deterministic_identity` (27 root causes)** — attack after the portion lane, and
+split before attacking it at all; it is at least four distinct problems.
+
+**Explicitly NOT targets.** `qualitative_or_absent_amount` (26) and `alternative_ambiguous`
+(3) are **correct behavior** — a phase that "fixed" them would be manufacturing quantity
+authority, or picking an author's food for them. `needs_recon` (9) is a policy/authority
+**decision queue**, containing no AI lane at all. `catalog_or_specificity_gap` (4) is mostly
+not ours.
+
+#### WHAT THE TARGET MUST NOT WEAKEN
+
+Never fabricate, midpoint, average or infer a gram value. **Never resolve an authored `X or Y`
+by picking one** — and note §61.33, where production **already does** for one line; correcting
+that is a behavior change requiring its own authorization. Never relax identity binding: all
+46 labeled cases bind the expected FDC. Never convert an AI-3 bounded estimate into
+authenticated mass or change estimate eligibility. Never treat authenticated mass as proof of
+authorized semantic choice — those are separate axes (§61.34). Never resolve intentional
+qualitative wording as a defect. Never promote a declared package net mass without an
+explicit, separately-reviewed authority decision. Never implement range consumption to make the
+six policy-gap lines look resolved. Never regress **46/97** and **42/91**. Never weaken an
+identity-safety assertion. Never quote the raw 59. **Never report `raw_matched` as a success
+count.**
+
+**AI-6B remains NOT STARTED.**
