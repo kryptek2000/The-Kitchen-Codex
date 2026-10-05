@@ -15,7 +15,9 @@
  */
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { join, relative, resolve, sep } from 'node:path';
+import { build } from 'esbuild';
 import { describe, it, expect } from 'vitest';
 
 import {
@@ -266,9 +268,96 @@ describe('AI-6A — the recon is unreachable from production', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('is absent from the plugin bundle source', () => {
-    const source = readFileSync(join(REPO_ROOT, 'plugin/main.js'), 'utf8').toLowerCase();
-    // The built plugin must not carry the recon schema or its benchmark tool.
-    expect(source.includes('nutrition_ai6a_intelligence_recon_v1')).toBe(false);
-  });
+  // The recon is proved unreachable from the REAL plugin bundle by resolving the
+  // actual esbuild dependency closure FROM SOURCE, in memory, on every run.
+  //
+  // This deliberately does NOT read the generated `plugin/main.js`. That artifact
+  // exists only in an already-built worktree and is absent from a clean CI
+  // checkout, so a hermetic unit-level isolation assertion must derive the bundle
+  // itself. `write: false` guarantees the repository is never touched.
+  const PLUGIN_ENTRY = join(REPO_ROOT, 'plugin/main.ts');
+  const PLUGIN_ARTIFACT = join(REPO_ROOT, 'plugin/main.js');
+
+  // Any input under `scripts/` or `tests/` is measurement-only by construction, so
+  // the plugin graph must contain none of it. This covers the recon modules, the
+  // recon benchmark, the AI-6A corpus fixture, and any future recon-only module.
+  const NON_PRODUCTION_INPUT_ROOTS = ['scripts/', 'tests/'];
+
+  // Recon-only markers. Each is a literal or exported identifier that exists ONLY
+  // in AI-6A recon code and its fixture, so it can appear in emitted plugin JS only
+  // if recon code genuinely entered the closure.
+  const RECON_ONLY_MARKERS = [
+    'nutrition_ai6a_intelligence_recon_v1',
+    'benchmark_nutrition_intelligence',
+    'AI6A_RECON_SCHEMA',
+    'AI6A_RECON_TOOL',
+    'AI6A_INTELLIGENCE_CORPUS',
+    'AI6A_HISTORICAL_SUBSET',
+    'AI6A_LEGACY_SUBSET',
+    'advancedNutritionAi6aIntelligenceCorpus',
+    'nutritionIntelligence',
+  ];
+
+  // Runtime (non-type) values that exist in `plugin/main.ts` only, so seeing them
+  // proves the entrypoint really bundled and the negative assertions below are not
+  // vacuous. A type-only name such as `KitchenCodexSettings` is erased by esbuild
+  // and would make this control meaningless.
+  const PLUGIN_ENTRY_MARKERS = ['open-kitchen-codex', 'KitchenCodexPlugin'];
+
+  function artifactFingerprint(): string {
+    const stats = statSync(PLUGIN_ARTIFACT, { throwIfNoEntry: false });
+    return stats ? `${stats.size}:${stats.mtimeMs}` : 'absent';
+  }
+
+  it('is absent from the real plugin bundle resolved from source', async () => {
+    const artifactBefore = artifactFingerprint();
+
+    // Same options as `plugin/build.mjs`, with `write: false` and `metafile: true`.
+    // The outfile path is a throwaway temp name so that even a lost `write: false`
+    // could not touch the real artifact.
+    const result = await build({
+      entryPoints: [PLUGIN_ENTRY],
+      absWorkingDir: REPO_ROOT,
+      bundle: true,
+      write: false,
+      metafile: true,
+      external: ['obsidian'],
+      format: 'cjs',
+      platform: 'browser',
+      target: 'es2020',
+      jsx: 'automatic',
+      outfile: join(tmpdir(), 'kc-ai6a-plugin-isolation.js'),
+      sourcemap: 'inline',
+      tsconfig: join(REPO_ROOT, 'tsconfig.json'),
+      define: { 'process.env.NODE_ENV': '"production"' },
+      logLevel: 'silent',
+    });
+
+    expect(result.errors).toEqual([]);
+
+    // (A) Resolved dependency-graph proof: inspect esbuild's REAL input graph.
+    const inputs = Object.keys(result.metafile.inputs);
+    expect(inputs.length).toBeGreaterThan(0);
+    expect(inputs).toContain('plugin/main.ts');
+    const leakedInputs = inputs.filter((input) => {
+      const repoRelative = relative(REPO_ROOT, resolve(REPO_ROOT, input)).split(sep).join('/');
+      return NON_PRODUCTION_INPUT_ROOTS.some((root) => repoRelative.startsWith(root));
+    });
+    expect(leakedInputs).toEqual([]);
+
+    // (B) Emitted bundle-text proof: inspect the in-memory output.
+    const js = result.outputFiles.filter((file) => file.path.endsWith('.js'));
+    expect(js.length).toBe(1);
+    const emitted = js[0].text;
+    expect(emitted.length).toBeGreaterThan(100_000);
+    for (const marker of PLUGIN_ENTRY_MARKERS) expect(emitted).toContain(marker);
+    for (const marker of RECON_ONLY_MARKERS) {
+      expect(emitted, `recon marker reached the plugin bundle: ${marker}`).not.toContain(
+        marker
+      );
+    }
+
+    // No generated artifact was created, destroyed, or rewritten.
+    expect(artifactFingerprint()).toBe(artifactBefore);
+  }, 60000);
 });
