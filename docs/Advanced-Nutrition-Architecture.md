@@ -11512,3 +11512,187 @@ or network call.
 | whole-object/cut-measure/container partition is closed and total, recovery rule positives and every refusal, requirement precedence and range/amount refusal, adjective-first ≡ unit-first equivalence, bread-slice no-averaging proof, `v3` version + stale-`v2` fail-closed, versioned baseline records and preserved release digests, the two witnesses, the 35 retained refusals, mortadella and oyster dispositions | `tests/unit/advancedNutritionAi6b1DeterministicPortion.test.ts` |
 | AI-6A release snapshot preservation (46/42 + release SHAs) alongside the AI-6B1 current expectation | `tests/unit/advancedNutritionAi6aCorpus.test.ts`, `tests/unit/advancedNutritionAi6aRealBundle.test.ts` |
 | adjective-first whole-object recovery resolves, cut measure refuses | `tests/unit/advancedNutritionPhase6Household.test.ts` |
+
+---
+
+## 63. AI-6B2 — PORTION AUTHORITY EXHAUSTION + NEXT-LANE HANDOFF
+
+### 63.1 WHAT CHANGED — AND WHAT DID NOT
+
+AI-6B2 is **planning-only**. It changes **ZERO** production nutrition behavior: no new
+grams, no changed FDC binding, no changed mass source, no changed eligibility, no new
+authority. Its entire contribution is a correction to **planning truth**, published as a
+SEPARATE versioned artifact so the AI-6A/AI-6B1 intelligence schema is untouched:
+
+- schema `nutrition_ai6b2_portion_disposition_v1` (the recon schema remains
+  `nutrition_ai6a_intelligence_recon_v1`)
+- builder `scripts/nutritionIntelligence/portionDispositionReport.ts`
+- classifier `scripts/nutritionIntelligence/portionDisposition.ts`
+- CLI `scripts/benchmark_nutrition_portion_disposition.ts`
+- ZERO production consumers
+
+### 63.2 THE ARCHITECTURAL CORRECTION
+
+A **blocker** and a **repairability verdict** are not the same thing.
+`selected_record_lacks_source_portion` is a perfectly truthful observation, but it does not
+mean "a deterministic portion implementation can repair this". AI-6B2 therefore adds an
+**orthogonal, closed disposition axis** beside the blocker and never rewrites blocker truth,
+corpus membership, identity labels, mass sources, or grams to move a ranking.
+
+### 63.3 THE PROGRESSION (each step remains true in its own time)
+
+| Phase | Truthful statement |
+| --- | --- |
+| AI-6A | "Investigate deterministic portion first." 37 actionable root causes. |
+| AI-6B1 | Two genuine deterministic improvements landed (908 g, 588 g). 35 remained. |
+| AI-6B2 | The remaining 35 were adjudicated. Measured repairable count is **0**. |
+
+### 63.4 CLOSED DISPOSITION VOCABULARY (7)
+
+`repairable_deterministic_defect`, `authority_absent`, `policy_boundary`,
+`authoritative_ambiguity`, `parser_followup`, `semantic_equivalence_not_authorized`,
+`human_choice_required`. Every line gets exactly ONE; nothing is unclassified.
+
+`authority_absent` = no mass authority exists at all. `policy_boundary` = relevant mass
+evidence EXISTS and policy deliberately refuses to promote it. See 63.6.1 — container presence
+alone is not a policy boundary.
+
+### 63.5 CLOSED EVIDENCE VOCABULARY (9)
+
+`container_scope_not_authorized`, `package_net_mass_not_declared`,
+`authenticated_portion_present_but_unconsumed`, `parser_dropped_authored_count_unit`,
+`count_unit_equivalence_not_authorized`, `materially_different_authenticated_masses`,
+`selected_record_has_no_authenticated_item_mass`, `size_specific_portion_absent`,
+`household_registry_key_absent`.
+
+### 63.6 MEASURED DISPOSITION OF ALL 35
+
+| Disposition | Count | What it means |
+| --- | --- | --- |
+| `authority_absent` | **31** | No authenticated mass authority exists for the authored quantity (12 bare whole-item, 4 size-specific, 5 household-registry, 10 container/package with **no declared package net mass**). |
+| `policy_boundary` | **0** | Package net mass EXISTS and policy refuses to promote it. Zero in this set — see 63.6.1. |
+| `authoritative_ambiguity` | **2** | Both bread lines: authenticated 10 g vs 13 g, and 10 g vs 16 g. |
+| `parser_followup` | **1** | `4 thin slices mortadella` — authority exists, parser drops the unit. |
+| `semantic_equivalence_not_authorized` | **1** | `24 pieces … oysters` — `piece` is not `oyster`. |
+| `repairable_deterministic_defect` | **0** | No genuine deterministic portion bug remains. |
+| `human_choice_required` | **0** | Nothing needed bare user intent beyond the more specific verdicts. |
+
+Total **35**.
+
+The `authority_absent` **evidence** split is **12 + 4 + 5 + 10 = 31**, and the four codes stay
+orthogonal — `selected_record_has_no_authenticated_item_mass` (bare whole-item counts),
+`size_specific_portion_absent` (size-specific lines), `household_registry_key_absent`
+(household-registry keys), and `package_net_mass_not_declared` (container/package lines with no
+declared mass).
+
+#### 63.6.1 CONTAINER / PACKAGE PRESENCE IS **NOT** A POLICY BOUNDARY
+
+**Container/package presence by itself is not a policy boundary.** A policy boundary means
+the information **exists** and policy deliberately refuses to promote it — so it requires
+relevant mass evidence plus a deliberate authority refusal. Two container situations must be
+separated by whether an authored package net mass actually exists:
+
+| Case | Condition | Disposition | Evidence |
+| --- | --- | --- | --- |
+| **A** — mass exists, policy declines it | authored package/net mass present | `policy_boundary` | `container_scope_not_authorized` |
+| **B** — no package mass exists | no authored/authenticated package net mass | `authority_absent` | `package_net_mass_not_declared` |
+
+Case B is **authority absence, not a policy refusal**: there is no mass authority to promote in
+the first place, so nothing was declined. Reporting it as `policy_boundary` would overstate
+policy and hide the real reason from any later phase.
+
+**All 10 container lines in the current 35-line set are Case B.** Verified independently
+against the real parser and bundle: `3 cans tomato sauce`, `2 cans tomato sauce`,
+`1 can black beans`, `1 can packed in oil`, `1 package cream cheese`,
+`2 packages cream cheese`, `1 jar pickles`, `2 jars salsa`, `1 bottle ketchup`,
+`1 bottle soy sauce` all parse with `container` set and `package_net_mass` **undefined**. None
+carries a usable package/net mass, so none is a policy boundary.
+
+`policy_boundary` **remains a live member of the closed vocabulary**. A zero-current-instance
+member is acceptable because its semantics are precise and a synthetic witness proves it is
+reachable — `1 can (400 g) diced tomatoes` parses to `container = can` with an authored
+`400 g` `per_container` package net mass, which classifies as `policy_boundary` /
+`container_scope_not_authorized`. That corpus line lives in the `deterministic_identity` lane,
+not the portion lane, which is exactly why the portion lane observes zero instances. The
+concept is not dead or unreachable by construction. **No production resolution is added and no
+package mass is ever promoted.**
+
+### 63.7 THE TWO NUMBERS THAT MUST NEVER BE CONFLATED
+
+```
+OBSERVED PORTION BLOCKERS .................. 35
+REPAIRABLE DETERMINISTIC PORTION DEFECTS ... 0   (measured, not assumed)
+```
+
+`deterministic_portion = 35` is a statement about how many lines lack portion authority.
+It is **not** a statement about how much implementation work remains.
+
+### 63.8 NEXT-LANE HANDOFF (computed, never hardcoded)
+
+An exhausted lane (adjudicated, zero actionable defects) can never be recommended, however
+large its blocker count — correct refusals are not implementation backlog. Only the portion
+lane is adjudicated by AI-6B2; every other lane is reported as `not_adjudicated` (null),
+**never** as zero. Applying the declared criterion order to MEASURED actionable counts:
+
+- **Recommended active repair lane: `none`** — `no_adjudicated_lane_has_actionable_defects`
+- **Next adjudication target: `deterministic_identity`** — largest un-adjudicated eligible
+  lane by observed blockers (27). This is a *measurement* instruction, not a repair
+  instruction.
+
+Changing any disposition flips the derived result, which a test proves directly.
+
+**The container taxonomy precision repair (63.6.1) moved NO roadmap number.** Reclassifying ten
+`policy_boundary` lines as `authority_absent` is a taxonomy correction, not a change in what is
+actionable. The handoff split is unchanged at **`needs_recon` 32**, **`intentional_human_review`
+2**, **`deterministic_parser` 1** (31 authority-absent + 1 semantic-equivalence refusal = 32
+needs_recon; 2 authoritative ambiguity = intentional human review; 1 parser follow-up =
+deterministic parser). Because both container cases already handed off to `needs_recon` and
+neither is repairable, the measured repairable count stays 0, the lane stays exhausted, the
+active-repair recommendation stays `none`, and `deterministic_identity` (27) stays the next
+adjudication target. If this taxonomy repair had moved the roadmap, that would have been
+smuggling a roadmap change and is treated as a failure.
+
+### 63.9 HANDOFF WITNESSES (pinned, NOT fixed)
+
+- **Mortadella** — `4 thin slices mortadella`: selected FDC 2706182 has an authenticated
+  `1 slice = 15 g`; the parser does not retain the authored `slices` unit behind `thin`;
+  no grams resolve; **no identity change is required**. Correcting it is parser/count-unit
+  work, NOT portion-authority invention. Disposition `parser_followup`.
+- **Oyster** — `24 pieces fresh shucked oysters`: the record portion is `1 oyster`, the
+  authored unit is `piece`, and no canonical contract equates them. `piece == oyster` is
+  NOT added. Disposition `semantic_equivalence_not_authorized`.
+- **Bread** — `2 slices white bread` (10 g vs 13 g) and `2 slices whole wheat bread`
+  (10 g vs 16 g): materially different authenticated masses. No average, no first, no
+  lowest, no highest. Disposition `authoritative_ambiguity`.
+- **Containers** — the 10 `can` / `package` / `jar` / `bottle` lines route to
+  **authority-absence / recon**, NOT to a policy boundary: none of them declares a package net
+  mass, so there is no mass authority to promote in the first place (63.6.1). Package net mass
+  is never promoted, and where a net mass **is** declared — `1 can (400 g) diced tomatoes`,
+  `1 (15 oz) can tomato sauce`, `1 (8 oz) package cream cheese`, `1 (16 oz) package cream
+  cheese` — the verdict is `policy_boundary` / `container_scope_not_authorized`, because the
+  mass exists and consumption scope is deliberately unauthorized.
+
+### 63.10 AI-3 CROSS-CHECK (unchanged contract)
+
+Observed through the real phase-4 flow and the genuine eligibility contract:
+**25 eligible**, **8 `parsed_container`**, **2 `identity_unresolved`**. AI-3 v1 already
+refuses container lines outright, and the two `bottle` lines are refused earlier at
+identity. The remaining 25 show that the existing "AI only after deterministic authority
+runs out" architecture **already covers** these cases. AI-6B2 changes no eligibility and
+routes nothing to AI merely because AI exists.
+
+### 63.11 PRODUCTION INVARIANTS (all unchanged)
+
+historical **48/97**, legacy **44/91**, raw **94**, authenticated **94**, safe **93**,
+identity **46/46**, `verified_unsafe` **0**, corpus **207**. Mass sources unchanged at
+none 113 / source_portion 44 / direct_mass 21 / count_portion 19 / household_portion 10.
+`container_net_mass_boundary = 3`, `measurement_policy_gap = 6`,
+`alternative_ambiguous = 3`, `qualitative_or_absent_amount = 26`. The AI-6B1 recon SHA and
+the historical benchmark SHA are both byte-identical. `deterministic portion is exhausted`
+is asserted only because the measured repairable count reached zero.
+
+### 63.12 AI-6B2 COVERAGE
+
+| Concern | File |
+| --- | --- |
+| closed disposition + evidence vocabularies, classifier semantics per class, totality, the 35-line measured partition, container/bread/mortadella/oyster/household/size-only witnesses, AI-3 cross-check, repairability-aware roadmap derivation (exhausted lane never recommended, blocker summing, never-target lanes), unchanged production baseline, byte-determinism | `tests/unit/advancedNutritionAi6b2PortionDisposition.test.ts` |
