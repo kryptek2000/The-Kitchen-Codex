@@ -45,16 +45,28 @@
 import { isPlainObject, toInertValue } from '../schema';
 import { canonicalStringify, sha256Hex } from '../usda/digest';
 import type { CanonicalPortionRecord, CanonicalUsdaFoodRecord } from '../usda/types';
-import { parseAmount } from '../../../utils/measurements';
+import { getMeasurementKind, normalizeUnit, parseAmount } from '../../../utils/measurements';
 import {
   canonicalHouseholdUnit,
   householdCountNouns,
   householdUnitAliases,
+  householdUnitFoodCollision,
+  isWholeObjectCountNoun,
 } from '../../../utils/householdUnits';
 import { CALCULATION_VERSION, type Phase3Failure } from './types';
 
-/** Explicit count-portion contract version (part of selection bindings). */
-export const COUNT_PORTION_VERSION = 'usda_count_portion_v2';
+/**
+ * Explicit count-portion contract version (part of selection bindings).
+ *
+ * v3 (AI-6B1): a size qualifier may PRECEDE a named count unit, so the count
+ * requirement can bind the count noun the recipe actually authored
+ * (`1 medium head green cabbage`) instead of degrading to a unit-less
+ * requirement that no authenticated portion can satisfy. This materially changes
+ * the derived requirement — and therefore `candidates_digest` — for those lines,
+ * so the version is bumped and any persisted count-portion selection bound to the
+ * old requirement is correctly refused as `stale` and re-derived by the user.
+ */
+export const COUNT_PORTION_VERSION = 'usda_count_portion_v3';
 
 /** Bounded ingredient count requirement derived from the parsed ingredient. */
 export interface CountRequirement {
@@ -395,24 +407,90 @@ function inferUnitFromIdentityTokens(tokens: ReadonlyArray<string>): string | nu
 }
 
 /**
+ * The ONE bounded count noun a size-qualified line authors when the size
+ * qualifier precedes the unit (`1 medium head green cabbage`,
+ * `1 large head red cabbage`).
+ *
+ * WHY THIS EXISTS. The canonical Phase 1 parse only consumes a leading unit when
+ * it is the FIRST token after the amount, so a size adjective in front of a named
+ * count unit leaves `raw_unit` unset. The count noun is still plainly authored and
+ * is still present in the query text, so the requirement previously degraded to a
+ * unit-less shape that `countIdentityCompatible` can never satisfy — even when the
+ * authenticated record carries exactly the matching portion.
+ *
+ * SAFETY. This is recognition of the author's own noun, not a new weight:
+ *   - it yields a WHOLE-OBJECT canonical noun only. A cut measure (`slice`,
+ *     `piece`, `strip`, `rib`, ...) is refused, so `1 medium slice tomato` is
+ *     never reinterpreted as a whole medium item;
+ *   - it refuses a container (`can`) and any mass/volume word (`cup`), so
+ *     `1 medium can black beans` and `1 medium cup whole milk` stay unresolved
+ *     exactly as before;
+ *   - it requires EXACTLY ONE distinct noun (two different nouns are ambiguous
+ *     and yield nothing);
+ *   - it refuses a noun that would destroy a documented compound food name
+ *     (`1 medium head cheese`);
+ *   - it never supplies an amount, a gram weight, or an FDC id.
+ */
+export function namedCountUnitFromQueryTokens(
+  tokens: ReadonlyArray<string>
+): string | null {
+  const found: { noun: string; index: number }[] = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (typeof token !== 'string' || token.length === 0) continue;
+    const cleaned = token.toLowerCase().replace(/[.,;:]+$/, '');
+    if (cleaned.length === 0) continue;
+    // A mass/volume word anywhere in the line means the amount is NOT a bare
+    // count of a named unit; never reinterpret it as one.
+    const measurementKind = getMeasurementKind(normalizeUnit(cleaned));
+    if (measurementKind === 'mass' || measurementKind === 'volume') return null;
+    const household = canonicalHouseholdUnit(cleaned);
+    // Containers keep their own (unresolved) authority and never become a count.
+    if (household === null || household.kind !== 'count') continue;
+    // AI-6B1: a cut measure is NOT a whole object, so a recipe size adjective
+    // never turns it into a whole-item size requirement.
+    if (!isWholeObjectCountNoun(household.noun)) continue;
+    if (!found.some((entry) => entry.noun === household.noun)) {
+      found.push({ noun: household.noun, index });
+    }
+  }
+  // Zero whole-object nouns -> nothing authored. Two or more distinct nouns ->
+  // ambiguous.
+  if (found.length !== 1) return null;
+  const only = found[0];
+  const following = tokens.slice(only.index + 1).join(' ').trim();
+  if (householdUnitFoodCollision(only.noun, following)) return null;
+  return canonicalCountUnit(only.noun);
+}
+
+/**
  * Derives the closed count requirement from a parsed ingredient's amount, raw
  * unit, and the query's bounded size qualifiers. Returns null when the ingredient
  * is not a usable count (no amount, or neither a count unit nor a size).
  *
- * The optional `hint` (bounded, closed vocabulary) may only FILL a missing
- * unit/size; it never supplies or overrides the amount, and the recipe's own
- * explicit identity always wins.
+ * Unit precedence (each step only fills a gap; none ever overrides an explicit
+ * recipe unit):
+ *   1. the explicit authored unit (`raw_unit`);
+ *   2. AI-6B1 — the count noun the line itself authors behind a size qualifier,
+ *      but only on a size-qualified line;
+ *   3. the food head noun (`2 celery stalks`, `1 large egg`);
+ *   4. the bounded advisory hint, which may only fill what the source omits.
  */
 export function deriveCountRequirement(
   amount: number | null,
   rawUnit: string | null | undefined,
   identityTokens: ReadonlyArray<string>,
   sizeQualifiers: ReadonlyArray<string>,
-  hint?: CountRequirementHint
+  hint?: CountRequirementHint,
+  queryTokens?: ReadonlyArray<string>
 ): CountRequirement | null {
   if (amount === null || !isPositiveFinite(amount)) return null;
   const explicitUnit = canonicalCountUnit(rawUnit ?? null);
-  const unit = explicitUnit ?? inferUnitFromIdentityTokens(identityTokens) ?? hint?.unit ?? null;
+  // The named-noun rule exists for the size-before-unit gap, so it is scoped to
+  // exactly that: a line with no size qualifier keeps its previous derivation.
+  const namedUnit =
+    sizeQualifiers.length > 0 ? namedCountUnitFromQueryTokens(queryTokens ?? []) : null;
+  const unit = explicitUnit ?? namedUnit ?? inferUnitFromIdentityTokens(identityTokens) ?? hint?.unit ?? null;
   const explicitSize = sizeQualifiers.length > 0 ? canonicalSize(sizeQualifiers[0]) : null;
   const size = explicitSize ?? hint?.size ?? null;
   return Object.freeze({ amount, unit, size });

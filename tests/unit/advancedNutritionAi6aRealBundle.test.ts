@@ -55,7 +55,8 @@ import {
   AI6A_SUCCESS_SENTINEL,
   AUTHENTICATED_MASS_SOURCES,
   BLOCKER_TO_LANE,
-  HISTORICAL_RESOLVED,
+  AI6A_RELEASE_BASELINE,
+  AI6B1_EXPECTED_PRODUCTION_BASELINE,
   HISTORICAL_TOTAL,
   isAi6aPrimaryBlocker,
   isAi6aRepairLane,
@@ -100,64 +101,117 @@ describe('AI-6A — the historical baseline is unchanged by AI-6A', () => {
     expect(new Set(records.map((r) => r.line)).size).toBe(records.length);
   });
 
-  it('still resolves 46 of the historical 97 on the PRODUCTION axis', () => {
-    // AI-6A-R3: the load-bearing 46/97 invariant is the PRODUCTION axis — the
-    // authenticated MASS SOURCE. It is deliberately NOT the diagnostic safe axis,
-    // because the historical benchmark measures what production actually
+  it('resolves 48 of the historical 97 on the PRODUCTION axis (AI-6B1 current)', () => {
+    // AI-6A-R3: the load-bearing historical invariant is the PRODUCTION axis —
+    // the authenticated MASS SOURCE. It is deliberately NOT the diagnostic safe
+    // axis, because the historical benchmark measures what production actually
     // resolved and must not be rewritten to hide production behavior.
+    //
+    // AI-6B1 CURRENT PRODUCTION EXPECTATION. AI-6A shipped at 46/97; AI-6B1
+    // closed the documented `deterministic_portion` root cause in which a size
+    // qualifier before a WHOLE-OBJECT count unit (`1 medium head ...`) made the
+    // canonical parse drop the unit, so no authenticated portion could be
+    // consumed. Exactly two historical lines became resolvable. The corpus, the
+    // 97 denominator, and identity truth are unchanged.
     const resolved = AI6A_HISTORICAL_SUBSET.filter((entry) => {
       const record = byLine(entry.line);
       return AUTHENTICATED_MASS_SOURCES.includes(record.mass_source);
     });
-    expect(resolved.length).toBe(HISTORICAL_RESOLVED);
+    expect(resolved.length).toBe(AI6B1_EXPECTED_PRODUCTION_BASELINE.historical_authenticated_resolved);
+    expect(resolved.length).toBe(48);
     expect(HISTORICAL_TOTAL).toBe(97);
     // The historical benchmark itself, independently, agrees.
     const aggregates = aggregate(records, identityFor);
-    expect(aggregates.historical_97.authenticated_resolved).toBe(46);
+    expect(aggregates.historical_97.authenticated_resolved).toBe(48);
     expect(aggregates.historical_97.total).toBe(97);
   });
 
-  it('still resolves 42 of the legacy 91 on the PRODUCTION axis', () => {
+  it('resolves 44 of the legacy 91 on the PRODUCTION axis (AI-6B1 current)', () => {
+    // AI-6B1 CURRENT PRODUCTION EXPECTATION (was 42 at the AI-6A release).
     const resolved = AI6A_LEGACY_SUBSET.filter((entry) =>
       AUTHENTICATED_MASS_SOURCES.includes(byLine(entry.line).mass_source)
     );
-    expect(resolved.length).toBe(42);
+    expect(resolved.length).toBe(AI6B1_EXPECTED_PRODUCTION_BASELINE.legacy_authenticated_resolved);
+    expect(resolved.length).toBe(44);
     expect(AI6A_LEGACY_SUBSET.length).toBe(91);
     const aggregates = aggregate(records, identityFor);
-    expect(aggregates.legacy_91.authenticated_resolved).toBe(42);
+    expect(aggregates.legacy_91.authenticated_resolved).toBe(44);
     expect(aggregates.legacy_91.total).toBe(91);
   });
 
+  it('still preserves the immutable AI-6A release snapshot at 46 and 42', () => {
+    // HISTORICAL SNAPSHOT PRESERVATION. AI-6A shipped at 46/97 and 42/91. That
+    // measurement is history and is NOT rewritten by a later authorized phase.
+    // Nothing here executes production; it pins the recorded release facts.
+    expect(AI6A_RELEASE_BASELINE.phase).toBe('AI-6A');
+    expect(AI6A_RELEASE_BASELINE.historical_total).toBe(97);
+    expect(AI6A_RELEASE_BASELINE.historical_authenticated_resolved).toBe(46);
+    expect(AI6A_RELEASE_BASELINE.legacy_total).toBe(91);
+    expect(AI6A_RELEASE_BASELINE.legacy_authenticated_resolved).toBe(42);
+    // The two records differ by exactly the two authorized improvements.
+    expect(
+      AI6B1_EXPECTED_PRODUCTION_BASELINE.historical_authenticated_resolved -
+        AI6A_RELEASE_BASELINE.historical_authenticated_resolved
+    ).toBe(2);
+    expect(
+      AI6B1_EXPECTED_PRODUCTION_BASELINE.legacy_authenticated_resolved -
+        AI6A_RELEASE_BASELINE.legacy_authenticated_resolved
+    ).toBe(2);
+    // The corpus denominators are SHARED: the corpus never changed.
+    expect(AI6B1_EXPECTED_PRODUCTION_BASELINE.historical_total).toBe(
+      AI6A_RELEASE_BASELINE.historical_total
+    );
+    expect(AI6B1_EXPECTED_PRODUCTION_BASELINE.legacy_total).toBe(
+      AI6A_RELEASE_BASELINE.legacy_total
+    );
+  });
+
   it('reports the SAFE axis as a SEPARATE, one-lower diagnostic number', () => {
-    // AI-6A-R3: 46 production-resolved, 45 safe-resolved. The single difference
+    // AI-6A-R3: 48 production-resolved, 47 safe-resolved. The single difference
     // is `1 cup all-purpose or bread flour`, whose 125 g production mass is
     // authenticated but whose authored food choice was never made. Both numbers
     // are reported; neither replaces the other.
     const aggregates = aggregate(records, identityFor);
-    expect(aggregates.historical_97.raw_matched).toBe(46);
-    expect(aggregates.historical_97.safe_resolved).toBe(45);
-    expect(aggregates.legacy_91.safe_resolved).toBe(41);
+    expect(aggregates.historical_97.raw_matched).toBe(48);
+    expect(aggregates.historical_97.safe_resolved).toBe(47);
+    expect(aggregates.legacy_91.safe_resolved).toBe(43);
     expect(
       aggregates.historical_97.authenticated_resolved - aggregates.historical_97.safe_resolved
     ).toBe(aggregates.counts.authenticated_mass_with_unresolved_authored_choice);
   });
 
-  it('agrees with the AI-6A historical invariant check', () => {
+  it('agrees with the versioned baseline check and reports the AI-6B1 delta', () => {
     const check = historicalBaselineCheck(aggregate(records));
     expect(check.problems).toEqual([]);
     expect(check.ok).toBe(true);
+    // Conformance is measured against the CURRENT authorized production baseline,
+    // so an authorized improvement is not reported as permanent drift.
+    expect(check.expected_production_baseline.phase).toBe('AI-6B1');
+    expect(check.expected_production_baseline.historical_authenticated_resolved).toBe(48);
+    // ...while the AI-6A release snapshot and the delta stay visible.
+    expect(check.ai6a_release_baseline.historical_authenticated_resolved).toBe(46);
+    expect(check.ai6a_release_baseline.legacy_authenticated_resolved).toBe(42);
+    expect(check.delta_from_ai6a_release).toEqual({
+      historical_authenticated_resolved: 2,
+      legacy_authenticated_resolved: 2,
+    });
+    expect(check.observed.historical_authenticated_resolved).toBe(48);
+    expect(check.observed.legacy_authenticated_resolved).toBe(44);
   });
 
   it('reproduces the historical mass-source split on the historical subset', () => {
-    // The historical benchmark reports 11/22/9/4. AI-6A must observe the SAME
-    // distribution, or the recon is not measuring the same pipeline.
+    // The historical benchmark's ORIGINAL 11/22/9/4 split becomes 11/22/10/5:
+    // `1 medium head cauliflower` added one authenticated COUNT portion and
+    // `1 medium head green cabbage` added one authenticated HOUSEHOLD portion.
+    // Direct-mass and source-portion counts are unchanged, so nothing was
+    // promoted out of its existing authority.
     const historical = records.filter((record) => record.source === 'historical');
     const count = (source: string): number =>
       historical.filter((record) => record.mass_source === source).length;
     expect(count('direct_mass')).toBe(11);
     expect(count('source_portion')).toBe(22);
-    expect(count('count_portion')).toBe(9);
-    expect(count('household_portion')).toBe(4);
+    expect(count('count_portion')).toBe(10);
+    expect(count('household_portion')).toBe(5);
   });
 });
 
@@ -685,20 +739,23 @@ describe('AI-6A-R2 — raw portion incompatibility vs ACTIONABLE portion blocker
     // The raw metric is strictly larger, which is precisely why it must not be
     // quoted as if it were roadmap work.
     expect(raw.length).toBeGreaterThan(actionable.length);
-    expect(raw.length).toBe(59);
-    expect(actionable.length).toBe(37);
+    // AI-6B1 CURRENT: raw 57 (was 59), actionable 35 (was 37). Both fell by
+    // exactly the two lines AI-6B1 resolved; the two metrics stayed separate.
+    expect(raw.length).toBe(57);
+    expect(actionable.length).toBe(35);
   });
 
   it('reconciles the two numbers EXACTLY, with the gap named by blocker', () => {
     const a = aggregate(records, identityFor);
-    // The exact partition, stated so the numbers cannot drift apart:
-    //   raw(59)          = actionable WITH an incompatible record (35) + not_actionable(24)
-    //   actionable(37)   = 35 + the 2 whose record DOES have a compatible portion
+    // The exact partition, stated so the numbers cannot drift apart.
+    // AI-6B1 CURRENT (was raw 59 = 35 + 24 and actionable 37 = 35 + 2):
+    //   raw(57)          = actionable WITH an incompatible record (33) + not_actionable(24)
+    //   actionable(35)   = 33 + the 2 whose record DOES have a compatible portion
     const actionableWithIncompatible =
       a.portion.actionable_portion_blocker -
       a.portion.actionable_with_compatible_record_but_unresolved;
     expect(a.portion.actionable_with_compatible_record_but_unresolved).toBe(2);
-    expect(actionableWithIncompatible).toBe(35);
+    expect(actionableWithIncompatible).toBe(33);
     expect(a.portion.raw_selected_record_portion_incompatible).toBe(
       actionableWithIncompatible + a.portion.bounded_lines_incompatible_but_not_actionable
     );
@@ -754,7 +811,9 @@ describe('AI-6A-R2 — the roadmap recommendation uses ROOT-CAUSE counts', () =>
       .filter((r) => r.repair_lane === winner && r.primary_blocker !== 'none_resolved')
       .reduce((sum, r) => sum + 1, 0);
     expect(a.roadmap.root_cause_count).toBe(blockerTotal);
-    expect(a.roadmap.root_cause_count).toBe(37);
+    // AI-6B1 CURRENT: the portion lane's root-cause count fell 37 -> 35 because
+    // two of its blockers were closed. The LANE itself is unchanged.
+    expect(a.roadmap.root_cause_count).toBe(35);
   });
 
   it('changes the ranking when the measured distribution changes', () => {
@@ -785,12 +844,13 @@ describe('AI-6A-R2 — the roadmap recommendation uses ROOT-CAUSE counts', () =>
 
   it('excludes the success sentinel from the ranking entirely', () => {
     // `none_resolved` routes to `already_resolved`, which is never a target, so
-    // the 92 resolved lines cannot inflate any target lane's root-cause count.
+    // the resolved lines cannot inflate any target lane's root-cause count.
+    // AI-6B1 CURRENT: 94 resolved lines (was 92).
     const ranking = roadmapRanking(aggregate(records, identityFor).primary_blockers);
     expect(ranking.find((e) => e.lane === 'already_resolved')).toBeUndefined();
     const portion = ranking.find((e) => e.lane === 'deterministic_portion');
-    expect(portion?.root_cause_count).toBe(37);
-    expect(portion?.root_cause_count).toBeLessThan(92);
+    expect(portion?.root_cause_count).toBe(35);
+    expect(portion?.root_cause_count).toBeLessThan(94);
   });
 
   it('never ranks a correct-behavior or policy-decision lane as the target', () => {
@@ -827,8 +887,9 @@ describe('AI-6A-R2 — the roadmap recommendation uses ROOT-CAUSE counts', () =>
     // SAFETY decides it: the portion lane is fail-closed with identity already
     // bound, and the identity lane carries the Phase 0A wrong-food history.
     expect(winner!.criteria.safety).toBeGreaterThan(runnerUp!.criteria.safety);
+    // AI-6B1 CURRENT: portion 35 (was 37); identity UNCHANGED at 27.
     expect(runnerUp!.root_cause_count).toBe(27);
-    expect(winner!.root_cause_count).toBe(37);
+    expect(winner!.root_cause_count).toBe(35);
   });
 });
 
@@ -1624,7 +1685,9 @@ describe('AI-6A-R3 — ordinary "or" inside another token is NOT an alternative'
 
   it('REQUIRED 8: every non-alternative matched line remains a safe success', () => {
     const safe = records.filter(isSafeResolution);
-    expect(safe.length).toBe(91);
+    // AI-6B1 CURRENT: 93 (was 91 at the AI-6A release). The two newly resolved
+    // lines carry no alternative, so both are ordinary safe successes.
+    expect(safe.length).toBe(93);
     for (const record of safe) {
       expect(record.secondary_signals, record.line).not.toContain('has_alternative');
       expect(record.primary_blocker, record.line).toBe('none_resolved');
@@ -1640,7 +1703,8 @@ describe('AI-6A-R3 — raw matched, safe resolved and the sentinel precedence', 
     const rawMatched = records.filter((r) => r.terminal === 'matched');
     const safe = records.filter(isSafeResolution);
     expect(a.counts.raw_matched).toBe(rawMatched.length);
-    expect(a.counts.raw_matched).toBe(92);
+    // AI-6B1 CURRENT: raw matched 94 (was 92 at the AI-6A release).
+    expect(a.counts.raw_matched).toBe(94);
     expect(a.counts.safe_resolved).toBe(safe.length);
     // Derived from the classifier, never hard-coded, and provably distinct here.
     expect(a.counts.raw_matched).not.toBe(a.counts.safe_resolved);
@@ -1652,11 +1716,14 @@ describe('AI-6A-R3 — raw matched, safe resolved and the sentinel precedence', 
 
   it('REQUIRED 5: safe-resolved accounting excludes the collapsed alternative', () => {
     const a = aggregate(records, identityFor);
-    expect(a.counts.safe_resolved).toBe(91);
-    expect(records.filter((r) => r.primary_blocker === 'none_resolved')).toHaveLength(91);
+    // AI-6B1 CURRENT: 93 safe / 93 none_resolved (was 91 / 91).
+    expect(a.counts.safe_resolved).toBe(93);
+    expect(records.filter((r) => r.primary_blocker === 'none_resolved')).toHaveLength(93);
+    // UNCHANGED REFUSAL: the authored alternative is still NOT a safe success,
+    // and it is still the ONE line separating raw matched from safe resolved.
     expect(byLine('1 cup all-purpose or bread flour').primary_blocker).not.toBe('none_resolved');
     // The raw matched count is NOT reduced to hide it.
-    expect(records.filter((r) => r.terminal === 'matched')).toHaveLength(92);
+    expect(records.filter((r) => r.terminal === 'matched')).toHaveLength(94);
   });
 
   it('REQUIRED 6: none_resolved cannot short-circuit authored alternative ambiguity', () => {
@@ -1712,7 +1779,10 @@ describe('AI-6A-R3 — raw matched, safe resolved and the sentinel precedence', 
     // The two axes are independent fields; neither is derived from the other.
     expect(r.mass_source).not.toBe(r.primary_blocker as never);
     const a = aggregate(records, identityFor);
-    expect(a.counts.authenticated_mass_resolved).toBe(92);
+    // AI-6B1 CURRENT: authenticated mass resolved 94 (was 92).
+    expect(a.counts.authenticated_mass_resolved).toBe(94);
+    // UNCHANGED: still exactly ONE line has authenticated mass without a
+    // resolved authored food choice.
     expect(a.counts.authenticated_mass_with_unresolved_authored_choice).toBe(1);
   });
 
@@ -1722,23 +1792,40 @@ describe('AI-6A-R3 — raw matched, safe resolved and the sentinel precedence', 
     expect(r.repair_lane).toBe('intentional_human_review');
     expect(r.repair_lane).not.toBe('already_resolved');
     const a = aggregate(records, identityFor);
+    // UNCHANGED REFUSAL: the alternative lane did not grow.
     expect(a.repair_lanes.find((e) => e.key === 'intentional_human_review')?.count).toBe(29);
-    expect(a.repair_lanes.find((e) => e.key === 'already_resolved')?.count).toBe(91);
-    // And the recommendation is unchanged: the portion lane still leads.
+    // AI-6B1 CURRENT: already_resolved 93 (was 91) — the two authorized wins.
+    expect(a.repair_lanes.find((e) => e.key === 'already_resolved')?.count).toBe(93);
+    // The recommendation is UNCHANGED in lane: the portion lane still leads. Its
+    // root-cause count fell 37 -> 35 because two portion blockers were closed.
     expect(a.roadmap.lane).toBe('deterministic_portion');
-    expect(a.roadmap.root_cause_count).toBe(37);
+    expect(a.roadmap.root_cause_count).toBe(35);
   });
 
-  it('REQUIRED 11: the historical 46/97 and 42/91 invariants are untouched', () => {
+  it('REQUIRED 11: the versioned historical baseline transition is exact', () => {
     const a = aggregate(records, identityFor);
     const check = historicalBaselineCheck(a);
     expect(check.problems).toEqual([]);
     expect(check.ok).toBe(true);
-    expect(a.historical_97.authenticated_resolved).toBe(46);
-    expect(a.legacy_91.authenticated_resolved).toBe(42);
-    // The production axis is unchanged; only the safe axis is one lower.
-    expect(a.historical_97.safe_resolved).toBe(45);
-    expect(a.legacy_91.safe_resolved).toBe(41);
+
+    // AI-6B1 CURRENT PRODUCTION EXPECTATION (was 46/42 at the AI-6A release).
+    expect(a.historical_97.authenticated_resolved).toBe(48);
+    expect(a.legacy_91.authenticated_resolved).toBe(44);
+    // The safe axis stays exactly one lower — the single authored-alternative
+    // line is still not a safe success.
+    expect(a.historical_97.safe_resolved).toBe(47);
+    expect(a.legacy_91.safe_resolved).toBe(43);
+
+    // HISTORICAL SNAPSHOT PRESERVATION: AI-6A shipped at 46/97 and 42/91, and
+    // that measurement is immutable history rather than a value to rewrite.
+    expect(check.ai6a_release_baseline.historical_authenticated_resolved).toBe(46);
+    expect(check.ai6a_release_baseline.legacy_authenticated_resolved).toBe(42);
+    // The corpus denominators never moved.
+    expect(a.historical_97.total).toBe(97);
+    expect(a.legacy_91.total).toBe(91);
+    // The transition is exactly +2 / +2.
+    expect(check.delta_from_ai6a_release.historical_authenticated_resolved).toBe(2);
+    expect(check.delta_from_ai6a_release.legacy_authenticated_resolved).toBe(2);
   });
 });
 

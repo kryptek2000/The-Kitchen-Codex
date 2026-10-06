@@ -960,7 +960,8 @@ function evaluateIngredient(
       parsed.raw_unit,
       projection.food_tokens,
       projection.size_qualifiers,
-      prepared.countRequirementHint
+      prepared.countRequirementHint,
+      normalizedQuery.split(/\s+/).filter(Boolean)
     );
     // ONE effective-mass decision, shared with the live projection. More than
     // one non-direct selection, or a direct recipe mass together with ANY

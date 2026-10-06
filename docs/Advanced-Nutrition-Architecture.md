@@ -11363,3 +11363,152 @@ identity-safety assertion. Never quote the raw 59. **Never report `raw_matched` 
 count.**
 
 **AI-6B remains NOT STARTED.**
+
+---
+
+## 62. AI-6B1 — DETERMINISTIC PORTION INTELLIGENCE (VERSIONED BASELINE TRANSITION)
+
+### 62.1 WHAT AI-6B1 REPAIRED
+
+AI-6A measured `deterministic_portion` as the #1 repair lane with **37** actionable
+root causes. AI-6B1 closed exactly ONE root mechanism, the only one where authenticated,
+identity-bound evidence already existed but was unreachable:
+
+> The canonical Phase 1 parse consumes a leading unit only when it is the FIRST token
+> after the amount. A recipe **size qualifier in front of a named whole-object count unit**
+> therefore left `raw_unit` unset, so the derived count requirement was unit-less — a shape
+> that `countIdentityCompatible` can never satisfy, even when the selected USDA record
+> carries the exact matching portion.
+
+`1 medium head green cabbage` and `1 medium head cauliflower` both lost their `head` unit
+this way. The repair binds the count noun **the recipe itself authored**, and only that.
+
+### 62.2 THE WHOLE-OBJECT RULE AND ITS SAFETY BOUNDARY
+
+`namedCountUnitFromQueryTokens` runs ONLY on a size-qualified line and admits ONLY a
+**whole-object** count noun whose size class is meaningful. The partition is closed and
+total over the canonical household vocabulary, and it lives in the ONE vocabulary owner
+(`src/utils/householdUnits.ts`):
+
+| Class | Nouns | Rationale |
+| --- | --- | --- |
+| whole-object | `head`, `bunch`, `stick`, `item`, `clove`, `stalk`, `sprig` | present in the authenticated household registry (`head`, `stick`, `clove`, `item`) or an ordinary whole-object measure |
+| cut measure | `slice`, `piece`, `strip`, `rib`, `fillet`, `breast`, `thigh`, `link`, `scoop`, `leaf` | a piece CUT from a larger food; a size adjective describes the cut, never a whole-item size class |
+| container | `can`, `package`, `jar`, `box`, `bag`, `bottle` | third class; keeps its own unresolved authority |
+
+The rule is scoped to size-qualified lines, so every other line's derivation is unchanged.
+It additionally refuses a container, any mass/volume word, two distinct nouns, and a
+documented compound food name (`1 medium head cheese`). It never supplies an amount, a
+gram weight, or an FDC id.
+
+**CUT-MEASURE EXCLUSION IS LOAD-BEARING.** Without it, `1 medium slice tomato` produced a
+`slice`/`medium` whole-item requirement — silently reinterpreting a cut piece as one medium
+tomato. The rule now refuses it, and an existing Phase 6 guard proves no household lookup
+context and no grams are derived.
+
+### 62.3 THE TWO NEWLY RESOLVED WITNESSES
+
+| Line | Before | After | Authenticated evidence |
+| --- | --- | --- | --- |
+| `1 medium head green cabbage` | `household_portion_absent`, no mass | `none_resolved`, **household_portion, 908 g** | digest-bound registry `green cabbage \| head \| medium = 908 g`; registry FDC list includes the selected **2346407** |
+| `1 medium head cauliflower` | `household_portion_absent`, no mass | `none_resolved`, **count_portion, 588 g** | selected **FDC 169986**'s own portion `head medium (5-6" dia.) = 588 g` |
+
+Both are bound to the ALREADY-SELECTED identity. No identity moved, no portion was borrowed
+across FDC records, and the household registry was **not** broadened.
+
+### 62.4 VERSIONED BENCHMARK BASELINE — HISTORY IS NOT REWRITTEN
+
+A later phase may legitimately improve production while the original measurement stays
+immutable. The recon therefore distinguishes two records:
+
+| Record | historical | legacy | Meaning |
+| --- | --- | --- | --- |
+| `AI6A_RELEASE_BASELINE` | **46/97** | **42/91** | IMMUTABLE. What AI-6A actually shipped. Never rewritten. |
+| `AI6B1_EXPECTED_PRODUCTION_BASELINE` | **48/97** | **44/91** | CURRENT authorized production expectation. |
+
+`historicalBaselineCheck` measures **conformance against the current AI-6B1 record** (so an
+authorized improvement is not permanently reported as drift) while **reporting** the AI-6A
+release record and the delta. The output states plainly that the corpus did not change and
+only production resolution did. There is deliberately **no ambiguous bare
+`HISTORICAL_RESOLVED`** constant: every consumer names the phase it pins.
+
+Release-point artifact digests are preserved as historical evidence:
+
+- AI-6A recon JSON: `0a08840535f9a43712942fef89cd1416c3c883f9d0d762929557530a2eeb7444`
+- AI-6A historical benchmark JSON:
+  `0480527440eb8344a2210901f5796ae21b232fc81d218f5f082be32f01db8375`
+
+AI-6B1 legitimately produces **different current output** because the same instrument now
+observes different production results. The current digests are recorded as the AI-6B1
+snapshot; the AI-6A digests above remain the proof of the release state.
+
+### 62.5 BEFORE / AFTER
+
+| Metric | AI-6A release | AI-6B1 current |
+| --- | --- | --- |
+| historical resolved (production axis) | 46/97 | **48/97** |
+| legacy resolved | 42/91 | **44/91** |
+| historical SAFE axis | 45/97 | 47/97 |
+| raw matched | 92 | 94 |
+| authenticated mass resolved | 92 | 94 |
+| safe resolved | 91 | 93 |
+| `deterministic_portion` lane | 37 | **35** |
+| `household_portion_absent` | 7 | **5** |
+| `selected_record_lacks_source_portion` | 26 | 26 |
+| `authenticated_count_portion_absent` | 2 | 2 |
+| `compatible_portion_unresolved` | 2 | 2 |
+| raw portion incompatible (observational only) | 59 | 57 |
+| corpus total | 207 | **207 (unchanged)** |
+| verified correct / unsafe | 46 / 0 | **46 / 0 (unchanged)** |
+
+Historical mass-source split moved **11/22/9/4 → 11/22/10/5**: one authenticated COUNT
+portion and one authenticated HOUSEHOLD portion were added. Direct-mass and source-portion
+counts are unchanged, so nothing was promoted out of its existing authority.
+
+### 62.6 CONTRACT VERSION
+
+`COUNT_PORTION_VERSION` is bumped **`usda_count_portion_v2` → `usda_count_portion_v3`**.
+Requirement derivation materially changed, and the requirement feeds `candidates_digest`, so
+a persisted count-portion selection bound to the old requirement is correctly refused as
+`stale` and re-derived rather than silently honored under a new meaning.
+
+### 62.7 WHAT REMAINS UNRESOLVED — AND WHY THAT IS CORRECT
+
+35 of the original 37 stay unresolved. Each is a correct refusal, not deferred work:
+
+- **Container/package scope (10)** — consuming a container is a package-net-mass claim. No
+  shortcut was taken; `container_net_mass_boundary` remains `needs_recon`.
+- **Bare whole-item counts (11)** — `1 lemon`, `2 shallots`, `1 jalapeno`… the selected
+  records expose only `RACC`, `cup`, or size/qualified portions. Resolving them would require
+  an invented average item weight.
+- **Size-only with no matching portion (5)** — including `2 medium potatoes`, whose record
+  offers only `1 new potato` / `1 baby potato`. Using those would silently drop the `medium`
+  qualifier and pick a materially different mass.
+- **Household registry absence (5)** — no authenticated row for parsley/celery bunch or
+  thyme/rosemary sprig. `1 head garlic` is refused because the authenticated registry unit is
+  `clove`, and a head is not a clove.
+- **Count identity absence (2)** — `24 pieces fresh shucked oysters`: `piece` is NOT `oyster`,
+  and no authorized semantic equivalence exists. `4 thin slices mortadella` is a PARSER gap
+  (`thin` sits between the amount and the unit) reserved for a later parser phase; AI-6B1 does
+  **not** expand scope to cover it.
+- **Materially different slice masses (2)** — `2 slices white bread` sees authenticated
+  10 g and 13 g portions; whole wheat sees 10 g and 16 g. AI-6B1 does **not** average, and
+  does not pick lowest, highest, or first. Human review remains correct.
+
+### 62.8 UNCHANGED SAFETY INVARIANTS
+
+No new nutrition authority; the 6-level effective-mass precedence is untouched; no cross-FDC
+portion borrowing; no invented density or weight; no package net-mass promotion; no range
+midpoint or averaging; no authored-alternative auto-choice (the
+`1 cup all-purpose or bread flour` witness keeps zero safe-success credit); no qualitative
+amount turned into grams; `verified_unsafe` stays **0**; no AI-4 downstream consumer; no
+entitlement or BYOK change. AI-6B1 is entirely deterministic — no Gemini, OpenRouter, LLM,
+or network call.
+
+### 62.9 AI-6B1 COVERAGE
+
+| Concern | File |
+| --- | --- |
+| whole-object/cut-measure/container partition is closed and total, recovery rule positives and every refusal, requirement precedence and range/amount refusal, adjective-first ≡ unit-first equivalence, bread-slice no-averaging proof, `v3` version + stale-`v2` fail-closed, versioned baseline records and preserved release digests, the two witnesses, the 35 retained refusals, mortadella and oyster dispositions | `tests/unit/advancedNutritionAi6b1DeterministicPortion.test.ts` |
+| AI-6A release snapshot preservation (46/42 + release SHAs) alongside the AI-6B1 current expectation | `tests/unit/advancedNutritionAi6aCorpus.test.ts`, `tests/unit/advancedNutritionAi6aRealBundle.test.ts` |
+| adjective-first whole-object recovery resolves, cut measure refuses | `tests/unit/advancedNutritionPhase6Household.test.ts` |

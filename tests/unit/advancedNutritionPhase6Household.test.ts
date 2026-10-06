@@ -468,7 +468,12 @@ const REAL_LINE_EXPECTATIONS: ReadonlyArray<RealLineExpectation> = Object.freeze
   { line: '1 large red bell pepper', classification: 'household_reachable', fdc: 2258590, massSource: 'household_portion', grams: 164 },
   { line: '1 large green bell pepper', classification: 'household_reachable', fdc: 2258588, massSource: 'household_portion', grams: 164 },
   { line: '1 head large red cabbage', classification: 'shadowed_by_count_portion', fdc: 169977, massSource: 'count_portion', grams: 1134 },
-  { line: '1 large head red cabbage', classification: 'parser_limitation_blocked', fdc: 169977, massSource: null, grams: null },
+  // AI-6B1: the adjective-before-unit parser limitation is now CLOSED for
+  // whole-object nouns, so this line behaves exactly like its unit-first twin
+  // `1 head large red cabbage` — same FDC 169977, same authenticated 1134 g.
+  // The USDA COUNT authority shadows household for red cabbage, so the
+  // classification is `shadowed_by_count_portion`, not `household_reachable`.
+  { line: '1 large head red cabbage', classification: 'shadowed_by_count_portion', fdc: 169977, massSource: 'count_portion', grams: 1134 },
 ]);
 
 describe('phase 6 — real pipeline reachability and precedence', () => {
@@ -527,21 +532,38 @@ describe('phase 6 — real pipeline reachability and precedence', () => {
     }
   }, 120000);
 
-  it('documents the parser limitation on adjective-before-unit lines', () => {
-    // `1 large head red cabbage` parses `head` as a preparation qualifier (the
-    // size adjective comes first), so no canonical count unit/size is derived.
-    // The household resolver then treats the line as a size-only item request
-    // and the item-mapping token scan refuses to reinterpret the named `head`
-    // unit as one whole item: no mass is invented.
-    expect(deriveHouseholdLookupContext(structuredLine('1 large head red cabbage'))).toBeUndefined();
-    // The unit-first ordering parses a canonical `head` unit + `large` size, and
-    // the count authority resolves it before household is ever considered.
-    expect(deriveHouseholdLookupContext(structuredLine('1 head large red cabbage'))).toEqual({
+  it('recovers a WHOLE-OBJECT unit written after the size adjective', () => {
+    // AI-6B1. The canonical Phase 1 parse only consumes a leading unit when it is
+    // the FIRST token after the amount, so a size adjective in front of a named
+    // whole-object count unit used to leave `raw_unit` unset and the requirement
+    // unit-less — a shape no authenticated portion can satisfy. The count
+    // requirement now binds the count noun the recipe itself authored.
+    //
+    // Adjective-first and unit-first wordings are therefore EQUIVALENT here,
+    // because both name the same authenticated head + large size.
+    const expected = {
       quantity: 1,
       household_unit: 'head',
       size_class: 'large',
       requires_state: null,
-    });
+    };
+    expect(deriveHouseholdLookupContext(structuredLine('1 large head red cabbage'))).toEqual(expected);
+    expect(deriveHouseholdLookupContext(structuredLine('1 head large red cabbage'))).toEqual(expected);
+  });
+
+  it('still refuses to reinterpret a CUT-MEASURE unit as a whole-item size class', () => {
+    // UNCHANGED REFUSAL (AI-6B1 narrowing). `slice` is a piece CUT from a larger
+    // food, not a whole object, so a recipe size adjective must never turn
+    // `slice tomato` into a `slice`/`medium` whole-item requirement. Without
+    // this, `1 medium slice tomato` would silently become `1 medium tomato`.
+    expect(deriveHouseholdLookupContext(structuredLine('1 medium slice tomato'))).toBeUndefined();
+    // The whole-object recovery therefore never applies to a cut measure.
+    for (const cutNoun of ['slice', 'piece', 'strip', 'rib'] as const) {
+      expect(
+        deriveHouseholdLookupContext(structuredLine(`1 medium ${cutNoun} tomato`)),
+        cutNoun
+      ).toBeUndefined();
+    }
   });
 
   it('resolves the three measured household lines with the pinned grams', () => {

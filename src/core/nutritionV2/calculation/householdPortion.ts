@@ -277,7 +277,8 @@ export function deriveHouseholdLookupContext(
   if (typeof parsed.amount !== 'number' || !Number.isFinite(parsed.amount)) return undefined;
   if (parsed.amount <= 0 || Object.is(parsed.amount, -0)) return undefined;
 
-  const projection = projectQueryText(normalizeQuery(parsed.query).text, {
+  const normalizedQueryText = normalizeQuery(parsed.query).text;
+  const projection = projectQueryText(normalizedQueryText, {
     count_noun: parsed.count_noun,
     container: parsed.container,
   });
@@ -288,7 +289,9 @@ export function deriveHouseholdLookupContext(
     parsed.amount,
     parsed.raw_unit,
     projection.food_tokens,
-    projection.size_qualifiers
+    projection.size_qualifiers,
+    undefined,
+    normalizedQueryText.split(/\s+/).filter(Boolean)
   );
   if (!requirement) return undefined;
 

@@ -108,6 +108,81 @@ const IDENTITY_BEARING_COUNT_NOUNS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * WHOLE-OBJECT count nouns (AI-6B1).
+ *
+ * These name a complete countable object whose SIZE CLASS is meaningful, which
+ * is exactly what an authenticated USDA portion (`1 medium = 123 g`) and a
+ * digest-bound household registry row (`tomato | item | medium = 123 g`) describe.
+ * A recipe size adjective may therefore legitimately qualify them:
+ * `1 medium head green cabbage` really is one medium head.
+ *
+ * This set is the evidence-supported basis for the AI-6B1 adjective-before-unit
+ * recovery: every noun here is either present in the authenticated household
+ * registry (`head`, `stick`, `clove`, `item`) or is an ordinary whole-object
+ * household measure (`bunch`, `stalk`, `sprig`).
+ */
+const WHOLE_OBJECT_COUNT_NOUNS: ReadonlySet<string> = new Set([
+  'bunch',
+  'clove',
+  'head',
+  'item',
+  'sprig',
+  'stalk',
+  'stick',
+]);
+
+/**
+ * CUT-MEASURE count nouns (AI-6B1).
+ *
+ * These name a piece CUT FROM a larger food, not a whole object. A size adjective
+ * in front of them describes the cut or the food, never a whole-item size class,
+ * so they are EXCLUDED from the AI-6B1 recovery rule. Without this exclusion
+ * `1 medium slice tomato` would become a `slice`/`medium` household requirement —
+ * silently reinterpreting a cut piece as a whole medium item.
+ *
+ * The two sets partition `householdCountNouns()` exactly (asserted by test), so
+ * every household count noun is explicitly classified and none is undecided.
+ */
+const CUT_MEASURE_COUNT_NOUNS: ReadonlySet<string> = new Set([
+  'breast',
+  'fillet',
+  'leaf',
+  'link',
+  'piece',
+  'rib',
+  'scoop',
+  'slice',
+  'strip',
+  'thigh',
+]);
+
+/**
+ * True when a canonical count noun names a WHOLE countable object whose size
+ * class is meaningful. False for every cut measure, and false for anything that
+ * is not a canonical household count noun.
+ */
+export function isWholeObjectCountNoun(noun: string | null | undefined): boolean {
+  if (typeof noun !== 'string') return false;
+  return WHOLE_OBJECT_COUNT_NOUNS.has(noun);
+}
+
+/** True when a canonical count noun names a piece cut from a larger food. */
+export function isCutMeasureCountNoun(noun: string | null | undefined): boolean {
+  if (typeof noun !== 'string') return false;
+  return CUT_MEASURE_COUNT_NOUNS.has(noun);
+}
+
+/** Canonical whole-object count nouns (singular, sorted). */
+export function wholeObjectCountNouns(): ReadonlyArray<string> {
+  return Object.freeze([...WHOLE_OBJECT_COUNT_NOUNS].sort());
+}
+
+/** Canonical cut-measure count nouns (singular, sorted). */
+export function cutMeasureCountNouns(): ReadonlyArray<string> {
+  return Object.freeze([...CUT_MEASURE_COUNT_NOUNS].sort());
+}
+
+/**
  * Closed unit/food COMPOUND-COLLISION policy.
  *
  * Some household unit nouns also begin a legitimate compound FOOD name. A

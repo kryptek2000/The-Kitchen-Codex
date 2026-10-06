@@ -316,7 +316,14 @@ const SNAPSHOT: ReadonlyArray<SnapshotEntry> = Object.freeze([
   { line: '2 medium tomatoes, sliced', fdc: 2709719, status: 'matched', grams: 246, mass: 'household_portion' },
   { line: '3 large carrots', fdc: 170393, status: 'matched', grams: 216, mass: 'count_portion' },
   { line: '1 red bell pepper', fdc: 2258590, status: 'needs_amount', grams: null, mass: null },
-  { line: '1 medium head green cabbage', fdc: 2346407, status: 'needs_amount', grams: null, mass: null },
+  // AI-6B1: the adjective-before-whole-object-unit gap is closed, so this line now
+  // resolves from the AUTHENTICATED, digest-bound household registry row
+  // `green cabbage | head | medium = 908 g` (whose FDC list includes 2346407).
+  // Every neighbouring refusal in this table is UNCHANGED — `2 celery stalks`,
+  // `1 red bell pepper`, `2 medium potatoes`, `2 slices white bread` (materially
+  // different authenticated slice masses) and `1 lemon` (no authenticated
+  // identity-bound mass) all still yield no mass, so no authority was widened.
+  { line: '1 medium head green cabbage', fdc: 2346407, status: 'matched', grams: 908, mass: 'household_portion' },
   { line: '2 medium potatoes', fdc: 2709382, status: 'needs_amount', grams: null, mass: null },
   { line: '1 stick unsalted butter', fdc: 789828, status: 'matched', grams: 113, mass: 'household_portion' },
   { line: '4 slices bacon', fdc: 168277, status: 'matched', grams: 112, mass: 'count_portion' },

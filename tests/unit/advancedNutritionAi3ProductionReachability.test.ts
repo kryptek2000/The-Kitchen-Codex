@@ -276,7 +276,10 @@ describe('AI-3 reachability — capability authority', () => {
 describe('AI-3 reachability — the returned offer is inert but fully evidenced', () => {
   it('every actionable offer carries COMPLETE five-field evidence', async () => {
     const flows = ai3Flows();
-    expect(flows.length).toBe(26);
+    // AI-6B1 CURRENT: 24 offerable flows (was 26). Two lines now have a higher
+    // authenticated deterministic mass, so the LOWEST authority (AI-3) is
+    // correctly not offered for them. AI-3 behavior is otherwise unchanged.
+    expect(flows.length).toBe(24);
     for (const flow of flows) {
       const transport = stubTransport([flow.lineRef]);
       const result = await requestAiMassEstimateOffers({

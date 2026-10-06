@@ -252,7 +252,8 @@ export function createAdvancedNutritionSession(
       if (!hintResult.ok) return { ok: false, failure: phase3PortionFailure() };
       const parsed = parseIngredient(ingredient);
       if (!parsed.ok) return { ok: false, failure: phase3PortionFailure() };
-      const projection = projectQueryText(normalizeQuery(parsed.parsed.query).text, {
+      const normalizedQueryText = normalizeQuery(parsed.parsed.query).text;
+      const projection = projectQueryText(normalizedQueryText, {
         count_noun: parsed.parsed.count_noun,
         container: parsed.parsed.container,
       });
@@ -261,7 +262,8 @@ export function createAdvancedNutritionSession(
         parsed.parsed.raw_unit,
         projection.food_tokens,
         projection.size_qualifiers,
-        hintResult.hint
+        hintResult.hint,
+        normalizedQueryText.split(/\s+/).filter(Boolean)
       );
       if (!requirement) return { ok: false, failure: phase3PortionFailure() };
       return reviewFoodCountPortions(authority.context, fdcId, requirement);

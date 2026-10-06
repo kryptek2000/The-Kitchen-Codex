@@ -135,9 +135,20 @@ function calculatorDigest(candidate: Candidate): string | null {
 }
 
 describe('AI-3 identity evidence — Phase-4/calculator parity', () => {
-  it('the canonical population is 97 and yields the measured 26 candidates', () => {
+  it('the canonical population is 97 and yields the measured 24 candidates', () => {
+    // AI-6B1 CURRENT: 24 AI-3 candidates (was 26 at the AI-6A release).
+    //
+    // This is NOT an AI-3 behavior change and NOT a weakened AI-3 contract. AI-3
+    // is the LOWEST mass authority: it is offered only when no deterministic
+    // authority can supply mass. AI-6B1 gave two historical lines a HIGHER
+    // authenticated authority, so AI is correctly no longer offered for them:
+    //   `1 medium head green cabbage` -> household_portion 908 g
+    //   `1 medium head cauliflower`   -> count_portion 588 g
+    // AI-3 remains estimate-class, never authenticated and never auto-accepted;
+    // its eligibility rule, evidence contract, and effective-mass precedence are
+    // untouched. The corpus population itself is still 97.
     expect(canonicalPopulation().length).toBe(97);
-    expect(ai3Candidates().length).toBe(26);
+    expect(ai3Candidates().length).toBe(24);
   });
 
   it('every AI-3 candidate gets COMPLETE five-field evidence (none fail closed)', () => {
@@ -180,7 +191,7 @@ describe('AI-3 identity evidence — Phase-4/calculator parity', () => {
         mismatches.push(`${c.line}: phase4=${ev.ingredient_identity_digest} calculator=${calc}`);
       }
     }
-    expect(compared).toBe(26);
+    expect(compared).toBe(24);
     expect(mismatches, `identity digest divergence:\n${mismatches.join('\n')}`).toEqual([]);
   });
 

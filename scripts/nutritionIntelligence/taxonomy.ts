@@ -929,13 +929,95 @@ export type Ai6aCorpusSource = (typeof AI6A_CORPUS_SOURCES)[number];
 // ---------------------------------------------------------------------------
 
 /**
- * The load-bearing historical denominators. AI-6A is measurement-only, so a
- * future change to either number means behavior changed and MUST be reported.
+ * A versioned production-resolution baseline for one recon phase.
+ *
+ * The distinction between these records is load-bearing. The AI-6A record is
+ * IMMUTABLE historical evidence of what the engine actually did when AI-6A
+ * shipped; it is never rewritten because a later authorized phase improved the
+ * engine. The AI-6B1 record is the CURRENT authorized production expectation.
  */
-export const HISTORICAL_TOTAL = 97;
-export const HISTORICAL_RESOLVED = 46;
-export const LEGACY_TOTAL = 91;
-export const LEGACY_RESOLVED = 42;
+export interface Ai6aProductionBaseline {
+  /** The phase whose authorized production behavior this record pins. */
+  readonly phase: string;
+  readonly historical_total: number;
+  readonly historical_authenticated_resolved: number;
+  readonly legacy_total: number;
+  readonly legacy_authenticated_resolved: number;
+}
+
+/**
+ * IMMUTABLE AI-6A RELEASE BASELINE — before any AI-6B production change.
+ *
+ * These are the values AI-6A shipped with and the exact digests of the two
+ * deterministic JSON artifacts it produced at that release point. They are
+ * preserved as historical evidence and must NOT be updated when a later phase
+ * legitimately improves production resolution.
+ */
+export const AI6A_RELEASE_BASELINE: Ai6aProductionBaseline = Object.freeze({
+  phase: 'AI-6A',
+  historical_total: 97,
+  historical_authenticated_resolved: 46,
+  legacy_total: 91,
+  legacy_authenticated_resolved: 42,
+});
+
+/**
+ * Exact AI-6A release-point artifact digests (immutable historical evidence).
+ * AI-6B1 legitimately produces DIFFERENT current output; these remain the
+ * snapshot proving the AI-6A release state.
+ */
+export const AI6A_RELEASE_RECON_JSON_SHA256 =
+  '0a08840535f9a43712942fef89cd1416c3c883f9d0d762929557530a2eeb7444';
+
+export const AI6A_RELEASE_HISTORICAL_BENCHMARK_JSON_SHA256 =
+  '0480527440eb8344a2210901f5796ae21b232fc81d218f5f082be32f01db8375';
+
+/**
+ * CURRENT AUTHORIZED PRODUCTION BASELINE — AI-6B1.
+ *
+ * AI-6B1 closed the documented `deterministic_portion` root cause in which a size
+ * qualifier preceding a whole-object count unit (`1 medium head green cabbage`)
+ * made the canonical parse drop the unit, so no authenticated portion could ever
+ * be consumed. Exactly two historical-corpus lines became resolvable with
+ * authenticated, identity-bound evidence:
+ *
+ *   - `1 medium head green cabbage` -> household_portion 908 g
+ *   - `1 medium head cauliflower`   -> count_portion 588 g
+ *
+ * The corpus, the 97/91 denominators, identity truth, and every safety rule are
+ * UNCHANGED; only production resolution improved. Conformance is checked against
+ * THIS record so an authorized improvement is not reported as drift, while
+ * AI6A_RELEASE_BASELINE remains the immutable before-AI-6B measurement.
+ */
+export const AI6B1_EXPECTED_PRODUCTION_BASELINE: Ai6aProductionBaseline = Object.freeze({
+  phase: 'AI-6B1',
+  historical_total: 97,
+  historical_authenticated_resolved: 48,
+  legacy_total: 91,
+  legacy_authenticated_resolved: 44,
+});
+
+/**
+ * The historical subset denominators. These are corpus SHAPE facts (the load-bearing
+ * 97-line benchmark denominator and its 91-line legacy subset) and are therefore
+ * shared by every baseline record. Only the RESOLVED counts move between phases.
+ */
+export const HISTORICAL_TOTAL = AI6A_RELEASE_BASELINE.historical_total;
+export const LEGACY_TOTAL = AI6A_RELEASE_BASELINE.legacy_total;
+
+/**
+ * Resolved-count accessors, named for the phase whose authorized behavior they
+ * pin. There is deliberately NO ambiguous bare `HISTORICAL_RESOLVED` constant:
+ * every consumer must state which baseline it means.
+ */
+export const AI6A_RELEASE_HISTORICAL_RESOLVED =
+  AI6A_RELEASE_BASELINE.historical_authenticated_resolved;
+export const AI6A_RELEASE_LEGACY_RESOLVED =
+  AI6A_RELEASE_BASELINE.legacy_authenticated_resolved;
+export const AI6B1_EXPECTED_HISTORICAL_RESOLVED =
+  AI6B1_EXPECTED_PRODUCTION_BASELINE.historical_authenticated_resolved;
+export const AI6B1_EXPECTED_LEGACY_RESOLVED =
+  AI6B1_EXPECTED_PRODUCTION_BASELINE.legacy_authenticated_resolved;
 
 /**
  * The six `nutrient_annotation` lines were added to the resolution corpus AFTER

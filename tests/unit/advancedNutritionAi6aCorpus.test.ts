@@ -32,10 +32,13 @@ import {
   RESOLUTION_COVERAGE_CORPUS,
 } from '../../tests/fixtures/advancedNutritionResolutionCorpus';
 import {
-  HISTORICAL_RESOLVED,
+  AI6A_RELEASE_BASELINE,
+  AI6A_RELEASE_HISTORICAL_BENCHMARK_JSON_SHA256,
+  AI6A_RELEASE_HISTORICAL_RESOLVED,
+  AI6A_RELEASE_LEGACY_RESOLVED,
+  AI6A_RELEASE_RECON_JSON_SHA256,
   HISTORICAL_TOTAL,
   LEGACY_EXCLUDED_LINES,
-  LEGACY_RESOLVED,
   LEGACY_TOTAL,
   AI6A_COVERAGE_FAMILIES,
   isAi6aCoverageFamily,
@@ -82,17 +85,45 @@ describe('AI-6A — the recon denominator cannot be inflated', () => {
   });
 });
 
-describe('AI-6A — the historical denominators are preserved exactly', () => {
-  it('keeps the canonical 97-line denominator', () => {
+describe('AI-6A — the corpus denominators and the AI-6A release snapshot', () => {
+  it('keeps the canonical 97-line corpus denominator', () => {
+    // The DENOMINATOR is a corpus-shape fact and is shared by every phase. Only
+    // the resolved count moves between authorized production baselines.
     expect(HISTORICAL_TOTAL).toBe(97);
-    expect(HISTORICAL_RESOLVED).toBe(46);
     expect(AI6A_HISTORICAL_SUBSET.length).toBe(HISTORICAL_TOTAL);
   });
 
-  it('keeps the legacy 91-line denominator and its 42 resolved', () => {
+  it('preserves the immutable AI-6A release baseline at 46 resolved', () => {
+    // HISTORICAL SNAPSHOT PRESERVATION: this is what AI-6A actually shipped.
+    // AI-6B1 legitimately improved production to 48; that must NOT rewrite this
+    // record out of history.
+    expect(AI6A_RELEASE_BASELINE.phase).toBe('AI-6A');
+    expect(AI6A_RELEASE_BASELINE.historical_total).toBe(97);
+    expect(AI6A_RELEASE_BASELINE.historical_authenticated_resolved).toBe(46);
+    expect(AI6A_RELEASE_HISTORICAL_RESOLVED).toBe(46);
+  });
+
+  it('keeps the legacy 91-line corpus denominator', () => {
     expect(LEGACY_TOTAL).toBe(91);
-    expect(LEGACY_RESOLVED).toBe(42);
     expect(AI6A_LEGACY_SUBSET.length).toBe(LEGACY_TOTAL);
+  });
+
+  it('preserves the immutable AI-6A release baseline at 42 legacy resolved', () => {
+    // HISTORICAL SNAPSHOT PRESERVATION.
+    expect(AI6A_RELEASE_BASELINE.legacy_total).toBe(91);
+    expect(AI6A_RELEASE_BASELINE.legacy_authenticated_resolved).toBe(42);
+    expect(AI6A_RELEASE_LEGACY_RESOLVED).toBe(42);
+  });
+
+  it('preserves the AI-6A release-point artifact digests as historical evidence', () => {
+    // HISTORICAL SNAPSHOT PRESERVATION: the SAME instrument now legitimately
+    // produces DIFFERENT current output, so these are the release-point digests.
+    expect(AI6A_RELEASE_RECON_JSON_SHA256).toBe(
+      '0a08840535f9a43712942fef89cd1416c3c883f9d0d762929557530a2eeb7444'
+    );
+    expect(AI6A_RELEASE_HISTORICAL_BENCHMARK_JSON_SHA256).toBe(
+      '0480527440eb8344a2210901f5796ae21b232fc81d218f5f082be32f01db8375'
+    );
   });
 
   it('makes the 97 -> 91 split explicit and self-consistent', () => {

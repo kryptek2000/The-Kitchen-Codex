@@ -249,11 +249,25 @@ async function main(): Promise<void> {
   console.log('--- qualitative / absent-amount subtypes ---');
   console.log(`  explicit qualitative cue: ${aggregates.counts.qualitative_explicit_cue}`);
   console.log(`  authored amount absent: ${aggregates.counts.qualitative_amount_absent}`);
-  console.log('--- historical baseline invariant ---');
+  console.log('--- versioned production baseline transition ---');
+  const rel = baseline.ai6a_release_baseline;
+  const exp = baseline.expected_production_baseline;
   console.log(
-    `  historical ${aggregates.historical_97.authenticated_resolved}/${aggregates.historical_97.total}, legacy ${aggregates.legacy_91.authenticated_resolved}/${aggregates.legacy_91.total}`
+    `  AI-6A RELEASE baseline (immutable, before any AI-6B change): historical ${rel.historical_authenticated_resolved}/${rel.historical_total}, legacy ${rel.legacy_authenticated_resolved}/${rel.legacy_total}`
   );
-  console.log(`  ok: ${baseline.ok}${baseline.problems.length > 0 ? ` (${baseline.problems.join(', ')})` : ''}`);
+  console.log(
+    `  ${exp.phase} EXPECTED production baseline (current authorized): historical ${exp.historical_authenticated_resolved}/${exp.historical_total}, legacy ${exp.legacy_authenticated_resolved}/${exp.legacy_total}`
+  );
+  console.log(
+    `  OBSERVED: historical ${baseline.observed.historical_authenticated_resolved}/${baseline.observed.historical_total}, legacy ${baseline.observed.legacy_authenticated_resolved}/${baseline.observed.legacy_total}`
+  );
+  console.log(
+    `  DELTA vs AI-6A release: historical ${baseline.delta_from_ai6a_release.historical_authenticated_resolved >= 0 ? '+' : ''}${baseline.delta_from_ai6a_release.historical_authenticated_resolved}, legacy ${baseline.delta_from_ai6a_release.legacy_authenticated_resolved >= 0 ? '+' : ''}${baseline.delta_from_ai6a_release.legacy_authenticated_resolved}`
+  );
+  console.log(
+    `  corpus UNCHANGED (${AI6A_INTELLIGENCE_CORPUS.length} lines, 97/91 denominators); only production resolution changed`
+  );
+  console.log(`  conformance ok: ${baseline.ok}${baseline.problems.length > 0 ? ` (${baseline.problems.join(', ')})` : ''}`);
   console.log(
     `  SAFE axis (diagnostic, NOT the invariant): historical ${aggregates.historical_97.safe_resolved}/${aggregates.historical_97.total}, legacy ${aggregates.legacy_91.safe_resolved}/${aggregates.legacy_91.total}`
   );

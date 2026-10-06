@@ -126,7 +126,13 @@ function classifyLine(line: string, focus: string): DeterministicLineResult {
 }
 
 describe('AI-0 benchmark foundation', () => {
-  it('keeps the deterministic expanded benchmark at 46/97 and legacy subset at 42/91', () => {
+  it('keeps the 97/91 corpus denominators and the AI-6B1 current resolution', () => {
+    // The DENOMINATORS are the load-bearing corpus shape and never change.
+    // AI-6B1 raised deterministic resolution 46 -> 48 (legacy 42 -> 44) by
+    // closing the `deterministic_portion` root cause in which a size qualifier
+    // before a whole-object count unit (`1 medium head ...`) made the canonical
+    // parse drop the unit. The AI-6A release values 46/42 remain the documented
+    // historical snapshot; see advancedNutritionAi6aCorpus.test.ts.
     const seen = new Set<string>();
     const results: DeterministicLineResult[] = [];
     for (const entry of RESOLUTION_COVERAGE_CORPUS) {
@@ -136,11 +142,11 @@ describe('AI-0 benchmark foundation', () => {
     }
     const resolved = results.filter((result) => result.resolved).length;
     expect(results.length).toBe(97);
-    expect(resolved).toBe(46);
+    expect(resolved).toBe(48);
 
     const legacy = results.filter((result) => result.focus !== 'nutrient_annotation');
     expect(legacy.length).toBe(91);
-    expect(legacy.filter((result) => result.resolved).length).toBe(42);
+    expect(legacy.filter((result) => result.resolved).length).toBe(44);
   }, 180000);
 
   it('reports AI-Advanced buckets separately without inflating resolution credit', () => {

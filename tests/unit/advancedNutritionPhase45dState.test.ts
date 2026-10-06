@@ -41,7 +41,12 @@ describe('phase 4.5d versioning — explicit bumps', () => {
     expect(PHASE4_SESSION_VERSION).toBe('usda_phase4_session_v3');
     // Phase 6 adds the verified household-portion mass source + state map.
     expect(PHASE4_STATE_VERSION).toBe('usda_phase4_state_v5');
-    expect(COUNT_PORTION_VERSION).toBe('usda_count_portion_v2');
+    // AI-6B1 bumps the count-portion contract v2 -> v3. Requirement derivation
+    // materially changed (a size qualifier may precede a named whole-object count
+    // unit), and the requirement feeds `candidates_digest`, so a persisted
+    // selection bound to the old requirement must fail closed as `stale` rather
+    // than be honored under a new meaning. No other version moved.
+    expect(COUNT_PORTION_VERSION).toBe('usda_count_portion_v3');
   });
 
   it('leaves the Phase 4.5C portion-semantics version unchanged', () => {

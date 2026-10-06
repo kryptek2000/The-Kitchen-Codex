@@ -17,10 +17,10 @@ import {
   AI6A_NEVER_TARGET_LANES,
   AI6A_ROADMAP_CRITERIA,
   AUTHENTICATED_MASS_SOURCES,
-  HISTORICAL_RESOLVED,
+  AI6A_RELEASE_BASELINE,
+  AI6B1_EXPECTED_PRODUCTION_BASELINE,
   HISTORICAL_TOTAL,
   LEGACY_EXCLUDED_LINES,
-  LEGACY_RESOLVED,
   LEGACY_TOTAL,
   laneForBlocker,
   type Ai6aAutoOutcome,
@@ -31,6 +31,7 @@ import {
   type Ai6aIdentityCorrectness,
   type Ai6aKnowledgeFlag,
   type Ai6aMassSource,
+  type Ai6aProductionBaseline,
   type Ai6aPrimaryBlocker,
   type Ai6aRepairLane,
   type Ai6aRoadmapCriterion,
@@ -696,30 +697,74 @@ function secondarySignalCounts(
  * legacy subset must still resolve 42. A drift here means behavior changed, which
  * is a STOP condition and must be reported rather than absorbed.
  */
+/**
+ * Conformance + transition report for the historical/legacy denominators.
+ *
+ * CONFORMANCE is measured against the CURRENT authorized production baseline
+ * (AI-6B1), so an explicitly authorized later phase that genuinely improves
+ * production resolution is not permanently reported as drift.
+ *
+ * The IMMUTABLE AI-6A release baseline is still reported alongside it, together
+ * with the delta, so the output always shows that the CORPUS did not change and
+ * that production resolution improved by exactly the authorized amount.
+ */
 export function historicalBaselineCheck(aggregates: Ai6aAggregates): {
   readonly ok: boolean;
   readonly problems: ReadonlyArray<string>;
+  readonly ai6a_release_baseline: Ai6aProductionBaseline;
+  readonly expected_production_baseline: Ai6aProductionBaseline;
+  readonly observed: {
+    readonly historical_total: number;
+    readonly historical_authenticated_resolved: number;
+    readonly legacy_total: number;
+    readonly legacy_authenticated_resolved: number;
+  };
+  readonly delta_from_ai6a_release: {
+    readonly historical_authenticated_resolved: number;
+    readonly legacy_authenticated_resolved: number;
+  };
 } {
+  const expected = AI6B1_EXPECTED_PRODUCTION_BASELINE;
+  const observed = {
+    historical_total: aggregates.historical_97.total,
+    historical_authenticated_resolved: aggregates.historical_97.authenticated_resolved,
+    legacy_total: aggregates.legacy_91.total,
+    legacy_authenticated_resolved: aggregates.legacy_91.authenticated_resolved,
+  };
   const problems: string[] = [];
-  if (aggregates.historical_97.total !== HISTORICAL_TOTAL) {
+  if (observed.historical_total !== expected.historical_total) {
+    problems.push(`historical_total:${observed.historical_total}!=${expected.historical_total}`);
+  }
+  if (
+    observed.historical_authenticated_resolved !== expected.historical_authenticated_resolved
+  ) {
     problems.push(
-      `historical_total:${aggregates.historical_97.total}!=${HISTORICAL_TOTAL}`
+      `historical_resolved:${observed.historical_authenticated_resolved}!=${expected.historical_authenticated_resolved}`
     );
   }
-  if (aggregates.historical_97.authenticated_resolved !== HISTORICAL_RESOLVED) {
+  if (observed.legacy_total !== expected.legacy_total) {
+    problems.push(`legacy_total:${observed.legacy_total}!=${expected.legacy_total}`);
+  }
+  if (observed.legacy_authenticated_resolved !== expected.legacy_authenticated_resolved) {
     problems.push(
-      `historical_resolved:${aggregates.historical_97.authenticated_resolved}!=${HISTORICAL_RESOLVED}`
+      `legacy_resolved:${observed.legacy_authenticated_resolved}!=${expected.legacy_authenticated_resolved}`
     );
   }
-  if (aggregates.legacy_91.total !== LEGACY_TOTAL) {
-    problems.push(`legacy_total:${aggregates.legacy_91.total}!=${LEGACY_TOTAL}`);
-  }
-  if (aggregates.legacy_91.authenticated_resolved !== LEGACY_RESOLVED) {
-    problems.push(
-      `legacy_resolved:${aggregates.legacy_91.authenticated_resolved}!=${LEGACY_RESOLVED}`
-    );
-  }
-  return { ok: problems.length === 0, problems: Object.freeze(problems) };
+  return {
+    ok: problems.length === 0,
+    problems: Object.freeze(problems),
+    ai6a_release_baseline: AI6A_RELEASE_BASELINE,
+    expected_production_baseline: expected,
+    observed: Object.freeze(observed),
+    delta_from_ai6a_release: Object.freeze({
+      historical_authenticated_resolved:
+        observed.historical_authenticated_resolved -
+        AI6A_RELEASE_BASELINE.historical_authenticated_resolved,
+      legacy_authenticated_resolved:
+        observed.legacy_authenticated_resolved -
+        AI6A_RELEASE_BASELINE.legacy_authenticated_resolved,
+    }),
+  };
 }
 
 export { AI6A_BLOCKER_TOTAL, AI6A_FAILURE_BLOCKER_TOTAL };
