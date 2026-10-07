@@ -11696,3 +11696,189 @@ is asserted only because the measured repairable count reached zero.
 | Concern | File |
 | --- | --- |
 | closed disposition + evidence vocabularies, classifier semantics per class, totality, the 35-line measured partition, container/bread/mortadella/oyster/household/size-only witnesses, AI-3 cross-check, repairability-aware roadmap derivation (exhausted lane never recommended, blocker summing, never-target lanes), unchanged production baseline, byte-determinism | `tests/unit/advancedNutritionAi6b2PortionDisposition.test.ts` |
+
+---
+
+## 64. AI-6B3 — DETERMINISTIC IDENTITY ADJUDICATION + NEXT-LANE HANDOFF
+
+### 64.1 WHAT CHANGED — AND WHAT DID NOT
+
+AI-6B3 is **planning-only**, exactly like AI-6B2. It changes **ZERO** production nutrition
+behavior: no new grams, no changed FDC binding, no auto-selected identity, no changed mass
+source, no changed eligibility, no new authority. Its entire contribution is a correction to
+**planning truth**, published as a SEPARATE versioned artifact so the AI-6A recon schema and the
+AI-6B2 portion-disposition schema are both untouched:
+
+- schema `nutrition_ai6b3_identity_disposition_v1`
+- classifier `scripts/nutritionIntelligence/identityDisposition.ts`
+- builder `scripts/nutritionIntelligence/identityDispositionReport.ts`
+- CLI `scripts/benchmark_nutrition_identity_disposition.ts`
+- base commit pinned to `9761ae5fef84058ef76ba1ad6232c1b3f644cc5a` so later HEAD movement cannot
+  perturb the artifact
+- ZERO production consumers (asserted by test across `src/core/nutritionV2`, `src/utils`,
+  `server`, `plugin`)
+
+### 64.2 THE SAME CORRECTION, APPLIED TO IDENTITY
+
+A **blocker** and a **repairability verdict** are not the same thing.
+`identity_needs_review` is a truthful observation that the deterministic engine declined to bind an
+identity, and most such refusals are **correct**. AI-6B3 therefore adds an ORTHOGONAL, closed
+disposition axis beside the blocker and never rewrites blocker truth, corpus membership, authored
+text, identity labels, mass sources, or grams to move a ranking.
+
+The two numbers that must never be conflated:
+
+```
+OBSERVED IDENTITY BLOCKERS ................. 27
+REPAIRABLE DETERMINISTIC IDENTITY DEFECTS .. 0   (measured, not assumed)
+```
+
+### 64.3 THE PROGRESSION (each step remains true in its own time)
+
+| Phase | Truthful statement |
+| --- | --- |
+| AI-6A | "Investigate deterministic identity first." 37 actionable root causes. |
+| AI-6B1 | Closed the whole-object/cut/container partition; identity blockers unchanged. |
+| AI-6B2 | Adjudicated the portion lane. Measured repairable = **0**; named `deterministic_identity` (27) as the next ADJUDICATION target. |
+| AI-6B3 | The 27 identity blockers were adjudicated. Measured repairable = **0**. |
+
+### 64.4 THE 27-LINE CENSUS RECONCILES
+
+Blocker split **26 `identity_needs_review` + 1 `identity_unmatched` = 27**. Every line receives
+EXACTLY ONE disposition with EXACTLY ONE closed evidence code; nothing is unclassified, and there is
+no silent catch-all. `needs_identity_recon` exists as a closed member with a bounded reason code but
+has **zero** instances, so it never hides an unclassified case.
+
+### 64.5 CLOSED DISPOSITION VOCABULARY (9)
+
+`repairable_deterministic_identity_defect`, `normalization_or_tokenization_gap`,
+`catalog_candidate_generation_gap`, `ambiguous_identity_requires_review`,
+`specificity_not_authorized`, `semantic_equivalence_not_authorized`,
+`branded_or_commercial_specificity_gap`, `intentional_human_identity_choice`,
+`needs_identity_recon`.
+
+Only `repairable_deterministic_identity_defect` means "the current bounded candidate window ALREADY
+determines one safe identity and production fails to consume it". Its measured count is **0**.
+
+### 64.6 CLOSED EVIDENCE VOCABULARY (12)
+
+`single_safe_candidate_withheld`, `multiple_plausible_candidates`,
+`all_satisfying_candidates_forbidden`, `quantity_token_absorbed_into_food_query`,
+`container_noun_in_food_head`, `declared_qualifier_token_in_food_head`,
+`catalog_probe_finds_candidate_but_window_empty`, `no_authorized_record_for_authored_specificity`,
+`resolving_requires_unstated_food_equivalence`, `brand_token_in_authored_line`,
+`authored_line_names_no_discriminating_food`, `insufficient_evidence_for_classification`.
+
+### 64.7 MEASURED DISPOSITION OF ALL 27
+
+| Disposition | Count | What it means |
+| --- | --- | --- |
+| `ambiguous_identity_requires_review` | **11** | Two or more window candidates satisfy the authored food head. Choosing one would manufacture certainty. |
+| `normalization_or_tokenization_gap` | **6** | The food head is not a faithful identity string: the quantity is absorbed (`2 cloves`), a container noun leaked (`packet yeast`, `packet ranch seasoning mix`, `packets taco seasoning`), or a declared modifier leaked (`whole chicken`, `whole lemons`). |
+| `catalog_candidate_generation_gap` | **6** | Nothing in the window satisfies the authored head, yet a bounded catalog probe over a one-token relaxation finds records (`apple cider vinegar`, `penne pasta`, `thick-cut bacon`, `Italian seasoning`, `salmon fillet`, `loosely packed brown rice`). The catalog is not empty; the candidate path surfaced nothing usable. |
+| `specificity_not_authorized` | **3** | Either every satisfying candidate is forbidden by the corpus (`1 can diced tomatoes`), or neither the head nor any relaxation matches any record (`crushed red pepper flakes`, `dill pickle spears`). Binding would discard authored content. |
+| `branded_or_commercial_specificity_gap` | **1** | `1 packet Lipton onion soup mix` — generic substitution would be dishonest. |
+
+Total **27**. `repairable_deterministic_identity_defect` = **0**,
+`semantic_equivalence_not_authorized` = **0**, `intentional_human_identity_choice` = **0**,
+`needs_identity_recon` = **0**. Zero-instance members stay in the closed vocabulary so the taxonomy
+cannot rot; a test asserts the vocabulary itself, not its instance counts.
+
+Handoff: `intentional_human_review` **15**, `deterministic_parser` **6**, `needs_recon` **6**.
+
+### 64.8 WHY ZERO — AND WHY THAT IS NOT AN ASSUMPTION
+
+"No line has exactly one satisfying candidate" is a **measured** fact about the real candidate
+windows, not a starting position. Per line the identity lane distributes as
+**0 satisfying → 15**, **2 → 1**, **3 → 2**, **4 → 3**, **5 → 6**. There is no line at 1, so the
+repairable predicate has no witness to fire on. Two bounded hypothetical rules were therefore
+SIMULATED against all 207 recon lines and every checked-in constraint:
+
+| Rule | Identity-lane new bindings | Corpus new | Corpus changed | Oracle divergences | Safety-history bindings | Eligible |
+| --- | --- | --- | --- | --- | --- | --- |
+| `unique_satisfying_candidate_auto_bind` | 0 | 4 | **11** | 0 | 0 | **no** — `no_identity_lane_witness` |
+| `singularize_plural_head_token` | 0 | 8 | **11** | 0 | **1** | **no** — `no_identity_lane_witness` |
+
+Two decisive negatives:
+
+- The "obvious" rule — *bind the identity when the window already determines one* — would **rewrite
+  11 identities that currently resolve**. It is not conservative, and its corpus effect dwarfs its
+  identity-lane effect (0).
+- The plural-morphology rule would newly bind exactly one food-inside-preparation line
+  (`sardines in tomato sauce` → `175140`, *Fish, sardine, Pacific, canned in tomato sauce*). That
+  is precisely the safety class the AI-6A identity history records, so it is refused even though it
+  happens to look correct.
+
+Neither rule is applied. Both exist only as simulation inputs.
+
+### 64.9 SAFETY FIRST — THE 46/46 ORACLE AND THE FORBIDDEN CONSTRAINTS
+
+The known-good identity oracle stays **46 verified-correct / 0 verified-unsafe**, untouched. Both
+simulated rules produce **0 oracle divergences**, so nothing already correct would move.
+
+The identity lane itself carries checked-in constraints, and both are honoured:
+
+- `1 can diced tomatoes` is `expectNoAutomatic` **and** forbids `/\braw\b|\bcrushed\b/i`. All **4**
+  of its satisfying window candidates are raw records, so the verdict is
+  `specificity_not_authorized` / `all_satisfying_candidates_forbidden` — an authorized bind does not
+  exist. A naive "bind the unique candidate" rule would violate this corpus line; the tests assert
+  the refusal.
+- `1 packet Lipton onion soup mix` is never genericized.
+
+No rule may weaken food-inside-preparation wording, container contents, sauce/condiment phrasing,
+fresh/dried, raw/cooked, salted/unsalted, fat percentage, brand specificity, compound names, or
+authored alternatives.
+
+### 64.10 IDENTITY IS NOT RANKING
+
+```
+IDENTITY:  what food is this?
+RANKING:   given valid candidate identities, which should come first?
+```
+
+The **9** `deterministic_ranking` blockers (`compatible_candidate_not_selected`) remain a **separate
+lane** and are never folded into identity. AI-6B3 reads the identity lane only and merely reports
+the ranking count; a classification discrepancy would be recorded and stopped on, never silently
+acted on. 27 + 9 = 36, and neither number absorbs the other.
+
+### 64.11 AI-3 CROSS-CHECK AND THE INTERPRETATION BOUNDARY
+
+All **27** identity-lane lines report `not_actionable` downstream: an unresolved identity blocks
+estimation entirely, so AI-3 becomes eligible for **none** of them. AI-3 is unchanged, and no
+identity case is routed to AI merely because deterministic identity is hard. No AI-selected FDC
+becomes authoritative; AI-4 accepted recipe context stays inert.
+
+### 64.12 PRODUCTION INVARIANTS (all unchanged)
+
+historical **48/97**, legacy **44/91**, raw **94**, authenticated **94**, safe **93**, identity
+**46/46**, `verified_unsafe` **0**, corpus **207**. Mass sources unchanged at none 113 /
+source_portion 44 / direct_mass 21 / count_portion 19 / household_portion 10. The AI-6B1 recon SHA,
+the historical benchmark SHA, and the AI-6B2 portion-disposition SHA are all byte-identical.
+
+### 64.13 ROADMAP: ADJUDICATION ≠ APPROVED WORK
+
+Both lanes are now adjudicated. Neither is approved implementation work:
+
+| Lane | Observed | Actionable | Adjudicated | Exhausted |
+| --- | --- | --- | --- | --- |
+| `deterministic_portion` | 35 | **0** | yes | **yes** |
+| `deterministic_identity` | 27 | **0** | yes | **yes** |
+| `deterministic_ranking` | 9 | `not_adjudicated` | no | no |
+| `catalog_gap` | 5 | `not_adjudicated` | no | no |
+
+- **Recommended active repair lane: `none`** — `no_adjudicated_lane_has_actionable_defects`
+- **Next adjudication target: `deterministic_ranking`** — largest un-adjudicated **eligible** lane by
+  observed blockers (9). `intentional_human_review`, `needs_recon`, and `already_resolved` remain
+  never-target lanes. This is a *measurement* instruction, not a repair instruction.
+
+Nothing here is hardcoded: the lane table is derived from the declared criteria order applied to
+MEASURED actionable counts, and tests prove the answer flips when a hypothetical actionable count
+changes (and flips to `deterministic_ranking`, not to `deterministic_identity`, when ranking is the
+adjudicated lane). The 35 portion blockers and 27 identity blockers can never buy repair status
+from frequency alone.
+
+### 64.14 AI-6B3 COVERAGE
+
+| Concern | File |
+| --- | --- |
+| closed disposition + evidence vocabularies, classifier semantics per class, totality, the 27-line measured partition, the 26+1 blocker reconciliation, candidate/probe evidence preservation, the 46/46 oracle, `expectNoAutomatic` and forbidden-description refusals, ranking separation, hypothetical-rule simulation, AI-3 cross-check, repairability-aware roadmap derivation, unchanged production baseline, zero production consumers, byte-determinism | `tests/unit/advancedNutritionAi6b3IdentityDisposition.test.ts` |
