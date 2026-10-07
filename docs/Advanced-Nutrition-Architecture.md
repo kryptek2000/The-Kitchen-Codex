@@ -11882,3 +11882,268 @@ from frequency alone.
 | Concern | File |
 | --- | --- |
 | closed disposition + evidence vocabularies, classifier semantics per class, totality, the 27-line measured partition, the 26+1 blocker reconciliation, candidate/probe evidence preservation, the 46/46 oracle, `expectNoAutomatic` and forbidden-description refusals, ranking separation, hypothetical-rule simulation, AI-3 cross-check, repairability-aware roadmap derivation, unchanged production baseline, zero production consumers, byte-determinism | `tests/unit/advancedNutritionAi6b3IdentityDisposition.test.ts` |
+
+---
+
+## 65. AI-6B4 — DETERMINISTIC RANKING ADJUDICATION + NEXT-LANE HANDOFF
+
+### 65.1 WHAT CHANGED — AND WHAT DID NOT
+
+AI-6B4 is **planning-only**, exactly like AI-6B2 and AI-6B3. It changes **ZERO** production
+nutrition behavior: no rerank applied, no FDC rebound, no gram changed, no changed mass source, no
+changed eligibility, no new authority. Its entire contribution is a correction to **planning
+truth**, published as a SEPARATE versioned artifact:
+
+- schema `nutrition_ai6b4_ranking_disposition_v1` (AI-6B4-R1 repairs the safety-history
+  characterization only; schema string unchanged)
+- classifier `scripts/nutritionIntelligence/rankingDisposition.ts`
+- builder `scripts/nutritionIntelligence/rankingDispositionReport.ts`
+- CLI `scripts/benchmark_nutrition_ranking_disposition.ts`
+- base commit pinned to `d31070978c44cb21721441158b130b8ad98831b6`
+- ZERO production consumers (asserted by test across `src/core/nutritionV2`, `src/utils`, `server`,
+  `plugin`)
+
+### 65.2 RANKING IS NOT PORTION SHOPPING — THE LOAD-BEARING RULE
+
+A candidate must **never** outrank a semantically better food identity merely because it has a
+convenient USDA portion.
+
+The canonical ranking blocker `compatible_candidate_not_selected` means only that production HAS a
+selected FDC, that the selected FDC cannot satisfy the authored measurement through compatible
+authenticated portion authority, and that SOME other bounded candidate can. It says nothing about
+whether that other candidate is the right FOOD. A portion-compatible alternate may still be the
+wrong food, a materially different state or form, less faithful to authored qualifiers, a branded
+mismatch, an unauthorized substitute, or simply a record with a convenient portion.
+
+Every alternate is therefore evaluated in order: does it satisfy the authored food identity; does it
+preserve authored state/form qualifiers; does it avoid introducing un-authored specificity; does it
+avoid contradicting an authored state; does it violate no checked-in constraint; and only then does
+it carry usable portion authority. If any of the identity questions fails, portion compatibility
+does **not** make it a ranking repair.
+
+**A rerank that increases raw matched, authenticated resolved, or safe resolved is NOT
+automatically desirable.** Safety and semantic truth outrank coverage, and a record is never
+preferred merely because it would produce grams.
+
+### 65.3 THE SAME CORRECTION, APPLIED TO RANKING
+
+A blocker and a repairability verdict are not the same thing. AI-6B4 adds an ORTHOGONAL, closed
+disposition axis beside the blocker and never rewrites blocker truth, corpus membership, authored
+text, identity labels, mass sources, FDC bindings, or grams to move a ranking.
+
+```
+OBSERVED RANKING BLOCKERS ................. 9   (all compatible_candidate_not_selected)
+REPAIRABLE DETERMINISTIC RANKING DEFECTS .. 0   (measured, not assumed)
+```
+
+### 65.4 CLOSED DISPOSITION VOCABULARY (11)
+
+`repairable_deterministic_ranking_defect`, `selected_identity_semantically_preferred`,
+`alternate_identity_not_equivalent`, `authoritative_ranking_ambiguity`,
+`portion_compatibility_only_advantage`, `qualifier_fidelity_blocks_rerank`,
+`brand_or_product_specificity_blocks_rerank`, `corpus_constraint_blocks_rerank`,
+`no_safe_general_ranking_rule`, `ranking_blocker_misclassified`, `needs_ranking_recon`.
+
+Only `repairable_deterministic_ranking_defect` means a bounded GENERAL ranking rule could safely
+prefer a different candidate. Its measured count is **0**.
+
+### 65.5 CLOSED EVIDENCE VOCABULARY (14)
+
+`alternate_compatible_selected_incompatible`, `expected_candidate_supports_selected`,
+`expect_no_automatic_constraint`, `forbidden_candidate_constraint`,
+`alternate_drops_authored_qualifier`, `alternate_adds_unauthored_specificity`,
+`alternate_contradicts_authored_state`, `alternate_changes_food_identity`, `same_food_semantics`,
+`multiple_compatible_alternates`, `portion_compatibility_is_only_advantage`,
+`rule_would_break_known_good_identity_oracle`, `no_safe_general_rule_demonstrable`,
+`insufficient_semantic_evidence`.
+
+### 65.6 MEASURED DISPOSITION OF ALL 9
+
+| Disposition | Count | Lines |
+| --- | --- | --- |
+| `corpus_constraint_blocks_rerank` | **4** | `2 tbsp unsalted butter`, `2 celery stalks, chopped`, `2 stalks celery`, `2 chicken breasts` — in every case a checked-in `expectedAutoFdc` names the SELECTED record, so the identity is already VERIFIED correct and reranking away from it diverges from the oracle. |
+| `portion_compatibility_only_advantage` | **2** | `1/2 cup chopped bacon` (alternates are *Bacon, meatless* and *Bacon bits*), `1 head cabbage` (the alternate adds an un-authored `green`). The portion is the only real advantage. |
+| `qualifier_fidelity_blocks_rerank` | **1** | `4 tbsp unsalted butter` — **all four** compatible alternates (*Butter, NFS*, *Butter, tub*, *Fruit butter*, *Oil, cocoa butter*) drop the authored `unsalted`; two are not butter at all. |
+| `alternate_identity_not_equivalent` | **1** | `1 cup raw chicken breast` — the only compatible alternate is *Chicken breast, **fried**, coated … from raw*, contradicting the authored `raw`. |
+| `no_safe_general_ranking_rule` | **1** | `3 stalks celery` — see 65.8. |
+
+Total **9**. `repairable_deterministic_ranking_defect` = **0**;
+`selected_identity_semantically_preferred` = **0**; `authoritative_ranking_ambiguity` = **0**;
+`brand_or_product_specificity_blocks_rerank` = **0**; `ranking_blocker_misclassified` = **0**;
+`needs_ranking_recon` = **0**. Zero-instance members remain in the closed vocabulary so the taxonomy
+cannot rot, and a test asserts the vocabulary itself rather than its instance counts.
+
+Handoff: `needs_recon` **7**, `intentional_human_review` **2**.
+
+Semantic parity, derived from authored text and candidate descriptions only — **never** from portion
+availability: `same_semantic_identity` **3**, `selected_more_faithful` **3**,
+`materially_different` **2**, `ambiguous` **1**.
+
+### 65.7 THE SELECTED FDC MAY ALREADY BE CORRECT
+
+In all 9 cases the selected record is top-ranked (`selected_rank = 1`) and is the better expression of
+the authored food identity. Four of them are additionally corpus-verified
+(`identity_correctness = verified_correct`, `auto_outcome = automatic_matches_expected`,
+`expected_candidate_rank = top_1`) with `expectedAutoFdc` naming the SELECTED record. AI-6B4
+therefore does **not** declare a ranking defect merely because another record carries a compatible
+portion: where the selected identity is right and its portion authority is simply absent, that is a
+portion-authority condition, not a ranking defect. **AI-6B4 does not distort identity to manufacture
+grams.**
+
+### 65.8 WHY `3 stalks celery` IS NOT A REPAIRABLE DEFECT — THE CENTRAL FINDING
+
+`3 stalks celery` is the one line that looks repairable on its own evidence:
+
+- selected `169988` = *Celery, raw*, `has_compatible_portion = false`;
+- compatible alternate `2709778` = *Celery, raw* — **token-identical** description;
+- semantic parity `same_semantic_identity`, no authored qualifier at risk;
+- **no checked-in constraint forbids the swap.**
+
+A line-local verdict would call this a repair. It is not, and the corpus proves why: **all three
+celery lines share the identical alternate**, and on the other two (`2 celery stalks, chopped`,
+`2 stalks celery`) the checked-in corpus **requires** `169988`. The minimal GENERAL rule that
+expresses this preference — *prefer a token-identical candidate that carries compatible portion
+authority* — therefore reranks all three, converting one unresolved line into **two verified-identity
+divergences**. That trades a correct refusal for an identity regression.
+
+This is why AI-6B4 gates every line-local repairable verdict behind corpus-wide rule simulation
+(`applyRuleSafetyGate`). A defect that cannot be fixed by a general rule is not a repairable
+deterministic ranking defect, and a rerank that improves coverage while moving verified identities is
+unsafe by construction.
+
+### 65.9 HYPOTHETICAL RULE SIMULATION (never applied)
+
+Both declared general rules were simulated across all **207** recon lines and every checked-in
+constraint:
+
+| Rule | Lane bindings | New auto | Changed auto | Expected-FDC divergences | New masses | Safety-history bindings | Eligible |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `prefer_identical_description_with_compatible_portion` | 20 | 0 | **20** | **7** | 0 | **0** | **no** |
+| `prefer_head_token_preserving_candidate_with_compatible_portion` | 85 | 0 | **85** | **23** | 0 | **0** | **no** |
+
+**Both refuse for the same, single, sufficient reason: they diverge the expected-identity oracle —
+exact-record authority.** Neither unlocks a single new automatic identity or new authenticated mass
+(0 and 0); they only rewrite identities that already resolve (20 and 85). That is the decisive
+evidence that portion-based reranking is a coverage illusion, not a repair. Neither rule is applied.
+
+The refusal hierarchy is explicit:
+
+| Rank | Evidence | Rule 1 | Rule 2 | Standing |
+| --- | --- | --- | --- | --- |
+| **PRIMARY** | `expectedFdc` divergences (exact-record authority) | **7** | **23** | **Sufficient on its own** |
+| SECONDARY | `safety_history_bindings` (nested-food structural hazard) | 0 | 0 | Reported only when a real witness is hit |
+
+See 65.9.1 for why the secondary row is zero — an earlier detector over-claimed it.
+
+#### 65.9.1 SAFETY-HISTORY DETECTOR PRECISION REPAIR (AI-6B4-R1)
+
+An audit of AI-6B4 found the safety-history characterization **inaccurate**, and the finding is
+correct. The earlier detector was a bare `/ in /` test, which is not a detector for this hazard at
+all: it flags any authored line containing the standalone word `in`. It reported **2** hits, and both
+were false positives of the same kind — a **same-food record swap** caught by an annotation word:
+
+| Authored line | Selected | Would bind | Why it is NOT `sardines`-class |
+| --- | --- | --- | --- |
+| `3 to 4 slices provolone (about 75 to 100 grams in total)` | `170850 Cheese, provolone` | `2705733 Cheese, Provolone` | `in` sits inside a **parenthetical mass annotation** ("in total"); the swap is the **same food** from a different data source |
+| `3 to 4 slices provolone (about 75-100 g in total)` | `170850 Cheese, provolone` | `2705733 Cheese, Provolone` | identical reasoning |
+
+The historical hazard is a **structural identity collision**: for `sardines in tomato sauce` the
+engine once risked binding the **embedded preparation component** (`tomato sauce`) instead of the
+**containing food** (`sardines`). A same-food provolone record swap is not that, and reporting it as
+such overstated the safety evidence.
+
+**Repair.** A structural regex still cannot separate the hazard from ordinary preparation wording:
+after stripping parentheticals, `sardines in tomato sauce` and `1 can packed in oil` are
+syntactically identical, yet the first is a nested food identity and the second is a preparation state
+phrase. Telling those apart would require food semantics this artifact must not invent. The class is
+therefore **narrowed to a declared, audited witness set** rather than broadened into a brittle
+heuristic:
+
+```ts
+AI6B4_FOOD_INSIDE_PREPARATION_WITNESSES = { 'sardines in tomato sauce' }
+AI6B4_FOOD_INSIDE_PREPARATION_EXCLUSIONS = {
+  '1 can packed in oil',                                    // preparation state phrase
+  '3 to 4 slices provolone (about 75 to 100 grams in total)', // annotation "in total"
+  '3 to 4 slices provolone (about 75-100 g in total)',
+}
+```
+
+**The refusal does not depend on this evidence.** Both rules remain `repairable_eligible: false` with
+`eligibility_reason: hypothetical_rule_would_violate:diverges_expected_identity_oracle`, i.e. on exact
+-record authority alone, before and after the repair. The historical witness is still modelled, and a
+test proves it: binding `sardines in tomato sauce` is still recognized as a true structural hit.
+
+### 65.10 CORPUS CONSTRAINTS ACROSS THE 9
+
+`expectedAutoFdc` **4** (all pinning the selected record), `baselineAutoFdc` **0**, `expectTopFdc`
+**0**, `expectCandidateDescription` **0**, `expectNoAutomatic` **0**, `forbiddenAutoFdcs` **0**,
+`forbiddenAutoDescription` **0**, `knownIssue` **0**. No ranking line carries a checked-in safety
+constraint; the binding constraint on four of them is the *positive* oracle (`expectedAutoFdc`), which
+forbids moving away from a verified identity. Both simulated rules produce **0**
+`expectNoAutomatic`, forbidden-FDC and forbidden-description violations, and **0 oracle
+divergences** is never claimed — the divergences are the reason the rules are refused.
+
+An ORDER expectation (`expectTopFdc` / `expectCandidateDescription`) is never converted into automatic
+identity authority: "should rank highly" is not "may auto-bind". No such expectation is present on
+these 9 lines, so neither is exercised here.
+
+### 65.11 RANKING IS NOT IDENTITY, AND NEITHER IS PORTION
+
+```
+IDENTITY:  what food is this?              27 blockers (AI-6B3, exhausted)
+RANKING:   which valid candidate first?     9 blockers (AI-6B4, exhausted)
+PORTION:   which authorized mass?          35 blockers (AI-6B2, exhausted)
+```
+
+The three lanes are reported side by side and never merged. Identity-lane lines are asserted absent
+from the ranking census and vice versa.
+
+**Celery is not a near-miss.** `169988` (*Celery, raw*) and `2709778` (*Celery, raw*) render as the
+same description text but are **not interchangeable records**: material nutrient differences are
+measured across **16 of 31 nutrients**. Token-identical *descriptions* therefore do not imply
+token-identical *records*, which is exactly why `expectedAutoFdc = 169988` is treated as
+**exact-record authority** rather than a soft preference — and why `3 stalks celery` stays
+non-repairable even though it carries no checked-in constraint of its own (65.8).
+
+### 65.12 AI-3 CROSS-CHECK AND THE INTERPRETATION BOUNDARY
+
+All **9** ranking-lane lines report `eligible`. This is a real and useful distinction from AI-6B3: an
+unresolved identity blocks estimation entirely (27/27 `not_actionable`), whereas a ranking blocker is
+a `needs_amount` row whose authored amount is already known, so downstream estimation is unaffected.
+AI-3 eligibility is unchanged, no line is reranked, and no AI-selected FDC becomes authoritative.
+
+### 65.13 PRODUCTION INVARIANTS (all unchanged)
+
+historical **48/97**, legacy **44/91**, raw **94**, authenticated **94**, safe **93**, identity
+**46/46**, `verified_unsafe` **0**, corpus **207**. Mass sources unchanged at none 113 /
+source_portion 44 / direct_mass 21 / count_portion 19 / household_portion 10. Every one of the 9 lines
+still carries its original selected FDC, `mass_source = none` and `resolved_grams = null`. The AI-6B1
+recon SHA, the historical benchmark SHA, the AI-6B2 portion-disposition SHA, and the AI-6B3
+identity-disposition SHA are all byte-identical.
+
+### 65.14 ROADMAP: ADJUDICATION ≠ APPROVED WORK
+
+All three deterministic lanes are now adjudicated and none is approved implementation work:
+
+| Lane | Observed | Actionable | Adjudicated | Exhausted |
+| --- | --- | --- | --- | --- |
+| `deterministic_portion` | 35 | **0** | yes | **yes** |
+| `deterministic_identity` | 27 | **0** | yes | **yes** |
+| `deterministic_ranking` | 9 | **0** | yes | **yes** |
+| `catalog_gap` | 5 | `not_adjudicated` | no | no |
+
+- **Recommended active repair lane: `none`** — `no_adjudicated_lane_has_actionable_defects`
+- **Next adjudication target: `catalog_gap`** — largest un-adjudicated **eligible** lane by observed
+  blockers (5). `intentional_human_review`, `needs_recon`, and `already_resolved` remain never-target
+  lanes. This is a *measurement* instruction, not a repair instruction.
+
+Nothing here is hardcoded. Tests prove the recommendation flips to `deterministic_ranking` when a
+hypothetical actionable ranking count appears, flips to `deterministic_identity` when identity is the
+adjudicated lane instead, and that the 35 portion and 27 identity blockers can never buy repair status
+from frequency alone.
+
+### 65.15 AI-6B4 COVERAGE
+
+| Concern | File |
+| --- | --- |
+| closed disposition + evidence + parity vocabularies, classifier semantics per class, totality, the 9-line measured partition, the corpus-wide rule-safety gate, selected/alternate evidence preservation, parity derived independently of portion availability, qualifier/state/product-class blocks, `expectedAutoFdc` pinning the selected record, ranking-vs-identity separation, hypothetical-rule simulation, AI-3 cross-check, repairability-aware roadmap derivation, unchanged production baseline, zero production consumers, byte-determinism | `tests/unit/advancedNutritionAi6b4RankingDisposition.test.ts` |
