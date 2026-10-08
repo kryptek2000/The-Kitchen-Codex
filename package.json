@@ -13,6 +13,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:prod": "tsx scripts/verify_prod_serve.ts",
+    "test:nutrition:browser": "tsx scripts/verify_advanced_nutrition_browser_prod.ts",
+    "test:plugin:isolation": "tsx scripts/verify_plugin_isolation.ts",
     "generate:usda-bundle": "tsx scripts/usda_bundle/generate.cli.ts",
     "verify:usda-bundle": "tsx scripts/usda_bundle/verify.cli.ts"
   },

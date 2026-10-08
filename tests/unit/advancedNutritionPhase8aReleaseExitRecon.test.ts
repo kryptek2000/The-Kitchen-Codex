@@ -103,6 +103,28 @@ interface ReportJson {
 
 const ROOT = join(import.meta.dirname, '../..');
 
+/**
+ * Phase 8A's test-inventory measurement AT Phase 8A's base commit.
+ *
+ * This is a frozen historical receipt, not a live measurement. It was taken from
+ * the Phase 8A artifact with SHA
+ * `a41ad19b04ae8d4dac8e17a6abd6ecf08f05ee423f6f397af995a567186b91ac`
+ * (reproducible by running the Phase 8A CLI against commit
+ * PHASE8A_BASE_COMMIT). Phase 8A found unit=302, integration=43, dom=46,
+ * server=8, total 399, and NO production_build, browser_automation or
+ * production_server coverage.
+ *
+ * Phase 8B (production-browser integration proof) subsequently added one
+ * production_build-level file, so the live scan legitimately reports
+ * production_build=1. Pinning the historical level set here keeps Phase 8A's
+ * finding intact instead of silently rewriting it to match the present tree.
+ */
+const PHASE8A_TEST_INVENTORY_AT_BASE_COMMIT = {
+  total_test_files: 399,
+  levels: ['unit', 'integration', 'dom', 'server'],
+  levels_not_found: ['production_server', 'browser_automation'],
+} as const;
+
 let REPORT: ReportJson | null = null;
 let REPORT_TEXT: string | null = null;
 
@@ -347,11 +369,25 @@ describe('Phase 8A — the measured release-exit matrix', () => {
   });
 
   it('reports zero browser-automation and zero production-build coverage', () => {
+    // Phase 8A's own finding was a HISTORICAL measurement: at Phase 8A's base
+    // commit the repository had no browser-automation, no production-server and
+    // no production-build test coverage. Phase 8B then legitimately added a
+    // production-build-level browser proof, so the LIVE scan now finds
+    // production_build=1. Asserting `levels.has('production_build') === false`
+    // against today's tree would rewrite Phase 8A's historical finding, so the
+    // historical zero is pinned to the frozen Phase 8A receipt instead.
+    expect(PHASE8A_TEST_INVENTORY_AT_BASE_COMMIT.levels).toEqual(['unit', 'integration', 'dom', 'server']);
+    expect(PHASE8A_TEST_INVENTORY_AT_BASE_COMMIT.levels).not.toContain('production_build');
+    expect(PHASE8A_TEST_INVENTORY_AT_BASE_COMMIT.levels).not.toContain('browser_automation');
+    expect(PHASE8A_TEST_INVENTORY_AT_BASE_COMMIT.levels).not.toContain('production_server');
+
+    // The live scan must still show that no BROWSER-AUTOMATION or
+    // PRODUCTION-SERVER coverage exists: neither has been claimed by Phase 8B.
     const levels = new Set(report().test_inventory.by_level.map((entry) => entry.level));
     expect(levels.has('browser_automation')).toBe(false);
-    expect(levels.has('production_build')).toBe(false);
     expect(levels.has('production_server')).toBe(false);
     expect(report().test_inventory.levels_not_found).toContain('browser_automation');
+    expect(report().test_inventory.levels_not_found).toContain('production_server');
   });
 
   it('has no blocking release gaps, and says so', () => {

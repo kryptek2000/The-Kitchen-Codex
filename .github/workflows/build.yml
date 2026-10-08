@@ -37,3 +37,34 @@ jobs:
 
       - name: Build application
         run: bun run build
+
+      # Phase 8B: durable production-browser proof for Advanced Nutrition.
+      # It consumes the exact build produced above and fails the job on failure.
+      # No secrets are required and no AI provider is used.
+      - name: Resolve a real Chrome for the browser proof
+        run: |
+          set -euo pipefail
+          if command -v google-chrome > /dev/null 2>&1; then
+            echo "CHROME_BIN=$(command -v google-chrome)" >> "$GITHUB_ENV"
+          elif command -v chromium > /dev/null 2>&1; then
+            echo "CHROME_BIN=$(command -v chromium)" >> "$GITHUB_ENV"
+          elif [ -x /opt/google/chrome/chrome ]; then
+            echo "CHROME_BIN=/opt/google/chrome/chrome" >> "$GITHUB_ENV"
+          else
+            echo "::error title=No Chrome Browser::No Chrome/Chromium binary is available on this runner, so the Advanced Nutrition production-browser proof cannot run. Install Google Chrome or set CHROME_BIN."
+            exit 1
+          fi
+          echo "using CHROME_BIN=$CHROME_BIN"
+          "$CHROME_BIN" --version
+
+      - name: Advanced Nutrition production-browser proof
+        run: bun run test:nutrition:browser
+
+      # Phase 8B: durable plugin-isolation proof, after the build so the emitted
+      # artifact exists. Runs after the test suite because building the plugin
+      # creates plugin/main.js, which the clean full-suite run must not see.
+      - name: Build Obsidian plugin
+        run: bun run build:plugin
+
+      - name: Verify plugin isolation
+        run: bun run test:plugin:isolation

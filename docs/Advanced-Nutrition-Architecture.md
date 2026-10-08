@@ -12569,3 +12569,169 @@ become authoritative; no external or live USDA dependency was introduced.
 | Concern | File |
 | --- | --- |
 | closed vocabularies, total gate evaluation, evidence-strength ordering, NOT_PROVEN-vs-FAIL distinction, observed-failure override, per-property evidence (never a repo-wide max), destructive round-trip detection, stale-never-fresh, unknown-schema preservation, migration non-destruction, AI-6 exit baselines, next-slice derivation incl. the zero-gap verification case and deterministic tie-break, byte-determinism, zero production consumers, and an assertion that **no production file is modified** | `tests/unit/advancedNutritionPhase8aReleaseExitRecon.test.ts` |
+
+## 68. PHASE 8B — PRODUCTION BROWSER INTEGRATION PROOF
+
+**Status: implemented and proven locally, UNCOMMITTED. Durable CI proof is
+pending the pushed commit's GitHub Actions run.**
+
+Phase 8A closed with `10 PASS / 0 FAIL / 6 NOT_PROVEN / 0 NOT_APPLICABLE` and
+derived `production_browser_integration_proof` as the next slice. Phase 8A's six
+important pre-release evidence gaps were `production_browser_reachable`,
+`production_build_clean`, `plugin_isolated`,
+`accessibility_smoke_sufficient`, `recipe_level_smoke_sufficient`, and
+`manual_smoke_required`.
+
+### Why a browser proof was selected
+
+Phase 8A classified the strongest available evidence for `production_browser_reachable`
+as `dom` against a required `browser_automation`. A simulated DOM with a stubbed
+`fetch` cannot establish three things that matter: that the BUILT production app
+actually emits and serves the pinned USDA bundle, that the real browser loader
+authenticates it, and that a genuine session becomes usable. Phase 8B therefore
+drives a real headless Chrome against the built production server.
+
+### Real browser harness (no new dependency)
+
+`scripts/browserHarness/cdpBrowser.ts` is a dependency-free Chrome DevTools
+Protocol client using only Node/Bun built-ins (`global WebSocket` + `fetch`).
+No Playwright, Puppeteer, Cypress, or Selenium was added. Chrome is resolved at
+runtime via `CHROME_BIN` when set, otherwise by probing well-known
+Chrome/Chromium paths; an unresolved browser is a HARD FAILURE, never a skip.
+
+The existing brand/theme harness (`scripts/verify_brand_theme_browser_prod.ts`)
+was left untouched; only its proven patterns were reused (CDP transport, server
+spawn, isolated profile, wait helpers).
+
+### Production build boundary
+
+The verifier spawns `dist/server.cjs` directly, never a dev entrypoint, and
+refuses to continue unless the served document carries the production
+`Content-Security-Policy` (`default-src 'self'`, disabled in dev) and references
+content-hashed built assets. This makes "built production vs dev" a checked
+property rather than an assumption.
+
+### USDA asset and authentication proof
+
+Through the real production loader (`loadProductionAdvancedNutritionSession`),
+a real browser fetched all five pinned artifacts same-origin
+(`artifact`, `manifest`, `records.foundation`, `records.sr_legacy`,
+`records.fndds`) and completed byte authentication against the pinned release
+lock `usda_fdc_87c5408a3e98838944a87be74824761e` (13,559 canonical records).
+The session became usable and review rows rendered. No live USDA call occurred.
+
+### Entitlement and readiness proof (AND, never OR)
+
+Two production server configurations were exercised via the documented
+`KITCHEN_CODEX_NUTRITION_PRODUCT_TIER` environment variable:
+
+- **entitled but not operationally ready** (`ai_advanced`, empty provider key):
+  the UI reports `provider_unavailable` and every AI action stays disabled. This
+  proves operational readiness alone does not unlock AI.
+- **not entitled** (`basic`): the UI reports `product_not_enabled` and every AI
+  action stays disabled, while deterministic review, calculation, and Apply
+  eligibility remain available.
+
+Both arms together prove `PRODUCT ENTITLED AND OPERATIONALLY READY`. The Basic
+negative control performed zero provider work.
+
+### Recipe-level fixture and proof
+
+Phase 8A found zero full-recipe fixtures with expected nutrient totals. Phase 8B
+adds one checked-in acceptance vault
+(`tests/fixtures/advancedNutritionBrowserAcceptanceVault/Weeknight Beef Rice Bowls.md`,
+serves 4) imported through the real Connect Vault UI. Measured in the browser:
+
+| Measure | Value |
+|---|---|
+| total ingredient lines | 9 |
+| matched (authenticated mass) | 6 |
+| needing amount (`needs_amount`) | 3 |
+| unresolved in calculation | 3 (`no_mass`) |
+| calculation status | `partial` (truthful, not complete) |
+| nutrient scope / totals | 34 / 31 |
+| coverage reported | `3 of 9 ingredient lines unresolved` |
+| Apply eligibility | eligible, nothing auto-saved |
+
+The fixture exercises four distinct deterministic mass-source classes
+(`direct_mass`, `source_portion`, `count_portion`, `household_portion`) and is
+deliberately boring: no brands, ranges, `or`, `to taste`, or package ambiguity.
+Partial coverage is proven truthful rather than hidden.
+
+### Apply, write, and reopen coverage
+
+Through the real UI: Apply → explicit Confirm Apply → success status, then the
+production write boundary emitted the recipe as a real download whose persisted
+`codex_nutrition` block was parsed and checked (schema 2, total basis, partial,
+USDA release attributed, unresolved list present). The persisted
+`ingredient_digest` prefix was checked against the digest rendered from the
+reviewed preview, demonstrating that persistence re-proves current authority.
+
+Coverage still NOT proven: a full **reload-and-reopen** of persisted state. The
+only production mode with real two-way vault writes and a persistent handle is
+File System Access, whose native directory picker cannot be granted in headless
+Chrome. Honoring the brief, this sub-flow is recorded as NOT_PROVEN rather than
+faked by a test-only persistence backend.
+
+### Accessibility smoke
+
+Real-browser release smoke (not a WCAG audit): dialog semantics and accessible
+name, initial focus moved inside, keyboard focus containment (Tab wraps), Escape
+close, focus restoration to the opener, and accessible names on every focusable
+dialog control. Two measurement bugs here were fixed in the harness (accessible
+name via associated `<label for>`; uppercase-rendered summary text).
+
+### Network, provider, and console isolation
+
+The verifier captures all requests and asserts zero live USDA, zero provider,
+zero off-origin requests beyond a narrow allowlist of the app's pre-existing
+presentation assets (Google Fonts and bundled starter-vault images), zero failed
+same-origin nutrition asset requests, zero console errors, and zero uncaught
+exceptions. Chrome background/telemetry services are suppressed by launch flags
+so browser-internal traffic cannot pollute the measurement.
+
+### CI integration
+
+`.github/workflows/build.yml` now runs: install → typecheck → full suite →
+production build → explicit Chrome resolution (failing the job if none exists) →
+`bun run test:nutrition:browser` → plugin build → `bun run test:plugin:isolation`.
+The browser verifier runs with no repository secrets and no provider key, and it
+fails the job on any failure. The plugin build is ordered after the full suite
+because building it creates `plugin/main.js`, which the clean full-suite run must
+not see.
+
+`bun run test:plugin:isolation` reads the emitted `plugin/main.js` as an opaque
+artifact and proves no Advanced Nutrition planning or browser-proof code entered
+it, while requiring real plugin runtime markers so a stub cannot pass. No plugin
+build change was needed and the plugin SHA is unchanged.
+
+### Gate status — local proof vs durable CI
+
+Local browser proof: **9 PROVEN / 0 REFUTED / 1 NOT_PROVEN**, plus the
+`manual_smoke_required` gate that stays NOT_PROVEN because a human manual smoke
+is still required. `production_build_clean`, `plugin_isolated`,
+`production_browser_reachable`, `recipe_level_smoke_sufficient`,
+`accessibility_smoke_sufficient`, `entitlement_enforced`, and
+`apply_authority_revalidated` are all browser/production-build proven locally.
+
+**These upgrades are eligible for post-CI PASS only after the pushed commit's
+GitHub Actions run is green.** The Phase 8B artifact records
+`durable_ci_required = true`, `post_push_ci_proof = "pending"`, and no local run
+can promote a CI-dependent gate.
+
+### Phase 8A preservation
+
+Phase 8A was not rewritten. Against the untouched pre-Phase-8B commit
+`ea4be87`, the Phase 8A artifact reproduces its SHA `a41ad19b…` byte-for-byte.
+Within the current tree, `test_inventory` is the ONLY field that differs, because
+it is a live disk scan and Phase 8B added one test file and one
+production-build-level file (399→400; production_build=1). The historical zero
+production-build finding is preserved by pinning that one assertion to Phase
+8A's base commit rather than asserting it against today's tree.
+
+### Zero production behavior change
+
+No file under `src/`, `server/`, or `plugin/` was modified. Phase 8B added only
+proof infrastructure: browser/CDP harness, the browser verifier, the plugin
+isolation CLI, the acceptance fixture, package scripts, the CI workflow, the
+Phase 8B artifact/report modules, and their focused contract tests.
