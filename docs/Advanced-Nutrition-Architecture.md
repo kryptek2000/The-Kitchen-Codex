@@ -12359,3 +12359,213 @@ artifact refuses to nominate one. **No AI work is invented to keep the roadmap m
 | Concern | File |
 | --- | --- |
 | closed disposition + evidence vocabularies, classifier semantics per class, totality, the 5-line measured partition, catalog-existence vs candidate-surface separation, brand/package/equivalence refusals, unambiguous-surface requirement, corpus-wide hypothetical surface simulation, AI-3 cross-check, repairability-aware roadmap derivation including the zero-blocker guard, unchanged production baseline, zero production consumers, no external USDA dependency, byte-determinism | `tests/unit/advancedNutritionAi6b5CatalogDisposition.test.ts` |
+
+---
+
+## 67. PHASE 8A — RELEASE-EXIT RECON + GAP MATRIX
+
+### 67.1 WHY AI-6B ENDED, AND WHY THERE IS NO AI-6B6
+
+AI-6B adjudicated every observable deterministic lane and measured **zero** actionable defects in
+each:
+
+| Phase | Lane | Observed | Actionable | Exhausted |
+| --- | --- | --- | --- | --- |
+| AI-6B2 | `deterministic_portion` | 35 | **0** | yes |
+| AI-6B3 | `deterministic_identity` | 27 | **0** | yes |
+| AI-6B4 | `deterministic_ranking` | 9 | **0** | yes |
+| AI-6B5 | `catalog_gap` | 5 | **0** | yes |
+
+Active repair: **`none`**. Next adjudication: **`none`**. There is therefore **no measured evidence
+justifying a fifth deterministic lane**. Inventing AI-6B6 would be scoreboard churn, not
+engineering, so none is started. The canonical roadmap's next real program is **Phase 8** — the
+broader final migration, staleness, round-trip, production-browser, corpus, and release-exit program.
+
+Phase 8A is **RECON ONLY**. It implements no repair, changes no production behavior, grants no
+authority, and adds no product feature.
+
+### 67.2 THE LOAD-BEARING RULE: PASS IS NOT "A TEST EXISTS"
+
+A release gate passes only when current evidence actually proves the property **on the path that
+matters**. Phase 8A therefore models evidence STRENGTH explicitly and refuses to upgrade weak
+evidence into release confidence:
+
+```
+EVIDENCE LEVELS (weakest → strongest)
+  none < unit < integration < dom < server < production_build < production_server < browser_automation
+```
+
+Each gate declares the level it **requires**; evidence below that level yields **`NOT_PROVEN`**, never
+`PASS`. `NOT_PROVEN` is distinct from `FAIL`: an unproven property is not a demonstrated defect, but it
+also cannot support a release-exit claim.
+
+**This rule caught two real false-positive risks during Phase 8A itself**, and both are now guarded
+in code:
+
+1. A naive driver-keyword scan classified `tests/unit/usdaAdapter.test.ts` as `browser_automation`
+   because it references the NUTRIENT `nutrients.selenium`. That single false positive would have
+   promoted four browser/build gates from `NOT_PROVEN` to `PASS`. Only a driver import or launch
+   signature now counts.
+2. A repo-wide "strongest level" maximum would have let an unrelated integration test "prove" the
+   browser bundle works. Evidence is therefore declared **per property**, never globally.
+
+### 67.3 AXIS A — MIGRATION (9 recognized shapes)
+
+Three schema versions are recognized in code (`v1`, `v2`, `v3` — `v3` adds range-representative
+evidence), plus legacy shapes, an unknown-future path, and a malformed path.
+
+| Shape | Parsed | Auto-migrated | User action | Overwritable by Advanced | Destructive rewrite |
+| --- | --- | --- | --- | --- | --- |
+| legacy simple nutrition | yes (display-only) | **no** | no | **no** | **no** |
+| legacy AI estimator result | yes (display-only) | **no** | no | **no** | **no** |
+| `codex_nutrition` v1 / v2 / v3 | yes (typed) | **no** | yes | yes | **no** |
+| unknown future schema | bounded **opaque**, never interpreted | **no** | no | **no** | **no** |
+| malformed block | `malformed`, never usable | **no** | no | **no** | **no** |
+| stale saved block | decoded, then flagged at presentation | **no** | yes | yes | **no** |
+| recipe with no saved nutrition | nothing decoded | **no** | yes | **no** | **no** |
+
+**Measured: zero automatic migrations exist, and zero are required.** `applyRuleSafetyGate`-style
+migration is deliberately absent: presentation is pure and read-only, and the only write path is an
+explicit user Apply. An unknown future schema decodes to bounded opaque data and Apply **refuses** with
+`unknown_future_schema`. A malformed block is preserved inert, is never attached as canonical
+nutrition, and hostile values fail closed **before** reaching YAML. **"Not migrated" is not treated as
+a defect**, because the architecture does not require migration.
+
+Gate `migration_non_destructive`: **PASS** at `integration`.
+
+### 67.4 AXIS B — STALENESS (two independent detectors)
+
+| Mechanism | Inputs | Fails closed? |
+| --- | --- | --- |
+| presentation staleness | `servings` vs adapted base servings; sorted `line_ref` set vs stored + unresolved | yes — an unadaptable recipe reports `ingredients_changed` |
+| `ingredient_digest` | per-line identity, mass source, portion, count-portion, manual weight, household object (incl. registry release + record digest + selection digest), range representative, grams, outcome, contributing nutrients | yes — bound into `previewStillBinds` |
+
+**Deliberately outside the digest:** `bundle_release`, `catalog_digest`, `nutrient_map_version` and
+`servings` are compared separately at Apply time by `previewStillBinds`, alongside calculation schema,
+version, status, basis and nutrient scope. That is a division of labour, not a hole.
+
+**Finding (not a defect):** `status: 'stale'` is schema-legal but produced by **no** code path —
+calculation emits only `complete | partial | unresolved`. Recorded for a future phase; Phase 8A
+changes nothing.
+
+Gate `staleness_fail_closed`: **PASS** at `integration`.
+
+### 67.5 AXIS C — ROUND-TRIP (closed matrix)
+
+| Outcome | Count | Meaning |
+| --- | --- | --- |
+| `roundtrip_exact_semantic` | 2 | v1 canonical round-trip; simple nutrition; legacy per-serving |
+| `preserved_opaque` | 2 | raw-mode save; unknown future schema |
+| `roundtrip_normalized_safe` | 2 | visual-editor partial; unrelated custom frontmatter |
+| `rejected_fail_closed` | 2 | malformed block; unsafe/oversized hostile value |
+| `stale_after_roundtrip` | 1 | staleness recomputed on reopen |
+| `destructive_change_detected` | **0** | would be blocking if observed |
+| `not_applicable` | 2 | duplicate keys not representable; real-session round-trip NOT MEASURED |
+
+**Zero destructive changes to unrelated recipe content.** Unrelated frontmatter, custom keys, legacy
+nutrition and opaque schemas all survive; a throwing proxy is never passed to YAML and its message is
+never leaked.
+
+Gate `roundtrip_safe`: **PASS** at `integration`. The real-session → Apply → vault → reopen
+round-trip is explicitly recorded as **`not_applicable` / NOT MEASURED**, not quietly passed.
+
+### 67.6 AXIS D — PRODUCTION-BROWSER
+
+Traced flow: open recipe → surface → **product entitlement** → **operational readiness** → local USDA
+bundle fetch (same-origin, `redirect: 'error'`, length-locked) → byte authentication against the pinned
+release lock → session creation → deterministic resolution → AI assist only when invoked and
+entitled → review → Apply (explicit; authority re-proved) → persisted `codex_nutrition` → vault write →
+reopen.
+
+Measured properties that hold:
+
+- **No dev-only fixture path** in production: five `?url&no-inline` static imports, served by
+  `express.static`.
+- **No Node-only path in the browser**: zero `node:` imports, `process.cwd`, or `require()` in `src/`;
+  gzip uses `DecompressionStream`.
+- **No live USDA dependency**: zero network calls in the resolution flow; the USDA host constant is
+  consumed only by a pure predicate that validates manifest URL strings.
+- **No leaked provider secret**: the browser secret adapter is deliberately unavailable; the emitted
+  bundle carries no `VITE_` key material.
+- **Basic tier performs zero provider work**: `requireNutritionProductFeature` runs before pricing,
+  provider selection and credential resolution; denial is `403` with `aiAttempted: false`.
+- **No readiness overclaim**: the UI consumes composed availability and does not claim readiness first.
+
+Gate `production_browser_reachable`: **`NOT_PROVEN`**. The path exists, but the loader is exercised
+only in a **simulated DOM with a stubbed fetch** (`dom`), and the requirement is `browser_automation`.
+The Vite-built app is never driven end to end. The repo's only real-browser script covers
+brand/theme, is not a test file, is not in `package.json` scripts, is not in CI, and does not touch
+Advanced Nutrition.
+
+### 67.7 AXIS E — CORPUS (measured denominators only)
+
+| Corpus | Size |
+| --- | --- |
+| AI-6A intelligence corpus | **207** lines (historical 97 · semantic 18 · supplemental 92), 207 unique, **30** coverage families |
+| Resolution coverage corpus | 145 lines |
+| Semantic corpus | 23 cases |
+| Smoke corpus | 18 cases |
+| Identity safety corpus | 55 lines |
+| **Full-recipe fixtures with expected nutrient totals** | **0** |
+
+**Ingredient-line success is not recipe success.** Every measured corpus is line-level, so no
+recipe-level outcome is measurable at all. **No coverage percentage is fabricated.** Line-level
+94/94/93 therefore cannot support a recipe-level release claim.
+
+Gate `corpus_baseline_stable`: **PASS** at `integration`.
+Gate `recipe_level_smoke_sufficient`: **`NOT_PROVEN`** with evidence `none`.
+
+### 67.8 AXIS F — MEASURED RELEASE-EXIT GATE MATRIX
+
+| Gate | Status | Severity | Evidence | Required |
+| --- | --- | --- | --- | --- |
+| `migration_non_destructive` | PASS | not_a_gap | integration | integration |
+| `staleness_fail_closed` | PASS | not_a_gap | integration | integration |
+| `roundtrip_safe` | PASS | not_a_gap | integration | integration |
+| `authority_revalidated_at_apply` | PASS | not_a_gap | integration | integration |
+| `no_external_usda_dependency` | PASS | not_a_gap | integration | integration |
+| `corpus_baseline_stable` | PASS | not_a_gap | integration | integration |
+| `full_suite_green` | PASS | not_a_gap | integration | integration |
+| `entitlement_enforced` | PASS | not_a_gap | server | server |
+| `no_secret_exposure` | PASS | not_a_gap | server | server |
+| `security_suite_green` | PASS | not_a_gap | server | server |
+| `production_browser_reachable` | **NOT_PROVEN** | important_before_release | dom | browser_automation |
+| `production_build_clean` | **NOT_PROVEN** | important_before_release | integration | production_build |
+| `plugin_isolated` | **NOT_PROVEN** | important_before_release | integration | production_build |
+| `accessibility_smoke_sufficient` | **NOT_PROVEN** | important_before_release | dom | browser_automation |
+| `recipe_level_smoke_sufficient` | **NOT_PROVEN** | important_before_release | **none** | integration |
+| `manual_smoke_required` | **NOT_PROVEN** | important_before_release | **none** | browser_automation |
+
+**PASS 10 · FAIL 0 · NOT_PROVEN 6 · NOT_APPLICABLE 0.** Zero blocking-release gaps. Six
+important-before-release gaps, **every one of them an evidence gap rather than a demonstrated defect.**
+
+Measured test-level inventory (398 files): **unit 301 · integration 43 · dom 46 · server 8**;
+**production_build, production_server and browser_automation are NOT FOUND.**
+
+### 67.9 NEXT-SLICE DERIVATION (planning only, never authorization)
+
+Priority: blocking → important → generality/blast radius → tractability. **Zero blocking gates**, so
+the frontier is unproven evidence, and the highest-severity unresolved gate is
+`production_browser_reachable` (`important_before_release`, `NOT_PROVEN`).
+
+**Recommended next slice: `production_browser_integration_proof`.**
+
+Derived, not chosen: the winner falls out of the declared severity order applied to the gate matrix,
+and the remediation mapping for that gate. The same function returns `release_exit_verification` when
+every gate is satisfied — so a zero-gap state produces **verification, never an invented feature**.
+
+### 67.10 AI-6 EXIT BASELINES AND UNCHANGED AUTHORITY INVARIANTS
+
+historical **48/97**, legacy **44/91**, raw/auth/safe **94/94/93**, identity **46/46**, verified unsafe
+**0**, corpus **207**; mass sources none 113 / source_portion 44 / direct_mass 21 / count_portion 19 /
+household_portion 10. All six prior artifact SHAs (recon, historical, B2, B3, B4, B5) are unchanged.
+No FDC, gram, or terminal changed. AI remains interpretation-only; deterministic identity and mass
+remain authority; Apply re-proves current authority; BYOK does not imply entitlement; the Basic tier
+performs zero provider work; a server receipt is still required before accepted AI-4 context could ever
+become authoritative; no external or live USDA dependency was introduced.
+
+### 67.11 PHASE 8A COVERAGE
+
+| Concern | File |
+| --- | --- |
+| closed vocabularies, total gate evaluation, evidence-strength ordering, NOT_PROVEN-vs-FAIL distinction, observed-failure override, per-property evidence (never a repo-wide max), destructive round-trip detection, stale-never-fresh, unknown-schema preservation, migration non-destruction, AI-6 exit baselines, next-slice derivation incl. the zero-gap verification case and deterministic tie-break, byte-determinism, zero production consumers, and an assertion that **no production file is modified** | `tests/unit/advancedNutritionPhase8aReleaseExitRecon.test.ts` |
