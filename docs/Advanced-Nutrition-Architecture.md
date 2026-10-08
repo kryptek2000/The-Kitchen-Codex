@@ -12147,3 +12147,215 @@ from frequency alone.
 | Concern | File |
 | --- | --- |
 | closed disposition + evidence + parity vocabularies, classifier semantics per class, totality, the 9-line measured partition, the corpus-wide rule-safety gate, selected/alternate evidence preservation, parity derived independently of portion availability, qualifier/state/product-class blocks, `expectedAutoFdc` pinning the selected record, ranking-vs-identity separation, hypothetical-rule simulation, AI-3 cross-check, repairability-aware roadmap derivation, unchanged production baseline, zero production consumers, byte-determinism | `tests/unit/advancedNutritionAi6b4RankingDisposition.test.ts` |
+
+---
+
+## 66. AI-6B5 — CATALOG GAP ADJUDICATION + NEXT-LANE HANDOFF
+
+### 66.1 WHAT CHANGED — AND WHAT DID NOT
+
+AI-6B5 is **planning-only**, like AI-6B2/3/4. It changes **ZERO** production nutrition behavior: no
+FDC bound, no gram changed, no catalog bundle, loader, search, matcher, candidate generation,
+normalizer, parser, identity, portion, or mass-authority change. Its contribution is a correction to
+**planning truth**, published as a SEPARATE versioned artifact:
+
+- schema `nutrition_ai6b5_catalog_disposition_v1`
+- classifier `scripts/nutritionIntelligence/catalogDisposition.ts`
+- builder `scripts/nutritionIntelligence/catalogDispositionReport.ts`
+- CLI `scripts/benchmark_nutrition_catalog_disposition.ts`
+- base commit pinned to `5ee912999fa2cf7bd83efc56a0fcfa89c2df258f`
+- evidence gathered **only** from the authenticated pinned USDA bundle — no live or external USDA
+  source, no internet lookup, no AI
+- ZERO production consumers (asserted by test)
+
+### 66.2 THE PROGRESSION
+
+| Phase | Lane | Observed | Actionable | Exhausted |
+| --- | --- | --- | --- | --- |
+| AI-6B2 | `deterministic_portion` | 35 | **0** | yes |
+| AI-6B3 | `deterministic_identity` | 27 | **0** | yes |
+| AI-6B4 | `deterministic_ranking` | 9 | **0** | yes |
+| AI-6B5 | `catalog_gap` | **5** | **0** | **yes** |
+
+```
+OBSERVED CATALOG BLOCKERS .................. 5   (4 catalog_or_specificity_gap + 1 container_mass_absent)
+REPAIRABLE CATALOG SURFACE DEFECTS ......... 0   (measured, not assumed)
+```
+
+### 66.3 CATALOG GAP IS NOT ONE PROBLEM
+
+A catalog-lane blocker can mean several genuinely different things, and collapsing them into one
+"the catalog is missing something" bucket is exactly how a roadmap gets misled. AI-6B5 keeps them
+apart:
+
+| Case | Meaning |
+| --- | --- |
+| A | The pinned catalog genuinely lacks the authored food family |
+| B | The catalog holds related records but not the authored specificity |
+| C | The record **EXISTS** but the candidate/search surface never surfaces it |
+| D | A container/package has no authored net mass — an **external fact**, not an identity fact |
+| E | Identity exists but usable portion evidence is the real gap |
+| F | Resolving needs a food equivalence nobody owns |
+
+### 66.4 CATALOG ABSENCE IS NOT MATCHER FAILURE
+
+If an authorized record exists in the authenticated bundle but search never surfaces it, that is
+**not** catalog absence. The two facts are reported separately per line:
+
+| Field | Meaning |
+| --- | --- |
+| `exact_search_total` | Does the direct bounded surface return anything? |
+| `variant_found_fdc_ids` | Do separated compound forms reach records the bundle already holds? |
+| `variant_surface_unambiguous` | Does that surface isolate exactly ONE record? |
+| `portion_authority_available_for_variant` | Would the reached record actually carry usable portion authority? |
+| `broader_generic_family_exists` | Is only a broader family present? |
+
+"Catalog gap" is never used as shorthand for "the matcher didn't find it".
+
+### 66.5 CLOSED DISPOSITION VOCABULARY (9)
+
+`repairable_catalog_surface_defect`, `candidate_generation_handoff`,
+`authenticated_catalog_absence`, `branded_specificity_not_in_catalog`,
+`generic_substitution_not_authorized`, `container_net_mass_absent_from_authored_text`,
+`portion_authority_handoff`, `catalog_blocker_misclassified`, `needs_catalog_recon`.
+
+Only `repairable_catalog_surface_defect` means the authorized record already exists, the authored
+identity safely determines it, **the surface isolates exactly one record**, and a general rule can
+repair the catalog/search surface without touching the parser, matcher, normalizer, or portion logic.
+Its measured count is **0**.
+
+### 66.6 MEASURED DISPOSITION OF ALL 5
+
+| Disposition | Count | Line | Measured basis |
+| --- | --- | --- | --- |
+| `candidate_generation_handoff` | **2** | `2 cups breadcrumbs`, `2 cups firmly packed breadcrumbs` | Direct surface returns **0**. The bundle DOES hold `174928 Bread, crumbs, dry, grated, plain` (cup = 108 g) — reached only as the separated compound `bread crumbs`. **Not catalog absence.** |
+| `authenticated_catalog_absence` | **1** | `1 lb rigatoni` | `rigatoni` returns **0** and no separated form reaches anything. The food is genuinely absent. |
+| `branded_specificity_not_in_catalog` | **1** | `1 tbsp Mrs. Dash` | `mrs. dash`, `mrs dash` and `dash` all return **0**. |
+| `container_net_mass_absent_from_authored_text` | **1** | `1 package breadcrumbs` | Blocker is `container_mass_absent`; the container authors no net mass. |
+
+Total **5**. `repairable_catalog_surface_defect` = **0**; `generic_substitution_not_authorized` = **0**;
+`portion_authority_handoff` = **0**; `catalog_blocker_misclassified` = **0**; `needs_catalog_recon` = **0**.
+Zero-instance members remain in the closed vocabulary, and a test asserts the vocabulary itself rather
+than its instance counts.
+
+Handoff: `deterministic_identity` **2**, `needs_recon` **2**, `intentional_human_review` **1**.
+
+### 66.7 WHY THE TWO BREADCRUMB VOLUME LINES ARE NOT A CATALOG REPAIR
+
+This is the central finding, and it is a near-miss that must not be over-claimed.
+
+The evidence genuinely favours a real defect: `breadcrumbs` (one word) returns **nothing**, while the
+bundle plainly contains `174928 Bread, crumbs, dry, grated, plain` with a usable cup portion (108 g).
+Had identity been surfaced, both lines would resolve.
+
+But the surface reached by the separated form returns **three** materially different records:
+
+| FDC | Description | Faithful to `breadcrumbs`? |
+| --- | --- | --- |
+| `174928` | `Bread, crumbs, dry, grated, plain` | yes |
+| `172806` | `Bread, crumbs, dry, grated, **seasoned**` | **no** — a different product |
+| `2708079` | `Coffee cake, crumb or quick-bread type` | **no** — not crumbs at all |
+
+A rule that simply "surfaces what the separated form finds" would therefore offer **seasoned** crumbs
+and a **coffee cake** as candidates for `2 cups breadcrumbs`. Isolating the correct record requires a
+food-specific discrimination rule, which this phase must not invent. Two consequences follow:
+
+1. The line is a **candidate-generation handoff**, not a catalog repair — the repair it implies is
+   tokenization, owned by a lane that is already adjudicated. Calling it catalog work would be
+   lane-laundering.
+2. `repairable_deterministic_catalog_surface_defect` requires `variant_surface_unambiguous`. Measured
+   across all five lines, it is **false wherever the variant surface bites**, so the repairable count
+   is **0**.
+
+### 66.8 EXACT FOOD VS GENERIC FOOD, AND THE BRAND BOUNDARY
+
+A related generic record is never automatically authorized:
+
+- **rigatoni ≠ arbitrary pasta.** Generic dry pasta exists (`168927 Pasta, dry, unenriched`,
+  `169736 Pasta, dry, enriched`), and their cup portions are keyed by *shape* — rotini, lasagna,
+  farfalle, shells, elbows, spaghetti, penne — with **no rigatoni**. Binding one would invent a shape
+  equivalence, and `1 lb` already supplies the mass, so identity is the only gap.
+- **Mrs. Dash ≠ an arbitrary seasoning blend.** Four generic `Seasoning mix, dry` records exist
+  (`173476` chili, `172242` sazon, `172243` taco) plus `171331 Spices, poultry seasoning`. Choosing any
+  of them asserts a formulation. **A brand name is not permission to guess.**
+- **breadcrumbs ≠ seasoned breadcrumbs**, and **breadcrumbs ≠ a coffee cake** (66.7).
+
+`generic_substitution_not_authorized` is a live vocabulary member with zero instances here precisely
+because no generic substitution was made.
+
+### 66.9 PACKAGE MASS IS AN EXTERNAL FACT
+
+`1 package breadcrumbs` is routed to the catalog lane by `container_mass_absent`, but conceptually it
+is **not** a catalog identity failure: the food exists (`174928`). The missing fact is a package net
+mass that the recipe never authored. It is never inferred from a typical retail size, another brand,
+another candidate's package, a USDA serving size, common sense, or AI. Reported as
+`container_net_mass_absent_from_authored_text`, owned by another lane.
+
+**Classification observation (reported, not acted on):** `food catalog absence != package mass absent`.
+The current taxonomy routes `container_mass_absent` to `catalog_gap`, which conflates an external-fact
+absence with an identity-fact absence. AI-6B5 does **not** rewrite the AI-6A taxonomy; it records the
+discrepancy and flags the disposition as owned by another lane.
+
+### 66.10 HYPOTHETICAL SURFACE RULE — MEASURED, NEVER APPLIED
+
+| Metric | Value |
+| --- | --- |
+| Lines probed | 202 |
+| Lines whose direct surface is empty | 24 |
+| Lines whose variant surface finds records | **3** (all three are the breadcrumb volume/package lines) |
+| Of those, brand-genericizing | **0** |
+| `expectedFdc` divergences | **0** |
+| `expectNoAutomatic` violations | **0** |
+| Forbidden-FDC violations | **0** |
+| Forbidden-description violations | **0** |
+
+Identity, mass and gram effects are explicitly **not computed**: AI-6B5 never applies the rule, so
+claiming computed mass numbers would be fabrication. The rule reaches exactly three lines and is
+refused for all three because the surface is ambiguous there (66.7). The split probe itself is
+**general**, enumerating every internal position of a long compound rather than encoding any known word
+pair; it is the bundle, not the probe, that decides what matches.
+
+### 66.11 PRODUCTION INVARIANTS (all unchanged)
+
+historical **48/97**, legacy **44/91**, raw **94**, authenticated **94**, safe **93**, identity
+**46/46**, `verified_unsafe` **0**, corpus **207**. Mass sources unchanged at none 113 /
+source_portion 44 / direct_mass 21 / count_portion 19 / household_portion 10. Every one of the 5 lines
+still selects **no** FDC, `mass_source = none`, `resolved_grams = null`. The AI-6B1 recon SHA, the
+historical benchmark SHA, and the AI-6B2 / AI-6B3 / AI-6B4 disposition SHAs are all byte-identical.
+
+### 66.12 AI-3 CROSS-CHECK
+
+All **5** catalog-lane lines report `not_actionable`: an unresolved identity blocks estimation
+entirely. AI-3 eligibility is unchanged, and no catalog adjudication expands AI identity authority.
+
+### 66.13 THE ROADMAP HAS REACHED NO REMAINING ELIGIBLE ADJUDICATION
+
+With all four observable lanes adjudicated and exhausted:
+
+| Lane | Observed | Actionable | Adjudicated | Exhausted |
+| --- | --- | --- | --- | --- |
+| `deterministic_portion` | 35 | **0** | yes | **yes** |
+| `deterministic_identity` | 27 | **0** | yes | **yes** |
+| `deterministic_ranking` | 9 | **0** | yes | **yes** |
+| `catalog_gap` | 5 | **0** | yes | **yes** |
+| `intentional_human_review` | 29 | `not_adjudicated` | no | no — **never-target** |
+| `needs_recon` | 9 | `not_adjudicated` | no | no — **never-target** |
+| `deterministic_parser` | 0 | `not_adjudicated` | no | no |
+| `ai_semantic_interpretation` | 0 | `not_adjudicated` | no | no |
+| `ai_bounded_mass_estimation` | 0 | `not_adjudicated` | no | no |
+
+- **Recommended active repair lane: `none`** — `no_adjudicated_lane_has_actionable_defects`
+- **Next adjudication target: `none`** — `every remaining eligible un-adjudicated lane has zero
+  observed blockers`
+
+This is reported **truthfully rather than padded**. The two lanes with large remaining counts
+(`intentional_human_review` 29, `needs_recon` 9) are **never-target** under the existing roadmap
+contract, so their frequency can never become implementation authorization. The remaining *eligible*
+lanes genuinely carry zero observed blockers. A zero-blocker lane is not adjudication work, so the
+artifact refuses to nominate one. **No AI work is invented to keep the roadmap moving.**
+
+### 66.14 AI-6B5 COVERAGE
+
+| Concern | File |
+| --- | --- |
+| closed disposition + evidence vocabularies, classifier semantics per class, totality, the 5-line measured partition, catalog-existence vs candidate-surface separation, brand/package/equivalence refusals, unambiguous-surface requirement, corpus-wide hypothetical surface simulation, AI-3 cross-check, repairability-aware roadmap derivation including the zero-blocker guard, unchanged production baseline, zero production consumers, no external USDA dependency, byte-determinism | `tests/unit/advancedNutritionAi6b5CatalogDisposition.test.ts` |
