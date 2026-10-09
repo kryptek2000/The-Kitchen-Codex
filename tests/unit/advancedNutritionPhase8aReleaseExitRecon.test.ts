@@ -23,7 +23,7 @@
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import {
@@ -607,6 +607,176 @@ describe('Phase 8A — the next slice is derived, never hardcoded', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Phase 8A historical release receipt
+// ---------------------------------------------------------------------------
+
+/**
+ * ARCHITECTURAL PRINCIPLE, encoded deliberately and proven below:
+ *
+ *   A CLOSED PHASE MAY PIN ITS OWN HISTORICAL SCOPE AND INVARIANTS.
+ *   A CLOSED PHASE MUST NOT RE-DERIVE ITS HISTORICAL FREEZE FROM THE CURRENT
+ *   ARBITRARY WORKTREE.
+ *
+ * WHY THIS BLOCK EXISTS. Phase 8A's production-freeze assertion ran
+ * `git status --porcelain -- src server plugin` against TODAY's working tree
+ * and demanded it be empty. That was a TEMPORAL claim — true while Phase 8A
+ * was in flight, and unknowable afterwards. Phase 8A is CLOSED, so the claim
+ * could only ever be re-derived from whatever the tree happened to contain on
+ * any given day. The consequence was a lifecycle defect: any later authorized
+ * phase that legitimately edited production code failed a closed phase's test
+ * for having existed. Proven in an isolated fixture — a future matcher edit, a
+ * future server edit, a future plugin edit, and an unrelated untracked
+ * production file each produced a non-empty status and each would have failed
+ * Phase 8A.
+ *
+ * THE REPAIR. A historical event cannot be inferred; it must be RECORDED.
+ * Phase 8A's actual release is a fact that can be written down:
+ *
+ *   release commit  ea4be87e3d21a2ba04aaf2335254005859e441f8
+ *   release parent  150b68582213ae4b63a06e92f083fb70d8568a85
+ *   subject         test(nutrition): map release-exit gaps
+ *   touched paths   exactly five, NONE under src/ server/ plugin/
+ *
+ * That receipt IS the historical production freeze, restated durably. The
+ * contract below is derived purely from it. It never consults the current
+ * worktree, never runs `git status`, and requires no commit object to exist
+ * locally — the SHAs are receipt metadata, not traversal targets — so it is
+ * safe under a shallow GitHub Actions checkout.
+ *
+ * This is the same principle repaired for Phase 8B in Phase 9A-R1: historical
+ * receipt + pure evaluation + mutation sensitivity + future-work
+ * non-interference.
+ */
+const PHASE8A_RELEASE_COMMIT = 'ea4be87e3d21a2ba04aaf2335254005859e441f8';
+const PHASE8A_RELEASE_PARENT = '150b68582213ae4b63a06e92f083fb70d8568a85';
+
+/**
+ * Phase 8A's frozen release scope, keyed by category. Phase 8A was recon-only:
+ * it shipped planning and measurement tooling plus one contract test, and its
+ * historical release touched no production source whatsoever.
+ */
+const PHASE8A_RELEASE_RECEIPT = {
+  architecture_doc: 'docs/Advanced-Nutrition-Architecture.md',
+  benchmark_cli: 'scripts/benchmark_nutrition_phase8a_release_exit.ts',
+  recon_module: 'scripts/nutritionReleaseExit/phase8aRecon.ts',
+  report_module: 'scripts/nutritionReleaseExit/phase8aReport.ts',
+  contract_test: 'tests/unit/advancedNutritionPhase8aReleaseExitRecon.test.ts',
+} as const;
+
+/**
+ * The expected scope, held INDEPENDENTLY of the receipt above. Without this
+ * second anchor the contract could degrade into "the receipt contains whatever
+ * the receipt currently contains" — precisely the pass-by-definition outcome
+ * that is not evidence of anything.
+ */
+const PHASE8A_EXPECTED_RELEASE_SCOPE: Readonly<Record<string, string>> = {
+  architecture_doc: 'docs/Advanced-Nutrition-Architecture.md',
+  benchmark_cli: 'scripts/benchmark_nutrition_phase8a_release_exit.ts',
+  recon_module: 'scripts/nutritionReleaseExit/phase8aRecon.ts',
+  report_module: 'scripts/nutritionReleaseExit/phase8aReport.ts',
+  contract_test: 'tests/unit/advancedNutritionPhase8aReleaseExitRecon.test.ts',
+};
+
+const PHASE8A_PRODUCTION_ROOTS = ['src', 'server', 'plugin'] as const;
+
+interface Phase8aHistoricalFreezeContract {
+  /** Frozen Phase 8A scope that claims production source — the freeze violated. */
+  readonly productionOwnedPaths: readonly string[];
+  /** Required Phase 8A categories missing from the receipt. */
+  readonly missingCategories: readonly string[];
+  /** Categories remapped to a path other than the historical one. */
+  readonly remappedCategories: readonly string[];
+  /** Paths owned by the receipt that are not in the expected historical scope. */
+  readonly unexpectedPaths: readonly string[];
+  /** Bad release-identity receipt. */
+  readonly releaseIdentityViolations: readonly string[];
+  /** Current worktree paths outside Phase 8A's scope. DIAGNOSTIC ONLY. */
+  readonly foreignWorktreePaths: readonly string[];
+  readonly violations: readonly string[];
+}
+
+function evaluatePhase8aHistoricalFreeze(input: {
+  readonly categories: Readonly<Record<string, string>>;
+  readonly expected: Readonly<Record<string, string>>;
+  readonly productionRoots: readonly string[];
+  readonly releaseCommit: string;
+  readonly releaseParent: string;
+  readonly expectedCommit: string;
+  readonly expectedParent: string;
+  readonly currentWorktreePaths: readonly string[];
+}): Phase8aHistoricalFreezeContract {
+  const {
+    categories,
+    expected,
+    productionRoots,
+    releaseCommit,
+    releaseParent,
+    expectedCommit,
+    expectedParent,
+    currentWorktreePaths,
+  } = input;
+
+  const isProduction = (path: string): boolean =>
+    productionRoots.some((root) => path === root || path.startsWith(`${root}/`));
+
+  const present = (path: unknown): path is string => typeof path === 'string' && path.length > 0;
+
+  // A malformed receipt (non-string or empty path) is DAMAGE, not something to
+  // crash on: it is classified as a missing category and excluded from the
+  // historical path set, so the violation is reported instead of thrown.
+  const categoryValues = Object.values(categories).filter(present);
+
+  // Judge the HISTORICAL scope: the union of what the receipt claims and what
+  // the expected scope pins. Either going non-production proves the freeze.
+  const historicalPaths = [...new Set([...categoryValues, ...Object.values(expected).filter(present)])];
+  const productionOwnedPaths = historicalPaths.filter(isProduction).sort();
+
+  const missingCategories = Object.keys(expected)
+    .filter((category) => !present(categories[category]))
+    .sort();
+
+  const remappedCategories = Object.keys(expected)
+    .filter((category) => present(categories[category]) && categories[category] !== expected[category])
+    .sort();
+
+  const expectedPathSet = new Set(Object.values(expected).filter(present));
+  const unexpectedPaths = [...new Set(categoryValues)]
+    .filter((path) => !expectedPathSet.has(path))
+    .sort();
+
+  const releaseIdentityViolations: string[] = [];
+  if (releaseCommit !== expectedCommit) {
+    releaseIdentityViolations.push(`release commit is ${releaseCommit}, expected ${expectedCommit}`);
+  }
+  if (releaseParent !== expectedParent) {
+    releaseIdentityViolations.push(`release parent is ${releaseParent}, expected ${expectedParent}`);
+  }
+
+  const owned = new Set(historicalPaths);
+  const foreignWorktreePaths = currentWorktreePaths.filter((path) => !owned.has(path)).sort();
+
+  const violations: string[] = [
+    ...productionOwnedPaths.map((p) => `Phase 8A was recon-only but its release scope claims production path: ${p}`),
+    ...missingCategories.map((c) => `Phase 8A release scope is missing required category: ${c}`),
+    ...remappedCategories.map(
+      (c) => `Phase 8A category ${c} is remapped: ${categories[c]} != ${expected[c]}`
+    ),
+    ...unexpectedPaths.map((p) => `Phase 8A release scope claims a path outside its historical set: ${p}`),
+    ...releaseIdentityViolations,
+  ].sort();
+
+  return {
+    productionOwnedPaths,
+    missingCategories,
+    remappedCategories,
+    unexpectedPaths,
+    releaseIdentityViolations,
+    foreignWorktreePaths,
+    violations,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Determinism and the production freeze
 // ---------------------------------------------------------------------------
 
@@ -666,15 +836,166 @@ describe('Phase 8A — determinism and the production freeze', () => {
     }
   });
 
-  it('modifies no production file at all', async () => {
-    // Phase 8A must ship planning files only.
-    const { execFileSync } = await import('node:child_process');
-    const changed = execFileSync(
-      'git',
-      ['status', '--porcelain', '--', 'src', 'server', 'plugin'],
-      { cwd: ROOT, encoding: 'utf8' }
-    ).trim();
-    expect(changed).toBe('');
+  it('keeps every Phase 8A release asset present on disk', () => {
+    // PRESENT-DAY INVARIANT, deliberately kept SEPARATE from the historical
+    // freeze below. This asks only whether Phase 8A's own artifacts still
+    // exist. It makes no claim about future files, and it is not a freeze.
+    for (const [category, path] of Object.entries(PHASE8A_RELEASE_RECEIPT)) {
+      expect(existsSync(join(ROOT, path)), `${category}: ${path}`).toBe(true);
+    }
+  });
+
+  it('confines its frozen historical release scope to non-production paths', () => {
+    // REPLACES the former `modifies no production file at all`, which ran
+    // `git status --porcelain -- src server plugin` against TODAY's tree. That
+    // was a temporal claim about a closed phase, and it failed any later
+    // authorized production work. The durable equivalent is a fact about the
+    // PAST: Phase 8A's own release touched no production source.
+    const contract = evaluatePhase8aHistoricalFreeze({
+      categories: PHASE8A_RELEASE_RECEIPT,
+      expected: PHASE8A_EXPECTED_RELEASE_SCOPE,
+      productionRoots: PHASE8A_PRODUCTION_ROOTS,
+      releaseCommit: PHASE8A_RELEASE_COMMIT,
+      releaseParent: PHASE8A_RELEASE_PARENT,
+      expectedCommit: 'ea4be87e3d21a2ba04aaf2335254005859e441f8',
+      expectedParent: '150b68582213ae4b63a06e92f083fb70d8568a85',
+      currentWorktreePaths: [],
+    });
+    expect(contract.productionOwnedPaths).toEqual([]);
+    expect(contract.violations).toEqual([]);
+  });
+
+  it('pins the Phase 8A release identity that the historical scope belongs to', () => {
+    expect(PHASE8A_RELEASE_COMMIT).toBe('ea4be87e3d21a2ba04aaf2335254005859e441f8');
+    expect(PHASE8A_RELEASE_PARENT).toBe('150b68582213ae4b63a06e92f083fb70d8568a85');
+    // Receipt metadata only — the test never requires these commit objects to
+    // exist locally, so a shallow CI checkout is unaffected.
+    expect(PHASE8A_RELEASE_COMMIT).toMatch(/^[0-9a-f]{40}$/);
+    expect(PHASE8A_RELEASE_PARENT).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it('pins exactly the five historical Phase 8A release paths', () => {
+    expect(Object.keys(PHASE8A_RELEASE_RECEIPT).sort()).toEqual([
+      'architecture_doc',
+      'benchmark_cli',
+      'contract_test',
+      'recon_module',
+      'report_module',
+    ]);
+    expect([...new Set(Object.values(PHASE8A_RELEASE_RECEIPT))]).toHaveLength(5);
+  });
+
+  it('never consults the current worktree to establish its historical claim', () => {
+    // Structural guarantee: the historical verdict is computed from the
+    // receipt ALONE. Every future development shape below leaves it identical.
+    const verdict = (currentWorktreePaths: string[]) =>
+      evaluatePhase8aHistoricalFreeze({
+        categories: PHASE8A_RELEASE_RECEIPT,
+        expected: PHASE8A_EXPECTED_RELEASE_SCOPE,
+        productionRoots: PHASE8A_PRODUCTION_ROOTS,
+        releaseCommit: PHASE8A_RELEASE_COMMIT,
+        releaseParent: PHASE8A_RELEASE_PARENT,
+        expectedCommit: 'ea4be87e3d21a2ba04aaf2335254005859e441f8',
+        expectedParent: '150b68582213ae4b63a06e92f083fb70d8568a85',
+        currentWorktreePaths,
+      });
+
+    const baseline = verdict([]).violations;
+
+    const futureStates: ReadonlyArray<readonly [string, string[]]> = [
+      ['A. clean future worktree', []],
+      ['B. unrelated untracked docs/test file', ['docs/Some-Roadmap.md', 'tests/unit/someFuture.test.ts']],
+      [
+        'C. legitimate future matcher edit under src/core/nutritionV2',
+        ['src/core/nutritionV2/matching.ts', 'src/core/nutritionV2/query.ts'],
+      ],
+      ['D. legitimate future server edit', ['server/byokSession.ts', 'server/ai/openrouterProvider.ts']],
+      ['E. legitimate future plugin edit', ['plugin/main.ts']],
+      ['F. unrelated staged future file', ['src/utils/money.ts', 'server/app.ts', 'plugin/views/x.ts']],
+      ['G. the four Phase 9A recon files', [
+        'docs/Phase-9A-BYOK-Persistence-and-AI-Smoke.md',
+        'scripts/verify_phase9a_ai_advanced_live.ts',
+        'tests/security/phase9aByokPersistenceContract.test.ts',
+        'tests/unit/phase9aAiSemanticAuthority.test.ts',
+      ]],
+    ];
+
+    for (const [label, paths] of futureStates) {
+      const contract = verdict(paths);
+      expect(contract.violations, `${label} must not invalidate Phase 8A`).toEqual(baseline);
+      expect(contract.productionOwnedPaths, label).toEqual([]);
+      // The future paths are observed and reported, never judged.
+      expect(contract.foreignWorktreePaths.length).toBe(paths.length);
+    }
+  });
+
+  it('still detects real historical damage to the Phase 8A freeze', () => {
+    const real = () =>
+      evaluatePhase8aHistoricalFreeze({
+        categories: PHASE8A_RELEASE_RECEIPT,
+        expected: PHASE8A_EXPECTED_RELEASE_SCOPE,
+        productionRoots: PHASE8A_PRODUCTION_ROOTS,
+        releaseCommit: PHASE8A_RELEASE_COMMIT,
+        releaseParent: PHASE8A_RELEASE_PARENT,
+        expectedCommit: 'ea4be87e3d21a2ba04aaf2335254005859e441f8',
+        expectedParent: '150b68582213ae4b63a06e92f083fb70d8568a85',
+        currentWorktreePaths: [],
+      });
+    expect(real().violations).toEqual([]);
+
+    const judge = (patch: Partial<Parameters<typeof evaluatePhase8aHistoricalFreeze>[0]>) =>
+      evaluatePhase8aHistoricalFreeze({
+        categories: PHASE8A_RELEASE_RECEIPT,
+        expected: PHASE8A_EXPECTED_RELEASE_SCOPE,
+        productionRoots: PHASE8A_PRODUCTION_ROOTS,
+        releaseCommit: PHASE8A_RELEASE_COMMIT,
+        releaseParent: PHASE8A_RELEASE_PARENT,
+        expectedCommit: 'ea4be87e3d21a2ba04aaf2335254005859e441f8',
+        expectedParent: '150b68582213ae4b63a06e92f083fb70d8568a85',
+        currentWorktreePaths: [],
+        ...patch,
+      });
+
+    // A. a production path inserted into the frozen touched set.
+    for (const production of [
+      'src/core/nutritionV2/applyAuthority.ts',
+      'server/nutritionV2Apply.ts',
+      'plugin/main.ts',
+    ]) {
+      const c = judge({ categories: { ...PHASE8A_RELEASE_RECEIPT, rogue: production } });
+      expect(c.productionOwnedPaths).toContain(production);
+      expect(c.violations.join('\n')).toMatch(/recon-only/);
+    }
+
+    // B. a required historical Phase 8A path removed.
+    for (const category of ['recon_module', 'report_module', 'benchmark_cli'] as const) {
+      const c = judge({ categories: { ...PHASE8A_RELEASE_RECEIPT, [category]: undefined! } });
+      expect(c.missingCategories).toContain(category);
+      expect(c.violations.join('\n')).toMatch(new RegExp(`missing required category: ${category}`));
+    }
+
+    // C. an unexpected extra Phase 8A-owned path appears in the receipt.
+    const extra = judge({
+      categories: { ...PHASE8A_RELEASE_RECEIPT, bonus: 'scripts/nutritionReleaseExit/extra.ts' },
+    });
+    expect(extra.unexpectedPaths).toEqual(['scripts/nutritionReleaseExit/extra.ts']);
+    expect(extra.violations.join('\n')).toMatch(/outside its historical set/);
+
+    // D/E. the receipt loses its expected release identity.
+    const badCommit = judge({ releaseCommit: '0000000000000000000000000000000000000000' });
+    expect(badCommit.releaseIdentityViolations.join('\n')).toMatch(/release commit is/);
+    expect(badCommit.violations.join('\n')).toMatch(/release commit is/);
+
+    const badParent = judge({ releaseParent: '1111111111111111111111111111111111111111' });
+    expect(badParent.releaseIdentityViolations.join('\n')).toMatch(/release parent is/);
+    expect(badParent.violations.join('\n')).toMatch(/release parent is/);
+
+    // F. a role remapped outside the historical manifest.
+    const remapped = judge({
+      categories: { ...PHASE8A_RELEASE_RECEIPT, recon_module: 'scripts/nutritionReleaseExit/other.ts' },
+    });
+    expect(remapped.remappedCategories).toEqual(['recon_module']);
+    expect(remapped.violations.join('\n')).toMatch(/is remapped/);
   });
 });
 
