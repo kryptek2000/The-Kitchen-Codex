@@ -634,11 +634,30 @@ describe('Phase 8B production freeze', () => {
   });
 
   it('touches only the allowed Phase 8B proof paths', () => {
+    const { execFileSync } = require('node:child_process') as typeof import('node:child_process');
     const paths = worktreePaths();
-    expect(paths.length).toBeGreaterThan(0);
-    for (const path of paths) {
-      expect(ALLOWED.has(path), `unexpected Phase 8B path: ${path}`).toBe(true);
+
+    if (paths.length > 0) {
+      // In-flight work: every changed/untracked path must be an authorized one.
+      for (const path of paths) {
+        expect(ALLOWED.has(path), `unexpected Phase 8B path: ${path}`).toBe(true);
+      }
+      return;
     }
+
+    // Committed state (CI, or any clean checkout): the worktree diff is empty by
+    // definition, so the same intent — "Phase 8B's file set is exactly the
+    // authorized set" — is asserted against the committed tree instead. This is
+    // deliberately history-free (no HEAD^, no rev-list), so it holds under a
+    // shallow CI checkout, and it stays strict in BOTH states: every authorized
+    // path must exist AND be tracked, and no authorized path may be absent.
+    for (const path of ALLOWED) {
+      expect(existsSync(join(ROOT, path)), `authorized Phase 8B path is missing: ${path}`).toBe(true);
+    }
+    const tracked = execFileSync('git', ['ls-files', '--', ...ALLOWED], { cwd: ROOT, encoding: 'utf8' })
+      .split('\n')
+      .filter(Boolean);
+    expect([...tracked].sort(), 'every authorized Phase 8B path must be committed (tracked by git)').toEqual([...ALLOWED].sort());
   });
 
   it('has staged nothing', () => {
