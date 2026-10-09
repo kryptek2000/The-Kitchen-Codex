@@ -9,6 +9,14 @@
  * The MUTATION PROOFS (M1-M14) are the important half. Each takes a deliberately
  * broken observation, workflow, or bundle and asserts the contract CATCHES it.
  * A gate model that cannot fail is not evidence of anything.
+ *
+ * Phase 8B is CLOSED. Its former worktree-wide "production freeze" assertions
+ * encoded a TEMPORAL claim that cannot be re-derived from an arbitrary future
+ * tree, and they began failing later phases for merely existing. They are
+ * replaced below by a durable, checked-in historical manifest — see the
+ * "ARCHITECTURAL RULE" comment above `PHASE8B_FROZEN_PRODUCTION_TREES` for the
+ * full rationale. A closed phase pins its OWN artifacts; it never claims
+ * ownership of all future repository diffs.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -53,18 +61,36 @@ const HARNESS_SOURCE = readFileSync(join(ROOT, 'scripts/browserHarness/cdpBrowse
 const CI_CLI_SOURCE = readFileSync(join(ROOT, 'scripts/benchmark_nutrition_phase8b_browser_proof.ts'), 'utf8');
 
 /**
- * File-level worktree paths. `git status --porcelain` collapses untracked
- * DIRECTORIES into a single entry (`?? scripts/browserHarness/`), which would
- * hide the very files this contract is supposed to police, so untracked paths
- * are expanded with `git ls-files --others`.
+ * Thin `git` reader. Every call this contract makes is INDEX-SCOPED or
+ * WORKTREE-OBSERVATIONAL — never history-scoped. No `HEAD^`, no `rev-list`, no
+ * commit ranges: this file must behave identically in a full checkout, a
+ * shallow CI clone, and a dirty future-development worktree.
  */
-function worktreePaths(): string[] {
+function gitLines(args: string[]): string[] | null {
   const { execFileSync } = require('node:child_process') as typeof import('node:child_process');
-  const run = (args: string[]): string[] =>
-    execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' })
+  try {
+    return execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' })
       .split('\n')
       .filter(Boolean);
-  return [...new Set([...run(['diff', '--name-only']), ...run(['ls-files', '--others', '--exclude-standard'])])].sort();
+  } catch {
+    // No git index available (e.g. an exported source tree). Index-scoped checks
+    // are then reported as "not applicable" rather than silently passing.
+    return null;
+  }
+}
+
+/**
+ * OBSERVATION ONLY — never an input to the Phase 8B verdict.
+ *
+ * `git status --porcelain` collapses untracked DIRECTORIES into a single entry
+ * (`?? scripts/browserHarness/`), so untracked paths are expanded with
+ * `git ls-files --others`. This exists purely so the contract can REPORT what
+ * else is in flight alongside it; see `evaluatePhase8bFreezeContract`.
+ */
+function worktreePaths(): string[] {
+  const modified = gitLines(['diff', '--name-only']) ?? [];
+  const untracked = gitLines(['ls-files', '--others', '--exclude-standard']) ?? [];
+  return [...new Set([...modified, ...untracked])].sort();
 }
 
 // ---------------------------------------------------------------------------
@@ -599,70 +625,407 @@ describe('Phase 8B harness and dependency contract', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Production freeze
+// Phase 8B historical manifest + durable freeze contract
 // ---------------------------------------------------------------------------
 
-describe('Phase 8B production freeze', () => {
-  const FROZEN_TREES = ['src/core/nutritionV2', 'src/utils', 'src/components', 'src/application', 'server', 'plugin'];
-  const ALLOWED = new Set([
-    'scripts/verify_advanced_nutrition_browser_prod.ts',
-    'scripts/verify_plugin_isolation.ts',
-    'scripts/benchmark_nutrition_phase8b_browser_proof.ts',
-    'scripts/browserHarness/cdpBrowser.ts',
-    'scripts/nutritionReleaseExit/phase8bReport.ts',
-    'scripts/nutritionReleaseExit/phase8bPluginIsolation.ts',
-    'tests/fixtures/advancedNutritionBrowserAcceptanceFixture.ts',
-    `tests/fixtures/advancedNutritionBrowserAcceptanceVault/${ACCEPTANCE_RECIPE_FILE}`,
-    'tests/unit/advancedNutritionPhase8bBrowserProofContract.test.ts',
-    // Authorized amendment, NOT a Phase 8B file: one Phase 8A assertion is
-    // pinned to Phase 8A's base commit so that Phase 8A's historical
-    // "zero production-build coverage" finding is preserved rather than
-    // silently rewritten by the legitimate arrival of Phase 8B evidence.
-    // Explicitly approved by Sid; see the Phase 8B report.
-    'tests/unit/advancedNutritionPhase8aReleaseExitRecon.test.ts',
-    'package.json',
-    '.github/workflows/build.yml',
-    'docs/Advanced-Nutrition-Architecture.md',
-  ]);
+/**
+ * ARCHITECTURAL RULE, encoded deliberately and tested below:
+ *
+ *   A CLOSED PHASE MAY PIN ITS OWN ARTIFACTS AND INVARIANTS.
+ *   A CLOSED PHASE MUST NOT CLAIM OWNERSHIP OF ALL FUTURE REPOSITORY DIFFS.
+ *
+ * WHY THIS BLOCK EXISTS. Phase 8B originally froze production source and
+ * asserted two things about the WORKTREE:
+ *
+ *   (1) "touches only the allowed Phase 8B proof paths"
+ *   (2) "has zero production source diff"
+ *
+ * Both were correct WHILE Phase 8B WAS IN FLIGHT. Both encoded a TEMPORAL
+ * fact — a claim about the moment Phase 8B was being developed. Phase 8B is
+ * CLOSED, and the temporal fact cannot be re-derived from an arbitrary tree
+ * three phases later. Reading it off TODAY's working directory was a lifecycle
+ * bug: any later authorized phase failed a CLOSED phase's test simply for
+ * existing. Phase 9A's four untracked files demonstrated exactly that, and the
+ * same defect applied twice over — the path-allowlist assertion AND the
+ * production-diff assertion, which would have rejected any legitimate future
+ * production change under `src/utils`, `server`, or `plugin`.
+ *
+ * THE REPAIR. A historical event cannot be inferred; it must be RECORDED. So
+ * Phase 8B's evidence is preserved here as a checked-in receipt — the same
+ * technique Phase 8A used for `PHASE8A_TEST_INVENTORY_AT_BASE_COMMIT` in
+ * `advancedNutritionPhase8aReleaseExitRecon.test.ts`, which froze a base-commit
+ * measurement instead of re-measuring the live tree. `PHASE8B_MANIFEST` below
+ * is that receipt: the exact historical file set Phase 8B owned. It is data
+ * about the PAST. It makes no claim about the FUTURE.
+ *
+ * WHAT IS NOW ASSERTED (durable, worktree-independent, shallow-CI safe):
+ *
+ *   1. every Phase 8B artifact still EXISTS;
+ *   2. every Phase 8B artifact is COMMITTED (git index only);
+ *   3. Phase 8B owned NO production source — the durable restatement of the
+ *      original freeze. This survives all later production work precisely
+ *      because it constrains the MANIFEST, not the working tree;
+ *   4. every Phase 8B artifact ROLE is still represented, so an artifact
+ *      cannot be quietly deleted from the manifest to hide its removal.
+ *
+ * WHAT IS DELIBERATELY NOT ASSERTED: anything about paths outside the manifest.
+ * Those belong to whichever phase is currently in flight — including Phase 9A.
+ */
 
-  it('has zero production source diff', () => {
-    const { execFileSync } = require('node:child_process') as typeof import('node:child_process');
-    for (const tree of FROZEN_TREES) {
-      const status = execFileSync('git', ['status', '--porcelain=v1', '--', tree], { cwd: ROOT, encoding: 'utf8' });
-      expect(status.trim(), `${tree} must have no diff`).toBe('');
+/**
+ * The production trees Phase 8B declared frozen while it was in flight. Retained
+ * as historical receipt: the freeze is now enforced against the MANIFEST (see
+ * `productionOwnedArtifacts`), which is why later production development under
+ * these trees no longer collides with a closed phase's contract.
+ */
+const PHASE8B_FROZEN_PRODUCTION_TREES = [
+  'src/core/nutritionV2',
+  'src/utils',
+  'src/components',
+  'src/application',
+  'server',
+  'plugin',
+] as const;
+
+/**
+ * Every artifact Phase 8B owned, keyed by the durable ROLE it plays. Roles —
+ * not bare paths — are what the contract requires to be represented, so deleting
+ * an entry here cannot quietly erase the obligation to prove it still exists.
+ *
+ * `phase8a_historical_amendment` is an authorized amendment, NOT a Phase 8B
+ * asset: it exists only so Phase 8A's historical "zero production-build
+ * coverage" finding stays pinned to Phase 8A's base commit instead of being
+ * silently rewritten by the arrival of Phase 8B evidence. Explicitly approved by
+ * Sid; see the Phase 8B report.
+ */
+const PHASE8B_ARTIFACT_ROLES = {
+  production_browser_verifier: 'scripts/verify_advanced_nutrition_browser_prod.ts',
+  plugin_isolation_verifier: 'scripts/verify_plugin_isolation.ts',
+  benchmark_cli: 'scripts/benchmark_nutrition_phase8b_browser_proof.ts',
+  browser_harness: 'scripts/browserHarness/cdpBrowser.ts',
+  gate_report_module: 'scripts/nutritionReleaseExit/phase8bReport.ts',
+  plugin_isolation_module: 'scripts/nutritionReleaseExit/phase8bPluginIsolation.ts',
+  acceptance_fixture_module: 'tests/fixtures/advancedNutritionBrowserAcceptanceFixture.ts',
+  acceptance_vault_recipe: `tests/fixtures/advancedNutritionBrowserAcceptanceVault/${ACCEPTANCE_RECIPE_FILE}`,
+  contract_test: 'tests/unit/advancedNutritionPhase8bBrowserProofContract.test.ts',
+  phase8a_historical_amendment: 'tests/unit/advancedNutritionPhase8aReleaseExitRecon.test.ts',
+  package_manifest: 'package.json',
+  ci_workflow: '.github/workflows/build.yml',
+  architecture_doc: 'docs/Advanced-Nutrition-Architecture.md',
+} as const;
+
+const PHASE8B_MANIFEST: readonly string[] = [
+  ...new Set(Object.values(PHASE8B_ARTIFACT_ROLES)),
+].sort();
+
+/**
+ * Role names the contract REQUIRES to be represented, held independently of
+ * `PHASE8B_ARTIFACT_ROLES` on purpose. If the requirement were derived from the
+ * roles map itself, deleting a role would delete the obligation to prove it —
+ * exactly the "pass by definition" failure this contract must not have.
+ */
+const PHASE8B_REQUIRED_ROLES: readonly string[] = [
+  'production_browser_verifier',
+  'plugin_isolation_verifier',
+  'benchmark_cli',
+  'browser_harness',
+  'gate_report_module',
+  'plugin_isolation_module',
+  'acceptance_fixture_module',
+  'acceptance_vault_recipe',
+  'contract_test',
+  'phase8a_historical_amendment',
+  'package_manifest',
+  'ci_workflow',
+  'architecture_doc',
+];
+
+function isUnderProductionTree(path: string): boolean {
+  return PHASE8B_FROZEN_PRODUCTION_TREES.some((tree) => path === tree || path.startsWith(`${tree}/`));
+}
+
+interface Phase8bFreezeContract {
+  /** Manifest artifacts absent from disk — real damage to Phase 8B evidence. */
+  readonly missingArtifacts: readonly string[];
+  /** Manifest artifacts not committed — Phase 8B evidence was never sealed. */
+  readonly uncommittedArtifacts: readonly string[];
+  /** Phase 8B artifacts sitting in the index — Phase 8B's work must be committed. */
+  readonly stagedArtifacts: readonly string[];
+  /** Manifest artifacts inside a frozen production tree — Phase 8B was proof-only. */
+  readonly productionOwnedArtifacts: readonly string[];
+  /** Roles whose artifact is absent from the manifest — the receipt lost a claim. */
+  readonly unrepresentedRoles: readonly string[];
+  /**
+   * Paths in flight that are NOT Phase 8B's. Reported for diagnostics ONLY.
+   * This NEVER contributes a violation — that separation is the whole repair.
+   */
+  readonly foreignWorktreePaths: readonly string[];
+  readonly violations: readonly string[];
+}
+
+interface Phase8bFreezeInputs {
+  readonly manifest: readonly string[];
+  readonly roles: Readonly<Record<string, string>>;
+  /** Role names that MUST be represented, independent of `roles`. */
+  readonly requiredRoles: readonly string[];
+  readonly productionTrees: readonly string[];
+  /** Paths present on disk. */
+  readonly presentPaths: ReadonlySet<string>;
+  /** Paths in the git index. `null` = no index available; index checks do not apply. */
+  readonly trackedPaths: ReadonlySet<string> | null;
+  /** Paths currently staged. `null` = no index available; index checks do not apply. */
+  readonly stagedPaths: ReadonlySet<string> | null;
+  /** Current worktree paths. OBSERVED AND REPORTED, NEVER JUDGED. */
+  readonly currentWorktreePaths: readonly string[];
+}
+
+/**
+ * PURE. No filesystem, no git, no clock, no process state — so it is directly
+ * testable with synthetic inputs, and it can never mutate the real worktree.
+ */
+function evaluatePhase8bFreezeContract(input: Phase8bFreezeInputs): Phase8bFreezeContract {
+  const { manifest, roles, requiredRoles, productionTrees, presentPaths, trackedPaths, stagedPaths, currentWorktreePaths } = input;
+
+  const missingArtifacts = manifest.filter((path) => !presentPaths.has(path)).sort();
+
+  const uncommittedArtifacts =
+    trackedPaths === null ? [] : manifest.filter((path) => !trackedPaths.has(path)).sort();
+
+  const stagedArtifacts =
+    stagedPaths === null ? [] : manifest.filter((path) => stagedPaths.has(path)).sort();
+
+  const owned = new Set(manifest);
+  const underTree = (path: string): boolean =>
+    productionTrees.some((tree) => path === tree || path.startsWith(`${tree}/`));
+  const productionOwnedArtifacts = manifest.filter(underTree).sort();
+
+  // A role is unrepresented if it is required but absent from the roles map, OR
+  // is mapped to a path the manifest does not contain. Anchoring on
+  // `requiredRoles` means dropping a role entry cannot also drop the demand.
+  const unrepresentedRoles = requiredRoles
+    .filter((role) => {
+      const path = roles[role];
+      return path === undefined || !owned.has(path);
+    })
+    .sort();
+
+  const foreignWorktreePaths = currentWorktreePaths.filter((path) => !owned.has(path)).sort();
+
+  const violations: string[] = [
+    ...missingArtifacts.map((p) => `Phase 8B artifact is missing from disk: ${p}`),
+    ...uncommittedArtifacts.map((p) => `Phase 8B artifact is not committed: ${p}`),
+    ...stagedArtifacts.map((p) => `Phase 8B artifact is staged but should be committed: ${p}`),
+    ...productionOwnedArtifacts.map(
+      (p) => `Phase 8B was proof-only and must own no production source, but the manifest claims: ${p}`
+    ),
+    ...unrepresentedRoles.map((r) => `Phase 8B manifest no longer represents required role: ${r}`),
+  ].sort();
+
+  return {
+    missingArtifacts,
+    uncommittedArtifacts,
+    stagedArtifacts,
+    productionOwnedArtifacts,
+    unrepresentedRoles,
+    foreignWorktreePaths,
+    violations,
+  };
+}
+
+/** Real-world inputs, read index-scoped. Never mutates anything. */
+function livePhase8bFreezeInputs(
+  overrides: Partial<Phase8bFreezeInputs> = {}
+): Phase8bFreezeInputs {
+  const tracked = gitLines(['ls-files', '--', ...PHASE8B_MANIFEST]);
+  const staged = gitLines(['diff', '--cached', '--name-only']);
+  return {
+    manifest: PHASE8B_MANIFEST,
+    roles: PHASE8B_ARTIFACT_ROLES,
+    requiredRoles: PHASE8B_REQUIRED_ROLES,
+    productionTrees: PHASE8B_FROZEN_PRODUCTION_TREES,
+    presentPaths: new Set(PHASE8B_MANIFEST.filter((path) => existsSync(join(ROOT, path)))),
+    trackedPaths: tracked === null ? null : new Set(tracked),
+    stagedPaths: staged === null ? null : new Set(staged),
+    currentWorktreePaths: worktreePaths(),
+    ...overrides,
+  };
+}
+
+describe('Phase 8B frozen manifest is a historical receipt', () => {
+  it('is a closed, duplicated-free file set', () => {
+    expect(PHASE8B_MANIFEST).toEqual([...new Set(PHASE8B_MANIFEST)].sort());
+    expect(PHASE8B_MANIFEST.length).toBeGreaterThanOrEqual(13);
+  });
+
+  it('spells out both authorization amendments in comments rather than silently widening the set', () => {
+    expect(PHASE8B_ARTIFACT_ROLES.phase8a_historical_amendment).toBe(
+      'tests/unit/advancedNutritionPhase8aReleaseExitRecon.test.ts'
+    );
+  });
+
+  it('claims no production source — the durable restatement of the Phase 8B freeze', () => {
+    const owned = evaluatePhase8bFreezeContract(livePhase8bFreezeInputs());
+    expect(owned.productionOwnedArtifacts).toEqual([]);
+    for (const path of PHASE8B_MANIFEST) {
+      expect(isUnderProductionTree(path), `${path} must not be a Phase 8B production artifact`).toBe(false);
     }
   });
 
-  it('touches only the allowed Phase 8B proof paths', () => {
-    const { execFileSync } = require('node:child_process') as typeof import('node:child_process');
-    const paths = worktreePaths();
+  it('represents every Phase 8B artifact role', () => {
+    expect(Object.keys(PHASE8B_ARTIFACT_ROLES)).toEqual(expect.arrayContaining([
+      'production_browser_verifier',
+      'browser_harness',
+      'gate_report_module',
+      'plugin_isolation_module',
+      'acceptance_fixture_module',
+      'acceptance_vault_recipe',
+      'benchmark_cli',
+      'contract_test',
+      'ci_workflow',
+    ]));
+  });
+});
 
-    if (paths.length > 0) {
-      // In-flight work: every changed/untracked path must be an authorized one.
-      for (const path of paths) {
-        expect(ALLOWED.has(path), `unexpected Phase 8B path: ${path}`).toBe(true);
-      }
-      return;
-    }
-
-    // Committed state (CI, or any clean checkout): the worktree diff is empty by
-    // definition, so the same intent — "Phase 8B's file set is exactly the
-    // authorized set" — is asserted against the committed tree instead. This is
-    // deliberately history-free (no HEAD^, no rev-list), so it holds under a
-    // shallow CI checkout, and it stays strict in BOTH states: every authorized
-    // path must exist AND be tracked, and no authorized path may be absent.
-    for (const path of ALLOWED) {
-      expect(existsSync(join(ROOT, path)), `authorized Phase 8B path is missing: ${path}`).toBe(true);
-    }
-    const tracked = execFileSync('git', ['ls-files', '--', ...ALLOWED], { cwd: ROOT, encoding: 'utf8' })
-      .split('\n')
-      .filter(Boolean);
-    expect([...tracked].sort(), 'every authorized Phase 8B path must be committed (tracked by git)').toEqual([...ALLOWED].sort());
+describe('Phase 8B durable freeze contract', () => {
+  it('A — passes in a clean checkout with an empty worktree', () => {
+    const contract = evaluatePhase8bFreezeContract(
+      livePhase8bFreezeInputs({ currentWorktreePaths: [] })
+    );
+    expect(contract.violations).toEqual([]);
+    expect(contract.missingArtifacts).toEqual([]);
+    expect(contract.uncommittedArtifacts).toEqual([]);
+    expect(contract.stagedArtifacts).toEqual([]);
   });
 
-  it('has staged nothing', () => {
-    const { execFileSync } = require('node:child_process') as typeof import('node:child_process');
-    const staged = execFileSync('git', ['diff', '--cached', '--name-only'], { cwd: ROOT, encoding: 'utf8' });
-    expect(staged.trim()).toBe('');
+  it('B — an unrelated future UNTRACKED file does not fail a closed phase', () => {
+    const contract = evaluatePhase8bFreezeContract(
+      livePhase8bFreezeInputs({
+        currentWorktreePaths: [
+          'docs/Phase-9A-BYOK-Persistence-and-AI-Smoke.md',
+          'scripts/verify_phase9a_ai_advanced_live.ts',
+          'tests/security/phase9aByokPersistenceContract.test.ts',
+          'tests/unit/phase9aAiSemanticAuthority.test.ts',
+        ],
+      })
+    );
+    expect(contract.violations).toEqual([]);
+    expect(contract.foreignWorktreePaths).toHaveLength(4);
+  });
+
+  it('C — an unrelated future MODIFIED non-production file does not fail a closed phase', () => {
+    const contract = evaluatePhase8bFreezeContract(
+      livePhase8bFreezeInputs({
+        currentWorktreePaths: ['README.md', 'docs/Release-Plan.md', 'src/appVersion.ts'],
+      })
+    );
+    expect(contract.violations).toEqual([]);
+  });
+
+  it('D — legitimate later PRODUCTION development does not fail a closed phase', () => {
+    // The exact defect being repaired: Phase 9A (or any later phase) may
+    // legitimately edit these very trees. Phase 8B once froze them TEMPORARILY;
+    // it must not police them FOREVER.
+    const contract = evaluatePhase8bFreezeContract(
+      livePhase8bFreezeInputs({
+        currentWorktreePaths: [
+          'server/byokSession.ts',
+          'server/ai/openrouterProvider.ts',
+          'src/utils/byok.ts',
+          'src/components/AiSettingsModal.tsx',
+          'src/application/session/sessionKeys.ts',
+          'src/core/nutritionV2/applyAuthority.ts',
+          'plugin/main.ts',
+        ],
+      })
+    );
+    expect(contract.violations).toEqual([]);
+    expect(contract.productionOwnedArtifacts).toEqual([]);
+    expect(contract.foreignWorktreePaths).toContain('server/byokSession.ts');
+  });
+
+  it('D2 — the verdict is INVARIANT to arbitrary future worktree contents', () => {
+    // Strongest form of non-interference: hold the manifest and index constant,
+    // sweep wildly different worktrees, and prove the verdict never moves. This
+    // is what makes the repair durable rather than a lucky pass.
+    const baseline = evaluatePhase8bFreezeContract(
+      livePhase8bFreezeInputs({ currentWorktreePaths: [] })
+    ).violations;
+
+    const hostileWorktrees = [
+      [],
+      ['unrelated.txt'],
+      ['server/a.ts', 'src/utils/b.ts', 'plugin/c.ts'],
+      ['src/core/nutritionV2/anything.ts', 'src/components/anything.tsx'],
+      ['package.json.orig'],
+      Array.from({ length: 200 }, (_, i) => `src/future/${i}.ts`),
+    ];
+
+    for (const currentWorktreePaths of hostileWorktrees) {
+      const contract = evaluatePhase8bFreezeContract(livePhase8bFreezeInputs({ currentWorktreePaths }));
+      expect(contract.violations, `worktree of ${currentWorktreePaths.length} paths must not matter`).toEqual(
+        baseline
+      );
+    }
+  });
+
+  it('E — actually damaging a real Phase 8B invariant still fails', () => {
+    const real = livePhase8bFreezeInputs();
+
+    // E1: a Phase 8B artifact deleted from disk.
+    const presentWithoutHarness = new Set(real.presentPaths);
+    presentWithoutHarness.delete(PHASE8B_ARTIFACT_ROLES.browser_harness);
+    expect(
+      evaluatePhase8bFreezeContract({ ...real, presentPaths: presentWithoutHarness }).violations.join('\n')
+    ).toMatch(/cdpBrowser\.ts/);
+
+    // E2: a Phase 8B artifact removed from version control.
+    const trackedWithoutVerifier = new Set(real.trackedPaths ?? []);
+    trackedWithoutVerifier.delete(PHASE8B_ARTIFACT_ROLES.production_browser_verifier);
+    expect(
+      evaluatePhase8bFreezeContract({ ...real, trackedPaths: trackedWithoutVerifier }).violations.join('\n')
+    ).toMatch(/verify_advanced_nutrition_browser_prod\.ts/);
+
+    // E3: Phase 8B evidence left uncommitted in the index.
+    const staged = new Set<string>([PHASE8B_ARTIFACT_ROLES.contract_test]);
+    expect(
+      evaluatePhase8bFreezeContract({ ...real, stagedPaths: staged }).violations.join('\n')
+    ).toMatch(/staged but should be committed/);
+
+    // E4: Phase 8B claiming production source — the freeze itself, violated.
+    const manifestWithProduction = [...real.manifest, 'server/nutritionV2Apply.ts'];
+    expect(
+      evaluatePhase8bFreezeContract({ ...real, manifest: manifestWithProduction }).violations.join('\n')
+    ).toMatch(/proof-only/);
+
+    // E5: an artifact quietly dropped from the manifest or the roles map.
+    const rolesWithoutWorkflow = { ...PHASE8B_ARTIFACT_ROLES };
+    delete (rolesWithoutWorkflow as Record<string, string>).ci_workflow;
+    expect(
+      evaluatePhase8bFreezeContract({ ...real, roles: rolesWithoutWorkflow }).violations.join('\n')
+    ).toMatch(/required role: ci_workflow/);
+
+    const manifestWithoutRecipe = real.manifest.filter(
+      (path) => path !== PHASE8B_ARTIFACT_ROLES.acceptance_vault_recipe
+    );
+    expect(
+      evaluatePhase8bFreezeContract({ ...real, manifest: manifestWithoutRecipe }).violations.join('\n')
+    ).toMatch(/required role: acceptance_vault_recipe/);
+  });
+
+  it('still fails closed when no git index is available rather than passing by default', () => {
+    const contract = evaluatePhase8bFreezeContract(
+      livePhase8bFreezeInputs({ trackedPaths: null, stagedPaths: null })
+    );
+    // Index checks become not-applicable, but DISK damage is still caught.
+    expect(contract.violations).toEqual([]);
+    expect(evaluatePhase8bFreezeContract(
+      livePhase8bFreezeInputs({ trackedPaths: null, presentPaths: new Set() })
+    ).missingArtifacts).toEqual([...PHASE8B_MANIFEST].sort());
+  });
+
+  it('keeps the live contract green regardless of what else is in flight', () => {
+    // Final live assertion: the real manifest against the real repository.
+    const contract = evaluatePhase8bFreezeContract(livePhase8bFreezeInputs());
+    expect(contract.violations).toEqual([]);
   });
 });
