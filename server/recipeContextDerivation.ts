@@ -66,6 +66,42 @@ export type RecipeContextDerivationResult =
   | { readonly ok: false; readonly code: RecipeContextDerivationCode };
 
 /**
+ * Derivation-ONLY entry point (Phase 9B-1).
+ *
+ * Runs the SAME canonical chain as `deriveRecipeContextModelInput`
+ * (adaptRecipe -> extractRecipeContext) and returns the deterministic
+ * derivation ONLY. It deliberately does NOT build an AI-4C request, does NOT
+ * produce an AI-4 `model_input_binding`, and does NOT consume or emit any
+ * AI-4 review/proposal/acceptance state.
+ *
+ * WHY THIS EXISTS: this module is the ONE server owner of the AI-4B extraction
+ * (`tests/security/advancedNutritionAi4bIsolation.test.ts` enforces that only
+ * this file may reach `extractRecipeContext`). A second semantic wire that needs
+ * the same derivation must consume the owner rather than reimplement the chain
+ * or reach past it. Phase 9B-1 is that second consumer: it reuses the
+ * DETERMINISTIC DERIVATION and builds its own distinct materialization and its
+ * own freshness binding, so the two contracts are never conflated.
+ *
+ * Never throws. Every failure is a bounded code, and no failure path can
+ * produce a partial derivation.
+ */
+export function deriveRecipeContextExtractionOnly(input: {
+  readonly recipe: unknown;
+  readonly instructions?: unknown;
+}): { readonly ok: true; readonly extraction: RecipeContextExtraction } | { readonly ok: false; readonly code: 'invalid_recipe' } {
+  const adapted = adaptRecipe(input.recipe);
+  if (adapted.ok === false) return { ok: false, code: 'invalid_recipe' };
+
+  const extracted = extractRecipeContext({
+    recipe: adapted.recipe,
+    instructions: input.instructions,
+  });
+  if (extracted.ok === false) return { ok: false, code: 'invalid_recipe' };
+
+  return { ok: true, extraction: extracted.extraction };
+}
+
+/**
  * Derives the whole-recipe AI-4 context from AUTHORED RECIPE SOURCE DATA.
  *
  * Never throws. Every failure is a bounded code, and no failure path can produce

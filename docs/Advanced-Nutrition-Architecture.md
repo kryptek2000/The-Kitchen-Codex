@@ -12735,3 +12735,78 @@ No file under `src/`, `server/`, or `plugin/` was modified. Phase 8B added only
 proof infrastructure: browser/CDP harness, the browser verifier, the plugin
 isolation CLI, the acceptance fixture, package scripts, the CI workflow, the
 Phase 8B artifact/report modules, and their focused contract tests.
+
+---
+
+## Forward note — Advanced Nutrition as a Shiso capability
+
+**This is a forward-looking note only.** Nothing above this line is historical
+and nothing above this line is changed by it. Advanced Nutrition remains exactly
+as documented and proven in its own phases.
+
+The product direction is now settled: The Kitchen Codex will have **one** AI
+companion, **Shiso** — one conversational surface, one intelligence
+architecture, multiple contextual entry points. The full plan is
+[`Shiso-Architecture-and-Roadmap.md`](./Shiso-Architecture-and-Roadmap.md).
+
+The relationship relevant to this document:
+
+- **Advanced Nutrition is a reusable authoritative capability.** Shiso may
+  invoke it — to report a recipe's nutrition, answer a what-if, or explain a
+  calculation — but Shiso does not reimplement any part of it.
+- **AI semantic reasoning never replaces authority here.** Shiso understanding
+  an ingredient in the context of a recipe is input to resolution. The USDA
+  bundle and matcher remain the sole food-identity authority, mass/portion
+  authority remains deterministic, nutrient calculation remains deterministic,
+  and Apply revalidation and persistence are unchanged. A Shiso-created recipe
+  receives no invented nutrition values; it gets no nutrition at all until
+  Advanced Nutrition computes one deterministically.
+- **The authority boundary is unchanged by the assistant.** Entitlement is still
+  required and still `entitled AND operationally ready`, never OR. AI
+  confidence never overrides deterministic ambiguity, and genuine ambiguity
+  still becomes a user review.
+
+For Phase 9B specifically, the design consequence is narrow: whole-recipe
+semantic understanding should be exposed behind a **clean capability boundary**
+so a future Shiso can reuse it, rather than being inseparable from a single
+modal button. That means reusable intelligence, not a premature assistant
+platform — no Shiso UI, conversation engine, or agent framework is built as part
+of that work.
+
+### Phase 9B-1 — whole-recipe semantic request foundation (forward note)
+
+Phase 9B-1 establishes the request boundary only. It adds no UI, changes no
+provider prompt, and performs no provider call.
+
+**D1 — request versioning is split from response contract versioning.** The
+whole-recipe request has its own wire identity,
+`nutrition_ai_whole_recipe_interpretation_request_v1`. The RESPONSE contract is
+unchanged and unbumped: it remains `nutrition_ai_advanced_interpretation_v1`.
+A request-shape change must not redefine an already-versioned wire, and it does
+not justify bumping a response whose meaning did not change.
+
+**D2 — client-authored source is request input, not authority.** The client may
+submit the current authored recipe source and instructions for an explicit,
+user-initiated resolve. That source is untrusted: bounded, validated,
+re-derived server-side through the canonical owners (`adaptRecipe` ->
+`extractRecipeContext`), and never able to create nutrition authority. The
+client may not supply food identity, food semantics, a context binding, a
+context envelope, target source text, an FDC id, a USDA candidate, grams,
+nutrient values, authority flags, origin verification, or persistence state.
+Those names are refused at the boundary.
+
+**Title and base servings remain withheld** from the model-visible context.
+
+**Freshness binds the whole recipe.** The binding covers exactly the
+model-visible payload plus request identity and target order, so a change to any
+visible ingredient or instruction makes the earlier interpretation stale as a
+whole. Individual rows are not salvaged from a stale interpretation.
+
+**AI-4 is not reused as a wire.** The deterministic derivation machinery is
+reused; AI-4's request materialization and its AI-4E origin receipt are
+deliberately not, because they belong to a different contract and reusing the
+shape would mislabel the evidence.
+
+Nothing in this slice changes matching, ranking, mass, calculation, Apply, or
+persistence. The deterministic USDA matcher remains the sole food-identity
+authority, and the Basic tier gains no provider access.
