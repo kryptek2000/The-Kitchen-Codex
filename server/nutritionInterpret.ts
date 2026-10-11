@@ -39,6 +39,7 @@ import { runWithAiFallback, resolveRoleCandidates } from "./ai/provider.js";
 import { getRegisteredProviders } from "./ai/provider.js";
 import { resolveExecutableTextCandidates } from "./ai/effectiveSelection.js";
 import { normalizeProviderError } from "./ai/providerErrors.js";
+import { resolveThinkingProviderOptions } from "./ai/thinkingPolicy.js";
 import type { AiJsonSchema } from "./ai/types.js";
 import type { SelectionInput } from "./ai/effectiveSelection.js";
 import { logModelAttempt } from "./providerDiagnostics.js";
@@ -241,7 +242,14 @@ async function aiInterpret(
         candidate.provider.generateStructured(buildPrompt(rows), schema, {
           model: candidate.model,
           temperature: 0,
-          providerOptions: { thinkingConfig: { thinkingLevel: "MINIMAL" } },
+          // Phase 9B-P1: the thinking level is MODEL-specific, so it is resolved
+          // from the candidate that is ABOUT TO EXECUTE. Inside the fallback run
+          // this means a fallback candidate gets the configuration IT accepts,
+          // not the one the failed primary would have needed.
+          providerOptions: resolveThinkingProviderOptions(
+            candidate.provider.id,
+            candidate.model
+          ),
         }),
     });
     return result;

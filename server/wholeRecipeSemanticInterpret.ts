@@ -80,6 +80,7 @@
 import { runWithAiFallback } from './ai/providerRegistry.js';
 import { resolveExecutableTextCandidates } from './ai/effectiveSelection.js';
 import { normalizeProviderError } from './ai/providerErrors.js';
+import { resolveThinkingProviderOptions } from './ai/thinkingPolicy.js';
 import { logModelAttempt } from './providerDiagnostics.js';
 import type { AiJsonSchema } from './ai/types.js';
 import type { AiCandidate, RegisteredProvider } from './ai/providerRegistry.js';
@@ -409,7 +410,16 @@ export async function interpretWholeRecipeSemantics(
         candidate.provider.generateStructured(prompt, schema, {
           model: candidate.model,
           temperature: 0,
-          providerOptions: { thinkingConfig: { thinkingLevel: 'MINIMAL' } },
+          // Phase 9B-P1: resolved from the EXECUTING candidate (see
+          // `server/ai/thinkingPolicy.ts`). The 9B-2C smoke proved the primary
+          // Gemini 3.7 Flash candidate rejects a hard-coded `MINIMAL` with HTTP
+          // 400; this keeps the Flash-Lite fallback on `MINIMAL` while giving
+          // the primary the `LOW` it actually supports. Candidate-aware, so a
+          // fallback candidate is configured for ITSELF.
+          providerOptions: resolveThinkingProviderOptions(
+            candidate.provider.id,
+            candidate.model
+          ),
         }),
     });
     raw = outcome.result;
