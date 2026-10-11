@@ -81,6 +81,8 @@ export const MAX_WHOLE_RECIPE_REQUEST_ID_LENGTH = 120;
 export const MAX_WHOLE_RECIPE_TARGET_REF_LENGTH = 200;
 export const MAX_WHOLE_RECIPE_CONTEXT_BYTES = 32 * 1024;
 export const MAX_WHOLE_RECIPE_UNIT_LENGTH = 60;
+/** Server-adapted amount surfaced model-visible (no mass authority). */
+export const MAX_WHOLE_RECIPE_AUTHORED_AMOUNT = 1_000;
 export const MAX_WHOLE_RECIPE_QUANTITY = 1_000_000;
 /** Bounded deep-read limits for untrusted request input. */
 const MAX_INERT_DEPTH = 6;
@@ -150,6 +152,20 @@ export interface WholeRecipeDerivedInstructionEvidence {
 export interface WholeRecipeDerivedTarget {
   readonly line_ref: string;
   readonly source_text: string;
+  /**
+   * Server-adapted structured authored QUANTITY and UNIT (F-QUANT).
+   *
+   * These were accepted on the request in 9B-1 but were NOT model-visible, so
+   * `2 cups flour` and `5 cups flour` produced identical model-visible context
+   * and an identical binding. Once the model performs semantic reasoning that
+   * is unacceptable: the quantity changes what the recipe MEANS.
+   *
+   * They are surfaced as bounded DATA from the server adaptation. They are NOT
+   * folded into `source_text`, NOT injected into deterministic matcher anchors,
+   * and they do NOT alter `line_ref` identity. They carry no mass authority.
+   */
+  readonly authored_amount?: number;
+  readonly authored_unit?: string;
   /** Deterministic food-phrase extraction. Never a model output, never authority. */
   readonly food_semantics?: string;
   /** Deterministic instruction evidence naming THIS line. */
@@ -507,6 +523,8 @@ export function buildWholeRecipeDerivedContext(input: {
   readonly derivedRows: ReadonlyArray<{
     readonly line_ref: string;
     readonly source_text: string;
+    readonly authored_amount?: number;
+    readonly authored_unit?: string;
     readonly food_semantics?: string;
     readonly instruction_evidence: ReadonlyArray<WholeRecipeDerivedInstructionEvidence>;
     readonly issue_kind?: AiResolutionIssueKind;
@@ -522,6 +540,8 @@ export function buildWholeRecipeDerivedContext(input: {
         Object.freeze({
           line_ref: row.line_ref,
           source_text: row.source_text,
+          ...(row.authored_amount !== undefined ? { authored_amount: row.authored_amount } : {}),
+          ...(row.authored_unit !== undefined ? { authored_unit: row.authored_unit } : {}),
           ...(row.food_semantics !== undefined ? { food_semantics: row.food_semantics } : {}),
           instruction_evidence: Object.freeze(
             row.instruction_evidence.map((evidence) => Object.freeze({ ...evidence })),

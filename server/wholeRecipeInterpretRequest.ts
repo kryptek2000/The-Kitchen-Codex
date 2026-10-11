@@ -105,6 +105,23 @@ export function materializeWholeRecipeInterpretationContext(
   const derivedByRef = new Map(
     extracted.extraction.envelope.targets.map((target) => [target.line_ref, target]),
   );
+  // Server-adapted structured quantity/unit, keyed by the SAME derived line ref.
+  // Sourced from the server adaptation (which validated the authored source),
+  // never from client-supplied semantics.
+  const authoredByRef = new Map(
+    extracted.adapted.adapted.map((row) => [
+      row.line_ref,
+      {
+        amount: typeof row.ingredient.amount === 'number' && Number.isFinite(row.ingredient.amount)
+          ? row.ingredient.amount
+          : undefined,
+        unit: typeof row.ingredient.unit === 'string' && row.ingredient.unit.trim().length > 0
+          ? row.ingredient.unit.trim().slice(0, 60)
+          : undefined,
+      },
+    ]),
+  );
+
   const issueKindByRef = new Map<string, AiResolutionIssueKind>(
     request.targets.map((target) => [target.line_ref, target.issue_kind as AiResolutionIssueKind]),
   );
@@ -112,6 +129,8 @@ export function materializeWholeRecipeInterpretationContext(
   const derivedRows: Array<{
     line_ref: string;
     source_text: string;
+    authored_amount?: number;
+    authored_unit?: string;
     food_semantics?: string;
     instruction_evidence: Array<{ instruction_line_ref: string; evidence: string }>;
     issue_kind?: AiResolutionIssueKind;
@@ -123,10 +142,13 @@ export function materializeWholeRecipeInterpretationContext(
     // a row, and cannot silently resolve against something it does not own.
     if (derived === undefined) return { ok: false, code: 'unknown_line_ref' };
 
+    const authored = authoredByRef.get(derived.line_ref);
     const issueKind = issueKindByRef.get(target.line_ref);
     derivedRows.push({
       line_ref: derived.line_ref,
       source_text: derived.source_text,
+      ...(authored?.amount !== undefined ? { authored_amount: authored.amount } : {}),
+      ...(authored?.unit !== undefined ? { authored_unit: authored.unit } : {}),
       ...(derived.food_semantics !== undefined ? { food_semantics: derived.food_semantics } : {}),
       instruction_evidence: extracted.extraction.signals
         .filter((signal) => signal.subjects.includes(derived.line_ref))

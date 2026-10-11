@@ -475,3 +475,77 @@ describe('9B-1 — sanitizer and bounds', () => {
     }
   });
 });
+// ---------------------------------------------------------------------------
+// §4 F-QUANT — structured authored quantity/unit must be model-visible
+// ---------------------------------------------------------------------------
+
+describe('9B-2 §4 — F-QUANT: authored quantity/unit is model-visible and bound', () => {
+  function quantRecipe(name: string, amount: number, unit: string) {
+    return { ingredients: [{ name, amount, unit }] };
+  }
+
+  function derived(name: string, amount?: number, unit?: string) {
+    const recipe =
+      amount === undefined && unit === undefined
+        ? { ingredients: [{ name }] }
+        : quantRecipe(name, amount as number, unit as string);
+    const result = materializeWholeRecipeInterpretationContext(
+      request({ recipe, targets: derivedRefs(recipe).map((line_ref) => ({ line_ref })) })
+    );
+    return ok(result).context;
+  }
+
+  it('A — 2 cups flour and 5 cups flour are DIFFERENT model-visible context', () => {
+    const two = derived('flour', 2, 'cup');
+    const five = derived('flour', 5, 'cup');
+    expect(two.provider_context.targets[0].authored_amount).toBe(2);
+    expect(five.provider_context.targets[0].authored_amount).toBe(5);
+    expect(JSON.stringify(two.provider_context)).not.toBe(JSON.stringify(five.provider_context));
+  });
+
+  it('A — 2 cups flour and 5 cups flour are DIFFERENT bindings', () => {
+    expect(derived('flour', 2, 'cup').context_binding).not.toBe(derived('flour', 5, 'cup').context_binding);
+  });
+
+  it('B — 4 cloves garlic and 4 bulbs garlic are DIFFERENT bindings', () => {
+    expect(derived('garlic', 4, 'clove').context_binding).not.toBe(
+      derived('garlic', 4, 'bulb').context_binding
+    );
+  });
+
+  it('C — omitting amount/unit changes the model-visible context where supplied', () => {
+    const omitted = derived('flour');
+    const supplied = derived('flour', 2, 'cup');
+    expect(omitted.provider_context.targets[0].authored_amount).toBeUndefined();
+    expect(supplied.provider_context.targets[0].authored_amount).toBe(2);
+    expect(omitted.context_binding).not.toBe(supplied.context_binding);
+  });
+
+  it('D — quantity is carried as bounded recipe DATA, never as food identity', () => {
+    const context = derived('flour', 2, 'cup');
+    const target = context.provider_context.targets[0];
+    // Identity wording is untouched; quantity lives in its own field.
+    expect(target.source_text).toBe('flour');
+    expect(target.food_semantics).toBe('flour');
+    expect(target.source_text).not.toMatch(/2|cup/);
+    expect(target.authored_unit).toBe('cup');
+  });
+
+  it('E — line_ref identity is deliberately UNCHANGED by the quantity repair', () => {
+    // §4: do not alter line_ref identity merely to make quantity visible.
+    const two = derived('flour', 2, 'cup');
+    const five = derived('flour', 5, 'cup');
+    expect(two.provider_context.targets[0].line_ref).toBe(five.provider_context.targets[0].line_ref);
+  });
+
+  it('F — quantity carries NO mass or nutrient authority', () => {
+    const serialized = JSON.stringify(derived('flour', 2, 'cup').provider_context);
+    for (const forbidden of ['grams', 'g ', 'calories', 'protein', 'mass', 'density']) {
+      expect(serialized, forbidden).not.toMatch(new RegExp(`"${forbidden.trim()}"`));
+    }
+  });
+
+  it('G — amount changes go stale exactly like an ingredient change', () => {
+    expect(derived('flour', 2, 'cup').context_binding).not.toBe(derived('flour', 2, 'tbsp').context_binding);
+  });
+});

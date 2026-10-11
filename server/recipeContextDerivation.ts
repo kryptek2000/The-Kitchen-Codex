@@ -88,7 +88,7 @@ export type RecipeContextDerivationResult =
 export function deriveRecipeContextExtractionOnly(input: {
   readonly recipe: unknown;
   readonly instructions?: unknown;
-}): { readonly ok: true; readonly extraction: RecipeContextExtraction } | { readonly ok: false; readonly code: 'invalid_recipe' } {
+}): { readonly ok: true; readonly adapted: AdaptedRecipe; readonly extraction: RecipeContextExtraction } | { readonly ok: false; readonly code: 'invalid_recipe' } {
   const adapted = adaptRecipe(input.recipe);
   if (adapted.ok === false) return { ok: false, code: 'invalid_recipe' };
 
@@ -98,7 +98,7 @@ export function deriveRecipeContextExtractionOnly(input: {
   });
   if (extracted.ok === false) return { ok: false, code: 'invalid_recipe' };
 
-  return { ok: true, extraction: extracted.extraction };
+  return { ok: true, adapted: adapted.recipe, extraction: extracted.extraction };
 }
 
 /**
