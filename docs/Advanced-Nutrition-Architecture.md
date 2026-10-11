@@ -13163,3 +13163,79 @@ and no nutrition authority anywhere.
 preserved. A pathological recipe whose bounded serialized context exceeds the
 byte ceiling may still fail with the existing bounded `request_too_large`; the
 byte limit was not inflated without evidence.
+
+### Phase 9B-2C — whole-recipe semantic route + AI-5 entitlement gate (forward note)
+
+Phase 9B-2C is **server-only transport**. It adds no UI, no client call, no
+matcher handoff and no Shiso surface, and nothing above this line is changed by
+it.
+
+**The canonical route** is `POST /api/nutrition/interpret-whole-recipe`. It is a
+new, dedicated transport; it does not replace or reinterpret the historical
+`/api/nutrition/interpret-ingredients`, `/api/nutrition/resolve-ingredients`,
+`/api/nutrition/recipe-context`, or any other existing route.
+
+**Entitlement uses the EXISTING `ai_interpretation` feature.** No fifth product
+feature was added, `NUTRITION_PRODUCT_AI_FEATURES` is still exactly the closed
+four-item vocabulary, and `NUTRITION_PRODUCT_ACCESS_VERSION` remains
+`nutrition_product_access_v1`. Phase 9B-2C is another transport for AI semantic
+interpretation under the same product entitlement, and one product feature may
+truthfully gate more than one HTTP route. The gated-route count moved from six to
+seven; `/api/estimate-nutrition` remains outside AI-5 gating exactly as before.
+
+**Middleware order is mandatory and structural:**
+
+```
+requireAiAccessToken
+  -> requireNutritionProductFeature(authority, "ai_interpretation")
+  -> textPricingGuard
+  -> nutritionInterpretRateLimiter        // the SHARED semantic limiter
+  -> route handler
+```
+
+Authentication runs first, so an unauthenticated caller receives the bounded 401
+with ZERO product-authority lookups and zero AI work. The product gate runs
+before pricing, rate limiting, provider selection, credential resolution and
+model execution, so a Basic caller — even one posting a malformed recipe — stops
+at product denial and never reveals request-validation behaviour. The new route
+reuses `nutritionInterpretRateLimiter` rather than adding a second semantic
+bucket, so route-switching cannot trivially double the semantic AI quota.
+
+**The route is a transport; every semantic boundary stays in the operation.** The
+handler passes the RAW request body straight into the released internal
+operation. It deliberately does NOT rebuild a narrowed `{recipe, instructions,
+targets}` object: that would silently DISCARD hostile `context_binding`,
+`provider_context`, `operation_id`, `origin_receipt`, `fdc_id` and similar
+fields, turning a required REFUSAL into a silent success. The only server option
+the route may supply is the strictly-parsed, non-secret provider selection from
+`parseTextSelectionHeader(req.headers)`; the internal `registry`, `candidates`
+and `authority` test seams remain internal and are not reachable over HTTP,
+including through query, header or cookie channels.
+
+**Success response is a closed, field-by-field projection**: `ok`,
+`contract_version`, `request_version`, `request_id`, `context_binding`,
+`semantic_response`, `provider_id`, `model_id`, `operation_id`, `origin_receipt`,
+`aiAttempted`. A broad spread would leak any future internal field, so the wire
+is closed by construction. `provider_id`/`model_id` are the ACTUAL successful
+execution identity, not the requested or preferred candidate. Every success
+carries the `wsem1.<mac>` semantic-origin receipt minted by the operation; the
+route creates no second receipt and never uses AI-4E `rctx1`.
+
+**Failures collapse into two bounded classes.** Internal `invalid_request`
+becomes HTTP 400 `INVALID_WHOLE_RECIPE_SEMANTIC_REQUEST` with
+`aiAttempted: false`; every execution-side failure (`unavailable`,
+`provider_error`, `invalid_response`, `reconciliation_failed`,
+`origin_proof_failed`) becomes one generic HTTP 503
+`WHOLE_RECIPE_SEMANTIC_UNAVAILABLE` that preserves `aiAttempted` but reveals no
+provider class, failed candidate, reconciliation internals or cryptographic
+detail. An unexpected throw is a bounded 500 with a generic body. Responses set
+`Cache-Control: no-store`, because the body carries freshness-bound semantics,
+execution identity and an origin receipt.
+
+**Still no nutrition authority and no matcher consumer.** The route returns inert
+authenticated semantics only. It grants no FDC identity, USDA authority, grams,
+density, nutrients, Daily Values, Apply or persistence, and no AI search phrase
+reaches deterministic matching through it. Semantic-origin verification,
+current-context verification, the deterministic matcher handoff and client/UI
+integration all remain **Phase 9B-3**. Phase 9B-2C performs semantic-origin proof
+ISSUANCE and transport only.

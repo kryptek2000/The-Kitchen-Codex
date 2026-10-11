@@ -12,6 +12,7 @@ import { grabRecipeFromWeb } from "./recipeGrabber.js";
 import { estimateRecipeNutrition } from "./nutritionEstimator.js";
 import { resolveIngredientFoodsOnServer } from "./nutritionResolve.js";
 import { interpretIngredientsOnServer } from "./nutritionInterpret.js";
+import { interpretWholeRecipeSemantics } from "./wholeRecipeSemanticInterpret.js";
 import { planIngredientsOnServer } from "./nutritionPlan.js";
 import { interpretRecipeContextOnServer } from "./nutritionContext.js";
 import { reconcileRecipeContextOnServer } from "./recipeContextReconcile.js";
@@ -686,7 +687,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // collapsing them into one generic "not configured" message.
   //
   // THIS ROUTE AUTHORIZES NOTHING.
-  //   * It is NOT consulted by any of the six AI-5B gates below. Those gates ask the
+  //   * It is NOT consulted by any of the seven AI-5B gates below. Those gates ask the
   //     same server-owned AI-5E authority themselves and refuse work independently.
   //   * It mints no receipt, no token, no capability and no signature, and it
   //     never appears in any AI request path.
@@ -862,6 +863,123 @@ export function createApp(opts: CreateAppOptions): express.Express {
       return res.status(500).json({
         ok: false,
         error: "An unexpected error occurred during ingredient interpretation.",
+      });
+    }
+  });
+
+  // Phase 9B-2C — TRUE WHOLE-RECIPE AI SEMANTIC INTERPRETATION transport.
+  //
+  // This route is a TRANSPORT ONLY. Every semantic security boundary lives in the
+  // internal operation (`server/wholeRecipeSemanticInterpret.ts`):
+  //   closed request sanitization -> server-derived whole-recipe context (F-02)
+  //   -> process-scoped semantic authority (F-05) -> server-minted operation id
+  //   (F-04) -> ONE provider fallback chain -> strict semantic sanitizer ->
+  //   exact target reconciliation (F-03) -> canonical target ordering ->
+  //   authenticated `wsem1` semantic-origin receipt.
+  // The route deliberately does NOT reproduce any of that, and it does NOT feed
+  // the result to the deterministic matcher: the response is INERT authenticated
+  // semantics. Matcher consumption, verification and client/UI wiring are 9B-3.
+  //
+  // AI-5B: `ai_interpretation`. This is another TRANSPORT for AI semantic
+  // interpretation under the EXISTING product entitlement — the closed
+  // four-feature vocabulary and `nutrition_product_access_v1` are unchanged, and
+  // one product feature truthfully gates more than one HTTP route. Entitlement
+  // permits an ATTEMPT only: it grants no authority over FDC identity, grams,
+  // nutrients, Apply or persistence.
+  //
+  // MIDDLEWARE ORDER IS MANDATORY and matches the historical semantic route:
+  //   auth -> product feature gate -> pricing guard -> SHARED semantic limiter.
+  // The product gate runs before pricing, rate limiting, provider selection,
+  // credential resolution and model execution, so a Basic caller learns nothing
+  // about request validation and consumes no AI budget. Reusing
+  // `nutritionInterpretRateLimiter` keeps both semantic transports in ONE
+  // cost/rate category so route-switching cannot double the quota.
+  app.post("/api/nutrition/interpret-whole-recipe", requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccessAuthority, "ai_interpretation"), textPricingGuard, nutritionInterpretRateLimiter, async (req, res) => {
+    const clientIp = getClientIp(req);
+
+    // The response carries freshness-bound semantics, execution identity and an
+    // origin receipt. It must never become reusable HTTP cache state.
+    res.setHeader("Cache-Control", "no-store");
+
+    try {
+      // F-02 / §14: the route NEVER derives or trusts context. It passes the RAW
+      // body straight through so the operation's CLOSED request sanitizer can SEE
+      // and REFUSE forbidden or unknown fields. Rebuilding only recipe /
+      // instructions / targets here would silently DISCARD hostile
+      // `context_binding`, `provider_context`, `operation_id`, `origin_receipt`,
+      // fdc_id, ... — turning a refusal into a silent success.
+      const userSelection = parseTextSelectionHeader(req.headers);
+      // The ONLY server option the route may supply is the strictly-parsed,
+      // non-secret provider selection. The internal `registry` / `candidates` /
+      // `authority` test seams are NOT reachable from HTTP.
+      const result = await interpretWholeRecipeSemantics(req.body, { userSelection });
+
+      if (result.ok !== true) {
+        const failure = result as {
+          readonly ok: false;
+          readonly code: string;
+          readonly aiAttempted: boolean;
+        };
+        // A client-authored request the operation refuses is a 400. Every
+        // execution-side failure collapses into ONE generic service class so the
+        // route is not an oracle for which internal gate failed.
+        if (failure.code === "invalid_request") {
+          return res.status(400).json({
+            ok: false,
+            code: "INVALID_WHOLE_RECIPE_SEMANTIC_REQUEST",
+            error: "Invalid whole-recipe semantic interpretation request.",
+            aiAttempted: false,
+          });
+        }
+        // Semantic interpretation is an optional assistant: an unavailable or
+        // failed interpreter degrades to the deterministic/manual workflow.
+        return res.status(503).json({
+          ok: false,
+          code: "WHOLE_RECIPE_SEMANTIC_UNAVAILABLE",
+          error:
+            "AI whole-recipe interpretation is unavailable. You can continue with the deterministic analyzer and manual review.",
+          aiAttempted: failure.aiAttempted === true,
+        });
+      }
+
+      const accepted = result as {
+        readonly ok: true;
+        readonly contract_version: string;
+        readonly request_version: string;
+        readonly request_id: string;
+        readonly context_binding: string;
+        readonly semantic_response: ReadonlyArray<unknown>;
+        readonly provider_id: string;
+        readonly model_id: string;
+        readonly operation_id: string;
+        readonly origin_receipt: string;
+        readonly aiAttempted: true;
+      };
+
+      // Field-by-field projection. A spread would leak any future internal field
+      // the operation grows, so the response wire is CLOSED by construction.
+      return res.status(200).json({
+        ok: true,
+        contract_version: accepted.contract_version,
+        request_version: accepted.request_version,
+        request_id: accepted.request_id,
+        context_binding: accepted.context_binding,
+        semantic_response: accepted.semantic_response,
+        provider_id: accepted.provider_id,
+        model_id: accepted.model_id,
+        operation_id: accepted.operation_id,
+        origin_receipt: accepted.origin_receipt,
+        aiAttempted: true,
+      });
+    } catch {
+      // Final boundary. The operation normalizes ordinary failures itself; an
+      // UNEXPECTED throw is a generic bounded 500. No raw error text, stack,
+      // provider payload, credential or request body is ever echoed.
+      return res.status(500).json({
+        ok: false,
+        code: "WHOLE_RECIPE_SEMANTIC_INTERNAL_ERROR",
+        error: "An unexpected error occurred during whole-recipe semantic interpretation.",
+        aiAttempted: false,
       });
     }
   });

@@ -11,7 +11,7 @@
  * AI-5E is an ABSTRACTION phase, not a product-policy change. It creates the ONE
  * server-owned socket that answers the question "where does authoritative product
  * access come from?", so that replacing the CURRENT deployment-scoped source with a
- * future authenticated ACCOUNT source later does NOT require redesigning the six
+ * future authenticated ACCOUNT source later does NOT require redesigning the seven
  * AI-5B gates or the AI-5C status route a second time.
  *
  * ---------------------------------------------------------------------------
@@ -286,7 +286,7 @@ async function consultNutritionProductAccessAuthority(
 /**
  * The ONE authority invocation boundary.
  *
- * Every product-access question — the six AI-5B gates and the AI-5C status route —
+ * Every product-access question — the seven AI-5B gates and the AI-5C status route —
  * goes through this function, exactly once per request. It:
  *
  *   1. refuses an absent, non-object or `resolve`-less authority;
@@ -333,7 +333,7 @@ export async function invokeNutritionProductAccessAuthority(
  *
  *   - the raw env value is NEVER reparsed per request;
  *   - changing `process.env` after construction cannot change this authority;
- *   - the six gates and the status route cannot disagree, because they observe the
+ *   - the seven gates and the status route cannot disagree, because they observe the
  *     identical immutable decision;
  *   - there is no I/O, no provider work, no credential work, no billing work and no
  *     persistence — the decision lives in server process memory only.

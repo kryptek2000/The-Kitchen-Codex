@@ -17,7 +17,7 @@
  *      before D1 currentness, so an unauthorized caller gets no receipt oracle;
  *   8. FORGED CLIENT INPUT has zero authority and cannot SELECT an authority;
  *   9. DEFAULT `createApp()` is canonical Basic, and one deployment authority governs
- *      the status route and all six gates identically.
+ *      the status route and all seven gates identically.
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import http from 'http';
@@ -158,10 +158,19 @@ const AUTHORED_RECIPE = {
 };
 const INSTRUCTIONS = [{ text: 'Garnish with parsley' }];
 
-/** The EXACT six AI-5B gates and nothing else. */
+/**
+ * The EXACT seven AI-5B gates and nothing else.
+ *
+ * Phase 9B-2C added `/api/nutrition/interpret-whole-recipe` as a SEVENTH
+ * gated route — another transport for AI semantic interpretation under the
+ * EXISTING `ai_interpretation` product feature. The four-feature product
+ * vocabulary and `nutrition_product_access_v1` are unchanged; one product
+ * feature may truthfully gate more than one HTTP route.
+ */
 const GATED_ROUTES: ReadonlyArray<readonly [string, string]> = [
   ['/api/nutrition/resolve-ingredients', 'ai_interpretation'],
   ['/api/nutrition/interpret-ingredients', 'ai_interpretation'],
+  ['/api/nutrition/interpret-whole-recipe', 'ai_interpretation'],
   ['/api/nutrition/plan-ingredients', 'ai_candidate_orchestration'],
   ['/api/nutrition/estimate-mass', 'ai_bounded_mass_estimation'],
   ['/api/nutrition/recipe-context', 'ai_recipe_context_review'],
@@ -174,6 +183,15 @@ function requestBody(path: string, overrides: Record<string, unknown> = {}): unk
       return { ingredients: INGREDIENTS, ...overrides };
     case '/api/nutrition/interpret-ingredients':
       return { ingredients: ROWS, ...overrides };
+    case '/api/nutrition/interpret-whole-recipe':
+      return {
+        request_version: 'nutrition_ai_whole_recipe_interpretation_request_v1',
+        request_id: 'ai5e-whole-recipe',
+        recipe: AUTHORED_RECIPE,
+        instructions: INSTRUCTIONS,
+        targets: [],
+        ...overrides,
+      };
     case '/api/nutrition/plan-ingredients':
       return {
         request_version: 'nutrition_ai_advanced_plan_request_v1',
@@ -656,8 +674,8 @@ describe('AI-5E — the status route under a resolved authority', () => {
 // 5. THE SIX GATES
 // ===========================================================================
 
-describe('AI-5E — the six gates follow the authority decision', () => {
-  it('Basic denies all six with the bounded 403 and ZERO provider work', async () => {
+describe('AI-5E — the seven gates follow the authority decision', () => {
+  it('Basic denies all seven with the bounded 403 and ZERO provider work', async () => {
     const app = await startApp({ kind: 'deployment', tier: 'basic' });
     try {
       for (const [path] of GATED_ROUTES) {
@@ -669,7 +687,7 @@ describe('AI-5E — the six gates follow the authority decision', () => {
     }
   });
 
-  it('an UNAVAILABLE authority fails all six closed with the bounded 503', async () => {
+  it('an UNAVAILABLE authority fails all seven closed with the bounded 503', async () => {
     for (const behaviour of ['throw', 'reject', 'null', 'hand-authored', 'unknown-status'] as const) {
       const app = await startApp({ kind: 'broken', behaviour, count: true });
       try {
@@ -698,7 +716,7 @@ describe('AI-5E — the six gates follow the authority decision', () => {
     }
   });
 
-  it('AI Advanced passes the product gate on all six to their EXISTING downstream semantics', async () => {
+  it('AI Advanced passes the product gate on all seven to their EXISTING downstream semantics', async () => {
     const app = await startApp({ kind: 'deployment', tier: 'ai_advanced' });
     try {
       for (const [path] of GATED_ROUTES) {
@@ -712,11 +730,14 @@ describe('AI-5E — the six gates follow the authority decision', () => {
     }
   });
 
-  it('there is no SEVENTH gate: the historical estimate-nutrition route stays outside', async () => {
+  it('there is no EIGHTH gate: the historical estimate-nutrition route stays outside', async () => {
     const gateCalls = [...APP_SOURCE.matchAll(/requireNutritionProductFeature\([^)]*\)/g)].map(
       (m) => m[0],
     );
-    expect(gateCalls).toHaveLength(6);
+    // Seven gated routes after 9B-2C, from the SAME closed four-feature
+    // vocabulary: the new whole-recipe route is another `ai_interpretation`
+    // transport, not a fifth feature.
+    expect(gateCalls).toHaveLength(7);
     for (const [path, feature] of GATED_ROUTES) {
       expect(
         APP_SOURCE.includes(

@@ -48,7 +48,7 @@
  * built from the non-secret environment variable `KITCHEN_CODEX_NUTRITION_PRODUCT_TIER`
  * (`server/nutritionProductAccessAuthority.ts`). AI-5E moved the seam from a raw
  * injected value to that authority object, so the day authenticated per-user
- * entitlement exists, the six gates and the status route below do not change.
+ * entitlement exists, the seven gates and the status route below do not change.
  *
  * This is NOT presented as per-user hosted entitlement. Identity is NOT inferred from an
  * IP address, from `AI_ENDPOINT_TOKEN`, from browser state, from Provider Settings, from
@@ -114,7 +114,7 @@ export const NUTRITION_AI_NOT_ENTITLED_CODE = "NUTRITION_AI_NOT_ENTITLED";
  * spelling of that route path.
  *
  * The route is INFORMATIONAL ONLY. It authorizes nothing, mints no receipt, and is
- * never consulted by any AI-5B gate: the six authoritative gates and this endpoint
+ * never consulted by any AI-5B gate: the seven authoritative gates and this endpoint
  * each resolve the SAME server-owned authority exactly once per request, and only the
  * gates refuse work.
  */
