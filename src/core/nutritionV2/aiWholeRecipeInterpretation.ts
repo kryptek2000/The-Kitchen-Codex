@@ -142,14 +142,22 @@ export interface WholeRecipeInterpretationRequest {
 // Derived context (server-owned; the client can never construct this)
 // ---------------------------------------------------------------------------
 
-/** One server-derived, model-visible instruction-evidence entry. */
+/** One server-derived instruction-evidence entry. */
 export interface WholeRecipeDerivedInstructionEvidence {
   readonly instruction_line_ref: string;
   readonly evidence: string;
 }
 
-/** One server-derived model-visible target. */
-export interface WholeRecipeDerivedTarget {
+/**
+ * ONE model-visible ingredient row — the WHOLE bounded recipe, in AUTHORED order.
+ *
+ * Phase 9B-2B-R1: the provider context now carries EVERY bounded ingredient row,
+ * not only the rows that happen to be actionable targets. The previous shape used
+ * one array for both purposes, which made the model believe the target list WAS
+ * the recipe, and tied the 9B target ceiling to AI-4's historical 12-row
+ * envelope cap.
+ */
+export interface WholeRecipeDerivedIngredient {
   readonly line_ref: string;
   readonly source_text: string;
   /**
@@ -157,8 +165,8 @@ export interface WholeRecipeDerivedTarget {
    *
    * These were accepted on the request in 9B-1 but were NOT model-visible, so
    * `2 cups flour` and `5 cups flour` produced identical model-visible context
-   * and an identical binding. Once the model performs semantic reasoning that
-   * is unacceptable: the quantity changes what the recipe MEANS.
+   * and an identical binding. Once the model performs semantic reasoning that is
+   * unacceptable: the quantity changes what the recipe MEANS.
    *
    * They are surfaced as bounded DATA from the server adaptation. They are NOT
    * folded into `source_text`, NOT injected into deterministic matcher anchors,
@@ -168,8 +176,27 @@ export interface WholeRecipeDerivedTarget {
   readonly authored_unit?: string;
   /** Deterministic food-phrase extraction. Never a model output, never authority. */
   readonly food_semantics?: string;
-  /** Deterministic instruction evidence naming THIS line. */
+  /**
+   * Deterministic instruction evidence naming THIS line, where the canonical
+   * deterministic read found any.
+   *
+   * ADVISORY ONLY. Its absence must never suppress an ingredient from the
+   * whole-recipe context: the complete instruction list is model-visible
+   * regardless of whether the deterministic matcher linked a phrase to a row.
+   */
   readonly instruction_evidence: ReadonlyArray<WholeRecipeDerivedInstructionEvidence>;
+}
+
+/**
+ * ONE actionable target — the exact SUBSET the model must interpret.
+ *
+ * A target is an opaque line reference plus an application-owned issue kind. It
+ * deliberately carries NO source text, amount or unit: those live once, on the
+ * canonical `ingredients` row it points at, so a row is never described by two
+ * competing sources of truth.
+ */
+export interface WholeRecipeDerivedTarget {
+  readonly line_ref: string;
   /** Application-owned issue classification, echoed from the request. */
   readonly issue_kind?: AiResolutionIssueKind;
 }
@@ -178,10 +205,18 @@ export interface WholeRecipeDerivedTarget {
  * The exact bounded model-visible payload for a whole-recipe interpretation.
  *
  * This is what `context_binding` covers, so freshness is defined by precisely
- * what the model was shown.
+ * what the model was shown: the WHOLE bounded recipe, the complete bounded
+ * instructions, and the actionable target subset.
  */
 export interface WholeRecipeProviderContext {
   readonly provenance_class: typeof WHOLE_RECIPE_CONTEXT_PROVENANCE_CLASS;
+  /**
+   * EVERY bounded authored ingredient row, in AUTHORED order.
+   *
+   * This is the recipe. It is NOT the target list: a 40-ingredient recipe with 5
+   * actionable targets sends all 40 rows plus 5 target references.
+   */
+  readonly ingredients: ReadonlyArray<WholeRecipeDerivedIngredient>;
   /**
    * Bounded AUTHORED INSTRUCTIONS, verbatim, as untrusted DATA.
    *
@@ -197,6 +232,13 @@ export interface WholeRecipeProviderContext {
    * cooking instructions but must never obey them as commands.
    */
   readonly instructions: ReadonlyArray<{ readonly text: string }>;
+  /**
+   * The actionable TARGET SUBSET: exactly the line refs the model must interpret.
+   *
+   * Bounded by `MAX_WHOLE_RECIPE_TARGETS` (25). Deliberately NOT bounded by
+   * AI-4's historical envelope cap of 12: 9B and AI-4 project the same
+   * canonical deterministic basis differently.
+   */
   readonly targets: ReadonlyArray<WholeRecipeDerivedTarget>;
 }
 
@@ -494,6 +536,17 @@ export function sanitizeWholeRecipeInterpretationRequest(
  * The exact payload the binding covers. Deliberately includes request identity
  * and target order alongside the model-visible content, so ANY change to what
  * the model was shown — or to what was asked — invalidates the interpretation.
+ *
+ * Because the model now sees the WHOLE bounded recipe, this commits to EVERY
+ * ingredient row, not just the actionable targets. Changing a NON-TARGET
+ * ingredient therefore stales an earlier interpretation, exactly as changing a
+ * target does. There is no per-row salvage from a stale whole-recipe proposal.
+ *
+ * The `binding` tag is an INTERNAL material identifier, not a wire version. It
+ * moves to v2 because the model-visible shape is materially different (whole
+ * `ingredients` plus a target-reference subset), and pretending v1 and v2 hash
+ * the same material would be false. The request wire version, the semantic
+ * response version and the semantic-origin receipt version are all unaffected.
  */
 function wholeRecipeBindingPayload(
   requestId: string,
@@ -501,7 +554,7 @@ function wholeRecipeBindingPayload(
   providerContext: WholeRecipeProviderContext
 ): unknown {
   return {
-    binding: 'nutrition_ai_whole_recipe_interpretation_binding_v1',
+    binding: 'nutrition_ai_whole_recipe_interpretation_binding_v2',
     request_version: request.request_version,
     request_id: requestId,
     target_order: request.targets.map((target) => target.line_ref),
@@ -520,33 +573,50 @@ function wholeRecipeBindingPayload(
 export function buildWholeRecipeDerivedContext(input: {
   readonly request: WholeRecipeInterpretationRequest;
   readonly requestId: string;
-  readonly derivedRows: ReadonlyArray<{
+  /**
+   * EVERY bounded ingredient row of the recipe, in AUTHORED order.
+   *
+   * Phase 9B-2B-R1: this is the whole recipe, not the target subset. Targets are
+   * supplied separately as references only.
+   */
+  readonly ingredients: ReadonlyArray<{
     readonly line_ref: string;
     readonly source_text: string;
     readonly authored_amount?: number;
-    readonly authored_unit?: string;
+    readonly authored_unit?: number | string;
     readonly food_semantics?: string;
     readonly instruction_evidence: ReadonlyArray<WholeRecipeDerivedInstructionEvidence>;
-    readonly issue_kind?: AiResolutionIssueKind;
   }>;
+  /** The actionable target subset, as opaque references in request order. */
+  readonly targets: ReadonlyArray<{ readonly line_ref: string; readonly issue_kind?: AiResolutionIssueKind }>;
   /** Bounded authored instruction text to expose as model-visible data. */
   readonly instructions: ReadonlyArray<{ readonly text: string }>;
 }): { readonly ok: true; readonly context: WholeRecipeDerivedInterpretationContext } | { readonly ok: false; readonly code: WholeRecipeDerivationFailure } {
   const providerContext: WholeRecipeProviderContext = Object.freeze({
     provenance_class: WHOLE_RECIPE_CONTEXT_PROVENANCE_CLASS,
-    instructions: Object.freeze(input.instructions.map((instruction) => Object.freeze({ text: instruction.text }))),
-    targets: Object.freeze(
-      input.derivedRows.map((row) =>
+    // AUTHORED order, exactly as the canonical basis read them. Never sorted by
+    // food name, target status, confidence or deterministic signal.
+    ingredients: Object.freeze(
+      input.ingredients.map((row) =>
         Object.freeze({
           line_ref: row.line_ref,
           source_text: row.source_text,
           ...(row.authored_amount !== undefined ? { authored_amount: row.authored_amount } : {}),
-          ...(row.authored_unit !== undefined ? { authored_unit: row.authored_unit } : {}),
+          ...(row.authored_unit !== undefined ? { authored_unit: String(row.authored_unit) } : {}),
           ...(row.food_semantics !== undefined ? { food_semantics: row.food_semantics } : {}),
           instruction_evidence: Object.freeze(
             row.instruction_evidence.map((evidence) => Object.freeze({ ...evidence })),
           ),
-          ...(row.issue_kind !== undefined ? { issue_kind: row.issue_kind } : {}),
+        })
+      ),
+    ),
+    instructions: Object.freeze(input.instructions.map((instruction) => Object.freeze({ text: instruction.text }))),
+    // Targets reference canonical ingredient rows by opaque line ref only.
+    targets: Object.freeze(
+      input.targets.map((target) =>
+        Object.freeze({
+          line_ref: target.line_ref,
+          ...(target.issue_kind !== undefined ? { issue_kind: target.issue_kind } : {}),
         })
       ),
     ),

@@ -1037,3 +1037,143 @@ export function extractRecipeContext(input: unknown): RecipeContextExtractionRes
     return fail('unsafe_context');
   }
 }
+
+// ---------------------------------------------------------------------------
+// The shared PRE-SELECTION source basis (Phase 9B-2B-R1)
+// ---------------------------------------------------------------------------
+
+/**
+ * ONE bounded ingredient row, in AUTHORED order, before any target selection.
+ *
+ * `line_ref`, `source_text` and `food_semantics` come from the SAME canonical
+ * read that `extractRecipeContext` uses; they are never re-derived here.
+ */
+export interface RecipeContextSourceIngredient {
+  readonly line_ref: string;
+  readonly source_text: string;
+  readonly food_semantics?: string;
+}
+
+/** ONE bounded authored instruction line, in authored order. */
+export interface RecipeContextSourceInstruction {
+  readonly line_ref: string;
+  readonly text: string;
+}
+
+/**
+ * ONE deterministic evidence association: an instruction line's detected signal
+ * evidence, naming the ingredient row(s) it covers.
+ *
+ * This is ADVISORY. It exists because the deterministic matcher found a known
+ * phrase; it never decides what may be read, and the absence of a hit must
+ * never suppress an ingredient from a consumer's context.
+ */
+export interface RecipeContextSourceEvidence {
+  readonly instruction_line_ref: string;
+  readonly subject_ref: string;
+  readonly evidence: string;
+}
+
+/**
+ * The CANONICAL bounded deterministic source basis, BEFORE the AI-4 12-target
+ * selection budget is applied.
+ *
+ * WHY THIS EXISTS
+ *   `extractRecipeContext` applies `MAX_RECIPE_CONTEXT_TARGETS` (12) because the
+ *   AI-4 review envelope only needs a capped, evidence-adjacent target set. That
+ *   cap is HISTORICAL AI-4 behavior and stays exactly 12.
+ *
+ *   Phase 9B's whole-recipe semantic operation needs something different: the
+ *   model must see the WHOLE bounded recipe, not a 12-row envelope subset. If 9B
+ *   re-implemented the read, normalization, line-ref derivation, subject
+ *   detection or evidence logic, the two could drift — and a fresh recipe would
+ *   have two competing notions of "this ingredient's line ref".
+ *
+ *   So there is exactly ONE bounded read, and it is projected two ways:
+ *     A. `extractRecipeContext` -> AI-4's historical capped envelope (unchanged)
+ *     B. `readRecipeContextSourceBasis` -> 9B's whole-recipe semantic context
+ *
+ *   No normalization, line-ref derivation, subject detection or evidence rule is
+ *   duplicated. This is a read-only projection of the same basis, not a second
+ *   extraction owner: it cannot build an AI-4 envelope, and it grants nothing.
+ *
+ * PURE, OFFLINE, PROVIDER-FREE. Never throws.
+ */
+export interface RecipeContextSourceBasis {
+  /** EVERY bounded ingredient row, in AUTHORED order. Never target-selected. */
+  readonly ingredients: ReadonlyArray<RecipeContextSourceIngredient>;
+  /** EVERY bounded instruction line, in authored order. */
+  readonly instructions: ReadonlyArray<RecipeContextSourceInstruction>;
+  /** Deterministic advisory evidence, associated per ingredient where found. */
+  readonly evidence: ReadonlyArray<RecipeContextSourceEvidence>;
+  readonly skipped_line_count: number;
+}
+
+export type RecipeContextSourceBasisResult =
+  | { readonly ok: true; readonly basis: RecipeContextSourceBasis }
+  | { readonly ok: false; readonly code: RecipeContextExtractionFailure };
+
+/**
+ * Reads the canonical PRE-SELECTION basis.
+ *
+ * Calls the SAME `readContext` that `extractRecipeContext` calls, so ingredient
+ * normalization, line-ref derivation, instruction bounds, subject detection and
+ * evidence detection are literally the same code path — not a parallel
+ * implementation that could drift.
+ *
+ * Ingredient order is AUTHORED order, never sorted by food name, target status,
+ * confidence or signal. Deterministic evidence is attached where the canonical
+ * read found it and is absent otherwise; it is advisory only.
+ */
+export function readRecipeContextSourceBasis(input: unknown): RecipeContextSourceBasisResult {
+  try {
+    const read = readContext(input);
+    if (!read.ok) return fail((read as { ok: false; code: RecipeContextExtractionFailure }).code);
+    const context = read.context;
+    if (context.lines.length === 0) return fail('no_context_targets');
+
+    const ingredients: RecipeContextSourceIngredient[] = context.ingredients.map((line) =>
+      Object.freeze({
+        line_ref: line.line_ref,
+        source_text: line.source_text,
+        ...(line.food_semantics === undefined ? {} : { food_semantics: line.food_semantics }),
+      })
+    );
+
+    const instructions: RecipeContextSourceInstruction[] = context.lines
+      .filter((line) => line.kind === 'instruction')
+      .map((line) => Object.freeze({ line_ref: line.line_ref, text: line.source_text }));
+
+    // Advisory evidence, associated to whichever ingredient the canonical
+    // subject detection named. Bounded by the same slot/attempt constants.
+    const evidence: RecipeContextSourceEvidence[] = [];
+    for (const line of context.lines) {
+      if (line.kind !== 'instruction') continue;
+      for (const signal of line.signals) {
+        if (evidence.length >= MAX_RECIPE_CONTEXT_SLOTS * MAX_RECIPE_CONTEXT_INSTRUCTION_LINES) break;
+        for (const subject of signal.subjects) {
+          if (evidence.length >= MAX_RECIPE_CONTEXT_SLOTS * MAX_RECIPE_CONTEXT_INSTRUCTION_LINES) break;
+          evidence.push(
+            Object.freeze({
+              instruction_line_ref: line.line_ref,
+              subject_ref: subject,
+              evidence: signal.evidence,
+            })
+          );
+        }
+      }
+    }
+
+    return {
+      ok: true,
+      basis: Object.freeze({
+        ingredients: Object.freeze(ingredients),
+        instructions: Object.freeze(instructions),
+        evidence: Object.freeze(evidence),
+        skipped_line_count: context.skippedLineCount,
+      }),
+    };
+  } catch {
+    return fail('unsafe_context');
+  }
+}

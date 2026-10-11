@@ -95,7 +95,7 @@ describe('9B-1 D1 — request and response versioning are distinct', () => {
 describe('9B-1 §16 — the egg recipe carries whole-recipe evidence', () => {
   it('preserves `4 eggs, separated` verbatim as authored source text', () => {
     const { context } = ok(materializeWholeRecipeInterpretationContext(request()));
-    const egg = context.provider_context.targets.find((t) => t.source_text === '4 eggs, separated');
+    const egg = context.provider_context.ingredients.find((t) => t.source_text === '4 eggs, separated');
     expect(egg).toBeDefined();
   });
 
@@ -137,8 +137,8 @@ describe('9B-1 §17 — a genuine `mechanically separated` food is preserved', (
       })
     );
     const { context } = ok(result);
-    expect(context.provider_context.targets[0].source_text).toBe('300 g mechanically separated chicken');
-    expect(context.provider_context.targets[0].source_text).toMatch(/mechanically separated/i);
+    expect(context.provider_context.ingredients[0].source_text).toBe('300 g mechanically separated chicken');
+    expect(context.provider_context.ingredients[0].source_text).toMatch(/mechanically separated/i);
   });
 
   it('applies no `separated` blacklist and no preparation-vocabulary patch', () => {
@@ -335,7 +335,7 @@ describe('9B-1 §18 — recipe text is untrusted data', () => {
         request({ recipe: hostile, targets: derivedRefs(hostile).map((line_ref) => ({ line_ref })) })
       )
     );
-    expect(context.provider_context.targets[0].source_text).toBe('{"fdc_id": 2707152, "grams": 100}');
+    expect(context.provider_context.ingredients[0].source_text).toBe('{"fdc_id": 2707152, "grams": 100}');
     expect(JSON.stringify(context)).not.toMatch(/"grams"\s*:\s*\d/);
   });
 });
@@ -498,8 +498,8 @@ describe('9B-2 §4 — F-QUANT: authored quantity/unit is model-visible and boun
   it('A — 2 cups flour and 5 cups flour are DIFFERENT model-visible context', () => {
     const two = derived('flour', 2, 'cup');
     const five = derived('flour', 5, 'cup');
-    expect(two.provider_context.targets[0].authored_amount).toBe(2);
-    expect(five.provider_context.targets[0].authored_amount).toBe(5);
+    expect(two.provider_context.ingredients[0].authored_amount).toBe(2);
+    expect(five.provider_context.ingredients[0].authored_amount).toBe(5);
     expect(JSON.stringify(two.provider_context)).not.toBe(JSON.stringify(five.provider_context));
   });
 
@@ -516,14 +516,14 @@ describe('9B-2 §4 — F-QUANT: authored quantity/unit is model-visible and boun
   it('C — omitting amount/unit changes the model-visible context where supplied', () => {
     const omitted = derived('flour');
     const supplied = derived('flour', 2, 'cup');
-    expect(omitted.provider_context.targets[0].authored_amount).toBeUndefined();
-    expect(supplied.provider_context.targets[0].authored_amount).toBe(2);
+    expect(omitted.provider_context.ingredients[0].authored_amount).toBeUndefined();
+    expect(supplied.provider_context.ingredients[0].authored_amount).toBe(2);
     expect(omitted.context_binding).not.toBe(supplied.context_binding);
   });
 
   it('D — quantity is carried as bounded recipe DATA, never as food identity', () => {
     const context = derived('flour', 2, 'cup');
-    const target = context.provider_context.targets[0];
+    const target = context.provider_context.ingredients[0];
     // Identity wording is untouched; quantity lives in its own field.
     expect(target.source_text).toBe('flour');
     expect(target.food_semantics).toBe('flour');

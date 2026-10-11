@@ -31,7 +31,7 @@
  *     never identity authority.
  */
 
-import { deriveRecipeContextExtractionOnly } from './recipeContextDerivation';
+import { deriveRecipeContextSourceBasis } from './recipeContextDerivation';
 import type { AiResolutionIssueKind } from '../src/core/nutritionV2/aiResolution';
 import {
   buildWholeRecipeDerivedContext,
@@ -90,26 +90,29 @@ export function materializeWholeRecipeInterpretationContext(
   if (sanitized.ok === false) return { ok: false, code: sanitized.code };
   const request = sanitized.request;
 
-  // --- SERVER-SIDE DERIVATION (canonical owners, reused) --------------------
-  // The ONE derivation owner runs adaptRecipe -> AI-4B extraction. This
-  // module consumes its deterministic derivation and builds its OWN distinct
-  // materialization and binding; it never touches AI-4's request wire,
-  // model_input_binding, review proposal, or acceptance state.
-  const extracted = deriveRecipeContextExtractionOnly({
+  // --- SERVER-SIDE DERIVATION (canonical owner, reused) --------------------
+  // This module consumes the ONE server owner's canonical PRE-SELECTION basis:
+  // every bounded ingredient row plus every bounded instruction line, read by
+  // the SAME bounded read AI-4 uses. AI-4 then projects its historical 12-target
+  // envelope from that same basis; 9B projects the whole recipe from it.
+  //
+  // The result is deliberately NOT AI-4's capped envelope: treating that
+  // historical 12-row selection as the universe of understandable ingredients
+  // made every 13-25 target 9B request fail `unknown_line_ref` (I-01).
+  const derived = deriveRecipeContextSourceBasis({
     recipe: toAdaptableRecipeSource(request),
     instructions: request.instructions.map((instruction) => ({ text: instruction.text })),
   });
-  if (extracted.ok === false) return { ok: false, code: 'invalid_recipe' };
+  if (derived.ok === false) return { ok: false, code: 'invalid_recipe' };
 
-  // --- TARGET RECONCILIATION: server-derived rows are the only source -------
-  const derivedByRef = new Map(
-    extracted.extraction.envelope.targets.map((target) => [target.line_ref, target]),
-  );
-  // Server-adapted structured quantity/unit, keyed by the SAME derived line ref.
+  const basis = derived.basis;
+  const ingredientsByRef = new Map(basis.ingredients.map((row) => [row.line_ref, row]));
+
+  // Server-adapted structured quantity/unit, keyed by the SAME canonical ref.
   // Sourced from the server adaptation (which validated the authored source),
   // never from client-supplied semantics.
   const authoredByRef = new Map(
-    extracted.adapted.adapted.map((row) => [
+    derived.adapted.adapted.map((row) => [
       row.line_ref,
       {
         amount: typeof row.ingredient.amount === 'number' && Number.isFinite(row.ingredient.amount)
@@ -126,36 +129,44 @@ export function materializeWholeRecipeInterpretationContext(
     request.targets.map((target) => [target.line_ref, target.issue_kind as AiResolutionIssueKind]),
   );
 
-  const derivedRows: Array<{
+  // --- WHOLE RECIPE: every bounded ingredient row, in AUTHORED order --------
+  // Deterministic evidence is attached where the canonical read found it, and is
+  // simply absent otherwise. A missing phrase hit never suppresses a row.
+  const ingredientRows: Array<{
     line_ref: string;
     source_text: string;
     authored_amount?: number;
     authored_unit?: string;
     food_semantics?: string;
     instruction_evidence: Array<{ instruction_line_ref: string; evidence: string }>;
-    issue_kind?: AiResolutionIssueKind;
   }> = [];
 
-  for (const target of request.targets) {
-    const derived = derivedByRef.get(target.line_ref);
-    // An unknown or stale ref fails the whole request: the client cannot invent
-    // a row, and cannot silently resolve against something it does not own.
-    if (derived === undefined) return { ok: false, code: 'unknown_line_ref' };
-
-    const authored = authoredByRef.get(derived.line_ref);
-    const issueKind = issueKindByRef.get(target.line_ref);
-    derivedRows.push({
-      line_ref: derived.line_ref,
-      source_text: derived.source_text,
+  for (const row of basis.ingredients) {
+    const authored = authoredByRef.get(row.line_ref);
+    ingredientRows.push({
+      line_ref: row.line_ref,
+      source_text: row.source_text,
       ...(authored?.amount !== undefined ? { authored_amount: authored.amount } : {}),
       ...(authored?.unit !== undefined ? { authored_unit: authored.unit } : {}),
-      ...(derived.food_semantics !== undefined ? { food_semantics: derived.food_semantics } : {}),
-      instruction_evidence: extracted.extraction.signals
-        .filter((signal) => signal.subjects.includes(derived.line_ref))
-        .map((signal) => ({
-          instruction_line_ref: signal.instruction_line_ref,
-          evidence: signal.evidence,
+      ...(row.food_semantics !== undefined ? { food_semantics: row.food_semantics } : {}),
+      instruction_evidence: basis.evidence
+        .filter((entry) => entry.subject_ref === row.line_ref)
+        .map((entry) => ({
+          instruction_line_ref: entry.instruction_line_ref,
+          evidence: entry.evidence,
         })),
+    });
+  }
+
+  // --- TARGET RECONCILIATION: opaque refs only ------------------------------
+  const targetRows: Array<{ line_ref: string; issue_kind?: AiResolutionIssueKind }> = [];
+  for (const target of request.targets) {
+    // An unknown or stale ref fails the whole request: the client cannot invent
+    // a row, and cannot silently resolve against something it does not own.
+    if (!ingredientsByRef.has(target.line_ref)) return { ok: false, code: 'unknown_line_ref' };
+    const issueKind = issueKindByRef.get(target.line_ref);
+    targetRows.push({
+      line_ref: target.line_ref,
       ...(issueKind !== undefined ? { issue_kind: issueKind } : {}),
     });
   }
@@ -164,7 +175,8 @@ export function materializeWholeRecipeInterpretationContext(
   const built = buildWholeRecipeDerivedContext({
     request,
     requestId,
-    derivedRows,
+    ingredients: ingredientRows,
+    targets: targetRows,
     instructions: request.instructions.map((instruction) => ({ text: instruction.text })),
   });
   if (built.ok === false) return { ok: false, code: built.code };

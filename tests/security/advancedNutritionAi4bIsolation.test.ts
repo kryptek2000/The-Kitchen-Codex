@@ -36,6 +36,7 @@ import {
   QUANTITY_CUE_GROUPS,
   RECIPE_CONTEXT_NAME_STOP_TOKENS,
 } from '../../src/core/nutritionV2/phase4/recipeContextExtraction';
+import { MAX_RECIPE_CONTEXT_TARGETS } from '../../src/core/nutritionV2/phase4/recipeContextContract';
 
 const REPO = process.cwd();
 const src = (rel: string): string => readFileSync(join(REPO, rel), 'utf8');
@@ -307,10 +308,38 @@ describe('AI-4B isolation — AI-4B re-owns nothing', () => {
     }
   });
 
-  it('AI-4B defines exactly ONE exported function: the extractor', () => {
+  it('AI-4B exports EXACTLY the extractor plus one read-only basis projection', () => {
+    // Phase 9B-2B-R1 added `readRecipeContextSourceBasis`. It is NOT a second
+    // extraction owner: it calls the SAME private `readContext` that
+    // `extractRecipeContext` calls, projects the PRE-SELECTION bounded basis, and
+    // cannot build an AI-4 envelope. The pin is therefore strengthened from "one
+    // export" to "these exact two exports, with distinct and bounded roles",
+    // rather than loosened to "any number of exports".
     const source = code(EXTRACTION);
     const exported = source.match(/export function \w+/g) ?? [];
-    expect(exported).toEqual(['export function extractRecipeContext']);
+    expect(exported).toEqual([
+      'export function extractRecipeContext',
+      'export function readRecipeContextSourceBasis',
+    ]);
+
+    // The projection is a READ of the shared basis, not a competing normalizer:
+    // it must not define its own bounded read, detection or normalization logic.
+    const basisFn = source.slice(source.indexOf('export function readRecipeContextSourceBasis'));
+    expect(basisFn).toContain('readContext(input)');
+    // It cannot produce an AI-4 envelope: no envelope build, no AI-4 target budget.
+    expect(basisFn).not.toContain('sanitizeRecipeContextEnvelope');
+    expect(basisFn).not.toContain('AI_RECIPE_CONTEXT_CONTRACT_VERSION');
+    expect(basisFn).not.toContain('MAX_RECIPE_CONTEXT_TARGETS');
+  });
+
+  it('AI-4B historical target budget stays exactly 12 (R1)', () => {
+    // The 9B whole-recipe repair must NOT raise AI-4's envelope cap. 9B projects
+    // the same canonical basis differently; AI-4 keeps its historical budget.
+    const source = code(EXTRACTION);
+    const selected = source.slice(source.indexOf('export function extractRecipeContext'));
+    expect(selected).toContain('selected.length >= MAX_RECIPE_CONTEXT_TARGETS');
+    // And the cap is still declared as 12 at its single owner.
+    expect(MAX_RECIPE_CONTEXT_TARGETS).toBe(12);
   });
 
   it('AI-4B imports ONLY the local pure modules it is allowed to read', () => {

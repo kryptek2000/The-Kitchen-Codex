@@ -30,13 +30,19 @@
  */
 
 import { adaptRecipe } from '../src/core/nutritionV2/phase4/adapt.js';
-import { extractRecipeContext } from '../src/core/nutritionV2/phase4/recipeContextExtraction.js';
+import {
+  extractRecipeContext,
+  readRecipeContextSourceBasis,
+} from '../src/core/nutritionV2/phase4/recipeContextExtraction.js';
 import {
   buildAiRecipeContextRequest,
   type AiRecipeContextRequestContext,
 } from '../src/core/nutritionV2/aiRecipeContextRequest.js';
 import type { AdaptedRecipe } from '../src/core/nutritionV2/phase4/adapt.js';
-import type { RecipeContextExtraction } from '../src/core/nutritionV2/phase4/recipeContextExtraction.js';
+import type {
+  RecipeContextExtraction,
+  RecipeContextSourceBasis,
+} from '../src/core/nutritionV2/phase4/recipeContextExtraction.js';
 
 /**
  * Bounded derivation failure codes. `invalid_recipe` covers both the adaptation
@@ -99,6 +105,48 @@ export function deriveRecipeContextExtractionOnly(input: {
   if (extracted.ok === false) return { ok: false, code: 'invalid_recipe' };
 
   return { ok: true, adapted: adapted.recipe, extraction: extracted.extraction };
+}
+
+/**
+ * Derives the WHOLE-RECIPE canonical source basis for Phase 9B (Phase 9B-2B-R1).
+ *
+ * Runs `adaptRecipe` and then reads the canonical PRE-SELECTION basis through
+ * `readRecipeContextSourceBasis` — the same bounded read `extractRecipeContext`
+ * itself performs, before AI-4's historical `MAX_RECIPE_CONTEXT_TARGETS` (12)
+ * budget is applied.
+ *
+ * WHY THIS EXISTS (I-01)
+ *   The 9B whole-recipe request wire accepts up to `MAX_WHOLE_RECIPE_TARGETS`
+ *   (25) targets, but the AI-4B extraction envelope exposes at most 12. Treating
+ *   that AI-4 envelope selection as the universe of ingredients 9B may understand
+ *   made every 13–25 target request fail with `unknown_line_ref`. That was a real
+ *   contract/capability mismatch.
+ *
+ *   The repair does NOT raise AI-4's cap and does NOT reimplement the read. It
+ *   projects the SAME canonical bounded basis a second way: AI-4 keeps its
+ *   historical capped envelope, and 9B receives the whole bounded recipe.
+ *
+ *   This module remains the ONE server owner of that derivation. No server module
+ *   reaches past it into the low-level extractor, and there is exactly one
+ *   underlying normalization / line-ref / subject-detection implementation.
+ *
+ * Never throws. Every failure is a bounded code, and no failure path can produce
+ * a partial basis.
+ */
+export function deriveRecipeContextSourceBasis(input: {
+  readonly recipe: unknown;
+  readonly instructions?: unknown;
+}): { readonly ok: true; readonly adapted: AdaptedRecipe; readonly basis: RecipeContextSourceBasis } | { readonly ok: false; readonly code: 'invalid_recipe' } {
+  const adapted = adaptRecipe(input.recipe);
+  if (adapted.ok === false) return { ok: false, code: 'invalid_recipe' };
+
+  const read = readRecipeContextSourceBasis({
+    recipe: adapted.recipe,
+    instructions: input.instructions,
+  });
+  if (read.ok === false) return { ok: false, code: 'invalid_recipe' };
+
+  return { ok: true, adapted: adapted.recipe, basis: read.basis };
 }
 
 /**

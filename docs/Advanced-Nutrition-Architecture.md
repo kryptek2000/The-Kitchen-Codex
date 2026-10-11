@@ -12938,3 +12938,228 @@ carrying `fdc_id`, `grams`, `calories`, `nutrients`, `candidate`,
 cooking-semantic prompt, the sanitize/reconcile step and the first real
 issuance of these proofs are all Phase 9B-2B. Nothing in this primitive has a
 live consumer yet.
+
+### Phase 9B-2B — whole-recipe semantic provider operation (forward note)
+
+Phase 9B-2B is the first real whole-recipe semantic provider operation. It is
+**server-side and internal**: it adds no route, no UI, no matcher handoff and no
+Shiso surface, and no live Basic user can reach it. Nothing above this line is
+changed by it.
+
+**AI understands; deterministic systems decide.** The operation lets a model say
+what a target ingredient MEANS in recipe context. It can never say which FDC
+record applies, how many grams that is, or what the nutrients are. The layer
+order is unchanged and not collapsed:
+
+```
+whole recipe -> AI semantic understanding -> authenticated semantic result
+  -> deterministic matcher -> USDA authority -> authenticated mass/portion
+  -> deterministic nutrient calculation -> Apply revalidation -> persistence
+```
+
+**Exactly one operation per explicit resolve.** One `runWithAiFallback` chain
+execution runs regardless of target count; there is no per-ingredient call, no
+per-row call, no verification second call, and no background, render-time or
+modal-open inference. The existing executor may still try a later
+(provider, model) candidate when an earlier one fails — that is the existing
+fallback chain, not a second operation. Note the released deterministic extractor
+caps model-visible targets at `MAX_RECIPE_CONTEXT_TARGETS` (12), below the request
+wire's 25; that pre-existing bound is unchanged.
+
+**Existing provider infrastructure is reused.** The operation uses the existing
+`nutrition` AI role with its `structuredOutput` capability requirement,
+`resolveExecutableTextCandidates`, `runWithAiFallback`, provider-neutral
+structured output constrained by the released
+`buildAiAdvancedInterpretationSchema`, `normalizeProviderError`, and the
+existing redacted `logModelAttempt` diagnostics. No parallel provider stack, no
+new AI role, no provider-specific behavior and no credential, pricing, rate-limit
+or BYOK change. The released AI-1 flat request path is untouched and its callers
+remain green.
+
+**Actual successful execution identity is bound.** The proof authenticates the
+`providerId` and `model` returned by the fallback executor for the candidate that
+actually succeeded — not the requested, preferred or first candidate. When
+candidate A fails and candidate B succeeds, the proof binds B.
+
+**Operation id is server-minted.** `createWholeRecipeSemanticOperationId()` is
+called internally immediately before dispatch. The caller never chooses it and
+the model never chooses it; a request carrying an `operation_id` is refused
+outright by the released request owner.
+
+**F-02 — current context is server-derived.** The operation accepts only the
+authored whole-recipe request and calls the released owner
+`materializeWholeRecipeInterpretationContext` to re-derive `provider_context`,
+`context_binding` and the target set from scratch. No caller-supplied context,
+binding, derived target, food semantic, instruction evidence, interpretation,
+operation id, provider, model or receipt can become current authority.
+
+**F-05 — one process-scoped receipt authority.** `getProcessSemanticOriginAuthority()`
+is a lazy, server-lifetime owner. The operation that issues a proof and any future
+consumer that verifies it share one instance and therefore one key. There is no
+per-request authority, no key injection, and no environment override.
+
+**Whole-recipe model input.** The model receives the server-derived model-visible
+provider context in one payload: every requested target's line ref, authored
+source text, server-adapted `authored_amount` and `authored_unit`, deterministic
+`food_semantics` evidence, bounded instruction evidence, issue kind, and the
+complete bounded instruction list. It is never reduced back to isolated
+ingredient rows.
+
+**Privacy is not broadened.** Recipe title, base servings, recipe key, filename,
+filesystem and Vault paths, raw Markdown, arbitrary frontmatter, user identity,
+credentials, API keys and any saved nutrition block remain withheld. Having a
+provider call is not a reason to send more.
+
+**Generic cooking-semantic prompt, deliberately not a dictionary.** The prompt
+teaches the model its JOB and its LIMITS: read the recipe as a whole, use
+ingredient wording together with instructions, distinguish food identity from
+preparation wording, use ordinary cooking knowledge about components that may be
+separated, combined, recombined, retained, discarded, reserved, divided,
+transformed or used as a cooking medium, preserve food-defining wording, express
+genuine ambiguity rather than inventing facts, never silently drop a requested
+line, and never output database or nutrition authority. It contains **no** phrase
+dictionary and **no** food-specific rule: nothing states what any individual word
+such as `separated`, `divided`, `reserved` or `mechanically separated` means.
+Closed vocabularies are rendered from the same canonical constants the sanitizer
+enforces, so there is no second vocabulary owner. This slice defines boundaries,
+not vocabulary lessons, and a growing cookbook exception dictionary is explicitly
+a thing this architecture refuses to grow.
+
+**Recipe text is untrusted DATA.** The provider abstraction's
+`generateStructured` takes one string and exposes no system/user message roles, so
+this operation uses the same framing convention the released AI-1 adapter uses —
+trusted instructions first, then an explicitly framed untrusted data payload — and
+documents that as a limitation rather than pretending a role boundary the
+abstraction cannot express. That framing is not the security control. Injection
+resistance comes from the structural boundary plus the **closed output
+sanitizer**, server reconciliation and the server-owned proof. Prompt text alone
+is never treated as sufficient.
+
+**Sanitize -> reconcile -> order -> sign.** The mandatory order is: existing
+strict sanitizer, then exact target/ref reconciliation, then canonical request
+ordering, then semantic-origin proof issuance. A proof is never issued before
+reconciliation, raw provider output is never signed, and there is no partial
+authenticated result on any failure path.
+
+**F-03 — every requested target exactly once.** Unknown, duplicate, extra and
+missing line refs all fail the whole operation; omission is never silently
+reinterpreted as abstention, because genuine ambiguity is expressible through the
+existing `ambiguity` field. After validation, accepted interpretations are
+reordered deterministically into the **server-derived requested target order** —
+never alphabetically by food name, never by model confidence. Provider output
+ordering therefore carries no authority, and reordering after issuance
+invalidates the proof.
+
+**Still no nutrition authority.** The authenticated result carries semantic
+observations only. No FDC id, USDA identity, grams, mass, density, portion
+weight, nutrient value, calorie, Daily Value, Apply authorization or persistence
+authorization exists anywhere in this operation, and the deterministic USDA
+matcher remains the sole food-identity authority. Provider output carrying
+forbidden authority fails the whole operation through the existing sanitizer, and
+no proof is issued.
+
+**Result surface.** A success returns the canonical semantic response, the
+effective request identity, the context binding, the actual provider and model,
+the operation id and the `wsem1.<mac>` receipt. It returns no raw provider
+request, no raw provider response, no credentials, no stack trace, no internal
+provider exception and no unrestricted diagnostics. Failures are bounded,
+fail-closed codes reusing the existing AI-1 categories where they map
+(`invalid_request`, `unavailable`, `provider_error`, `invalid_response`) plus
+`reconciliation_failed` and `origin_proof_failed`.
+
+**Remaining phases.** Phase 9B-2C owns the dedicated route and the AI-5
+entitlement gate. Phase 9B-3 owns client/UI instruction threading, the verified
+semantic-result handoff, and deterministic matcher consumption. Semantic-origin
+proof remains mandatory before any AI semantic result influences deterministic
+matching, on both the client-return path and any internal path.
+
+### Phase 9B-2B-R1 — true whole-recipe context + target-cap repair (forward note)
+
+Phase 9B-2B-R1 repairs Muse finding **I-01**. It is still server-side and
+internal: no route, no UI, no matcher handoff, no Shiso surface. Nothing above
+this line is changed by it, and **no historical AI-4 record is rewritten**.
+
+**I-01 — the mismatch.** The 9B whole-recipe request wire accepts up to
+`MAX_WHOLE_RECIPE_TARGETS` (25) targets, but the reused AI-4B extraction envelope
+exposes at most `MAX_RECIPE_CONTEXT_TARGETS` (12). Treating that historical AI-4
+selection as the universe of ingredients 9B may understand meant every 13–25
+target request failed with `unknown_line_ref`: a real contract/capability
+mismatch, not a request error.
+
+**Architecture chosen — ONE basis, TWO projections.** There is now exactly one
+canonical bounded deterministic source basis, read by `readContext` inside the
+extraction module and projected two ways:
+
+- **AI-4 projection (unchanged):** `extractRecipeContext` still applies its
+  historical 12-target budget and still emits the same capped envelope. The AI-4
+  cap is NOT raised, AI-4 is NOT version-bumped, and AI-4 acceptance/currentness
+  semantics are untouched.
+- **9B projection (repaired):** `readRecipeContextSourceBasis` exposes the
+  PRE-SELECTION basis — every bounded ingredient row in authored order, every
+  bounded instruction line, and the deterministic evidence where the canonical
+  read found it — which 9B projects into the whole-recipe semantic context.
+
+No ingredient normalization, line-ref derivation, instruction normalization,
+subject detection, signal logic or evidence logic is duplicated. The new export
+is a read-only projection that cannot build an AI-4 envelope, and the AI-4B
+isolation pin was *strengthened* from "exactly one export" to "these exact two
+exports, with distinct bounded roles", plus a new pin that the AI-4 budget is
+still exactly 12.
+
+**The whole-recipe model context.** The provider context now distinguishes
+RECIPE from ASK:
+
+```
+{ provenance_class,
+  ingredients: [ { line_ref, source_text, authored_amount?, authored_unit?,
+                  food_semantics?, instruction_evidence? } ],   // the WHOLE recipe
+  instructions: [ { text } ],                                    // all bounded steps
+  targets: [ { line_ref, issue_kind? } ] }                      // the SUBSET to answer
+```
+
+`ingredients` is the entire bounded authored recipe, in **authored order** —
+never sorted alphabetically, by target status, by confidence or by deterministic
+signal. `targets` is the exact subset the model must interpret, carried as an
+opaque line reference plus an application-owned issue kind. Targets deliberately
+carry **no** source text, amount or unit, so a row is never described by two
+competing sources of truth.
+
+A 40-ingredient recipe with 5 actionable targets therefore sends 40 ingredient
+rows, the complete bounded instructions, and 5 target references, and the model
+returns exactly 5 interpretations. The target list is not the recipe.
+
+Deterministic evidence remains **advisory**. It is attached where the canonical
+read found it and is absent otherwise; the full instruction list is
+model-visible regardless, so a missing phrase hit can never suppress an
+ingredient from whole-recipe context. No new phrase rules were added, nothing
+was taught about `separated`, and R2B was not resurrected.
+
+**Versions.** The request wire stays
+`nutrition_ai_whole_recipe_interpretation_request_v1`, the semantic response
+stays `nutrition_ai_advanced_interpretation_v1`, and the semantic-origin receipt
+stays `nutrition_ai_whole_recipe_semantic_origin_receipt_v1` (`wsem1`). Only the
+**internal** binding material tag moves, from
+`nutrition_ai_whole_recipe_interpretation_binding_v1` to
+`..._v2`, because the model-visible shape is materially different and pretending
+the two hash the same material would be false. The released 9B-2A receipt module
+needed **no adaptation at all**: it already read target refs from
+`provider_context.targets[].line_ref`, which the repaired shape preserves.
+
+**Currentness now covers the whole recipe.** Because the model sees every
+bounded ingredient, `context_binding` commits to every one of them. Changing a
+NON-TARGET ingredient — milk to buttermilk — makes an earlier interpretation
+stale exactly as changing a target does. There is no per-row salvage from a
+stale whole-recipe proposal.
+
+**Unchanged invariants.** One whole-recipe provider operation per explicit
+resolve, with no chunking and no N+1; 1–25 targets each run exactly ONE
+fallback-chain execution and 26 is refused before any provider work; sanitize →
+reconcile → canonical request order → sign; the process-scoped receipt authority;
+the server-minted operation id; the actual successful provider/model identity;
+and no nutrition authority anywhere.
+
+**Request and byte bounds.** `MAX_WHOLE_RECIPE_SOURCE_INGREDIENTS` (60),
+`MAX_WHOLE_RECIPE_TARGETS` (25) and `MAX_WHOLE_RECIPE_CONTEXT_BYTES` are all
+preserved. A pathological recipe whose bounded serialized context exceeds the
+byte ceiling may still fail with the existing bounded `request_too_large`; the
+byte limit was not inflated without evidence.
