@@ -12810,3 +12810,131 @@ shape would mislabel the evidence.
 Nothing in this slice changes matching, ranking, mass, calculation, Apply, or
 persistence. The deterministic USDA matcher remains the sole food-identity
 authority, and the Basic tier gains no provider access.
+
+### Phase 9B-2A — semantic-origin proof primitive (forward note)
+
+Phase 9B-2A is an inert server-side security primitive plus tests. It performs
+**no provider call**, adds **no route**, wires **no UI**, and has **no live
+consumer**. Nothing above this line is changed by it.
+
+**The gap it closes.** 9B-1 established a request boundary and 9B-2Q made
+authored quantity model-visible. Neither proves where a semantic interpretation
+came from. Without origin proof, a client could eventually say "the model told
+me this food means whole egg", post a well-formed
+`nutrition_ai_advanced_interpretation_v1` payload, and have it treated as model
+output — when nothing ever called a provider. Phase 9B-2A makes that
+impossible: a semantic payload may only influence deterministic matching if the
+server issued a proof for **that exact payload**, over **that exact
+request/context**, under **that exact provider/model execution**.
+
+**A DISTINCT contract from AI-4E.** AI-4E authenticates an AI-4C
+recipe-context proposal wire for the AI-4 review/reconcile flow. Phase 9B-2A
+authenticates a whole-recipe semantic interpretation over 9B-1's request:
+different payload, different boundary, different purpose. The wire is therefore
+never reused. It has its own version
+`nutrition_ai_whole_recipe_semantic_origin_receipt_v1`, its own token prefix
+`wsem1`, its own operation-id format `wsemo1`, and **its own key**. Note that
+`wsem1` and AI-4E's `rctx1` are both five characters, so the two token domains
+are the same length — the **prefix**, not the length, is what separates them.
+Each domain refuses the other's receipts in both directions.
+
+**Exact authenticated material.** HMAC-SHA-256 over one canonical projection
+that binds, at minimum:
+
+1. the semantic-origin proof/material version;
+2. the whole-recipe request version (`nutrition_ai_whole_recipe_interpretation_request_v1`);
+3. the **effective** request id — the server-materialized identity the operation
+   actually uses, so the server can never authenticate "undefined" while
+   downstream code uses a different id;
+4. the released whole-recipe `context_binding`;
+5. the **canonical sanitized** `nutrition_ai_advanced_interpretation_v1` response;
+6. the **actual** provider id;
+7. the **actual** model id;
+8. the server-owned semantic operation id.
+
+It deliberately does **not** bind API keys, provider credentials, filesystem or
+Vault paths, user identity, raw Markdown, or arbitrary frontmatter. It also does
+not re-serialize the whole `provider_context`: the binding already commits to it
+cryptographically, and duplicating that canonicalization here would create a
+second owner that could silently drift from 9B-1. `provider_context` is read only
+to obtain the sanitizer's allowed line refs. That is sound because any change to
+the interpretations changes the MAC, so a fabricated context cannot turn a signed
+payload into a different one. The 9B-2C route must still derive context
+server-side rather than trusting a client-submitted context.
+
+**Sanitize/reconcile-before-sign, enforced by construction.** There is no "sign
+raw output" entry point. Both issue and verify route the candidate payload
+through the **existing strict sanitizer** with the released context's target
+line refs as the allowed set, and the MAC is computed over the **sanitizer's
+output**, never over caller objects. The safe order for 9B-2B is therefore:
+
+```
+raw provider response
+  -> strict existing sanitizer
+  -> target/ref reconciliation (any reordering happens HERE)
+  -> canonical sanitized semantic response
+  -> origin proof issue
+```
+
+Passing raw provider-shaped input to issue is not merely discouraged: forbidden
+fields are refused, and anything merely unsanitized is normalized first — raw and
+already-sanitized input produce the **identical** proof, which is the proof that
+raw bytes were never signed.
+
+**Detached proof.** The token is `wsem1.<base64url-mac>` and carries a prefix
+and a MAC and nothing else: no JSON, no payload, no request id, no recipe text,
+no provider, no model, no path, no key. It is opaque, fixed-length, and
+unbufferable. Verification recomputes authentication from the separately supplied
+material; the semantic payload is never duplicated inside an encoded receipt.
+
+**Ordering is authenticated, never sorted.** The canonical projection preserves
+the exact array order the sanitizer produced. Interpretation order can carry
+meaning, so it is proven rather than canonicalized away: reordering after issuance
+invalidates the proof. Any reconciliation ordering must be established **before**
+issuance.
+
+**Server operation id.** `createWholeRecipeSemanticOperationId()` mints an opaque
+192-bit `wsemo1.` identifier. It exists to distinguish two distinct server
+semantic executions even when every other input is equal, which is what stops one
+execution's proof from being replayed as another's. It embeds no user data, no
+provider data, no credential, and no timestamp. 9B-2B mints it before provider
+dispatch and binds it in the proof after successful sanitization, so the proof
+attests to one specific dispatch.
+
+**Replay and TTL posture.** The same exact proof over the same exact material
+verifies **repeatedly, by design**. There is no TTL, no nonce store, and no
+replay cache; expiration semantics are deliberately not invented for appearance.
+Cross-request, cross-context, cross-provider/model and cross-operation replay all
+fail, because those components are authenticated. **Staleness is handled by the
+whole-recipe `context_binding`**, not by expiring proofs.
+
+**Process-local key truth.** The 256-bit key is generated per authority instance
+and never leaves the process: not into a response, a log, an error message, the
+client bundle, or persisted data. There is deliberately no key-injection option,
+because a caller-supplied secret is exactly the shortcut this phase exists to
+prevent. Consequently:
+
+- a proof survives only for the lifetime of that server process;
+- **a server restart invalidates every outstanding proof**;
+- **a proof issued by one independent instance does not verify on another.**
+
+A future multi-instance deployment would require a shared signing secret or an
+equivalent shared verification architecture. That is **not** implemented here and
+is **not** pretended to work.
+
+**No nutrition authority is granted.** The proof says "this server issued this
+sanitized interpretation for this request, context and execution". It does **not**
+say the provider signed it, that the model is factually correct, that USDA
+approved the food identity, that the model selected an FDC record, or that grams,
+nutrients, Apply or persistence are authorized. A proven semantic result remains
+**inert data**: it becomes food identity only through the deterministic USDA
+matcher, which remains the sole food-identity authority. "This came from the
+model" and "this is correct" are different claims, and only the first is proven.
+The server MAC can never legitimize forbidden model output — an interpretation
+carrying `fdc_id`, `grams`, `calories`, `nutrients`, `candidate`,
+`origin_receipt` or `context_binding` is refused before it can be signed.
+
+**9B-2B remains future work.** The whole-recipe provider operation, the generic
+cooking-semantic prompt, the sanitize/reconcile step and the first real
+issuance of these proofs are all Phase 9B-2B. Nothing in this primitive has a
+live consumer yet.
