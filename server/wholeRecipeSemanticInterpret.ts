@@ -79,7 +79,8 @@
 
 import { runWithAiFallback } from './ai/providerRegistry.js';
 import { resolveExecutableTextCandidates } from './ai/effectiveSelection.js';
-import { normalizeProviderError } from './ai/providerErrors.js';
+import { normalizeProviderError, ProviderOperationError } from './ai/providerErrors.js';
+import type { ProviderDiagnostic, ProviderErrorCode } from './ai/providerErrors.js';
 import { resolveThinkingProviderOptions } from './ai/thinkingPolicy.js';
 import { logModelAttempt } from './providerDiagnostics.js';
 import type { AiJsonSchema } from './ai/types.js';
@@ -138,7 +139,9 @@ type SemanticDiagnosticStage =
   | 'provider_returned'
   | 'sanitizer_rejected'
   | 'reconciliation_rejected'
-  | 'origin_proof_failed';
+  | 'origin_proof_failed'
+  // 9B-P5A: the fallback chain was exhausted and every candidate failed.
+  | 'fallback_exhausted';
 
 /** Hard cap on any single logged token, so a value can never flood the log. */
 const MAX_DIAGNOSTIC_TOKEN_LENGTH = 64;
@@ -271,6 +274,135 @@ function logSemanticStage(
   } catch {
     // A diagnostic sink that throws is not an operation failure. Swallow it and
     // let the caller proceed unchanged.
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 9B-P5A — EXHAUSTED-FALLBACK DIAGNOSTICS (observability only)
+// ---------------------------------------------------------------------------
+//
+// WHY. The Phase 9B-P5 controlled live smoke consumed BOTH authorized Gemini
+// candidates and returned HTTP 503, yet the server log named only the FINAL
+// candidate (`gemini-3.1-flash-lite`, 504 DEADLINE_EXCEEDED). The PRIMARY
+// candidate's failure was invisible, so "primary failed, fallback also failed"
+// was indistinguishable from "only the fallback ever ran".
+//
+// WHY NO SHARED-CHANGE IS NEEDED. `runWithAiFallback` already retains the full
+// sanitized attempt trail: `terminalError()` attaches it to the terminal
+// `ProviderOperationError` as a NON-ENUMERABLE own property `diagnostics`. That
+// data is already produced and already trustworthy, so this phase only READS it.
+// The fallback runner, candidate selection, ordering, thinking policy, timeouts,
+// retry policy, fallback eligibility and terminal rules are all UNTOUCHED.
+//
+// WHAT THIS IS. One bounded summary event plus at most
+// `MAX_FALLBACK_ATTEMPT_EVENTS` per-attempt events, emitted ONLY when the whole
+// chain fails. It changes no return value, no HTTP status, and no wire field.
+//
+// WHAT THIS DELIBERATELY NEVER LOGS. The diagnostic `message` field is never
+// read, so no provider prose, payload, recipe text, credential or raw exception
+// can reach the log through it. `cause` is never touched. No error object is
+// serialized, spread or stringified. Only an allowlisted error code, a
+// `safeDiagnosticToken`-filtered provider/model identifier, a server-generated
+// attempt index, and a bounded numeric status are emitted.
+
+/**
+ * The closed set of normalized provider error codes that may be logged. Derived
+ * from the existing `ProviderErrorCode` taxonomy, so it can never drift from the
+ * classification the fallback runner actually used. A code outside this set is
+ * OMITTED, never passed through.
+ */
+const LOGGABLE_PROVIDER_ERROR_CODES: ReadonlySet<string> = new Set<ProviderErrorCode>([
+  'AUTH',
+  'QUOTA',
+  'RATE_LIMIT',
+  'UNAVAILABLE',
+  'TIMEOUT',
+  'UNSUPPORTED_CAPABILITY',
+  'INVALID_RESPONSE',
+  'PROVIDER_ERROR',
+  'NO_IMAGE',
+  'BLOCKED',
+]);
+
+/** Hard cap on per-attempt events, so a long trail can never flood the log. */
+const MAX_FALLBACK_ATTEMPT_EVENTS = 8;
+
+/**
+ * A valid, bounded HTTP-ish status. Anything non-numeric, non-integral,
+ * out of range, or non-finite is dropped rather than emitted.
+ */
+function safeDiagnosticStatus(value: unknown): string | undefined {
+  if (typeof value !== 'number') return undefined;
+  if (!Number.isInteger(value)) return undefined;
+  if (value < 100 || value > 599) return undefined;
+  return String(value);
+}
+
+/**
+ * Reads the trusted fallback attempt trail from a TERMINAL error.
+ *
+ * TRUST. The trail is accepted only when BOTH hold:
+ *   1. the thrown value is a genuine `ProviderOperationError` — the exact type
+ *      `runWithAiFallback` throws, so an arbitrary provider RESPONSE object (or
+ *      any provider-authored payload) can never satisfy this; and
+ *   2. `diagnostics` is an OWN, NON-ENUMERABLE data property — precisely the
+ *      shape `terminalError()` defines. An enumerable property means something
+ *      other than the trusted runner attached it, so it is treated as absent.
+ *
+ * Reads through `getOwnPropertyDescriptor`, which does NOT invoke a getter, so
+ * an accessor descriptor yields no value and is safely rejected. A missing,
+ * malformed, or empty trail is reported as absent: an attempt result is NEVER
+ * invented.
+ */
+function readTrustedFallbackDiagnostics(error: unknown): readonly ProviderDiagnostic[] {
+  if (!(error instanceof ProviderOperationError)) return [];
+  const descriptor = Object.getOwnPropertyDescriptor(error, 'diagnostics');
+  if (descriptor === undefined || descriptor.enumerable !== false) return [];
+  const value = descriptor.value;
+  if (!Array.isArray(value)) return [];
+  return value as readonly ProviderDiagnostic[];
+}
+
+/**
+ * Emits the bounded exhausted-fallback trail. BEST-EFFORT BY DESIGN: the whole
+ * body is isolated, so a throwing sink, a hostile shape, or any unexpected
+ * runtime failure leaves the operation's original result untouched.
+ *
+ * Reads the trail from the CAUGHT terminal error rather than from a re-normalized
+ * copy, because `normalizeProviderError` may construct a new instance when
+ * enriching context and that new instance would not carry the trail.
+ */
+function logFallbackExhausted(error: unknown): void {
+  try {
+    const trail = readTrustedFallbackDiagnostics(error);
+    if (trail.length === 0) return;
+    const emitted = Math.min(trail.length, MAX_FALLBACK_ATTEMPT_EVENTS);
+    logSemanticStage('fallback_exhausted', {
+      attempts: String(emitted),
+      ...(trail.length > MAX_FALLBACK_ATTEMPT_EVENTS ? { truncated: 'true' } : {}),
+    });
+    for (let index = 0; index < emitted; index += 1) {
+      const entry = trail[index];
+      if (entry === null || typeof entry !== 'object') continue;
+      const fields: Record<string, string> = { attempt: String(index + 1) };
+      // Allowlisted code, else omitted entirely.
+      if (typeof entry.code === 'string' && LOGGABLE_PROVIDER_ERROR_CODES.has(entry.code)) {
+        fields.code = entry.code;
+      }
+      if (typeof entry.providerId === 'string') {
+        fields.provider = safeDiagnosticToken(entry.providerId);
+      }
+      if (typeof entry.model === 'string') {
+        fields.model = safeDiagnosticToken(entry.model);
+      }
+      // `entry.message` is deliberately NEVER read.
+      const status = safeDiagnosticStatus(entry.status);
+      if (status !== undefined) fields.status = status;
+      logSemanticStage('fallback_exhausted', fields);
+    }
+  } catch {
+    // Observational logging can never turn a provider failure into another kind
+    // of failure, nor recover a result the operation did not earn.
   }
 }
 
@@ -602,6 +734,11 @@ export async function interpretWholeRecipeSemantics(
   } catch (error) {
     const normalized = normalizeProviderError(error);
     logModelAttempt(DIAGNOSTIC_SCOPE, normalized.model ?? '', normalized);
+    // 9B-P5A: surface the trusted attempt trail the fallback runner already
+    // retained, so an exhausted chain no longer hides the PRIMARY failure.
+    // Observability only: the returned failure and every wire field are
+    // unchanged, and no additional provider call is made.
+    logFallbackExhausted(error);
     return { ok: false, code: 'provider_error', aiAttempted: true };
   }
 
