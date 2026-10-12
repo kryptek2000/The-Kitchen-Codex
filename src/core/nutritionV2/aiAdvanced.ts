@@ -245,11 +245,163 @@ export type AiAdvancedFailureCode =
   | 'unknown_line_ref'
   | 'duplicate_line_ref';
 
+/**
+ * 9B-P4: the closed vocabulary of STRUCTURAL rejection branches.
+ *
+ * `invalid_response` is deliberately collapsed: roughly forty distinct
+ * structural conditions share it, which made a live rejection impossible to
+ * diagnose without re-sending the request. These labels name WHICH branch
+ * fired so the caller can act, and are the ONLY thing the rejection observer
+ * is ever told.
+ *
+ * SAFETY PROPERTIES (all structural guarantees, not conventions):
+ *   - every value is a compile-time literal, never derived from the rejected
+ *     payload, so no provider content, field name, or field value can reach
+ *     a diagnostic through this channel;
+ *   - the vocabulary is CLOSED and frozen, and the emitter maps anything
+ *     unrecognized to `unknown` rather than passing it through;
+ *   - labels describe STRUCTURE (which shape check failed), never semantics.
+ */
+export type AiAdvancedRejectReason =
+  // --- inert pre-pass ------------------------------------------------------
+  | 'response_unsafe'
+  | 'response_oversized'
+  // --- envelope ------------------------------------------------------------
+  | 'envelope_shape'
+  | 'envelope_key_unknown'
+  | 'envelope_key_authority'
+  | 'envelope_contract_version'
+  | 'rows_not_array'
+  | 'row_count_exceeded'
+  // --- row -----------------------------------------------------------------
+  | 'row_shape'
+  | 'row_key_authority'
+  | 'row_key_unknown'
+  | 'row_contract_version'
+  | 'line_ref_malformed'
+  | 'line_ref_not_requested'
+  | 'line_ref_duplicate'
+  // --- semantic_food -------------------------------------------------------
+  | 'semantic_food_shape'
+  | 'semantic_food_key_unknown'
+  | 'semantic_food_name_malformed'
+  | 'semantic_food_token_count'
+  | 'semantic_food_token_malformed'
+  // --- search_phrases ------------------------------------------------------
+  | 'search_phrases_shape'
+  | 'search_phrase_malformed'
+  // --- amount_semantics ----------------------------------------------------
+  | 'amount_semantics_shape'
+  | 'amount_semantics_key_unknown'
+  | 'amount_kind_invalid'
+  | 'amount_endpoint_invalid'
+  | 'amount_range_incomplete'
+  | 'amount_range_order'
+  | 'amount_endpoint_on_non_range'
+  | 'amount_echoed_value_invalid'
+  | 'amount_phrasing_malformed'
+  // --- unit_semantics ------------------------------------------------------
+  | 'unit_semantics_shape'
+  | 'unit_semantics_key_unknown'
+  | 'unit_family_invalid'
+  | 'unit_raw_malformed'
+  | 'unit_interpreted_malformed'
+  // --- count_semantics -----------------------------------------------------
+  | 'count_semantics_shape'
+  | 'count_semantics_key_unknown'
+  | 'count_token_malformed'
+  // --- alternatives --------------------------------------------------------
+  | 'alternatives_shape'
+  | 'alternative_shape'
+  | 'alternative_key_unknown'
+  | 'alternative_name_malformed'
+  | 'alternative_notes_malformed'
+  // --- ambiguity -----------------------------------------------------------
+  | 'ambiguity_shape'
+  | 'ambiguity_key_unknown'
+  | 'ambiguity_flag_invalid'
+  | 'ambiguity_reasons_shape'
+  | 'ambiguity_reason_malformed'
+  // --- advisory ------------------------------------------------------------
+  | 'confidence_invalid'
+  | 'notes_malformed';
+
+/**
+ * The closed, frozen allowlist. A diagnostic emitter MUST consult this set and
+ * substitute `unknown` for anything absent, so a label can never become a
+ * content-carrying channel even if a future branch is wired incorrectly.
+ */
+export const AI_ADVANCED_REJECT_REASONS: ReadonlySet<string> = new Set<string>([
+  'response_unsafe',
+  'response_oversized',
+  'envelope_shape',
+  'envelope_key_unknown',
+  'envelope_key_authority',
+  'envelope_contract_version',
+  'rows_not_array',
+  'row_count_exceeded',
+  'row_shape',
+  'row_key_authority',
+  'row_key_unknown',
+  'row_contract_version',
+  'line_ref_malformed',
+  'line_ref_not_requested',
+  'line_ref_duplicate',
+  'semantic_food_shape',
+  'semantic_food_key_unknown',
+  'semantic_food_name_malformed',
+  'semantic_food_token_count',
+  'semantic_food_token_malformed',
+  'search_phrases_shape',
+  'search_phrase_malformed',
+  'amount_semantics_shape',
+  'amount_semantics_key_unknown',
+  'amount_kind_invalid',
+  'amount_endpoint_invalid',
+  'amount_range_incomplete',
+  'amount_range_order',
+  'amount_endpoint_on_non_range',
+  'amount_echoed_value_invalid',
+  'amount_phrasing_malformed',
+  'unit_semantics_shape',
+  'unit_semantics_key_unknown',
+  'unit_family_invalid',
+  'unit_raw_malformed',
+  'unit_interpreted_malformed',
+  'count_semantics_shape',
+  'count_semantics_key_unknown',
+  'count_token_malformed',
+  'alternatives_shape',
+  'alternative_shape',
+  'alternative_key_unknown',
+  'alternative_name_malformed',
+  'alternative_notes_malformed',
+  'ambiguity_shape',
+  'ambiguity_key_unknown',
+  'ambiguity_flag_invalid',
+  'ambiguity_reasons_shape',
+  'ambiguity_reason_malformed',
+  'confidence_invalid',
+  'notes_malformed',
+]);
+
 export interface AiAdvancedSanitizeOptions {
   /** The exact line_refs the caller asked about. */
   readonly allowedLineRefs: ReadonlyArray<string>;
   /** Optional cap (clamped to MAX_AI_ADVANCED_ROWS). */
   readonly maxRows?: number;
+  /**
+   * 9B-P4: OPTIONAL, private, out-of-band rejection observer.
+   *
+   * Receives ONLY a closed `AiAdvancedRejectReason` label. It never receives
+   * the raw response, the offending value, an unknown field NAME, or any part
+   * of the recipe. Omitting it preserves the previous behavior exactly, and
+   * it can never change the returned result.
+   *
+   * The observer is called inside a best-effort sink isolation: if it throws,
+   * the rejection still returns the same code and success.
+   */
+  readonly onReject?: (reason: AiAdvancedRejectReason) => void;
 }
 
 export type AiAdvancedSanitizeResult =
@@ -321,14 +473,24 @@ function containsForbiddenAuthorityKey(value: unknown, depth = 0): boolean {
 /**
  * Bounded token list (modifiers/preparation/state/qualifiers). Absent -> empty
  * frozen list; a present malformed entry rejects the interpretation.
+ *
+ * 9B-P4: `reason` names the structural branch (count vs malformed) so the
+ * rejection observer can distinguish them. It is a closed label, never content.
  */
-function boundedTokens(raw: unknown): { ok: boolean; tokens: readonly string[] } {
+function boundedTokens(
+  raw: unknown
+): { ok: boolean; tokens: readonly string[]; reason?: AiAdvancedRejectReason } {
   if (raw === undefined || raw === null) return { ok: true, tokens: Object.freeze([]) };
-  if (!Array.isArray(raw) || raw.length > MAX_AI_ADVANCED_TOKENS) return { ok: false, tokens: Object.freeze([]) };
+  if (!Array.isArray(raw)) return { ok: false, tokens: Object.freeze([]), reason: 'semantic_food_token_count' };
+  if (raw.length > MAX_AI_ADVANCED_TOKENS) {
+    return { ok: false, tokens: Object.freeze([]), reason: 'semantic_food_token_count' };
+  }
   const tokens: string[] = [];
   for (const token of raw) {
     const bounded = boundedString(token, MAX_AI_ADVANCED_TOKEN_LENGTH);
-    if (bounded === undefined) return { ok: false, tokens: Object.freeze([]) };
+    if (bounded === undefined) {
+      return { ok: false, tokens: Object.freeze([]), reason: 'semantic_food_token_malformed' };
+    }
     tokens.push(bounded);
   }
   return { ok: true, tokens: Object.freeze(tokens) };
@@ -343,45 +505,81 @@ export function sanitizeAiAdvancedInterpretationResponse(
   raw: unknown,
   options: AiAdvancedSanitizeOptions
 ): AiAdvancedSanitizeResult {
+  /**
+   * 9B-P4: the ONE rejection exit. It notifies the optional observer with a
+   * closed structural label and returns the SAME public result the sanitizer
+   * returned before this change — `AiAdvancedSanitizeResult` is untouched, so
+   * every existing `toEqual({ ok: false, code })` assertion still holds.
+   *
+   * Three invariants, enforced here rather than by convention:
+   *   1. the label is re-validated against the closed allowlist, so an
+   *      out-of-vocabulary label degrades to `unknown` instead of escaping;
+   *   2. the observer runs inside sink isolation — a throwing observer cannot
+   *      convert a rejection into a success, a crash, or a different code;
+   *   3. the observer receives no argument but the label, so no payload,
+   *      field name, or field value can reach it.
+   */
+  const reject = (
+    code: AiAdvancedFailureCode,
+    reason: AiAdvancedRejectReason
+  ): AiAdvancedSanitizeResult => {
+    const label = AI_ADVANCED_REJECT_REASONS.has(reason) ? reason : 'unknown';
+    const notify = options.onReject;
+    if (typeof notify === 'function') {
+      try {
+        notify(label as AiAdvancedRejectReason);
+      } catch {
+        /* best-effort sink isolation: diagnostics never alter the result */
+      }
+    }
+    return { ok: false, code };
+  };
+
   let materialized: unknown;
   try {
     const result = toInertValue(raw);
     if (!result.ok) {
       const reason = (result as { ok: false; reason: string }).reason;
-      return { ok: false, code: reason === 'oversized' ? 'oversized_response' : 'unsafe_response' };
+      return reject(
+        reason === 'oversized' ? 'oversized_response' : 'unsafe_response',
+        reason === 'oversized' ? 'response_oversized' : 'response_unsafe'
+      );
     }
     materialized = result.value;
   } catch {
-    return { ok: false, code: 'unsafe_response' };
+    return reject('unsafe_response', 'response_unsafe');
   }
 
-  if (!isPlainObject(materialized)) return { ok: false, code: 'invalid_response' };
+  if (!isPlainObject(materialized)) return reject('invalid_response', 'envelope_shape');
   for (const key of Object.keys(materialized)) {
     if (!ENVELOPE_KEYS.has(key)) {
-      return { ok: false, code: isForbiddenAuthorityKey(key) ? 'authority_field' : 'invalid_response' };
+      return reject(
+        isForbiddenAuthorityKey(key) ? 'authority_field' : 'invalid_response',
+        isForbiddenAuthorityKey(key) ? 'envelope_key_authority' : 'envelope_key_unknown'
+      );
     }
   }
   if (materialized.contract_version !== AI_ADVANCED_CONTRACT_VERSION) {
-    return { ok: false, code: 'unsupported_contract_version' };
+    return reject('unsupported_contract_version', 'envelope_contract_version');
   }
-  if (!Array.isArray(materialized.interpretations)) return { ok: false, code: 'invalid_response' };
+  if (!Array.isArray(materialized.interpretations)) return reject('invalid_response', 'rows_not_array');
   const maxRows = Math.min(
     typeof options.maxRows === 'number' && Number.isSafeInteger(options.maxRows) && options.maxRows > 0
       ? options.maxRows
       : MAX_AI_ADVANCED_ROWS,
     MAX_AI_ADVANCED_ROWS
   );
-  if (materialized.interpretations.length > maxRows) return { ok: false, code: 'invalid_response' };
+  if (materialized.interpretations.length > maxRows) return reject('invalid_response', 'row_count_exceeded');
 
   const allowed = new Set(options.allowedLineRefs);
   const seen = new Set<string>();
   const out: AiAdvancedIngredientInterpretation[] = [];
 
   for (const entry of materialized.interpretations) {
-    if (!isPlainObject(entry)) return { ok: false, code: 'invalid_response' };
-    if (containsForbiddenAuthorityKey(entry)) return { ok: false, code: 'authority_field' };
+    if (!isPlainObject(entry)) return reject('invalid_response', 'row_shape');
+    if (containsForbiddenAuthorityKey(entry)) return reject('authority_field', 'row_key_authority');
     for (const key of Object.keys(entry)) {
-      if (!INTERPRETATION_KEYS.has(key)) return { ok: false, code: 'invalid_response' };
+      if (!INTERPRETATION_KEYS.has(key)) return reject('invalid_response', 'row_key_unknown');
     }
 
     // The canonical envelope owns the version; a per-entry version field is
@@ -390,13 +588,13 @@ export function sanitizeAiAdvancedInterpretationResponse(
       entry.contract_version !== undefined &&
       entry.contract_version !== AI_ADVANCED_CONTRACT_VERSION
     ) {
-      return { ok: false, code: 'unsupported_contract_version' };
+      return reject('unsupported_contract_version', 'row_contract_version');
     }
 
     const lineRef = boundedString(entry.line_ref, MAX_AI_ADVANCED_LINE_REF_LENGTH);
-    if (lineRef === undefined) return { ok: false, code: 'invalid_response' };
-    if (!allowed.has(lineRef)) return { ok: false, code: 'unknown_line_ref' };
-    if (seen.has(lineRef)) return { ok: false, code: 'duplicate_line_ref' };
+    if (lineRef === undefined) return reject('invalid_response', 'line_ref_malformed');
+    if (!allowed.has(lineRef)) return reject('unknown_line_ref', 'line_ref_not_requested');
+    if (seen.has(lineRef)) return reject('duplicate_line_ref', 'line_ref_duplicate');
     seen.add(lineRef);
 
     // --- semantic_food (optional; defaults to empty observations) ----------
@@ -408,18 +606,18 @@ export function sanitizeAiAdvancedInterpretationResponse(
       qualifiers: readonly string[];
     } = { modifiers: Object.freeze([]), preparation: Object.freeze([]), state: Object.freeze([]), qualifiers: Object.freeze([]) };
     if (entry.semantic_food !== undefined && entry.semantic_food !== null) {
-      if (!isPlainObject(entry.semantic_food)) return { ok: false, code: 'invalid_response' };
+      if (!isPlainObject(entry.semantic_food)) return reject('invalid_response', 'semantic_food_shape');
       for (const key of Object.keys(entry.semantic_food)) {
-        if (!SEMANTIC_FOOD_KEYS.has(key)) return { ok: false, code: 'invalid_response' };
+        if (!SEMANTIC_FOOD_KEYS.has(key)) return reject('invalid_response', 'semantic_food_key_unknown');
       }
       if (entry.semantic_food.normalized_name !== undefined && entry.semantic_food.normalized_name !== null) {
         const name = boundedString(entry.semantic_food.normalized_name, MAX_AI_ADVANCED_NAME_LENGTH);
-        if (name === undefined) return { ok: false, code: 'invalid_response' };
+        if (name === undefined) return reject('invalid_response', 'semantic_food_name_malformed');
         semanticFood.normalized_name = name;
       }
       for (const key of ['modifiers', 'preparation', 'state', 'qualifiers'] as const) {
         const tokens = boundedTokens(entry.semantic_food[key]);
-        if (!tokens.ok) return { ok: false, code: 'invalid_response' };
+        if (!tokens.ok) return reject('invalid_response', tokens.reason ?? 'semantic_food_token_malformed');
         semanticFood[key] = tokens.tokens;
       }
     }
@@ -431,11 +629,11 @@ export function sanitizeAiAdvancedInterpretationResponse(
         !Array.isArray(entry.search_phrases) ||
         entry.search_phrases.length > MAX_AI_ADVANCED_SEARCH_PHRASES
       ) {
-        return { ok: false, code: 'invalid_response' };
+        return reject('invalid_response', 'search_phrases_shape');
       }
       for (const phrase of entry.search_phrases) {
         const bounded = boundedString(phrase, MAX_AI_ADVANCED_PHRASE_LENGTH);
-        if (bounded === undefined) return { ok: false, code: 'invalid_response' };
+        if (bounded === undefined) return reject('invalid_response', 'search_phrase_malformed');
         if (!searchPhrases.includes(bounded)) searchPhrases.push(bounded);
       }
     }
@@ -445,12 +643,12 @@ export function sanitizeAiAdvancedInterpretationResponse(
       kind: 'unknown' as AiAdvancedAmountKind,
     });
     if (entry.amount_semantics !== undefined && entry.amount_semantics !== null) {
-      if (!isPlainObject(entry.amount_semantics)) return { ok: false, code: 'invalid_response' };
+      if (!isPlainObject(entry.amount_semantics)) return reject('invalid_response', 'amount_semantics_shape');
       for (const key of Object.keys(entry.amount_semantics)) {
-        if (!AMOUNT_SEMANTICS_KEYS.has(key)) return { ok: false, code: 'invalid_response' };
+        if (!AMOUNT_SEMANTICS_KEYS.has(key)) return reject('invalid_response', 'amount_semantics_key_unknown');
       }
       if (!isOneOf(AI_ADVANCED_AMOUNT_KINDS, entry.amount_semantics.kind)) {
-        return { ok: false, code: 'invalid_response' };
+        return reject('invalid_response', 'amount_kind_invalid');
       }
       const kind = entry.amount_semantics.kind;
       const lower =
@@ -469,26 +667,29 @@ export function sanitizeAiAdvancedInterpretationResponse(
           entry.amount_semantics.range_upper !== null &&
           upper === undefined)
       ) {
-        return { ok: false, code: 'invalid_response' };
+        return reject('invalid_response', 'amount_endpoint_invalid');
       }
       if (kind === 'range') {
         // A claimed range must declare BOTH authored-endpoint interpretations.
-        if (lower === undefined || upper === undefined || lower > upper) {
-          return { ok: false, code: 'invalid_response' };
+        if (lower === undefined || upper === undefined) {
+          return reject('invalid_response', 'amount_range_incomplete');
+        }
+        if (lower > upper) {
+          return reject('invalid_response', 'amount_range_order');
         }
       } else if (lower !== undefined || upper !== undefined) {
         // Range endpoints on a non-range claim are internally inconsistent.
-        return { ok: false, code: 'invalid_response' };
+        return reject('invalid_response', 'amount_endpoint_on_non_range');
       }
       let echoed: number | undefined;
       if (entry.amount_semantics.echoed_value !== undefined && entry.amount_semantics.echoed_value !== null) {
         echoed = boundedPositive(entry.amount_semantics.echoed_value);
-        if (echoed === undefined) return { ok: false, code: 'invalid_response' };
+        if (echoed === undefined) return reject('invalid_response', 'amount_echoed_value_invalid');
       }
       let phrasing: string | undefined;
       if (entry.amount_semantics.phrasing !== undefined && entry.amount_semantics.phrasing !== null) {
         phrasing = boundedString(entry.amount_semantics.phrasing, MAX_AI_ADVANCED_PHRASE_LENGTH);
-        if (phrasing === undefined) return { ok: false, code: 'invalid_response' };
+        if (phrasing === undefined) return reject('invalid_response', 'amount_phrasing_malformed');
       }
       amountSemantics = Object.freeze({
         kind,
@@ -504,24 +705,24 @@ export function sanitizeAiAdvancedInterpretationResponse(
       family: 'unknown' as AiAdvancedUnitFamily,
     });
     if (entry.unit_semantics !== undefined && entry.unit_semantics !== null) {
-      if (!isPlainObject(entry.unit_semantics)) return { ok: false, code: 'invalid_response' };
+      if (!isPlainObject(entry.unit_semantics)) return reject('invalid_response', 'unit_semantics_shape');
       for (const key of Object.keys(entry.unit_semantics)) {
-        if (!UNIT_SEMANTICS_KEYS.has(key)) return { ok: false, code: 'invalid_response' };
+        if (!UNIT_SEMANTICS_KEYS.has(key)) return reject('invalid_response', 'unit_semantics_key_unknown');
       }
       const family =
         entry.unit_semantics.family === undefined || entry.unit_semantics.family === null
           ? ('unknown' as AiAdvancedUnitFamily)
           : entry.unit_semantics.family;
-      if (!isOneOf(AI_ADVANCED_UNIT_FAMILIES, family)) return { ok: false, code: 'invalid_response' };
+      if (!isOneOf(AI_ADVANCED_UNIT_FAMILIES, family)) return reject('invalid_response', 'unit_family_invalid');
       let rawUnit: string | undefined;
       if (entry.unit_semantics.raw !== undefined && entry.unit_semantics.raw !== null) {
         rawUnit = boundedString(entry.unit_semantics.raw, MAX_AI_ADVANCED_TOKEN_LENGTH);
-        if (rawUnit === undefined) return { ok: false, code: 'invalid_response' };
+        if (rawUnit === undefined) return reject('invalid_response', 'unit_raw_malformed');
       }
       let interpretedUnit: string | undefined;
       if (entry.unit_semantics.interpreted_unit !== undefined && entry.unit_semantics.interpreted_unit !== null) {
         interpretedUnit = boundedString(entry.unit_semantics.interpreted_unit, MAX_AI_ADVANCED_TOKEN_LENGTH);
-        if (interpretedUnit === undefined) return { ok: false, code: 'invalid_response' };
+        if (interpretedUnit === undefined) return reject('invalid_response', 'unit_interpreted_malformed');
       }
       unitSemantics = Object.freeze({
         family,
@@ -533,16 +734,16 @@ export function sanitizeAiAdvancedInterpretationResponse(
     // --- count_semantics ----------------------------------------------------
     let countSemantics: AiAdvancedCountSemantics = Object.freeze({});
     if (entry.count_semantics !== undefined && entry.count_semantics !== null) {
-      if (!isPlainObject(entry.count_semantics)) return { ok: false, code: 'invalid_response' };
+      if (!isPlainObject(entry.count_semantics)) return reject('invalid_response', 'count_semantics_shape');
       for (const key of Object.keys(entry.count_semantics)) {
-        if (!COUNT_SEMANTICS_KEYS.has(key)) return { ok: false, code: 'invalid_response' };
+        if (!COUNT_SEMANTICS_KEYS.has(key)) return reject('invalid_response', 'count_semantics_key_unknown');
       }
       const count: { noun?: string; size?: string; state?: string } = {};
       for (const key of ['noun', 'size', 'state'] as const) {
         const value = entry.count_semantics[key];
         if (value === undefined || value === null) continue;
         const bounded = boundedString(value, MAX_AI_ADVANCED_TOKEN_LENGTH);
-        if (bounded === undefined) return { ok: false, code: 'invalid_response' };
+        if (bounded === undefined) return reject('invalid_response', 'count_token_malformed');
         count[key] = bounded;
       }
       countSemantics = Object.freeze(count);
@@ -552,19 +753,19 @@ export function sanitizeAiAdvancedInterpretationResponse(
     const alternatives: AiAdvancedAlternative[] = [];
     if (entry.alternatives !== undefined && entry.alternatives !== null) {
       if (!Array.isArray(entry.alternatives) || entry.alternatives.length > MAX_AI_ADVANCED_ALTERNATIVES) {
-        return { ok: false, code: 'invalid_response' };
+        return reject('invalid_response', 'alternatives_shape');
       }
       for (const alternative of entry.alternatives) {
-        if (!isPlainObject(alternative)) return { ok: false, code: 'invalid_response' };
+        if (!isPlainObject(alternative)) return reject('invalid_response', 'alternative_shape');
         for (const key of Object.keys(alternative)) {
-          if (!ALTERNATIVE_KEYS.has(key)) return { ok: false, code: 'invalid_response' };
+          if (!ALTERNATIVE_KEYS.has(key)) return reject('invalid_response', 'alternative_key_unknown');
         }
         const name = boundedString(alternative.normalized_name, MAX_AI_ADVANCED_NAME_LENGTH);
-        if (name === undefined) return { ok: false, code: 'invalid_response' };
+        if (name === undefined) return reject('invalid_response', 'alternative_name_malformed');
         let alternativeNotes: string | undefined;
         if (alternative.notes !== undefined && alternative.notes !== null) {
           alternativeNotes = boundedString(alternative.notes, MAX_AI_ADVANCED_NOTE_LENGTH);
-          if (alternativeNotes === undefined) return { ok: false, code: 'invalid_response' };
+          if (alternativeNotes === undefined) return reject('invalid_response', 'alternative_notes_malformed');
         }
         alternatives.push(
           Object.freeze({
@@ -578,22 +779,22 @@ export function sanitizeAiAdvancedInterpretationResponse(
     // --- ambiguity ----------------------------------------------------------
     let ambiguity: AiAdvancedAmbiguity = Object.freeze({ ambiguous: false, reasons: Object.freeze([]) });
     if (entry.ambiguity !== undefined && entry.ambiguity !== null) {
-      if (!isPlainObject(entry.ambiguity)) return { ok: false, code: 'invalid_response' };
+      if (!isPlainObject(entry.ambiguity)) return reject('invalid_response', 'ambiguity_shape');
       for (const key of Object.keys(entry.ambiguity)) {
-        if (!AMBIGUITY_KEYS.has(key)) return { ok: false, code: 'invalid_response' };
+        if (!AMBIGUITY_KEYS.has(key)) return reject('invalid_response', 'ambiguity_key_unknown');
       }
-      if (typeof entry.ambiguity.ambiguous !== 'boolean') return { ok: false, code: 'invalid_response' };
+      if (typeof entry.ambiguity.ambiguous !== 'boolean') return reject('invalid_response', 'ambiguity_flag_invalid');
       const reasons: string[] = [];
       if (entry.ambiguity.reasons !== undefined && entry.ambiguity.reasons !== null) {
         if (
           !Array.isArray(entry.ambiguity.reasons) ||
           entry.ambiguity.reasons.length > MAX_AI_ADVANCED_AMBIGUITY_REASONS
         ) {
-          return { ok: false, code: 'invalid_response' };
+          return reject('invalid_response', 'ambiguity_reasons_shape');
         }
         for (const reason of entry.ambiguity.reasons) {
           const bounded = boundedString(reason, MAX_AI_ADVANCED_TOKEN_LENGTH);
-          if (bounded === undefined) return { ok: false, code: 'invalid_response' };
+          if (bounded === undefined) return reject('invalid_response', 'ambiguity_reason_malformed');
           reasons.push(bounded);
         }
       }
@@ -607,14 +808,14 @@ export function sanitizeAiAdvancedInterpretationResponse(
     let confidence: AiAdvancedConfidence | undefined;
     if (entry.confidence !== undefined && entry.confidence !== null) {
       if (!isOneOf(AI_ADVANCED_CONFIDENCE_VALUES, entry.confidence)) {
-        return { ok: false, code: 'invalid_response' };
+        return reject('invalid_response', 'confidence_invalid');
       }
       confidence = entry.confidence;
     }
     let notes: string | undefined;
     if (entry.notes !== undefined && entry.notes !== null) {
       notes = boundedString(entry.notes, MAX_AI_ADVANCED_NOTE_LENGTH);
-      if (notes === undefined) return { ok: false, code: 'invalid_response' };
+      if (notes === undefined) return reject('invalid_response', 'notes_malformed');
     }
 
     out.push(

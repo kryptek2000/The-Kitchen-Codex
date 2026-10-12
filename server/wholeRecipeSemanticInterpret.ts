@@ -89,11 +89,13 @@ import {
   AI_ADVANCED_AMOUNT_KINDS,
   AI_ADVANCED_CONFIDENCE_VALUES,
   AI_ADVANCED_CONTRACT_VERSION,
+  AI_ADVANCED_REJECT_REASONS,
   AI_ADVANCED_UNIT_FAMILIES,
   buildAiAdvancedInterpretationSchema,
   sanitizeAiAdvancedInterpretationResponse,
   type AiAdvancedFailureCode,
   type AiAdvancedIngredientInterpretation,
+  type AiAdvancedRejectReason,
 } from '../src/core/nutritionV2/aiAdvanced.js';
 import {
   MAX_WHOLE_RECIPE_CONTEXT_BYTES,
@@ -222,6 +224,18 @@ const LOGGABLE_SANITIZER_CODES: ReadonlySet<string> = new Set<AiAdvancedFailureC
  * allowlist closed if another bounded code is ever added.
  */
 const LOGGABLE_ORIGIN_PROOF_CODES: ReadonlySet<string> = new Set(['invalid_subject']);
+
+/**
+ * 9B-P4: the closed set of structural sanitizer sub-reasons that may be logged.
+ *
+ * Derived from the sanitizer's OWN exported allowlist rather than restated here,
+ * so the two can never drift. Every label is a compile-time literal describing
+ * which shape check fired; none is derived from the rejected payload. The
+ * `sub_reason` token is additionally passed through `safeDiagnosticToken`, so
+ * the P2 token alphabet, length cap, and single-line guarantee still apply even
+ * if a future branch were wired incorrectly.
+ */
+const LOGGABLE_SANITIZER_SUB_REASONS: ReadonlySet<string> = AI_ADVANCED_REJECT_REASONS;
 
 /**
  * Emits exactly ONE bounded server-internal diagnostic event.
@@ -592,15 +606,32 @@ export async function interpretWholeRecipeSemantics(
   }
 
   // --- strict sanitizer gate --------------------------------------------------
-  const sanitized = sanitizeAiAdvancedInterpretationResponse(raw, { allowedLineRefs: requestedLineRefs });
+  // 9B-P4: the sanitizer reports WHICH structural branch rejected, through a
+  // private out-of-band observer. The observer receives one closed label and
+  // nothing else; the returned result is consumed exactly as before, so the
+  // public contract, the fail-closed behavior, and the proof boundary are
+  // unchanged.
+  let sanitizerSubReason: AiAdvancedRejectReason | undefined;
+  const sanitized = sanitizeAiAdvancedInterpretationResponse(raw, {
+    allowedLineRefs: requestedLineRefs,
+    onReject: (reason) => {
+      sanitizerSubReason = reason;
+    },
+  });
   if (sanitized.ok === false) {
     // Forbidden authority, unknown refs, oversized output, malformed structure:
     // all fail the WHOLE operation. No proof is issued.
     // 9B-P2: record the STAGE plus the already-bounded, allowlisted sanitizer
     // code only. The rejected payload itself is NEVER logged.
+    // 9B-P4: additionally record the closed structural SUB-REASON, so a
+    // collapsed `invalid_response` is diagnosable without a second request.
     const reason = sanitized.code;
     logSemanticStage('sanitizer_rejected', {
       reason: LOGGABLE_SANITIZER_CODES.has(reason) ? reason : 'unknown',
+      ...(sanitizerSubReason !== undefined &&
+      LOGGABLE_SANITIZER_SUB_REASONS.has(sanitizerSubReason)
+        ? { sub_reason: safeDiagnosticToken(sanitizerSubReason) }
+        : {}),
     });
     return { ok: false, code: 'invalid_response', aiAttempted: true };
   }
