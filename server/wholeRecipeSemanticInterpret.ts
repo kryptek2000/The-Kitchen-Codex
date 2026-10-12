@@ -92,6 +92,7 @@ import {
   AI_ADVANCED_UNIT_FAMILIES,
   buildAiAdvancedInterpretationSchema,
   sanitizeAiAdvancedInterpretationResponse,
+  type AiAdvancedFailureCode,
   type AiAdvancedIngredientInterpretation,
 } from '../src/core/nutritionV2/aiAdvanced.js';
 import {
@@ -107,6 +108,157 @@ import { getProcessSemanticOriginAuthority } from './wholeRecipeSemanticAuthorit
 
 /** Diagnostic scope for the existing redacted provider-attempt logger. */
 const DIAGNOSTIC_SCOPE = 'wholeRecipeSemanticInterpret';
+
+// ---------------------------------------------------------------------------
+// Phase 9B-P2 — SERVER-INTERNAL STAGE DIAGNOSTICS (observability only)
+// ---------------------------------------------------------------------------
+//
+// WHY. The Phase 9B-P1 controlled live smoke returned HTTP 503
+// `WHOLE_RECIPE_SEMANTIC_UNAVAILABLE` with `aiAttempted: true` and produced NO
+// provider diagnostic. The route deliberately collapses every post-provider
+// failure into one generic class, and the three post-provider gates had no
+// logging at all, so a failure stage was indistinguishable from log loss.
+//
+// WHAT THIS IS. A closed, fixed-vocabulary, SERVER-INTERNAL event that records
+// WHICH STAGE the operation reached. It is NOT a user-facing taxonomy: the HTTP
+// status, the response key set, the wire codes and `aiAttempted` are all
+// unchanged, so this cannot become a client-visible oracle about which internal
+// gate rejected a request.
+//
+// WHAT THIS DELIBERATELY NEVER LOGS. No recipe text, ingredient text, prompt,
+// raw provider output, provider response body, HMAC/signing material, receipt
+// value, operation id, context binding, credential, key fragment, authorization
+// header, cookie, or full request object. Only a fixed stage label plus bounded
+// tokens that are already server-owned identifiers.
+
+/** The CLOSED stage vocabulary. No other value can be emitted. */
+type SemanticDiagnosticStage =
+  | 'provider_returned'
+  | 'sanitizer_rejected'
+  | 'reconciliation_rejected'
+  | 'origin_proof_failed';
+
+/** Hard cap on any single logged token, so a value can never flood the log. */
+const MAX_DIAGNOSTIC_TOKEN_LENGTH = 64;
+
+/** The value emitted when nothing safe can be derived from an input. */
+const UNKNOWN_DIAGNOSTIC_TOKEN = 'unknown';
+
+/**
+ * The ONLY characters that may survive in an emitted diagnostic token.
+ *
+ * This is a positive ALLOWLIST, chosen to cover the identifier syntax the
+ * application's providers actually use while excluding every character that
+ * could change how a log line parses:
+ *
+ *   - letters and digits   : `gemini-3.7-flash`, `gpt4o`, `deepseek-reasoner`
+ *   - `-` and `.`           : Flash / Pro version segments and decimal versions
+ *   - `_`                  : snake_case provider and model names
+ *   - `/` and `:`          : OpenRouter's `vendor/model` and `:free` / `:nitro`
+ *                            routing variants
+ *
+ * Explicitly NOT allowed, and therefore removed: whitespace (including space,
+ * tab, CR and LF), `=` (the field delimiter — its absence is what makes field
+ * injection impossible), quotes, brackets, braces, angle brackets, backticks,
+ * every ASCII control character, every non-ASCII character (so ANSI escapes and
+ * Unicode control/format characters cannot appear), and all remaining
+ * punctuation.
+ *
+ * Phase 9B-P2 audit finding: the previous implementation filtered only
+ * NON-PRINTABLE characters, which let printable ASCII such as spaces and `=`
+ * survive. An input of `gemini-3.7-flash stage=origin_proof_failed
+ * provider=attacker` therefore emitted a line containing forged apparent
+ * `stage=` and `provider=` fields. Filtering against this allowlist closes that
+ * gap by construction.
+ */
+const SAFE_DIAGNOSTIC_TOKEN_CHARS = /[^A-Za-z0-9._:/-]/g;
+
+/**
+ * Reduces an arbitrary value to a bounded, single-field, log-safe token.
+ *
+ * GUARANTEES on the returned string (all observable by the caller/tests):
+ *   1. It matches `/^[A-Za-z0-9._:/-]*$/` — no whitespace, no `=`, no control
+ *      characters, no quotes or bracket delimiters, no non-ASCII.
+ *   2. Its length is at most `MAX_DIAGNOSTIC_TOKEN_LENGTH` (64).
+ *   3. Consequently it can NEVER introduce an additional `key=value` field into
+ *      an emitted diagnostic line: the delimiter it would need is not in the
+ *      alphabet.
+ *   4. It never returns the empty string; that degrades to `unknown`.
+ *
+ * It does NOT escape or quote anything: the guarantee comes from REMOVING every
+ * unsafe character, not from encoding them.
+ *
+ * This is applied even to SERVER-owned identifiers (provider/model ids): they
+ * ultimately originate from configuration, and a diagnostic sink is not a place
+ * to trust them unconditionally.
+ */
+function safeDiagnosticToken(value: unknown): string {
+  if (typeof value !== 'string') return UNKNOWN_DIAGNOSTIC_TOKEN;
+  const filtered = value.replace(SAFE_DIAGNOSTIC_TOKEN_CHARS, '');
+  if (filtered.length === 0) return UNKNOWN_DIAGNOSTIC_TOKEN;
+  return filtered.length > MAX_DIAGNOSTIC_TOKEN_LENGTH
+    ? filtered.slice(0, MAX_DIAGNOSTIC_TOKEN_LENGTH)
+    : filtered;
+}
+
+/**
+ * The closed set of already-bounded sanitizer failure codes that may be logged.
+ * The sanitizer's union is closed, so this is a compile-time-fixed vocabulary;
+ * a value outside it degrades to `unknown` rather than being passed through.
+ */
+const LOGGABLE_SANITIZER_CODES: ReadonlySet<string> = new Set<AiAdvancedFailureCode>([
+  'invalid_response',
+  'unsafe_response',
+  'oversized_response',
+  'unsupported_contract_version',
+  'authority_field',
+  'unknown_line_ref',
+  'duplicate_line_ref',
+]);
+
+/**
+ * The closed set of origin-proof issuance codes that may be logged. The receipt
+ * authority currently issues exactly one; listing it here keeps the diagnostic
+ * allowlist closed if another bounded code is ever added.
+ */
+const LOGGABLE_ORIGIN_PROOF_CODES: ReadonlySet<string> = new Set(['invalid_subject']);
+
+/**
+ * Emits exactly ONE bounded server-internal diagnostic event.
+ *
+ * BEST-EFFORT BY DESIGN. Observational logging must never affect operation
+ * correctness: a throwing or otherwise broken sink (`console.warn` replaced,
+ * wrapped by a logging library that throws, a closed stream, a full disk) is
+ * swallowed here and ONLY here. The caller then continues on its original path
+ * with its original result and authority boundaries intact.
+ *
+ * The isolation is deliberately narrow:
+ *   - It wraps ONLY the sink call. Provider execution, the strict sanitizer,
+ *     reconciliation and receipt issuance are NOT wrapped and still propagate
+ *     their own errors exactly as before.
+ *   - The pre-existing provider-error logging (`logModelAttempt` in the
+ *     `provider_error` catch) is NOT changed by this helper.
+ *
+ * Callers pass ONLY a fixed stage label and a small closed set of server-owned
+ * scalar fields that have already been through `safeDiagnosticToken`. There is
+ * deliberately no parameter through which a provider payload, exception
+ * message, or request object could reach this function.
+ */
+function logSemanticStage(
+  stage: SemanticDiagnosticStage,
+  fields: Readonly<Record<string, string>> = {}
+): void {
+  try {
+    const parts = ['[wholeRecipeSemantic][stage]', `stage=${stage}`];
+    for (const [key, value] of Object.entries(fields)) {
+      parts.push(`${key}=${value}`);
+    }
+    console.warn(parts.join(' '));
+  } catch {
+    // A diagnostic sink that throws is not an operation failure. Swallow it and
+    // let the caller proceed unchanged.
+  }
+}
 
 /**
  * The generic cooking-semantic prompt.
@@ -426,6 +578,13 @@ export async function interpretWholeRecipeSemantics(
     // The ACTUAL successful candidate's identity, NOT the first/preferred one.
     providerId = outcome.providerId;
     modelId = outcome.model;
+    // 9B-P2: a candidate RETURNED. Identity is read ONLY from the server-owned
+    // fallback outcome (`outcome.providerId` / `outcome.model`), never from the
+    // request or from any client-authored field. Both are log-sanitized.
+    logSemanticStage('provider_returned', {
+      provider: safeDiagnosticToken(providerId),
+      model: safeDiagnosticToken(modelId),
+    });
   } catch (error) {
     const normalized = normalizeProviderError(error);
     logModelAttempt(DIAGNOSTIC_SCOPE, normalized.model ?? '', normalized);
@@ -437,12 +596,21 @@ export async function interpretWholeRecipeSemantics(
   if (sanitized.ok === false) {
     // Forbidden authority, unknown refs, oversized output, malformed structure:
     // all fail the WHOLE operation. No proof is issued.
+    // 9B-P2: record the STAGE plus the already-bounded, allowlisted sanitizer
+    // code only. The rejected payload itself is NEVER logged.
+    const reason = sanitized.code;
+    logSemanticStage('sanitizer_rejected', {
+      reason: LOGGABLE_SANITIZER_CODES.has(reason) ? reason : 'unknown',
+    });
     return { ok: false, code: 'invalid_response', aiAttempted: true };
   }
 
   // --- F-03: reconcile the exact target set, then canonical order -------------
   const reconciled = reconcileWholeRecipeSemantics(sanitized.interpretations, requestedLineRefs);
   if (reconciled.ok === false) {
+    // 9B-P2: the reconciliation implementation is UNCHANGED; it still returns no
+    // sub-reason. Only the stage is recorded.
+    logSemanticStage('reconciliation_rejected');
     return { ok: false, code: 'reconciliation_failed', aiAttempted: true };
   }
 
@@ -455,6 +623,11 @@ export async function interpretWholeRecipeSemantics(
     operation_id: operationId,
   });
   if (issued.ok === false) {
+    // 9B-P2: record the stage. The receipt material, the authority subject and
+    // the signing key are NEVER logged.
+    logSemanticStage('origin_proof_failed', {
+      reason: LOGGABLE_ORIGIN_PROOF_CODES.has(issued.code) ? issued.code : 'unknown',
+    });
     return { ok: false, code: 'origin_proof_failed', aiAttempted: true };
   }
 
