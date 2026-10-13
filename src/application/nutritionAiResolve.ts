@@ -13,6 +13,7 @@
 import type { NetworkAdapter } from './adapters/NetworkAdapter';
 import { buildAiSelectionRequestOptions } from './aiSelection';
 import {
+  AI_RESOLUTION_VERSION,
   buildAiResolutionRequestRows,
   sanitizeAiResolutionResponse,
   type AiResolutionIssueKind,
@@ -52,6 +53,44 @@ import {
 } from '../core/nutritionV2/phase4';
 
 export const NUTRITION_RESOLVE_ENDPOINT = '/api/nutrition/resolve-ingredients';
+
+/**
+ * Phase 9B-3C — ATOMIC authenticated whole-recipe resolution.
+ *
+ * ONE request performs interpretation, `wsem1` issuance, same-process MAC
+ * verification and advisory adaptation INSIDE the server process. The browser
+ * never receives a signing key, never issues a receipt, and never claims to
+ * have verified a MAC; it receives advisory SEARCH WORDING only and runs its own
+ * local deterministic USDA verification.
+ */
+export const NUTRITION_RESOLVE_WHOLE_RECIPE_ENDPOINT = '/api/nutrition/resolve-whole-recipe';
+
+/** The closed advisory contract the atomic route answers with. */
+export const AUTHENTICATED_ADVISORY_CONTRACT_VERSION =
+  'nutrition_ai_authenticated_advisory_suggestions_v1' as const;
+
+/**
+ * The COMPLETE authored recipe source the atomic route needs.
+ *
+ * This is deliberately the WHOLE recipe — every authored ingredient in original
+ * order plus the complete bounded instruction list — because whole-recipe
+ * semantic interpretation depends on the instructions. Sending only the
+ * unresolved rows would silently discard the context SHISO reasons over.
+ */
+export interface WholeRecipeSemanticSource {
+  readonly recipe: { readonly ingredients: ReadonlyArray<{ readonly name: string }> };
+  readonly instructions: ReadonlyArray<{ readonly text: string }>;
+  /** Exact server-derivable target refs; never fabricated. */
+  readonly targets: ReadonlyArray<{ readonly line_ref: string }>;
+}
+
+export interface AuthenticatedAdvisoryRequestResult {
+  readonly ok: boolean;
+  readonly message?: string;
+  readonly suggestions: ReadonlyArray<AiResolutionSuggestion>;
+  readonly withheld: ReadonlyArray<AiAdvancedWithheldInterpretation>;
+  readonly aiAttempted: boolean;
+}
 
 /**
  * The LIVE canonical semantic-interpretation route (AI-1). Distinct from the v4
@@ -568,6 +607,18 @@ export interface AiResolutionRunArgs extends AiResolutionRequestArgs {
    * verification pipeline. The legacy v4 advisory path is used otherwise.
    */
   readonly liveCanonicalInterpretation?: boolean;
+  /**
+   * Phase 9B-3C — the COMPLETE authored recipe source for the ATOMIC
+   * authenticated whole-recipe path.
+   *
+   * When supplied (and AI interpretation is available), the orchestrator makes
+   * exactly ONE request to the atomic route, which interprets the WHOLE recipe
+   * including instructions, issues and verifies a `wsem1` receipt inside the
+   * server process, and returns bounded ADVISORY search wording. This is the
+   * WHOLE recipe, not just the unresolved rows: sending only the exception rows
+   * would discard the instruction context SHISO reasons over.
+   */
+  readonly wholeRecipe?: WholeRecipeSemanticSource;
   /** Deterministic parse observations used to reconcile echoed amounts. */
   readonly authoritativeByLineRef?: ReadonlyMap<string, AiAdvancedAuthoritativeAmountObservation>;
 }
@@ -578,6 +629,105 @@ export interface AiResolutionRunArgs extends AiResolutionRequestArgs {
  * suggestions go through the confidence matcher; amount suggestions go through
  * the authenticated USDA count-portion contract. Neither grants authority.
  */
+/**
+ * Phase 9B-3C — calls the ATOMIC authenticated whole-recipe route.
+ *
+ * DEFENSE IN DEPTH: the server's advisory response is still UNTRUSTED transport
+ * data when it reaches the browser, so it is re-sanitized here with the released
+ * `sanitizeAiResolutionResponse` against the EXACT locally requested line refs.
+ * A string or boolean claiming `authenticated` / `verified` / `aiAccepted` in
+ * that payload carries no authority and is rejected like any other unknown key;
+ * MAC verification happened on the server, and local USDA verification happens
+ * independently below.
+ */
+async function requestAuthenticatedWholeRecipeSuggestions(
+  args: AiResolutionRequestArgs,
+  source: WholeRecipeSemanticSource
+): Promise<AuthenticatedAdvisoryRequestResult> {
+  const allowedLineRefs = source.targets.map((target) => target.line_ref);
+  if (allowedLineRefs.length === 0) {
+    return {
+      ok: false,
+      message: 'Nothing unresolved to interpret.',
+      suggestions: Object.freeze([]),
+      withheld: Object.freeze([]),
+      aiAttempted: false,
+    };
+  }
+
+  let response;
+  try {
+    response = await args.network.post<Record<string, unknown>>(
+      NUTRITION_RESOLVE_WHOLE_RECIPE_ENDPOINT,
+      {
+        request_version: 'nutrition_ai_whole_recipe_interpretation_request_v1',
+        recipe: source.recipe,
+        instructions: source.instructions,
+        targets: source.targets,
+      },
+      await buildAiSelectionRequestOptions()
+    );
+  } catch {
+    return {
+      ok: false,
+      message: AI_RESOLUTION_UNAVAILABLE_MESSAGE,
+      suggestions: Object.freeze([]),
+      withheld: Object.freeze([]),
+      aiAttempted: true,
+    };
+  }
+
+  if (!response || response.ok !== true) {
+    return {
+      ok: false,
+      message: AI_RESOLUTION_UNAVAILABLE_MESSAGE,
+      suggestions: Object.freeze([]),
+      withheld: Object.freeze([]),
+      aiAttempted: true,
+    };
+  }
+
+  const sanitized = sanitizeAiResolutionResponse(
+    {
+      version: AI_RESOLUTION_VERSION,
+      suggestions: response.data?.['suggestions'],
+    },
+    { allowedLineRefs }
+  );
+  if (sanitized.ok !== true) {
+    return {
+      ok: false,
+      message: AI_RESOLUTION_INVALID_MESSAGE,
+      suggestions: Object.freeze([]),
+      withheld: Object.freeze([]),
+      aiAttempted: true,
+    };
+  }
+
+  // The withheld list is DISPLAY/AUDIT information only. It is re-read
+  // structurally, never trusted as typed data.
+  const withheldRaw = response.data?.['withheld'];
+  const withheld: AiAdvancedWithheldInterpretation[] = [];
+  if (Array.isArray(withheldRaw)) {
+    for (const entry of withheldRaw) {
+      if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) continue;
+      const record = entry as Record<string, unknown>;
+      const lineRef = record['line_ref'];
+      const reason = record['reason'];
+      if (typeof lineRef !== 'string' || !allowedLineRefs.includes(lineRef)) continue;
+      if (reason !== 'ambiguous' && reason !== 'alternatives') continue;
+      withheld.push({ line_ref: lineRef, reason });
+    }
+  }
+
+  return {
+    ok: true,
+    suggestions: sanitized.suggestions,
+    withheld: Object.freeze(withheld),
+    aiAttempted: true,
+  };
+}
+
 export async function resolveUnresolvedRowsWithAi(
   args: AiResolutionRunArgs
 ): Promise<AiResolutionRunResult> {
@@ -597,13 +747,38 @@ export async function resolveUnresolvedRowsWithAi(
     };
   }
 
+  const wholeRecipePath = args.wholeRecipe !== undefined;
   const canonicalInterpretationPath =
-    args.interpretations !== undefined || args.liveCanonicalInterpretation === true;
+    wholeRecipePath || args.interpretations !== undefined || args.liveCanonicalInterpretation === true;
   let suggestions: ReadonlyArray<AiResolutionSuggestion>;
   let aiAttempted: boolean;
   let withheld: ReadonlyArray<AiAdvancedWithheldInterpretation> = Object.freeze([]);
   let semanticInterpretedCount = 0;
-  if (canonicalInterpretationPath) {
+  if (wholeRecipePath) {
+    // PHASE 9B-3C: ONE atomic request performs interpretation, receipt issuance,
+    // same-process MAC verification and advisory adaptation on the server. The
+    // browser adds NO second round-trip and receives NO authority claim: the
+    // advisory transport is re-sanitized locally above, and every USDA decision
+    // below remains the LOCAL deterministic contract's.
+    const live = await requestAuthenticatedWholeRecipeSuggestions(args, args.wholeRecipe as WholeRecipeSemanticSource);
+    if (live.ok !== true) {
+      return {
+        ok: false,
+        message: live.message ?? AI_RESOLUTION_UNAVAILABLE_MESSAGE,
+        aiAttempted: live.aiAttempted,
+        interpretedCount: 0,
+        semanticInterpretedCount: 0,
+        withheld: Object.freeze([]),
+        outcome: EMPTY_FOOD_OUTCOME,
+        amounts: EMPTY_AMOUNT_OUTCOME,
+        households: EMPTY_HOUSEHOLD_OUTCOME,
+      };
+    }
+    suggestions = live.suggestions;
+    withheld = live.withheld;
+    semanticInterpretedCount = live.suggestions.length;
+    aiAttempted = true;
+  } else if (canonicalInterpretationPath) {
     // CANONICAL PATH (AI-0 explicit interpretations, AI-1 live route). Both forms
     // converge on ONE application step: re-sanitize against the exact request
     // rows, reconcile against the deterministic source observations, then apply

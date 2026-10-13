@@ -794,10 +794,28 @@ describe('9B-3B — structural pins for defence-in-depth the 3A gate already enf
     expect(code).not.toMatch(/createHmac|randomBytes|timingSafeEqual|createWholeRecipeSemanticOriginAuthority/);
   });
 
-  it('introduces NO HTTP route and NO wiring change', () => {
+  it('is a PURE server function — it introduces NO HTTP surface of its own', () => {
     expect(SOURCE).not.toMatch(/express|app\.(get|post|put|delete)|Router/);
+    expect(SOURCE).not.toMatch(/nutritionInterpretRateLimiter|requireAiAccessToken|requireNutritionProductFeature/);
+  });
+
+  it('after 9B-3C it is wired ONLY into the atomic resolve route, never the legacy one', () => {
     const app = readFileSync(new URL('../../server/app.ts', import.meta.url), 'utf8');
-    expect(app).not.toContain('wholeRecipeSemanticUsdaBridge');
-    expect(app).not.toContain('bridgeAuthenticatedSemanticsToAdvisorySuggestions');
+    // It IS now wired — but exactly once, and only beside the atomic route.
+    const wires = [...app.matchAll(/bridgeAuthenticatedSemanticsToAdvisorySuggestions\(/g)];
+    expect(wires).toHaveLength(1);
+    expect(app).toContain('wholeRecipeSemanticUsdaBridge');
+    // The legacy `/api/nutrition/interpret-whole-recipe` route block must never
+    // gain the bridge: its released wire contract is the raw signed semantics.
+    const legacyAt = app.indexOf('app.post("/api/nutrition/interpret-whole-recipe"');
+    const atomicAt = app.indexOf('app.post("/api/nutrition/resolve-whole-recipe"');
+    expect(legacyAt).toBeGreaterThan(-1);
+    expect(atomicAt).toBeGreaterThan(legacyAt);
+    const legacyBlock = app.slice(legacyAt, atomicAt);
+    expect(legacyBlock).not.toContain('bridgeAuthenticatedSemanticsToAdvisorySuggestions');
+    expect(legacyBlock).not.toContain('wholeRecipeSemanticUsdaBridge');
+    // And the legacy route still returns the receipt, never advisory suggestions.
+    expect(legacyBlock).toContain('semantic_response');
+    expect(legacyBlock).not.toContain('"nutrition_ai_authenticated_advisory_suggestions_v1"');
   });
 });

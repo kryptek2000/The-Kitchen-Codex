@@ -13,6 +13,7 @@ import { estimateRecipeNutrition } from "./nutritionEstimator.js";
 import { resolveIngredientFoodsOnServer } from "./nutritionResolve.js";
 import { interpretIngredientsOnServer } from "./nutritionInterpret.js";
 import { interpretWholeRecipeSemantics } from "./wholeRecipeSemanticInterpret.js";
+import { bridgeAuthenticatedSemanticsToAdvisorySuggestions } from "./wholeRecipeSemanticUsdaBridge.js";
 import { planIngredientsOnServer } from "./nutritionPlan.js";
 import { interpretRecipeContextOnServer } from "./nutritionContext.js";
 import { reconcileRecipeContextOnServer } from "./recipeContextReconcile.js";
@@ -979,6 +980,139 @@ export function createApp(opts: CreateAppOptions): express.Express {
         ok: false,
         code: "WHOLE_RECIPE_SEMANTIC_INTERNAL_ERROR",
         error: "An unexpected error occurred during whole-recipe semantic interpretation.",
+        aiAttempted: false,
+      });
+    }
+  });
+
+  // Phase 9B-3C — ATOMIC AUTHENTICATED WHOLE-RECIPE RESOLUTION.
+  //
+  // ONE request performs the whole trust chain inside ONE process execution:
+  //   released request materialization -> whole-recipe semantic operation ->
+  //   genuine `wsem1` issuance -> Phase 9B-3A same-process MAC verification ->
+  //   Phase 9B-3B advisory bridge -> bounded advisory suggestion response.
+  //
+  // The browser NEVER receives the signing key, NEVER issues a receipt, and
+  // NEVER claims to have cryptographically verified anything: it receives
+  // advisory SEARCH WORDING only and runs its own local deterministic USDA
+  // verification. Issuance and verification share one process-scoped authority,
+  // so no second browser round-trip and no cross-process receipt is required.
+  //
+  // `/api/nutrition/interpret-whole-recipe` above is UNCHANGED and remains the
+  // raw signed-semantics contract; this route is additive.
+  //
+  // AI-5B: `ai_interpretation`. Entitlement only permits an ATTEMPT, so a Basic
+  // caller costs ZERO provider work. `authoritativeByLineRef` is deliberately
+  // NOT accepted from HTTP: a serialized amount-observation map must never
+  // become an authority a client can forge. Amount reconciliation therefore runs
+  // in the browser against its own deterministic source evidence.
+  app.post("/api/nutrition/resolve-whole-recipe", requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccessAuthority, "ai_interpretation"), textPricingGuard, nutritionInterpretRateLimiter, async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+
+    try {
+      const userSelection = parseTextSelectionHeader(req.headers);
+
+      // STEP 1 — the released operation. This is the ONLY provider work, and it
+      // runs at most one application-level fallback chain.
+      const result = await interpretWholeRecipeSemantics(req.body, { userSelection });
+      if (result.ok !== true) {
+        const failure = result as { readonly code: string; readonly aiAttempted: boolean };
+        if (failure.code === "invalid_request") {
+          return res.status(400).json({
+            ok: false,
+            code: "INVALID_WHOLE_RECIPE_RESOLUTION_REQUEST",
+            error: "Invalid whole-recipe resolution request.",
+            aiAttempted: false,
+          });
+        }
+        return res.status(503).json({
+          ok: false,
+          code: "WHOLE_RECIPE_RESOLUTION_UNAVAILABLE",
+          error:
+            "AI whole-recipe resolution is unavailable. You can continue with the deterministic analyzer and manual review.",
+          aiAttempted: failure.aiAttempted === true,
+        });
+      }
+
+      // STEP 2 — the issued envelope, projected field-by-field. A spread would
+      // leak any future internal field, so the transport is CLOSED by
+      // construction.
+      const issued = result as {
+        readonly request_id: string;
+        readonly context_binding: string;
+        readonly semantic_response: ReadonlyArray<unknown>;
+        readonly provider_id: string;
+        readonly model_id: string;
+        readonly operation_id: string;
+        readonly origin_receipt: string;
+      };
+      const bridge = bridgeAuthenticatedSemanticsToAdvisorySuggestions({
+        rawRequest: req.body,
+        issuedEnvelope: {
+          request_id: issued.request_id,
+          context_binding: issued.context_binding,
+          semantic_response: issued.semantic_response,
+          provider_id: issued.provider_id,
+          model_id: issued.model_id,
+          operation_id: issued.operation_id,
+          origin_receipt: issued.origin_receipt,
+        },
+      });
+
+      // STEP 3 — a verification or adaptation failure yields ZERO suggestions and
+      // collapses into the SAME generic service class, so the route is never an
+      // oracle for which internal gate refused. No MAC detail, provider
+      // exception, prompt, credential, receipt or binding is ever echoed.
+      if (bridge.ok !== true) {
+        return res.status(503).json({
+          ok: false,
+          code: "WHOLE_RECIPE_RESOLUTION_UNAVAILABLE",
+          error:
+            "AI whole-recipe resolution is unavailable. You can continue with the deterministic analyzer and manual review.",
+          aiAttempted: true,
+        });
+      }
+
+      // ADVISORY ONLY. This response carries search WORDING, never an FDC id,
+      // catalog or record digest, gram/portion value, nutrient, calorie,
+      // acceptance threshold, Apply token or persistence permission.
+      //
+      // CLOSED PUBLIC ALLOWLIST. The object below is a field-by-field literal
+      // with NO spread of the bridge result, so no bridge field — present or
+      // added later — can reach the wire. Exactly these keys are public:
+      //
+      //   ok, contract_version, request_version,
+      //   suggestions, withheld, contradicted, inadaptable, aiAttempted
+      //
+      // The six IDENTITY/AUTHORITY fields stay strictly inside the server:
+      //   context_binding  the sha256 digest of the exact context the model saw
+      //   operation_id     server-side correlation
+      //   origin_receipt   the wsem1 MAC — verified above and never echoed
+      //   provider_id      provider identity
+      //   model_id         model identity
+      //   request_id       request correlation
+      //
+      // They remain available internally via the bridge for genuine
+      // authentication, reconciliation, logging and diagnostics. The browser
+      // needs none of them: freshness and mid-flight protection are owned by
+      // the application's own request sequence, generation counter, recipe key,
+      // session identity and open flag.
+      const publicAdvisoryResolution: Record<string, unknown> = {
+        ok: true,
+        contract_version: "nutrition_ai_authenticated_advisory_suggestions_v1",
+        request_version: "nutrition_ai_whole_recipe_interpretation_request_v1",
+        suggestions: bridge.suggestions,
+        withheld: bridge.withheld,
+        contradicted: bridge.contradicted,
+        inadaptable: bridge.inadaptable,
+        aiAttempted: true,
+      };
+      return res.status(200).json(publicAdvisoryResolution);
+    } catch {
+      return res.status(500).json({
+        ok: false,
+        code: "WHOLE_RECIPE_RESOLUTION_INTERNAL_ERROR",
+        error: "An unexpected error occurred during whole-recipe resolution.",
         aiAttempted: false,
       });
     }

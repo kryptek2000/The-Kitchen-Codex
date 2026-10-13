@@ -621,16 +621,20 @@ describe('9B-2C — structural invariants of the new route', () => {
     expect(authAt).toBeLessThan(gateAt);
     expect(gateAt).toBeLessThan(pricingAt);
     expect(pricingAt).toBeLessThan(limiterAt);
-    // Reuses the SHARED semantic limiter: both semantic transports are in ONE
-    // cost/rate category, and no second whole-recipe bucket was introduced.
+    // Reuses the SHARED semantic limiter: every semantic transport is in ONE
+    // cost/rate category, and no second whole-recipe bucket was introduced by
+    // the 9B-3C atomic route either.
     const limiterRoutes = [...APP_SOURCE.matchAll(/app\.post\([^\n]*nutritionInterpretRateLimiter/g)];
-    expect(limiterRoutes).toHaveLength(2);
+    expect(limiterRoutes).toHaveLength(3);
     expect(APP_SOURCE).not.toMatch(/wholeRecipe[A-Za-z]*RateLimiter/);
   });
 
   it('gates with the EXISTING ai_interpretation feature, not a new one', () => {
     expect(routeBlock.slice(0, 400)).toContain('requireNutritionProductFeature(nutritionProductAccessAuthority, "ai_interpretation")');
-    expect(APP_SOURCE).not.toContain('ai_whole_recipe_interpretation');
+    // 9B-3C adds an atomic route whose REQUEST VERSION legitimately contains
+    // "ai_whole_recipe_interpretation". The invariant is that it was never used
+    // as a product-access FEATURE, so the check is anchored to the gate call.
+    expect(APP_SOURCE).not.toMatch(/requireNutritionProductFeature\([^)]*"ai_whole_recipe_interpretation"/);
   });
 
   it('the product-access contract and feature vocabulary are UNCHANGED', () => {

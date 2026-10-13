@@ -734,10 +734,10 @@ describe('AI-5E — the seven gates follow the authority decision', () => {
     const gateCalls = [...APP_SOURCE.matchAll(/requireNutritionProductFeature\([^)]*\)/g)].map(
       (m) => m[0],
     );
-    // Seven gated routes after 9B-2C, from the SAME closed four-feature
+    // Eight gated routes after 9B-3C, from the SAME closed four-feature
     // vocabulary: the new whole-recipe route is another `ai_interpretation`
     // transport, not a fifth feature.
-    expect(gateCalls).toHaveLength(7);
+    expect(gateCalls).toHaveLength(8);
     for (const [path, feature] of GATED_ROUTES) {
       expect(
         APP_SOURCE.includes(

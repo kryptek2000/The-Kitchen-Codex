@@ -339,6 +339,16 @@ export type AdvancedNutritionAiResolveHandler = (args: {
   /** The SAME live projection that renders the ingredient list. */
   readonly liveRows: ReadonlyArray<LiveRowState>;
   readonly state: Phase4State;
+  /**
+   * Phase 9B-3C — the AUTHORED recipe source, supplied by the shell.
+   *
+   * The whole-recipe semantic path reasons over the COMPLETE recipe including
+   * its instructions, so the shell needs the authored recipe to build that
+   * request. The UI never parses it: it only forwards the recipe object it
+   * already holds, and the shell derives exact line refs through the existing
+   * deterministic adapter.
+   */
+  readonly recipe?: ObsidianRecipe;
 }) => Promise<{
   readonly ok: boolean;
   readonly message?: string;
@@ -1305,6 +1315,11 @@ onReviewRecipeContextWithAi,
           issueKinds,
           liveRows: liveRowsRef.current,
           state: stateRef.current,
+          // Phase 9B-3C: forward the authored recipe so the shell can build the
+          // WHOLE-recipe semantic request. The callback closes over the recipe
+          // current at CLICK time, and `stillCurrent()` below still discards any
+          // response whose recipe/session generation has moved on.
+          recipe,
         });
         // STALE-RESPONSE PROTECTION: a response for a different recipe/session,
         // an older generation, a superseded request, or a closed editor is

@@ -62,7 +62,10 @@ import {
 } from './application/recipeImageRecovery';
 import { saveGeneratedRecipeImageToVault, hashCanonicalMarkdown, type GeneratedImageSaveResult } from './application/recipeImageSave';
 import { hydrateAiSelections } from './application/aiSelection';
-import { resolveUnresolvedRowsWithAi } from './application/nutritionAiResolve';
+import {
+  resolveUnresolvedRowsWithAi,
+  type WholeRecipeSemanticSource,
+} from './application/nutritionAiResolve';
 import {
   NUTRITION_AI_REFRESHING_MESSAGE,
   UNAVAILABLE_EFFECTIVE_CAPABILITIES,
@@ -1112,8 +1115,32 @@ export default function App() {
     issueKinds,
     liveRows,
     state,
-  }) =>
-    resolveUnresolvedRowsWithAi({
+    recipe,
+  }) => {
+    // Phase 9B-3C: build the WHOLE-recipe semantic source from the authored
+    // recipe and the SAME deterministic adapter the card already used, so the
+    // requested line references are the exact canonical ones — never fabricated.
+    // Every authored ingredient goes in ORIGINAL order, and the complete bounded
+    // instruction list is included: whole-recipe interpretation reasons over the
+    // instructions, so sending only the exception rows would discard that context.
+    let wholeRecipe: WholeRecipeSemanticSource | undefined;
+    if (recipe !== undefined) {
+      const ingredients = recipe.ingredients
+        .map((ingredient) => ingredient.original ?? ingredient.name ?? '')
+        .map((original) => original.trim())
+        .filter((original) => original.length > 0);
+      const targetLineRefs = rows
+        .map((row) => row.line_ref)
+        .filter((lineRef): lineRef is string => typeof lineRef === 'string' && lineRef.length > 0);
+      if (ingredients.length > 0 && targetLineRefs.length > 0) {
+        wholeRecipe = {
+          recipe: { ingredients: ingredients.map((name) => ({ name })) },
+          instructions: recipe.instructions.map((step) => ({ text: step.text })),
+          targets: targetLineRefs.map((line_ref) => ({ line_ref })),
+        };
+      }
+    }
+    return resolveUnresolvedRowsWithAi({
       network: networkAdapter,
       session,
       rows,
@@ -1123,7 +1150,9 @@ export default function App() {
       state,
       capabilities: await resolveEffectiveNutritionCapabilitiesOnce(),
       liveCanonicalInterpretation: true,
+      ...(wholeRecipe !== undefined ? { wholeRecipe } : {}),
     });
+  };
 
   /**
    * AI-3 PRODUCTION COMPOSITION OWNER — bounded mass estimates.
