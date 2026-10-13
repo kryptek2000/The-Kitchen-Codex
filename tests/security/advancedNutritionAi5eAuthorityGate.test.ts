@@ -17,7 +17,7 @@
  *      before D1 currentness, so an unauthorized caller gets no receipt oracle;
  *   8. FORGED CLIENT INPUT has zero authority and cannot SELECT an authority;
  *   9. DEFAULT `createApp()` is canonical Basic, and one deployment authority governs
- *      the status route and all seven gates identically.
+ *      the status route and all eight gates identically.
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import http from 'http';
@@ -159,18 +159,25 @@ const AUTHORED_RECIPE = {
 const INSTRUCTIONS = [{ text: 'Garnish with parsley' }];
 
 /**
- * The EXACT seven AI-5B gates and nothing else.
+ * The EXACT eight AI-5B gates and nothing else.
  *
- * Phase 9B-2C added `/api/nutrition/interpret-whole-recipe` as a SEVENTH
- * gated route — another transport for AI semantic interpretation under the
- * EXISTING `ai_interpretation` product feature. The four-feature product
- * vocabulary and `nutrition_product_access_v1` are unchanged; one product
- * feature may truthfully gate more than one HTTP route.
+ * Phase 9B-2C added `/api/nutrition/interpret-whole-recipe` as a SEVENTH gated
+ * route, and Phase 9B-3C added `/api/nutrition/resolve-whole-recipe` as an
+ * EIGHTH — both are transports for AI semantic interpretation under the EXISTING
+ * `ai_interpretation` product feature. Neither introduces a fifth feature: the
+ * four-feature product vocabulary and `nutrition_product_access_v1` are unchanged,
+ * because one product feature may truthfully gate more than one HTTP route.
+ *
+ * This matrix is the shared per-route coverage of that structure (Muse flag F-1,
+ * now closed): each entry is exercised for authentication-before-entitlement,
+ * entitlement-before-pricing/provider, the four-feature vocabulary, fail-closed
+ * unknown authority, and zero provider work on denial.
  */
 const GATED_ROUTES: ReadonlyArray<readonly [string, string]> = [
   ['/api/nutrition/resolve-ingredients', 'ai_interpretation'],
   ['/api/nutrition/interpret-ingredients', 'ai_interpretation'],
   ['/api/nutrition/interpret-whole-recipe', 'ai_interpretation'],
+  ['/api/nutrition/resolve-whole-recipe', 'ai_interpretation'],
   ['/api/nutrition/plan-ingredients', 'ai_candidate_orchestration'],
   ['/api/nutrition/estimate-mass', 'ai_bounded_mass_estimation'],
   ['/api/nutrition/recipe-context', 'ai_recipe_context_review'],
@@ -190,6 +197,17 @@ function requestBody(path: string, overrides: Record<string, unknown> = {}): unk
         recipe: AUTHORED_RECIPE,
         instructions: INSTRUCTIONS,
         targets: [],
+        ...overrides,
+      };
+    case '/api/nutrition/resolve-whole-recipe':
+      // The 9B-3C ATOMIC route issues and verifies a wsem1 receipt in one process.
+      // Its request shape is the whole-recipe one; entitlement must be settled
+      // before any of that work begins.
+      return {
+        request_version: 'nutrition_ai_whole_recipe_interpretation_request_v1',
+        recipe: AUTHORED_RECIPE,
+        instructions: INSTRUCTIONS,
+        targets: [{ line_ref: 'ing:0:ai5e-probe000000', original: '400 g chicken' }],
         ...overrides,
       };
     case '/api/nutrition/plan-ingredients':
@@ -674,8 +692,8 @@ describe('AI-5E — the status route under a resolved authority', () => {
 // 5. THE SIX GATES
 // ===========================================================================
 
-describe('AI-5E — the seven gates follow the authority decision', () => {
-  it('Basic denies all seven with the bounded 403 and ZERO provider work', async () => {
+describe('AI-5E — the eight gates follow the authority decision', () => {
+  it('Basic denies all eight with the bounded 403 and ZERO provider work', async () => {
     const app = await startApp({ kind: 'deployment', tier: 'basic' });
     try {
       for (const [path] of GATED_ROUTES) {
@@ -687,7 +705,7 @@ describe('AI-5E — the seven gates follow the authority decision', () => {
     }
   });
 
-  it('an UNAVAILABLE authority fails all seven closed with the bounded 503', async () => {
+  it('an UNAVAILABLE authority fails all eight closed with the bounded 503', async () => {
     for (const behaviour of ['throw', 'reject', 'null', 'hand-authored', 'unknown-status'] as const) {
       const app = await startApp({ kind: 'broken', behaviour, count: true });
       try {
@@ -716,7 +734,7 @@ describe('AI-5E — the seven gates follow the authority decision', () => {
     }
   });
 
-  it('AI Advanced passes the product gate on all seven to their EXISTING downstream semantics', async () => {
+  it('AI Advanced passes the product gate on all eight to their EXISTING downstream semantics', async () => {
     const app = await startApp({ kind: 'deployment', tier: 'ai_advanced' });
     try {
       for (const [path] of GATED_ROUTES) {
@@ -730,7 +748,21 @@ describe('AI-5E — the seven gates follow the authority decision', () => {
     }
   });
 
-  it('there is no EIGHTH gate: the historical estimate-nutrition route stays outside', async () => {
+  it('the matrix covers EXACTLY the production gated routes — no gap, no extra', () => {
+    // Derive the truth from the server source rather than trusting this file, so
+    // this is a genuine coverage pin (the reason Muse raised flag F-1) rather than
+    // a restatement of the constant next to it.
+    const gatedInSource: string[] = [];
+    for (const m of APP_SOURCE.matchAll(
+      /app\.post\(\s*"(\/api\/[^"]+)"([\s\S]{0,600}?)(?:\)|\basync\b)/g,
+    )) {
+      if (m[2].includes('requireNutritionProductFeature')) gatedInSource.push(m[1]);
+    }
+    expect(gatedInSource.length).toBe(GATED_ROUTES.length);
+    expect(new Set(gatedInSource)).toEqual(new Set(GATED_ROUTES.map(([p]) => p)));
+  });
+
+  it('eight gates, four features: no fifth product feature was introduced', () => {
     const gateCalls = [...APP_SOURCE.matchAll(/requireNutritionProductFeature\([^)]*\)/g)].map(
       (m) => m[0],
     );
@@ -738,6 +770,15 @@ describe('AI-5E — the seven gates follow the authority decision', () => {
     // vocabulary: the new whole-recipe route is another `ai_interpretation`
     // transport, not a fifth feature.
     expect(gateCalls).toHaveLength(8);
+    const features = new Set(
+      gateCalls.map((call) => /"([a-z_]+)"\)/.exec(call)?.[1]).filter(Boolean),
+    );
+    expect([...features].sort()).toEqual([
+      'ai_bounded_mass_estimation',
+      'ai_candidate_orchestration',
+      'ai_interpretation',
+      'ai_recipe_context_review',
+    ]);
     for (const [path, feature] of GATED_ROUTES) {
       expect(
         APP_SOURCE.includes(

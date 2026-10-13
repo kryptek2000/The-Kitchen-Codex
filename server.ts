@@ -3,6 +3,7 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { createApp } from "./server/app.js";
+import { usdaBundleDevAssetMiddleware } from "./server/usdaBundleDevAssets.js";
 import {
   createDeploymentNutritionProductAccessAuthority,
   NUTRITION_PRODUCT_TIER_ENV,
@@ -72,6 +73,15 @@ const app = createApp({
 // Serve frontend with Vite in dev, static files in prod
 async function start() {
   if (!isProduction) {
+    // H1-A: Vite's dev static server marks `.gz` files with `Content-Encoding:
+    // gzip`, so the browser transparently DECOMPRESSES the locked USDA shards and
+    // the bytes handed to JavaScript stop being the authenticated artifacts. This
+    // development-only middleware is mounted FIRST so the five locked files are
+    // served verbatim (no Content-Encoding), after verifying each against the
+    // source-controlled release lock. It matches ONLY those exact locked filenames
+    // under the one fixed bundle directory and passes everything else to Vite
+    // untouched. Production never mounts it.
+    app.use(usdaBundleDevAssetMiddleware());
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
