@@ -11,11 +11,11 @@
  * What it updates mechanically (version strings ONLY, no authored content):
  *   - src/appVersion.ts        : `RELEASE_VERSION = "vX.Y.Z"`
  *   - package.json             : `"version": "X.Y.Z"`   (no leading 'v')
- *   - README.md                : header `vX.Y.Z` and the shield badge `version-X.Y.Z`
+ *   - README.md                : version shield badge `version-X.Y.Z` (and legacy versioned heading if present)
  *
  * After running it, finish the release by hand (the script prints a checklist):
  *   - Add a CHANGELOG.md entry under a new `## [X.Y.Z]` heading.
- *   - Author RELEASE_NOTES_vX.Y.Z.md (and optionally retire the old one).
+ *   - Publish GitHub Release notes from the canonical CHANGELOG.md entry; no duplicate root release-note file.
  *   - Commit, tag `vX.Y.Z`, push, and publish the GitHub Release.
  *
  * The script never edits `bun.lock`, the git tags, or existing releases, and it
@@ -54,7 +54,7 @@ export function syncVersionContents(version: string, contents: {
     `$1${bare}$2`
   );
 
-  // README header line: "# 🍳 The Kitchen Codex \`vX.Y.Z\`"
+  // Legacy README header (when present); the current README uses an unversioned brand heading.
   let readme = contents.readme;
   readme = readme.replace(
     /(# 🍳 The Kitchen Codex `)v?\d+\.\d+\.\d+(`)/,
@@ -88,8 +88,8 @@ function main(): void {
   if (!target) {
     console.error(
       "Usage: bun x tsx scripts/bump_version.ts v0.3.0\n\n" +
-        "Note: this only rewrites the version STRINGS in src/appVersion.ts, " +
-        "package.json, and README.md. Add the CHANGELOG entry and release notes by hand."
+        "Note: this only rewrites version strings in src/appVersion.ts, " +
+        "package.json, and the README version badge. Update CHANGELOG.md and publish the GitHub Release manually."
     );
     process.exit(1);
   }
@@ -123,8 +123,7 @@ function main(): void {
   console.log("   Updated: src/appVersion.ts, package.json, README.md");
   console.log("\nFinish the release by hand:");
   console.log("   1. Add a CHANGELOG.md entry under `## [X.Y.Z]`.");
-  console.log("   2. Author RELEASE_NOTES_vX.Y.Z.md.");
-  console.log("   3. Commit, tag vX.Y.Z, push, and publish the GitHub Release.");
+  console.log("   2. Commit, tag vX.Y.Z, push, and publish GitHub Release notes from CHANGELOG.md.");
 }
 
 if (process.argv[1] && process.argv[1].endsWith("bump_version.ts")) {
