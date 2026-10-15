@@ -3,11 +3,21 @@
 [![Version](https://img.shields.io/badge/version-0.9.0-amber.svg)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A markdown-native recipe manager, meal planner, culinary knowledge base, and interactive cooking companion built specifically for **Obsidian** vaults. Read, edit, sync, and cook directly from your Obsidian `.md` recipe collection with YAML frontmatter, Dataview tags, wikilinks (`[[Ingredient]]`, `[[Target|Alias]]`), AI nutrition estimation, dynamic portion scaling, multi-step cooking timers, and AI-powered web recipe scraping.
+**The recipes you love deserve a home.** The Kitchen Codex is a local-first recipe library, meal planner, and cooking workspace. Keep recipes in **My Recipe Vault**, plan meals, build grocery lists, and cook from your own collection. It supports Markdown recipes, YAML frontmatter, and Obsidian-compatible wikilinks—but **Obsidian is optional**, not a requirement.
+
+[Official website](https://kitchencodex.app) · [Issues and feedback](https://github.com/kryptek2000/The-Kitchen-Codex/issues)
 
 <p align="center">
   <img src="./public/images/kitchen-codex-ui.png" alt="The Kitchen Codex UI Screenshot" width="100%" />
 </p>
+
+---
+
+## 🌿 SHISO — Your AI Kitchen Companion
+
+**SHISO is in active development.** The goal is to let you ask for recipe help in plain language: investigate ingredients, propose and make supported working-copy edits, use authenticated USDA data for nutrition corrections, and recalculate nutrition through The Kitchen Codex's existing calculation engine. Saving recipe changes must remain an explicit user-authorized action.
+
+**Release status:** The new SHISO editing workflow (H-2) has been reported implemented in an **uncommitted development workspace**, but still awaits an independent security audit and real-browser acceptance. **It is not included in the v0.9.0 release.** Features described here as in development should not be mistaken for available release functionality.
 
 ---
 
@@ -23,9 +33,9 @@ A markdown-native recipe manager, meal planner, culinary knowledge base, and int
 - **Backlink Discovery**: Explore all recipes in your vault that share the same ingredient or technique.
 - **Direct Note Authoring**: Create new Markdown knowledge notes directly into your Obsidian `Notes/` folder with YAML frontmatter from the preview modal.
 
-### 🥗 AI Nutritional Estimation
-- **Multi-Tiered Nutritional Analysis**: High-precision nutritional estimation with a resilient multi-model fallback cascade: `gemini-3.7-flash` (primary), `gemini-3.1-flash-lite` (secondary fallback), and an offline culinary algorithmic estimator.
-- **Deterministic local estimation first**: when every measurable ingredient resolves against the curated local food reference, whole-recipe nutrition is computed deterministically (`source = database`) before any AI/offline cascade, with provenance/confidence metadata and an in-memory deterministic cache. Heuristic/AI output stays clearly labelled and is never treated as deterministic.
+### 🥗 Nutrition Management
+- **Basic and existing nutrition**: View, edit, scale, and preserve imported or previously saved nutrition information without pretending missing values are known.
+- **Conservative calculation authority**: The v0.9.0 release disables automatic application or saving of untrusted machine nutrition. Authenticated USDA-backed Advanced Nutrition and SHISO-assisted corrections are being developed and tested; **Advanced Nutrition is not part of v0.9.0**.
 - **Wikilink & Measurement Normalization**: Obsidian wikilinks (`[[Ingredient|Alias]]`) and Unicode/ASCII fractions are cleaned and parsed for consistent analysis.
 - **YAML Frontmatter Persistence**: Validates and serializes calories, protein, carbohydrates, fat, dietary fiber, and sodium per serving directly into note frontmatter for Dataview interoperability.
 - **Portion Scaling Compatibility**: Dynamically calculates and displays macro values scaled to current portions.
@@ -82,7 +92,7 @@ A markdown-native recipe manager, meal planner, culinary knowledge base, and int
 - **Frontend**: React 19, TypeScript, Tailwind CSS v4, Motion (`motion/react`), Lucide React, Canvas Confetti
 - **Markdown & Frontmatter**: `js-yaml`, `react-markdown`, `remark-gfm`
 - **Backend API**: Express.js, TypeScript (`tsx`), Node.js
-- **AI Integration**: Google Gen AI SDK (`@google/genai`) with Gemini 3.7 Flash for recipe extraction
+- **AI Integration**: Provider abstraction for supported Gemini and OpenRouter integrations, with capability and credential checks (availability varies by configuration)
 - **Build System**: Vite 6, `esbuild`
 
 ---
@@ -131,7 +141,9 @@ Open `.env` in any text editor and add your API key (optional, only needed for A
 GEMINI_API_KEY=your_gemini_api_key_here
 ```
 
-##### Advanced Nutrition product access (optional)
+##### Development configuration: Advanced Nutrition (not included in v0.9.0)
+
+**Note:** This configuration documents the development path for Advanced Nutrition; it does not enable a feature in the tagged v0.9.0 release.
 
 **Basic Nutrition** — the default. No extra setting is needed. Deterministic USDA
 analysis, matching, manual correction, manual weight entry, Review and Apply all work
