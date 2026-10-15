@@ -1,283 +1,181 @@
-# 🍳 The Kitchen Codex `v0.9.0`
+# The Kitchen Codex
+
+**The recipes you love deserve a home.**
 
 [![Version](https://img.shields.io/badge/version-0.9.0-amber.svg)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A markdown-native recipe manager, meal planner, culinary knowledge base, and interactive cooking companion built specifically for **Obsidian** vaults. Read, edit, sync, and cook directly from your Obsidian `.md` recipe collection with YAML frontmatter, Dataview tags, wikilinks (`[[Ingredient]]`, `[[Target|Alias]]`), AI nutrition estimation, dynamic portion scaling, multi-step cooking timers, and AI-powered web recipe scraping.
+**The Kitchen Codex** is a **standalone, local-first recipe and cooking workspace**. Save the recipes you love, keep them together in **My Recipe Vault**, plan meals, build shopping lists, cook step by step, and understand your recipes' nutrition.
+
+**Obsidian is optional.** The Kitchen Codex works as its own application. Its Markdown-based recipe format also makes it friendly to Obsidian users, but you do not need Obsidian to use it.
+
+[**Official website**](https://kitchencodex.app) · [**Get started locally**](#run-it-locally) · [**Current release**](#whats-available-now) · [**Roadmap**](#where-were-heading) · [**Issues & feedback**](https://github.com/kryptek2000/The-Kitchen-Codex/issues)
 
 <p align="center">
-  <img src="./public/images/kitchen-codex-ui.png" alt="The Kitchen Codex UI Screenshot" width="100%" />
+  <img src="./public/images/kitchen-codex-ui.png" alt="The Kitchen Codex recipe library interface" width="100%" />
 </p>
 
----
-
-## ✨ Features
-
-### 📂 Native Obsidian Vault Synchronization
-- **Direct Vault Connection**: Connect local Obsidian vault folders using the File System Access API (`showDirectoryPicker`) for direct reading and writing.
-- **Drag-and-Drop Vault Importer**: Drag individual `.md` notes or entire vault folders to import and parse recipes instantly.
-- **Bi-directional Compatibility**: Export, download, or copy standardized Obsidian Markdown files with YAML frontmatter, wikilinks (`[[Garlic]]`), Dataview tags, and callouts (`> [!tip]`).
-
-### 🧠 Interactive Wikilink Intelligence & Note Knowledge Base
-- **Live Wikilink Previews**: Click any `[[Ingredient Note]]` or `[[Target|Alias]]` across recipe cards, ingredient lists, instructions, or callouts to preview contextual notes.
-- **Backlink Discovery**: Explore all recipes in your vault that share the same ingredient or technique.
-- **Direct Note Authoring**: Create new Markdown knowledge notes directly into your Obsidian `Notes/` folder with YAML frontmatter from the preview modal.
-
-### 🥗 AI Nutritional Estimation
-- **Multi-Tiered Nutritional Analysis**: High-precision nutritional estimation with a resilient multi-model fallback cascade: `gemini-3.7-flash` (primary), `gemini-3.1-flash-lite` (secondary fallback), and an offline culinary algorithmic estimator.
-- **Deterministic local estimation first**: when every measurable ingredient resolves against the curated local food reference, whole-recipe nutrition is computed deterministically (`source = database`) before any AI/offline cascade, with provenance/confidence metadata and an in-memory deterministic cache. Heuristic/AI output stays clearly labelled and is never treated as deterministic.
-- **Wikilink & Measurement Normalization**: Obsidian wikilinks (`[[Ingredient|Alias]]`) and Unicode/ASCII fractions are cleaned and parsed for consistent analysis.
-- **YAML Frontmatter Persistence**: Validates and serializes calories, protein, carbohydrates, fat, dietary fiber, and sodium per serving directly into note frontmatter for Dataview interoperability.
-- **Portion Scaling Compatibility**: Dynamically calculates and displays macro values scaled to current portions.
-
-### 🔗 Recipe Relationships & Similar Recipes
-- **Recipes Using This Ingredient**: Tap any ingredient on a recipe to see the other recipes that use the exact same ingredient (derived locally, no network/AI).
-- **Similar Recipes**: A compact panel ranks recipes by culinary relevance — dish family/type first, related dish families second, with cuisine/course/tag signals; shared-ingredient overlap remains only a secondary bonus signal (deterministic, local, no network/AI). A known-family mismatch (e.g. a salad vs a pasta) is never overridden by shared cuisine, course, tags, or ingredients.
-- **Conservative, exact ingredient identity**: no substring/fuzzy matching, so `egg` never matches `eggplant`, `butter` ≠ `peanut butter`, `cream` ≠ `cream cheese`, `chicken breast` ≠ `chicken thigh`, and `all-purpose flour` ≠ `almond flour`.
-- **Wikilink target authority**: an ingredient link's identity derives from its target (`[[Chicken Breast|chicken]]` ≠ `[[Chicken Thigh|chicken]]`) while alias/display text is preserved for display.
-- **No auto-generated wikilinks**: relationship derivation never creates, edits, or rewrites wikilinks, aliases, ingredient text, or Markdown.
-
-### 🌐 AI Web Recipe Grabber
-- **URL & Text Importer**: Paste any recipe website URL, raw HTML, or recipe text to convert it into a structured Obsidian markdown note.
-- **Structured Schema & AI Parsing**: Extracts recipe metadata, ingredient amounts, wikilink entities, cooking step durations, and tips using the AI provider and Schema.org JSON-LD extraction.
-
-### 🧭 Ask My Kitchen
-- **Richer natural-language cooking intent**: your question is interpreted into a structured `KitchenIntent` — find recipes, meal suggestion, similar recipe, ingredient use, browse category, or explicit web discovery — with hard filters (ingredients, courses, cuisines, time, ratings) and soft preferences (effort, mood, style, dietary, variety).
-- **Deterministic, vault-first membership**: a deterministic engine decides which of *your* recipes actually match the hard filters. The model never chooses recipes, never invents recipe IDs, and never decides vault membership.
-- **Grounded, preference-aware recommendations**: local candidates are ranked with transparent, evidence-backed reasons ("Easy difficulty", "Under 30 minutes", "Dinner recipe"). An optional AI layer may re-rank the same trusted candidate evidence and degrades to a deterministic fallback when unavailable.
-- **Optional, explicit web discovery**: when you ask to find something online (or the vault results are weak and you tap "Search the web"), Ask My Kitchen runs explicit, provider-grounded web discovery. Discovered result URLs come only from real search grounding — never invented.
-- **Strictly separated results**: "FROM MY VAULT" and "FROM THE WEB" results are kept fully separate. Web results are discovery cards, never local recipes, with no favorite/edit/local-metadata controls.
-- **Web result → Grab Recipe handoff**: select a web result and send it to the existing Web Recipe Grabber for a preview before you save it. Imports always require preview + explicit user confirmation, and the hardened importer re-validates the URL (SSRF/private-IP/redirect/content-type protections).
-- **Privacy-first & read-only by default**: the full vault, raw Markdown, notes, and unrelated recipes never leave the client; discovery is query-only; no auto-import, no silent web escalation, and no vault writes unless you explicitly save from the Grabber.
-
-### 🍳 Distraction-Free Interactive Cooking Mode & Recipe Cards
-- **Step-by-Step Focus**: Fullscreen hands-free cooking assistant with high-contrast typography.
-- **Automatic Timer Detection**: Detects durations in instruction steps (e.g., *"Simmer for 15 minutes"*) with one-click countdown timers, background alerts, and celebration audio chimes.
-- **Markdown-Enabled Instruction Steps**: Instruction steps support clean inline Markdown rendering for bold, italic, and inline code formatting.
-- **Publication-Quality Recipe Cards & PDF Export**: Export standalone printable recipe cards with customizable Obsidian themes, clean layout wrapping, and strict print pagination.
-
-### ⚖️ Dynamic Portion & Serving Scaling
-- Scale recipes seamlessly from **0.5× to 4×** with intelligent fraction and measurement arithmetic (e.g., `1 1/2 cups` scales accurately to `3 cups`).
-- Metric and Imperial unit support.
-
-### 📊 Dual Layouts: Visual Grid & Dataview Table
-- **Recipe Grid**: Rich card view displaying cook time, difficulty, calorie counts, and tag pills.
-- **Dataview Table View**: Structured tabular view inspired by the Obsidian Dataview plugin, supporting multi-column sorting and filtering by cuisine, difficulty, total time, and tags.
-
-### 📅 Weekly Meal Planner & Synchronized Grocery List
-- **7-Day Meal Scheduler**: Organize Breakfast, Lunch, and Dinner slots across the week.
-- **Smart Grocery List**: Automatically syncs ingredients from scheduled meals into categorized shopping checklists (Produce, Pantry, Dairy, Meat, etc.). When the meal plan is empty, the grocery list stays clean.
-- **Obsidian Checklist Export**: One-click copy formatted Markdown task checklists (`- [ ]`) ready to paste into your Obsidian daily notes.
-
-### 🎨 Obsidian Community Themes
-- Switch between custom Obsidian themes:
-  - **Obsidian Default Dark** (Classic Obsidian aesthetic)
-  - **Warm Parchment** (Warm editorial parchment paper aesthetic)
-  - **Nordic Sage** (Calm Scandinavian herbal & pine aesthetic)
+> **Release status — v0.9.0:** This README distinguishes features in the published version from development work and future product direction. SHISO's H-2 editing workflow is **uncommitted and awaiting independent audit and real-browser acceptance**. It is **not part of v0.9.0**. Advanced Nutrition is also **not included in v0.9.0**. No paid tier, subscription, hosted Kitchen Codex Cloud, or mobile app is being offered by this release.
 
 ---
 
-## 🛠️ Tech Stack
+## 🍃 The idea: one home for your cooking
 
-- **Frontend**: React 19, TypeScript, Tailwind CSS v4, Motion (`motion/react`), Lucide React, Canvas Confetti
-- **Markdown & Frontmatter**: `js-yaml`, `react-markdown`, `remark-gfm`
-- **Backend API**: Express.js, TypeScript (`tsx`), Node.js
-- **AI Integration**: Google Gen AI SDK (`@google/genai`) with Gemini 3.7 Flash for recipe extraction
-- **Build System**: Vite 6, `esbuild`
+The Kitchen Codex is built around a simple flow:
 
----
+**Save → Protect in My Recipe Vault → Organize → Plan → Shop → Cook → Understand nutrition**
 
-## 🚀 Local Installation & Setup (Standalone)
+Your Recipe Vault is the home for your recipe collection, not another company's product name. Today the application can work with local recipe files, including Obsidian-compatible Markdown. Different storage providers, hosted Vaults, and richer sync options are **future directions**, not current integrations.
 
-This app is a self-contained full-stack Node.js + React application that runs locally on your machine (macOS, Windows, or Linux) with **no cloud platform, container service, or AI Studio requirement**.
+You can start with your existing recipes or create new ones. Keep your collection yours, and choose when to use optional AI services.
 
-### Prerequisites
+## ✨ What's available now
 
-Ensure you have the following installed on your machine:
-- **Node.js** (v18.0.0 or higher): [Download Node.js](https://nodejs.org/)
-- **npm** (bundled with Node.js) or **pnpm** / **yarn** / **bun**
-- **Git**: [Download Git](https://git-scm.com/)
-- *(Optional)* **Obsidian**: [Download Obsidian](https://obsidian.md/) to connect your existing recipe vaults.
-- *(Optional)* **Gemini API Key**: If you want to use the AI-powered web recipe scraping feature, get a free key from [Google AI Studio](https://aistudio.google.com/). The rest of the app (vault sync, cooking mode, timers, meal planning, offline recipe editing) works 100% locally with zero external API dependencies.
+The following describes the **published v0.9.0 application**, not every experiment in the development worktree.
 
----
+| Your kitchen workflow | What The Kitchen Codex offers |
+| --- | --- |
+| **My Recipe Vault** | Browse, search, filter, favorite, create, and edit recipes with local-file workflows. |
+| **Save recipes from elsewhere** | Import recipes from supported web pages, structured recipe data, or supplied text, with a preview before saving. |
+| **Create recipes** | Write recipes manually or use the existing **Create for Me** AI draft feature where a configured, verified provider is available. Generated drafts are not saved automatically. |
+| **Organize and rediscover** | Explore related recipes, recipes using an ingredient, useful tags, and culinary similarity. |
+| **Plan meals** | Plan breakfast, lunch, and dinner across a seven-day calendar. |
+| **Shop from your plan** | Build a grocery checklist from planned recipes and copy a shopping list. |
+| **Cook with focus** | Use recipe cards, step-by-step Cooking Mode, ingredient scaling, and recipe timers. |
+| **Keep and share recipe information** | Print/export recipe cards and preserve supported recipe metadata, notes, images, and Markdown formatting. |
+| **Work with recipe images** | Find licensed representative images or explicitly request AI generation using supported providers; check provider pricing before making paid image requests. |
+| **View existing nutrition** | Display, edit, scale, and preserve usable saved or imported nutrition data. Automated untrusted nutrition values are not silently treated as verified. |
 
-### Step-by-Step Local Setup
+**AI functionality is conditional.** Provider/model availability, credentials, verification, product gates, and possible charges affect which AI actions can run. Core recipe editing, planning, shopping, and cooking do not depend on having an AI account.
 
-#### 1. Clone the repository
+### The Kitchen Codex Vault and Obsidian
+
+**Obsidian is an integration, not a requirement or parent product.** If you already use Obsidian, The Kitchen Codex supports local recipe folders and compatible Markdown/YAML frontmatter, including wikilinks such as `[[Garlic]]` and `[[Chicken Breast|chicken]]`. It can read and save local recipe files through supported browser directory access.
+
+If you have never heard of Markdown or Obsidian, that's fine: the goal is a recipe organizer first, with technical file compatibility available when you want it.
+
+An **official Obsidian plugin**, additional storage-provider integrations, hosted Vault options, and richer cross-device sync remain part of the **multi-surface roadmap**; do not assume they are included with v0.9.0.
+
+## 🌿 Meet SHISO — Your AI Kitchen Companion
+
+**One companion. One conversation. Different places to start.**
+
+**SHISO** is the planned unified AI kitchen companion for The Kitchen Codex. The direction is to talk naturally with one assistant whether you're in your Recipe Vault, looking at a recipe, planning a meal, or reviewing nutrition. Future entry points use names such as **Chat with SHISO**, **Ask SHISO**, and **Create with SHISO**, not separate recipe and nutrition chatbots.
+
+The intended workflow is practical: ask SHISO to make a recipe, change ingredients, investigate nutrition issues, plan with your own recipes, or help while cooking. **SHISO interprets and coordinates; The Kitchen Codex's existing application systems validate and perform the work.**
+
+### SHISO development status — not a released feature
+
+Current internal H-2 development has **reported** implementation of authorized working-copy ingredient edits, USDA-backed nutrition corrections, deterministic recalculation, undo/discard, and explicit user-authorized saving via the existing Vault writer. These claims still require independent audit and real-user browser testing; the work is **uncommitted and unavailable in the published v0.9.0 release**.
+
+The intended trust model:
+
+- SHISO can help carry out **user-requested** changes through application-controlled tools, not through unrestricted access to local files.
+- The application—not a language model—selects authenticated food data, derives weights, and calculates nutrition.
+- Changes should be visible and undoable, and **saving to the Vault requires an explicit user instruction or trusted save action**.
+- Ambiguous ingredient identities or measurements stay reviewable; missing facts are not invented.
+- A successful conversational response alone is not proof that data was changed or saved.
+
+Earlier features named **Ask My Kitchen**, **Ask This Recipe**, and **Create for Me** are historical/shipped capabilities, **not separate assistant brands in the forward plan**. Existing features will not be removed or renamed merely by this README; the unification is a staged development program.
+
+## 🥗 Nutrition: useful basics, verified depth
+
+The long-term nutrition strategy has two complementary levels:
+
+| | Basic Nutrition | Advanced Nutrition |
+| --- | --- | --- |
+| **Product direction** | Free everyday nutrition functionality, including usable nutrition already present in recipes. | Premium AI-assisted interpretation of difficult ingredient and portion wording. |
+| **Calculation trust** | Preserve the distinction between known, unknown, and manually edited data. | Authenticate food identities/USDA source portions, calculate deterministically, disclose incomplete coverage, and retain review/provenance. |
+| **v0.9.0 availability** | Existing and imported nutrition display/edit/scale workflows. | **Not included in v0.9.0.** In development and testing. |
+
+**SHISO understands. The Kitchen Codex verifies. You stay in control.**
+
+Advanced Nutrition is designed to use AI for interpretation, not as a source of invented calories, grams, food identities, or nutrient totals. Genuine gaps stay unresolved until supported evidence or user input is available. Nutrition outputs are estimates, not individualized medical advice.
+
+The free/premium distinction is a **product strategy**; this repository does not currently provide a hosted subscription or billing service.
+
+## 🧭 Where we're heading
+
+The Kitchen Codex is intended to grow into **one product core across several ways to cook and manage recipes**. These items are **plans, not shipping claims or timelines**.
+
+| Direction | Planned experience |
+| --- | --- |
+| **SHISO everywhere** | One conversational companion for creation, editing, Vault search, nutrition, planning, shopping, and cooking assistance. |
+| **Advanced Nutrition** | Wider real-world ingredient understanding using authenticated USDA evidence and the existing deterministic engine. |
+| **Collections** | Organize recipes into named groups, dietary collections, and cuisines. |
+| **Spice Rack** | Manage spices and seasonings and connect them to recipes. |
+| **Ingredient substitutions** | Show appropriate substitutions through a verified application workflow. |
+| **Smarter planning and cooking** | Leftover-aware suggestions, linked cooking timer chains, and more useful meal workflows. |
+| **More places to use your Vault** | Standalone desktop distribution, an official Obsidian plugin, and a mobile/PWA companion as each surface is completed and verified. |
+| **More ways to capture and store recipes** | Additional import sources, social recipe capture where supported, and optional future storage/cloud integrations. |
+| **Nutrition diary** | Possible later recipe-aware food logging and nutrient tracking, conditional on Advanced Nutrition accuracy and release gates. |
+
+**Not currently offered:** Kitchen Codex Cloud, Google Drive/Notion sync, social-network connectors, paid subscriptions, nutrient tracking, or a released mobile companion. Specific integrations will be announced only when real and supportable.
+
+For the product architecture and long-term direction, see the [SHISO architecture roadmap](docs/Shiso-Architecture-and-Roadmap.md) and the [official website's product/brand planning](https://github.com/kryptek2000/The-Kitchen-Codex-Website/blob/main/docs/Website-Master-Plan.md). These are living planning documents: some older implementation-status statements predate the current development work.
+
+## 🚀 Run it locally
+
+The Kitchen Codex is currently a local full-stack React + Node application. **Obsidian is not required.** The repository's reproducible dependency path uses [Bun](https://bun.sh/) and its committed `bun.lock` file.
+
+**Requirements:** Git, Bun, a supported desktop browser, and a local Node-compatible runtime. AI provider credentials are optional for non-AI features.
+
 ```bash
 git clone https://github.com/kryptek2000/The-Kitchen-Codex.git
 cd The-Kitchen-Codex
-```
-
-#### 2. Install dependencies
-
-This repository uses **Bun** (a `bun.lock` lockfile is committed and CI installs with `bun install --frozen-lockfile`). Install and run with Bun for a reproducible setup:
-
-```bash
-bun install
-```
-
-Advanced note: npm is also compatible and is used throughout the scripts below (`npm run dev`, etc.). Using npm adds a `package-lock.json`; prefer Bun to avoid maintaining a competing lockfile.
-
-#### 3. Set up environment variables
-Copy the template configuration file:
-```bash
+bun install --frozen-lockfile
 cp .env.example .env
+bun run dev
 ```
 
-Open `.env` in any text editor and add your API key (optional, only needed for AI web recipe scraping):
-```env
-GEMINI_API_KEY=your_gemini_api_key_here
-```
+Open **http://localhost:3000**.
 
-##### Advanced Nutrition product access (optional)
+To connect local files in a compatible Chromium-based browser, use **Connect Vault → Select Vault Directory**, choose your recipe folder, and grant access. The browser File System Access API manages local directory permissions. You can also use the supported importer workflows.
 
-**Basic Nutrition** — the default. No extra setting is needed. Deterministic USDA
-analysis, matching, manual correction, manual weight entry, Review and Apply all work
-without any product setting, and the product tier stays `basic`.
+### Optional AI setup
 
-**AI Advanced Nutrition** — if you want to use the AI Advanced Nutrition AI features,
-set this one server variable:
-```env
-KITCHEN_CODEX_NUTRITION_PRODUCT_TIER=ai_advanced
-```
-That exact value is required. Anything else — missing, misspelled, wrong case, or
-extra spaces — falls back safely to `basic`, so the feature stays off until you opt in.
-Without it, the Advanced Nutrition AI requests are refused with a clear
-`AI Advanced Nutrition is not available` error and no AI request is sent. The value is
-read once at server startup, so restart the server after changing it. No browser
-setting, header, cookie or URL parameter can change it.
+Some features require a supported AI provider, model, and credentials. Start with [`.env.example`](.env.example) and the in-app AI settings where available. **Do not commit credentials to GitHub.** Provider requests may use paid credits, depending on your selection and account.
 
-A few things worth knowing:
-- **A key alone does not enable it.** Uploading an API key or configuring BYOK does
-  *not* grant AI Advanced product access; this setting is separate.
-- **Enabling it doesn't promise an AI call.** A configured, working
-  provider/model/credential is still required. If none is available, the app reports
-  that the AI step is unavailable rather than failing silently.
-- **It grants permission to try, nothing more.** It does not let AI decide food or
-  nutrient values — your deterministic nutrition data, Review and Apply rules are
-  unchanged.
-- **It is per-installation, not per-account.** This setting applies to this deployment
-  (for the local/single-user setup the app currently supports). There is no sign-in,
-  no subscription and no billing here; hosted multi-user accounts are not implemented.
+The environment variable `KITCHEN_CODEX_NUTRITION_PRODUCT_TIER=ai_advanced` is a **development/product-access gate**, not a subscription, not a way to unlock unreleased Advanced Nutrition in v0.9.0, and not a substitute for valid provider access.
 
-The template ships with the safe `basic` value already filled in, so it never turns
-Advanced Nutrition on by accident — change it to `ai_advanced` only when you want it.
-
-#### 4. Run the local development server
-```bash
-npm run dev
-```
-
-The application will start on **`http://localhost:3000`**. Open this URL in Chrome, Edge, Brave, or Safari.
-
----
-
-### 📦 Production Build & Local Hosting
-
-To build an optimized production bundle and run it as a lightweight background service or home server (e.g., Raspberry Pi, Unraid, Home Assistant, or local desktop):
+### Build and test
 
 ```bash
-# 1. Build frontend assets and server bundle
-npm run build
-
-# 2. Start the production server
-npm run start
-```
-The production server will listen on `http://localhost:3000`.
-
----
-
-### 🔐 Security, Local-Only Default & Public Deployment
-
-The Express server ships with hardened security headers (`X-Content-Type-Options: nosniff`, clickjacking protection via `X-Frame-Options` + CSP `frame-ancestors`, and a `Referrer-Policy`). In production a Content Security Policy is also emitted.
-
-To keep the app safe-by-default:
-
-- **Bind to loopback by default.** The server listens on `127.0.0.1` unless you set `HOST`. To expose it to your LAN or a public host, set `HOST=0.0.0.0` (see `.env.example`). Cloud Run / AI Studio deployments are auto-detected (via `K_SERVICE`/`K_REVISION`/`K_CONFIGURATION`) and bind to `0.0.0.0` automatically.
-- **AI endpoints are local-only unless you opt in.** The Gemini-backed endpoints (`/api/estimate-nutrition`, `/api/recover-metadata`, `/api/grab-recipe`) are unauthenticated so local development is friction-free, but they must not be left open on a public host. When you deploy publicly, set a strong random `AI_ENDPOINT_TOKEN`; clients then must send `Authorization: Bearer <token>`, otherwise they receive `HTTP 401`. The `GEMINI_API_KEY` is only ever used server-side and is never sent to the browser.
-- **Rate limiting** is always on, and `TRUST_PROXY` should be set to the number of trusted reverse-proxy hops when deployed behind a proxy to prevent IP spoofing.
-
----
-
-### 💡 Connecting Your Local Obsidian Vault
-
-When running locally in a Chromium-based browser (Google Chrome, Microsoft Edge, Brave, Opera, Arc):
-1. Click **Connect Vault** in the top navigation bar.
-2. Choose **Select Vault Directory** (uses the native browser File System Access API).
-3. Select your local Obsidian vault folder (or a `Recipes/` subfolder).
-4. Grant read/write permission when prompted.
-5. All recipe edits, new recipes, and web-scraped recipes will write directly to your local `.md` files on disk!
-
----
-
-## 📝 Obsidian Recipe Markdown Format
-
-Recipes in this manager follow standard Obsidian Markdown with YAML frontmatter:
-
-```markdown
----
-title: Creamy Tuscan Garlic Chicken
-tags:
-  - recipe
-  - dinner
-  - italian
-  - high-protein
-cuisine: Italian
-category: Dinner
-servings: 4
-prep_time: 15 mins
-cook_time: 25 mins
-difficulty: Medium
-calories: 520
-source: "https://example.com/tuscan-chicken"
-rating: 5
-favorite: true
----
-
-# Creamy Tuscan Garlic Chicken
-
-> [!summary] Rich, restaurant-quality pan-seared chicken bathed in a velvety sun-dried tomato garlic sauce.
-
-## 🛒 Ingredients
-
-- [ ] 2 large [[Chicken Breast|chicken breasts]], sliced horizontally
-- [ ] 1 tbsp [[Olive Oil]]
-- [ ] 4 cloves [[Garlic]], minced
-- [ ] 1/2 cup [[Heavy Cream]]
-- [ ] 1/2 cup [[Chicken Broth]]
-- [ ] 1/2 cup [[Sun-Dried Tomatoes]], chopped
-- [ ] 2 cups [[Baby Spinach]]
-- [ ] 1/2 cup [[Parmesan Cheese]], freshly grated
-
-## 🔪 Instructions
-
-1. Season chicken with salt, pepper, and Italian seasoning.
-2. Heat olive oil in a skillet over medium-high heat. Sear chicken for 5 minutes per side until golden. Remove and set aside.
-3. Add minced garlic to the pan and saute for 1 minute until fragrant.
-4. Pour in chicken broth, heavy cream, and sun-dried tomatoes. Simmer for 3 minutes.
-5. Add baby spinach and parmesan cheese; stir for 2 minutes until wilted.
-6. Return chicken to skillet and simmer for 5 minutes until sauce thickens and chicken reaches 165°F.
-
-> [!tip] Serve over warm fettuccine pasta or roasted garlic mashed potatoes.
+bun run lint         # TypeScript type checking
+bun run build        # Frontend + bundled server
+bun run start        # Start the production build locally
+bun run test         # Automated test suite
 ```
 
+For a production/LAN/public deployment, review the included security configuration carefully. The app binds to loopback by default; exposing AI endpoints requires appropriate authentication (including `AI_ENDPOINT_TOKEN` when applicable), rate limiting, reverse-proxy settings, and a deliberate deployment security review. **The repo is not a ready-made hosted multi-user service.**
+
+## 🧰 Under the hood
+
+The application uses **React 19**, **TypeScript**, **Vite**, an **Express/Node** API, and a local-first recipe/Markdown data model. It supports Obsidian-compatible Markdown and YAML frontmatter without requiring Obsidian.
+
+AI operations go through guarded provider infrastructure rather than granting models direct file or nutrition authority. The developing Advanced Nutrition system is grounded in USDA FoodData Central with authenticated records, review states, and deterministic calculations. See [Advanced Nutrition Architecture](docs/Advanced-Nutrition-Architecture.md) for implementation-level detail; that document includes historical phase records and should not be read as a v0.9.0 shipping checklist.
+
+## 🔐 Data ownership and product trust
+
+- **Local-first:** the current desktop-browser workflow keeps your recipe files under your chosen local file access. External AI services are separate, optional capabilities.
+- **Your confirmation matters:** imported/generated recipe drafts are reviewed before saving. Uncommitted SHISO editing is being designed around application-authorized changes and explicit saves.
+- **Nutrition transparency:** a missing amount or unsupported match must not become a fabricated nutrient result.
+- **No invented integrations:** desktop/mobile apps, cloud storage, social importers, and paid tiers are only called available once verified and released.
+- **Your own provider costs:** AI or image-generation providers may charge independently of The Kitchen Codex.
+
+## 🤝 Contributing and feedback
+
+This project is open source and developed in public. Bugs, feature ideas, and contributions are welcome through [GitHub Issues](https://github.com/kryptek2000/The-Kitchen-Codex/issues).
+
+**Release authority:** New versions and major deployment decisions are approved by the project owner. An implementation report or passing tests alone does not mean SHISO or Advanced Nutrition has shipped.
+
+## 📄 License
+
+[MIT License](LICENSE).
+
 ---
 
-## 📜 Available Scripts
-
-| Command | Description |
-|---|---|
-| `npm run dev` | Starts the Express backend and Vite development server on port 3000 |
-| `npm run build` | Builds the React frontend and bundles the Node server with `esbuild` |
-| `npm run start` | Runs the production-bundled server (`dist/server.cjs`) |
-| `npm run lint` | Runs TypeScript type checking (`tsc --noEmit`) |
-| `npm run clean` | Cleans up the `dist` build directory |
-
----
-
-## 📌 Changelog
+## 📌 Release history
 
 ### `v0.9.0` (Current Release)
 - **Verified-free recipe generation**: separate structured-text and recipe-generation capability verification so a model must be verified for the recipe task itself, not merely for text. Current verified-free OpenRouter recipe models can generate editable drafts, and verified dynamic generation is single-attempt and terminal — no silent paid/provider fallback, no model fallback, and no retries.
@@ -371,7 +269,7 @@ favorite: true
 - **Hermetic Offline Testing**: Refactored `recipeGrabber.ts` and test suite to run hermetically without external network latency or API rate limits.
 
 ### `v0.2.3`
-- **Inline Markdown Instruction Rendering**: Instruction steps now correctly parse and render inline Markdown (bold `**`, italics `*`, code `\``) for clean typographic emphasis.
+- **Inline Markdown Instruction Rendering**: Instruction steps now correctly parse and render inline Markdown (bold `**`, italics `*`, code ```) for clean typographic emphasis.
 - **Clean Metadata Display**: Removed redundant duplicate servings sub-headers under ingredients, keeping primary serving counts in the top metadata panel.
 - **Recipe-Aware Footer Recommendations**: Replaced hardcoded universal serving advice with smart, category-aware recommendations (e.g., cooling instructions for sourdough bread, warm serving notes for soups).
 - **Strict Food Display Metadata Compliance**: Configured the Food Display panel to render strictly when actual presentation/food-display metadata exists, omitting the panel entirely when absent to prevent fabrication.
@@ -406,16 +304,4 @@ favorite: true
 
 ### `v0.1.0`
 - Initial release featuring native Obsidian vault synchronization, interactive cooking mode, AI web recipe grabber, weekly meal planning, and smart grocery list generation.
-
----
-
-## 🤝 Contributing
-
-Contributions, issues, and feature requests are welcome! Feel free to check the [issues page](https://github.com/kryptek2000/The-Kitchen-Codex/issues).
-
----
-
-## 📄 License
-
-This project is licensed under the [MIT License](LICENSE).
 
