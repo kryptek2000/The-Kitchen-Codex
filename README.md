@@ -9,7 +9,7 @@
 
 **Obsidian is optional.** The Kitchen Codex works as its own application. Its Markdown-based recipe format also makes it friendly to Obsidian users, but you do not need Obsidian to use it.
 
-[**Official website**](https://kitchencodex.app) · [**Get started locally**](#-run-it-locally) · [**Current release**](#-whats-available-now) · [**Roadmap**](#-where-were-heading) · [**Issues & feedback**](https://github.com/kryptek2000/The-Kitchen-Codex/issues)
+[**Official website**](https://kitchencodex.app) · [**Get started locally**](#run-it-locally) · [**Current release**](#whats-available-now) · [**Roadmap**](#where-were-heading) · [**Issues & feedback**](https://github.com/kryptek2000/The-Kitchen-Codex/issues)
 
 <p align="center">
   <img src="./public/images/kitchen-codex-ui.png" alt="The Kitchen Codex recipe library interface" width="100%" />
@@ -50,7 +50,7 @@ The following describes the **published v0.9.0 application**, not every experime
 
 ### The Kitchen Codex Vault and Obsidian
 
-**Obsidian is an integration, not a requirement or parent product.** If you already use Obsidian, The Kitchen Codex supports local recipe folders and compatible Markdown/YAML frontmatter, including wikilinks such as \`[[Garlic]]\` and \`[[Chicken Breast|chicken]]\`. It can read and save local recipe files through supported browser directory access.
+**Obsidian is an integration, not a requirement or parent product.** If you already use Obsidian, The Kitchen Codex supports local recipe folders and compatible Markdown/YAML frontmatter, including wikilinks such as `[[Garlic]]` and `[[Chicken Breast|chicken]]`. It can read and save local recipe files through supported browser directory access.
 
 If you have never heard of Markdown or Obsidian, that's fine: the goal is a recipe organizer first, with technical file compatibility available when you want it.
 
@@ -116,17 +116,17 @@ For the product architecture and long-term direction, see the [SHISO architectur
 
 ## 🚀 Run it locally
 
-The Kitchen Codex is currently a local full-stack React + Node application. **Obsidian is not required.** The repository's reproducible dependency path uses [Bun](https://bun.sh/) and its committed \`bun.lock\` file.
+The Kitchen Codex is currently a local full-stack React + Node application. **Obsidian is not required.** The repository's reproducible dependency path uses [Bun](https://bun.sh/) and its committed `bun.lock` file.
 
 **Requirements:** Git, Bun, a supported desktop browser, and a local Node-compatible runtime. AI provider credentials are optional for non-AI features.
 
-\`\`\`bash
+```bash
 git clone https://github.com/kryptek2000/The-Kitchen-Codex.git
 cd The-Kitchen-Codex
 bun install --frozen-lockfile
 cp .env.example .env
 bun run dev
-\`\`\`
+```
 
 Open **http://localhost:3000**.
 
@@ -134,20 +134,20 @@ To connect local files in a compatible Chromium-based browser, use **Connect Vau
 
 ### Optional AI setup
 
-Some features require a supported AI provider, model, and credentials. Start with [\`.env.example\`](.env.example) and the in-app AI settings where available. **Do not commit credentials to GitHub.** Provider requests may use paid credits, depending on your selection and account.
+Some features require a supported AI provider, model, and credentials. Start with [`.env.example`](.env.example) and the in-app AI settings where available. **Do not commit credentials to GitHub.** Provider requests may use paid credits, depending on your selection and account.
 
-The environment variable \`KITCHEN_CODEX_NUTRITION_PRODUCT_TIER=ai_advanced\` is a **development/product-access gate**, not a subscription, not a way to unlock unreleased Advanced Nutrition in v0.9.0, and not a substitute for valid provider access.
+The environment variable `KITCHEN_CODEX_NUTRITION_PRODUCT_TIER=ai_advanced` is a **development/product-access gate**, not a subscription, not a way to unlock unreleased Advanced Nutrition in v0.9.0, and not a substitute for valid provider access.
 
 ### Build and test
 
-\`\`\`bash
+```bash
 bun run lint         # TypeScript type checking
 bun run build        # Frontend + bundled server
 bun run start        # Start the production build locally
 bun run test         # Automated test suite
-\`\`\`
+```
 
-For a production/LAN/public deployment, review the included security configuration carefully. The app binds to loopback by default; exposing AI endpoints requires appropriate authentication (including \`AI_ENDPOINT_TOKEN\` when applicable), rate limiting, reverse-proxy settings, and a deliberate deployment security review. **The repo is not a ready-made hosted multi-user service.**
+For a production/LAN/public deployment, review the included security configuration carefully. The app binds to loopback by default; exposing AI endpoints requires appropriate authentication (including `AI_ENDPOINT_TOKEN` when applicable), rate limiting, reverse-proxy settings, and a deliberate deployment security review. **The repo is not a ready-made hosted multi-user service.**
 
 ## 🧰 Under the hood
 
@@ -269,7 +269,7 @@ This project is open source and developed in public. Bugs, feature ideas, and co
 - **Hermetic Offline Testing**: Refactored `recipeGrabber.ts` and test suite to run hermetically without external network latency or API rate limits.
 
 ### `v0.2.3`
-- **Inline Markdown Instruction Rendering**: Instruction steps now correctly parse and render inline Markdown (bold `**`, italics `*`, code `\``) for clean typographic emphasis.
+- **Inline Markdown Instruction Rendering**: Instruction steps now correctly parse and render inline Markdown (bold `**`, italics `*`, code ```) for clean typographic emphasis.
 - **Clean Metadata Display**: Removed redundant duplicate servings sub-headers under ingredients, keeping primary serving counts in the top metadata panel.
 - **Recipe-Aware Footer Recommendations**: Replaced hardcoded universal serving advice with smart, category-aware recommendations (e.g., cooling instructions for sourdough bread, warm serving notes for soups).
 - **Strict Food Display Metadata Compliance**: Configured the Food Display panel to render strictly when actual presentation/food-display metadata exists, omitting the panel entirely when absent to prevent fabrication.
