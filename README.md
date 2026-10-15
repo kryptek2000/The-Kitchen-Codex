@@ -305,15 +305,3 @@ This project is open source and developed in public. Bugs, feature ideas, and co
 ### `v0.1.0`
 - Initial release featuring native Obsidian vault synchronization, interactive cooking mode, AI web recipe grabber, weekly meal planning, and smart grocery list generation.
 
----
-
-## 🤝 Contributing
-
-Contributions, issues, and feature requests are welcome! Feel free to check the [issues page](https://github.com/kryptek2000/The-Kitchen-Codex/issues).
-
----
-
-## 📄 License
-
-This project is licensed under the [MIT License](LICENSE).
-
