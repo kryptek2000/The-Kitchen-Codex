@@ -1,6 +1,6 @@
 # Shiso — Architecture and Roadmap
 
-**Status:** Historical forward-looking architecture with an **October 16, 2026 AI-first nutrition decision** below. This is not a live-release specification.
+**Status:** Forward-looking product roadmap updated October 16, 2026 with AI-first nutrition and Unified Kitchen / Vault Intelligence decisions. Not a released-feature inventory.
 **Implementation note:** The original SHISO-0 inventory is historical. Local uncommitted SHISO H-2 and nutrition implementation work exists; the published v0.9.0 release does not include those changes. This draft documentation change does not touch, merge, or validate Luna's in-progress implementation.
 
 - Decision owner: Sid (sole release authority)
@@ -14,9 +14,7 @@
 
 The Kitchen Codex will have **ONE** AI companion, named **Shiso**.
 
-Shiso is the conversational AI intelligence surface for the product. Shiso
-understands intent, reasons over the user's kitchen, explains results, and
-proposes changes. It is an **orchestrator**, not an authority.
+Shiso is the conversational AI intelligence surface for the product. Shiso understands intent, reasons over the user's kitchen, and can prepare transparently attributed estimates and proposed changes. Trusted application code retains validation, health scoring, and persistence authority.
 
 Retired from the forward roadmap — do not build these as separate products:
 
@@ -38,9 +36,7 @@ MULTIPLE CONVENIENT ENTRY POINTS
 roadmap**. They are not future Shiso entry points, and no future Shiso surface
 will be named after them.
 
-Those features shipped and remain in the codebase. This program does **not**
-rename, remove, or rewrite them; if they still exist in production UI at the
-time any Shiso phase begins, they are left alone unless separately authorized.
+Those features shipped and remain in the codebase. Preserve useful existing implementations during migration; do not remove or rename working entry points until the Shiso replacements pass functional and human acceptance.
 All future Shiso entry points use Shiso terminology (`Chat with Shiso`,
 `Create with Shiso`, `Ask Shiso`).
 
@@ -61,7 +57,9 @@ context:
 | `Create with Shiso` | recipe-creation intent established |
 | recipe page → Shiso | that recipe supplied as scoped context |
 | meal planner → Shiso | current meal-plan context |
-| Ask My Kitchen | vault retrieval context |
+| Explore My Vault through Shiso | scoped Vault retrieval and grounded recipe results |
+| Vault Intelligence through Shiso | scanner health, issue explanation, proposed repairs |
+| Nutrition with Shiso | complete recipe analysis and review |
 
 These are **contexts supplied to one conversation**, never separate assistants
 and never separate conversation engines. A user already in a general Shiso chat
@@ -75,6 +73,9 @@ Preferred product wording going forward:
 - `Chat with Shiso`
 - `Ask Shiso`
 - `Create with Shiso`
+- `Explore My Vault`
+- `Nutrition with Shiso` (inside Advanced Nutrition)
+- `Vault Intelligence` (retained existing dashboard)
 - `Shiso is thinking…`
 
 ---
@@ -282,8 +283,8 @@ A single Shiso conversation surface; conversation/session model; provider
 abstraction; streaming if justified. No broad mutations yet.
 
 **SHISO-2 — Read-Only Kitchen Context**
-Recipe context, Vault search, collections lookup, nutrition report lookup,
-meal-plan inspection, shopping-list inspection. Read-only.
+Recipe context, actual Vault search/index, collections lookup, nutrition reports,
+meal plans, shopping lists, and Vault health/issue summaries. Read-only.
 
 **SHISO-3 — Structured Capability Invocation**
 Intent maps to a structured application capability. Existing systems remain
@@ -305,6 +306,9 @@ deterministic recalculation remains authoritative.
 **SHISO-7 — Broader Kitchen Intelligence**
 Substitutions, leftovers, cooking assistance, timer chains, and future
 capabilities.
+
+**SHISO-8 — Vault Intelligence Integration**
+Retain the deterministic Vault Health % dashboard, scanner, formatting checks and metadata recovery. Add SHISO explanations and reviewable repair proposals, always using trusted existing file authorities. May be scheduled independently of SHISO-7 after prerequisite integration gates.
 
 ---
 
@@ -331,8 +335,8 @@ above authorizes it.
 | Advanced Nutrition (unreleased development direction) | AI-led estimates and user review on top of provenance, calculation and explicit persistence controls |
 | USDA pinned bundle + matcher | Preferred source-backed identities and nutrient data; not a prohibition on labeled AI/source-informed estimates |
 | Mass / portion / calculation layer | Uses source-backed and openly estimated weights; application validates totals, assumptions and saved state |
-| Ask My Kitchen / Ask This Recipe | Shipped capabilities, **retired from the forward roadmap**. Left in code unchanged; not future Shiso entry points |
-| Create for Me (one-shot) | Capability retained; becomes `Create with Shiso` at SHISO-4 |
+| Ask My Kitchen / Ask This Recipe | Keep working legacy pathways until parity; migrate real Vault search and recipe context into Shiso rather than maintaining separate AI assistants |
+| Create for Me (one-shot) | Retain validated generator and draft save; migrate to conversational Create with Shiso only after parity |
 | `server/ai/*` provider abstraction | Reused; Shiso adds no second credential or selection path |
 | BYOK session keys | Reused where relevant; no new storage model |
 
@@ -345,3 +349,65 @@ Sid approved a pivot: **Shiso should return useful nutrition when a defensible e
 Concrete browser-test cases driving this decision: Huevos Rancheros tortillas with missing count portions; Cochinita Pibil volume-vs-fruit-yield and pork-form identity; banana-leaf wrappers; separated eggs; unsalted butter; guacamole's unknown energy on the chosen Roma tomato record; Basic's partial totals and explicit save. The local consolidated repair reported labeled partial totals, explicit partial saving with acknowledgement and sample coverage improvements, but this is **not proof of a production release**. Final acceptance is Sid's real browser testing, including explicit Save/Apply and reopening in a disposable Vault.
 
 **Merge warning:** This doc-only branch starts at GitHub `main`. Luna's local app changes and protected Phase 9A work are not included. Do not merge/cherry-pick this branch into the active worktree until its updated local roadmap and uncommitted changes have been reviewed for conflicts. No app runtime or deployment changes are authorized by this decision record.
+
+---
+
+## 11. Unified Shiso Kitchen and Vault Intelligence Gameplan — October 16, 2026
+
+**Approved product decision:** One SHISO companion, one current effective text-AI Settings selection, and multiple *contexts and capabilities*, rather than separate recipe, search, nutrition, and repair chatbots. This is roadmap direction, not a claim of public availability. Existing non-AI services should still work offline where practical.
+
+### 11.1 Capability and interface map
+
+| Experience | Public / app label | Shiso capability | Application-owned authority |
+| --- | --- | --- | --- |
+| Conversation | **Chat with Shiso** | General kitchen questions and capability routing | Provider/capability selection; safe request and tool validation |
+| Recipe creation | **Create with Shiso** | Multi-turn recipe draft generation and refinement in one conversation | Validated draft schema, serving logic and **explicit Save to Vault** |
+| Recipe discovery | **Explore My Vault** | Recipe questions by ingredient, tags, cuisine, time or combinations | Actual Vault search/index; authentic recipe references and links |
+| Nutrition | **Advanced Nutrition** feature containing **Nutrition with Shiso** | One-click whole-recipe analysis and defensible estimated nutrients | Source data, validated calculation, review → Apply → explicit Save |
+| Vault care | **Vault Intelligence** retained dashboard | Scan explanation, health troubleshooting, targeted repair proposals | Scanner, deterministic Vault Health %, formatting/metadata repair, authorized file changes |
+
+Buttons and contextual entry points launch the same Shiso conversation and existing application capabilities. Do not create competing SHISO credentials, model selectors, histories or tool registries. Deterministic searches/scans need not invoke an AI model.
+
+### 11.2 Keep and extend Vault Intelligence
+
+**Preserve** the existing Vault Intelligence page, health percentage, format diagnostics, metadata recovery and useful repair workflows. SHISO *enhances* this module; it does not replace its scanner or compute the score with AI.
+
+- **Vault Health % comes from the deterministic scanner** using its actual scoring rules. SHISO can explain factors and recommend improvements, but must not guess a score or imply it ran a scan when it did not.
+- Dashboard retains visible health %, last scan state/time, measured issue counts, affected recipes and existing repair controls when supported. Define score numerator/denominator and weighting from real code before describing it publicly; no invented percentages, fake counts or made-up checks.
+- Examples of SHISO questions: “Check my Vault health,” “Why is my health low?”, “Which recipes have missing metadata?”, “Show formatting errors,” “Prepare safe fixes.”
+- Read actual scanner results. Provide a link to each affected recipe and a concise explanation. A disconnected or unscanned Vault shows an honest *not scanned / unavailable* state.
+- **Repair preview first:** show precise file set and exact proposed changes (diff/preview), classify mechanical formatting separately from ambiguous metadata or ingredient semantics; preserve the original recipe content and user edits.
+- No silent writes. One-recipe repair requires an explicit user-approved action; bulk repair requires specific selection, summary of changes and separate confirmation. Reuse existing Vault write authorization and stale-content checks, plus backup/undo/rollback where storage capabilities allow.
+- Re-run the actual scanner after successful repairs and show the **measured** health change, including remaining issues; never optimistically claim 100% health.
+- Automated tests use disposable Vaults and verify no unrelated file changes or data loss. SHISO never modifies a personal Vault by inference alone.
+
+### 11.3 Integrate Create for Me and Ask My Kitchen
+
+**Create for Me → Create with Shiso:** Keep the working generation, validator and collision-safe draft saver. The contextual entry starts the existing SHISO conversation. Multi-turn requests (“make it dairy free,” “serve six,” “make it hotter”) update the same unsaved draft. Validated structured output and explicit authorized saving remain mandatory. Retain manual New Recipe. Retire the old entry point only after parity and human browser acceptance.
+
+**Ask My Kitchen → Explore My Vault:** Use the existing local search/index directly for simple queries, including “What recipes have garlic?”; grounded results include real names, links and counts, not fabricated recipes. SHISO can add conversational reasoning for complex constraints using only the retrieved scoped results. Don't make every search depend on model JSON, and don't discard the legacy interface until parity.
+
+### 11.4 Nutrition workflow consolidation
+
+Keep Basic Nutrition free, fast and offline. Keep **Advanced Nutrition** as the premium feature name, with **Nutrition with Shiso** as its primary experience. Replace five competing top-level AI/source controls with **Analyze Recipe** (Shiso) and **Calculate Without AI** (offline/source pass). Underlying tools remain usable internally; ingredient-specific correction appears contextually after analysis.
+
+Show one clear review: correct serving basis, source-backed versus AI-estimated contributions, weight assumptions, genuine unknowns and exceptions. Distinguish Analyze (unsaved review), Apply (working recipe) and explicitly authorized Save (Vault write). No fabricated web research, duplicate nutrient counts or silent fallbacks.
+
+### 11.5 Provider/model and release truth
+
+All SHISO contexts use the current effective text provider/model/credential selected in AI Settings, with appropriate per-operation capability checks. Ordinary chat should not inherit restrictive nutrition or recipe-generation gates. A safe structured-text adapter is acceptable where supported; never execute unvalidated model output. No silent paid fallback, hidden model switch or separate SHISO key.
+
+Existing provider-neutral SHISO conversation repairs, AI nutrient contribution schema v5, natural-language resolution and nutrition UI consolidation are **uncommitted development reports awaiting local reconciliation and human acceptance**, not verified published features of v0.9.0.
+
+### 11.6 Delivery order, each with its own acceptance gate
+
+1. **Now — Nutrition with Shiso:** Finish Luna's existing UI consolidation, focused regression, then real browser Analyze → Review → Apply → explicit Save → Reopen in a disposable Vault. Preserve Basic.
+2. **Next — Common SHISO reliability:** Verify selected-provider chat, authentication lifecycle, errors and grounded tool handoffs without automatic model fallback.
+3. **Create with Shiso:** Migrate and validate conversational draft refinement with manual creation and explicit Save retained.
+4. **Explore My Vault:** Integrate deterministic ingredient/tag/name search with genuine recipe links; retire the separate Ask My Kitchen entry only after parity.
+5. **Vault Intelligence with Shiso:** First read-only scan/score explanation, then previewable single-recipe fixes, then user-approved batch formatting/metadata repairs with post-repair rescan and recovery path. Keep the dashboard and Vault Health % throughout.
+6. **Cross-feature workflows:** Grounded Vault search → recipe edits → nutrition; health check → repair preview → confirmation → verified rescan.
+
+Avoid a large rewrite or endless audits. Ship and human-verify incremental coherent workflows before removing legacy surfaces. Defer mascot animations and broad web research until core execution is dependable.
+
+**Release safety:** Sid controls releases. This remote documentation PR must not be merged over Luna's dirty local checkout without reconciling local roadmap changes and protected Phase 9A artifacts. No app runtime files, credentials, personal Vaults, provider calls, commits to main or deployments are changed by this plan.
