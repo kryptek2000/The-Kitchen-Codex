@@ -84,6 +84,15 @@ describe("Create for Me — request validation (v0.7 2A)", () => {
     expect(validateCreateRecipeRequest({ prompt: "x", constraints: { maxTotalMinutes: 1 } }).ok).toBe(false);
     expect(validateCreateRecipeRequest({ prompt: "x", constraints: { dietary: Array.from({ length: 25 }, (_, i) => `d${i}`) } }).ok).toBe(false);
   });
+
+  it("accepts only a validated bounded current draft for same-recipe refinement", () => {
+    const currentDraft = { title: "Chicken Casserole", servings: 6, ingredients: [{ name: "chicken", amount: 2, unit: "lb" }], steps: [{ text: "Bake until done." }] };
+    const valid = validateCreateRecipeRequest({ prompt: "Make it dairy-free", currentDraft });
+    expect(valid.ok).toBe(true);
+    expect(valid.value?.currentDraft?.title).toBe("Chicken Casserole");
+    expect(validateCreateRecipeRequest({ prompt: "Change it", currentDraft: { title: "Bad", ingredients: [], steps: [] } }).ok).toBe(false);
+    expect(validateCreateRecipeRequest({ prompt: "Change it", currentDraft: { ...currentDraft, ingredients: Array.from({ length: 61 }, (_, i) => ({ name: `item ${i}` })) } }).ok).toBe(false);
+  });
 });
 
 describe("Create for Me — prompt construction (v0.7 2A)", () => {
@@ -98,6 +107,17 @@ describe("Create for Me — prompt construction (v0.7 2A)", () => {
     expect(prompt).toContain("- exclude ingredients: peanuts");
     // User content is clearly delimited and never mutated into output-rule changes.
     expect(prompt).toContain("below this delimiter is the user's freeform prompt");
+  });
+
+  it("binds a refinement to the validated existing draft and does not add nutrition fields", () => {
+    const prompt = buildCreateRecipePrompt({
+      prompt: "Add black beans and make it dairy-free",
+      currentDraft: { title: "Chicken Casserole", servings: 6, ingredients: [{ name: "chicken", amount: 2, unit: "lb" }], steps: [{ text: "Bake until done." }] },
+    });
+    expect(prompt).toContain("REFINEMENT CONTEXT");
+    expect(prompt).toContain('"title":"Chicken Casserole"');
+    expect(prompt).toContain("preserve this same recipe identity");
+    expect(prompt).toContain("Do not invent nutrition");
   });
 });
 
