@@ -17,7 +17,7 @@
  *      before D1 currentness, so an unauthorized caller gets no receipt oracle;
  *   8. FORGED CLIENT INPUT has zero authority and cannot SELECT an authority;
  *   9. DEFAULT `createApp()` is canonical Basic, and one deployment authority governs
- *      the status route and all eight gates identically.
+ *      the status route and all nine gates identically.
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import http from 'http';
@@ -178,6 +178,10 @@ const GATED_ROUTES: ReadonlyArray<readonly [string, string]> = [
   ['/api/nutrition/interpret-ingredients', 'ai_interpretation'],
   ['/api/nutrition/interpret-whole-recipe', 'ai_interpretation'],
   ['/api/nutrition/resolve-whole-recipe', 'ai_interpretation'],
+  // SHISO-C1: the conversational turn is a NINTH transport for AI
+  // interpretation under the SAME existing `ai_interpretation` product
+  // feature. It introduces no fifth feature and no new entitlement vocabulary.
+  ['/api/shiso/turn', 'ai_interpretation'],
   ['/api/nutrition/plan-ingredients', 'ai_candidate_orchestration'],
   ['/api/nutrition/estimate-mass', 'ai_bounded_mass_estimation'],
   ['/api/nutrition/recipe-context', 'ai_recipe_context_review'],
@@ -197,6 +201,21 @@ function requestBody(path: string, overrides: Record<string, unknown> = {}): unk
         recipe: AUTHORED_RECIPE,
         instructions: INSTRUCTIONS,
         targets: [],
+        ...overrides,
+      };
+    case '/api/shiso/turn':
+      return {
+        turn_version: 'shiso_turn_request_v1',
+        user_message: 'ai5e shiso probe',
+        history: [],
+        context: {
+          recipe: { title: 'Authority probe', servings: 2, ingredientCount: 2, stepCount: 1 },
+          nutrition: { available: false },
+          recipeKey: null,
+          sessionIdentity: null,
+        },
+        model_invocations_used: 0,
+        tool_calls_used: 0,
         ...overrides,
       };
     case '/api/nutrition/resolve-whole-recipe':
@@ -692,8 +711,8 @@ describe('AI-5E — the status route under a resolved authority', () => {
 // 5. THE SIX GATES
 // ===========================================================================
 
-describe('AI-5E — the eight gates follow the authority decision', () => {
-  it('Basic denies all eight with the bounded 403 and ZERO provider work', async () => {
+describe('AI-5E — the nine gates follow the authority decision', () => {
+  it('Basic denies all nine with the bounded 403 and ZERO provider work', async () => {
     const app = await startApp({ kind: 'deployment', tier: 'basic' });
     try {
       for (const [path] of GATED_ROUTES) {
@@ -705,7 +724,7 @@ describe('AI-5E — the eight gates follow the authority decision', () => {
     }
   });
 
-  it('an UNAVAILABLE authority fails all eight closed with the bounded 503', async () => {
+  it('an UNAVAILABLE authority fails all nine closed with the bounded 503', async () => {
     for (const behaviour of ['throw', 'reject', 'null', 'hand-authored', 'unknown-status'] as const) {
       const app = await startApp({ kind: 'broken', behaviour, count: true });
       try {
@@ -734,7 +753,7 @@ describe('AI-5E — the eight gates follow the authority decision', () => {
     }
   });
 
-  it('AI Advanced passes the product gate on all eight to their EXISTING downstream semantics', async () => {
+  it('AI Advanced passes the product gate on all nine to their EXISTING downstream semantics', async () => {
     const app = await startApp({ kind: 'deployment', tier: 'ai_advanced' });
     try {
       for (const [path] of GATED_ROUTES) {
@@ -762,14 +781,14 @@ describe('AI-5E — the eight gates follow the authority decision', () => {
     expect(new Set(gatedInSource)).toEqual(new Set(GATED_ROUTES.map(([p]) => p)));
   });
 
-  it('eight gates, four features: no fifth product feature was introduced', () => {
+  it('nine gates, four features: no fifth product feature was introduced', () => {
     const gateCalls = [...APP_SOURCE.matchAll(/requireNutritionProductFeature\([^)]*\)/g)].map(
       (m) => m[0],
     );
-    // Eight gated routes after 9B-3C, from the SAME closed four-feature
+    // Nine gated routes after SHISO-C1, from the SAME closed four-feature
     // vocabulary: the new whole-recipe route is another `ai_interpretation`
     // transport, not a fifth feature.
-    expect(gateCalls).toHaveLength(8);
+    expect(gateCalls).toHaveLength(9);
     const features = new Set(
       gateCalls.map((call) => /"([a-z_]+)"\)/.exec(call)?.[1]).filter(Boolean),
     );

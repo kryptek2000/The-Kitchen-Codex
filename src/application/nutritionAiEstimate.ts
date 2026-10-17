@@ -356,7 +356,7 @@ export async function requestAiMassEstimateOffers(input: {
   // The shell's single centralized decision, used verbatim.
   const capabilities = input.capabilities;
   if (capabilities.aiEstimation !== 'available') {
-    return { ok: true, offers: [], refused: [], message: 'AI estimation is not available for this tier.' };
+    return { ok: true, offers: [], refused: [], message: 'AI quantity estimation is not currently available. Check AI Settings and refresh nutrition AI availability.' };
   }
 
   // THE single Phase-4/session identity-evidence owner. It runs FIRST, before

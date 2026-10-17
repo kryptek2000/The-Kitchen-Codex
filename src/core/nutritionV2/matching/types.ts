@@ -25,8 +25,8 @@ import type { UsdaDataType } from '../usda/types';
 // Versions (pinned; part of confirmation binding)
 // ---------------------------------------------------------------------------
 
-export const MATCHING_NORMALIZATION_VERSION = 'usda_match_normalize_v2';
-export const MATCHING_RANKING_VERSION = 'usda_match_rank_v11';
+export const MATCHING_NORMALIZATION_VERSION = 'usda_match_normalize_v3';
+export const MATCHING_RANKING_VERSION = 'usda_match_rank_v12';
 export const MATCHING_CATALOG_VERSION = 'usda_review_catalog_v2';
 export const MATCHING_CONFIRMATION_VERSION = 'usda_match_confirm_v2';
 

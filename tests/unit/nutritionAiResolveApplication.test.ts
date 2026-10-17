@@ -1,3 +1,5 @@
+import { resolveNutritionCapabilities } from '../../src/core/nutritionV2/nutritionCapabilities';
+const AI_ADVANCED_CAPABILITIES = resolveNutritionCapabilities({aiConfigured:true,aiReachable:true});
 /**
  * The Kitchen Codex — application-layer AI-assisted USDA resolution flow.
  *
@@ -84,6 +86,22 @@ function fakeNetwork(impl: (path: string, body: unknown) => Promise<unknown>): N
 }
 
 describe('AI resolution — application request/response', () => {
+  it.each([[404, /restart/], [401, /authorization/], [429, /limit/], [503, /connection test/]])(
+    'reports actionable HTTP %s failure from the whole-recipe request without echoing server text', async (status, message) => {
+      const {adapted, rows}=buildRows(['1 cup Zzz']);
+      const network=fakeNetwork(async()=>({ok:false,status,data:{error:'PRIVATE PROVIDER DETAILS'}}));
+      const result=await resolveUnresolvedRowsWithAi({
+        network,session:SESSION,rows,adapted,capabilities:AI_ADVANCED_CAPABILITIES,
+        liveCanonicalInterpretation:true,
+        wholeRecipe:{recipe:{ingredients:[{name:'1 cup Zzz'}]},instructions:[],targets:rows.map(r=>({line_ref:r.line_ref}))},
+      });
+      expect(network.post).toHaveBeenCalledTimes(1);
+      expect(result.ok).toBe(false);
+      expect(result.message).toMatch(message as RegExp);
+      expect(result.message).not.toContain('PRIVATE');
+      expect(result.outcome.candidates).toHaveLength(0);
+    });
+
   it('sends only bounded unresolved rows and accepts a valid advisory response', async () => {
     const { adapted, rows } = buildRows(['1 cup Zzz', '100 g Flour, wheat, white']);
     const zzzRow = rows.find((row) => /zzz/i.test(row.query));

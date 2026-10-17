@@ -402,7 +402,7 @@ describe('AI-5B — composition ownership', () => {
     const gates = [...appSource.matchAll(/requireNutritionProductFeature\(([^,)]+)/g)].map((m) => m[1]);
     // Eight gated routes after 9B-3C: the whole-recipe semantic transport
     // is another `ai_interpretation` gate, not a new feature or authority seam.
-    expect(gates.length).toBe(8);
+    expect(gates.length).toBe(9);
     expect(new Set(gates)).toEqual(new Set(['nutritionProductAccessAuthority']));
   });
 

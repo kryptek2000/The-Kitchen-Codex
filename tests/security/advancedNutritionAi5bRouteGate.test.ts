@@ -720,7 +720,7 @@ describe('AI-5B — middleware order is structural, not incidental', () => {
   it('gates exactly the four AI-5A features and nothing else', () => {
     const gateCalls = [...APP_SOURCE.matchAll(/requireNutritionProductFeature\([^)]*\)/g)].map((m) => m[0]);
     // Eight gated routes after 9B-3C, still exactly FOUR distinct AI-5A features.
-    expect(gateCalls).toHaveLength(8);
+    expect(gateCalls).toHaveLength(9);
     const features = new Set(gateCalls.map((call) => /"([a-z_]+)"\)$/.exec(call)![1]));
     expect([...features].sort()).toEqual([
       'ai_bounded_mass_estimation',

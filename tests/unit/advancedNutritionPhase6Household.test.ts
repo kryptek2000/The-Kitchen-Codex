@@ -86,6 +86,8 @@ import type {
   CodexNutritionV1,
   CodexNutritionV2,
   CodexNutritionV3,
+  CodexNutritionV4,
+  CodexNutritionV5,
   HouseholdPortionEvidence,
   IngredientEvidenceV2,
 } from '../../src/core/nutritionV2/schema';
@@ -234,7 +236,7 @@ function lineInput(flowValue: Flow, householdSelection?: unknown): Record<string
 
 /** Version-neutral household evidence accessor for persisted-block assertions. */
 function persistedHousehold(
-  block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3,
+  block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5,
   index = 0
 ): HouseholdPortionEvidence | undefined {
   const entry = block.ingredients[index] as IngredientEvidenceV2 | undefined;
@@ -1409,7 +1411,7 @@ function authorizeReady(flowValue: Flow, state: Phase4State): Phase4State {
   } as Phase4State;
 }
 
-function authorize(flowValue: Flow, state: Phase4State): CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 {
+function authorize(flowValue: Flow, state: Phase4State): CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5 {
   const result = authorizeNutritionPersistence({
     session,
     recipe: flowValue.recipe,

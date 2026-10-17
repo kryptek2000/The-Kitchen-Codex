@@ -104,6 +104,18 @@ export const NUTRITION_INTERPRET_ENDPOINT = '/api/nutrition/interpret-ingredient
 export const NUTRITION_AI_STATUS_ENDPOINT = '/api/providers';
 
 /** Fixed, bounded, user-facing messages (never raw provider/exception text). */
+export function nutritionResolutionFailureMessage(status?: number): string {
+  switch (status) {
+    case 404: return 'The running server does not support this nutrition request. Rebuild and restart the server, then reload the page.';
+    case 401: return 'Nutrition AI authorization expired or is missing. Recheck AI Settings.';
+    case 402: return 'Nutrition AI requires pricing approval for the selected model. Review AI Settings.';
+    case 403: return 'Nutrition AI is not permitted by the current access or model settings. Review AI Settings.';
+    case 429: return 'Nutrition AI reached a rate or quota limit. Try again later.';
+    case 503: return 'The selected AI could not complete nutrition interpretation. A connection test does not verify this task. You can continue with USDA search manually.';
+    default: return AI_RESOLUTION_UNAVAILABLE_MESSAGE;
+  }
+}
+
 export const AI_RESOLUTION_UNAVAILABLE_MESSAGE =
   'AI assistance is unavailable. You can continue with USDA search manually.';
 export const AI_RESOLUTION_INVALID_MESSAGE =
@@ -339,7 +351,7 @@ export async function requestAiAdvancedInterpretations(
   if (!response || response.ok !== true) {
     return {
       ok: false,
-      message: AI_RESOLUTION_UNAVAILABLE_MESSAGE,
+      message: nutritionResolutionFailureMessage(response?.status),
       interpretations: Object.freeze([]),
       authoritativeByLineRef,
       aiAttempted: true,
@@ -680,7 +692,7 @@ async function requestAuthenticatedWholeRecipeSuggestions(
   if (!response || response.ok !== true) {
     return {
       ok: false,
-      message: AI_RESOLUTION_UNAVAILABLE_MESSAGE,
+      message: nutritionResolutionFailureMessage(response?.status),
       suggestions: Object.freeze([]),
       withheld: Object.freeze([]),
       aiAttempted: true,
