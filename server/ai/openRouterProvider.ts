@@ -152,13 +152,6 @@ async function asJson<T>(res: OpenRouterFetchResponse): Promise<T | undefined> {
 }
 
 /** Baseline assistant-content extraction (curated path). */
-function extractContent(parsed: unknown): string {
-  const body = (parsed ?? {}) as { choices?: unknown };
-  const choices = Array.isArray(body.choices) ? body.choices : [];
-  const choice = choices[0] as { message?: { content?: unknown } } | undefined;
-  const content = choice?.message?.content;
-  return typeof content === "string" ? content.trim() : "";
-}
 
 /**
  * TRUSTED, server-derived execution context for an OpenRouter structured call.
@@ -172,7 +165,8 @@ function extractContent(parsed: unknown): string {
  */
 export type OpenRouterExecutionContext =
   | { source: "curated" }
-  | { source: "verified_dynamic"; profile: OpenRouterProfile };
+  | { source: "verified_dynamic"; profile: OpenRouterProfile }
+  | { source: "ordinary_free_text" };
 
 /** The one implemented provider: OpenRouter (OpenAI-compatible). */
 export class OpenRouterProvider implements AiProvider {
@@ -260,6 +254,8 @@ export class OpenRouterProvider implements AiProvider {
       ? { source: "verified_dynamic", profile: verifiedProfile }
       : catalog.isVerifiedStrictStructuredModel(options.model)
       ? { source: "curated" }
+      : !schema && catalog.openRouterConversationTextModelIds().includes(options.model)
+      ? { source: "ordinary_free_text" }
       : undefined;
     if (!execution || (execution.source === "verified_dynamic" && !schema)) {
       throw new ProviderOperationError('UNSUPPORTED_CAPABILITY', 'The selected free model is not currently verified.', {});
@@ -293,7 +289,7 @@ export class OpenRouterProvider implements AiProvider {
     if (!res.ok) {
       const error = Object.assign(new Error('OpenRouter request failed.'), { status: res.status });
       const code = classifyProviderError(error);
-      throw new ProviderOperationError(code, 'OpenRouter request failed.', {});
+      throw new ProviderOperationError(code, 'OpenRouter request failed.', { status: res.status });
     }
 
     if (execution.source === "verified_dynamic") {
@@ -307,18 +303,18 @@ export class OpenRouterProvider implements AiProvider {
         throw new ProviderOperationError('INVALID_RESPONSE', 'OpenRouter returned an unreadable or oversized response.', {});
       }
       const extracted = completionContent(parsed);
-      if (extracted.ok === false) throw new ProviderOperationError('INVALID_RESPONSE', 'OpenRouter did not return a complete supported answer.', {});
+      if (extracted.ok === false) throw new ProviderOperationError('INVALID_RESPONSE', 'OpenRouter did not return a complete supported answer.', { responseFailure: extracted.reason });
       return extracted.content;
     }
 
     // Curated/server-default execution: EXACT baseline (pre-Astra) reading with
     // NO streamed byte ceiling. The body is read EXACTLY once here.
     const parsed = await asJson<unknown>(res);
-    const text = extractContent(parsed);
-    if (!text) {
-      throw new ProviderOperationError("INVALID_RESPONSE", "OpenRouter returned an empty response.", {});
+    const extracted = completionContent(parsed);
+    if (extracted.ok === false) {
+      throw new ProviderOperationError('INVALID_RESPONSE', 'OpenRouter did not return a complete supported answer.', { responseFailure: extracted.reason });
     }
-    return text;
+    return extracted.content;
   }
 
   async generate(prompt: string, options: AiGenerateOptions): Promise<string> {
@@ -331,13 +327,12 @@ export class OpenRouterProvider implements AiProvider {
     options: AiStructuredOptions
   ): Promise<T> {
     const text = await this.chat(prompt, options, schema);
-    try {
-      const parsed = JSON.parse(text);
-      if (!validatesAiSchema(parsed, schema)) throw new Error();
-      return parsed as T;
-    } catch (err) {
-      throw new ProviderOperationError("INVALID_RESPONSE", "OpenRouter returned invalid structured data.", {});
+    let parsed: unknown;
+    try { parsed = JSON.parse(text); } catch {
+      throw new ProviderOperationError("INVALID_RESPONSE", "OpenRouter returned invalid JSON.", { responseFailure: "malformed_json" });
     }
+    if (!validatesAiSchema(parsed, schema)) throw new ProviderOperationError("INVALID_RESPONSE", "OpenRouter returned invalid structured data.", { responseFailure: "schema_mismatch" });
+    return parsed as T;
   }
 }
 

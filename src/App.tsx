@@ -12,6 +12,7 @@ import {
   isThemeId,
   VaultNote,
   RecipeNutrition,
+  ParsedIngredient,
 } from './types';
 import { DEFAULT_VAULT_PATH, getStarterVaultRecipes, getStarterVaultNotes, STARTER_MEAL_PLAN, STARTER_SHOPPING_CATEGORIES } from './data/starterVault';
 import { getRecipeImage } from './utils/imageHelper';
@@ -98,12 +99,31 @@ import type { NutritionCapabilities } from './core/nutritionV2/nutritionCapabili
 import { getEndpointAccessHeaders } from './application/endpointAccess';
 import { loadProductionAdvancedNutritionSession } from './browser/advancedNutritionBundle';
 import { useAdvancedNutritionBundle } from './application-ui/useAdvancedNutritionBundle';
+import { ShisoEntryProvider, useShiso } from './application-ui/shisoEntryPoints';
+import { ShisoModal } from './components/ShisoModal';
+import { applyShisoIngredientEdits } from './core/shiso/recipeEditing';
+import {
+  extendWorkingRecipe,
+  undoLastWorkingEdit,
+  type ShisoWorkingRecipeCore,
+} from './core/shiso/workingRecipe';
+import {
+  recipeIdentityOf,
+  verifySaveGrant,
+  type ShisoSaveGrant,
+} from './core/shiso/saveAuthorization';
+import type {
+  ShisoIngredientEditArgs,
+  ShisoRecipeEditOutcome,
+  ShisoRecipeSaveOutcome,
+} from './core/shiso/protocol';
 import { playTimerChime } from './utils/audioAlert';
 import { buildGalleryRoute, buildRecipeRoute, parseRecipeRoute } from './utils/recipeRoute';
 import { APP_VERSION } from './version';
 import ProviderSettings from './application-ui/ProviderSettings';
 import { CreateForMeModal } from './components/CreateForMeModal';
-import { saveGeneratedRecipeToVault, GeneratedRecipePathCollisionError } from './application/createForMe';
+import { generatedDraftToObsidianRecipe, saveGeneratedRecipeToVault, GeneratedRecipePathCollisionError } from './application/createForMe';
+import type { GeneratedRecipeDraft, GeneratedRecipeProvenance } from './schema/generatedRecipe';
 import {
   sameCanonicalRecipeIdentity,
   reconcileActiveRecipe,
@@ -174,6 +194,17 @@ interface LoadedVaultData {
   shoppingList?: ShoppingCategoryGroup[];
   folderName: string;
 }
+
+/**
+ * SHISO H-2 — the UNSAVED working copy of the selected recipe.
+ *
+ * `base` is the canonical recipe the working copy derives from (identity
+ * binding); `working` is the edited recipe the UI displays; `changes` is the
+ * bounded human-readable account; `history` is the per-edit undo record. This
+ * state is memory-only: it is never persisted, and it is discarded on Save,
+ * Discard, or any successful canonical write of the same recipe.
+ */
+type ShisoWorkingRecipeState = ShisoWorkingRecipeCore<ObsidianRecipe, ParsedIngredient>;
 
 /**
  * Reads a connected vault handle through the application VaultAdapter
@@ -249,6 +280,10 @@ export default function App() {
   // resulting genuine Phase 4 session is retained in memory across recipe
   // navigation for the lifetime of the page and is never persisted.
   const advancedNutritionBundle = useAdvancedNutritionBundle(loadProductionAdvancedNutritionSession);
+  // SHISO — one conversation, three entry points (global, recipe, nutrition).
+  // `ShisoEntryProvider` lives in main.tsx ABOVE this component, so the context
+  // is available here as well as inside the recipe / nutrition surfaces.
+  const shiso = useShiso();
 
   // Asset save dependencies, supplied BY the browser shell: the binary storage
   // boundary (BrowserAssetAdapter) + the fixed-purpose remote image downloader.
@@ -363,6 +398,18 @@ export default function App() {
   const [editingRecipe, setEditingRecipe] = useState<ObsidianRecipe | null>(null);
   const [isWindowDragging, setIsWindowDragging] = useState(false);
   const [grabberInitialUrl, setGrabberInitialUrl] = useState('');
+
+  // SHISO H-2 — the UNSAVED working copy produced by authorized chat edits.
+  // Memory-only: never persisted here, cleared on Save/Discard (or any
+  // successful canonical write of the same recipe). A ref mirrors the state so
+  // the conversation tools (which await between steps) always read the latest
+  // working copy rather than a stale render closure.
+  const [shisoWorkingRecipe, setShisoWorkingRecipe] = useState<ShisoWorkingRecipeState | null>(null);
+  const shisoWorkingRecipeRef = useRef<ShisoWorkingRecipeState | null>(null);
+  const updateShisoWorkingRecipe = useCallback((next: ShisoWorkingRecipeState | null) => {
+    shisoWorkingRecipeRef.current = next;
+    setShisoWorkingRecipe(next);
+  }, []);
 
   // Filters & Search
   const [searchQuery, setSearchQuery] = useState('');
@@ -742,29 +789,238 @@ export default function App() {
   };
 
   // Save / Update Recipe
-  const handleSaveRecipe = async (savedRecipe: ObsidianRecipe) => {
-    // Write FIRST: Obsidian Markdown is the canonical source of truth. React state is
-    // only updated AFTER the canonical write succeeds, so a failed write leaves the
-    // prior canonical state (and the open editor) intact (defect C).
-    try {
+  //
+  // H-2: the canonical write is factored into `commitRecipeWrite` so the SHISO
+  // save capability uses the very SAME authoritative path as the editor. Any
+  // successful canonical write also RESOLVES the unsaved SHISO working copy for
+  // that recipe (the written recipe now contains those changes).
+  const commitRecipeWrite = useCallback(
+    async (savedRecipe: ObsidianRecipe) => {
       if (vaultAdapter) {
         await saveRecipeWithVaultAdapter(vaultAdapter, savedRecipe);
       } else {
         // Disconnected workflow: preserve the existing download-to-disk fallback.
         await saveRecipeToVaultFile(savedRecipe, undefined);
       }
+      setRecipes((prev) => upsertCanonicalRecipe(prev, savedRecipe));
+      setSelectedRecipe((prev) => (prev && sameCanonicalRecipeIdentity(prev, savedRecipe) ? savedRecipe : prev));
+      const working = shisoWorkingRecipeRef.current;
+      if (working !== null && sameCanonicalRecipeIdentity(working.base, savedRecipe)) {
+        updateShisoWorkingRecipe(null);
+      }
+    },
+    [vaultAdapter, updateShisoWorkingRecipe],
+  );
+
+  const handleSaveRecipe = async (savedRecipe: ObsidianRecipe) => {
+    // Write FIRST: Obsidian Markdown is the canonical source of truth. React state is
+    // only updated AFTER the canonical write succeeds, so a failed write leaves the
+    // prior canonical state (and the open editor) intact (defect C).
+    try {
+      await commitRecipeWrite(savedRecipe);
     } catch (err) {
       // Surface the failure; do NOT claim persistence succeeded (editor stays open).
       reportVaultError('save', savedRecipe.title || 'recipe', err);
       throw err;
     }
-    // Commit state from the successfully written/serialized canonical object, matched
-    // by canonical vault-path identity (never basename) (defect B).
-    setRecipes((prev) => upsertCanonicalRecipe(prev, savedRecipe));
-    setSelectedRecipe((prev) => (prev && sameCanonicalRecipeIdentity(prev, savedRecipe) ? savedRecipe : prev));
     setIsEditorOpen(false);
     setEditingRecipe(null);
   };
+
+  /**
+   * H-2 — applies structured ingredient edits to the UNSAVED working copy
+   * through the ONE core editing engine. The core function re-derives every
+   * line reference against the CURRENT recipe, so a stale reference fails
+   * closed. Nothing is written here; the working copy is memory-only until the
+   * user explicitly saves.
+   */
+  const applyShisoEdits = useCallback(
+    async (edits: readonly ShisoIngredientEditArgs[]): Promise<ShisoRecipeEditOutcome> => {
+      const currentWorking = shisoWorkingRecipeRef.current;
+      const base =
+        currentWorking !== null &&
+        selectedRecipe !== null &&
+        sameCanonicalRecipeIdentity(currentWorking.base, selectedRecipe)
+          ? currentWorking.working
+          : selectedRecipe;
+      if (base === null) {
+        return {
+          ok: false,
+          applied: [],
+          refused: [],
+          summary: 'No recipe is open to edit.',
+          working_unsaved: false,
+          note: '',
+        };
+      }
+      const result = applyShisoIngredientEdits(base, edits);
+      if (result.ok !== true) {
+        const failure = result as { message?: string };
+        return {
+          ok: false,
+          applied: [],
+          refused: [],
+          summary: failure.message ?? 'No ingredient change could be applied.',
+          working_unsaved: false,
+          note: '',
+        };
+      }
+      const sameWorking =
+        currentWorking !== null && sameCanonicalRecipeIdentity(currentWorking.base, base)
+          ? currentWorking
+          : null;
+      const next = extendWorkingRecipe<ObsidianRecipe, ParsedIngredient>({
+        current: sameWorking,
+        base,
+        working: result.recipe as unknown as ObsidianRecipe,
+        ledger: result.ledger.map((entry) => ({
+          index: entry.index,
+          previous: entry.previous as ParsedIngredient,
+        })),
+        changeLines: result.applied.map((entry) => `${entry.before} → ${entry.after}`.slice(0, 300)),
+        maxChanges: 24,
+      });
+      updateShisoWorkingRecipe(next);
+      return {
+        ok: true,
+        applied: result.applied,
+        refused: result.refused,
+        summary: result.summary,
+        working_unsaved: true,
+        note:
+          'Saved: no. These changes exist only in the UNSAVED working copy. Say so plainly, and tell the user ' +
+          'they can review the changes and save when they are ready.',
+      };
+    },
+    [selectedRecipe, updateShisoWorkingRecipe],
+  );
+
+  /**
+   * H-2 — one-step undo: restores the ingredient a single edit replaced. This
+   * is the visible undo path for authorized chat edits.
+   */
+  const undoLastShisoEdit = useCallback(() => {
+    const current = shisoWorkingRecipeRef.current;
+    if (current === null) return;
+    const next = undoLastWorkingEdit<ObsidianRecipe, ParsedIngredient>(current, (working, index, previous) => {
+      const ingredients = [...(working.ingredients as ParsedIngredient[])];
+      if (ingredients[index] === undefined) return null;
+      ingredients[index] = previous;
+      return { ...working, ingredients, rawMarkdown: '' };
+    });
+    if (next !== null) updateShisoWorkingRecipe(next);
+  }, [updateShisoWorkingRecipe]);
+
+  /**
+   * H-2 — persists the UNSAVED working recipe through the EXISTING canonical
+   * save path.
+   *
+   * H-2 SECURITY (the adversarial boundary): before ANY write this owner
+   * INDEPENDENTLY re-verifies the save grant:
+   *
+   *   - the grant must be structurally authorized (only the trusted entry
+   *     surface constructs one; a model tool call cannot);
+   *   - an assistant-initiated grant must be bound to the SAME recipe identity
+   *     that is actually being saved, so a stale (recipe switched) or replayed
+   *     authorization fails closed.
+   *
+   * The visible Save control passes a `ui` grant (the trusted user event is its
+   * own authorization).
+   */
+  const saveShisoWorkingRecipe = useCallback(
+    async (grant?: ShisoSaveGrant): Promise<ShisoRecipeSaveOutcome> => {
+      const current = shisoWorkingRecipeRef.current;
+      if (current === null) {
+        return {
+          ok: true,
+          saved: false,
+          reason_code: 'nothing_unsaved',
+          message: 'There is nothing to save — this recipe has no unsaved changes from Shiso.',
+        };
+      }
+      const verdict = verifySaveGrant(grant, recipeIdentityOf(current.base));
+      if (verdict.ok !== true) {
+        return {
+          ok: false,
+          saved: false,
+          reason_code: verdict.reason,
+          message:
+            verdict.reason === 'stale_recipe'
+              ? 'That save was authorized for a different recipe, so nothing was saved. Ask again for this recipe.'
+              : 'Saving needs your explicit instruction (for example “save my changes”) or the Save button. Nothing was saved.',
+        };
+      }
+      try {
+        await commitRecipeWrite(current.working);
+      } catch (err) {
+        reportVaultError('save', current.working.title || 'recipe', err);
+        return { ok: false, saved: false, reason_code: 'write_failed', message: 'The recipe could not be saved to the vault.' };
+      }
+      // A canonical write happened: invalidate any vault scan that STARTED before
+      // it so a stale scan can never overwrite the just-saved recipe.
+      vaultScanGeneration.current.begin();
+      updateShisoWorkingRecipe(null);
+      return {
+        ok: true,
+        saved: true,
+        message: `Saved "${current.working.title}" with ${current.changes.length + Number(JSON.stringify(current.working.codexNutrition ?? null) !== JSON.stringify(current.base.codexNutrition ?? null))} recipe change(s).`,
+      };
+    },
+    [commitRecipeWrite, updateShisoWorkingRecipe],
+  );
+
+  // SHISO H-2 — register the recipe-edit/save applier with the ONE Shiso entry
+  // point surface. The registered functions always read the latest working copy
+  // through the ref, so a mid-turn edit can never be applied against stale
+  // state. An absent applier makes every edit capability fail closed.
+  const registerRecipeEditApplier = shiso.registerRecipeEditApplier;
+  useEffect(() => {
+    return registerRecipeEditApplier({
+      applyEdits: (edits) => applyShisoEdits(edits),
+      save: (grant) => saveShisoWorkingRecipe(grant),
+      discard: () => updateShisoWorkingRecipe(null),
+    });
+  }, [registerRecipeEditApplier, applyShisoEdits, saveShisoWorkingRecipe, updateShisoWorkingRecipe]);
+
+  // Publish the bounded working-copy summary (the ONE visible banner account).
+  const publishWorkingRecipe = shiso.publishWorkingRecipe;
+  const shisoWorkingForSelected =
+    shisoWorkingRecipe !== null &&
+    selectedRecipe !== null &&
+    sameCanonicalRecipeIdentity(shisoWorkingRecipe.base, selectedRecipe)
+      ? shisoWorkingRecipe
+      : null;
+  const shisoWorkingChangeLines = useMemo(
+    () => shisoWorkingForSelected === null
+      ? []
+      : [
+          ...shisoWorkingForSelected.changes,
+          ...(JSON.stringify(shisoWorkingForSelected.working.codexNutrition ?? null) !== JSON.stringify(shisoWorkingForSelected.base.codexNutrition ?? null)
+            ? ['Advanced Nutrition applied']
+            : []),
+        ],
+    [shisoWorkingForSelected],
+  );
+  useEffect(() => {
+    if (shisoWorkingForSelected === null) {
+      publishWorkingRecipe(null);
+      return;
+    }
+    publishWorkingRecipe({
+      unsaved: true,
+      change_count: shisoWorkingChangeLines.length,
+      changes: shisoWorkingChangeLines,
+    });
+  }, [shisoWorkingForSelected, shisoWorkingChangeLines, publishWorkingRecipe]);
+
+  /**
+   * H-2 — the recipe every surface DISPLAYS: the unsaved working copy when one
+   * exists for the selected recipe, otherwise the canonical recipe. Advanced
+   * Nutrition, the detail view and the Shiso conversation all read this, so an
+   * authorized edit is immediately visible everywhere.
+   */
+  const displayRecipe: ObsidianRecipe | null =
+    shisoWorkingForSelected?.working ?? selectedRecipe;
 
   // Create for Me save (generated-save scoped). A same-title file is NEVER
   // overwritten: on a collision this throws GeneratedRecipePathCollisionError
@@ -812,12 +1068,17 @@ export default function App() {
     }
     setRecipes((prev) => upsertCanonicalRecipe(prev, updatedRecipe));
     setSelectedRecipe((prev) => (prev && sameCanonicalRecipeIdentity(prev, updatedRecipe) ? updatedRecipe : prev));
+    // H-2: a canonical write of the displayed (working) recipe resolves the
+    // unsaved SHISO working copy for that recipe.
+    const workingAfterNutrition = shisoWorkingRecipeRef.current;
+    if (workingAfterNutrition !== null && sameCanonicalRecipeIdentity(workingAfterNutrition.base, updatedRecipe)) {
+      updateShisoWorkingRecipe(null);
+    }
   };
 
-  // Phase 5B: explicit Advanced Nutrition Apply. The application write
-  // coordinator re-authorizes from genuine Phase 4 authority immediately before
-  // the write; this shell only supplies the SAME authoritative recipe write path
-  // the editor uses, plus an optional post-write re-read when a vault is connected.
+  // Phase 5B: Apply moves the freshly authorized nutrition block into the
+  // unsaved recipe working copy. The existing banner's explicit Save to vault
+  // action remains the only persistence boundary.
   const handleApplyAdvancedNutrition: AdvancedNutritionApplyHandler = async (
     args: AdvancedNutritionApplyHandlerArgs
   ): Promise<AdvancedNutritionApplyUiResult> => {
@@ -827,42 +1088,30 @@ export default function App() {
       state: args.state,
       expectedMode: args.expectedMode,
       write: async (updated: ObsidianRecipe) => {
-        if (vaultAdapter) {
-          await saveRecipeWithVaultAdapter(vaultAdapter, updated);
-        } else {
-          await saveRecipeToVaultFile(updated, undefined);
-        }
-        // Commit in-memory state ONLY after the canonical write succeeded. The
-        // new saved result immediately becomes THE current recipe on every
-        // surface (Advanced summary, saved report, compact card, header).
-        setRecipes((prev) => upsertCanonicalRecipe(prev, updated));
-        setSelectedRecipe((prev) =>
-          prev && sameCanonicalRecipeIdentity(prev, updated) ? updated : prev
-        );
-        // AUTHORITATIVE HANDOFF: invalidate any vault scan that STARTED before
-        // this write. Such a scan may have read the pre-Apply Markdown and would
-        // otherwise still be considered "current", letting a later-resolving
-        // stale scan overwrite the just-applied result. The committed in-memory
-        // recipe is authoritative until a scan that began AFTER this write
-        // completes.
-        vaultScanGeneration.current.begin();
+        const existingWorking = shisoWorkingRecipeRef.current;
+        const sameWorking = existingWorking !== null && sameCanonicalRecipeIdentity(existingWorking.base, updated)
+          ? existingWorking
+          : null;
+        const selectedBase = selectedRecipe !== null && sameCanonicalRecipeIdentity(selectedRecipe, updated)
+          ? selectedRecipe
+          : args.recipe;
+        const base = sameWorking?.base ?? selectedBase;
+        updateShisoWorkingRecipe(Object.freeze({
+          base,
+          working: updated,
+          // Keep the ingredient-only undo history aligned with `changes`; the
+          // nutrition change is reported separately in the working banner.
+          changes: sameWorking?.changes ?? Object.freeze([]),
+          history: sameWorking?.history ?? Object.freeze([]),
+        }));
       },
-      ...(vaultAdapter
-        ? {
-            readBack: async (updated: ObsidianRecipe) =>
-              vaultAdapter.readText(resolveRecipeVaultPath(updated)),
-          }
-        : {}),
     });
 
     if (result.ok) {
       return {
         ok: true,
         mode: result.result.mode,
-        message:
-          result.result.mode === 'replace'
-            ? 'Advanced Nutrition was replaced and saved to your recipe.'
-            : 'Advanced Nutrition was saved to your recipe.',
+        message: 'Nutrition was applied to the working recipe. It is not saved to your Vault yet; use Save to vault in the recipe banner when ready.',
       };
     }
     const failureCode = (result as { ok: false; failure: { code: keyof typeof ADVANCED_NUTRITION_APPLY_UI_MESSAGE } })
@@ -1883,7 +2132,7 @@ export default function App() {
           setIsVaultIntelligenceOpen(true);
         }}
         onOpenAskMyKitchen={() => setIsAskMyKitchenOpen(true)}
-        onOpenCreateForMe={() => setIsCreateForMeOpen(true)}
+        onOpenCreateForMe={() => shiso.open('create')}
         legacyRecipeCount={vaultHealthSummary.legacyCount + vaultHealthSummary.incompleteCount}
         onRefreshVault={async () => {
           if (vaultStatus.isConnected && vaultStatus.folderHandle) {
@@ -1918,9 +2167,67 @@ export default function App() {
 
       {/* Main View Router */}
       <main className="flex-1">
-        {selectedRecipe ? (
-          <RecipeDetailView
-            recipe={selectedRecipe}
+        {selectedRecipe && displayRecipe ? (
+          <>
+            {/* SHISO H-2 — the ONE visible account of unauthorized-not-yet-saved
+                chat edits, with Save, one-step Undo, and Discard. */}
+            {shisoWorkingForSelected !== null && (
+              <div
+                data-testid="shiso-working-recipe-banner"
+                className="max-w-5xl mx-auto mt-4 px-4 sm:px-6"
+              >
+                <div className="rounded-xl border border-teal-500/30 bg-teal-500/10 px-4 py-3 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <p className="text-xs text-teal-100">
+                      <strong>Unsaved recipe changes.</strong>{' '}
+                      {shisoWorkingChangeLines.length} change
+                      {shisoWorkingChangeLines.length === 1 ? '' : 's'} are in the working copy. Your Vault recipe is unchanged until you save.
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        data-testid="shiso-banner-save"
+                        onClick={() =>
+                          void saveShisoWorkingRecipe({
+                            authorized: true,
+                            via: 'ui',
+                            recipe_identity: '',
+                            turn: 0,
+                          })
+                        }
+                        className="text-[11px] px-2.5 py-1 rounded-lg bg-teal-500/25 text-teal-100 border border-teal-500/40 hover:bg-teal-500/35"
+                      >
+                        Save to vault
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="shiso-banner-undo"
+                        disabled={shisoWorkingForSelected.history.length === 0}
+                        onClick={undoLastShisoEdit}
+                        className="text-[11px] px-2.5 py-1 rounded-lg border border-white/15 text-gray-200 hover:bg-white/5 disabled:opacity-40"
+                      >
+                        Undo last ingredient change
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="shiso-banner-discard"
+                        onClick={() => updateShisoWorkingRecipe(null)}
+                        className="text-[11px] px-2.5 py-1 rounded-lg border border-white/15 text-gray-200 hover:bg-white/5"
+                      >
+                        Discard changes
+                      </button>
+                    </div>
+                  </div>
+                  <ul className="space-y-0.5">
+                    {shisoWorkingChangeLines.slice(-4).map((change, index) => (
+                      <li key={`${index}-${change}`} className="text-[11px] text-teal-200/90">• {change}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            )}
+            <RecipeDetailView
+              recipe={displayRecipe}
             allRecipes={recipes}
             allNotes={notes}
             onBack={() => setSelectedRecipe(null)}
@@ -1957,6 +2264,7 @@ export default function App() {
               onRetry: handleRetryNutritionAiAvailability,
             }}
           />
+          </>
         ) : activeTab === 'grid' ? (
           /* Recipe Gallery View */
           <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
@@ -2182,6 +2490,31 @@ export default function App() {
           if (selectedRecipe && selectedRecipe.id === updatedRecipe.id) {
             setSelectedRecipe(updatedRecipe);
           }
+        }}
+      />
+
+      {/* SHISO — one conversational surface, opened from the global header,
+          a recipe, or Advanced Nutrition. It holds no mutation authority. */}
+      <ShisoModal
+        isOpen={shiso.isOpen}
+        onClose={shiso.close}
+        network={networkAdapter}
+        recipe={shiso.source === 'create' ? null : displayRecipe}
+        nutritionSession={advancedNutritionBundle.session}
+        loadNutritionBundle={async () => {
+          // Calls the SAME controller the user's own "Load USDA data" button
+          // calls. Deliberately no polling and no timer: the controller installs
+          // the session when it is ready and the next Shiso turn observes it.
+          advancedNutritionBundle.load();
+        }}
+        nutritionRows={shiso.snapshot?.rows ?? []}
+        nutritionAiContributions={shiso.snapshot?.aiContributions ?? []}
+        nutritionReviewRows={shiso.snapshot?.reviewRows ?? []}
+        nutritionSummary={shiso.snapshot?.summary ?? null}
+        nutritionUnsaved={shiso.snapshot?.unsaved ?? false}
+        onSaveCreatedDraft={async (draft: GeneratedRecipeDraft, provenance: GeneratedRecipeProvenance) => {
+          const recipeToSave = generatedDraftToObsidianRecipe({ draft, provenance });
+          await handleSaveGeneratedRecipe(recipeToSave);
         }}
       />
 

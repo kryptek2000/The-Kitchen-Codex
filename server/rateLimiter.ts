@@ -226,6 +226,51 @@ export function nutritionInterpretRateLimiter(req: Request, res: Response, next:
  * interpretation, the legacy estimator, or the v4 resolution endpoint. The AI-1
  * interpretation limiter is untouched.
  */
+/**
+ * SHISO conversational turns. A conversation turn is the most frequent AI action
+ * in the product — a single user message may legitimately drive several tool
+ * steps — so it has its OWN bucket rather than borrowing the one-shot
+ * interpretation limiter, and it is more generous than it. It is still a real
+ * limit: the per-turn model/tool budgets bound each individual turn, and this
+ * bounds how many turns one client may start per window.
+ */
+export function shisoConversationRateLimiter(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  const parsedLimit = parseInt(process.env.SHISO_CONVERSATION_RATE_LIMIT || "60", 10);
+  const maxRequestsPerWindow = isNaN(parsedLimit) || parsedLimit <= 0 ? 60 : parsedLimit;
+  const windowMs = 60 * 1000; // 1 minute window
+
+  const clientIp = getClientIp(req);
+  const now = Date.now();
+
+  let entry = clientIpStore.get(`shiso_conv_${clientIp}`);
+
+  if (!entry || entry.resetTime <= now) {
+    entry = { count: 1, resetTime: now + windowMs };
+    clientIpStore.set(`shiso_conv_${clientIp}`, entry);
+  } else {
+    entry.count += 1;
+  }
+
+  const remaining = Math.max(0, maxRequestsPerWindow - entry.count);
+  const resetSeconds = Math.ceil((entry.resetTime - now) / 1000);
+
+  res.setHeader("RateLimit-Limit", maxRequestsPerWindow);
+  res.setHeader("RateLimit-Remaining", remaining);
+  res.setHeader("RateLimit-Reset", resetSeconds);
+
+  if (entry.count > maxRequestsPerWindow) {
+    res.setHeader("Retry-After", resetSeconds);
+    return res.status(429).json({
+      error: "Too many chat requests. Please slow down and try again shortly.",
+    });
+  }
+  return next();
+}
+
 export function nutritionPlanRateLimiter(req: Request, res: Response, next: NextFunction) {
   const parsedLimit = parseInt(process.env.NUTRITION_PLAN_RATE_LIMIT || "12", 10);
   const maxRequestsPerWindow = isNaN(parsedLimit) || parsedLimit <= 0 ? 12 : parsedLimit;

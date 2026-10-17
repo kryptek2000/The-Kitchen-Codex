@@ -14,6 +14,7 @@ export type AiOperation =
   | "kitchenInterpret"
   | "kitchenRank"
   | "kitchenDiscover"
+  | "shisoConversation"
   | "nutrition"
   | "metadataRecovery"
   | "recipeGrabber"
@@ -24,6 +25,7 @@ export const AI_OPERATIONS: AiOperation[] = [
   "kitchenInterpret",
   "kitchenRank",
   "kitchenDiscover",
+  "shisoConversation",
   "nutrition",
   "metadataRecovery",
   "recipeGrabber",
@@ -41,6 +43,9 @@ export const OPERATION_REQUIRED_CAPABILITIES: Record<AiOperation, AiCapabilityKe
   kitchenInterpret: ["structuredOutput"],
   kitchenRank: ["structuredOutput"],
   kitchenDiscover: ["webSearch"],
+  // Shiso can use schema-constrained output when available, or its validated
+  // JSON-over-text adapter for ordinary conversational text models.
+  shisoConversation: [],
   nutrition: ["structuredOutput"],
   metadataRecovery: ["structuredOutput"],
   recipeGrabber: ["structuredOutput"],
