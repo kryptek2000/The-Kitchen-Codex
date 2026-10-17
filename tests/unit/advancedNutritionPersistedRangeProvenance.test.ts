@@ -72,6 +72,8 @@ import type {
   CodexNutritionV1,
   CodexNutritionV2,
   CodexNutritionV3,
+  CodexNutritionV4,
+  CodexNutritionV5,
   WrittenMassRangeEvidence,
 } from '../../src/core/nutritionV2/schema';
 import type { ObsidianRecipe } from '../../src/types';
@@ -220,7 +222,7 @@ function authorize(reviewed: Reviewed) {
   });
 }
 
-function candidateOf(reviewed: Reviewed): CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 {
+function candidateOf(reviewed: Reviewed): CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5 {
   const result = authorize(reviewed);
   if (!result.ok) {
     throw new Error(
@@ -281,7 +283,7 @@ function reload(markdown: string, recipe: ObsidianRecipe) {
 /** Re-projects the live rows of a reloaded recipe through genuine hydration. */
 function liveRowsAfterReload(
   recipe: ObsidianRecipe,
-  savedBlock: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3
+  savedBlock: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5
 ): ReadonlyArray<LiveRowState> {
   const adaptation = adaptRecipe(recipe);
   if (!adaptation.ok) throw new Error('adapt failed');
@@ -318,7 +320,7 @@ function liveRowsAfterReload(
 }
 
 function markerOf(
-  block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3
+  block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5
 ): WrittenMassRangeEvidence | undefined {
   return (block.ingredients[0] as { range_representative?: WrittenMassRangeEvidence })
     .range_representative;

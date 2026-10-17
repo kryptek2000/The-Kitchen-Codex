@@ -40,9 +40,10 @@ export const INITIAL_PHASE4_STATE: Phase4State = Object.freeze({
   countPortions: Object.freeze({}),
   userMasses: Object.freeze({}),
   householdPortions: Object.freeze({}),
-  // AI-3: bounded AI mass estimates. Preview-only, never persisted, never
+  // Bounded AI mass estimates: accepted working choices, never
   // hydrated, and always the LOWEST mass authority for a line.
   aiEstimates: Object.freeze({}),
+  aiNutrition: undefined,
   basis: 'entire_recipe',
   selectedServings: 1,
   preview: null,
@@ -105,11 +106,10 @@ export function phase4Reducer(state: Phase4State, action: Phase4Action): Phase4S
         countPortions: action.countPortions,
         userMasses: action.userMasses,
         householdPortions: action.householdPortions,
-        // AI-3: hydration reconstructs the working review from a SAVED
-        // result. Estimates are preview-only and never persisted, so a
-        // re-analysis/hydration drops every one of them rather than reviving
-        // a stale estimate against a freshly reconstructed review.
-        aiEstimates: {},
+        // Hydration restores only estimates re-bound to the current authored
+        // line and authenticated USDA identity. Older schemas carry none.
+        aiEstimates: action.aiEstimates ?? {},
+        aiNutrition: action.aiNutrition,
         failure: null,
       };
     }
@@ -311,6 +311,16 @@ export function phase4Reducer(state: Phase4State, action: Phase4Action): Phase4S
       return withPreviewStale(next);
     }
 
+    case 'accept_ai_nutrition': {
+      if (state.recipeKey !== action.recipeKey || action.servings !== state.baseServings) return state;
+      const allowed = new Set(state.rows.map((row) => row.line_ref));
+      if (action.contributions.some((entry) => !allowed.has(entry.line_ref))) return state;
+      return withPreviewStale({ ...state, aiNutrition: { recipe_key: action.recipeKey, servings: action.servings, contributions: action.contributions } });
+    }
+
+    case 'clear_ai_nutrition':
+      return state.aiNutrition ? withPreviewStale({ ...state, aiNutrition: undefined }) : state;
+
     case 'clear_household_portion': {
       if (!(action.lineRef in state.householdPortions)) return state;
       const householdPortions = { ...state.householdPortions };
@@ -359,6 +369,7 @@ export function phase4Reducer(state: Phase4State, action: Phase4Action): Phase4S
         // A plain analyzer run clears user masses; a Re-analyze that preserves
         // reviewed user-entered weights carries them through explicitly.
         userMasses: action.userMasses ?? Object.freeze({}),
+        aiEstimates: action.aiEstimates ?? state.aiEstimates,
         failure: null,
         operationSeq: state.operationSeq + 1,
       };

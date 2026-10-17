@@ -328,11 +328,11 @@ describe('schema v2 — version-specific decoding', () => {
     expect(validateCodexNutrition(v3).ok).toBe(true);
     // v3 RETAINS every v2 meaning: a household-only block labeled 3 is valid v3.
     expect(validateCodexNutrition(validV2({ schema: 3 })).ok).toBe(true);
-    // An unknown FUTURE schema (4+) keeps the opaque-preservation contract.
-    const future = validV2({ schema: 4 });
+    // An unknown FUTURE schema (6+) keeps the opaque-preservation contract.
+    const future = validV2({ schema: 6 });
     const futureDecoded = decodeCodexNutrition(future);
     expect(futureDecoded.kind).toBe('opaque');
-    if (futureDecoded.kind === 'opaque') expect(futureDecoded.value.schema).toBe(4);
+    if (futureDecoded.kind === 'opaque') expect(futureDecoded.value.schema).toBe(6);
     expect(validateCodexNutrition(future).ok).toBe(false);
     expect(decodeCodexNutrition(validV2({ schema: 'two' })).kind).toBe('malformed');
   });

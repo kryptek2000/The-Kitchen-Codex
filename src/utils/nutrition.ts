@@ -201,3 +201,9 @@ export function buildNutritionApplyPayload(
   const { assessment: _assessment, ...clean } = pending;
   return { ...clean, servings: baseServings };
 }
+
+/** Historical machine subtotals remain readable as data, never complete totals. */
+export function isPartialMachineNutrition(nutrition: RecipeNutrition | null | undefined): boolean {
+  return !!nutrition && ['offline_heuristic', 'database', 'ai_estimate'].includes(nutrition.source ?? '') &&
+    /\bpartial\b|unresolved ingredient|recipe totals are unknown/i.test(nutrition.confidenceNote ?? '');
+}

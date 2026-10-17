@@ -35,7 +35,7 @@ import type {
   Phase4State,
 } from '../../src/core/nutritionV2/phase4/types';
 import type { AiResolutionSuggestion } from '../../src/core/nutritionV2/aiResolution';
-import type { CodexNutritionV1, CodexNutritionV2, CodexNutritionV3 } from '../../src/core/nutritionV2/schema';
+import type { CodexNutritionV1, CodexNutritionV2, CodexNutritionV3, CodexNutritionV4, CodexNutritionV5 } from '../../src/core/nutritionV2/schema';
 import type { ObsidianRecipe } from '../../src/types';
 
 const SPECS = [
@@ -145,7 +145,7 @@ function applyReady(flowValue: Flow, state: Phase4State): Phase4State {
   } as Phase4State;
 }
 
-function authorize(flowValue: Flow, state: Phase4State): CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 {
+function authorize(flowValue: Flow, state: Phase4State): CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5 {
   const result = authorizeNutritionPersistence({
     session,
     recipe: flowValue.recipe,
@@ -162,7 +162,7 @@ function authorize(flowValue: Flow, state: Phase4State): CodexNutritionV1 | Code
 function reAuthorize(
   flowValue: Flow,
   state: Phase4State,
-  existingBlock: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3
+  existingBlock: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5
 ): { code: string } {
   const result = authorizeNutritionPersistence({
     session,
@@ -187,7 +187,7 @@ function cloveSuggestion(lineRef: string): AiResolutionSuggestion {
 }
 
 describe('phase 0B final parity — Apply→reopen provenance (I-2)', () => {
-  it('hint-dependent garlic: Apply persists truthfully; reopen restores food only, keeps mass NEEDS AMOUNT, and blocks re-Apply', () => {
+  it('hint-dependent garlic: schema 4 restores the source portion; legacy blocks without hints remain unresolved', () => {
     // `3 garlic` has no recipe-declared count unit, so the applied count basis is
     // genuinely hint-dependent (Phase 1: `3 garlic cloves` would carry its own
     // unit and re-authenticate without a hint).
@@ -219,14 +219,13 @@ describe('phase 0B final parity — Apply→reopen provenance (I-2)', () => {
     expect(applied.conversion_basis).toBe('source_portion');
     expect(applied.amount?.value).toBe(9);
 
-    // REOPEN: the hint is not persisted, so the count basis cannot be
-    // re-authenticated. The reviewed food identity is restored, but NO user
-    // mass is ever fabricated.
+    // Schema 4 persists the reviewed count identity, so reopening can prove
+    // the actual portion again without fabricating a user-entered mass.
     const hydrated = hydrateWorkingReview({ session, adapted: f.adapted, rows: f.rows, savedBlock: block });
     expect(hydrated).toBeDefined();
     if (!hydrated) return;
     expect(hydrated.matches[f.lineRef]).toBeDefined();
-    expect(hydrated.countPortions[f.lineRef]).toBeUndefined();
+    expect(hydrated.countPortions[f.lineRef]?.countRequirementHint).toEqual({unit:'clove',size:null});
     expect(hydrated.userMasses[f.lineRef]).toBeUndefined();
     const reopenState: Phase4State = {
       ...f.state,
@@ -236,14 +235,20 @@ describe('phase 0B final parity — Apply→reopen provenance (I-2)', () => {
       userMasses: hydrated.userMasses,
     };
     const reopenedLive = liveOf(f, reopenState)[0];
-    expect(reopenedLive.status).toBe('needs_amount');
-    expect(reopenedLive.mass_source).toBeUndefined();
-    expect(reopenedLive.resolved_grams).toBeUndefined();
-    expect(summarizeLiveRows(liveOf(f, reopenState)).needs_amount).toBe(1);
+    expect(reopenedLive.status).toBe('matched');
+    expect(reopenedLive.mass_source).toBe('count_portion');
+    expect(reopenedLive.resolved_grams).toBe(9);
+    expect(reAuthorize(f, reopenState, block).code).toBe('applied');
 
-    // Re-Apply is blocked until the mass is resolved again: no provenance
-    // downgrade is ever written over the applied report.
-    expect(reAuthorize(f, reopenState, block).code).toBe('applied_line_unresolved');
+    // Existing v1 notes did not save count hints. They still fail closed;
+    // this repair never invents the missing historical provenance.
+    const legacy = {...block,schema:1,ingredients:block.ingredients.map(({count_portion, ...entry}: any)=>entry)} as CodexNutritionV1;
+    const old=hydrateWorkingReview({session,adapted:f.adapted,rows:f.rows,savedBlock:legacy});
+    expect(old?.countPortions[f.lineRef]).toBeUndefined();
+    expect(old?.userMasses[f.lineRef]).toBeUndefined();
+    const oldState={...f.state,matches:old!.matches,portions:old!.portions,countPortions:old!.countPortions,userMasses:old!.userMasses};
+    expect(liveOf(f,oldState)[0].status).toBe('needs_amount');
+    expect(reAuthorize(f,oldState,legacy).code).toBe('applied_line_unresolved');
   });
 
   it('explicit-unit `3 cloves garlic` reopens truthfully as the authenticated count portion and re-applies', () => {

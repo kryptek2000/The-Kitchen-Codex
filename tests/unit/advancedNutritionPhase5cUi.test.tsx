@@ -94,7 +94,7 @@ function partialBlock(target: ObsidianRecipe): CodexNutritionV1 {
   return {
     ...block,
     ingredients: block.ingredients.slice(0, 1),
-    unresolved: [{ line_ref: 'ing:1:unresolved', reason: 'no_match' }],
+    unresolved: [{ line_ref: block.ingredients[1].line_ref, reason: 'no_match' }],
   };
 }
 
@@ -173,7 +173,7 @@ describe('phase 5C — consolidated Nutrition UI', () => {
     // CURRENT recipe scale (364 kcal for 2 saved servings -> 728 for the current
     // 4); legacy 100 is never silently substituted.
     const normal = document.getElementById('recipe-nutrition-card') as HTMLElement;
-    expect(normal.textContent).toMatch(/728/);
+    expect(normal.textContent).not.toMatch(/728/);
     expect(normal.textContent).not.toMatch(/\b100\b/);
   });
 
@@ -186,12 +186,12 @@ describe('phase 5C — consolidated Nutrition UI', () => {
     // The incomplete/partial state is explicit and prominent.
     expect(normal.textContent).toMatch(/Partial estimate/i);
     expect(normal.textContent).toMatch(/Advanced nutrition incomplete/i);
-    expect(normal.textContent).toMatch(/1 of 2 ingredient lines resolved/i);
-    expect(normal.textContent).toMatch(/unresolved ingredient line/i);
-    // The PARTIAL values over the resolved lines ARE shown (not hidden).
-    expect(normal.textContent).toMatch(/364/);
-    expect(normal.textContent).toMatch(/91\.3/);
-    expect(normal.textContent).toMatch(/11/);
+    expect(normal.textContent).toMatch(/1 of 2 ingredient lines accounted for/i);
+    expect(normal.textContent).toMatch(/full recipe totals are unknown/i);
+    // Persisted partial values appear as explicitly labelled subtotals.
+    expect(normal.textContent).toMatch(/Calories · subtotal364/);
+    expect(normal.textContent).toMatch(/Fat · subtotal91\.3/);
+    expect(normal.textContent).toMatch(/Sodium · subtotal11/);
     // No per-nutrient legacy top-up.
     expect(normal.textContent).not.toMatch(/320/);
     // The detailed partial values remain available inside the separate card.
@@ -226,7 +226,7 @@ describe('phase 5C — consolidated Nutrition UI', () => {
   it('reports an unknown future schema and keeps the legacy fallback clearly labelled', () => {
     renderSection(
       recipe([FLOUR], {
-        frontmatter: { codex_nutrition: { schema: 4, basis: 'total' } },
+        frontmatter: { codex_nutrition: { schema: 6, basis: 'total' } },
         nutrition: { calories: 100 } as never,
       })
     );

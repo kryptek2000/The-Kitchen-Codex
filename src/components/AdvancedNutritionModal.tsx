@@ -1,6 +1,10 @@
+import { flushSync } from 'react-dom';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { X, ShieldAlert, FlaskConical, CheckCircle2, AlertTriangle, Info, Search } from 'lucide-react';
+import { X, ShieldAlert, FlaskConical, CheckCircle2, AlertTriangle, Info, Search, Sparkles } from 'lucide-react';
 import { convertMassToGrams, type NormalizedUnit } from '../utils/measurements';
+import { useShiso } from '../application-ui/shisoEntryPoints';
+import { prepareShisoProposalActions } from '../core/shiso/proposalActions';
+import { deriveNutritionCoverage } from '../core/shiso/nutritionCoverage';
 import { AI_ADVANCED_NUTRITION_LABEL } from '../core/nutritionV2/nutritionCapabilities';
 import {
   NUTRIENT_GROUPS,
@@ -29,7 +33,6 @@ import {
   massSourceLabel,
   projectLiveRows,
   reviewCanonicalLineCountPortions,
-  summarizeLiveRows,
   type AdvancedNutritionSession,
   type AdaptedIngredient,
   type AnalyzedRow,
@@ -78,6 +81,8 @@ export interface AdvancedNutritionApplyUi {
   readonly onRequest: () => void;
   readonly onConfirm: () => void;
   readonly onCancel: () => void;
+  /** Existing explicit Vault save path for an already-applied working copy. */
+  readonly onSave?: () => void;
 }
 
 /**
@@ -226,6 +231,9 @@ interface AdvancedNutritionModalProps {
   analysis: RecipeAnalysis | null;
   /** Runs the one-click automatic analyzer. */
   onAnalyze: () => void;
+  /** Runs the registered, recipe-bound SHISO structured nutrition request. */
+  onAnalyzeRecipe?: () => void;
+  shisoAnalysisState?: { readonly kind: 'idle' | 'running' | 'success' | 'error'; readonly message: string | null };
   /** Number of analyzer runs in this modal session (visible feedback). */
   analysisRuns?: number;
   /** True when the working review diverges from the saved Advanced result. */
@@ -312,11 +320,12 @@ function useDialogFocus(isOpen: boolean, onClose: () => void) {
     const node = dialogRef.current;
     if (node) {
       const first = node.querySelector<HTMLElement>(FOCUSABLE);
-      (first ?? node).focus();
+      node.scrollTop = 0;
+      (first ?? node).focus({ preventScroll: true });
     }
     return () => {
       const restore = restoreRef.current;
-      if (restore && typeof restore.focus === 'function') restore.focus();
+      if (restore && typeof restore.focus === 'function') restore.focus({ preventScroll: true });
     };
   }, [isOpen]);
 
@@ -1009,6 +1018,8 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
   calculating,
   analysis,
   onAnalyze,
+  onAnalyzeRecipe = () => {},
+  shisoAnalysisState = { kind: 'idle', message: null },
   analysisRuns = 0,
   workingDirty = false,
   hydratedFromSaved = false,
@@ -1016,6 +1027,7 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
   ai,
   recipeContext,
 }) => {
+  const shiso = useShiso();
   const { dialogRef, onKeyDown } = useDialogFocus(isOpen, onClose);
   const [expandedLineRef, setExpandedLineRef] = useState<string | null>(null);
   const [changeFoodFor, setChangeFoodFor] = useState<string | null>(null);
@@ -1060,7 +1072,54 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
   }, [liveRows]);
   // The SINGLE live-status authority: the summary below and every row badge
   // derive from this exact projection, so they can never disagree.
-  const liveSummary = useMemo(() => summarizeLiveRows(liveRows), [liveRows]);
+  const currentAiContributions = state.aiNutrition?.recipe_key === state.recipeKey &&
+    state.aiNutrition?.servings === state.baseServings
+    ? state.aiNutrition.contributions
+    : [];
+  const nutritionCoverage = useMemo(
+    () => deriveNutritionCoverage(liveRows, currentAiContributions),
+    [liveRows, currentAiContributions]
+  );
+
+  /**
+   * H-2: the read snapshot is published by the CARD that always owns the
+   * working review (see `AdvancedNutritionCard`). The modal deliberately no
+   * longer publishes: a modal unmount would otherwise publish `null` and blank
+   * the conversation's view of a review that is still open on the card.
+   */
+  const calculateCurrentRef = useRef(onCalculate);
+  calculateCurrentRef.current = onCalculate;
+
+  /**
+   * SHISO CONFIRMATION — the authorized path from conversation to working review.
+   *
+   * The applier lives HERE, not in the conversation, because THIS component owns
+   * the reducer, the session and the adapted recipe. Shiso may only ask. Every
+   * proposal is revalidated against live state by `prepareShisoProposalActions`,
+   * which asks the existing authorities; only the resulting existing actions are
+   * dispatched, and the existing deterministic calculator then recomputes.
+   *
+   * Nothing here writes to the recipe or the Vault. The user still presses the
+   * existing final Apply control.
+   */
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    return shiso.registerApplier(async (bound) => {
+      const prepared = prepareShisoProposalActions({
+        bound,
+        session,
+        recipeKey: state.recipeKey ?? null,
+        sessionIdentity: state.sessionIdentity ?? null,
+        rows: state.rows,
+        adapted,
+      });
+      if (!prepared.ok) return prepared;
+      flushSync(() => { for (const action of prepared.actions) dispatch(action); });
+      calculateCurrentRef.current();
+      return prepared;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, session, state.recipeKey, state.sessionIdentity, state.rows, adapted, dispatch, onCalculate, shiso.registerApplier]);
 
   if (!isOpen) return null;
 
@@ -1086,14 +1145,24 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
         <div className="sticky top-0 z-10 flex items-center justify-between gap-3 px-5 py-4 border-b border-white/10 bg-[#101010]/95 backdrop-blur">
           <div className="flex items-center gap-2">
             <FlaskConical className="w-5 h-5 text-amber-400" />
-            <h2 id="advanced-nutrition-title" className="text-base font-serif font-bold text-white">
-              Advanced Nutrition
-            </h2>
+            <div>
+              <h2 id="advanced-nutrition-title" className="text-base font-serif font-bold text-white">Advanced Nutrition</h2>
+              <p className="text-[10px] text-teal-300">Nutrition with SHISO</p>
+            </div>
             <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/20">
               Advisory
             </span>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              data-testid="advanced-nutrition-ask-shiso"
+              onClick={() => shiso.open('nutrition')}
+              className="px-2.5 py-1 rounded-lg text-[11px] font-medium text-teal-200 bg-teal-500/10 hover:bg-teal-500/20 border border-teal-500/30 transition-colors"
+              title="Ask Shiso about this nutrition review"
+            >
+              Ask Shiso
+            </button>
             <button
               type="button"
               data-testid="advanced-nutrition-close-without-saving"
@@ -1119,13 +1188,13 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
             data-testid="advanced-nutrition-working-banner"
             className="p-3 rounded-xl bg-indigo-950/25 border border-indigo-500/25 space-y-0.5"
           >
-            <p className="text-[11px] font-semibold text-indigo-200">Working Advanced Nutrition review</p>
+              <p className="text-[11px] font-semibold text-indigo-200">Working Advanced Nutrition review</p>
             <p className="text-[10px] text-gray-400">
               {workingDirty
                 ? 'Unsaved changes · nothing is written until Apply.'
                 : hydratedFromSaved
                   ? 'Hydrated from the saved review · nothing is written until Apply.'
-                  : 'Nothing is written until Apply.'}
+                : 'Nothing is changed in your recipe until Apply.'}
             </p>
           </div>
 
@@ -1135,9 +1204,13 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
               and authenticated USDA portions decide every resolution. Available
               for ANY actionable exception, not merely NEEDS MATCH. */}
           {ai && (ai.exceptionCount > 0 || ai.message !== null) && (
-            <div
+            <details className="rounded-xl border border-white/10 bg-[#0E0E0E]">
+              <summary className="cursor-pointer px-3 py-2 text-xs font-semibold text-gray-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-teal-400">
+                Manual ingredient review and corrections
+              </summary>
+              <div
               data-testid="advanced-nutrition-ai"
-              className="p-3 rounded-xl bg-[#0E0E0E] border border-white/10 space-y-2"
+              className="p-3 pt-1 space-y-2"
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="min-w-0">
@@ -1148,12 +1221,8 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                     ✨ {AI_ADVANCED_NUTRITION_LABEL}
                   </p>
                   <p className="text-[10px] text-gray-500">
-                    AI Advanced Nutrition interprets ingredient wording. Verified local data and
-                    deterministic rules decide nutrition. AI interprets food wording, count language,
-                    and household unit/size/state wording only. The pinned USDA catalog, the
-                    deterministic matcher, authenticated USDA portions, and the verified Kitchen
-                    Codex household registry decide every resolution; AI never supplies grams. Basic
-                    manual review and correction are always available. Nothing is saved.
+                    Review any ingredient that needs attention. Estimates stay labeled, and nothing is
+                    saved automatically.
                   </p>
                 </div>
                 <button
@@ -1255,7 +1324,8 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                   </button>
                 </p>
               )}
-            </div>
+              </div>
+            </details>
           )}
 
           {/* AI-4D2 EXPLICIT RECIPE-CONTEXT REVIEW (session-only, no authority).
@@ -1266,9 +1336,13 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
               threshold, no bulk action, and nothing here changes nutrition: no
               match, portion, mass, nutrient, preview, Apply or saved value. */}
           {recipeContext && (
-            <div
+            <details className="rounded-xl border border-white/10 bg-[#0E0E0E]">
+              <summary className="cursor-pointer px-3 py-2 text-xs font-semibold text-gray-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-teal-400">
+                Recipe context suggestions
+              </summary>
+              <div
               data-testid="advanced-nutrition-recipe-context"
-              className="p-3 rounded-xl bg-[#0E0E0E] border border-white/10 space-y-2"
+              className="p-3 pt-1 space-y-2"
             >
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div className="min-w-0">
@@ -1439,7 +1513,8 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                   </ul>
                 </>
               )}
-            </div>
+              </div>
+            </details>
           )}
 
           <p id="advanced-nutrition-desc" className="text-[11px] text-gray-400">
@@ -1453,11 +1528,12 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
             </div>
           )}
 
-          <section className="text-[11px] text-gray-400 font-mono">
-            <span>Source: USDA FoodData Central · bundle {session.metadata().bundle_release.slice(0, 24)}…</span>
-            <span className="mx-2">·</span>
-            <span>{session.metadata().record_count} eligible home-recipe records</span>
-          </section>
+          <details className="text-[11px] text-gray-400">
+            <summary className="cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-teal-400">Sources and calculation details</summary>
+            <p className="mt-2 font-mono">
+              Source: USDA FoodData Central · bundle {session.metadata().bundle_release.slice(0, 24)}… · {session.metadata().record_count} eligible records
+            </p>
+          </details>
 
           <section aria-label="Display basis" className="space-y-2">
             <h3 className="text-xs font-bold text-white">Display basis</h3>
@@ -1504,23 +1580,44 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
             data-testid="advanced-nutrition-analysis"
             className="space-y-3"
           >
-            <div className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-xl bg-indigo-950/20 border border-indigo-500/20">
+            <div className="p-4 rounded-xl bg-amber-950/20 border border-amber-500/30 space-y-3">
               <div>
-                <p className="text-xs font-bold text-white">Analyze automatically</p>
-                <p className="text-[10px] text-gray-400">
-                  Deterministic USDA selection and authenticated portions. Review only exceptions.
-                  Nothing is saved.
+                <p className="text-sm font-bold text-white">Nutrition with SHISO</p>
+                <p className="text-xs text-gray-300 mt-1">
+                  Let SHISO review the recipe, use available food data, and clearly label estimates and unknowns. Review the result before applying it.
                 </p>
               </div>
-              <button
-                type="button"
-                data-testid="advanced-nutrition-analyze"
-                onClick={onAnalyze}
-                disabled={calculating || (analysis === null && !session)}
-                className="px-4 py-2 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-400 text-black disabled:opacity-50 transition-colors"
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  data-testid="advanced-nutrition-analyze-with-shiso"
+                  onClick={onAnalyzeRecipe}
+                  disabled={shisoAnalysisState.kind === 'running'}
+                  aria-describedby="advanced-nutrition-shiso-status"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-400 text-black disabled:opacity-50 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-teal-300"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  {shisoAnalysisState.kind === 'running' ? 'Analyzing Recipe…' : 'Analyze Recipe'}
+                </button>
+                <button
+                  type="button"
+                  data-testid="advanced-nutrition-analyze"
+                  onClick={onAnalyze}
+                  disabled={calculating || (analysis === null && !session)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-white/5 hover:bg-white/10 border border-white/15 text-gray-100 disabled:opacity-50 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-teal-300"
+                >
+                  {calculating ? 'Calculating…' : 'Calculate Without AI'}
+                </button>
+              </div>
+              <p
+                id="advanced-nutrition-shiso-status"
+                data-testid="advanced-nutrition-shiso-status"
+                role={shisoAnalysisState.kind === 'error' ? 'alert' : 'status'}
+                aria-live="polite"
+                className={`text-xs ${shisoAnalysisState.kind === 'error' ? 'text-rose-200' : shisoAnalysisState.kind === 'success' ? 'text-emerald-200' : 'text-gray-300'}`}
               >
-                {analysisRuns > 0 ? 'Re-analyze Nutrition' : 'Analyze Nutrition'}
-              </button>
+                {shisoAnalysisState.message ?? (shisoAnalysisState.kind === 'idle' ? 'Analysis creates a review only. Apply and Vault saving are separate steps.' : '')}
+              </p>
             </div>
 
             {analysis && (
@@ -1528,12 +1625,14 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                 data-testid="advanced-nutrition-analysis-runs"
                 className="text-[10px] font-mono uppercase text-gray-400"
               >
-                {analysisRuns > 0 ? `Analysis applied · run ${analysisRuns} · ` : ''}
+                {analysisRuns > 0 ? `Source review run ${analysisRuns} · ` : ''}
                 {/* LIVE STATUS SUMMARY: exact counts of the CURRENT rendered rows. */}
                 <span data-testid="advanced-nutrition-live-summary">
-                  {liveSummary.matched} matched · {liveSummary.review_suggested} review suggested ·{' '}
-                  {liveSummary.needs_amount} need amount · {liveSummary.needs_match} need match ·{' '}
-                  {liveSummary.qualitative} qualitative
+                  {nutritionCoverage.source_backed} source-backed · {nutritionCoverage.ai_estimated} AI estimated ·{' '}
+                  {nutritionCoverage.source_backed_contributions} other source-backed · {nutritionCoverage.partial_known} partial known ·{' '}
+                  {nutritionCoverage.excluded} excluded wrapper(s) ·{' '}
+                  {nutritionCoverage.unresolved} need attention ({nutritionCoverage.needs_amount} amount, {nutritionCoverage.needs_match} match,{' '}
+                  {nutritionCoverage.review_suggested} source review) · {nutritionCoverage.qualitative} qualitative
                 </span>
               </p>
             )}
@@ -1543,6 +1642,8 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                 const choice = state.matches[row.line_ref];
                 const live = liveByRef.get(row.line_ref);
                 const status: LiveRowStatus = live?.status ?? 'needs_match';
+                const effective = nutritionCoverage.lines.find((line) => line.line_ref === row.line_ref);
+                const displayContribution = effective?.contribution ?? effective?.candidate_contribution;
                 const fdcId = live?.selected_fdc_id;
                 const entry = adapted.find((item) => item.line_ref === row.line_ref);
                 const expanded = expandedLineRef === row.line_ref;
@@ -1563,7 +1664,7 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                     <div className="flex flex-wrap items-start justify-between gap-2">
                       <div className="min-w-0">
                         <p className="text-xs text-gray-100">{row.original_text || row.query}</p>
-                        {description ? (
+                        {description && !effective?.contribution ? (
                           <p className="text-[11px] text-emerald-300 truncate">
                             {description}
                             {massText !== undefined ? (
@@ -1596,6 +1697,18 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                               </span>
                             )}
                           </p>
+                        ) : effective?.status === 'excluded' && effective.candidate_contribution ? (
+                          <p className="text-[11px] text-sky-200">
+                            Excluded cooking wrapper · {effective.candidate_contribution.exclusion_assumption}
+                          </p>
+                        ) : displayContribution ? (
+                          <p className="text-[11px] text-violet-200">
+                            {effective?.contribution ? 'Nutrition contribution accepted' : 'AI contribution has no known nutrient values'}
+                            {' · '}{displayContribution.weight_grams !== undefined
+                              ? `${displayContribution.weight_grams} g estimated weight`
+                              : 'weight unknown'}
+                            {effective?.partial_known ? ` · ${effective.unknown_nutrients.length} nutrient(s) remain unknown` : ''}
+                          </p>
                         ) : (
                           <p className="text-[11px] text-gray-500">
                             {status === 'review_suggested'
@@ -1609,12 +1722,28 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                         )}
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
-                        <span
-                          data-testid="advanced-nutrition-row-status"
-                          className={`text-[10px] font-mono uppercase px-2 py-0.5 rounded-full border ${LIVE_STATUS_CLASS[status]}`}
-                        >
-                          {LIVE_ROW_STATUS_LABEL[status]}
-                        </span>
+                        {effective?.status === 'excluded' ? (
+                          <span data-testid="advanced-nutrition-effective-status" className="text-[10px] font-mono uppercase px-2 py-0.5 rounded-full border bg-sky-500/10 text-sky-200 border-sky-500/25">
+                            Excluded · cooking wrapper
+                          </span>
+                        ) : displayContribution && (
+                          <span
+                            data-testid="advanced-nutrition-effective-status"
+                            className={`text-[10px] font-mono uppercase px-2 py-0.5 rounded-full border ${effective?.contribution ? 'bg-violet-500/10 text-violet-200 border-violet-500/25' : 'bg-amber-500/10 text-amber-200 border-amber-500/25'}`}
+                          >
+                            {effective?.contribution
+                              ? `${displayContribution.classification === 'ai_estimate' ? 'AI Estimated' : 'Source-backed'}${effective.partial_known ? ' · Partial' : ''}`
+                              : 'AI Estimate Incomplete'}
+                          </span>
+                        )}
+                        {!effective?.contribution && effective?.status !== 'excluded' && (
+                          <span
+                            data-testid="advanced-nutrition-row-status"
+                            className={`text-[10px] font-mono uppercase px-2 py-0.5 rounded-full border ${LIVE_STATUS_CLASS[status]}`}
+                          >
+                            {LIVE_ROW_STATUS_LABEL[status]}
+                          </span>
+                        )}
                         <button
                           type="button"
                           data-testid="advanced-nutrition-edit"
@@ -1631,6 +1760,34 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
 
                     {expanded && (
                       <div className="pt-1 border-t border-white/5 space-y-2">
+                        {displayContribution && description && (
+                          <p className="text-[11px] text-gray-400">USDA reference: {description} · {massText ?? 'No source-backed mass available'}</p>
+                        )}
+                        {displayContribution && (
+                          <section className="rounded-lg border border-violet-500/20 bg-violet-950/15 p-2 space-y-1" data-testid="advanced-nutrition-contribution-details">
+                            <p className="text-[11px] text-violet-200">
+                              {effective?.contribution
+                                ? (displayContribution.classification === 'ai_estimate' ? 'AI-estimated nutrition' : 'Source-backed contribution')
+                                : 'Incomplete AI-estimated contribution — no known nutrient values'}
+                              {' · '}{displayContribution.weight_grams !== undefined
+                                ? `${displayContribution.weight_grams} g ${displayContribution.classification === 'ai_estimate' ? 'estimated weight' : 'source-backed weight'}`
+                                : 'weight unknown'}
+                            </p>
+                            <p className="text-[11px] text-gray-300">
+                              Known nutrients: {Object.entries(displayContribution.nutrients).map(([id, value]) => `${id.replace(/_/g, ' ')} ${value.amount} ${value.unit}`).join(' · ') || 'none'}
+                            </p>
+                            <p className="text-[11px] text-amber-200">
+                              Unknown nutrients: {displayContribution.unknown_nutrients.length ? displayContribution.unknown_nutrients.map((id) => id.replace(/_/g, ' ')).join(', ') : 'none reported'}
+                            </p>
+                            {displayContribution.assumptions.length > 0 && (
+                              <p className="text-[11px] text-gray-400">Assumptions: {displayContribution.assumptions.join(' · ')}</p>
+                            )}
+                            {displayContribution.sources.length > 0 && (
+                              <p className="text-[11px] text-gray-400">Sources: {displayContribution.sources.map((source) => source.title).join(' · ')}</p>
+                            )}
+                            <p className="text-[10px] text-gray-500">USDA review row: {LIVE_ROW_STATUS_LABEL[effective.source_status]}</p>
+                          </section>
+                        )}
                         {row.outcome === 'matched_exact' && (
                           <p className="text-[11px] text-emerald-300">
                             Matched automatically as the single exact source description. This was not
@@ -1744,7 +1901,7 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                           />
                         )}
 
-                        {(row.outcome === 'unmatched' || row.outcome === 'invalid') && (
+                        {(row.outcome === 'unmatched' || row.outcome === 'invalid') && !effective?.contribution && (
                           <p className="text-[11px] text-amber-300">
                             {row.outcome === 'unmatched'
                               ? 'No USDA source candidate shares this ingredient automatically. Search USDA below to choose one, or it contributes nothing.'
@@ -1987,6 +2144,31 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                 </div>
               )}
 
+              {preview.ai_contributions && preview.ai_contributions.length > 0 && (
+                <div aria-label="AI nutrition contributions">
+                  <h4 className="text-[11px] font-bold text-gray-300 uppercase tracking-wide mb-1">
+                    AI-estimated ingredient contributions
+                  </h4>
+                  <ul className="space-y-2">
+                    {preview.ai_contributions.map((entry) => (
+                      <li key={entry.line_ref} className="rounded-lg border border-violet-500/25 bg-violet-950/20 p-2 text-[11px] text-gray-300">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-semibold text-gray-100">{entry.ingredient}</span>
+                          <span className="rounded-full border border-violet-400/30 px-2 py-0.5 text-[10px] text-violet-200">
+                            {entry.classification === 'source_backed' ? 'Source-backed' : 'AI estimate'}
+                          </span>
+                          <span className="text-gray-400">{entry.quantity_basis}{entry.weight_grams !== undefined ? ` · ${entry.classification === 'source_backed' ? 'Source-backed' : 'Estimated'} weight: ${entry.weight_grams} g` : ' · Weight unknown'}</span>
+                        </div>
+                        <p className="mt-1">{Object.entries(entry.nutrients).map(([id, value]) => `${id}: ${value?.amount} ${value?.unit}`).join(' · ') || 'No nutrient values established'}</p>
+                        {entry.unknown_nutrients.length > 0 && <p className="mt-1 text-amber-200">Unknown: {entry.unknown_nutrients.join(', ')}</p>}
+                        {entry.assumptions.length > 0 && <ul className="mt-1 list-disc list-inside text-gray-400">{entry.assumptions.map((assumption, index) => <li key={`${entry.line_ref}-assumption-${index}`}>{assumption}</li>)}</ul>}
+                        {entry.sources.length > 0 && <p className="mt-1 text-sky-200">References: {entry.sources.map((source) => source.title).join(', ')}</p>}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               {preview.unresolved.length > 0 && (
                 <div className="p-3 rounded-xl bg-amber-950/30 border border-amber-800/40 text-[11px] text-amber-200 flex items-start gap-2">
                   <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
@@ -2006,8 +2188,7 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
               <p className="text-[10px] text-gray-500 flex items-start gap-1.5">
                 <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                 <span>
-                  This advisory preview is derived from a pinned local USDA dataset. It is not saved
-                  unless you explicitly Apply it, is not medical advice, and does not claim complete
+                This advisory preview combines available food data{preview.ai_contributions?.length ? ' and labeled AI estimates' : ''}. Apply updates the working recipe; Save to Vault is a separate explicit step. This is not medical advice and does not claim complete
                   nutritional coverage.
                 </span>
               </p>
@@ -2023,6 +2204,16 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                       {apply.message}
                     </p>
                   )}
+                  {apply.status === 'success' && apply.onSave && (
+                    <button
+                      type="button"
+                      data-testid="advanced-nutrition-save-working"
+                      onClick={apply.onSave}
+                      className="px-3.5 py-1.5 rounded-lg text-xs font-semibold text-black bg-emerald-400 hover:bg-emerald-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-teal-300"
+                    >
+                      Save to Vault
+                    </button>
+                  )}
                   {apply.status === 'error' && apply.message && (
                     <p role="alert" className="text-[11px] text-amber-300">
                       {apply.message}
@@ -2033,8 +2224,8 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                     <div className="p-3 rounded-xl bg-amber-950/30 border border-amber-800/40 text-[11px] text-amber-100 space-y-2">
                       <p>
                         {apply.mode === 'replace'
-                          ? 'Apply will replace the existing saved Advanced Nutrition block on this recipe.'
-                          : 'Apply will add a saved Advanced Nutrition block to this recipe.'}
+                          ? 'Apply will replace the existing Advanced Nutrition block in this working recipe.'
+                          : 'Apply will add Advanced Nutrition to this working recipe. You can save it to your Vault afterward.'}
                       </p>
                       <div className="flex items-center gap-2">
                         <button
@@ -2056,7 +2247,7 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                   ) : (
                     <div className="flex items-center justify-between gap-3">
                       <span className="text-[10px] text-gray-500">
-                        Writes one canonical Advanced Nutrition block; nothing else is changed.
+                        Apply updates the working recipe. Save to Vault is a separate step.
                       </span>
                       <button
                         type="button"
@@ -2085,8 +2276,7 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
           )}
 
           <p className="text-[10px] text-gray-600">
-            Recipe: {title}. Advanced Nutrition is advisory review only; nothing here is written
-            to your vault.
+            Recipe: {title}. Review before Apply. Applying updates the working recipe; Save to Vault is always explicit.
           </p>
         </div>
       </div>

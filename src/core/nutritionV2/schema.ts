@@ -53,17 +53,21 @@ export const CODEX_NUTRITION_SCHEMA_V2 = 2;
  * on direct-mass lines and retain the v2 household meaning unchanged.
  */
 export const CODEX_NUTRITION_SCHEMA_V3 = 3;
+export const CODEX_NUTRITION_SCHEMA_V4 = 4;
+/** Schema v5 stores validated ingredient-level AI nutrient contributions. */
+export const CODEX_NUTRITION_SCHEMA_V5 = 5;
 export const CODEX_NUTRITION_BASIS_TOTAL = 'total';
 export const CODEX_NUTRITION_FRONTMATTER_KEY = 'codex_nutrition';
 
 /** Mixed authoritative sources; each contribution stays traceable. */
-export type NutritionSourceId = 'usda_fdc' | 'open_food_facts' | 'curated_reference' | 'user_manual';
+export type NutritionSourceId = 'usda_fdc' | 'open_food_facts' | 'curated_reference' | 'user_manual' | 'ai_estimate';
 
 export const NUTRITION_SOURCE_IDS: ReadonlyArray<NutritionSourceId> = Object.freeze([
   'usda_fdc',
   'open_food_facts',
   'curated_reference',
   'user_manual',
+  'ai_estimate',
 ]);
 
 /**
@@ -186,7 +190,7 @@ export interface WrittenMassRangeEvidence {
 }
 
 /** Version-neutral read view of per-ingredient evidence. */
-export type AnyIngredientEvidence = IngredientEvidence | IngredientEvidenceV2 | IngredientEvidenceV3;
+export type AnyIngredientEvidence = IngredientEvidence | IngredientEvidenceV2 | IngredientEvidenceV3 | IngredientEvidenceV4;
 
 export type UnresolvedReason = 'no_match' | 'ambiguous' | 'no_mass' | 'no_nutrition' | 'qualitative';
 
@@ -258,6 +262,34 @@ export interface CodexNutritionV3 extends Omit<CodexNutritionV1, 'schema' | 'ing
   ingredients: IngredientEvidenceV3[];
 }
 
+/** Explicitly accepted bounded quantity estimates remain distinct from portions. */
+export interface QuantityEstimateEvidence {
+  readonly lower_grams: number;
+  readonly upper_grams: number;
+  readonly representative_grams: number;
+  readonly representative_policy: 'midpoint';
+  readonly provenance: 'ai_estimate';
+}
+export interface IngredientEvidenceV4 extends Omit<IngredientEvidenceV3, 'conversion_basis'> {
+  conversion_basis?: IngredientEvidenceV3['conversion_basis'] | 'estimated_quantity';
+  quantity_estimate?: QuantityEstimateEvidence;
+  count_portion?: {
+    readonly unit: string | null;
+    readonly size: string | null;
+    readonly quantity: number;
+    readonly portion_amount: number;
+    readonly gram_weight: number;
+  };
+}
+export interface CodexNutritionV4 extends Omit<CodexNutritionV1, 'schema' | 'ingredients'> {
+  schema: 4;
+  ingredients: IngredientEvidenceV4[];
+}
+export interface CodexNutritionV5 extends Omit<CodexNutritionV4, 'schema'> {
+  schema: 5;
+  ai_contributions: import('./aiContribution').AiNutrientContribution[];
+}
+
 /** Bounded opaque safe data for an unknown FUTURE schema value. */
 export interface OpaqueCodexNutrition {
   kind: 'opaque';
@@ -270,6 +302,8 @@ export type AdvancedNutritionBlock =
   | CodexNutritionV1
   | CodexNutritionV2
   | CodexNutritionV3
+  | CodexNutritionV4
+  | CodexNutritionV5
   | OpaqueCodexNutrition;
 
 export const MAX_SERVINGS = 1000;

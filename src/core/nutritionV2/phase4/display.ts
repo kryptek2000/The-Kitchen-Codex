@@ -168,7 +168,7 @@ export function deriveDisplayNutrients(
         unit: def.unit,
         unit_label: formatUnitLabel(def.unit),
         amount,
-        explicit_zero: amount === 0,
+        explicit_zero: amount === 0 && total.status === 'complete',
         coverage: total.status === 'complete' ? ('complete' as const) : ('partial' as const),
         covered_ingredient_count: total.covered_ingredient_count,
         measurable_ingredient_count: total.measurable_ingredient_count,

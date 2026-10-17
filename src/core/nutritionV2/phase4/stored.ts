@@ -15,6 +15,7 @@ import { isPlainObject, toInertValue } from '../schema';
 import type { NutrientId } from '../nutrients';
 import type { CanonicalUnit } from '../units';
 import { readOwnDataField } from './materialize';
+import { hasUsableAiNutrientValue } from '../aiContribution';
 
 export interface StoredNutrientValue {
   readonly nutrient: NutrientId;
@@ -24,13 +25,17 @@ export interface StoredNutrientValue {
 }
 
 export interface StoredAdvancedSummary {
-  readonly kind: 'none' | 'v1' | 'v2' | 'v3' | 'opaque';
+  readonly kind: 'none' | 'v1' | 'v2' | 'v3' | 'v4' | 'v5' | 'opaque';
   readonly status?: string;
   readonly servings?: number;
   /** Resolved measurable ingredient-line count of the saved block. */
   readonly resolvedCount: number;
   /** Unresolved measurable ingredient-line count of the saved block. */
   readonly unresolvedCount: number;
+  /** Explicitly excluded materials; accounted for but never edible/resolved. */
+  readonly excludedCount: number;
+  /** Distinct accounted lines across source evidence, AI contributions and unresolved rows. */
+  readonly ingredientCount: number;
   /**
    * The canonical `ingredient_digest` of the saved block, when present. Used to
    * deterministically detect whether the LIVE review session still equals the
@@ -53,11 +58,11 @@ function isFiniteNonNegative(value: unknown): value is number {
 }
 
 function opaque(): StoredAdvancedSummary {
-  return Object.freeze({ kind: 'opaque', resolvedCount: 0, unresolvedCount: 0, values: Object.freeze([]) });
+  return Object.freeze({ kind: 'opaque', resolvedCount: 0, unresolvedCount: 0, excludedCount: 0, ingredientCount: 0, values: Object.freeze([]) });
 }
 
 function none(): StoredAdvancedSummary {
-  return Object.freeze({ kind: 'none', resolvedCount: 0, unresolvedCount: 0, values: Object.freeze([]) });
+  return Object.freeze({ kind: 'none', resolvedCount: 0, unresolvedCount: 0, excludedCount: 0, ingredientCount: 0, values: Object.freeze([]) });
 }
 
 /**
@@ -83,10 +88,11 @@ export function summarizeStoredAdvanced(blockRaw: unknown): StoredAdvancedSummar
     nutrients?: unknown;
     ingredients?: unknown;
     unresolved?: unknown;
+    ai_contributions?: unknown;
     ingredient_digest?: unknown;
   };
   if (candidate.kind === 'opaque') return opaque();
-  if ((candidate.schema !== 1 && candidate.schema !== 2 && candidate.schema !== 3) || candidate.basis !== 'total') {
+  if ((candidate.schema !== 1 && candidate.schema !== 2 && candidate.schema !== 3 && candidate.schema !== 4 && candidate.schema !== 5) || candidate.basis !== 'total') {
     return opaque();
   }
   if (candidate.nutrients === null || typeof candidate.nutrients !== 'object') return opaque();
@@ -103,15 +109,36 @@ export function summarizeStoredAdvanced(blockRaw: unknown): StoredAdvancedSummar
     values.push(Object.freeze({ nutrient: id, label, amount, unit: unit as CanonicalUnit }));
   }
 
-  const resolvedCount = Array.isArray(candidate.ingredients) ? candidate.ingredients.length : 0;
-  const unresolvedCount = Array.isArray(candidate.unresolved) ? candidate.unresolved.length : 0;
+  const resolvedRefs = new Set<string>(Array.isArray(candidate.ingredients)
+    ? candidate.ingredients.flatMap((entry: any) => typeof entry?.line_ref === 'string' && entry.resolved === true ? [entry.line_ref] : [])
+    : []);
+  const excludedRefs = new Set<string>();
+  const aiContributions = candidate.schema === 5 && Array.isArray(candidate.ai_contributions) ? candidate.ai_contributions : [];
+  for (const entry of aiContributions as any[]) {
+    if (!entry || typeof entry.line_ref !== 'string') continue;
+    if (entry.disposition === 'excluded') excludedRefs.add(entry.line_ref);
+    else if (hasUsableAiNutrientValue(entry)) resolvedRefs.add(entry.line_ref);
+  }
+  const unresolvedRefs = new Set<string>(Array.isArray(candidate.unresolved)
+    ? candidate.unresolved.flatMap((entry: any) => typeof entry?.line_ref === 'string' ? [entry.line_ref] : [])
+    : []);
+  for (const ref of resolvedRefs) unresolvedRefs.delete(ref);
+  for (const ref of excludedRefs) unresolvedRefs.delete(ref);
+  for (const entry of aiContributions as any[]) {
+    if (entry && typeof entry.line_ref === 'string' && entry.disposition !== 'excluded' && !hasUsableAiNutrientValue(entry)) unresolvedRefs.add(entry.line_ref);
+  }
+  const resolvedCount = resolvedRefs.size;
+  const unresolvedCount = unresolvedRefs.size;
+  const ingredientCount = new Set([...resolvedRefs, ...unresolvedRefs, ...excludedRefs]).size;
 
   return Object.freeze({
-    kind: candidate.schema === 3 ? 'v3' : candidate.schema === 2 ? 'v2' : 'v1',
+    kind: candidate.schema === 5 ? 'v5' : candidate.schema === 4 ? 'v4' : candidate.schema === 3 ? 'v3' : candidate.schema === 2 ? 'v2' : 'v1',
     status: typeof candidate.status === 'string' ? candidate.status : undefined,
     servings: isFiniteNonNegative(candidate.servings) ? candidate.servings : undefined,
     resolvedCount,
     unresolvedCount,
+    excludedCount: excludedRefs.size,
+    ingredientCount,
     ...(typeof candidate.ingredient_digest === 'string'
       ? { ingredientDigest: candidate.ingredient_digest }
       : {}),

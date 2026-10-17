@@ -48,8 +48,11 @@ import {
   type CodexNutritionV1,
   type CodexNutritionV2,
   type CodexNutritionV3,
+  type CodexNutritionV4,
+  type CodexNutritionV5,
   type IngredientEvidenceV2,
   type IngredientEvidenceV3,
+  type IngredientEvidenceV4,
   type NutrientResult,
   type NutritionBlockStatus,
   type NutritionSourceId,
@@ -60,6 +63,7 @@ import {
 import { canonicalStringify, sha256Hex } from '../usda/digest';
 import { DV_STANDARD_ID } from '../dailyValues';
 import { decodeCodexNutrition, encodeCodexNutrition, validateCodexNutrition } from '../validate';
+import { combineAiContributionsWithPreview, validateAiNutrientContributions } from '../aiContribution';
 import { isNutrientId, NUTRIENT_IDS, type NutrientId } from '../nutrients';
 import { isValidStrictServingCount } from '../calculation/servings';
 import { roundCanonicalTotal } from '../calculation/numeric';
@@ -154,6 +158,8 @@ function resolvePersistenceMode(
     case 'v1':
     case 'v2':
     case 'v3':
+    case 'v4':
+    case 'v5':
       return { ok: true, mode: 'replace' };
     case 'opaque':
       // A safe but unknown FUTURE schema is never authorized for overwrite.
@@ -267,7 +273,7 @@ function conversionBasisFor(
 
 interface BlockBuild {
   readonly ok: true;
-  readonly block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3;
+  readonly block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5;
 }
 
 /**
@@ -329,10 +335,15 @@ function persistedRangeRepresentative(
  * Apply (v2 with household only, v1 with neither).
  */
 function buildPersistenceBlock(preview: AdvisoryNutritionPreview, computedAt: string): BlockBuild {
-  const sources: NutritionSourceId[] = ['usda_fdc'];
-  const sourceReleases: Partial<Record<NutritionSourceId, string>> = {
-    usda_fdc: preview.bundle_release,
-  };
+  const hasUsdaEvidence = preview.ingredients.some((entry) => entry.outcome === 'calculated' && entry.fdc_id !== undefined);
+  const hasAiEvidence = Boolean(preview.ai_contributions?.length);
+  const sources: NutritionSourceId[] = [
+    ...(hasUsdaEvidence ? ['usda_fdc' as const] : []),
+    ...(hasAiEvidence ? ['ai_estimate' as const] : []),
+  ];
+  const sourceReleases: Partial<Record<NutritionSourceId, string>> = hasUsdaEvidence
+    ? { usda_fdc: preview.bundle_release }
+    : {};
 
   const nutrients: Partial<Record<NutrientId, NutrientResult>> = {};
   for (const id of preview.nutrient_scope) {
@@ -348,13 +359,17 @@ function buildPersistenceBlock(preview: AdvisoryNutritionPreview, computedAt: st
     };
   }
 
-  const ingredients: IngredientEvidenceV3[] = [];
+  const ingredients: IngredientEvidenceV4[] = [];
+  let hasEstimate = false;
+  let hasCountEvidence = false;
   let hasHouseholdBasis = false;
   let hasRangeRepresentative = false;
   for (const entry of preview.ingredients) {
     if (entry.outcome !== 'calculated') continue;
     if (entry.fdc_id === undefined || entry.resolved_grams === undefined) continue;
-    const conversion = conversionBasisFor(entry.mass_source);
+    const conversion = entry.mass_source === 'ai_estimate' ? 'estimated_quantity' : conversionBasisFor(entry.mass_source);
+    if (conversion === 'estimated_quantity') hasEstimate = true;
+    if (entry.mass_source === 'count_portion') hasCountEvidence = true;
     if (conversion === 'household_portion') hasHouseholdBasis = true;
     const canonicalGrams = roundCanonicalTotal(entry.resolved_grams);
     // Persisted written-mass-range provenance: the marker exists ONLY for a
@@ -408,6 +423,8 @@ function buildPersistenceBlock(preview: AdvisoryNutritionPreview, computedAt: st
       user_confirmed: true,
       amount: { value: canonicalGrams, unit: 'g' },
       ...(conversion ? { conversion_basis: conversion } : {}),
+      ...(entry.mass_source === 'count_portion' ? { count_portion: { unit: entry.count_unit ?? null, size: entry.count_size ?? null, quantity: entry.count_ingredient_amount, portion_amount: entry.count_portion_amount, gram_weight: entry.count_gram_weight } } : {}),
+      ...(entry.mass_source === 'ai_estimate' && entry.ai_estimate ? { quantity_estimate: { ...entry.ai_estimate, representative_grams: canonicalGrams } } : {}),
       ...(householdPortion ? { household_portion: householdPortion } : {}),
       ...(rangeRepresentative ? { range_representative: rangeRepresentative } : {}),
     });
@@ -443,7 +460,7 @@ function buildPersistenceBlock(preview: AdvisoryNutritionPreview, computedAt: st
     });
   }
 
-  const schema = hasRangeRepresentative ? 3 : hasHouseholdBasis ? 2 : 1;
+  const schema = preview.ai_contributions?.length ? 5 : hasEstimate || hasCountEvidence ? 4 : hasRangeRepresentative ? 3 : hasHouseholdBasis ? 2 : 1;
   const block = {
     schema,
     basis: 'total',
@@ -458,7 +475,8 @@ function buildPersistenceBlock(preview: AdvisoryNutritionPreview, computedAt: st
     nutrients,
     ingredients,
     unresolved,
-  } as CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3;
+    ...(preview.ai_contributions?.length ? { ai_contributions: [...preview.ai_contributions] } : {}),
+  } as CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5;
   return { ok: true, block };
 }
 
@@ -526,10 +544,45 @@ export function authorizeNutritionPersistence(requestRaw: unknown): Phase5Author
     const trusted = recompute.result;
 
     if (rawServings.value !== trusted.servings) return fail('stale_preview');
-    if (!previewStillBinds(claimedPreview, trusted.preview)) return fail('calculation_mismatch');
+    let persistencePreview = trusted.preview;
+    const aiNutritionField = ownField(state, 'aiNutrition');
+    if (!aiNutritionField.ok) return fail('unsafe_request');
+    if (aiNutritionField.present && aiNutritionField.value !== undefined) {
+      const aiNutrition = materializeNarrow(aiNutritionField.value);
+      if (!aiNutrition.ok || !isPlainObject(aiNutrition.value)) return fail('stale_preview');
+      if (aiNutrition.value.recipe_key !== trusted.recipe_key || aiNutrition.value.servings !== trusted.servings || !Array.isArray(aiNutrition.value.contributions)) return fail('stale_preview');
+      const lineRefs = [...trusted.preview.ingredients.map((entry) => entry.line_ref), ...trusted.preview.unresolved.map((entry) => entry.line_ref)];
+      const lineTextByRef: Record<string, string> = {};
+      const rowsField = ownField(state, 'rows');
+      if (rowsField.ok && rowsField.present && Array.isArray(rowsField.value)) for (const rawRow of rowsField.value) {
+        if (!isPlainObject(rawRow)) continue;
+        const ref = ownField(rawRow, 'line_ref');
+        const text = ownField(rawRow, 'original_text');
+        if (ref.ok && typeof ref.value === 'string' && text.ok && typeof text.value === 'string') lineTextByRef[ref.value] = text.value;
+      }
+      const instructions: string[] = [];
+      const recipeInstructions = isPlainObject(recipeField.value) ? ownField(recipeField.value, 'instructions') : { ok: true as const, present: false, value: undefined };
+      if (recipeInstructions.ok && recipeInstructions.present && Array.isArray(recipeInstructions.value)) for (const step of recipeInstructions.value) {
+        if (typeof step === 'string') instructions.push(step);
+        else if (isPlainObject(step)) {
+          const text = ownField(step, 'text');
+          if (text.ok && typeof text.value === 'string') instructions.push(text.value);
+        }
+      }
+      const validatedAi = validateAiNutrientContributions(aiNutrition.value.contributions, {
+        recipe_digest: trusted.preview.ingredient_digest,
+        line_refs: lineRefs,
+        line_text_by_ref: lineTextByRef,
+        instructions,
+        requireExclusionContext: true,
+      });
+      if (!validatedAi.ok) return fail('stale_preview');
+      persistencePreview = combineAiContributionsWithPreview(trusted.preview, validatedAi.contributions);
+    }
+    if (!previewStillBinds(claimedPreview, persistencePreview)) return fail('calculation_mismatch');
 
     // --- Build the canonical block from the GENUINE result ------------------
-    const built = buildPersistenceBlock(trusted.preview, computedAt.value);
+    const built = buildPersistenceBlock(persistencePreview, computedAt.value);
 
     // --- REPLACE-MODE REGRESSION GATE ---------------------------------------
     // An explicit re-Apply must never silently downgrade a previously applied
@@ -545,7 +598,7 @@ export function authorizeNutritionPersistence(requestRaw: unknown): Phase5Author
       // The existing block may be stored in its encoded frontmatter form; use
       // the SAME decoding the mode resolution already performed.
       const decodedExisting = decodeCodexNutrition(existingField.value);
-      if (decodedExisting.kind === 'v1' || decodedExisting.kind === 'v2' || decodedExisting.kind === 'v3') {
+      if (decodedExisting.kind === 'v1' || decodedExisting.kind === 'v2' || (decodedExisting.kind === 'v3' || decodedExisting.kind === 'v4' || decodedExisting.kind === 'v5')) {
         const derivedResolved = new Set(
           built.block.ingredients.filter((entry) => entry.resolved === true).map((entry) => entry.line_ref)
         );
