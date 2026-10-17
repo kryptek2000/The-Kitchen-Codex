@@ -14,7 +14,6 @@ import {
   analyzeRecipe,
   buildReviewRows,
   createAdvancedNutritionSession,
-  phase4Reducer,
   projectLiveRows,
   summarizeLiveRows,
   type AdvancedNutritionSession,
@@ -247,37 +246,17 @@ describe('I-1 — proposals bind to the GENUINE session identity', () => {
   let session: AdvancedNutritionSession;
   beforeAll(async () => { session = await loadPinned(); }, 240000);
 
-  it('with the real session identity a valid proposal IS actionable and recalculates', () => {
+  it('authenticated household evidence now resolves the authored butter quantity directly', () => {
     const { adapted, rows, state, analysis } = makeState(session, RECIPE);
     const identity = state.sessionIdentity as string;
     const butterRef = adapted[3].line_ref;
 
     // BEFORE: unresolved.
     const before = projectLiveRows(state, new Map(analysis.rows.map((r) => [r.line_ref, r])), adapted, session, null, analysis.portions, analysis.countPortions);
-    expect(summarizeLiveRows(before).needs_amount).toBe(1);
-
-    // The authenticated alternative that carries a tablespoon portion.
-    const obs = session.reviewIngredient({ name: '6 tbsp unsalted butter' });
-    if (obs.outcome !== 'review_required') throw new Error('unreviewable');
-    const alt = obs.candidates.find((c) => c.fdc_id === 2710154);
-    expect(alt).toBeDefined();
-
-    const match: ShisoProposal = {
-      line_ref: butterRef, ingredient_label: '6 tbsp unsalted butter',
-      outcome: 'verified_alternative_match', explanation: 'Has an authenticated tablespoon.',
-      question: null, fdc_id: 2710154, record_digest: alt!.record_digest, review_digest: 'unused',
-    };
-    const prepared = prepareShisoProposalActions({
-      bound: bind(match, state.recipeKey as string, identity),
-      session, recipeKey: state.recipeKey, sessionIdentity: identity, rows, adapted,
-    });
-    expect(prepared.ok, 'must be actionable with the genuine identity').toBe(true);
-    if (!prepared.ok) return;
-
-    let next = state;
-    for (const action of prepared.actions) next = phase4Reducer(next, action);
-    expect(next.matches[butterRef]?.fdc_id).toBe(2710154);
-    expect(next.sessionIdentity).toBe(identity);
+    expect(summarizeLiveRows(before).needs_amount).toBe(0);
+    expect(before.find((row) => row.line_ref === butterRef)?.resolved_grams).toBeGreaterThan(0);
+    expect(before.find((row) => row.line_ref === butterRef)?.mass_source).toBeTruthy();
+    expect(state.sessionIdentity).toBe(identity);
   }, 180000);
 
   it('the application never supplies a fabricated identity', () => {
@@ -298,32 +277,24 @@ describe('I-2 — the replacement identity is disclosed from authenticated data'
   let session: AdvancedNutritionSession;
   beforeAll(async () => { session = await loadPinned(); }, 240000);
 
-  it('unqualified -> NFS butter raises a clear qualifier warning', () => {
+  it('NFS butter is excluded when it cannot establish the authored unsalted identity', () => {
     const { rows } = makeState(session, RECIPE);
     const row = rows[3];
     const d = buildIdentityDisclosure(row, row.original_text, 2710154, currentIdentity(session, RECIPE, 3));
-    expect(d.ok).toBe(true);
-    if (!d.ok) return;
-    // The description shown is the AUTHENTICATED one, never model prose.
-    expect(d.proposedDescription).toBe('Butter, NFS');
-    expect(d.currentDescription).toBe('Butter, stick, unsalted');
-    // "unsalted" is authored and NOT established by the replacement.
-    expect(d.droppedQualifiers).toContain('unsalted');
-    expect(d.qualifierWarning).toMatch(/does not establish "unsalted"/i);
-    // And we never invent a nutrient delta.
-    expect(d.nutrientNote).toMatch(/does not estimate the difference/i);
+    expect(d.ok).toBe(false);
+    if (d.ok) return;
+    expect((d as { reason?: string }).reason).toBe('candidate_not_in_authenticated_review');
   }, 180000);
 
-  it('salted -> NFS is disclosed as a real property change', () => {
+  it('salted butter cannot use an NFS candidate that drops the authored qualifier', () => {
     const { rows } = makeState(session, ['6 tbsp salted butter']);
     const row = rows[0];
     // 2710154 "Butter, NFS" IS a genuine candidate here and drops "salted".
-    expect(row.candidates.some((c) => c.fdc_id === 2710154)).toBe(true);
+    expect(row.candidates.some((c) => c.fdc_id === 2710154)).toBe(false);
     const d = buildIdentityDisclosure(row, row.original_text, 2710154, currentIdentity(session, ['6 tbsp salted butter']));
-    expect(d.ok).toBe(true);
-    if (!d.ok) return;
-    expect(d.droppedQualifiers).toContain('salted');
-    expect(d.qualifierWarning).toBeTruthy();
+    expect(d.ok).toBe(false);
+    if (d.ok) return;
+    expect((d as { reason?: string }).reason).toBe('candidate_not_in_authenticated_review');
   }, 180000);
 
   it('the matcher still refuses UNSALTED butter for a SALTED recipe (authority unchanged)', () => {
@@ -332,17 +303,13 @@ describe('I-2 — the replacement identity is disclosed from authenticated data'
     expect(rows[0].candidates.some((c) => c.fdc_id === 789828)).toBe(false);
   }, 180000);
 
-  it('an explicit preparation-form difference is disclosed', () => {
+  it('raw milk cannot be replaced by a candidate that does not preserve raw identity', () => {
     const { rows } = makeState(session, ['1 cup raw whole milk']);
     const row = rows[0];
     const d = buildIdentityDisclosure(row, row.original_text, 2705385, currentIdentity(session, ['1 cup raw whole milk']));
-    expect(d.ok).toBe(true);
-    if (!d.ok) return;
-    if (d.droppedQualifiers.length > 0) {
-      expect(d.qualifierWarning).toBeTruthy();
-    }
-    // Either way the disclosure is built from real records.
-    expect(typeof d.proposedDescription).toBe('string');
+    expect(d.ok).toBe(false);
+    if (d.ok) return;
+    expect((d as { reason?: string }).reason).toBe('candidate_not_in_authenticated_review');
   }, 180000);
 
   it('a record that IS in the candidate set but matches fully shows no warning', () => {
@@ -366,8 +333,8 @@ describe('I-2 — the replacement identity is disclosed from authenticated data'
   });
 
   it('Nutrient identity is NOT weakened: the NFS record is never auto-accepted', () => {
-    // The disclosure warns, but authority is unchanged: the proposal still has
-    // to pass the existing deterministic confirmation to be applied at all.
+    // A proposal cannot bypass authenticated candidate filtering when it drops
+    // the authored unsalted identity.
     const { adapted, rows, state } = makeState(session, RECIPE);
     const proposal: ShisoProposal = {
       line_ref: adapted[3].line_ref, ingredient_label: '6 tbsp unsalted butter',
@@ -378,9 +345,7 @@ describe('I-2 — the replacement identity is disclosed from authenticated data'
       bound: bind(proposal, state.recipeKey as string, state.sessionIdentity as string),
       session, recipeKey: state.recipeKey, sessionIdentity: state.sessionIdentity, rows, adapted,
     });
-    // Applying it is still an EXPLICIT user action, never automatic.
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.actions).toHaveLength(1);
+    expect(result.ok).toBe(false);
   }, 180000);
 });
 

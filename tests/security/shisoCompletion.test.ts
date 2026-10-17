@@ -98,7 +98,11 @@ function buildContext(
   );
   const ctx: ShisoToolContext = {
     session,
-    recipe: { title: 'fixture', servings, ingredients: lines.map((l) => ({ text: l, name: l })), instructions: [] },
+    recipe: {
+      title: 'fixture', servings,
+      ingredients: adapted.map((line, index) => ({ text: lines[index], name: lines[index], line_ref: line.line_ref })),
+      instructions: [],
+    },
     nutrition: { rows: liveRows, summary: 'test', unsaved: false },
   };
   return { ctx, adapted, rows, state, refFor: (i) => adapted[i].line_ref };

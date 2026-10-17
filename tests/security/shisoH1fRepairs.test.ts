@@ -110,7 +110,9 @@ function ctxFor(
     session,
     recipe: {
       title: 'Chicken Enchiladas Verdes', servings: 6,
-      ingredients: ENCHILADAS.map((t) => ({ text: t, name: t })),
+      ingredients: f.adapted.map((line, index) => ({
+        text: ENCHILADAS[index], name: ENCHILADAS[index], line_ref: line.line_ref,
+      })),
       instructions: [{ text: 'Cook it.' }],
     },
     nutrition: session === null ? null : { rows: f.rows, summary: 'test', unsaved: false },
