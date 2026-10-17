@@ -414,7 +414,7 @@ describe('AI-5E — AI-5A invariance', () => {
       expect(app).toContain(ungated);
     }
     // The gate is registered on exactly six routes and nowhere else.
-    expect([...app.matchAll(/requireNutritionProductFeature\(/g)]).toHaveLength(8);
+    expect([...app.matchAll(/requireNutritionProductFeature\(/g)]).toHaveLength(9);
   });
 });
 

@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { resolveRecipeNutritionPresentation } from '../core/nutritionV2/phase5c/presentation';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   X,
   Save,
@@ -32,12 +33,12 @@ import { buildAiSelectionRequestOptions } from '../application/aiSelection';
 import { useVaultImage } from '../hooks/useVaultImage';
 import {
   canApplyNutritionEstimate,
-  evaluateMachineNutritionApplicability,
   type NutritionAssessment,
 } from '../core/nutritionSanity';
+import { calculateProductionBasicNutrition } from '../browser/basicNutrition';
 import {
   NUTRITION_INCOMPLETE_MESSAGE,
-  NUTRITION_AUTOSAVE_DISABLED_MESSAGE,
+  isPartialMachineNutrition,
 } from '../utils/nutrition';
 import { RecipeImageChooser, type AiImagePanelState, type RecipeImageChooserMode } from './RecipeImageChooser';
 import {
@@ -245,17 +246,74 @@ export function RecipeEditorModal({
     initialRecipe?.difficulty || 'Easy'
   );
   const [rating, setRating] = useState(initialRecipe?.rating || 5);
-  const [calories, setCalories] = useState(initialRecipe?.calories?.toString() || '');
-  const [protein, setProtein] = useState<string>(initialRecipe?.nutrition?.protein?.toString() || '');
-  const [carbs, setCarbs] = useState<string>(initialRecipe?.nutrition?.carbohydrates?.toString() || '');
-  const [fat, setFat] = useState<string>(initialRecipe?.nutrition?.fat?.toString() || '');
-  const [fiber, setFiber] = useState<string>(initialRecipe?.nutrition?.fiber?.toString() || '');
-  const [sodium, setSodium] = useState<string>(initialRecipe?.nutrition?.sodium?.toString() || '');
+  // Initialize per-serving nutrition fields from the recipe's nutrition block.
+  // If the block has a servings denominator, divide totals by servings to get per-serving.
+  // Legacy: if only `calories` (string) is present without nutrition block, treat as per-serving.
+  const initialServingsForNutrition = typeof initialRecipe?.nutrition?.servings === 'number'
+    ? initialRecipe.nutrition.servings
+    : 1;
+  const computePerServing = (total: number | undefined, servings: number, whole = false): string => {
+    if (total === undefined || total === null || servings <= 0) return '';
+    const val = total / servings;
+    // Calories & sodium: whole number; macros: 1 decimal.
+    if (whole) return String(Math.round(val));
+    return Number.isInteger(val) ? String(Math.round(val)) : String(Math.round(val * 10) / 10);
+  };
+  const [calories, setCalories] = useState(() =>
+    initialRecipe?.nutrition?.calories !== undefined
+      ? computePerServing(initialRecipe.nutrition.calories, initialServingsForNutrition, true)
+      : initialRecipe?.calories?.toString() || ''
+  );
+  const [protein, setProtein] = useState(() =>
+    initialRecipe?.nutrition?.protein !== undefined
+      ? computePerServing(initialRecipe.nutrition.protein, initialServingsForNutrition)
+      : ''
+  );
+  const [carbs, setCarbs] = useState(() =>
+    initialRecipe?.nutrition?.carbohydrates !== undefined
+      ? computePerServing(initialRecipe.nutrition.carbohydrates, initialServingsForNutrition)
+      : ''
+  );
+  const [fat, setFat] = useState(() =>
+    initialRecipe?.nutrition?.fat !== undefined
+      ? computePerServing(initialRecipe.nutrition.fat, initialServingsForNutrition)
+      : ''
+  );
+  const [fiber, setFiber] = useState(() =>
+    initialRecipe?.nutrition?.fiber !== undefined
+      ? computePerServing(initialRecipe.nutrition.fiber, initialServingsForNutrition)
+      : ''
+  );
+  const [sodium, setSodium] = useState(() =>
+    initialRecipe?.nutrition?.sodium !== undefined
+      ? computePerServing(initialRecipe.nutrition.sodium, initialServingsForNutrition, true)
+      : ''
+  );
+  // Initialize whole-recipe totals from the nutrition block (or legacy calories).
+  const initialTotals = React.useMemo((): Partial<RecipeNutrition> => {
+    if (initialRecipe?.nutrition) {
+      const base = initialRecipe.nutrition.servings;
+      const multiplier = typeof base === 'number' && base > 0 ? 1 : (Number(initialRecipe.servings) || 1);
+      return Object.fromEntries(Object.entries(initialRecipe.nutrition).map(([key, value]) =>
+        [key, ['calories', 'protein', 'carbohydrates', 'fat', 'fiber', 'sodium'].includes(key) && typeof value === 'number' ? value * multiplier : value]));
+    }
+    if (initialRecipe?.calories !== undefined && initialRecipe?.calories !== null) {
+      const cal = typeof initialRecipe.calories === 'number' ? initialRecipe.calories : parseFloat(String(initialRecipe.calories));
+      if (Number.isFinite(cal)) return { calories: cal * (Number(initialRecipe?.servings) || 1) };
+    }
+    return {};
+  }, [initialRecipe]);
   const [image, setImage] = useState(initialRecipe?.image || '');
   const [isEstimatingNutrition, setIsEstimatingNutrition] = useState(false);
   const [nutritionError, setNutritionError] = useState<string | null>(null);
   const [nutritionSuccess, setNutritionSuccess] = useState(false);
+  const [nutritionCoverageNote, setNutritionCoverageNote] = useState<string | null>(null);
   const [nutritionFromEstimate, setNutritionFromEstimate] = useState(false);
+  const [nutritionPartial, setNutritionPartial] = useState(false);
+  const [partialOverwriteApproved, setPartialOverwriteApproved] = useState(false);
+  const priorCompleteNutrition = !!initialRecipe && !isPartialMachineNutrition(initialRecipe.nutrition) &&
+    (!!initialRecipe.nutrition || (initialRecipe.calories !== undefined && initialRecipe.calories !== null && String(initialRecipe.calories).trim() !== ''));
+  const [nutritionIngredientKey, setNutritionIngredientKey] = useState<string | null>(null);
   const [nutritionDirty, setNutritionDirty] = useState(false);
   const [nutritionProvenance, setNutritionProvenance] = useState<
     Pick<RecipeNutrition, 'source' | 'confidence' | 'confidenceNote'>
@@ -264,6 +322,17 @@ export function RecipeEditorModal({
     confidence: initialRecipe?.nutrition?.confidence,
     confidenceNote: initialRecipe?.nutrition?.confidenceNote,
   }));
+  // WHOLE-RECIPE totals (source of truth). These are the total nutrients for
+  // the entire recipe batch. Per-serving display values are derived by dividing
+  // by the current `servings` value. When the user edits a per-serving field,
+  // the totals are updated (edited_value × current_servings). When servings
+  // changes, per-serving display is recomputed from totals (unless that field
+  // has been manually edited).
+  const [nutritionTotals, setNutritionTotals] = useState<Partial<RecipeNutrition>>(initialTotals);
+  // Track which per-serving fields have been manually edited since the last
+  // calculation or servings change. Only dirty fields are NOT recomputed when
+  // servings changes.
+  const [nutritionDirtyFields, setNutritionDirtyFields] = useState<Set<string>>(new Set());
   const [isSavingImageAsset, setIsSavingImageAsset] = useState(false);
   const [isAssetPickerOpen, setIsAssetPickerOpen] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -455,28 +524,37 @@ export function RecipeEditorModal({
         text: l.replace(/^\d+\.\s*/, ''),
       }));
 
-    const parsedServings = typeof servings === 'number' ? servings : parseInt(String(servings), 10);
-    // Only a total-mode nutrition block carries a serving denominator. Legacy
-    // per-serving blocks (no explicit servings from the source) are preserved
-    // untouched. New estimates (or blocks that already declare servings) store
-    // the editor's current serving count as the denominator.
+    const parsedServings = typeof servings === 'number' ? servings : parseFloat(String(servings));
+    // The editor fields hold PER-SERVING values for the CURRENT `servings` value.
+    // On save, convert to WHOLE-RECIPE totals using the current parsedServings.
     const nutritionUsesServings =
-      nutritionFromEstimate || typeof initialRecipe?.nutrition?.servings === 'number';
-    const nutritionServings =
-      nutritionUsesServings && !isNaN(parsedServings) && parsedServings > 0
-        ? parsedServings
-        : typeof initialRecipe?.nutrition?.servings === 'number'
-        ? initialRecipe.nutrition.servings
-        : undefined;
+      nutritionFromEstimate || nutritionDirty || Object.keys(nutritionTotals).length > 0;
+    const nutritionServings = nutritionUsesServings && !isNaN(parsedServings) && parsedServings > 0
+      ? parsedServings
+      : undefined;
 
-    const parsedProtein = protein.trim() ? parseFloat(protein.trim()) : undefined;
-    const parsedCarbs = carbs.trim() ? parseFloat(carbs.trim()) : undefined;
-    const parsedFat = fat.trim() ? parseFloat(fat.trim()) : undefined;
-    const parsedFiber = fiber.trim() ? parseFloat(fiber.trim()) : undefined;
-    const parsedSodium = sodium.trim() ? parseFloat(sodium.trim()) : undefined;
-    const parsedCalNum = calories.trim() ? parseInt(calories.trim().replace(/\D/g, ''), 10) : undefined;
+    // Calories may be entered as a plain number or with a unit suffix ("520 kcal").
+    // Parse the numeric value WITHOUT stripping the decimal point (the old
+    // `replace(/\D/g,'')` turned "374.8" into "3748").
+    const parsedCalNum = (() => {
+      const raw = calories.trim();
+      if (!raw) return undefined;
+      const direct = parseFloat(raw);
+      if (Number.isFinite(direct)) return direct;
+      return undefined;
+    })();
 
-    const hasNutrition = parsedCalNum || parsedProtein || parsedCarbs || parsedFat || parsedFiber || parsedSodium;
+    // When nutritionUsesServings is true, the editor fields hold PER-SERVING values
+    // for the current `servings`. The saved nutrition block must store WHOLE-RECIPE
+    // totals with the current `servings` as the denominator.
+    const scaledProtein = nutritionTotals.protein;
+    const scaledCarbs = nutritionTotals.carbohydrates;
+    const scaledFat = nutritionTotals.fat;
+    const scaledFiber = nutritionTotals.fiber;
+    const scaledSodium = nutritionTotals.sodium;
+    const scaledCalNum = nutritionTotals.calories;
+
+    const hasNutrition = [scaledCalNum, scaledProtein, scaledCarbs, scaledFat, scaledFiber, scaledSodium].some(value => typeof value === 'number' && Number.isFinite(value));
 
     const partial: Partial<ObsidianRecipe> = {
       title: title || 'Untitled Recipe',
@@ -488,21 +566,29 @@ export function RecipeEditorModal({
       servings: !isNaN(parsedServings) && parsedServings > 0 ? parsedServings : undefined,
       difficulty,
       rating,
-      calories: calories.trim() || (parsedCalNum ? parsedCalNum.toString() : undefined),
+      // Legacy calories field: store PER-SERVING value (not scaled) for backward compatibility.
+      calories: calories.trim() || (parsedCalNum !== undefined ? parsedCalNum.toString() : undefined),
       nutrition: hasNutrition
         ? (() => {
             const prov = deriveNutritionProvenance(nutritionDirty, nutritionProvenance);
+            const persistedProvenance = nutritionPartial && nutritionFromEstimate
+              ? {
+                  source: 'offline_heuristic' as const,
+                  confidence: 'low' as const,
+                  confidenceNote: `${nutritionProvenance.confidenceNote ?? 'Pinned USDA estimate'} PARTIAL subtotal: unresolved ingredients are excluded; full recipe totals are unknown.`,
+                }
+              : prov;
             return {
-              calories: parsedCalNum,
-              protein: parsedProtein,
-              carbohydrates: parsedCarbs,
-              fat: parsedFat,
-              fiber: parsedFiber,
-              sodium: parsedSodium,
+              calories: scaledCalNum,
+              protein: scaledProtein,
+              carbohydrates: scaledCarbs,
+              fat: scaledFat,
+              fiber: scaledFiber,
+              sodium: scaledSodium,
               servings: nutritionServings,
-              source: prov.source,
-              confidence: prov.confidence,
-              confidenceNote: prov.confidenceNote,
+              source: persistedProvenance.source,
+              confidence: persistedProvenance.confidence,
+              confidenceNote: persistedProvenance.confidenceNote,
             };
           })()
         : undefined,
@@ -534,10 +620,45 @@ export function RecipeEditorModal({
     return serializeRecipeToObsidianMarkdown(partial);
   };
 
+  // Recompute per-serving display values when servings changes.
+  // Only fields NOT manually edited (not in nutritionDirtyFields) are updated.
+  useEffect(() => {
+    const parsedServings = typeof servings === 'number' ? servings : parseFloat(String(servings));
+    if (!isNaN(parsedServings) && parsedServings > 0 && Object.keys(nutritionTotals).length > 0) {
+      const newCalories = nutritionTotals.calories !== undefined ? computePerServing(nutritionTotals.calories, parsedServings, true) : '';
+      const newProtein = nutritionTotals.protein !== undefined ? computePerServing(nutritionTotals.protein, parsedServings) : '';
+      const newCarbs = nutritionTotals.carbohydrates !== undefined ? computePerServing(nutritionTotals.carbohydrates, parsedServings) : '';
+      const newFat = nutritionTotals.fat !== undefined ? computePerServing(nutritionTotals.fat, parsedServings) : '';
+      const newFiber = nutritionTotals.fiber !== undefined ? computePerServing(nutritionTotals.fiber, parsedServings) : '';
+      const newSodium = nutritionTotals.sodium !== undefined ? computePerServing(nutritionTotals.sodium, parsedServings, true) : '';
+
+      if (!nutritionDirtyFields.has('calories')) setCalories(newCalories);
+      if (!nutritionDirtyFields.has('protein')) setProtein(newProtein);
+      if (!nutritionDirtyFields.has('carbs')) setCarbs(newCarbs);
+      if (!nutritionDirtyFields.has('fat')) setFat(newFat);
+      if (!nutritionDirtyFields.has('fiber')) setFiber(newFiber);
+      if (!nutritionDirtyFields.has('sodium')) setSodium(newSodium);
+    }
+    // Clear dirty fields when servings changes — the user gets fresh computed values.
+    // They can edit again if needed.
+    if (nutritionDirtyFields.size > 0) {
+      setNutritionDirtyFields(new Set());
+    }
+  }, [servings, nutritionTotals, nutritionDirtyFields]);
+
+  const currentNutritionInput = JSON.stringify([ingredientsText, servings]);
+  const nutritionInputRef = useRef(currentNutritionInput);
+  nutritionInputRef.current = currentNutritionInput;
+  const nutritionEstimateSeq = useRef(0);
+  useEffect(() => () => { nutritionEstimateSeq.current += 1; }, []);
+
   const handleEstimateNutrition = async () => {
+    const seq = ++nutritionEstimateSeq.current;
+    const inputKey = nutritionInputRef.current;
     setIsEstimatingNutrition(true);
     setNutritionError(null);
     setNutritionSuccess(false);
+    setNutritionCoverageNote(null);
 
     try {
       const lines = ingredientsText
@@ -546,58 +667,116 @@ export function RecipeEditorModal({
         .filter(Boolean);
 
       if (lines.length === 0) {
-        throw new Error('Please add ingredients before estimating nutrition.');
+        throw new Error('Please add ingredients before calculating nutrition.');
       }
 
-      const numServings = typeof servings === 'number' ? servings : parseInt(String(servings), 10) || 4;
+      const numServings = typeof servings === 'number' ? servings : parseFloat(String(servings)) || 4;
 
-      const res = await network.post<{ success: boolean; nutrition?: any; error?: string }>(
-        '/api/estimate-nutrition',
-        {
-          title: title || 'Recipe',
-          servings: numServings,
-          ingredients: lines,
-        },
-        await buildAiSelectionRequestOptions()
-      );
-
-      const data = res.data;
-      if (!res.ok || !data?.success) {
-        throw new Error(data?.error || 'Failed to estimate nutrition.');
+      // ONE shared Basic Nutrition engine (the SAME service the main recipe page
+      // uses). Deterministic, local, no provider call: the pinned USDA
+      // catalog, shared parsing, applicable portions, and disclosed quantity
+      // estimates. Values populate the EDITABLE fields only — nothing is written
+      // to the Vault until the user explicitly saves the recipe.
+      const estimate = await calculateProductionBasicNutrition({ ingredients: lines, servings: numServings });
+      if (seq !== nutritionEstimateSeq.current || inputKey !== nutritionInputRef.current) return;
+      if (!estimate.ok) {
+        setNutritionTotals({});
+        setCalories(''); setProtein(''); setCarbs('');
+        setFat(''); setFiber(''); setSodium('');
+        setNutritionDirtyFields(new Set());
+        setNutritionFromEstimate(false);
+        setNutritionPartial(false);
+        setNutritionDirty(true);
+        setNutritionProvenance({});
+        setNutritionError(estimate.message ?? `Partial nutrition: ${estimate.coverage.resolved}/${estimate.coverage.total} lines resolved. Recipe totals are unknown. Review unresolved quantities in Advanced Nutrition.`);
+        return;
       }
 
-      if (data.nutrition) {
-        // FAIL CLOSED: never populate the editor from a machine-generated
-        // estimate unless the centralized applicability contract authorizes it.
-        const assessment = data.nutrition.assessment;
-        const rules = evaluateMachineNutritionApplicability(data.nutrition, assessment, numServings);
-        const gate = canApplyNutritionEstimate(data.nutrition, assessment, numServings);
-        if (!gate.ok) {
-          setNutritionError(rules.ok ? NUTRITION_AUTOSAVE_DISABLED_MESSAGE : NUTRITION_INCOMPLETE_MESSAGE);
-          return;
-        }
-        if (data.nutrition.calories !== undefined) setCalories(data.nutrition.calories.toString());
-        if (data.nutrition.protein !== undefined) setProtein(data.nutrition.protein.toString());
-        if (data.nutrition.carbohydrates !== undefined) setCarbs(data.nutrition.carbohydrates.toString());
-        if (data.nutrition.fat !== undefined) setFat(data.nutrition.fat.toString());
-        if (data.nutrition.fiber !== undefined) setFiber(data.nutrition.fiber.toString());
-        if (data.nutrition.sodium !== undefined) setSodium(data.nutrition.sodium.toString());
-        setNutritionFromEstimate(true);
-        setNutritionDirty(false);
-        setNutritionProvenance({
-          source: data.nutrition.source,
-          confidence: data.nutrition.confidence,
-          confidenceNote: data.nutrition.confidenceNote,
-        });
-        setNutritionSuccess(true);
-        setTimeout(() => setNutritionSuccess(false), 3000);
+      const partial = !estimate.coverage.complete;
+      const values = partial ? estimate.knownSubtotal : estimate.totals;
+      if (!values || !Object.values(values).some(value => typeof value === 'number' && Number.isFinite(value))) {
+        setNutritionError(estimate.message ?? 'No supported nutrition contribution could be calculated. Existing values were kept.');
+        return;
       }
+
+      // Store WHOLE-RECIPE totals as the source of truth.
+      // Per-serving display values are set from estimate.perServing.
+      const totals: Partial<RecipeNutrition> = {
+        ...(values.calories !== null ? { calories: values.calories } : {}),
+        ...(values.protein !== null ? { protein: values.protein } : {}),
+        ...(values.carbohydrates !== null ? { carbohydrates: values.carbohydrates } : {}),
+        ...(values.fat !== null ? { fat: values.fat } : {}),
+        ...(values.fiber !== null ? { fiber: values.fiber } : {}),
+        ...(values.sodium !== null ? { sodium: values.sodium } : {}),
+      };
+      setNutritionTotals(totals);
+      setNutritionDirtyFields(new Set()); // Clear dirty flags on new calculation
+
+      // Set per-serving editor fields from the estimate
+      const perServing = (value: number | null | undefined, whole = false) => value == null ? '' : String(whole ? Math.round(value / numServings) : Math.round((value / numServings) * 10) / 10);
+      setCalories(perServing(values.calories, true));
+      setProtein(perServing(values.protein));
+      setCarbs(perServing(values.carbohydrates));
+      setFat(perServing(values.fat));
+      setFiber(perServing(values.fiber));
+      setSodium(perServing(values.sodium, true));
+      setNutritionIngredientKey(ingredientsText);
+      setNutritionFromEstimate(true);
+      setNutritionPartial(partial);
+      setPartialOverwriteApproved(false);
+      setNutritionDirty(false);
+      setNutritionProvenance({
+        source: estimate.source,
+        confidence: estimate.confidence === 'unknown' ? 'low' : estimate.confidence,
+        confidenceNote: estimate.confidenceNote,
+      });
+      if (Object.values(values).some(value => value === null)) setNutritionCoverageNote('Some nutrients have incomplete source coverage and remain unknown.');
+      if (partial) {
+        setNutritionCoverageNote(
+          `Partial estimate: ${estimate.coverage.resolved} of ${estimate.coverage.total} ingredient lines ` +
+            `matched the local food reference; unresolved lines contribute nothing.` +
+            (estimate.lines.filter((line) => line.status === 'unresolved').length > 0
+              ? ` Unresolved: ${estimate.lines
+                  .filter((line) => line.status === 'unresolved')
+                  .slice(0, 4)
+                  .map((line) => line.ingredient)
+                  .join('; ')}.`
+              : ''),
+        );
+      }
+      setNutritionSuccess(true);
+      setTimeout(() => setNutritionSuccess(false), 3000);
     } catch (err: any) {
-      setNutritionError(err.message || 'Error estimating nutrition.');
+      setNutritionError(err.message || 'Error calculating nutrition.');
     } finally {
       setIsEstimatingNutrition(false);
     }
   };
+
+  const handleNutritionChange = useCallback(
+    (fieldName: string, setter: (value: string) => void, value: string) => {
+      setter(value);
+      setNutritionDirty(true);
+      // Mark this field as manually edited so it won't be overwritten by servings change
+      setNutritionDirtyFields((prev) => new Set(prev).add(fieldName));
+      // Update whole-recipe totals from the edited per-serving value
+      const parsedServings = typeof servings === 'number' ? servings : parseFloat(String(servings));
+      if (!isNaN(parsedServings) && parsedServings > 0) {
+        const numValue = value.trim() ? parseFloat(value.trim()) : undefined;
+        if (numValue !== undefined && Number.isFinite(numValue)) {
+          setNutritionTotals((prev) => ({ ...prev, [fieldName === 'carbs' ? 'carbohydrates' : fieldName]: numValue * parsedServings }));
+        } else if (value.trim() === '') {
+          // User cleared the field - remove from totals
+          setNutritionTotals((prev) => {
+            const next = { ...prev };
+            delete next[fieldName === 'carbs' ? 'carbohydrates' : fieldName];
+            return next;
+          });
+        }
+      }
+    },
+    [servings],
+  );
 
   const [isRecoveringMetadata, setIsRecoveringMetadata] = useState(false);
   const [metadataRecoverySuccess, setMetadataRecoverySuccess] = useState<string | null>(null);
@@ -659,7 +838,7 @@ export function RecipeEditorModal({
       if (data?.recovered) {
         const rec = data.recovered;
         const recoverBaseServings =
-          typeof servings === 'number' ? servings : parseInt(String(servings), 10) || 4;
+          typeof servings === 'number' ? servings : parseFloat(String(servings)) || 4;
 
         // The planner routes recovered nutrition through the SAME centralized
         // applicability contract used by the estimator. Non-nutrition metadata
@@ -1085,6 +1264,14 @@ export function RecipeEditorModal({
   };
 
   const handleSave = async () => {
+    if (nutritionFromEstimate && nutritionPartial && priorCompleteNutrition && !partialOverwriteApproved) {
+      setSaveError('This calculation is partial. Review the coverage notice and confirm that you want to replace the existing complete nutrition with a labeled subtotal.');
+      return;
+    }
+    if (nutritionFromEstimate && nutritionIngredientKey !== ingredientsText) {
+      setSaveError('Ingredients changed after the nutrition calculation. Recalculate nutrition before saving this estimate.');
+      return;
+    }
     // Synchronous transaction lock (I1): two clicks can never enter the Asset
     // writer twice. Retry stays available: the lock releases on every path.
     if (saveTransactionRef.current) return;
@@ -1477,7 +1664,7 @@ export function RecipeEditorModal({
                   <input
                     type="number"
                     value={servings}
-                    onChange={(e) => setServings(e.target.value === '' ? '' : parseInt(e.target.value, 10))}
+                    onChange={(e) => setServings(e.target.value === '' ? '' : parseFloat(e.target.value))}
                     min={1}
                     placeholder="e.g. 4"
                     className="w-full bg-[#0C0C0C] border border-white/10 rounded-lg p-2 text-gray-300 font-mono focus:border-amber-500 focus:outline-none"
@@ -1485,11 +1672,11 @@ export function RecipeEditorModal({
                 </div>
 
                 <div>
-                  <label className="block font-medium text-gray-300 mb-1">Calories (kcal)</label>
+                  <label className="block font-medium text-gray-300 mb-1">{nutritionPartial ? 'Calories (kcal) · subtotal' : 'Calories (kcal)'}</label>
                   <input
                     type="text"
                     value={calories}
-                    onChange={(e) => { setCalories(e.target.value); setNutritionDirty(true); }}
+                    onChange={(e) => handleNutritionChange('calories', setCalories, e.target.value)}
                     placeholder="e.g. 520"
                     className="w-full bg-[#0C0C0C] border border-white/10 rounded-lg p-2 text-gray-300 font-mono focus:border-amber-500 focus:outline-none"
                   />
@@ -1523,10 +1710,16 @@ export function RecipeEditorModal({
                     className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 transition-colors disabled:opacity-50"
                   >
                     <Sparkles className={`w-3.5 h-3.5 ${isEstimatingNutrition ? 'animate-spin' : ''}`} />
-                    <span>{isEstimatingNutrition ? 'Analyzing Ingredients...' : 'Estimate Nutrition (AI)'}</span>
+                    <span>{isEstimatingNutrition ? 'Calculating…' : 'Calculate Basic Nutrition'}</span>
                   </button>
                 </div>
 
+                {initialRecipe && resolveRecipeNutritionPresentation(initialRecipe).advanced_preferred && (
+                  <p className="text-[11px] text-amber-300">
+                    These are Basic nutrition fields. The recipe page uses the separately saved Advanced report.
+                    Review and recalculate Advanced Nutrition to update that report; saving these fields does not replace it.
+                  </p>
+                )}
                 {nutritionError && (
                   <p className="text-[11px] text-rose-300 bg-rose-950/40 p-2 rounded-lg border border-rose-800/40">
                     {nutritionError}
@@ -1534,61 +1727,78 @@ export function RecipeEditorModal({
                 )}
                 {nutritionSuccess && (
                   <p className="text-[11px] text-emerald-300 bg-emerald-950/40 p-2 rounded-lg border border-emerald-800/40">
-                    Nutrition &amp; macros successfully estimated and populated!
+                    Basic nutrition calculated and populated — these are estimates. Review or edit them; nothing is
+                    saved until you save the recipe.
+                  </p>
+                )}
+                {nutritionCoverageNote && (
+                  <p className="text-[11px] text-amber-300 bg-amber-950/40 p-2 rounded-lg border border-amber-800/40">
+                    {nutritionCoverageNote}
+                  </p>
+                )}
+                {nutritionFromEstimate && nutritionPartial && (
+                  <p data-testid="editor-basic-partial" className="text-[11px] text-amber-200 bg-amber-950/40 p-2 rounded-lg border border-amber-800/40">
+                    Partial subtotal: unresolved ingredients are excluded. These values are not full recipe totals.
+                    {priorCompleteNutrition && (
+                      <label className="mt-2 flex items-start gap-2">
+                        <input type="checkbox" checked={partialOverwriteApproved} onChange={(event) => setPartialOverwriteApproved(event.target.checked)} />
+                        <span>I understand this will replace the existing complete nutrition with the labeled partial subtotal.</span>
+                      </label>
+                    )}
                   </p>
                 )}
 
                 <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
                   <div>
-                    <label className="block text-[11px] text-gray-400 mb-1">Protein (g)</label>
+                    <label className="block text-[11px] text-gray-400 mb-1">{nutritionPartial ? 'Protein (g) · subtotal' : 'Protein (g)'}</label>
                     <input
                       type="number"
                       step="0.1"
                       value={protein}
-                      onChange={(e) => { setProtein(e.target.value); setNutritionDirty(true); }}
+                      onChange={(e) => handleNutritionChange('protein', setProtein, e.target.value)}
                       placeholder="e.g. 32"
                       className="w-full bg-[#0C0C0C] border border-white/10 rounded-lg p-2 text-emerald-400 font-mono focus:border-amber-500 focus:outline-none"
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] text-gray-400 mb-1">Carbs (g)</label>
+                    <label className="block text-[11px] text-gray-400 mb-1">{nutritionPartial ? 'Carbs (g) · subtotal' : 'Carbs (g)'}</label>
                     <input
                       type="number"
                       step="0.1"
                       value={carbs}
-                      onChange={(e) => { setCarbs(e.target.value); setNutritionDirty(true); }}
+                      onChange={(e) => handleNutritionChange('carbohydrates', setCarbs, e.target.value)}
                       placeholder="e.g. 45"
                       className="w-full bg-[#0C0C0C] border border-white/10 rounded-lg p-2 text-blue-400 font-mono focus:border-amber-500 focus:outline-none"
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] text-gray-400 mb-1">Fat (g)</label>
+                    <label className="block text-[11px] text-gray-400 mb-1">{nutritionPartial ? 'Fat (g) · subtotal' : 'Fat (g)'}</label>
                     <input
                       type="number"
                       step="0.1"
                       value={fat}
-                      onChange={(e) => { setFat(e.target.value); setNutritionDirty(true); }}
+                      onChange={(e) => handleNutritionChange('fat', setFat, e.target.value)}
                       placeholder="e.g. 18"
                       className="w-full bg-[#0C0C0C] border border-white/10 rounded-lg p-2 text-amber-400 font-mono focus:border-amber-500 focus:outline-none"
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] text-gray-400 mb-1">Fiber (g)</label>
+                    <label className="block text-[11px] text-gray-400 mb-1">{nutritionPartial ? 'Fiber (g) · subtotal' : 'Fiber (g)'}</label>
                     <input
                       type="number"
                       step="0.1"
                       value={fiber}
-                      onChange={(e) => { setFiber(e.target.value); setNutritionDirty(true); }}
+                      onChange={(e) => handleNutritionChange('fiber', setFiber, e.target.value)}
                       placeholder="e.g. 6"
                       className="w-full bg-[#0C0C0C] border border-white/10 rounded-lg p-2 text-purple-400 font-mono focus:border-amber-500 focus:outline-none"
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] text-gray-400 mb-1">Sodium (mg)</label>
+                    <label className="block text-[11px] text-gray-400 mb-1">{nutritionPartial ? 'Sodium (mg) · subtotal' : 'Sodium (mg)'}</label>
                     <input
                       type="number"
                       value={sodium}
-                      onChange={(e) => { setSodium(e.target.value); setNutritionDirty(true); }}
+                      onChange={(e) => handleNutritionChange('sodium', setSodium, e.target.value)}
                       placeholder="e.g. 580"
                       className="w-full bg-[#0C0C0C] border border-white/10 rounded-lg p-2 text-orange-400 font-mono focus:border-amber-500 focus:outline-none"
                     />

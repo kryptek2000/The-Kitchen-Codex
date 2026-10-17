@@ -12,15 +12,16 @@ import {
   savedReportGroups,
   savedReportMeta,
 } from '../core/nutritionV2/phase5c/savedReport';
-import type { CodexNutritionV1, CodexNutritionV2, CodexNutritionV3 } from '../core/nutritionV2/schema';
+import type { CodexNutritionV1, CodexNutritionV2, CodexNutritionV3, CodexNutritionV4, CodexNutritionV5 } from '../core/nutritionV2/schema';
 
 interface AdvancedNutritionSavedReportProps {
   isOpen: boolean;
+  stale?: boolean;
   onClose: () => void;
   /** Materialized, bounded recipe title (never a raw untrusted recipe). */
   title: string;
   /** The already-validated canonical saved block. */
-  block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3;
+  block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5;
   /** Opens the working analyzer/editor. */
   onEdit: () => void;
 }
@@ -35,6 +36,7 @@ interface AdvancedNutritionSavedReportProps {
  */
 export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReportProps> = ({
   isOpen,
+  stale = false,
   onClose,
   title,
   block,
@@ -72,6 +74,9 @@ export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReport
       }}
     >
       <div className="w-full max-w-3xl bg-[#0F0F0F] border border-indigo-500/20 rounded-2xl shadow-2xl my-4">
+        {block.schema === 4 && <div className="p-4 text-amber-300 text-xs">Includes accepted estimated quantities (not authenticated portions).
+          {block.ingredients.filter(e => e.quantity_estimate).map(e => <p key={e.line_ref}>AI estimate · {e.line_ref}: {e.quantity_estimate!.lower_grams}–{e.quantity_estimate!.upper_grams} g · midpoint {e.quantity_estimate!.representative_grams} g</p>)}
+        </div>}
         {/* Header */}
         <div className="flex items-start justify-between gap-3 p-5 border-b border-white/5">
           <div className="flex items-start gap-3 min-w-0">
@@ -84,7 +89,7 @@ export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReport
               </h2>
               <p className="text-[11px] text-gray-400 truncate">{title}</p>
               <p className="text-[10px] font-mono uppercase tracking-wide text-indigo-300 mt-0.5">
-                USDA reviewed · read-only
+                {block.schema === 5 ? 'Source-backed + AI-estimated · read-only' : 'USDA reviewed · read-only'}
               </p>
             </div>
           </div>
@@ -103,20 +108,51 @@ export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReport
           <div
             data-testid="saved-advanced-status"
             className={`p-3 rounded-xl border text-[11px] ${
-              meta.complete
+              meta.complete && !stale
                 ? 'bg-emerald-950/25 border-emerald-800/40 text-emerald-200'
                 : 'bg-amber-950/25 border-amber-800/40 text-amber-200'
             }`}
           >
             <p className="font-semibold">
-              {meta.complete ? 'Complete ingredient coverage' : 'Partial ingredient coverage'}
+              {stale ? 'Historical saved values — recalculate before using these totals' : meta.unresolved_count === 0 ? 'All ingredient lines accounted for' : 'Partial ingredient coverage'}
             </p>
             <p className="text-[11px] opacity-90">
-              {meta.resolved_count} of {meta.ingredient_count} ingredient line
-              {meta.ingredient_count === 1 ? '' : 's'} resolved
+              {meta.resolved_count + meta.excluded_count} of {meta.ingredient_count} ingredient line
+              {meta.ingredient_count === 1 ? '' : 's'} accounted for
+              {meta.excluded_count > 0 ? ` · ${meta.excluded_count} cooking wrapper excluded` : ''}
+              {meta.unresolved_count > 0 ? ` · ${meta.unresolved_count} unresolved` : ''}
               {' · '}base {meta.servings} serving{meta.servings === 1 ? '' : 's'}
             </p>
           </div>
+
+          {block.schema === 5 && (
+            <details className="p-3 rounded-xl bg-[#141414] border border-white/5" data-testid="saved-advanced-line-evidence">
+              <summary className="cursor-pointer text-[11px] font-semibold text-gray-200">
+                Ingredient evidence · {meta.resolved_count} nutrition contributions · {meta.excluded_count} excluded · {meta.unresolved_count} unresolved
+              </summary>
+              <ul className="mt-2 space-y-1.5 text-[10px] text-gray-400">
+                {block.ingredients.map((entry) => (
+                  <li key={`source-${entry.line_ref}`} data-testid="saved-line-source-backed">
+                    <span className="text-emerald-300">Source-backed</span> · {entry.line_ref} · USDA {entry.source_food_id}
+                  </li>
+                ))}
+                {block.ai_contributions.map((entry) => (
+                  <li key={`ai-${entry.line_ref}`} data-testid={`saved-line-${entry.disposition === 'excluded' ? 'excluded' : entry.classification}`}>
+                    <span className={entry.disposition === 'excluded' ? 'text-gray-300' : entry.classification === 'ai_estimate' ? 'text-amber-300' : 'text-emerald-300'}>
+                      {entry.disposition === 'excluded' ? 'Excluded cooking wrapper' : entry.classification === 'ai_estimate' ? 'AI estimate' : 'Source-backed contribution'}
+                    </span>
+                    {' · '}{entry.ingredient}
+                    {entry.disposition === 'excluded' ? ` · ${entry.exclusion_assumption}` : ` · ${entry.quantity_basis}`}
+                  </li>
+                ))}
+                {block.unresolved.map((entry) => (
+                  <li key={`unresolved-${entry.line_ref}`} data-testid="saved-line-unresolved">
+                    <span className="text-rose-300">Unresolved</span> · {entry.line_ref} · {entry.reason}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
 
           {/* Display basis controls */}
           <div className="flex flex-wrap items-center gap-2" data-testid="saved-advanced-basis">
@@ -191,7 +227,7 @@ export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReport
                             data-testid={`saved-advanced-partial-${entry.nutrient}`}
                             className="text-[9px] font-mono uppercase px-1.5 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/25 text-amber-300"
                           >
-                            partial
+                            subtotal · total unknown
                           </span>
                         )}
                       </span>
@@ -205,7 +241,7 @@ export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReport
           {/* Provenance */}
           <div className="p-3 rounded-xl bg-[#141414] border border-white/5 text-[11px] text-gray-400 space-y-0.5">
             <p>
-              Source: <span className="text-gray-200">USDA FoodData Central</span>
+              Source: <span className="text-gray-200">{block.schema === 5 ? 'USDA FoodData Central + saved AI contributions' : 'USDA FoodData Central'}</span>
               {meta.usda_release ? (
                 <>
                   {' '}

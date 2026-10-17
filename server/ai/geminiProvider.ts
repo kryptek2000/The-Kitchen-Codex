@@ -9,6 +9,7 @@
  * any model ID, thinking level, or the grounding-only URL contract.
  */
 
+import { ProviderOperationError } from "./providerErrors.js";
 import { ThinkingLevel, Type } from "@google/genai";
 import type { GoogleGenAI } from "@google/genai";
 import { createGeminiClientWithKey, getGemini } from "../geminiClient.js";
@@ -44,6 +45,11 @@ function geminiProviderOptions(options: { providerOptions?: Record<string, unkno
     if (typeof level === "string" && GEMINI_THINKING_LEVELS[level]) {
       out["thinkingConfig"] = { thinkingLevel: GEMINI_THINKING_LEVELS[level] };
     }
+  }
+  // SHISO's explicitly authorized controlled nutrition call must not be
+  // repeated by the Google SDK after a transient/HTTP failure.
+  if ((po as Record<string, unknown>)["singleRequest"] === true) {
+    out["httpOptions"] = { retryOptions: { attempts: 1 } };
   }
   return out;
 }
@@ -168,8 +174,13 @@ export class GeminiProvider implements AiProvider {
       },
     });
     const text = response.text?.trim();
-    if (!text) throw new Error("Empty response returned from AI provider.");
-    return JSON.parse(text) as T;
+    if (response.candidates?.some(candidate => candidate.finishReason === 'MAX_TOKENS')) {
+      throw new ProviderOperationError('INVALID_RESPONSE', 'Gemini output was truncated.', { responseFailure: 'output_truncated' });
+    }
+    if (!text) throw new ProviderOperationError('INVALID_RESPONSE', 'Gemini returned no structured content.', { responseFailure: 'empty_response' });
+    try { return JSON.parse(text) as T; } catch {
+      throw new ProviderOperationError('INVALID_RESPONSE', 'Gemini returned invalid JSON.', { responseFailure: 'malformed_json' });
+    }
   }
 
   /**

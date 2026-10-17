@@ -372,7 +372,9 @@ function textProviderRows(regs: RegisteredProvider[]): ProviderCatalogTextProvid
       // capability verification is reflected without a catalog refetch. Image
       // executability stays the curated transport allowlist.
       const isImage = model.capabilities.imageGeneration;
-      const selectable = isImage ? model.executionCompatible : isSelectableOpenRouterTextModel(model);
+      const selectable = isImage
+        ? model.executionCompatible
+        : selectableTextModels(registered.provider.id).includes(model.modelId);
       const capabilityVerified = !isImage && isCapabilityVerifiedOpenRouterTextModel(model);
       const strictStructuredCandidate = !isImage && isOpenRouterStrictStructuredCandidate(model);
       const recipeGenerationVerified = !isImage && isOpenRouterRecipeGenerationAuthorized(model.modelId);
@@ -424,8 +426,9 @@ function textProviderRows(regs: RegisteredProvider[]): ProviderCatalogTextProvid
     let discoveredModels: ProviderCatalogTextModel[] | undefined;
     if (isOpenRouter) {
       const snap = getOpenRouterCatalogSnapshot();
+      const selectableText = new Set(selectableTextModels(registered.provider.id));
       discoveredModels = snap.textModels
-        .filter((m) => isCompatibleOpenRouterTextModel(m) && !isSelectableOpenRouterTextModel(m))
+        .filter((m) => isCompatibleOpenRouterTextModel(m) && !selectableText.has(m.modelId))
         .slice(0, 250)
         .map(toRow);
     }

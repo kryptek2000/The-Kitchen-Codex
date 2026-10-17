@@ -335,6 +335,7 @@ function fullPayload(e: EvaluatedIngredient) {
     ...(e.rangeRepresentative !== undefined
       ? { range_representative: e.rangeRepresentative }
       : {}),
+    ...(e.aiEstimate !== undefined ? { ai_estimate: e.aiEstimate } : {}),
     resolved_grams: e.grams ?? null,
     outcome: e.outcome,
     contributing_nutrients: [...e.contributingNutrients],
@@ -1384,6 +1385,7 @@ export function runAdvisoryCalculation(inputs: AdvisoryCalculationInputs): Calcu
         ...(entry.recordDigest !== undefined ? { record_digest: entry.recordDigest } : {}),
         ...(entry.massSource !== undefined ? { mass_source: entry.massSource } : {}),
         ...(entry.grams !== undefined ? { resolved_grams: entry.grams } : {}),
+        ...(entry.aiEstimate !== undefined ? { ai_estimate: Object.freeze({ ...entry.aiEstimate }) } : {}),
         ...(entry.portionIndex !== undefined ? { portion_index: entry.portionIndex } : {}),
         ...(entry.countPortionAmount !== undefined
           ? {

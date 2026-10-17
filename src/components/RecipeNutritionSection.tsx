@@ -13,7 +13,7 @@ import {
   type AdvancedNutritionAiAvailability,
 } from './AdvancedNutritionCard';
 import type { AdvancedNutritionSession } from '../core/nutritionV2/phase4';
-import { deriveAdvancedCompactNutrition, type NutritionPresentation } from '../core/nutritionV2/phase5c';
+import { advancedPartialNutrients, deriveAdvancedCompactNutrition, type NutritionPresentation } from '../core/nutritionV2/phase5c';
 
 interface RecipeNutritionSectionProps {
   recipe: ObsidianRecipe;
@@ -85,6 +85,9 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
       ? {
           resolved: presentation.advanced_resolved_count,
           total: presentation.advanced_ingredient_count,
+          unresolved: presentation.advanced_unresolved_count,
+          excluded: presentation.advanced_excluded_count,
+          stale: presentation.advanced_stale,
         }
       : undefined;
   const legacyVisible = onUpdateNutrition !== undefined;
@@ -102,7 +105,8 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
           <span>
             Saved Advanced Nutrition may be out of date for the current recipe
             {presentation.stale_reasons.includes('servings_changed') ? ' (servings changed)' : ''}
-            {presentation.stale_reasons.includes('ingredients_changed') ? ' (ingredients changed)' : ''}.
+            {presentation.stale_reasons.includes('ingredients_changed') ? ' (ingredients changed)' : ''}
+            {presentation.stale_reasons.includes('quantity_conflict') ? ' (saved grams conflict with written ingredient weights)' : ''}.
             Recalculate and Apply to update it.
           </span>
         </div>
@@ -150,7 +154,16 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
             servings={servings}
             network={network}
             derivedNutrition={derivedNutrition}
-            derivedSourceLabel={derivedNutrition ? 'Advanced Nutrition · USDA reviewed' : undefined}
+            derivedPartialNutrients={advancedPartialNutrients(presentation)}
+            derivedSourceLabel={derivedNutrition ? (
+              presentation.advanced?.schema === 5
+                ? presentation.advanced.ai_contributions.some(line => line.classification === 'ai_estimate')
+                  ? 'Advanced Nutrition · includes AI estimates'
+                  : 'Advanced Nutrition · reviewed contributions'
+                : presentation.advanced?.schema === 4 && presentation.advanced.ingredients.some(e => e.quantity_estimate)
+                  ? 'USDA nutrients · includes accepted quantity estimates'
+                  : 'Advanced Nutrition · USDA reviewed'
+            ) : undefined}
             advancedIncomplete={advancedIncomplete}
             hideLegacyEstimator
             onUpdateNutrition={(nut) => onUpdateNutrition?.(nut)}

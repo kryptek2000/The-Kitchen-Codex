@@ -23,7 +23,8 @@ import { deriveDailyValue } from '../calculation/dailyValues';
 import { derivePerServing, deriveRequestedServing } from '../calculation/servings';
 import { formatUnitLabel, NUTRIENT_GROUPS } from '../phase4/display';
 import type { BasisMode, DisplayNutrient, NutrientGroup } from '../phase4/types';
-import type { CodexNutritionV1, CodexNutritionV2, CodexNutritionV3 } from '../schema';
+import type { CodexNutritionV1, CodexNutritionV2, CodexNutritionV3, CodexNutritionV4, CodexNutritionV5 } from '../schema';
+import { hasUsableAiNutrientValue } from '../aiContribution';
 
 export const SAVED_REPORT_VERSION = 'usda_phase5c_saved_report_v1';
 
@@ -33,6 +34,7 @@ export interface SavedReportMeta {
   readonly complete: boolean;
   readonly resolved_count: number;
   readonly unresolved_count: number;
+  readonly excluded_count: number;
   readonly ingredient_count: number;
   readonly servings: number;
   readonly dv_standard: string;
@@ -59,7 +61,7 @@ function scaleStored(
  * nutrient stays `missing`. Never tops up from legacy/simple nutrition.
  */
 export function deriveSavedReportNutrients(
-  block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3,
+  block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5,
   basis: BasisMode,
   selectedServings: number
 ): ReadonlyArray<DisplayNutrient> {
@@ -95,7 +97,7 @@ export function deriveSavedReportNutrients(
         unit: def.unit,
         unit_label: formatUnitLabel(def.unit),
         amount,
-        explicit_zero: amount === 0,
+        explicit_zero: amount === 0 && stored.status === 'complete',
         coverage: stored.status === 'complete' ? ('complete' as const) : ('partial' as const),
         covered_ingredient_count: stored.covered_ingredient_count,
         measurable_ingredient_count: stored.measurable_ingredient_count,
@@ -107,16 +109,26 @@ export function deriveSavedReportNutrients(
 }
 
 /** Bounded, display-safe saved-report metadata. Never throws on a valid block. */
-export function savedReportMeta(block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3): SavedReportMeta {
-  const resolved = block.ingredients.length;
-  const unresolved = block.unresolved.length;
+export function savedReportMeta(block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5): SavedReportMeta {
+  const resolvedRefs = new Set(block.ingredients.filter(entry => entry.resolved).map(entry => entry.line_ref));
+  const ai = block.schema === 5 ? block.ai_contributions : [];
+  const excludedRefs = new Set(ai.filter(entry => entry.disposition === 'excluded').map(entry => entry.line_ref));
+  for (const entry of ai) if (entry.disposition !== 'excluded' && hasUsableAiNutrientValue(entry)) resolvedRefs.add(entry.line_ref);
+  const unresolvedRefs = new Set(block.unresolved.map(entry => entry.line_ref));
+  for (const ref of resolvedRefs) unresolvedRefs.delete(ref);
+  for (const ref of excludedRefs) unresolvedRefs.delete(ref);
+  for (const entry of ai) if (entry.disposition !== 'excluded' && !hasUsableAiNutrientValue(entry)) unresolvedRefs.add(entry.line_ref);
+  const resolved = resolvedRefs.size;
+  const unresolved = unresolvedRefs.size;
+  const accounted = new Set([...resolvedRefs, ...unresolvedRefs, ...excludedRefs]);
   return Object.freeze({
     version: SAVED_REPORT_VERSION,
     status: block.status,
-    complete: block.status === 'complete' && unresolved === 0,
+    complete: unresolved === 0,
     resolved_count: resolved,
     unresolved_count: unresolved,
-    ingredient_count: resolved + unresolved,
+    excluded_count: excludedRefs.size,
+    ingredient_count: accounted.size,
     servings: block.servings,
     dv_standard: block.dv_standard,
     computed_at: block.computed_at,
@@ -140,7 +152,7 @@ export function savedReportGroups(): ReadonlyArray<NutrientGroup> {
  * `derivePerServing` math used everywhere else (no new rounding scheme).
  */
 export function deriveAdvancedCompactPerServing(
-  block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3
+  block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5
 ): { calories?: number; protein?: number; carbohydrates?: number; fat?: number; fiber?: number; sodium?: number; servings: number } | undefined {
   if (block.status !== 'complete' || block.unresolved.length > 0) return undefined;
   const base = block.servings;

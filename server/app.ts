@@ -9,6 +9,9 @@
  */
 import express from "express";
 import { grabRecipeFromWeb } from "./recipeGrabber.js";
+import { readShisoTurnRequest } from "./shiso/turnRequest.js";
+import { runShisoTurn } from "./shiso/conversationTurn.js";
+import { estimateRecipeNutrientsWithAi } from "./shiso/aiNutrition.js";
 import { estimateRecipeNutrition } from "./nutritionEstimator.js";
 import { resolveIngredientFoodsOnServer } from "./nutritionResolve.js";
 import { interpretIngredientsOnServer } from "./nutritionInterpret.js";
@@ -29,6 +32,7 @@ import {
   nutritionMassEstimateRateLimiter,
   nutritionResolveRateLimiter,
   nutritionInterpretRateLimiter,
+  shisoConversationRateLimiter,
   nutritionPlanRateLimiter,
   nutritionContextRateLimiter,
   nutritionContextReconcileRateLimiter,
@@ -1116,6 +1120,67 @@ export function createApp(opts: CreateAppOptions): express.Express {
         aiAttempted: false,
       });
     }
+  });
+
+  // SHISO — the conversational companion.
+  //
+  // This route is deliberately THIN. It owns exactly one decision: given a
+  // bounded turn, what should Shiso say or ask for next? It has no recipe state,
+  // no nutrition state and NO USDA access, because the pinned bundle is
+  // authenticated in the browser. A model response can only be a bounded reply
+  // or a request for one of the closed tools in `src/core/shiso/protocol.ts`;
+  // there is no path from model output to JavaScript, a shell command, a
+  // filesystem path, a database query or an external URL.
+  //
+  // Gate order is the established AI route order:
+  //   auth -> product entitlement -> pricing guard -> rate limit -> handler.
+  // `ai_interpretation` is reused because Shiso interprets; this introduces no
+  // fifth entitlement feature.
+  app.post(
+    "/api/shiso/turn",
+    requireAiAccessToken,
+    requireNutritionProductFeature(nutritionProductAccessAuthority, "ai_interpretation"),
+    textPricingGuard,
+    shisoConversationRateLimiter,
+    async (req, res) => {
+      res.setHeader("Cache-Control", "no-store");
+      try {
+        const body = readShisoTurnRequest(req.body);
+        if (body === null) {
+          return res.status(400).json({
+            ok: false,
+            code: "invalid_request",
+            message: "That chat message could not be read.",
+            aiAttempted: false,
+          });
+        }
+        const userSelection = parseTextSelectionHeader(req.headers);
+        const result = await runShisoTurn(body, { userSelection });
+        if (result.ok !== true) {
+          const status = result.code === "budget_exhausted" ? 429 : 503;
+          return res.status(status).json(result);
+        }
+        return res.status(200).json(result);
+      } catch {
+        return res.status(500).json({
+          ok: false,
+          code: "internal_error",
+          message: "Shiso hit an application error before completing this turn. No Vault changes were made; try again or report the issue.",
+          aiAttempted: false,
+        });
+      }
+    },
+  );
+
+  // SHISO AI-first nutrient analysis. This is a bounded structured estimate,
+  // kept separate from the deterministic USDA mass-estimate endpoint. Its
+  // output carries no USDA identity and remains advisory until reviewed/applied.
+  app.post("/api/shiso/nutrition", requireAiAccessToken, textPricingGuard, shisoConversationRateLimiter, async (req, res) => {
+    const selection = parseTextSelectionHeader(req.headers);
+    const result = await estimateRecipeNutrientsWithAi(req.body, selection);
+    if (result.ok === true) return res.json(result);
+    const status = result.code === 'unavailable' ? 503 : result.code === 'provider_error' ? 502 : result.code === 'request_too_large' ? 413 : 400;
+    return res.status(status).json({ ok: false, code: result.code, ...(result.reason ? { reason: result.reason } : {}) });
   });
 
   // AI-2B — live provider-neutral candidate PLANNING for the frozen

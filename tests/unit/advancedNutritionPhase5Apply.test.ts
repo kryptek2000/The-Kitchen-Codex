@@ -1,3 +1,6 @@
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 /**
  * The Kitchen Codex — Advanced Nutrition Phase 5B: explicit Apply coordinator.
  *
@@ -17,12 +20,15 @@ import { buildCalculationRequest, buildReviewRows } from '../../src/core/nutriti
 import { INITIAL_PHASE4_STATE, phase4Reducer } from '../../src/core/nutritionV2/phase4/state';
 import { parseIngredientLine, parseObsidianRecipeMarkdown, serializeRecipeToObsidianMarkdown } from '../../src/utils/markdownParser';
 import { phase4SessionIdentity } from '../../src/core/nutritionV2/phase4/types';
+import { hydrateWorkingReview } from '../../src/core/nutritionV2/phase4/hydrate';
 import type { AdvancedNutritionSession, Phase4Action, Phase4State } from '../../src/core/nutritionV2/phase4';
 import type { AdvisoryNutritionPreview } from '../../src/core/nutritionV2/calculation/types';
 import { decodeCodexNutrition, validateCodexNutritionV1 } from '../../src/core/nutritionV2/validate';
+import { combineAiContributionsWithPreview, validateAiNutrientContributions } from '../../src/core/nutritionV2/aiContribution';
 import { DV_STANDARD_ID } from '../../src/core/nutritionV2/dailyValues';
 import type { CodexNutritionV1 } from '../../src/core/nutritionV2/schema';
 import { resolveRecipeVaultPath } from '../../src/core/vaultPath';
+import { deriveAdvancedCompactNutrition, resolveRecipeNutritionPresentation } from '../../src/core/nutritionV2/phase5c/presentation';
 import {
   ADVANCED_NUTRITION_APPLY_UI_MESSAGE,
   applyAdvancedNutrition,
@@ -73,6 +79,11 @@ const OTHER_SESSION: AdvancedNutritionSession = OTHER_SESSION_RESULT.session;
 
 const FLOUR_LINE = '100 g Flour, wheat, white';
 const BACON_LINE = '8 slices bacon';
+const GUACAMOLE_LINES = [
+  '3 ripe avocados', '1 lime, juiced', '1/2 white onion, finely diced',
+  '1 serrano chile, minced', '1 roma tomato, seeded and diced',
+  '1/4 cup chopped cilantro', '1/2 tsp kosher salt',
+];
 
 function structured(line: string): Record<string, unknown> {
   const parsed = parseIngredientLine(line);
@@ -253,6 +264,181 @@ function failureCodeOf(result: AdvancedNutritionApplyResult): string {
 // ---------------------------------------------------------------------------
 
 describe('phase 5B — explicit Apply success', () => {
+  it('Cochinita: Apply stays unsaved, explicit Save to a disposable Vault reopens schema-v5 with zero-edible wrappers', async () => {
+    const recipe = parseObsidianRecipeMarkdown(readFileSync(join(__dirname, '../fixtures/nutritionRepairCochinitaPibil.md'), 'utf8'), 'cochinita.md', 'Recipes/cochinita.md');
+    const reviewed = buildReviewed(SESSION, recipe, ['calories', 'protein', 'fiber']);
+    const adapted = adaptRecipe(recipe); if (!adapted.ok) throw new Error('adaptation failed');
+    const weights = [1814.36948, 45, 120, 60, 18, 2, 1, 12, 0, 220, 9, 448];
+    const raw = adapted.recipe.adapted.map((line, i) => ({
+      line_ref: line.line_ref, ingredient: recipe.ingredients[i].original,
+      quantity_basis: i === 8 ? 'Discarded cooking wrapper' : 'Full authored ingredient quantity',
+      weight_grams: weights[i], classification: 'ai_estimate', confidence: 'medium', sources: [],
+      disposition: i === 8 ? 'excluded' : 'edible',
+      exclusion_role: i === 8 ? 'cooking_wrapper' : 'none',
+      exclusion_assumption: i === 8 ? 'The banana leaves line and cover the roasting pan; they are discarded and not eaten.' : '',
+      assumptions: [i === 8 ? 'Leaves line the roasting pan and are not eaten.' : 'Synthetic estimate for persistence verification.'],
+      nutrients: { calories: { amount: i === 8 ? 0 : 30, unit: 'kcal' }, protein: { amount: i === 8 ? 0 : 1, unit: 'g' } },
+      unknown_nutrients: i === 8 ? [] : ['fiber'],
+    }));
+    const checked = validateAiNutrientContributions(raw, {
+      recipe_digest: reviewed.preview.ingredient_digest,
+      line_refs: adapted.recipe.adapted.map(l => l.line_ref),
+      line_text_by_ref: Object.fromEntries(adapted.recipe.adapted.map(line => [line.line_ref, line.ingredient.original])),
+      instructions: recipe.instructions.map(step => step.text),
+      requireExclusionContext: true,
+    });
+    if (!checked.ok) throw new Error('fixture validation failed');
+    let state = phase4Reducer(reviewed.state, { type: 'accept_ai_nutrition', recipeKey: reviewed.state.recipeKey!, servings: 8, contributions: checked.contributions });
+    const preview = combineAiContributionsWithPreview(reviewed.preview, checked.contributions);
+    state = phase4Reducer(state, { type: 'preview_succeeded', seq: state.operationSeq, recipeKey: state.recipeKey!, preview });
+    const directory = mkdtempSync(join(tmpdir(), 'kcx-cochinita-vault-'));
+    try {
+      let working: ObsidianRecipe | undefined;
+      const result = await apply({ recipe, state, preview }, { write: async next => { working = next; }, readBack: async () => serializeRecipeToObsidianMarkdown(working!) });
+      expect(failureCodeOf(result)).toBe('ok');
+      expect(working).toBeDefined();
+      expect(readdirSync(directory)).toEqual([]); // Apply never writes this Vault.
+      mkdirSync(join(directory, 'Recipes'));
+      const target = join(directory, 'Recipes/cochinita.md');
+      writeFileSync(target, serializeRecipeToObsidianMarkdown(working!)); // explicit Save
+      const reopened = parseObsidianRecipeMarkdown(readFileSync(target, 'utf8'), 'cochinita.md', 'Recipes/cochinita.md');
+      const block = decodeCodexNutrition(reopened.codexNutrition);
+      expect(block.kind).toBe('v5');
+      const reopenedAdapted = adaptRecipe(reopened);
+      if (block.kind !== 'v5' || !reopenedAdapted.ok) throw new Error('reopen failed');
+      const hydrated = hydrateWorkingReview({ session: SESSION, recipeKey: reopenedAdapted.recipe.recipe_key, baseServings: 8, adapted: reopenedAdapted.recipe.adapted, instructions: reopened.instructions.map(step => step.text), rows: buildReviewRows(SESSION, reopenedAdapted.recipe.adapted), savedBlock: block.value });
+      expect(hydrated?.aiNutrition?.contributions).toEqual(checked.contributions);
+      expect(hydrated?.aiNutrition?.contributions[8].weight_grams).toBe(0);
+      expect(hydrated?.aiNutrition?.contributions[8]).toMatchObject({ disposition: 'excluded', exclusion_role: 'cooking_wrapper' });
+      expect(reopened.ingredients).toEqual(recipe.ingredients);
+      expect(reopened.instructions).toEqual(recipe.instructions);
+      expect(block.value.nutrients.calories?.amount).toBe(330);
+      expect(block.value.servings).toBe(8);
+      expect(reopened.nutrition?.fiber).toBeUndefined();
+      expect(readdirSync(join(directory, 'Recipes'))).toEqual(['cochinita.md']);
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  it('applies accepted Guacamole onion AI nutrition through a disposable Vault and reopens it', async () => {
+    const recipe = obsidianRecipe(GUACAMOLE_LINES.map(structured), { title: 'Guacamole', servings: 4, filePath: 'Recipes/Guacamole.md' });
+    const reviewed = buildReviewed(SESSION, recipe, ['calories', 'protein']);
+    const adaptation = adaptRecipe(recipe);
+    expect(adaptation.ok).toBe(true);
+    if (!adaptation.ok) return;
+    const raw = adaptation.recipe.adapted.map((line, index) => ({
+      line_ref: line.line_ref,
+      ingredient: GUACAMOLE_LINES[index],
+      quantity_basis: `Authored quantity: ${GUACAMOLE_LINES[index]}`,
+      weight_grams: 40 + index * 10,
+      classification: 'ai_estimate',
+      nutrients: { calories: { amount: 15 + index, unit: 'kcal' }, protein: { amount: 0.5, unit: 'g' } },
+      unknown_nutrients: ['vitamin_b12'],
+      assumptions: [`Estimated edible weight from a typical household amount for ${GUACAMOLE_LINES[index]}.`],
+      confidence: 'medium',
+      sources: [],
+    }));
+    const validated = validateAiNutrientContributions(raw, {
+      recipe_digest: reviewed.preview.ingredient_digest,
+      line_refs: adaptation.recipe.adapted.map((line) => line.line_ref),
+    });
+    expect(validated.ok).toBe(true);
+    if (!validated.ok) return;
+    let state = phase4Reducer(reviewed.state, {
+      type: 'accept_ai_nutrition', recipeKey: reviewed.state.recipeKey as string,
+      servings: reviewed.state.baseServings, contributions: validated.contributions,
+    });
+    const combined = combineAiContributionsWithPreview(reviewed.preview, validated.contributions);
+    const onionRef = adaptation.recipe.adapted[2]?.line_ref;
+    expect(combined.unresolved.some((line) => line.line_ref === onionRef)).toBe(false);
+    state = phase4Reducer(state, { type: 'preview_succeeded', seq: state.operationSeq, recipeKey: state.recipeKey as string, preview: combined });
+
+    // This in-memory Vault is disposable and uses the production Apply,
+    // Markdown serialization, parser, schema validation, and review hydration.
+    const vault = makeVault();
+    const applied = await apply({ recipe, state, preview: combined }, { write: vault.write, readBack: vault.readBack });
+    expect(failureCodeOf(applied)).toBe('ok');
+    expect(vault.writes).toHaveLength(1);
+    const markdown = await vault.readBack(vault.writes[0]);
+    expect(markdown).toContain('classification: ai_estimate');
+    expect(markdown).toContain('Estimated edible weight from a typical household amount for 1/2 white onion, finely diced.');
+    const reopened = parseObsidianRecipeMarkdown(markdown, 'Guacamole.md', 'Recipes/Guacamole.md');
+    const savedPresentation = resolveRecipeNutritionPresentation(reopened);
+    expect(savedPresentation.kind).toBe('advanced_saved');
+    expect(savedPresentation.advanced_resolved_count).toBe(7);
+    expect(savedPresentation.advanced_ingredient_count).toBe(7);
+    expect(savedPresentation.advanced_unresolved_count).toBe(0);
+    expect(deriveAdvancedCompactNutrition(savedPresentation)?.calories).toBeDefined();
+    const decoded = decodeCodexNutrition(reopened.codexNutrition);
+    const reopenedAdaptation = adaptRecipe(reopened);
+    expect(decoded.kind).toBe('v5');
+    expect(reopenedAdaptation.ok).toBe(true);
+    if (decoded.kind !== 'v5' || !reopenedAdaptation.ok) return;
+    const reopenedReview = hydrateWorkingReview({
+      session: SESSION,
+      recipeKey: reopenedAdaptation.recipe.recipe_key,
+      baseServings: reopenedAdaptation.recipe.base_servings,
+      adapted: reopenedAdaptation.recipe.adapted,
+      rows: buildReviewRows(SESSION, reopenedAdaptation.recipe.adapted),
+      savedBlock: decoded.value,
+    });
+    expect(reopenedReview?.aiNutrition?.contributions).toHaveLength(7);
+    const reopenedOnion = reopenedReview?.aiNutrition?.contributions.find((line) => line.line_ref === onionRef);
+    expect(reopenedOnion).toMatchObject({ classification: 'ai_estimate', weight_grams: 60, unknown_nutrients: ['vitamin_b12'] });
+    expect(reopenedOnion?.assumptions[0]).toContain('1/2 white onion, finely diced');
+    const tomatoRef = adaptation.recipe.adapted[4]?.line_ref;
+    const reopenedTomato = reopenedReview?.aiNutrition?.contributions.find((line) => line.line_ref === tomatoRef);
+    expect(reopenedTomato).toMatchObject({ classification: 'ai_estimate', weight_grams: 80, unknown_nutrients: ['vitamin_b12'] });
+  });
+
+  it('applies, saves, and reopens an AI estimate beside authenticated USDA nutrition', async () => {
+    const recipe = obsidianRecipe([structured(FLOUR_LINE), structured('2 tbsp achiote paste')]);
+    const reviewed = buildReviewed(SESSION, recipe, ['calories', 'protein']);
+    const aiLine = reviewed.preview.unresolved[0];
+    expect(aiLine).toBeDefined();
+    if (!aiLine) return;
+    const raw = [{
+      line_ref: aiLine.line_ref, ingredient: '2 tbsp achiote paste', quantity_basis: '2 tablespoons prepared paste',
+      weight_grams: 30, classification: 'ai_estimate', confidence: 'medium',
+      assumptions: ['Prepared paste is estimated from a typical two-tablespoon amount.'], sources: [],
+      unknown_nutrients: ['vitamin_b12'],
+      nutrients: { calories: { amount: 36, unit: 'kcal' }, protein: { amount: 1.2, unit: 'g' } },
+    }];
+    const validated = validateAiNutrientContributions(raw, { recipe_digest: reviewed.preview.ingredient_digest, line_refs: [aiLine.line_ref] });
+    expect(validated.ok).toBe(true);
+    if (!validated.ok) return;
+    let state = phase4Reducer(reviewed.state, { type: 'accept_ai_nutrition', recipeKey: reviewed.state.recipeKey as string, servings: reviewed.state.baseServings, contributions: validated.contributions });
+    const combined = combineAiContributionsWithPreview(reviewed.preview, validated.contributions);
+    state = phase4Reducer(state, { type: 'preview_succeeded', seq: state.operationSeq, recipeKey: state.recipeKey as string, preview: combined });
+    const vault = makeVault();
+    const result = await apply({ recipe, state, preview: combined }, { write: vault.write, readBack: vault.readBack });
+    expect(failureCodeOf(result)).toBe('ok');
+    if (!result.ok) return;
+    expect(vault.writes).toHaveLength(1);
+    const savedMarkdown = await vault.readBack(vault.writes[0]);
+    expect(savedMarkdown).toContain('schema: 5');
+    expect(savedMarkdown).toContain('classification: ai_estimate');
+    const reopened = parseObsidianRecipeMarkdown(savedMarkdown, vault.writes[0].fileName, vault.writes[0].filePath);
+    expect(reopened.codexNutrition).toMatchObject({ schema: 5, servings: 2, ai_contributions: [{ classification: 'ai_estimate', line_ref: aiLine.line_ref, assumptions: ['Prepared paste is estimated from a typical two-tablespoon amount.'], unknown_nutrients: ['vitamin_b12'] }] });
+    const reopenedAdaptation = adaptRecipe(reopened);
+    expect(reopenedAdaptation.ok).toBe(true);
+    const decoded = decodeCodexNutrition(reopened.codexNutrition);
+    if (!reopenedAdaptation.ok || decoded.kind !== 'v5') return;
+    const reopenedReview = hydrateWorkingReview({
+      session: SESSION,
+      recipeKey: reopenedAdaptation.recipe.recipe_key,
+      baseServings: reopenedAdaptation.recipe.base_servings,
+      adapted: reopenedAdaptation.recipe.adapted,
+      rows: buildReviewRows(SESSION, reopenedAdaptation.recipe.adapted),
+      savedBlock: decoded.value,
+    });
+    expect(reopenedReview?.aiNutrition?.contributions).toEqual(validated.contributions);
+    expect(decoded.kind).toBe('v5');
+    if (decoded.kind === 'v5') {
+      expect(decoded.value.nutrients.calories?.amount).toBeCloseTo((reviewed.preview.totals.calories?.amount ?? 0) + 36, 6);
+      expect(decoded.value.nutrients.protein?.amount).toBeCloseTo((reviewed.preview.totals.protein?.amount ?? 0) + 1.2, 6);
+    }
+  });
+
   it('creates a new block when the recipe has none', async () => {
     const recipe = obsidianRecipe([structured(FLOUR_LINE)]);
     const reviewed = buildReviewed(SESSION, recipe, ['calories', 'protein']);
@@ -502,7 +688,7 @@ describe('phase 5B — forged input cannot cause a write', () => {
 
 describe('phase 5B — existing block protection', () => {
   it('fails closed and preserves an unknown future schema', async () => {
-    const future = { schema: 4, basis: 'total', futureField: { nested: [1, 2, 3] } };
+    const future = { schema: 6, basis: 'total', futureField: { nested: [1, 2, 3] } };
     const before = JSON.stringify(future);
     const recipe = obsidianRecipe([structured(FLOUR_LINE)], { frontmatter: { codex_nutrition: future } });
     const reviewed = buildReviewed(SESSION, recipe, ['calories', 'protein']);

@@ -143,12 +143,18 @@ describe('fail closed — Blue Cheese Smashburgers fixture', () => {
     }
   });
 
-  it('6. unsalted butter cannot receive a salted-butter profile', () => {
+  it('6. unsalted butter never receives a salted-butter profile', () => {
     const det = estimateDeterministicNutrition(['57 g unsalted butter']);
     const c = det.contributions[0];
-    expect(c.matchedFoodId).toBeUndefined();
-    expect(c.resolved).toBe(false);
-    expect(det.totals.sodium).toBe(0);
+    // If it resolves at all it must be the UNSALTED identity — never the salted
+    // record (whose sodium differs by orders of magnitude).
+    if (c.matchedFoodId !== undefined) {
+      expect(c.matchedFoodId).toBe('butter_unsalted');
+    }
+    // The salted profile (≈643 mg/100 g) would give ≈366 mg for 57 g; the
+    // unsalted record gives ≈6 mg. Anything above 10 mg means the salted
+    // profile leaked into an unsalted line.
+    expect(det.totals.sodium).toBeLessThan(10);
   });
 
   it('7. 1 cup bread flour is not resolved as bread or a bun', () => {

@@ -750,7 +750,7 @@ describe('AI-5F — one request, one authority attempt, no retry', () => {
     // No second authority seam and no second gate REGISTRATION per route. After
     // 9B-2C there are seven GATED ROUTES, all composed from the same single
     // server-owned authority and the same closed four-feature vocabulary.
-    expect([...APP_SOURCE.matchAll(/requireNutritionProductFeature\(/g)]).toHaveLength(8);
+    expect([...APP_SOURCE.matchAll(/requireNutritionProductFeature\(/g)]).toHaveLength(9);
     expect(APP_SOURCE).not.toContain('"ai_recipe_context_application"');
   });
 });

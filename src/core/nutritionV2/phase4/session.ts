@@ -446,6 +446,8 @@ export function recomputeReviewedNutrition(
       return { ok: false, failure: phase4Failure(selectionReadFailure(householdPortions)) };
     }
 
+    const aiEstimates = readSelectionField(state, 'aiEstimates');
+    if (!aiEstimates.ok) return { ok: false, failure: phase4Failure(selectionReadFailure(aiEstimates)) };
     const scope = readStateNutrientScope(state);
 
     const rows = buildReviewRows(session, adapted.adapted as ReadonlyArray<AdaptedIngredient>);
@@ -461,6 +463,7 @@ export function recomputeReviewedNutrition(
       countPortions: countPortions.value,
       userMasses: userMasses.value,
       householdPortions: householdPortions.value,
+      aiEstimates: aiEstimates.value,
       basis: 'entire_recipe',
       selectedServings: adapted.base_servings,
       preview: null,

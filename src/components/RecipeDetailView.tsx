@@ -29,6 +29,7 @@ import {
   Trash2,
   BrainCircuit,
   Search,
+  MessageCircle,
 } from 'lucide-react';
 import { ObsidianRecipe, ParsedIngredient, VaultNote, RecipeNutrition } from '../types';
 import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
@@ -46,6 +47,7 @@ import {
   type AdvancedNutritionBundleUiStatus,
   type AdvancedNutritionAiAvailability,
 } from './AdvancedNutritionCard';
+import { useShiso } from '../application-ui/shisoEntryPoints';
 import { RecipeNutritionSection } from './RecipeNutritionSection';
 import type { AdvancedNutritionSession } from '../core/nutritionV2/phase4';
 import {
@@ -132,6 +134,14 @@ export function RecipeDetailView({
   onEstimateMassesWithAi,
   onReviewRecipeContextWithAi,
 }: RecipeDetailViewProps) {
+  React.useLayoutEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+    setCurrentServings(recipe.servings || 4);
+    setCheckedIngredients({});
+  }, [recipe.id]);
+
+  // SHISO recipe entry point (see the button below).
+  const shiso = useShiso();
   const [currentServings, setCurrentServings] = useState<number>(recipe.servings || 4);
   const [activeViewMode, setActiveViewMode] = useState<'visual' | 'markdown'>('visual');
   const [checkedIngredients, setCheckedIngredients] = useState<Record<number, boolean>>({});
@@ -333,6 +343,19 @@ export function RecipeDetailView({
           >
             <Download className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Export</span>
+          </button>
+
+          {/* SHISO recipe entry point — supplies THIS recipe as context to the
+              single Shiso conversation. Read-only; it changes nothing here. */}
+          <button
+            id="recipe-shiso-btn"
+            data-testid="recipe-shiso-entry"
+            onClick={() => shiso.open('recipe')}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-teal-500/30 bg-teal-500/10 text-teal-300 hover:bg-teal-500/20 text-xs font-medium transition-colors"
+            title="Ask Shiso about this recipe"
+          >
+            <MessageCircle className="w-3.5 h-3.5 text-teal-400" />
+            <span className="hidden sm:inline">Ask Shiso</span>
           </button>
 
           {/* Recipe Card Studio Button */}

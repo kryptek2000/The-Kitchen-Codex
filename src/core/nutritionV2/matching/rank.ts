@@ -253,6 +253,17 @@ function evaluate(
   entry: RankableEntry
 ): Evaluated {
   const candidateTokens = entry.normalized_tokens;
+  // Preparation overlap cannot establish food identity. Mechanically separated
+  // meat is a manufactured meat form, never a candidate for separated eggs.
+  if (candidateTokens.includes('mechanically') &&
+      !query.tokens.includes('mechanically')) return NO_MATCH;
+  if (candidateTokens.includes('juice') && !projection.form_tokens.includes('juice')) return NO_MATCH;
+  // Explicit material constraints are mandatory, including absence of a
+  // requested form. Do not offer contradictory raw/cooked, salt, or juice foods.
+  if (qualifierOppositionCount(candidateTokens, projection) > 0 ||
+      missingQualifierTokenCount(candidateTokens, projection) > 0 ||
+      missingFormTokenCount(candidateTokens, projection) > 0) return NO_MATCH;
+
   const identityTokens = projection.food_tokens;
 
   if (identityTokens.length === 0 || !anchorsSatisfied(projection, candidateTokens)) {

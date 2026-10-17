@@ -44,7 +44,7 @@
  * helpers used by the deterministic ranking and confidence contract.
  */
 
-export const QUERY_PROJECTION_VERSION = 'usda_query_projection_v10';
+export const QUERY_PROJECTION_VERSION = 'usda_query_projection_v11';
 
 /**
  * Optional, bounded Phase 1 metadata that a caller can supply when it already
@@ -140,6 +140,8 @@ export interface IngredientQueryProjection {
  * salted/unsalted, whole/skim, ...) are deliberately NOT in this set.
  */
 const PREPARATION_QUALIFIERS: ReadonlySet<string> = new Set([
+  'separated',
+  'ripe',
   'sliced',
   'slice',
   'slices',
@@ -163,6 +165,7 @@ const PREPARATION_QUALIFIERS: ReadonlySet<string> = new Set([
   'seeded',
   'cored',
   'shucked',
+  'husked',
   'julienned',
   'cubed',
   'cubing',
@@ -1818,7 +1821,7 @@ export function projectQueryText(
   text: string,
   context?: QueryProjectionContext
 ): IngredientQueryProjection {
-  const normalized = String(text).trim();
+  const normalized = String(text).trim().replace(/\bjuiced\b/g, 'juice');
   const measurementTokens: string[] = [];
 
   const withoutParens = stripParentheticals(normalized);
@@ -2362,6 +2365,21 @@ export function unrequestedMaterialVariantCount(
     if (requestedList.some((requestedToken) => tokensEquivalent(requestedToken, token))) continue;
     count += 1;
   }
+
+  // USDA meat records commonly split a cut into `separable lean only` and
+  // `separable lean and fat`. Treat that composition as material: a bare cut
+  // (or a query naming only one side) cannot silently inherit the other. An
+  // explicitly requested lean-only / lean-and-fat identity remains eligible.
+  const requestsLean = requested.has('lean') || projection.qualifier_tokens.includes('lean');
+  const requestsFat = requested.has('fat') || projection.qualifier_tokens.includes('fat');
+  const hasLean = candidateTokens.includes('lean');
+  const hasFat = candidateTokens.includes('fat');
+  const hasOnly = candidateTokens.includes('only');
+  const leanOnly = hasLean && hasOnly;
+  const leanAndFat = hasLean && hasFat;
+  if ((leanOnly || leanAndFat) && !requestsLean && !requestsFat) count += 1;
+  if (leanOnly && requestsFat) count += 1;
+  if (leanAndFat && requestsLean && !requestsFat) count += 1;
   return count;
 }
 

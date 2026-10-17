@@ -66,7 +66,7 @@ import { CALCULATION_VERSION, type Phase3Failure } from './types';
  * so the version is bumped and any persisted count-portion selection bound to the
  * old requirement is correctly refused as `stale` and re-derived by the user.
  */
-export const COUNT_PORTION_VERSION = 'usda_count_portion_v3';
+export const COUNT_PORTION_VERSION = 'usda_count_portion_v4';
 
 /** Bounded ingredient count requirement derived from the parsed ingredient. */
 export interface CountRequirement {
@@ -183,6 +183,15 @@ export interface CountPortionSelection {
  * deliberately NOT count units) never gain a count conversion from Phase 1.
  */
 const BASE_COUNT_UNIT_TOKENS: Readonly<Record<string, string>> = Object.freeze({
+  // Whole-food nouns denote one edible item of the already matched food.
+  // These do not authorize slices, RACC amounts, or unspecified package sizes.
+  fruit: 'item', fruits: 'item', pepper: 'item', peppers: 'item',
+  avocado: 'item', avocados: 'item', onion: 'item', onions: 'item',
+  tomato: 'item', tomatoes: 'item', lime: 'item', limes: 'item',
+  lemon: 'item', lemons: 'item', apple: 'item', apples: 'item',
+  potato: 'item', potatoes: 'item', carrot: 'item', carrots: 'item',
+  jalapeno: 'item', jalapenos: 'item',
+  yields: 'yield', yield: 'yield',
   serving: 'serving',
   servings: 'serving',
   egg: 'egg',
@@ -402,6 +411,7 @@ export function extractCountIdentity(
 /** Canonical count unit inferred from a food's head noun, or null. */
 function inferUnitFromIdentityTokens(tokens: ReadonlyArray<string>): string | null {
   if (tokens.length === 0) return null;
+  if (tokens.includes('juice') && tokens.some(t => ['lime', 'lemon', 'orange'].includes(t))) return 'yield';
   const head = tokens[tokens.length - 1];
   return canonicalCountUnit(head);
 }

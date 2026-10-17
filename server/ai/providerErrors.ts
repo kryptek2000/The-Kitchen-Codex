@@ -12,12 +12,15 @@
 
 import { redactSecrets } from "../providerDiagnostics.js";
 
+export type StructuredResponseFailure = 'output_truncated' | 'refusal' | 'tool_call_only' | 'content_parts_unsupported' | 'empty_response' | 'schema_mismatch' | 'malformed_json';
+
 /** Normalized provider error categories. */
 export type ProviderErrorCode =
   | "AUTH"
   | "QUOTA"
   | "RATE_LIMIT"
   | "UNAVAILABLE"
+  | "NETWORK"
   | "TIMEOUT"
   | "UNSUPPORTED_CAPABILITY"
   | "INVALID_RESPONSE"
@@ -36,8 +39,10 @@ export const FALLBACK_ELIGIBLE_ERROR_CODES: ReadonlySet<ProviderErrorCode> = new
 ]);
 
 export interface ProviderErrorContext {
+  responseFailure?: StructuredResponseFailure;
   providerId?: string;
   model?: string;
+  status?: number;
 }
 
 /** A sanitized, serializable diagnostic describing a failed provider attempt. */
@@ -58,6 +63,7 @@ export interface ProviderDiagnostic {
  */
 export class ProviderOperationError extends Error {
   readonly code: ProviderErrorCode;
+  readonly responseFailure?: StructuredResponseFailure;
   readonly providerId?: string;
   readonly model?: string;
   readonly status?: number;
@@ -67,8 +73,10 @@ export class ProviderOperationError extends Error {
     super(message || code);
     this.name = "ProviderOperationError";
     this.code = code;
+    if (ctx.responseFailure) this.responseFailure = ctx.responseFailure;
     if (ctx.providerId) this.providerId = ctx.providerId;
     if (ctx.model) this.model = ctx.model;
+    if (typeof ctx.status === "number") this.status = ctx.status;
     if (cause !== undefined) {
       // DEFENSE-IN-DEPTH (BYOK-5F): store the internal cause as a genuinely
       // NON-ENUMERABLE own property so `Object.keys`, JSON serialization, object
@@ -105,9 +113,19 @@ export function classifyProviderError(error: unknown): ProviderErrorCode {
   const name = typeof err["name"] === "string" ? err["name"] : "";
   const message = typeof err["message"] === "string" ? err["message"] : String(error ?? "");
   const status = numericStatus(err);
+  const cause = typeof err["cause"] === "object" && err["cause"] !== null
+    ? err["cause"] as Record<string, unknown>
+    : {};
+  const transportText = `${String(err["code"] ?? "")} ${String(cause["code"] ?? "")} ${message}`;
 
   // Timeout / aborted request.
   if (name === "AbortError" || /timeout|timed out|aborted/i.test(message)) return "TIMEOUT";
+
+  // Network/DNS failures are kept as a bounded category. Raw causes are not
+  // retained in the normalized error or returned to callers.
+  if (/\b(ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|EPIPE)\b|fetch failed|network error|socket hang up|dns/i.test(transportText)) {
+    return "NETWORK";
+  }
 
   // Auth-like signals.
   if (status === 401 || status === 403) return "AUTH";
@@ -164,7 +182,7 @@ export function normalizeProviderError(
   if (error instanceof ProviderOperationError) {
     // Enrich with context if it was previously missing.
     if (!error.providerId && ctx.providerId) {
-      return new ProviderOperationError(error.code, error.message, { ...ctx, model: error.model ?? ctx.model }, error);
+      return new ProviderOperationError(error.code, error.message, { ...ctx, model: error.model ?? ctx.model, responseFailure: error.responseFailure }, error);
     }
     return error;
   }

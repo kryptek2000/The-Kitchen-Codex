@@ -48,6 +48,23 @@ export function canonicalToObsidianRecipe(
   const difficulty: 'Easy' | 'Medium' | 'Hard' =
     canonical.metadata.difficulty === 'Unspecified' ? 'Medium' : canonical.metadata.difficulty;
 
+  // Top-level legacy `calories` is a PER-SERVING value (the Visual Recipe Editor
+  // reads/writes it as per-serving, as does source-metadata recovery). The
+  // canonical nutrition block stores WHOLE-RECIPE TOTALS whenever it carries a
+  // numeric serving denominator, so convert here. Without a denominator the
+  // block is already a legacy per-serving value and is passed through unchanged.
+  const nutrition = canonical.nutrition;
+  const legacyCalories = (() => {
+    if (!nutrition || nutrition.calories === undefined || nutrition.calories === null) return undefined;
+    const calories = nutrition.calories;
+    const base = nutrition.servings;
+    if (typeof base === 'number' && Number.isFinite(base) && base > 0) {
+      const perServing = Math.round(calories / base);
+      return Number.isFinite(perServing) ? perServing : calories;
+    }
+    return calories;
+  })();
+
   return {
     id: canonical.identity.id,
     fileName: canonical.identity.fileName,
@@ -63,7 +80,7 @@ export function canonicalToObsidianRecipe(
     servings: canonical.metadata.servings ?? undefined,
     difficulty,
     rating: canonical.metadata.rating,
-    calories: canonical.nutrition?.calories ?? undefined,
+    calories: legacyCalories,
     nutrition: canonical.nutrition
       ? {
           calories: canonical.nutrition.calories ?? undefined,

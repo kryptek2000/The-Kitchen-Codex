@@ -92,7 +92,7 @@ const Harness: React.FC = () => {
       },
     });
     if (result.ok) {
-      return { ok: true, mode: result.result.mode, message: 'Advanced Nutrition was saved to your recipe.' };
+      return { ok: true, mode: result.result.mode, message: 'Nutrition was applied to the working recipe. It is not saved to your Vault yet.' };
     }
     return { ok: false, message: 'Advanced Nutrition could not be applied.' };
   };
@@ -114,7 +114,7 @@ describe('post-Apply reconciliation', () => {
     await openAndCalculate();
     fireEvent.click(screen.getByRole('button', { name: /Apply to recipe/i }));
     fireEvent.click(await screen.findByRole('button', { name: /Confirm Apply/i }));
-    await screen.findByText(/was saved to your recipe/i);
+    await screen.findByText(/not saved to your Vault yet/i);
 
     // Saved block is authoritative; no duplicate identical unsaved panel.
     await waitFor(() => expect(screen.getByTestId('advanced-saved-complete')).toBeTruthy());
