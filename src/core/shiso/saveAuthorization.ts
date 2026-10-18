@@ -53,15 +53,17 @@ export const SHISO_SAVE_COMMAND_MAX_CHARS = 300;
  */
 const INJECTION_SHAPE = /(\bignore\s+(all\s+|the\s+)?(previous|prior|above)\b)|(\b(system|assistant|developer|tool)\s*[:\-–>])|(\byou\s+are\s+now\b)|(\bnew\s+instructions?\b)|(\bdisregard\s+(all\s+|the\s+)?instructions?\b)/i;
 
-/** Explicit negation of a save. Checked BEFORE any positive pattern. */
-const SAVE_NEGATION = /(\b(do\s+not|don'?t|does\s+not|doesn'?t|never|no)\s+(?:you\s+)?(?:yet\s+|actually\s+|really\s+)?save\b)|(\bsave\s+(?:it\s+|this\s+|them\s+)?(?:later|for\s+later)\b)|(\bwithout\s+saving\b)|(\bhold\s+off\s+on\s+sav(?:e|ing)\b)|(\bwait\s+to\s+save\b)|(\bnot\s+save\b)/i;
+/** Explicit negation/contradiction of saving. Checked BEFORE any positive form. */
+const SAVE_NEGATION = /\b(?:do|does|did|will|would|should|could|can|must)\s+not(?:\s+\w+){0,5}\s+save\b|\b(?:don['’]t|doesn['’]t|didn['’]t|won['’]t|wouldn['’]t|shouldn['’]t|couldn['’]t|can['’]t|cannot|never)(?:\s+\w+){0,5}\s+save\b|\bno\s+(?:(?:need|reason|desire)\s+to\s+)?save\b|\bsave\s+(?:it\s+|this\s+|them\s+)?(?:later|for\s+later)\b|\bwithout\s+saving\b|\bhold\s+off\s+on\s+sav(?:e|ing)\b|\bwait\s+to\s+save\b|\bnot\s+save\b/i;
 
 /** Questions never authorize a write, including polite questions with no `?`. */
 const SAVE_QUESTION = /\?|\b(?:can|could|would|will|should|do|does|is|are)\s+(?:i|you|we|it|this|that)\b/i;
 /** Requests for instructions or explanations mention saving but do not authorize it. */
 const SAVE_INFORMATION_REQUEST = /\b(?:how\s+(?:do|can|should|would)\s+(?:i|you|we)|how\s+to\s+save|explain|describe|teach\s+me|tell\s+me|show\s+me|want\s+to\s+know|wonder(?:ing)?)\b/i;
-/** Covers negation/uncertainty with intervening words, e.g. "do not want to save". */
-const SAVE_WANT_NEGATION = /\b(?:do\s+not|don't|does\s+not|doesn't)\s+(?:want|wish|need)\s+to\s+save\b|\bno\s+need\s+to\s+save\b|\b(?:maybe|perhaps|possibly|might|may|not\s+sure|uncertain)\b[\s\S]{0,50}\b(?:save|saving)\b/i;
+/** Quoted save commands are content to discuss, never authorization. */
+const QUOTED_SAVE_COMMAND = /["“][^"”]{0,300}\bsave\b[^"”]{0,300}["”]|[‘'][^‘’']{0,300}\bsave\b[^‘’']{0,300}[’']/i;
+/** Uncertainty or desire statements are not affirmative instructions. */
+const SAVE_AMBIGUITY = /\b(?:maybe|perhaps|possibly|might|may|not\s+sure|uncertain|if\s+you\s+think|if\s+it\s+makes\s+sense)\b[\s\S]{0,80}\b(?:save|saving)\b|\b(?:want|would\s+like|wish|need)\s+to\s+save\b/i;
 
 /**
  * The closed, conservative command vocabulary. Every pattern requires an
@@ -72,16 +74,14 @@ const SAVE_WANT_NEGATION = /\b(?:do\s+not|don't|does\s+not|doesn't)\s+(?:want|wi
  * A statement that merely MENTIONS saving ("the recipe saves well", "save time")
  * does not match an imperative form.
  */
+const SAVE_OBJECT = '(?:my\\s+|the\\s+|these\\s+|those\\s+|all\\s+|your\\s+)?(?:changes?|edits?|corrections?|recipe|version|copy|work|it|this|them|everything|all)';
+const SAVE_DESTINATION = '(?:\\s+(?:now|to\\s+(?:the|my)\\s+vault))?';
+/** Each form is anchored: a save-looking substring inside another message grants nothing. */
 const SAVE_COMMANDS: ReadonlyArray<RegExp> = [
-  // "save" + optional determiner + a direct object of the deferred work/recipe.
-  /\bsave\s+(?:my\s+|the\s+|these\s+|those\s+|all\s+|your\s+)?(?:changes|change|edits|edit|corrections|correction|recipe|version|copy|work|it|this|them|everything|all)\b/i,
-  // "save to the vault" / "save it to my vault" / "save now".
-  /\bsave\s+(?:it\s+|this\s+|them\s+|everything\s+)?(?:now|to\s+(?:the|my)\s+vault)\b/i,
-  // Affirmative continuations of a pending save question.
-  /^\s*(?:yes|yep|yeah|ok|okay|sure)[,.\s]+(?:please\s+)?save\b/i,
-  /\bplease\s+save\b/i,
-  /\bgo\s+ahead\s+and\s+save\b/i,
-  /\bsave\s+(?:the\s+)?(?:working\s+)?(?:copy|version)\b/i,
+  new RegExp(`^\\s*(?:please\\s+)?save\\s+${SAVE_OBJECT}${SAVE_DESTINATION}[.!]?\\s*$`, 'i'),
+  /^\s*please\s+save[.!]?\s*$/i,
+  /^\s*save\s+(?:now|to\s+(?:the|my)\s+vault)[.!]?\s*$/i,
+  /^\s*(?:go\s+ahead(?:\s+and)?|yes|yep|yeah|ok|okay|sure)[,.\s]+(?:please\s+)?save(?:\s+(?:my\s+|the\s+|these\s+|those\s+|all\s+|your\s+)?(?:changes?|edits?|corrections?|recipe|version|copy|work|it|this|them|everything|all))?(?:\s+(?:now|to\s+(?:the|my)\s+vault))?[.!]?\s*$/i,
 ];
 
 /**
@@ -91,7 +91,9 @@ const SAVE_COMMANDS: ReadonlyArray<RegExp> = [
  * false positives would write the Vault without the user asking.
  */
 export function classifySaveIntent(message: string): ShisoSaveIntent {
-  const text = typeof message === 'string' ? message.trim() : '';
+  const text = typeof message === 'string'
+    ? message.normalize('NFKC').replace(/[\u2018\u2019\u02bc]/g, "'").replace(/\s+/g, ' ').trim()
+    : '';
   if (text.length === 0) return Object.freeze({ authorized: false, reason: 'empty_message' });
   if (text.length > SHISO_SAVE_COMMAND_MAX_CHARS) {
     return Object.freeze({ authorized: false, reason: 'message_too_long_for_save_command' });
@@ -102,11 +104,14 @@ export function classifySaveIntent(message: string): ShisoSaveIntent {
   if (SAVE_NEGATION.test(text)) {
     return Object.freeze({ authorized: false, reason: 'save_negated' });
   }
-  if (SAVE_WANT_NEGATION.test(text)) {
-    return Object.freeze({ authorized: false, reason: 'save_negated' });
-  }
   if (SAVE_INFORMATION_REQUEST.test(text)) {
     return Object.freeze({ authorized: false, reason: 'save_information_request' });
+  }
+  if (QUOTED_SAVE_COMMAND.test(text)) {
+    return Object.freeze({ authorized: false, reason: 'quoted_save_command' });
+  }
+  if (SAVE_AMBIGUITY.test(text)) {
+    return Object.freeze({ authorized: false, reason: 'ambiguous_save_intent' });
   }
   if (INJECTION_SHAPE.test(text)) {
     return Object.freeze({ authorized: false, reason: 'injection_shaped_content' });

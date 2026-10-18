@@ -201,9 +201,19 @@ describe('SHISO H-2 — ADVERSARIAL save authorization (existing unsaved working
   it.each([
     'Can you save my changes?',
     'How do I save the recipe?',
+    'How do I save my recipe?',
     'Explain how to save the recipe',
     'I do not want to save my changes',
     "I don't need to save my changes",
+    'I don’t want to save my changes',
+    'Do not ever save my changes',
+    "Don't save",
+    'Never save this',
+    "Please don't save yet",
+    '“Save my changes.”',
+    '‘Save my changes.’',
+    "Save my changes, but don't save them.",
+    'Maybe save my changes.',
     'Could you explain how to save my changes?',
   ])('does not persist when the user says: %s', async (message) => {
     const saves: ShisoSaveGrant[] = [];
