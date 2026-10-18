@@ -50,7 +50,6 @@ describe('H-2 save authorization — message classification', () => {
       'Please save.',
       'go ahead and save',
       'save everything',
-      'Can you save my changes?',
       'ok save',
     ]) {
       const intent = classifySaveIntent(message);
@@ -69,6 +68,12 @@ describe('H-2 save authorization — message classification', () => {
       'how do I save money on groceries',
       'no need to save',
       'I already saved it myself',
+      'Can you save my changes?',
+      'How do I save the recipe?',
+      'Explain how to save the recipe',
+      'I do not want to save my changes',
+      "I don't need to save my changes",
+      'Could you explain how to save my changes?',
     ]) {
       const intent = classifySaveIntent(message);
       expect(intent.authorized, message).toBe(false);

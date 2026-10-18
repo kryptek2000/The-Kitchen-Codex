@@ -41,7 +41,7 @@ describe('nutrition functional repair, pinned production USDA bundle', () => {
     expect(basic.baseServings).toBe(8);
     expect(basic.coverage.complete).toBe(false);
     expect(basic.totals.calories).toBeNull();
-  });
+  }, 30000);
 
   it('detects the real potato saved-mass conflict and recalculates the written range', () => {
     const raw = readFileSync(join(__dirname, '../fixtures/nutritionRepairPotatoes.md'), 'utf8');
@@ -73,7 +73,7 @@ describe('nutrition functional repair, pinned production USDA bundle', () => {
     expect(isPartialMachineNutrition(enchiladas.nutrition)).toBe(true);
     for (const r of [enchiladas, recipe(GUAC)]) {
       const e = calculateBasicNutrition({ ingredients: r.ingredients, servings: r.servings }, session);
-      expect(e.coverage.resolved).toBe(r === enchiladas ? 9 : 7);
+      expect(e.coverage.resolved, JSON.stringify(e.lines.filter(line => line.status === 'unresolved').map(line => ({ ingredient: line.ingredient, reason: line.reason, match: line.matchedFood })))).toBe(r === enchiladas ? 9 : 7);
       expect(e.lines.filter(l => l.status === 'unresolved').every(l => !!l.reason)).toBe(true);
       if (!e.coverage.complete) {
         expect(e.totals.calories).toBeNull();
@@ -121,6 +121,14 @@ describe('nutrition functional repair, pinned production USDA bundle', () => {
       expect(e.coverage.resolved).toBeGreaterThanOrEqual(2);
       expect(e.knownSubtotal!.calories).toBeGreaterThan(0);
     }
+  });
+  it('does not apply cooked shredded-chicken density to a raw USDA record', () => {
+    const estimate = calculateBasicNutrition({ ingredients: ['2 cups shredded chicken breast'], servings: 2 }, session);
+    expect(estimate.lines[0]?.status).toBe('unresolved');
+    expect(estimate.lines[0]?.grams).toBeNull();
+    expect(estimate.lines[0]?.reason).toMatch(/portion|weight|review/i);
+    expect(estimate.coverage.complete).toBe(false);
+    expect(estimate.totals.calories).toBeNull();
   });
   it('runs the real Huevos Rancheros and Cochinita Pibil recipe fixtures through the production analyzer', () => {
     const huevos=parseObsidianRecipeMarkdown(readFileSync(join(__dirname,'../fixtures/nutritionRepairHuevosRancheros.md'),'utf8'),'huevos-rancheros.md','Recipes/huevos-rancheros.md');

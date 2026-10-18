@@ -813,6 +813,22 @@ export function RecipeEditorModal({
             return next;
           });
         }
+      } else {
+        // A manual per-serving value entered before the recipe has a serving
+        // denominator is retained as a legacy per-serving value. The first
+        // later serving count will establish whole-recipe totals exactly once.
+        const numValue = value.trim() ? parseFloat(value.trim()) : undefined;
+        const key = fieldName === 'carbs' ? 'carbohydrates' : fieldName;
+        if (numValue !== undefined && Number.isFinite(numValue)) {
+          legacyNutritionNeedsServingBasis.current = true;
+          setNutritionTotals((prev) => ({ ...prev, [key]: numValue }));
+        } else if (value.trim() === '') {
+          setNutritionTotals((prev) => {
+            const next = { ...prev };
+            delete next[key];
+            return next;
+          });
+        }
       }
     },
     [servings],

@@ -227,4 +227,24 @@ describe('RecipeEditorModal — real Auto Recover interaction', () => {
     }
     expect(saved.rawMarkdown).not.toContain('nutrition:');
   });
+
+  it('keeps a manually entered nutrient when servings are entered afterward, through save and reopen', async () => {
+    const { network } = makeNetwork();
+    const onSave = vi.fn();
+    render(<RecipeEditorModal initialRecipe={makeRecipe(false)} network={network} onSave={onSave} onClose={() => {}} />);
+
+    fireEvent.change(screen.getByPlaceholderText('e.g. 32'), { target: { value: '20' } });
+    fireEvent.change(screen.getByPlaceholderText('e.g. 4'), { target: { value: '4' } });
+    expect(inputValue('e.g. 32')).toBe('20');
+    fireEvent.click(screen.getByText('Save Obsidian Note'));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+
+    const saved = onSave.mock.calls[0][0] as ObsidianRecipe;
+    expect(saved.nutrition?.servings).toBe(4);
+    expect(saved.nutrition?.protein).toBe(80);
+    const reopened = parseObsidianRecipeMarkdown(saved.rawMarkdown, saved.fileName, saved.filePath);
+    cleanup();
+    render(<RecipeEditorModal initialRecipe={reopened} network={network} onSave={vi.fn()} onClose={() => {}} />);
+    expect(inputValue('e.g. 32')).toBe('20');
+  });
 });

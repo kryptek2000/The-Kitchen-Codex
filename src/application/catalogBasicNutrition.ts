@@ -64,6 +64,17 @@ export function calculateCatalogBasicNutrition(input: BasicNutritionInput, sessi
       const quantityName = identity.core_tokens.filter(t => !identity.variety_tokens.includes(t)).join(' ');
       const ref = findFoodReference(p.name) ?? findFoodReference(quantityName);
       if (!ref) return item;
+      // A curated density carries a preparation state (notably raw chicken
+      // breast versus cooked shredded chicken). Do not apply it to a different
+      // or unstated USDA record state; identity may be valid while the mass
+      // conversion is not.
+      const referenceState = /\bcooked\b/i.test(ref.sourceNote ?? '') ? 'cooked'
+        : /\braw\b/i.test(ref.sourceNote ?? '') ? 'raw' : null;
+      const selectedDescription = analysis.rows[i]?.selected_description ?? '';
+      const selectedState = /\bcooked\b|\broasted\b|\bgrilled\b|\bbaked\b|\bfried\b|\bboiled\b/i.test(selectedDescription) ? 'cooked'
+        : /\braw\b/i.test(selectedDescription) ? 'raw' : null;
+      if ((referenceState === 'cooked' && selectedState !== 'cooked') ||
+          (referenceState === 'raw' && selectedState === 'cooked')) return item;
       const measurement = normalizeIngredientMeasurement({ amount: p.amount, unit: p.unit, name: p.name });
       const mass = resolveFoodMass(measurement, ref);
       const count = !p.unit ? getFoodCountWeight(ref, null) : undefined;

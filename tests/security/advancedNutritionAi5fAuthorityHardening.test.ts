@@ -153,7 +153,7 @@ const AUTHORED_RECIPE = {
 };
 const INSTRUCTIONS = [{ text: 'Garnish with parsley' }];
 
-/** The EXACT six AI-5B gates and nothing else. */
+/** The seven routes exercised by this AI-5F gate matrix. */
 const GATED_ROUTES: ReadonlyArray<readonly [string, string]> = [
   ['/api/nutrition/resolve-ingredients', 'ai_interpretation'],
   ['/api/nutrition/interpret-ingredients', 'ai_interpretation'],
@@ -161,6 +161,7 @@ const GATED_ROUTES: ReadonlyArray<readonly [string, string]> = [
   ['/api/nutrition/estimate-mass', 'ai_bounded_mass_estimation'],
   ['/api/nutrition/recipe-context', 'ai_recipe_context_review'],
   ['/api/nutrition/recipe-context/reconcile', 'ai_recipe_context_review'],
+  ['/api/shiso/nutrition', 'ai_interpretation'],
 ];
 
 function requestBody(path: string): unknown {
@@ -201,6 +202,8 @@ function requestBody(path: string): unknown {
         recipe: AUTHORED_RECIPE,
         instructions: INSTRUCTIONS,
       };
+    case '/api/shiso/nutrition':
+      return { recipe: { title: 'SHISO nutrition entitlement probe', servings: 1, ingredients: [{ line_ref: 'L1', text: '1 apple' }], instructions: [] } };
     default:
       return {
         wire: { request_version: 'nutrition_ai_recipe_context_v1', request_id: 'ai5f-context' },
@@ -747,10 +750,9 @@ describe('AI-5F — one request, one authority attempt, no retry', () => {
         forbidden.toLowerCase(),
       );
     }
-    // No second authority seam and no second gate REGISTRATION per route. After
-    // 9B-2C there are seven GATED ROUTES, all composed from the same single
-    // server-owned authority and the same closed four-feature vocabulary.
-    expect([...APP_SOURCE.matchAll(/requireNutritionProductFeature\(/g)]).toHaveLength(9);
+    // No second authority seam and no second gate REGISTRATION per route. The
+    // SHISO nutrition route joins the same server-owned authority and four-feature set.
+    expect([...APP_SOURCE.matchAll(/requireNutritionProductFeature\(/g)]).toHaveLength(10);
     expect(APP_SOURCE).not.toContain('"ai_recipe_context_application"');
   });
 });

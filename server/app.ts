@@ -1181,7 +1181,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // SHISO AI-first nutrient analysis. This is a bounded structured estimate,
   // kept separate from the deterministic USDA mass-estimate endpoint. Its
   // output carries no USDA identity and remains advisory until reviewed/applied.
-  app.post("/api/shiso/nutrition", requireAiAccessToken, textPricingGuard, shisoConversationRateLimiter, async (req, res) => {
+  app.post("/api/shiso/nutrition", requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccessAuthority, "ai_interpretation"), textPricingGuard, shisoConversationRateLimiter, async (req, res) => {
     const selection = parseTextSelectionHeader(req.headers);
     const result = await estimateRecipeNutrientsWithAi(req.body, selection);
     if (result.ok === true) return res.json(result);

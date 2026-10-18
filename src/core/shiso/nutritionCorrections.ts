@@ -41,6 +41,7 @@ import {
 } from '../nutritionV2/phase4';
 import type { LiveRowState } from '../nutritionV2/phase4/liveRow';
 import type { ShisoNutritionCorrectionUnresolved } from './protocol';
+import { getMeasurementKind, normalizeUnit } from '../../utils/measurements';
 
 export interface ShisoNutritionCorrection {
   readonly line_ref: string;
@@ -177,6 +178,13 @@ export function buildSupportedNutritionCorrections(
     entry: AdaptedIngredient,
     automatic: boolean,
   ): ShisoNutritionCorrection | undefined => {
+    // Count portions are dimensionally incompatible with authored volume/mass.
+    // Some catalog records expose count portions even when the recipe asks for
+    // cups or grams; those must never be reinterpreted as a single item.
+    const authoredUnit = normalizeUnit(entry.ingredient.unit);
+    if (authoredUnit && (getMeasurementKind(authoredUnit) === 'volume' || getMeasurementKind(authoredUnit) === 'mass')) {
+      return undefined;
+    }
     // The count review MUST receive the STRUCTURED ingredient (amount/unit/name),
     // exactly like the review UI: the count requirement is derived from the
     // authored quantity and unit, never from the raw line text.
@@ -286,8 +294,12 @@ export function buildSupportedNutritionCorrections(
         if (accepted !== undefined) break;
 
         // 2. Count portions — only when the line's OWN requirement is a count.
-        const counts = session.reviewCountPortions(entry.ingredient, alternative.fdc_id);
-        if (counts.ok && counts.review.applicable === true) {
+        const authoredUnit = normalizeUnit(entry.ingredient.unit);
+        const countDimensionAllowed = !authoredUnit || (getMeasurementKind(authoredUnit) !== 'volume' && getMeasurementKind(authoredUnit) !== 'mass');
+        const counts = countDimensionAllowed
+          ? session.reviewCountPortions(entry.ingredient, alternative.fdc_id)
+          : undefined;
+        if (counts?.ok && counts.review.applicable === true) {
           for (const candidate of counts.review.candidates) {
             if (!(candidate.gram_weight > 0)) continue;
             const hint = { unit: candidate.unit ?? null, size: candidate.size ?? null };

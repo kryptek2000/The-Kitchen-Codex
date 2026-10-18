@@ -385,11 +385,11 @@ describe('H-2 — deterministic authenticated corrections (Chicken Enchiladas Ve
     session = result.session as AdvancedNutritionSession;
   }, 300000);
 
-  function fixture() {
+  function fixture(lines: readonly string[] = ENCHILADAS) {
     const recipe = adaptRecipe({
       title: 'Chicken Enchiladas Verdes',
       servings: 6,
-      ingredients: ENCHILADAS.map(structured),
+      ingredients: lines.map(structured),
     } as never) as never as { recipe: { adapted: AdaptedIngredient[]; recipe_key: string } };
     const adapted = recipe.recipe.adapted;
     const analysis = analyzeRecipe(session, adapted, 6);
@@ -446,6 +446,19 @@ describe('H-2 — deterministic authenticated corrections (Chicken Enchiladas Ve
     expect(covered).toContain('6 corn tortillas');
     expect(covered).toContain('1 cup shredded Monterey Jack cheese');
     expect(covered).toContain('1/4 teaspoon ground cumin');
+  }, 240000);
+
+  it('never turns an authored cup quantity into a catalog chicken-count portion', () => {
+    const f = fixture();
+    const built = buildSupportedNutritionCorrections({ session, liveRows: f.liveRows, adapted: f.adapted, workingState: f.state });
+    const chicken = built.corrections.find((correction) => correction.label === '2 cups shredded chicken breast');
+    expect(chicken?.actions.some((action) => action.type === 'select_count_portion')).toBe(false);
+  }, 240000);
+
+  it('does not resolve 1 cup raw chicken breast as a single count portion', () => {
+    const f = fixture(['1 cup raw chicken breast']);
+    const built = buildSupportedNutritionCorrections({ session, liveRows: f.liveRows, adapted: f.adapted, workingState: f.state });
+    expect(built.corrections.flatMap((correction) => correction.actions).some((action) => action.type === 'select_count_portion')).toBe(false);
   }, 240000);
 
   it('is DETERMINISTIC: identical inputs produce identical corrections', () => {

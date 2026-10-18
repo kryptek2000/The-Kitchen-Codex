@@ -5,12 +5,14 @@ import { createApp } from '../../server/app';
 import { createDeploymentNutritionProductAccessAuthority } from '../../server/nutritionProductAccessAuthority';
 import { resetRateLimitersForTests } from '../../server/rateLimiter';
 import { runShisoTurn } from '../../server/shiso/conversationTurn';
+import * as aiNutrition from '../../server/shiso/aiNutrition';
 import { toInertValue, utf8ByteLength } from '../../src/core/nutritionV2/schema';
+import { BASIC_NUTRITION_PRODUCT_ACCESS, AI_ADVANCED_NUTRITION_PRODUCT_ACCESS } from '../../src/core/nutritionV2/nutritionProductAccess';
 
 vi.mock('../../server/shiso/conversationTurn', () => ({ runShisoTurn: vi.fn(async () => ({ ok: true, reply: 'mock' })) }));
 vi.mock('../../server/geminiClient', () => ({ getGemini: vi.fn(() => null) }));
 
-afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); resetRateLimitersForTests(); });
+afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); vi.restoreAllMocks(); resetRateLimitersForTests(); });
 
 async function withServer(run: (base: string, authority: { resolve: ReturnType<typeof vi.fn> }) => Promise<void>, trustProxy = '') {
   vi.stubEnv('AI_ENDPOINT_TOKEN', '');
@@ -74,6 +76,33 @@ describe('PR12 parameter tampering over real HTTP', () => {
         expect(await response.json()).toMatchObject({ ok: false });
       }
     });
+  });
+  it('gates SHISO nutrition for Basic and unavailable authority before the estimator', async () => {
+    const estimator = vi.spyOn(aiNutrition, 'estimateRecipeNutrientsWithAi').mockResolvedValue({ ok: true, result: 'estimated' } as never);
+    await withServer(async (base, authority) => {
+      authority.resolve.mockResolvedValue({ status: 'resolved', access: BASIC_NUTRITION_PRODUCT_ACCESS });
+      const basic = await post(base, '/api/shiso/nutrition', {});
+      expect(basic.status).toBe(403);
+      expect(await basic.json()).toMatchObject({ code: 'NUTRITION_AI_NOT_ENTITLED', aiAttempted: false });
+      expect(estimator).not.toHaveBeenCalled();
+
+      authority.resolve.mockResolvedValue({ status: 'unavailable' });
+      const unavailable = await post(base, '/api/shiso/nutrition', {});
+      expect(unavailable.status).toBe(503);
+      expect(await unavailable.json()).toMatchObject({ code: 'NUTRITION_PRODUCT_ACCESS_UNAVAILABLE', aiAttempted: false });
+      expect(estimator).not.toHaveBeenCalled();
+    });
+    estimator.mockRestore();
+  });
+  it('allows a legitimately entitled SHISO nutrition request to reach its estimator', async () => {
+    const estimator = vi.spyOn(aiNutrition, 'estimateRecipeNutrientsWithAi').mockResolvedValue({ ok: true, result: 'estimated' } as never);
+    await withServer(async (base, authority) => {
+      authority.resolve.mockResolvedValue({ status: 'resolved', access: AI_ADVANCED_NUTRITION_PRODUCT_ACCESS });
+      const response = await post(base, '/api/shiso/nutrition', {});
+      expect(response.status).toBe(200);
+      expect(estimator).toHaveBeenCalledTimes(1);
+    });
+    estimator.mockRestore();
   });
   it('rejects the malformed array/string inputs on the exact SHISO nutrition SARIF source', async () => {
     await withServer(async base => {

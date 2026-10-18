@@ -56,6 +56,13 @@ const INJECTION_SHAPE = /(\bignore\s+(all\s+|the\s+)?(previous|prior|above)\b)|(
 /** Explicit negation of a save. Checked BEFORE any positive pattern. */
 const SAVE_NEGATION = /(\b(do\s+not|don'?t|does\s+not|doesn'?t|never|no)\s+(?:you\s+)?(?:yet\s+|actually\s+|really\s+)?save\b)|(\bsave\s+(?:it\s+|this\s+|them\s+)?(?:later|for\s+later)\b)|(\bwithout\s+saving\b)|(\bhold\s+off\s+on\s+sav(?:e|ing)\b)|(\bwait\s+to\s+save\b)|(\bnot\s+save\b)/i;
 
+/** Questions never authorize a write, including polite questions with no `?`. */
+const SAVE_QUESTION = /\?|\b(?:can|could|would|will|should|do|does|is|are)\s+(?:i|you|we|it|this|that)\b/i;
+/** Requests for instructions or explanations mention saving but do not authorize it. */
+const SAVE_INFORMATION_REQUEST = /\b(?:how\s+(?:do|can|should|would)\s+(?:i|you|we)|how\s+to\s+save|explain|describe|teach\s+me|tell\s+me|show\s+me|want\s+to\s+know|wonder(?:ing)?)\b/i;
+/** Covers negation/uncertainty with intervening words, e.g. "do not want to save". */
+const SAVE_WANT_NEGATION = /\b(?:do\s+not|don't|does\s+not|doesn't)\s+(?:want|wish|need)\s+to\s+save\b|\bno\s+need\s+to\s+save\b|\b(?:maybe|perhaps|possibly|might|may|not\s+sure|uncertain)\b[\s\S]{0,50}\b(?:save|saving)\b/i;
+
 /**
  * The closed, conservative command vocabulary. Every pattern requires an
  * explicit imperative save directed at the application, e.g.:
@@ -89,8 +96,17 @@ export function classifySaveIntent(message: string): ShisoSaveIntent {
   if (text.length > SHISO_SAVE_COMMAND_MAX_CHARS) {
     return Object.freeze({ authorized: false, reason: 'message_too_long_for_save_command' });
   }
+  if (SAVE_QUESTION.test(text)) {
+    return Object.freeze({ authorized: false, reason: 'save_question' });
+  }
   if (SAVE_NEGATION.test(text)) {
     return Object.freeze({ authorized: false, reason: 'save_negated' });
+  }
+  if (SAVE_WANT_NEGATION.test(text)) {
+    return Object.freeze({ authorized: false, reason: 'save_negated' });
+  }
+  if (SAVE_INFORMATION_REQUEST.test(text)) {
+    return Object.freeze({ authorized: false, reason: 'save_information_request' });
   }
   if (INJECTION_SHAPE.test(text)) {
     return Object.freeze({ authorized: false, reason: 'injection_shaped_content' });

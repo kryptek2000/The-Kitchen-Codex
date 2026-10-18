@@ -262,6 +262,7 @@ const GATED_ROUTES: ReadonlyArray<readonly [string, string]> = [
   ['/api/nutrition/estimate-mass', 'ai_bounded_mass_estimation'],
   ['/api/nutrition/recipe-context', 'ai_recipe_context_review'],
   ['/api/nutrition/recipe-context/reconcile', 'ai_recipe_context_review'],
+  ['/api/shiso/nutrition', 'ai_interpretation'],
 ];
 
 function requestBody(path: string, overrides: Record<string, unknown> = {}): unknown {
@@ -295,6 +296,8 @@ function requestBody(path: string, overrides: Record<string, unknown> = {}): unk
         instructions: INSTRUCTIONS,
         ...overrides,
       };
+    case '/api/shiso/nutrition':
+      return { recipe: { title: 'SHISO entitlement probe', servings: 1, ingredients: [{ line_ref: 'L1', text: '1 apple' }], instructions: [] }, ...overrides };
     default:
       // The reconcile route needs a receipt; a request WITHOUT one is still the
       // strongest probe, because the gate must fire before the receipt is examined.
@@ -719,8 +722,8 @@ describe('AI-5B — middleware order is structural, not incidental', () => {
 
   it('gates exactly the four AI-5A features and nothing else', () => {
     const gateCalls = [...APP_SOURCE.matchAll(/requireNutritionProductFeature\([^)]*\)/g)].map((m) => m[0]);
-    // Eight gated routes after 9B-3C, still exactly FOUR distinct AI-5A features.
-    expect(gateCalls).toHaveLength(9);
+    // The SHISO estimator adds one route while reusing the four AI-5A features.
+    expect(gateCalls).toHaveLength(10);
     const features = new Set(gateCalls.map((call) => /"([a-z_]+)"\)$/.exec(call)![1]));
     expect([...features].sort()).toEqual([
       'ai_bounded_mass_estimation',

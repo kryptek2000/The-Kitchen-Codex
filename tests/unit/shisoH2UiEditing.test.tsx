@@ -198,6 +198,37 @@ describe('SHISO H-2 — the visible working-copy surface', () => {
 });
 
 describe('SHISO H-2 — ADVERSARIAL save authorization (existing unsaved working copy)', () => {
+  it.each([
+    'Can you save my changes?',
+    'How do I save the recipe?',
+    'Explain how to save the recipe',
+    'I do not want to save my changes',
+    "I don't need to save my changes",
+    'Could you explain how to save my changes?',
+  ])('does not persist when the user says: %s', async (message) => {
+    const saves: ShisoSaveGrant[] = [];
+    const network = stubNetwork([toolRequest('save_working_recipe', 1), reply('No save was authorized.', 2)]);
+    render(<Host network={network} save={async (grant) => {
+      saves.push(grant);
+      return { ok: true, saved: true, message: 'Saved.' };
+    }} discard={() => {}} />);
+    await send(message);
+    await waitFor(() => expect(screen.getByText('No save was authorized.')).toBeTruthy(), { timeout: 15000 });
+    expect(saves).toHaveLength(0);
+  }, 60000);
+
+  it('permits an explicit affirmative save command through the real conversation UI', async () => {
+    const saves: ShisoSaveGrant[] = [];
+    const network = stubNetwork([toolRequest('save_working_recipe', 1), reply('Saved.', 2)]);
+    render(<Host network={network} save={async (grant) => {
+      saves.push(grant);
+      return { ok: true, saved: true, message: 'Saved.' };
+    }} discard={() => {}} />);
+    await send('Save my changes.');
+    await waitFor(() => expect(saves).toHaveLength(1), { timeout: 15000 });
+    expect(saves[0]).toMatchObject({ authorized: true, via: 'assistant' });
+  }, 60000);
+
   it('a model-induced save after a NON-save message writes NOTHING', async () => {
     const grants: ShisoSaveGrant[] = [];
     const network = stubNetwork([
