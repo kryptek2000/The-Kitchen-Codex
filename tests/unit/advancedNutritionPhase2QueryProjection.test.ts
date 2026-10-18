@@ -80,9 +80,9 @@ function reviewWith(
 
 describe('phase 2 projection — versioned contract and determinism', () => {
   it('pins the Phase 2 projection contract version', () => {
-    expect(QUERY_PROJECTION_VERSION).toBe('usda_query_projection_v10');
-    expect(projectQueryText('black beans').version).toBe('usda_query_projection_v10');
-    expect(MATCH_CONFIDENCE_VERSION).toBe('usda_match_confidence_v13');
+    expect(QUERY_PROJECTION_VERSION).toBe('usda_query_projection_v13');
+    expect(projectQueryText('black beans').version).toBe('usda_query_projection_v13');
+    expect(MATCH_CONFIDENCE_VERSION).toBe('usda_match_confidence_v14');
   });
 
   it('is deterministic and never mutates its input or context', () => {
@@ -238,7 +238,9 @@ describe('phase 2 projection — state contradiction evidence', () => {
   it('never contradicts raw ground beef (ground <> raw is not an opposed pair)', () => {
     const groundBeef = explainCandidate('ground beef', candidate(9, 'Beef, ground, 80% lean meat / 20% fat, raw'));
     expect(groundBeef.state_contradiction).toBe(0);
-    expect(groundBeef.automatic_eligible).toBe(true);
+    // A raw state is not opposed to `ground`, but an unsolicited 80/20 ratio
+    // still cannot gain automatic authority from a generic `ground beef` query.
+    expect(groundBeef.automatic_eligible).toBe(false);
   });
 });
 

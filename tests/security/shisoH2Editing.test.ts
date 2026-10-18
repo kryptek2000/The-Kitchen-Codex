@@ -421,12 +421,12 @@ describe('H-2 — deterministic authenticated corrections (Chicken Enchiladas Ve
       adapted: f.adapted,
       workingState: f.state,
     });
-    // Four of the five unresolved lines can be corrected with an authenticated
-    // record + portion that GENUINELY resolves mass through the real calculator.
+    // Three actionable lines have an authenticated record + portion that
+    // GENUINELY resolves mass through the real calculator.
     // "6 corn tortillas" cannot: its alternative records only carry mass-oz
     // portions that cannot relate to the authored count, and its count review is
     // not applicable — so it is reported unresolved rather than forced.
-    expect(built.corrections).toHaveLength(4);
+    expect(built.corrections).toHaveLength(3);
     expect(built.unresolved).toHaveLength(1);
     expect(built.unresolved[0]!.label).toBe('6 corn tortillas');
     expect(built.unresolved[0]!.reason.length).toBeGreaterThan(0);
@@ -445,7 +445,6 @@ describe('H-2 — deterministic authenticated corrections (Chicken Enchiladas Ve
     expect(covered).toContain('2 cups shredded chicken breast');
     expect(covered).toContain('6 corn tortillas');
     expect(covered).toContain('1 cup shredded Monterey Jack cheese');
-    expect(covered).toContain('1 cup chicken broth');
     expect(covered).toContain('1/4 teaspoon ground cumin');
   }, 240000);
 
@@ -761,7 +760,7 @@ describe('H-2 — execution overhead and state-change accounting', () => {
     // Deterministic: identical inputs → byte-identical result. No model call
     // exists in the path at all (the module imports no transport).
     expect(JSON.stringify(first)).toBe(JSON.stringify(second));
-    expect(first.corrections).toHaveLength(4);
+    expect(first.corrections).toHaveLength(3);
     // Sanity bound only — this is a local CPU pass over an in-memory review,
     // never a provider latency claim.
     expect(elapsedMs).toBeLessThan(60000);

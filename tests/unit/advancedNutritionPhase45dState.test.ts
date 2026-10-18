@@ -30,13 +30,13 @@ import { buildMatchingBundle } from '../fixtures/usdaMatchingFixtures';
 
 describe('phase 4.5d versioning — explicit bumps', () => {
   it('bumps every affected matching/calculation/phase version', () => {
-    expect(MATCHING_NORMALIZATION_VERSION).toBe('usda_match_normalize_v2');
-    expect(MATCHING_RANKING_VERSION).toBe('usda_match_rank_v11');
+    expect(MATCHING_NORMALIZATION_VERSION).toBe('usda_match_normalize_v3');
+    expect(MATCHING_RANKING_VERSION).toBe('usda_match_rank_v12');
     expect(MATCHING_CATALOG_VERSION).toBe('usda_review_catalog_v2');
     expect(MATCHING_CONFIRMATION_VERSION).toBe('usda_match_confirm_v2');
-    expect(QUERY_PROJECTION_VERSION).toBe('usda_query_projection_v10');
+    expect(QUERY_PROJECTION_VERSION).toBe('usda_query_projection_v13');
     expect(ELIGIBILITY_POLICY_VERSION).toBe('usda_home_recipe_eligibility_v1');
-    expect(CALCULATION_VERSION).toBe('usda_advisory_calc_v4');
+    expect(CALCULATION_VERSION).toBe('usda_advisory_calc_v5');
     expect(CALCULATION_CONTEXT_VERSION).toBe('usda_calc_context_v3');
     expect(PHASE4_SESSION_VERSION).toBe('usda_phase4_session_v3');
     // Phase 6 adds the verified household-portion mass source + state map.
@@ -46,7 +46,7 @@ describe('phase 4.5d versioning — explicit bumps', () => {
     // unit), and the requirement feeds `candidates_digest`, so a persisted
     // selection bound to the old requirement must fail closed as `stale` rather
     // than be honored under a new meaning. No other version moved.
-    expect(COUNT_PORTION_VERSION).toBe('usda_count_portion_v3');
+    expect(COUNT_PORTION_VERSION).toBe('usda_count_portion_v5');
   });
 
   it('leaves the Phase 4.5C portion-semantics version unchanged', () => {

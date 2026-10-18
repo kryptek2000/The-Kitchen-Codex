@@ -195,6 +195,18 @@ describe('phase 2 AI source-constraint parity — legitimate resolutions preserv
     }
   });
 
+  it('never lets provider wording erase a source powder form or explicit fat ratio', () => {
+    for (const [source, query] of [
+      ['1 cup skim milk powder', 'milk skim'],
+      ['1 lb ground beef (80/20)', 'beef ground'],
+      ['1 tbsp unsalted butter', 'butter salted'],
+    ]) {
+      const { outcome } = resolveFor(source, [{ interpreted_food_name: query, suggested_usda_queries: [query] }]);
+      expect(outcome.candidates, source).toEqual([]);
+      expect(outcome.auto_count, source).toBe(0);
+    }
+  });
+
   it('does not invent authority: no FDC/grams/digest from provider wording alone', () => {
     const { row, outcome } = resolveFor('1 can tuna', [
       { interpreted_food_name: 'tuna', suggested_usda_queries: ['tuna'] },

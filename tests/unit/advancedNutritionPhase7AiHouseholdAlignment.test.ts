@@ -509,7 +509,7 @@ describe('phase 7 — real-bundle baseline corpus', () => {
     }> = [
       { line: '3 cloves garlic, minced', status: 'matched', massSource: 'household_portion', grams: 9, householdKey: 'garlic|clove|null|null' },
       { line: '2 large tomatoes', status: 'matched', massSource: 'household_portion', grams: 364, householdKey: 'tomato|item|large|null' },
-      { line: '1 stick unsalted butter', status: 'matched', massSource: 'household_portion', grams: 113, householdKey: 'unsalted butter|stick|null|null' },
+      { line: '1 stick unsalted butter', status: 'matched', massSource: 'count_portion', grams: 113 },
       { line: '2 tomatoes', status: 'needs_amount' },
       { line: '2 green cabbages', status: 'needs_amount' },
       { line: '2 unsalted butter', status: 'needs_amount' },
@@ -1491,7 +1491,7 @@ describe('phase 7 — hamburger household persistence regression (I-1)', () => {
     });
   }, 120000);
 
-  it('persists the analyzer hamburger as schema v2 with truthful household provenance', () => {
+  it('persists the analyzer hamburger as schema v4 with truthful household provenance', () => {
     const fixture = hamburgerFixture as HamburgerFixture;
     const { recipe, state, preview } = fixture;
     const authorized = authorizeNutritionPersistence({
@@ -1507,7 +1507,7 @@ describe('phase 7 — hamburger household persistence regression (I-1)', () => {
     expect(authorized.ok).toBe(true);
     if (!authorized.ok) return;
     const block = authorized.candidate.block as CodexNutritionV2;
-    expect(block.schema).toBe(2);
+    expect(block.schema).toBe(4);
     const tomato = block.ingredients.find((entry) => entry.source_food_id === '2709719');
     expect(tomato?.conversion_basis).toBe('household_portion');
     expect(tomato?.amount?.value).toBe(246);
@@ -1525,7 +1525,7 @@ describe('phase 7 — hamburger household persistence regression (I-1)', () => {
     expect(block.unresolved).toHaveLength(1);
     expect(block.unresolved[0]?.reason).toBe('no_mass');
     const decoded = decodeCodexNutrition(encodeCodexNutrition(block));
-    expect(decoded.kind).toBe('v2');
+    expect(decoded.kind).toBe('v4');
   });
 
   it('a non-household persisted recipe remains canonical schema v1', () => {

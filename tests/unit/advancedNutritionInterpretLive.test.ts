@@ -35,6 +35,7 @@ vi.mock('../../src/application/aiSelection', () => ({
 import {
   AI_RESOLUTION_INVALID_MESSAGE,
   AI_RESOLUTION_UNAVAILABLE_MESSAGE,
+  nutritionResolutionFailureMessage,
   NUTRITION_INTERPRET_ENDPOINT,
   requestAiAdvancedInterpretations,
   resolveUnresolvedRowsWithAi,
@@ -323,7 +324,7 @@ describe('AI-1 live canonical request — failure handling', () => {
     const result = await resolveUnresolvedRowsWithAi(liveArgs(double.network, ['1 cup Zzz']));
     expect(result.ok).toBe(false);
     expect(result.aiAttempted).toBe(true);
-    expect(result.message).toBe(AI_RESOLUTION_UNAVAILABLE_MESSAGE);
+    expect(result.message).toBe(nutritionResolutionFailureMessage(503));
     expect(JSON.stringify(result)).not.toMatch(/provider stack trace/);
   });
 
@@ -431,7 +432,7 @@ describe('AI-1 live canonical request — failure handling', () => {
     expect(result.ok).toBe(false);
     expect(result.aiAttempted).toBe(true);
     expect(result.interpretations).toEqual([]);
-    expect(result.message).toBe(AI_RESOLUTION_UNAVAILABLE_MESSAGE);
+    expect(result.message).toBe(nutritionResolutionFailureMessage(503));
     // The deterministic source map was built BEFORE the call, from source state.
     expect(result.authoritativeByLineRef.size).toBe(1);
     expect(result.authoritativeByLineRef.get(rows[0].line_ref)?.amount).toBe(1);

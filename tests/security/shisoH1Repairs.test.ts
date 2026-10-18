@@ -123,7 +123,11 @@ function toolContextFor(f: Fixture, recipe: { title: string; servings: number | 
     recipe: {
       title: recipe.title,
       servings: recipe.servings,
-      ingredients: lines.map((l) => ({ text: l, name: l })),
+      ingredients: lines.map((l, index) => ({
+        text: l,
+        name: l,
+        line_ref: f.adapted[index]?.line_ref ?? null,
+      })),
       instructions: [{ text: 'Cook it.' }],
     },
     nutrition: { rows: f.rows, summary: 'h1', unsaved: false },
@@ -359,10 +363,10 @@ describe('H-1 Scenario E — a correction still needs explicit confirmation', ()
   }, 240000);
 
   it('an authenticated alternative still revalidates before it can be applied', async () => {
-    const f = makeFixture(session, ['6 tbsp unsalted butter']);
+    const f = makeFixture(session, ['1 lb pork shoulder']);
     const obs = await executeShisoTool(
       { tool: 'investigate_unresolved_ingredients' },
-      toolContextFor(f, { title: 'b', servings: 4 }, ['6 tbsp unsalted butter']),
+      toolContextFor(f, { title: 'b', servings: 4 }, ['1 lb pork shoulder']),
     );
     expect(obs.ok).toBe(true);
     if (!obs.ok) return;
@@ -380,7 +384,7 @@ describe('H-1 Scenario E — a correction still needs explicit confirmation', ()
       recipe_key: f.state.recipeKey as string, session_identity: f.state.sessionIdentity as string,
       catalog_digest: '', bundle_release: '',
       proposal: {
-        line_ref: withAlts.line_ref, ingredient_label: 'butter',
+        line_ref: withAlts.line_ref, ingredient_label: 'pork shoulder',
         outcome: 'verified_alternative_match' as const, explanation: 'e', question: null,
         fdc_id: alt.fdc_id, record_digest: alt.record_digest,
         review_digest: alt.review_digest ?? 'x',

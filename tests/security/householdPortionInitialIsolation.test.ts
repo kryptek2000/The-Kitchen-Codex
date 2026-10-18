@@ -1,3 +1,4 @@
+import { withoutTypeOnlyImports } from '../helpers/sourceAnalysis';
 /**
  * The Kitchen Codex — Household-Portion Registry (registry-track Phase 5, repair):
  * security / isolation / verified-loader-only / non-integration proof.
@@ -90,7 +91,7 @@ function collectTransitiveGraph(entries: ReadonlyArray<string>): Set<string> {
     visited.add(file);
     let source: string;
     try {
-      source = readFileSync(file, 'utf8');
+      source = withoutTypeOnlyImports(readFileSync(file, 'utf8'));
     } catch {
       continue;
     }
@@ -178,7 +179,7 @@ describe('phase 5 repair — module purity and dependency boundary', () => {
       for (const file of listTsFiles(root)) {
         if (file.startsWith(HOUSEHOLD_DIR)) continue;
         const rel = file.slice(ROOT.length + 1);
-        const source = readFileSync(file, 'utf8');
+        const source = withoutTypeOnlyImports(readFileSync(file, 'utf8'));
         let match: RegExpExecArray | null;
         importRe.lastIndex = 0;
         while ((match = importRe.exec(source)) !== null) {
@@ -325,11 +326,11 @@ const SNAPSHOT: ReadonlyArray<SnapshotEntry> = Object.freeze([
   // identity-bound mass) all still yield no mass, so no authority was widened.
   { line: '1 medium head green cabbage', fdc: 2346407, status: 'matched', grams: 908, mass: 'household_portion' },
   { line: '2 medium potatoes', fdc: 2709382, status: 'needs_amount', grams: null, mass: null },
-  { line: '1 stick unsalted butter', fdc: 789828, status: 'matched', grams: 113, mass: 'household_portion' },
+  { line: '1 stick unsalted butter', fdc: 173430, status: 'matched', grams: 113, mass: 'count_portion' },
   { line: '4 slices bacon', fdc: 168277, status: 'matched', grams: 112, mass: 'count_portion' },
   { line: '4 slices bread', fdc: 172686, status: 'matched', grams: 116, mass: 'count_portion' },
   { line: '2 slices white bread', fdc: 2707598, status: 'needs_amount', grams: null, mass: null },
-  { line: '1 lemon', fdc: 2709168, status: 'needs_amount', grams: null, mass: null },
+  { line: '1 lemon', fdc: 2709168, status: 'matched', grams: 65, mass: 'count_portion' },
   { line: '3 large eggs', fdc: 2707152, status: 'matched', grams: 150, mass: 'count_portion' },
 ]);
 

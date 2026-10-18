@@ -4,7 +4,7 @@
  * Genuine application-level integration: the pinned, authenticated USDA bundle is
  * composed into a real Phase 4 session, the hamburger acceptance recipe is
  * reviewed (bacon 224 g / cheddar 68 g / buns 208 g; tomatoes & pickles
- * unresolved), and the explicit Apply writes exactly one canonical schema-v1
+ * unresolved), and the explicit Apply writes exactly one canonical schema-v4
  * `codex_nutrition` block through the injected writer while preserving unrelated
  * recipe content.
  *
@@ -22,8 +22,8 @@ import { INITIAL_PHASE4_STATE, phase4Reducer } from '../../src/core/nutritionV2/
 import { phase4SessionIdentity } from '../../src/core/nutritionV2/phase4/types';
 import { composeAdvancedNutritionSessionFromBundle, type RuntimeBundleInputs } from '../../src/core/nutritionV2/runtime';
 import { USDA_BUNDLE_RELEASE_LOCK } from '../../src/core/nutritionV2/usda/releaseLock';
-import { decodeCodexNutrition, validateCodexNutritionV1 } from '../../src/core/nutritionV2/validate';
-import type { CodexNutritionV1 } from '../../src/core/nutritionV2/schema';
+import { decodeCodexNutrition, validateCodexNutrition } from '../../src/core/nutritionV2/validate';
+import type { CodexNutritionV4 } from '../../src/core/nutritionV2/schema';
 import {
   parseIngredientLine,
   parseObsidianRecipeMarkdown,
@@ -163,12 +163,12 @@ describe('phase 5B — real hamburger Apply (authenticated USDA bundle)', () => 
     expect(writes).toHaveLength(1);
     const written = writes[0];
     const decoded = decodeCodexNutrition(written.codexNutrition);
-    expect(decoded.kind).toBe('v1');
-    if (decoded.kind !== 'v1') return;
-    const block: CodexNutritionV1 = decoded.value;
+    expect(decoded.kind).toBe('v4');
+    if (decoded.kind !== 'v4') return;
+    const block: CodexNutritionV4 = decoded.value;
 
-    // The persisted block validates as canonical schema v1.
-    expect(validateCodexNutritionV1(block).ok).toBe(true);
+    // The persisted block validates as canonical schema v4 with count evidence.
+    expect(validateCodexNutrition(block).ok).toBe(true);
     expect(block.basis).toBe('total');
     expect(block.servings).toBe(4);
     expect(block.status).toBe('partial');
@@ -223,7 +223,7 @@ describe('phase 5B — real hamburger Apply (authenticated USDA bundle)', () => 
     expect(reparsed.ingredients).toHaveLength(HAMBURGER_INGREDIENTS.length);
     expect(reparsed.instructions[0]?.text).toBe('Grill and assemble.');
     const decoded = decodeCodexNutrition(reparsed.codexNutrition);
-    expect(decoded.kind).toBe('v1');
+    expect(decoded.kind).toBe('v4');
     // TEST-STABILITY ONLY. Same characteristic as the test above: real
     // authenticated bundle + serializer round-trip. Measured 2307ms in isolation
     // and over the 5000ms unit default under full-suite parallel load. Same
