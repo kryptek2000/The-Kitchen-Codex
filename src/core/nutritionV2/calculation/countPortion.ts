@@ -66,7 +66,7 @@ import { CALCULATION_VERSION, type Phase3Failure } from './types';
  * so the version is bumped and any persisted count-portion selection bound to the
  * old requirement is correctly refused as `stale` and re-derived by the user.
  */
-export const COUNT_PORTION_VERSION = 'usda_count_portion_v4';
+export const COUNT_PORTION_VERSION = 'usda_count_portion_v5';
 
 /** Bounded ingredient count requirement derived from the parsed ingredient. */
 export interface CountRequirement {
@@ -500,7 +500,11 @@ export function deriveCountRequirement(
   // exactly that: a line with no size qualifier keeps its previous derivation.
   const namedUnit =
     sizeQualifiers.length > 0 ? namedCountUnitFromQueryTokens(queryTokens ?? []) : null;
-  const unit = explicitUnit ?? namedUnit ?? inferUnitFromIdentityTokens(identityTokens) ?? hint?.unit ?? null;
+  const inferredUnit = explicitUnit ?? namedUnit ?? inferUnitFromIdentityTokens(identityTokens) ?? hint?.unit ?? null;
+  // A size-before-noun line keeps size-only semantics. The whole-item alias
+  // must not bypass the household path's cut/container/measurement guards.
+  const unit = sizeQualifiers.length > 0 && inferredUnit === 'item' && explicitUnit === null
+    ? null : inferredUnit;
   const explicitSize = sizeQualifiers.length > 0 ? canonicalSize(sizeQualifiers[0]) : null;
   const size = explicitSize ?? hint?.size ?? null;
   return Object.freeze({ amount, unit, size });

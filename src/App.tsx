@@ -1008,6 +1008,8 @@ export default function App() {
     }
     publishWorkingRecipe({
       unsaved: true,
+      nutrition_unsaved: JSON.stringify(shisoWorkingForSelected.working.codexNutrition ?? null) !==
+        JSON.stringify(shisoWorkingForSelected.base.codexNutrition ?? null),
       change_count: shisoWorkingChangeLines.length,
       changes: shisoWorkingChangeLines,
     });

@@ -115,7 +115,7 @@ function fullEntitled(overrides: Partial<Phase8bObservation> = {}): Phase8bObser
     builtApp: true,
     recipe: { title: ACCEPTANCE_RECIPE_TITLE, servings: ACCEPTANCE_SERVINGS, ingredientCount: 9 },
     bundle: cleanBundle(),
-    review: { total: 9, matched: 6, needsAmount: 3, needsMatch: 0, reviewSuggested: 0, qualitative: 0 },
+    review: { total: 9, matched: 7, needsAmount: 2, needsMatch: 0, reviewSuggested: 0, qualitative: 0 },
     calculation: {
       previewRendered: true,
       nutrientTotalsPresent: true,
@@ -166,7 +166,7 @@ function basicControl(overrides: Partial<Phase8bObservation> = {}): Phase8bObser
     builtApp: true,
     recipe: null,
     bundle: cleanBundle(),
-    review: { total: 9, matched: 6, needsAmount: 3, needsMatch: 0, reviewSuggested: 0, qualitative: 0 },
+    review: { total: 9, matched: 7, needsAmount: 2, needsMatch: 0, reviewSuggested: 0, qualitative: 0 },
     calculation: { previewRendered: true, nutrientTotalsPresent: true, partialReportedTruthfully: true, previewDigest: '', applyEligible: true },
     entitlement: {
       productAccessTier: 'basic',

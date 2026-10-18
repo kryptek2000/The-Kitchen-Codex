@@ -75,9 +75,9 @@ export const IDENTITY_LANE_ACTIONABLE_DEFECTS = 0;
 export const RANKING_LANE_ACTIONABLE_DEFECTS = 0;
 
 /** Observed blocker counts those phases recorded; asserted, never recomputed. */
-export const PORTION_LANE_OBSERVED_BLOCKERS = 35;
+export const PORTION_LANE_OBSERVED_BLOCKERS = 31;
 export const IDENTITY_LANE_OBSERVED_BLOCKERS = 27;
-export const RANKING_LANE_OBSERVED_BLOCKERS = 9;
+export const RANKING_LANE_OBSERVED_BLOCKERS = 7;
 
 /**
  * DECLARED, REVIEWABLE minimum token length for the orthographic-variant probe.
@@ -201,6 +201,7 @@ export interface Ai6b5ReportLine {
 
 export interface Ai6b5CatalogDispositionReport {
   readonly schema: string;
+  readonly measurement_baseline: 'pr12_ci_repair_v1';
   readonly tool: string;
   readonly base_phase: string;
   readonly base_commit: string;
@@ -631,6 +632,7 @@ export async function buildNutritionCatalogDispositionReport(): Promise<Ai6b5Cat
 
   return {
     schema: CATALOG_DISPOSITION_SCHEMA,
+    measurement_baseline: 'pr12_ci_repair_v1',
     tool: 'benchmark_nutrition_catalog_disposition',
     base_phase: BASE_PHASE,
     base_commit: BASE_COMMIT,

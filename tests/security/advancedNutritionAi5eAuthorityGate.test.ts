@@ -830,7 +830,7 @@ describe('AI-5E — middleware order is structural, not incidental', () => {
     return rest.slice(0, handlerAt);
   }
 
-  it.each(GATED_ROUTES)('%s: auth -> AUTHORITY -> pricing -> limiter -> handler', (path) => {
+  it.each(GATED_ROUTES)('%s: auth and product safeguards precede handler', (path) => {
     const chain = registrationOf(path);
     const at = (needle: string) => {
       const index = chain.indexOf(needle);
@@ -838,8 +838,13 @@ describe('AI-5E — middleware order is structural, not incidental', () => {
       return index;
     };
     expect(at('requireAiAccessToken')).toBeLessThan(at('requireNutritionProductFeature'));
-    expect(at('requireNutritionProductFeature')).toBeLessThan(at('RateLimiter'));
-    if (path !== '/api/nutrition/recipe-context/reconcile') {
+    if (path === '/api/shiso/turn') {
+      expect(at('requireAiAccessToken')).toBeLessThan(at('RateLimiter'));
+      expect(at('RateLimiter')).toBeLessThan(at('requireNutritionProductFeature'));
+    } else {
+      expect(at('requireNutritionProductFeature')).toBeLessThan(at('RateLimiter'));
+    }
+    if (path !== '/api/nutrition/recipe-context/reconcile' && path !== '/api/shiso/turn') {
       expect(at('requireNutritionProductFeature')).toBeLessThan(at('textPricingGuard'));
       expect(at('textPricingGuard')).toBeLessThan(at('RateLimiter'));
     }

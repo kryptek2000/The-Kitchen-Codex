@@ -44,7 +44,8 @@ export const IDENTITY_SAFETY_CORPUS: ReadonlyArray<IdentityCorpusLine> = [
   // source (identical description `Beef, ground, 80% lean meat / 20% fat, raw`).
   { line: '1 lb ground beef (80/20)', category: 'meat', expectedAutoFdc: 174036 },
   { line: '2 chicken breasts', category: 'meat', expectedAutoFdc: 2646170 },
-  { line: '1 lb pork shoulder', category: 'meat', expectedAutoFdc: 167845 },
+  // A bare shoulder does not authorize the lean-only composition of 167845.
+  { line: '1 lb pork shoulder', category: 'meat', expectNoAutomatic: true },
   // rice
   { line: '2 cups cooked long-grain rice (cooled)', category: 'rice', expectedAutoFdc: 168878 },
   { line: '1 cup dry white rice', category: 'rice', expectedAutoFdc: 169707 },
@@ -153,8 +154,8 @@ export const IDENTITY_SAFETY_CORPUS: ReadonlyArray<IdentityCorpusLine> = [
   { line: '2 sprigs fresh thyme', category: 'herbs-fresh', expectedAutoFdc: 173470 },
   { line: '1 tsp dried thyme', category: 'herbs-dried', expectedAutoFdc: 170938 },
   // butter / bread
-  { line: '1 stick unsalted butter', category: 'butter', expectedAutoFdc: 789828 },
-  { line: '2 tbsp unsalted butter', category: 'butter', expectedAutoFdc: 789828 },
+  { line: '1 stick unsalted butter', category: 'butter', expectedAutoFdc: 173430 },
+  { line: '2 tbsp unsalted butter', category: 'butter', expectedAutoFdc: 173430 },
   { line: '4 slices bread', category: 'bread', expectedAutoFdc: 172686 },
   { line: '2 slices white bread', category: 'bread', expectedAutoFdc: 2707598 },
   // citrus

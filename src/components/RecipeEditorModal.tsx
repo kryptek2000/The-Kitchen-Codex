@@ -1,4 +1,4 @@
-import { resolveRecipeNutritionPresentation } from '../core/nutritionV2/phase5c/presentation';
+import { hasPreferredAdvancedNutrition } from '../application/recipeNutritionPresentation';
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   X,
@@ -329,6 +329,14 @@ export function RecipeEditorModal({
   // changes, per-serving display is recomputed from totals (unless that field
   // has been manually edited).
   const [nutritionTotals, setNutritionTotals] = useState<Partial<RecipeNutrition>>(initialTotals);
+  // Legacy nutrition without its own denominator is per-serving data. If the
+  // recipe also has no serving count, the first count supplied establishes the
+  // batch total; after that, ordinary serving edits preserve the batch total.
+  const legacyNutritionNeedsServingBasis = useRef(
+    Object.keys(initialTotals).length > 0 &&
+      !(typeof initialRecipe?.nutrition?.servings === 'number' && initialRecipe.nutrition.servings > 0) &&
+      !(typeof initialRecipe?.servings === 'number' && initialRecipe.servings > 0)
+  );
   // Track which per-serving fields have been manually edited since the last
   // calculation or servings change. Only dirty fields are NOT recomputed when
   // servings changes.
@@ -337,6 +345,23 @@ export function RecipeEditorModal({
   const [isAssetPickerOpen, setIsAssetPickerOpen] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleServingsChange = (value: string | number) => {
+    const nextServings = typeof value === 'number' ? value : parseFloat(value);
+    if (legacyNutritionNeedsServingBasis.current && Number.isFinite(nextServings) && nextServings > 0) {
+      // Preserve legacy per-serving values when the first serving count is
+      // recovered/entered, then establish exact whole-recipe totals once.
+      setNutritionTotals((current) => {
+        const nutrientKeys = ['calories', 'protein', 'carbohydrates', 'fat', 'fiber', 'sodium'];
+        return Object.fromEntries(Object.entries(current).map(([key, amount]) => [
+          key,
+          nutrientKeys.includes(key) && typeof amount === 'number' ? amount * nextServings : amount,
+        ]));
+      });
+      legacyNutritionNeedsServingBasis.current = false;
+    }
+    setServings(value);
+  };
 
   // Two-mode image chooser (Phase 2): Licensed Search (default, free) and
   // Generate with AI (explicit). Opening/switching/typing make ZERO provider calls.
@@ -710,6 +735,7 @@ export function RecipeEditorModal({
         ...(values.sodium !== null ? { sodium: values.sodium } : {}),
       };
       setNutritionTotals(totals);
+      legacyNutritionNeedsServingBasis.current = false;
       setNutritionDirtyFields(new Set()); // Clear dirty flags on new calculation
 
       // Set per-serving editor fields from the estimate
@@ -770,6 +796,20 @@ export function RecipeEditorModal({
           setNutritionTotals((prev) => {
             const next = { ...prev };
             delete next[fieldName === 'carbs' ? 'carbohydrates' : fieldName];
+            return next;
+          });
+        }
+      } else if (legacyNutritionNeedsServingBasis.current) {
+        // With no known serving count, retain the edited field as legacy
+        // per-serving data until the first serving count establishes a batch.
+        const numValue = value.trim() ? parseFloat(value.trim()) : undefined;
+        const key = fieldName === 'carbs' ? 'carbohydrates' : fieldName;
+        if (numValue !== undefined && Number.isFinite(numValue)) {
+          setNutritionTotals((prev) => ({ ...prev, [key]: numValue }));
+        } else if (value.trim() === '') {
+          setNutritionTotals((prev) => {
+            const next = { ...prev };
+            delete next[key];
             return next;
           });
         }
@@ -852,7 +892,7 @@ export function RecipeEditorModal({
 
         if (plan.updates.prepTime !== undefined) setPrepTime(plan.updates.prepTime);
         if (plan.updates.cookTime !== undefined) setCookTime(plan.updates.cookTime);
-        if (plan.updates.servings !== undefined) setServings(plan.updates.servings);
+        if (plan.updates.servings !== undefined) handleServingsChange(plan.updates.servings);
         if (plan.updates.category !== undefined) setCategory(plan.updates.category);
         if (plan.updates.cuisine !== undefined) setCuisine(plan.updates.cuisine);
         if (plan.updates.difficulty !== undefined) setDifficulty(plan.updates.difficulty);
@@ -1664,7 +1704,7 @@ export function RecipeEditorModal({
                   <input
                     type="number"
                     value={servings}
-                    onChange={(e) => setServings(e.target.value === '' ? '' : parseFloat(e.target.value))}
+                    onChange={(e) => handleServingsChange(e.target.value === '' ? '' : parseFloat(e.target.value))}
                     min={1}
                     placeholder="e.g. 4"
                     className="w-full bg-[#0C0C0C] border border-white/10 rounded-lg p-2 text-gray-300 font-mono focus:border-amber-500 focus:outline-none"
@@ -1714,7 +1754,7 @@ export function RecipeEditorModal({
                   </button>
                 </div>
 
-                {initialRecipe && resolveRecipeNutritionPresentation(initialRecipe).advanced_preferred && (
+                {initialRecipe && hasPreferredAdvancedNutrition(initialRecipe) && (
                   <p className="text-[11px] text-amber-300">
                     These are Basic nutrition fields. The recipe page uses the separately saved Advanced report.
                     Review and recalculate Advanced Nutrition to update that report; saving these fields does not replace it.

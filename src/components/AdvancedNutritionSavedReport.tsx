@@ -17,6 +17,7 @@ import type { CodexNutritionV1, CodexNutritionV2, CodexNutritionV3, CodexNutriti
 interface AdvancedNutritionSavedReportProps {
   isOpen: boolean;
   stale?: boolean;
+  unsaved?: boolean;
   onClose: () => void;
   /** Materialized, bounded recipe title (never a raw untrusted recipe). */
   title: string;
@@ -37,6 +38,7 @@ interface AdvancedNutritionSavedReportProps {
 export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReportProps> = ({
   isOpen,
   stale = false,
+  unsaved = false,
   onClose,
   title,
   block,
@@ -68,7 +70,7 @@ export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReport
       className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto"
       role="dialog"
       aria-modal="true"
-      aria-label={`Saved Advanced Nutrition for ${title}`}
+      aria-label={`${unsaved ? 'Working' : 'Saved'} Advanced Nutrition for ${title}`}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
@@ -85,7 +87,7 @@ export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReport
             </div>
             <div className="min-w-0">
               <h2 className="text-base font-serif font-bold text-white truncate">
-                Advanced Nutrition saved
+                Advanced Nutrition {unsaved ? 'applied — not saved' : 'saved'}
               </h2>
               <p className="text-[11px] text-gray-400 truncate">{title}</p>
               <p className="text-[10px] font-mono uppercase tracking-wide text-indigo-300 mt-0.5">
@@ -96,7 +98,7 @@ export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReport
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close saved Advanced Nutrition report"
+            aria-label={unsaved ? 'Close working Advanced Nutrition report' : 'Close saved Advanced Nutrition report'}
             className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/10 transition-colors shrink-0"
           >
             <X className="w-4 h-4" />

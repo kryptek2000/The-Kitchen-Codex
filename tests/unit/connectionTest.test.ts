@@ -105,7 +105,7 @@ describe("BYOK-4 — runConnectionTest bounded + fail-closed (no real network)",
       const result = await connectionTest.runConnectionTest({ providerId: "openrouter", kind: "text" });
       expect(result.ok).toBe(false);
       if (result.ok === false) {
-        expect(result.code).toBe("AUTH");
+        expect(result.code).toBe("AUTHENTICATION_FAILED");
         expect(result.model).toBe("openai/gpt-4o-mini");
         expect(result.credentialSource).toBe("server_environment");
         expect(JSON.stringify(result)).not.toContain(SENTINEL);
@@ -194,7 +194,7 @@ describe("BYOK-4 — Gemini probes use a fixed REST path with tiny requests", ()
       try {
         const result = await connectionTest.runConnectionTest({ providerId: "gemini", kind: "text" });
         expect(result.ok, body).toBe(false);
-        if (result.ok === false) expect(result.code, body).toBe("INVALID_RESPONSE");
+        if (result.ok === false) expect(result.code, body).toBe(["", "not json"].includes(body) ? "RESPONSE_PARSE_ERROR" : "INVALID_RESPONSE");
       } finally {
         stub.restore();
       }
@@ -246,7 +246,7 @@ describe("BYOK-4 — OpenRouter image credential check", () => {
     try {
       const result = await connectionTest.runConnectionTest({ providerId: "openrouter-image", kind: "image" });
       expect(result.ok).toBe(false);
-      if (result.ok === false) expect(result.code).toBe("AUTH");
+      if (result.ok === false) expect(result.code).toBe("AUTHENTICATION_FAILED");
     } finally {
       stub.restore();
     }
@@ -350,7 +350,7 @@ describe("BYOK-4 — universal probe response-byte bounds", () => {
     try {
       const result = await connectionTest.runConnectionTest({ providerId: "gemini", kind: "text" });
       expect(result.ok).toBe(false);
-      if (result.ok === false) expect(result.code).toBe("INVALID_RESPONSE");
+      if (result.ok === false) expect(result.code).toBe("RESPONSE_PARSE_ERROR");
       expect(wasCancelled()).toBe(true);
     } finally {
       globalThis.fetch = originalFetch;
@@ -367,7 +367,7 @@ describe("BYOK-4 — universal probe response-byte bounds", () => {
       const result = await connectionTest.runConnectionTest({ providerId: "gemini", kind: "text" });
       expect(result.ok).toBe(false);
       if (result.ok === false) {
-        expect(result.code).toBe("PROVIDER_ERROR");
+        expect(result.code).toBe("UPSTREAM_ERROR");
         expect(result.message.length).toBeLessThanOrEqual(120);
       }
       expect(wasCancelled()).toBe(true);

@@ -1,3 +1,4 @@
+import { rateLimit, MemoryStore, ipKeyGenerator, type IncrementResponse } from 'express-rate-limit';
 import type { Request, Response, NextFunction } from "express";
 
 interface RateLimitEntry {
@@ -13,7 +14,49 @@ const clientIpStore = new Map<string, RateLimitEntry>();
  */
 export function resetRateLimitersForTests(): void {
   clientIpStore.clear();
+  void shisoConversationStore.resetAll();
+  void globalRequestStore.resetAll();
 }
+
+/**
+ * A process-wide, per-client ceiling for every HTTP request. The in-memory
+ * store expires inactive keys after the one-minute window; endpoint-specific
+ * limiters below remain in place and continue to impose their tighter budgets.
+ * Express's trusted-proxy configuration is applied before this middleware is
+ * mounted, and X-Forwarded-For is ignored unless an operator configures it.
+ */
+class BoundedRequestStore extends MemoryStore {
+  private readonly maxActiveClients = 50_000;
+
+  override async increment(key: string): Promise<IncrementResponse> {
+    const knownClient = this.current.has(key) || this.previous.has(key);
+    if (!knownClient && this.current.size + this.previous.size >= this.maxActiveClients) {
+      const now = Date.now();
+      for (const clients of [this.current, this.previous]) {
+        for (const [clientKey, client] of clients) {
+          if (client.resetTime.getTime() <= now) clients.delete(clientKey);
+        }
+      }
+      // Refuse new buckets when the bounded store is full. Returning an over-limit
+      // result makes express-rate-limit issue its normal 429 and Retry-After headers.
+      if (this.current.size + this.previous.size >= this.maxActiveClients) {
+        return { totalHits: 601, resetTime: new Date(now + 60_000) };
+      }
+    }
+    return super.increment(key);
+  }
+}
+
+const globalRequestStore = new BoundedRequestStore();
+export const globalRequestRateLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 600,
+  store: globalRequestStore,
+  keyGenerator: (req) => ipKeyGenerator(getClientIp(req)),
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please try again in a minute.' },
+});
 
 // Periodic cleanup every 5 minutes to prevent memory accumulation
 setInterval(() => {
@@ -234,42 +277,19 @@ export function nutritionInterpretRateLimiter(req: Request, res: Response, next:
  * limit: the per-turn model/tool budgets bound each individual turn, and this
  * bounds how many turns one client may start per window.
  */
-export function shisoConversationRateLimiter(
-  req: Request,
-  res: Response,
-  next: NextFunction,
-) {
-  const parsedLimit = parseInt(process.env.SHISO_CONVERSATION_RATE_LIMIT || "60", 10);
-  const maxRequestsPerWindow = isNaN(parsedLimit) || parsedLimit <= 0 ? 60 : parsedLimit;
-  const windowMs = 60 * 1000; // 1 minute window
-
-  const clientIp = getClientIp(req);
-  const now = Date.now();
-
-  let entry = clientIpStore.get(`shiso_conv_${clientIp}`);
-
-  if (!entry || entry.resetTime <= now) {
-    entry = { count: 1, resetTime: now + windowMs };
-    clientIpStore.set(`shiso_conv_${clientIp}`, entry);
-  } else {
-    entry.count += 1;
-  }
-
-  const remaining = Math.max(0, maxRequestsPerWindow - entry.count);
-  const resetSeconds = Math.ceil((entry.resetTime - now) / 1000);
-
-  res.setHeader("RateLimit-Limit", maxRequestsPerWindow);
-  res.setHeader("RateLimit-Remaining", remaining);
-  res.setHeader("RateLimit-Reset", resetSeconds);
-
-  if (entry.count > maxRequestsPerWindow) {
-    res.setHeader("Retry-After", resetSeconds);
-    return res.status(429).json({
-      error: "Too many chat requests. Please slow down and try again shortly.",
-    });
-  }
-  return next();
-}
+const shisoConversationStore = new MemoryStore();
+export const shisoConversationRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: () => {
+    const parsed = parseInt(process.env.SHISO_CONVERSATION_RATE_LIMIT || '60', 10);
+    return Number.isNaN(parsed) || parsed <= 0 ? 60 : parsed;
+  },
+  store: shisoConversationStore,
+  keyGenerator: (req) => ipKeyGenerator(getClientIp(req)),
+  standardHeaders: 'draft-6',
+  legacyHeaders: false,
+  message: { error: 'Too many chat requests. Please slow down and try again shortly.' },
+});
 
 export function nutritionPlanRateLimiter(req: Request, res: Response, next: NextFunction) {
   const parsedLimit = parseInt(process.env.NUTRITION_PLAN_RATE_LIMIT || "12", 10);

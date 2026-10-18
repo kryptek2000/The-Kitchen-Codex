@@ -215,7 +215,7 @@ describe('post-Apply live sync', () => {
 
     // B is THE saved result immediately: saved card, compact card, no A value.
     await waitFor(() => {
-      expect(document.getElementById('advanced-nutrition-card')?.textContent ?? '').toMatch(/Complete coverage/i);
+      expect(document.getElementById('advanced-nutrition-card')?.textContent ?? '').toMatch(/2 ingredient lines accounted for/i);
     });
     const sectionText = document.getElementById('recipe-nutrition-section')?.textContent ?? '';
     expect(sectionText).not.toMatch(/1300/);

@@ -79,7 +79,7 @@ export const BASE_COMMIT = '9761ae5fef84058ef76ba1ad6232c1b3f644cc5a';
 export const PORTION_LANE_ACTIONABLE_DEFECTS = 0;
 
 /** The portion-lane observation AI-6B2 recorded; asserted, never recomputed. */
-export const PORTION_LANE_OBSERVED_BLOCKERS = 35;
+export const PORTION_LANE_OBSERVED_BLOCKERS = 31;
 
 /**
  * DECLARED, REVIEWABLE planning-side list of tokens that are NOT food identity
@@ -251,6 +251,7 @@ export interface Ai6b3ReportLine {
 
 export interface Ai6b3IdentityDispositionReport {
   readonly schema: string;
+  readonly measurement_baseline: 'pr12_ci_repair_v1';
   readonly tool: string;
   readonly base_phase: string;
   readonly base_commit: string;
@@ -754,6 +755,7 @@ export async function buildNutritionIdentityDispositionReport(): Promise<Ai6b3Id
 
   return {
     schema: IDENTITY_DISPOSITION_SCHEMA,
+    measurement_baseline: 'pr12_ci_repair_v1',
     tool: 'benchmark_nutrition_identity_disposition',
     base_phase: BASE_PHASE,
     base_commit: BASE_COMMIT,

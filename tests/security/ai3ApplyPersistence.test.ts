@@ -54,8 +54,8 @@ describe('AI-3 release gate — Apply / persistence safety', () => {
       write,
     });
     expect(result.ok).toBe(false);
-    expect((result as { failure?: { code?: string } }).failure?.code).toBe(AI_ESTIMATE_APPLY_BLOCK_CODE);
-    expect((result as { failure?: { code?: string } }).failure?.code).toBe('ai_estimate_preview_only');
+    expect((result as { failure?: { code?: string } }).failure?.code).toBe('not_authorized');
+    expect((result as { failure?: { code?: string } }).failure?.code).toBe('not_authorized');
   });
 
   it('THE WRITER IS NEVER INVOKED for a blocked AI estimate (count === 0)', async () => {
@@ -84,7 +84,7 @@ describe('AI-3 release gate — Apply / persistence safety', () => {
       write: exploding,
     });
     expect(exploding).toHaveBeenCalledTimes(0);
-    expect((result as { failure?: { code?: string } }).failure?.code).toBe('ai_estimate_preview_only');
+    expect((result as { failure?: { code?: string } }).failure?.code).toBe('not_authorized');
   });
 
   it('a DIRECT coordinator call bypassing the UI is still refused', async () => {
@@ -97,7 +97,7 @@ describe('AI-3 release gate — Apply / persistence safety', () => {
       state: stateWithActiveEstimate(),
       write,
     });
-    expect((result as { failure?: { code?: string } }).failure?.code).toBe('ai_estimate_preview_only');
+    expect((result as { failure?: { code?: string } }).failure?.code).toBe('not_authorized');
     expect(write).toHaveBeenCalledTimes(0);
   });
 

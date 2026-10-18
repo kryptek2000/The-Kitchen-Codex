@@ -69,6 +69,8 @@ export interface ShisoNutritionSnapshot {
  */
 export interface ShisoWorkingRecipeSummary {
   readonly unsaved: boolean;
+  /** App-owned durability state; display-only, never save authority. */
+  readonly nutrition_unsaved?: boolean;
   readonly change_count: number;
   /** Human-readable change lines, oldest first, bounded by the applier. */
   readonly changes: readonly string[];

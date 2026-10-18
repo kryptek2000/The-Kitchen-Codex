@@ -335,8 +335,13 @@ function persistedRangeRepresentative(
  * Apply (v2 with household only, v1 with neither).
  */
 function buildPersistenceBlock(preview: AdvisoryNutritionPreview, computedAt: string): BlockBuild {
-  const hasUsdaEvidence = preview.ingredients.some((entry) => entry.outcome === 'calculated' && entry.fdc_id !== undefined);
   const hasAiEvidence = Boolean(preview.ai_contributions?.length);
+  // An all-unresolved USDA review still has a dataset source, with no nutrient
+  // amounts. Preserve that canonical v1 representation instead of building an
+  // invalid source-less block when the last resolved line is cleared.
+  const hasUsdaEvidence = !hasAiEvidence || preview.ingredients.some(
+    (entry) => entry.outcome === 'calculated' && entry.fdc_id !== undefined
+  );
   const sources: NutritionSourceId[] = [
     ...(hasUsdaEvidence ? ['usda_fdc' as const] : []),
     ...(hasAiEvidence ? ['ai_estimate' as const] : []),

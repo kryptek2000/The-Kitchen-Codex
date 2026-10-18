@@ -31,6 +31,8 @@ import { normalizeQuery } from '../matching/normalize';
 import { parseIngredient } from '../matching/parse';
 import {
   impliedStateCompatibilityMismatchCount,
+  missingQualifierTokenCount,
+  missingFormTokenCount,
   preparationFormContradictionCount,
   projectQueryText,
   stateContradictionCount,
@@ -133,6 +135,11 @@ function candidateContradictsSource(
   source: IngredientQueryProjection | undefined
 ): boolean {
   if (!source) return false;
+  // Suggestion wording cannot erase an authored salt/fat qualifier or product
+  // form merely because the original row has no compatible catalog candidate.
+  if (missingQualifierTokenCount(candidateTokens, source) > 0) return true;
+  if (missingFormTokenCount(candidateTokens, source) > 0) return true;
+  if (source.numeric_qualifiers.some(token => !candidateTokens.includes(token))) return true;
   if (stateContradictionCount(candidateTokens, source) > 0) return true;
   if (impliedStateCompatibilityMismatchCount(candidateTokens, source) > 0) return true;
   if (preparationFormContradictionCount(candidateTokens, source) > 0) return true;

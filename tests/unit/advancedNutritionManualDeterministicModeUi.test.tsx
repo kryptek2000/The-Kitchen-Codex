@@ -100,7 +100,7 @@ describe('AI-0 manual deterministic mode UI', () => {
     expect(tier.textContent).toContain(AI_ADVANCED_NUTRITION_LABEL);
     expect(tier.textContent).toContain('AI Advanced Nutrition');
     const panel = screen.getByTestId('advanced-nutrition-ai');
-    expect(panel.textContent).toContain('AI never supplies grams');
-    expect(panel.textContent).toContain('Basic manual review and correction are always available');
+    expect(panel.textContent).toContain('Estimates stay labeled');
+    expect(panel.textContent).toContain('nothing is saved automatically');
   });
 });

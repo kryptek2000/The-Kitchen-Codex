@@ -40,7 +40,8 @@ describe('phase 2 rank — match classes', () => {
     );
     expect(results[0].match_class).toBe('exact_phrase');
     expect(results[0].fdc_id).toBe(1);
-    expect(results[1].match_class).toBe('partial_token_overlap');
+    // An explicit salt constraint excludes its opposite from the offered set.
+    expect(results.map(c => c.fdc_id)).toEqual([1]);
   });
 
   it('detects exact token multiset without phrase equality', () => {
@@ -66,15 +67,13 @@ describe('phase 2 rank — match classes', () => {
     expect(results[0].evidence.extra_candidate_token_count).toBe(2);
   });
 
-  it('detects partial overlap and excludes unrelated candidates', () => {
+  it('excludes contradictory whole/skim and unrelated candidates', () => {
     const results = rankCandidates(
       normalizeQuery('milk whole'),
       [entry(1, 'foundation', 'milk skim'), entry(2, 'foundation', 'butter salted')],
       MAX_RESULT_LIMIT
     );
-    expect(results).toHaveLength(1);
-    expect(results[0].match_class).toBe('partial_token_overlap');
-    expect(results[0].fdc_id).toBe(1);
+    expect(results).toEqual([]);
   });
 
   it('orders the closed classes exactly', () => {
@@ -91,7 +90,6 @@ describe('phase 2 rank — match classes', () => {
       'exact_phrase',
       'exact_token_multiset',
       'all_query_tokens_present',
-      'partial_token_overlap',
     ]);
   });
 });

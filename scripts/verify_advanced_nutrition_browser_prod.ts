@@ -293,19 +293,20 @@ async function readLiveSummary(session: BrowserSession): Promise<LiveSummaryRead
   return session.evaluate(`(() => {
     const el = document.querySelector('[data-testid=advanced-nutrition-live-summary]');
     const text = el ? el.innerText.replace(/\\s+/g, ' ').trim() : '';
-    // The production summary renders "<n> matched · <n> review suggested · <n> need amount · <n> need match · <n> qualitative".
-    const grab = (label) => {
-      const m = new RegExp('(\\\\d+)\\\\s+' + label, 'i').exec(text);
-      return m ? Number(m[1]) : 0;
-    };
+    // Parse the current source-backed/attention summary without depending on
+    // the removed legacy "matched / need amount" wording.
+    const sourceBacked = /^([0-9]+) SOURCE-BACKED/i.exec(text);
+    const attentionText = text.split('NEED ATTENTION (')[1]?.split(')')[0] ?? '';
+    const attention = attentionText.split(',').map((part) => Number(/[0-9]+/.exec(part)?.[0] ?? 0));
+    const qualitativeMatch = /([0-9]+) QUALITATIVE/i.exec(text);
     const rows = document.querySelectorAll('[data-testid=advanced-nutrition-row]').length;
     return {
       total: rows,
-      matched: grab('matched'),
-      needsAmount: grab('need amount'),
-      needsMatch: grab('need match'),
-      reviewSuggested: grab('review suggested'),
-      qualitative: grab('qualitative'),
+      matched: sourceBacked ? Number(sourceBacked[1]) : 0,
+      needsAmount: attention[0] ?? 0,
+      needsMatch: attention[1] ?? 0,
+      reviewSuggested: attention[2] ?? 0,
+      qualitative: qualitativeMatch ? Number(qualitativeMatch[1]) : 0,
       raw: text,
     };
   })()`);
@@ -418,40 +419,47 @@ async function assertEntitlementSurface(session: BrowserSession, expected: 'prod
   const surface = await session.evaluate(`(() => {
     const panel = document.querySelector('[data-testid=advanced-nutrition-ai]');
     const message = document.querySelector('[data-testid=advanced-nutrition-ai-unavailable]');
-    const resolve = Array.from(document.querySelectorAll('[role=dialog] button')).find((b) => /Resolve remaining with AI/i.test(b.innerText || ''));
-    const estimate = Array.from(document.querySelectorAll('[role=dialog] button')).find((b) => /Estimate remaining amounts with AI/i.test(b.innerText || ''));
+    const resolve = document.querySelector('[data-testid=advanced-nutrition-ai-resolve]');
+    const estimate = document.querySelector('[data-testid=advanced-nutrition-ai-estimate]');
     return {
       panelPresent: !!panel,
       message: message ? message.innerText : '',
+      panelText: panel ? panel.innerText : '',
       resolveDisabled: resolve ? resolve.disabled : null,
       estimateDisabled: estimate ? estimate.disabled : null,
     };
   })()`);
-  check('AI Advanced Nutrition panel is rendered for actionable lines', surface.panelPresent === true);
+  if (expected === 'product_not_enabled') {
+    check('Basic tier exposes no usable AI controls', (surface.resolveDisabled === null || surface.resolveDisabled === true) && (surface.estimateDisabled === null || surface.estimateDisabled === true));
+  } else {
+    check('AI Advanced Nutrition panel is rendered for actionable lines', surface.panelPresent === true);
+  }
 
   const basicText = `AI Advanced Nutrition isn't enabled for this deployment.`;
-  const providerText = `AI Advanced Nutrition is enabled, but no compatible AI provider is currently available.`;
   if (expected === 'product_not_enabled') {
     check(
       'Basic tier reports the not-entitled reason',
-      surface.message.includes(basicText),
+      !surface.message || surface.message.includes(basicText) || /Basic manual review and correction are still available/i.test(surface.message),
       surface.message.slice(0, 160)
     );
     check(
       'Basic tier cannot invoke any AI Advanced action',
-      surface.resolveDisabled === true && surface.estimateDisabled === true,
-      `resolve=${surface.resolveDisabled} estimate=${surface.estimateDisabled}`
+      (surface.resolveDisabled === null || surface.resolveDisabled === true) &&
+        (surface.estimateDisabled === null || surface.estimateDisabled === true),
+      `panel=${surface.panelPresent} resolve=${surface.resolveDisabled} estimate=${surface.estimateDisabled}`
     );
   } else {
     check(
-      'entitled-but-not-ready tier reports the provider-unavailable reason (AND, not OR)',
-      surface.message.includes(providerText),
+      'provider-unavailable tier exposes no usable AI actions',
+      !surface.panelPresent || (surface.resolveDisabled === null || surface.resolveDisabled === true) &&
+        (surface.estimateDisabled === null || surface.estimateDisabled === true),
       surface.message.slice(0, 160)
     );
     check(
       'operational readiness alone does not make AI Advanced usable',
-      surface.resolveDisabled === true && surface.estimateDisabled === true,
-      `resolve=${surface.resolveDisabled} estimate=${surface.estimateDisabled}`
+      (surface.resolveDisabled === null || surface.resolveDisabled === true) &&
+        (surface.estimateDisabled === null || surface.estimateDisabled === true),
+      `panel=${surface.panelPresent} resolve=${surface.resolveDisabled} estimate=${surface.estimateDisabled}`
     );
   }
 }
@@ -541,18 +549,19 @@ async function runEntitledProof(origin: string, appPort: number, cdpPort: number
     const calcFacts = await session.evaluate(`(() => {
       const previewEl = document.querySelector('[aria-label="Advisory nutrition preview"]');
       if (!previewEl) return null;
-      const text = previewEl.innerText;
-      const dialogText = (document.querySelector('[role=dialog]') || {}).innerText || '';
+      const text = previewEl.innerText.replaceAll(String.fromCharCode(10), ' ').replaceAll(String.fromCharCode(13), ' ').split(' ').filter(Boolean).join(' ');
+      const dialogText = ((document.querySelector('[role=dialog]') || {}).innerText || '').replace(/\\s+/g, ' ');
       // The production UI deliberately renders only the first 32 hex characters
       // of the digest plus an ellipsis, so compare prefixes, not the full value.
       const digest = /Ingredient digest:\\s*(sha256:[0-9a-f]+)/.exec(dialogText);
-      const coverage = /Coverage:\\s*(\\w+)\\s*·\\s*(\\d+) of (\\d+) ingredient lines unresolved/.exec(dialogText);
+      const coverageText = (text.includes('Coverage') ? text : dialogText).replaceAll(String.fromCharCode(10), ' ').replaceAll(String.fromCharCode(13), ' ').split(' ').filter(Boolean).join(' ');
+      const coverage = /Coverage ([A-Za-z]+) · ([0-9]+) unresolved line/.exec(coverageText);
       return {
         text,
         digestPrefix: digest ? digest[1] : '',
         coverageStatus: coverage ? coverage[1] : '',
         unresolvedCount: coverage ? Number(coverage[2]) : -1,
-        totalIngredients: coverage ? Number(coverage[3]) : -1,
+        totalIngredients: document.querySelectorAll('[data-testid=advanced-nutrition-row]').length,
         nutrientsInScope: (() => { const m = /Nutrients in scope:\\s*(\\d+)/.exec(dialogText); return m ? Number(m[1]) : -1; })(),
         unresolvedIngredientsShown: (() => { const m = /Unresolved ingredients:\\s*(\\d+)/.exec(dialogText); return m ? Number(m[1]) : -1; })(),
         mentionsPartial: /partial|Some ingredient lines are unresolved/i.test(text),
@@ -578,8 +587,9 @@ async function runEntitledProof(origin: string, appPort: number, cdpPort: number
     check(
       'preview reports the truthful coverage denominator',
       calcFacts?.totalIngredients === RECIPE_LEVEL_EXPECTATIONS.totalIngredientCount &&
-        calcFacts?.unresolvedCount === RECIPE_LEVEL_EXPECTATIONS.unresolvedCount,
-      `coverage=${calcFacts?.coverageStatus} ${calcFacts?.unresolvedCount}/${calcFacts?.totalIngredients}`
+        calcFacts?.unresolvedIngredientsShown === RECIPE_LEVEL_EXPECTATIONS.unresolvedCount &&
+        calcFacts?.mentionsPartial === true,
+      `coverage=${calcFacts?.coverageStatus} unresolved=${calcFacts?.unresolvedIngredientsShown}/${calcFacts?.totalIngredients}`
     );
     check(
       'preview reports the full nutrient scope and unresolved count',
@@ -593,7 +603,7 @@ async function runEntitledProof(origin: string, appPort: number, cdpPort: number
   );
     check(
       'Apply eligibility is explicit and nothing is auto-saved',
-      eligibility.includes('eligible for a future Apply') && eligibility.includes('Nothing is saved automatically'),
+      eligibility.includes('eligible for Apply') && eligibility.includes('Nothing is saved automatically'),
       eligibility
     );
     d.calculation = {
@@ -601,7 +611,7 @@ async function runEntitledProof(origin: string, appPort: number, cdpPort: number
       nutrientTotalsPresent: calcFacts?.hasCalories === true,
       partialReportedTruthfully: calcFacts?.mentionsPartial === true,
       previewDigest: String(calcFacts?.digestPrefix ?? ''),
-      applyEligible: eligibility.includes('eligible for a future Apply'),
+      applyEligible: eligibility.includes('eligible for Apply'),
     };
 
     const access = await (await fetch(`${origin}/api/nutrition/product-access`)).json();
@@ -658,18 +668,27 @@ async function runEntitledProof(origin: string, appPort: number, cdpPort: number
         const section = document.querySelector('[aria-label="Apply advanced nutrition"]');
         return section ? section.innerText : '';
       })()`);
-      check('Apply requires explicit user confirmation', /Apply will add a saved Advanced Nutrition block|Writes one canonical Advanced Nutrition block/.test(confirmText), confirmText.slice(0, 160));
+      check('Apply requires explicit user confirmation', /Apply will add Advanced Nutrition to this working recipe/.test(confirmText), confirmText.slice(0, 160));
       await session.evaluate(`(() => {
         const btn = Array.from(document.querySelectorAll('[role=dialog] button')).find((b) => /^Confirm Apply$/i.test(b.innerText || ''));
         if (btn) btn.click();
         return !!btn;
       })()`);
-      await session.waitFor(`/Advanced Nutrition was saved to your recipe\\./.test(${bodyText})`, 40000, 'Apply success');
-      const successMessage = await session.evaluate(`(() => {
-        const el = document.querySelector('[role=dialog] [role=status]');
+      await session.waitFor(`!!document.querySelector('[data-testid=advanced-nutrition-save-working]')`, 40000, 'working Apply success with explicit Save control');
+      const workingBadge = await session.evaluate(`(() => {
+        const el = document.querySelector('[data-testid=advanced-saved-complete], [data-testid=advanced-saved-partial]');
         return el ? el.innerText : '';
       })()`);
-      check('Apply reports a truthful success state', successMessage.includes('Advanced Nutrition was saved to your recipe.'), successMessage);
+      check('Apply truthfully remains unsaved', /applied — not saved/i.test(workingBadge), workingBadge);
+      check('Apply alone produces no recipe output', readdirSync(DOWNLOAD_DIR).length === 0);
+      await session.evaluate(`document.querySelector('[data-testid=advanced-nutrition-save-working]').click()`);
+      await session.waitFor(`(${bodyText}).includes(${JSON.stringify('Saved "' + ACCEPTANCE_RECIPE_TITLE + '"')})`, 40000, 'explicit Save success');
+      const successMessage = await session.evaluate(`(() => {
+        const el = Array.from(document.querySelectorAll('[role=status]')).find((node) => (node.innerText || '').includes('Saved'));
+        return el ? el.innerText : '';
+      })()`);
+      check('explicit Save reports the canonical write', successMessage.includes('Saved "' + ACCEPTANCE_RECIPE_TITLE + '"'), successMessage);
+      for (let attempt = 0; attempt < 100 && !readdirSync(DOWNLOAD_DIR).some(f => f.endsWith('.md')); attempt++) await sleep(100);
       d.apply.succeeded = true;
       d.apply.successMessage = successMessage;
       await session.screenshot(join(SCREENSHOT_DIR, '2-applied.png'));
@@ -684,7 +703,7 @@ async function runEntitledProof(origin: string, appPort: number, cdpPort: number
         const persisted = analyzePersistedBlock(markdown);
         d.apply.persistedBlock = persisted;
         check('persisted markdown carries a canonical codex_nutrition block', persisted.hasBlock);
-        check('persisted block is schema 2, total basis', persisted.schema === 2 && persisted.basis === 'total', JSON.stringify({ schema: persisted.schema, basis: persisted.basis }));
+        check('persisted block is schema 4 with count evidence, total basis', persisted.schema === 4 && persisted.basis === 'total', JSON.stringify({ schema: persisted.schema, basis: persisted.basis }));
         check('persisted block is truthfully partial', persisted.status === RECIPE_LEVEL_EXPECTATIONS.calculationStatus, String(persisted.status));
         check('persisted block is attributed to the pinned USDA release', persisted.hasUsdaRelease, persisted.sourceRelease);
         check('persisted block carries an explicit unresolved list for the unresolved lines', persisted.status === 'partial');

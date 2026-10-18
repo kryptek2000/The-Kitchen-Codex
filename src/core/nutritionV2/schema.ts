@@ -1,3 +1,4 @@
+import type { AiNutrientContribution } from './aiContribution';
 /**
  * The Kitchen Codex — Advanced Nutrition v1: canonical schema types & bounds.
  *
@@ -287,7 +288,7 @@ export interface CodexNutritionV4 extends Omit<CodexNutritionV1, 'schema' | 'ing
 }
 export interface CodexNutritionV5 extends Omit<CodexNutritionV4, 'schema'> {
   schema: 5;
-  ai_contributions: import('./aiContribution').AiNutrientContribution[];
+  ai_contributions: AiNutrientContribution[];
 }
 
 /** Bounded opaque safe data for an unknown FUTURE schema value. */
@@ -399,6 +400,7 @@ function getTextEncoder(): TextEncoder | null {
  * available (browser, Node, Obsidian/Electron) with a pure fallback.
  */
 export function utf8ByteLength(text: string): number {
+  if (typeof text !== 'string') throw new TypeError('UTF-8 input must be a string');
   const encoder = getTextEncoder();
   if (encoder) return encoder.encode(text).length;
   let bytes = 0;
@@ -518,12 +520,11 @@ function materialize(value: unknown, bounds: MaterializeBounds, limit: number): 
       if (!add(4)) return { ok: false, reason: 'oversized' };
       return { ok: true, value: null };
     }
-    const type = typeof current;
-    if (type === 'boolean') {
+    if (typeof current === 'boolean') {
       if (!add(current ? 4 : 5)) return { ok: false, reason: 'oversized' };
       return { ok: true, value: current };
     }
-    if (type === 'number') {
+    if (typeof current === 'number') {
       if (!Number.isFinite(current)) {
         if (!bounds.allowNonFinite) return { ok: false, reason: 'non_finite_number' };
         if (!add(4)) return { ok: false, reason: 'oversized' };
@@ -532,14 +533,14 @@ function materialize(value: unknown, bounds: MaterializeBounds, limit: number): 
       if (!add(String(current).length)) return { ok: false, reason: 'oversized' };
       return { ok: true, value: current };
     }
-    if (type === 'string') {
-      const text = current as string;
+    if (typeof current === 'string') {
+      const text = current;
       if (text.length > bounds.maxString) return { ok: false, reason: 'string_too_long' };
       const length = jsonStringByteLength(text, limit - bytes);
       if (length < 0 || !add(length)) return { ok: false, reason: 'oversized' };
       return { ok: true, value: text };
     }
-    if (type !== 'object') return { ok: false, reason: 'unsupported_type' };
+    if (typeof current !== 'object') return { ok: false, reason: 'unsupported_type' };
 
     const object = current as object;
     if (stack.has(object)) return { ok: false, reason: 'cycle' };

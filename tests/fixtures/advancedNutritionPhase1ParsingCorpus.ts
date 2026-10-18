@@ -72,8 +72,8 @@ export const PHASE1_PARSING_CASES: ReadonlyArray<Phase1ParsingCase> = [
     packageMass: null,
     foodText: 'chili flakes (optional)',
     knownIssue: 'range-identity-unresolved',
-    expectCandidateDescription: /chili|pepper/i,
-    expectLiveStatus: 'review_suggested',
+    expectNoAutomatic: true,
+    expectLiveStatus: 'needs_match',
   },
   {
     line: '1-2 tbsp olive oil',

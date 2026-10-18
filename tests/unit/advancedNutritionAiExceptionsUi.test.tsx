@@ -200,8 +200,8 @@ describe('unified AI exception eligibility — UI', () => {
     await openAndAnalyze();
 
     expect(rowStatusText()).toBe('Needs amount');
-    expect(summaryText()).toMatch(/0 need match/);
-    expect(summaryText()).toMatch(/1 need amount/);
+    expect(summaryText()).toMatch(/0 match/);
+    expect(summaryText()).toMatch(/1 amount/);
     expect(screen.getByTestId('advanced-nutrition-ai')).toBeTruthy();
     expect(screen.getByTestId('advanced-nutrition-ai-resolve')).toBeTruthy();
     expect((screen.getByTestId('advanced-nutrition-ai-resolve') as HTMLButtonElement).disabled).toBe(false);
@@ -213,8 +213,8 @@ describe('unified AI exception eligibility — UI', () => {
     await openAndAnalyze();
 
     expect(rowStatusText()).toBe('Review suggested');
-    expect(summaryText()).toMatch(/0 need match/);
-    expect(summaryText()).toMatch(/1 review suggested/);
+    expect(summaryText()).toMatch(/0 match/);
+    expect(summaryText()).toMatch(/1 source review/);
     expect(screen.getByTestId('advanced-nutrition-ai-resolve')).toBeTruthy();
   });
 
@@ -231,8 +231,8 @@ describe('unified AI exception eligibility — UI', () => {
     render(<AdvancedNutritionCard recipe={recipe('100 g Mystery, raw')} session={session} onResolveWithAi={handler} />);
     await openAndAnalyze();
     expect(rowStatusText()).toBe('Matched');
-    expect(summaryText()).toMatch(/1 matched/);
-    expect(summaryText()).toMatch(/0 need amount/);
+    expect(summaryText()).toMatch(/1 source-backed/);
+    expect(summaryText()).toMatch(/0 amount/);
     expect(screen.queryByTestId('advanced-nutrition-ai')).toBeNull();
   });
 
@@ -256,8 +256,8 @@ describe('live status summary authority — UI', () => {
   it('summary follows an explicit user resolution immediately (no stale counters)', async () => {
     render(<AdvancedNutritionCard recipe={recipe('1 cup berries')} session={session} />);
     await openAndAnalyze();
-    expect(summaryText()).toMatch(/0 matched/);
-    expect(summaryText()).toMatch(/1 review suggested/);
+    expect(summaryText()).toMatch(/0 source-backed/);
+    expect(summaryText()).toMatch(/1 source review/);
 
     // Expand and pick a credible food + its authenticated cup portion.
     fireEvent.click(screen.getByTestId('advanced-nutrition-edit'));
@@ -278,8 +278,8 @@ describe('live status summary authority — UI', () => {
     });
     await waitFor(() => expect(rowStatusText()).toBe('Matched'));
     // The summary derives from the SAME live rows, never the analyzer snapshot.
-    expect(summaryText()).toMatch(/1 matched/);
-    expect(summaryText()).toMatch(/0 review suggested/);
+    expect(summaryText()).toMatch(/1 source-backed/);
+    expect(summaryText()).toMatch(/0 source review/);
   });
 });
 
@@ -361,7 +361,7 @@ describe('AI amount offers and post-result feedback — UI', () => {
     render(<AdvancedNutritionCard recipe={recipe('3 garlic cloves, minced')} session={session} onResolveWithAi={handler} />);
     await openAndAnalyze();
     expect(rowStatusText()).toBe('Needs amount');
-    expect(summaryText()).toMatch(/1 need amount/);
+    expect(summaryText()).toMatch(/1 amount/);
 
     fireEvent.click(screen.getByTestId('advanced-nutrition-ai-resolve'));
     await waitFor(() =>
@@ -379,8 +379,8 @@ describe('AI amount offers and post-result feedback — UI', () => {
     expect(row.textContent).toMatch(/USDA count portion/);
     expect(row.textContent).toMatch(/AI-assisted USDA count portion/);
     expect(row.textContent).not.toMatch(/user-confirmed/i);
-    await waitFor(() => expect(summaryText()).toMatch(/1 matched/));
-    expect(summaryText()).toMatch(/0 need amount/);
+    await waitFor(() => expect(summaryText()).toMatch(/1 source-backed/));
+    expect(summaryText()).toMatch(/0 amount/);
     expect(screen.getByTestId('advanced-nutrition-ai-message').textContent).toMatch(
       /0 still need review/i
     );

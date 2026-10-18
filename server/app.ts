@@ -49,6 +49,7 @@ import {
   providerTestRateLimiter,
   capabilityVerifyRateLimiter,
   recipeVerifyRateLimiter,
+  globalRequestRateLimiter,
   getClientIp,
 } from "./rateLimiter.js";
 import { interpretKitchenQuestionOnServer } from "./kitchenInterpret.js";
@@ -390,6 +391,10 @@ export function createApp(opts: CreateAppOptions): express.Express {
     const n = Number(raw);
     return Number.isInteger(n) && n >= 0 ? n : raw;
   })());
+
+  // Bound total request volume before route authentication and body parsing.
+  // Narrower route limiters below remain active as an additional control.
+  app.use(globalRequestRateLimiter);
 
   // BYOK-5B session-key routes are registered BEFORE the global JSON parser so
   // their dedicated 8 KiB body ceiling is actually enforced (a second
@@ -1132,16 +1137,17 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // there is no path from model output to JavaScript, a shell command, a
   // filesystem path, a database query or an external URL.
   //
-  // Gate order is the established AI route order:
-  //   auth -> product entitlement -> pricing guard -> rate limit -> handler.
+  // Gate order keeps authentication first, then applies the tighter SHISO
+  // bucket before product authority and pricing work:
+  //   auth -> rate limit -> product entitlement -> pricing guard -> handler.
   // `ai_interpretation` is reused because Shiso interprets; this introduces no
   // fifth entitlement feature.
   app.post(
     "/api/shiso/turn",
     requireAiAccessToken,
+    shisoConversationRateLimiter,
     requireNutritionProductFeature(nutritionProductAccessAuthority, "ai_interpretation"),
     textPricingGuard,
-    shisoConversationRateLimiter,
     async (req, res) => {
       res.setHeader("Cache-Control", "no-store");
       try {

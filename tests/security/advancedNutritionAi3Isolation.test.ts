@@ -319,17 +319,22 @@ describe('AI-3 isolation — capability gating and phase boundaries', () => {
   });
 });
 
-describe('AI-3 isolation — Phase 5 and the schema are untouched', () => {
-  it('no schema v4 and no estimate member in the closed conversion_basis union', () => {
+describe('AI-3 isolation — accepted estimates cross only validated persistence boundaries', () => {
+  it('declares separate estimate provenance and conversion evidence', () => {
     const schema = read('src/core/nutritionV2/schema.ts');
-    expect(schema).not.toContain("'v4'");
-    expect(schema).not.toContain('ai_estimate');
+    expect(schema).toContain('CODEX_NUTRITION_SCHEMA_V4 = 4');
+    expect(schema).toContain('CODEX_NUTRITION_SCHEMA_V5 = 5');
+    expect(schema).toContain("provenance: 'ai_estimate'");
+    expect(schema).toContain("'estimated_quantity'");
   });
-
-  it('Phase 5 core authorization does not import any AI-3 module', () => {
+  it('keeps authorization pure and validates both contributions and the final block', () => {
     const authorize = read('src/core/nutritionV2/phase5/authorize.ts');
-    expect(authorize).not.toContain('aiEstimate');
-    expect(authorize).not.toContain('ai_estimate');
+    expect(authorize).toContain('validateAiNutrientContributions');
+    expect(authorize).toContain('validateCodexNutrition(built.block)');
+    for (const spec of importSpecifiers(authorize)) {
+      expect(spec).not.toMatch(/server|provider|application|node:/);
+    }
+    expect(authorize).not.toMatch(/\bfetch\s*\(/);
   });
 });
 

@@ -406,6 +406,7 @@ type ShisoNutritionUiState =
   | { readonly kind: 'error'; readonly message: string };
 
 const NO_INGREDIENTS: ReadonlyArray<AdaptedIngredient> = Object.freeze([]);
+const NO_AI_CONTRIBUTIONS = Object.freeze([]);
 
 export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
   recipe,
@@ -421,6 +422,7 @@ onReviewRecipeContextWithAi,
   advancedNutritionAiAvailability,
 }) => {
   const shiso = useShiso();
+  const nutritionUnsaved = shiso.workingRecipe?.nutrition_unsaved === true;
   const [isOpen, setIsOpen] = useState(false);
   const [isSavedReportOpen, setIsSavedReportOpen] = useState(false);
   const [calculating, setCalculating] = useState(false);
@@ -946,7 +948,7 @@ onReviewRecipeContextWithAi,
       }
     : undefined;
 
-  const handleCalculate = () => {
+  const handleCalculate = useCallback(() => {
     if (!session || !adaptation.ok) return;
     setCalculating(true);
     const seq = state.operationSeq;
@@ -963,7 +965,7 @@ onReviewRecipeContextWithAi,
     } else {
       dispatch({ type: 'preview_failed', seq, failure: phase4Failure('validation_error') });
     }
-  };
+  }, [session, adaptation, adapted, state]);
 
   // Deterministic automatic analysis. Pure/offline; it never persists and never
   // mutates the recipe. Recomputed whenever the adaptation or session changes.
@@ -1101,7 +1103,7 @@ onReviewRecipeContextWithAi,
   const acceptedShisoContributions = state.aiNutrition?.recipe_key === state.recipeKey &&
     state.aiNutrition?.servings === state.baseServings
     ? state.aiNutrition.contributions
-    : [];
+    : NO_AI_CONTRIBUTIONS;
   const nutritionSummaryText = useMemo(() => {
     return nutritionCoverageSummary(deriveNutritionCoverage(liveRows, acceptedShisoContributions));
   }, [liveRows, acceptedShisoContributions]);
@@ -1395,10 +1397,10 @@ onReviewRecipeContextWithAi,
     for (const row of state.rows) {
       const choice = state.matches[row.line_ref];
       if (!choice) continue;
-      // An explicitly accepted AI correction is a reviewed choice, as are
-      // manual selections. Re-analyze preserves these decisions.
+      // A deterministic AI acceptance is automatic, not a user decision.
+      // Explicit Use/Confirm actions strip aiAccepted and remain preserved.
       const userDecision =
-        choice.aiAccepted === true || choice.kind === 'manual' || choice.automatic !== true;
+        choice.aiAccepted !== true && (choice.kind === 'manual' || choice.automatic !== true);
       if (!userDecision) continue;
       matches[row.line_ref] = choice;
       const userMass = state.userMasses[row.line_ref];
@@ -2351,7 +2353,7 @@ onReviewRecipeContextWithAi,
             }`}
           >
             <FlaskConical className="w-3.5 h-3.5" />
-            <span>{savedBlock ? 'Open Saved Advanced Report' : 'Generate Nutrition'}</span>
+            <span>{savedBlock ? (nutritionUnsaved ? 'Open Working Advanced Report' : 'Open Saved Advanced Report') : 'Generate Nutrition'}</span>
           </button>
         </div>
       )}
@@ -2373,7 +2375,7 @@ onReviewRecipeContextWithAi,
             </p>
           ) : savedPresentation.advanced_unresolved_count === 0 ? (
             <div data-testid="advanced-saved-complete" role="status" aria-live="polite" className="space-y-0.5">
-              <p className="text-xs font-semibold text-emerald-300">Advanced Nutrition saved{savedPresentation.advanced_complete ? '' : ' · nutrient coverage partial'}</p>
+              <p className="text-xs font-semibold text-emerald-300">Advanced Nutrition {nutritionUnsaved ? 'applied — not saved' : 'saved'}{savedPresentation.advanced_complete ? '' : ' · nutrient coverage partial'}</p>
               <p className="text-[11px] text-gray-400">
                 {savedPresentation.advanced_stale ? 'Saved result needs review — recalculate before using these totals' : stored.kind === 'v5' ? 'Source-backed + AI-estimated contributions' : 'USDA reviewed'}
                 {savedPresentation.advanced_ingredient_count ? ` · ${savedPresentation.advanced_ingredient_count} ingredient lines accounted for` : ''}
@@ -2383,7 +2385,7 @@ onReviewRecipeContextWithAi,
             </div>
           ) : (
             <div data-testid="advanced-saved-partial" role="status" aria-live="polite" className="space-y-0.5">
-              <p className="text-xs font-semibold text-amber-300">Advanced Nutrition saved — partial</p>
+              <p className="text-xs font-semibold text-amber-300">Advanced Nutrition {nutritionUnsaved ? 'applied — not saved' : 'saved'} — partial</p>
               <p className="text-[11px] text-gray-400">
                 {savedPresentation.advanced_resolved_count + savedPresentation.advanced_excluded_count} of {savedPresentation.advanced_ingredient_count} ingredient line
                 {savedPresentation.advanced_ingredient_count === 1 ? '' : 's'} accounted for
@@ -2424,7 +2426,7 @@ onReviewRecipeContextWithAi,
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-indigo-200 bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 transition-colors"
             >
               <FlaskConical className="w-3.5 h-3.5" />
-              <span>{savedBlock ? 'Open Saved Advanced Report' : 'Generate Nutrition'}</span>
+              <span>{savedBlock ? (nutritionUnsaved ? 'Open Working Advanced Report' : 'Open Saved Advanced Report') : 'Generate Nutrition'}</span>
             </button>
           )}
         </div>
@@ -2443,7 +2445,7 @@ onReviewRecipeContextWithAi,
             <div className="p-3 rounded-xl bg-[#0E0E0E] border border-white/5">
               {savedPresentation.advanced_unresolved_count === 0 ? (
                 <div data-testid="advanced-saved-complete" className="space-y-0.5">
-                  <p className="text-[11px] font-semibold text-emerald-300">Advanced Nutrition saved{savedPresentation.advanced_complete ? '' : ' · nutrient coverage partial'}</p>
+                  <p className="text-[11px] font-semibold text-emerald-300">Advanced Nutrition {nutritionUnsaved ? 'applied — not saved' : 'saved'}{savedPresentation.advanced_complete ? '' : ' · nutrient coverage partial'}</p>
                   <p className="text-[10px] text-gray-400">
                     {savedPresentation.advanced_stale ? 'Saved result needs review — recalculate before using these totals' : stored.kind === 'v5' ? 'Source-backed + AI-estimated contributions' : 'USDA reviewed'}
                     {savedPresentation.advanced_ingredient_count ? ` · ${savedPresentation.advanced_ingredient_count} ingredient lines accounted for` : ''}
@@ -2454,7 +2456,7 @@ onReviewRecipeContextWithAi,
               ) : (
                 <div data-testid="advanced-saved-partial" className="space-y-0.5">
                   <p className="text-[11px] font-semibold text-amber-300">
-                    Advanced Nutrition saved — partial
+                    Advanced Nutrition {nutritionUnsaved ? 'applied — not saved' : 'saved'} — partial
                   </p>
                   <p className="text-[10px] text-gray-400">
                     {savedPresentation.advanced_resolved_count + savedPresentation.advanced_excluded_count} of {savedPresentation.advanced_ingredient_count} ingredient line
@@ -2576,7 +2578,7 @@ onReviewRecipeContextWithAi,
               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold text-indigo-200 bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 transition-colors"
             >
               <FlaskConical className="w-3.5 h-3.5" />
-              <span>{savedBlock ? 'Open Saved Advanced Report' : 'Generate Nutrition'}</span>
+              <span>{savedBlock ? (nutritionUnsaved ? 'Open Working Advanced Report' : 'Open Saved Advanced Report') : 'Generate Nutrition'}</span>
             </button>
           </div>
         </div>
@@ -2609,6 +2611,7 @@ onReviewRecipeContextWithAi,
       {savedBlock && (
         <AdvancedNutritionSavedReport
           isOpen={isSavedReportOpen}
+          unsaved={nutritionUnsaved}
           onClose={() => setIsSavedReportOpen(false)}
           title={adaptation.ok ? adaptation.recipe.title : ''}
           block={savedBlock}
