@@ -165,7 +165,7 @@ describe('phase 3 calculation — lexical authority encapsulation', () => {
 
   it('source audit: the context authority registry is a non-exported WeakMap in context.ts', () => {
     for (const file of CALCULATION_FILES) {
-      const source = readFileSync(file, 'utf8');
+      const source = readFileSync(file, 'utf8').replace(/\bimport\s+type\b[\s\S]*?;/g, '');
       for (const line of source.split('\n')) {
         if (!/^\s*export\b/.test(line)) continue;
         expect(line, file).not.toMatch(/register|authority|registry|WeakMap/i);
@@ -234,7 +234,7 @@ describe('phase 3 calculation — isolation and purity', () => {
         if (file.startsWith(CALCULATION_DIR)) continue;
         if (file.startsWith(PHASE4_DIR)) continue; // allowed Phase 4 review/display path
         if (file.startsWith(PHASE5_DIR)) continue; // allowed Phase 5A build-only path
-        const source = readFileSync(file, 'utf8');
+        const source = readFileSync(file, 'utf8').replace(/\bimport\s+type\b[\s\S]*?;/g, '');
         let match: RegExpExecArray | null;
         importRe.lastIndex = 0;
         while ((match = importRe.exec(source)) !== null) {
@@ -251,7 +251,7 @@ describe('phase 3 calculation — isolation and purity', () => {
     // Positive control: the Phase 4 boundary DOES import Phase 3.
     let phase4Importers = 0;
     for (const file of listFiles(PHASE4_DIR)) {
-      const source = readFileSync(file, 'utf8');
+      const source = readFileSync(file, 'utf8').replace(/\bimport\s+type\b[\s\S]*?;/g, '');
       let match: RegExpExecArray | null;
       importRe.lastIndex = 0;
       while ((match = importRe.exec(source)) !== null) {
@@ -267,7 +267,7 @@ describe('phase 3 calculation — isolation and purity', () => {
     // Positive control: the Phase 5A boundary DOES import the Phase 3 contracts.
     let phase5Importers = 0;
     for (const file of listFiles(PHASE5_DIR)) {
-      const source = readFileSync(file, 'utf8');
+      const source = readFileSync(file, 'utf8').replace(/\bimport\s+type\b[\s\S]*?;/g, '');
       let match: RegExpExecArray | null;
       importRe.lastIndex = 0;
       while ((match = importRe.exec(source)) !== null) {

@@ -135,8 +135,8 @@ function calculatorDigest(candidate: Candidate): string | null {
 }
 
 describe('AI-3 identity evidence — Phase-4/calculator parity', () => {
-  it('the canonical population is 97 and yields the measured 24 candidates', () => {
-    // AI-6B1 CURRENT: 24 AI-3 candidates (was 26 at the AI-6A release).
+  it('the canonical population is 97 and yields the measured 22 candidates', () => {
+    // Current safe offer population: 22 AI-3 candidates. Two formerly offered rows retain authored product qualifiers that are not supported by their selected USDA identities; Phase 4 correctly withholds the lower-authority estimate.
     //
     // This is NOT an AI-3 behavior change and NOT a weakened AI-3 contract. AI-3
     // is the LOWEST mass authority: it is offered only when no deterministic
@@ -148,7 +148,7 @@ describe('AI-3 identity evidence — Phase-4/calculator parity', () => {
     // its eligibility rule, evidence contract, and effective-mass precedence are
     // untouched. The corpus population itself is still 97.
     expect(canonicalPopulation().length).toBe(97);
-    expect(ai3Candidates().length).toBe(24);
+    expect(ai3Candidates().length).toBe(22);
   });
 
   it('every AI-3 candidate gets COMPLETE five-field evidence (none fail closed)', () => {
@@ -178,7 +178,7 @@ describe('AI-3 identity evidence — Phase-4/calculator parity', () => {
     }
   });
 
-  it('the Phase-4 derived digest EQUALS the calculator digest for all 26', () => {
+  it('the Phase-4 derived digest EQUALS the calculator digest for all 22', () => {
     const mismatches: string[] = [];
     let compared = 0;
     for (const c of ai3Candidates()) {
@@ -191,7 +191,7 @@ describe('AI-3 identity evidence — Phase-4/calculator parity', () => {
         mismatches.push(`${c.line}: phase4=${ev.ingredient_identity_digest} calculator=${calc}`);
       }
     }
-    expect(compared).toBe(24);
+    expect(compared).toBe(22);
     expect(mismatches, `identity digest divergence:\n${mismatches.join('\n')}`).toEqual([]);
   });
 

@@ -313,11 +313,11 @@ describe("OpenRouterImageProvider — provider error taxonomy (BYOK-3)", () => {
     await expect(provider.generateImage("x", { model: OPENROUTER_IMAGE_DEFAULT_MODEL, prompt: "x" })).rejects.toMatchObject({ code: "TIMEOUT" });
   });
 
-  it("transport connection failure -> UNAVAILABLE (never a leaky PROVIDER_ERROR)", async () => {
+  it("transport connection failure -> NETWORK (never a leaky PROVIDER_ERROR)", async () => {
     const provider = new OpenRouterImageProvider({
       fetchFn: vi.fn<OpenRouterImageFetchLike>().mockRejectedValue(new Error("fetch failed: ECONNREFUSED")),
     });
-    await expect(provider.generateImage("x", { model: OPENROUTER_IMAGE_DEFAULT_MODEL, prompt: "x" })).rejects.toMatchObject({ code: "UNAVAILABLE" });
+    await expect(provider.generateImage("x", { model: OPENROUTER_IMAGE_DEFAULT_MODEL, prompt: "x" })).rejects.toMatchObject({ code: "NETWORK" });
   });
 
   it("model is required (no silent default)", async () => {

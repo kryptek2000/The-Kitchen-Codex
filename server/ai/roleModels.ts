@@ -23,7 +23,7 @@ import type { AiOperation } from "./operations.js";
 import { AI_OPERATIONS } from "./operations.js";
 import { MODEL_CONFIG } from "../modelConfig.js";
 import { OPENROUTER_STRUCTURED_MODEL } from "./openRouterProvider.js";
-import { openRouterSelectableTextModelIds } from "./openRouterCatalog.js";
+import { openRouterConversationTextModelIds, openRouterSelectableTextModelIds } from "./openRouterCatalog.js";
 import { DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL } from "./deepSeekProvider.js";
 
 /** Gemini role models per operation (unchanged v0.6 behavior). */
@@ -31,6 +31,7 @@ const GEMINI_ROLE_MODELS: Record<AiOperation, string[]> = {
   kitchenInterpret: [MODEL_CONFIG.kitchenPrimary, MODEL_CONFIG.kitchenFallback],
   kitchenRank: [MODEL_CONFIG.kitchenPrimary, MODEL_CONFIG.kitchenFallback],
   kitchenDiscover: [MODEL_CONFIG.kitchenDiscoveryPrimary, MODEL_CONFIG.kitchenDiscoveryFallback],
+  shisoConversation: [MODEL_CONFIG.kitchenPrimary, MODEL_CONFIG.kitchenFallback],
   nutrition: [MODEL_CONFIG.nutritionPrimary, MODEL_CONFIG.nutritionFallback],
   metadataRecovery: [MODEL_CONFIG.metadataRecoveryPrimary, MODEL_CONFIG.metadataRecoveryFallback],
   recipeGrabber: [MODEL_CONFIG.recipeGrabberPrimary, MODEL_CONFIG.recipeGrabberFallback, MODEL_CONFIG.recipeGrabberAlias],
@@ -44,6 +45,7 @@ const OPENROUTER_ROLE_MODELS: Record<AiOperation, string[]> = {
   kitchenRank: [OPENROUTER_STRUCTURED_MODEL],
   // Discovery candidates are resolved but capability-filtered out (webSearch:false).
   kitchenDiscover: [OPENROUTER_STRUCTURED_MODEL],
+  shisoConversation: [],
   nutrition: [OPENROUTER_STRUCTURED_MODEL],
   metadataRecovery: [OPENROUTER_STRUCTURED_MODEL],
   recipeGrabber: [OPENROUTER_STRUCTURED_MODEL],
@@ -64,6 +66,7 @@ const DEEPSEEK_ROLE_MODELS: Record<AiOperation, string[]> = {
   kitchenRank: [DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL],
   // Discovery candidates are resolved but capability-filtered out (webSearch:false).
   kitchenDiscover: [DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL],
+  shisoConversation: [DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL],
   nutrition: [DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL],
   metadataRecovery: [DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL],
   recipeGrabber: [DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL],
@@ -77,6 +80,7 @@ function geminiModels(operation: AiOperation): string[] {
 }
 
 function openRouterModels(operation: AiOperation): string[] {
+  if (operation === "shisoConversation") return openRouterConversationTextModelIds();
   return OPENROUTER_ROLE_MODELS[operation] ?? [];
 }
 
@@ -108,6 +112,10 @@ export function roleModelsForProvider(providerId: string, operation: AiOperation
 export function curatedTextModels(providerId: string): string[] {
   const models: string[] = [];
   for (const operation of AI_OPERATIONS) {
+    // OpenRouter's ordinary free chat tier is selected from the live text
+    // catalog. It is executable by Shiso's validated JSON-text adapter, but is
+    // not part of the curated structured-model / connection-test allowlist.
+    if (providerId === "openrouter" && operation === "shisoConversation") continue;
     for (const model of roleModelsForProvider(providerId, operation)) {
       if (!models.includes(model)) models.push(model);
     }
@@ -116,16 +124,16 @@ export function curatedTextModels(providerId: string): string[] {
 }
 
 /**
- * v0.8.0: the models a provider may be USER-SELECTED with. For OpenRouter this is
- * the union of the curated role models AND the live, normalized dynamic catalog
- * (structured-capable text models + the free router). Every other provider uses
- * the curated set unchanged. The dynamic set is server-owned and bounded: an
- * arbitrary client-supplied model id is never a member.
+ * The models a provider may be USER-SELECTED with. For OpenRouter this is the
+ * union of curated role models, live structured-capable models, and the verified
+ * free ordinary-chat tier. Every other provider uses the curated set unchanged.
+ * All dynamic sets are server-owned and bounded: arbitrary client model ids are
+ * never members.
  */
 export function selectableTextModels(providerId: string): string[] {
   if (providerId !== "openrouter") return curatedTextModels(providerId);
   const models: string[] = [];
-  for (const id of openRouterSelectableTextModelIds()) {
+  for (const id of [...openRouterSelectableTextModelIds(), ...openRouterConversationTextModelIds()]) {
     if (!models.includes(id)) models.push(id);
   }
   for (const id of curatedTextModels(providerId)) {

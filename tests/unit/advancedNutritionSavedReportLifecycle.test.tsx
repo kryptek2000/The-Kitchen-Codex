@@ -1,3 +1,4 @@
+import { ShisoEntryProvider, useShiso } from '../../src/application-ui/shisoEntryPoints';
 // @vitest-environment jsdom
 /**
  * Advanced Nutrition — saved-report lifecycle + working-review hydration.
@@ -77,7 +78,7 @@ function savedBlockFor(target: ObsidianRecipe, overrides: Partial<CodexNutrition
     ingredient_digest: `sha256:${'a'.repeat(64)}`,
     dv_standard: DV_STANDARD_ID,
     sources: ['usda_fdc'],
-    source_releases: { usda_fdc: 'r' },
+    source_releases: { usda_fdc: session.metadata().bundle_release },
     nutrient_scope: ['calories'],
     nutrients: {
       calories: {
@@ -94,7 +95,7 @@ function savedBlockFor(target: ObsidianRecipe, overrides: Partial<CodexNutrition
         line_ref: adaptation.recipe.adapted[0].line_ref,
         source: 'usda_fdc',
         source_food_id: '1002',
-        source_release: 'r',
+        source_release: session.metadata().bundle_release,
         match_status: 'confirmed',
         resolved: true,
         user_confirmed: true,
@@ -123,7 +124,7 @@ describe('saved Advanced report lifecycle', () => {
     fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
     // The saved report is visible from the persisted block alone.
     expect(screen.getByTestId('saved-advanced-status')).toBeTruthy();
-    expect(screen.getByTestId('saved-advanced-status').textContent).toMatch(/Complete ingredient coverage/i);
+    expect(screen.getByTestId('saved-advanced-status').textContent).toMatch(/All ingredient lines accounted for/i);
     // No analyzer initialization was required.
     expect(onLoadBundle).not.toHaveBeenCalled();
     expect(screen.queryByTestId('advanced-nutrition-working-banner')).toBeNull();
@@ -138,7 +139,7 @@ describe('saved Advanced report lifecycle', () => {
     render(<AdvancedNutritionCard recipe={base} savedAdvancedBlock={partial} onLoadBundle={vi.fn()} />);
     fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
     expect(screen.getByTestId('saved-advanced-status').textContent).toMatch(/Partial ingredient coverage/i);
-    expect(screen.getByTestId('saved-advanced-status').textContent).toMatch(/1 of 2 ingredient lines resolved/i);
+    expect(screen.getByTestId('saved-advanced-status').textContent).toMatch(/1 of 2 ingredient lines accounted for/i);
   });
 
   it('switches display basis without mutating stored totals', () => {
@@ -146,12 +147,12 @@ describe('saved Advanced report lifecycle', () => {
     render(<AdvancedNutritionCard recipe={base} savedAdvancedBlock={savedBlockFor(base)} onLoadBundle={vi.fn()} />);
     fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
     expect(screen.getByTestId('saved-advanced-basis-label').textContent).toBe('Entire recipe');
-    expect(screen.getByText(/3210/)).toBeTruthy();
+    expect(screen.getAllByText(/3210/).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByTestId('saved-advanced-basis-per_serving'));
     expect(screen.getByTestId('saved-advanced-basis-label').textContent).toBe('Per serving');
     expect(screen.getByText(/802\.5/)).toBeTruthy();
     fireEvent.click(screen.getByTestId('saved-advanced-basis-entire_recipe'));
-    expect(screen.getByText(/3210/)).toBeTruthy();
+    expect(screen.getAllByText(/3210/).length).toBeGreaterThan(0);
   });
 
   it('Edit / Re-analyze initializes the analyzer lazily and hydrates prior evidence', async () => {
@@ -191,7 +192,7 @@ describe('saved Advanced report lifecycle', () => {
     const block = savedBlockFor(base);
     render(<AdvancedNutritionCard recipe={base} session={session} savedAdvancedBlock={block} onApplyAdvancedNutrition={vi.fn()} />);
     fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
-    expect(screen.getByText(/3210/)).toBeTruthy();
+    expect(screen.getAllByText(/3210/).length).toBeGreaterThan(0);
     // Edit, then close without saving.
     fireEvent.click(screen.getByTestId('saved-advanced-edit'));
     await screen.findByTestId('advanced-nutrition-analyze');
@@ -199,8 +200,8 @@ describe('saved Advanced report lifecycle', () => {
     await waitFor(() => expect(screen.queryByTestId('advanced-nutrition-analyze')).toBeNull());
     // Reopen: the original saved report is still present and unchanged.
     fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
-    expect(screen.getByTestId('saved-advanced-status').textContent).toMatch(/Complete ingredient coverage/i);
-    expect(screen.getByText(/3210/)).toBeTruthy();
+    expect(screen.getByTestId('saved-advanced-status').textContent).toMatch(/All ingredient lines accounted for/i);
+    expect(screen.getAllByText(/3210/).length).toBeGreaterThan(0);
   });
 
   it('marks the working review dirty only after a genuine user edit', async () => {
@@ -220,4 +221,27 @@ describe('saved Advanced report lifecycle', () => {
       expect(screen.getByTestId('advanced-nutrition-working-banner').textContent).toMatch(/Unsaved changes/i);
     });
   });
+});
+
+function DurabilityHarness({ value, block }: { value: ObsidianRecipe; block: CodexNutritionV1 }) {
+  const shiso = useShiso();
+  return <>
+    <button onClick={() => shiso.publishWorkingRecipe({ unsaved: true, nutrition_unsaved: true, change_count: 1, changes: ['Advanced Nutrition applied'] })}>mark working</button>
+    <button onClick={() => shiso.publishWorkingRecipe(null)}>mark persisted</button>
+    <AdvancedNutritionCard recipe={value} savedAdvancedBlock={block} session={session} />
+  </>;
+}
+it('distinguishes an applied working result from a durably saved result', () => {
+  const value = recipe();
+  const block = savedBlockFor(value);
+  value.codexNutrition = block;
+  render(<ShisoEntryProvider><DurabilityHarness value={value} block={block} /></ShisoEntryProvider>);
+  fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
+  expect(screen.getByRole('heading', { name: /Advanced Nutrition saved/i })).toBeTruthy();
+  fireEvent.click(screen.getByText('mark working'));
+  expect(screen.getByRole('heading', { name: /Advanced Nutrition applied — not saved/i })).toBeTruthy();
+  fireEvent.click(screen.getByLabelText('Close working Advanced Nutrition report'));
+  fireEvent.click(screen.getByText('mark persisted'));
+  fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
+  expect(screen.getByRole('heading', { name: /Advanced Nutrition saved/i })).toBeTruthy();
 });

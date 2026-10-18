@@ -191,13 +191,13 @@ describe('phase 5C — presentation precedence', () => {
     expect(p.stale_reasons).toContain('ingredients_changed');
     // The Advanced value is still the display authority, never the legacy value
     // (364 total for the stored 2-serving basis, scaled to 4 requested servings).
-    expect(resolveNutritionDisplayCalories(p, 4)).toBe(728);
+    expect(resolveNutritionDisplayCalories(p, 4)).toBeUndefined();
     expect(resolveNutritionDisplayCalories(p, 4)).not.toBe(100);
   });
 
   it('7. unknown future Advanced + legacy -> advanced_unsupported', () => {
     const r = recipe([FLOUR], {
-      frontmatter: { codex_nutrition: { schema: 4, basis: 'total', futureField: true } },
+      frontmatter: { codex_nutrition: { schema: 6, basis: 'total', futureField: true } },
       nutrition: { calories: 100 } as never,
     });
     const p = resolveRecipeNutritionPresentation(r);
@@ -428,8 +428,8 @@ describe('phase 5C H2 — adaptation failure marks the saved result stale', () =
     expect(p.advanced_preferred).toBe(true);
     expect(p.stale_reasons).toContain('ingredients_changed');
     expect(p.advanced).toEqual(block);
-    // No legacy substitution (the block has its own calories).
-    expect(resolveNutritionDisplayCalories(p, 4)).toBe(364);
+    // Unverifiable totals are withheld; the original block is preserved.
+    expect(resolveNutritionDisplayCalories(p, 4)).toBeUndefined();
     // No mutation.
     expect(JSON.stringify(broken)).toBe(before);
   });

@@ -65,8 +65,15 @@ export function normalizeQuery(text: string): NormalizedQuery {
   const normalized = stripped
     .normalize('NFC')
     .toLowerCase()
+    // USDA and recipe vocabulary for the same ingredient, without weakening
+    // material identity (unsalted remains a required qualifier).
+    .replace(/\bwithout (?:added )?salt\b/g, 'unsalted')
+    .replace(/jalapeñ/g, 'jalapen')
+    .replace(/\bcheese monterey\b(?! jack)/g, 'cheese monterey jack')
+    .replace(/\bserrano chil(?:e|i)s?\b/g, 'serrano peppers')
     .replace(APOSTROPHE, '')
     .replace(NON_ALPHANUMERIC_RUN, ' ')
+    .replace(/^soup\s+([^,]+?)\s+broth\b/g, '$1 broth')
     .replace(/\s+/g, ' ')
     .trim();
   const tokens = normalized.length === 0 ? [] : normalized.split(' ');

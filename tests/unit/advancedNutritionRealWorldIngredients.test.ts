@@ -201,7 +201,8 @@ describe('real-world acceptance matrix', () => {
   it('I. 57 g unsalted butter -> unsalted butter, direct mass', () => {
     const { row } = analyzeLine('57 g unsalted butter, softened');
     expect(row.status).toBe('matched');
-    expect(row.selected_description).toMatch(/unsalted/i);
+    expect(row.selected_description).toMatch(/unsalted|without salt/i);
+    expect(row.selected_fdc_id).toBe(173430);
   });
 
   it('J. 113 g blue cheese -> blue cheese, direct mass', () => {

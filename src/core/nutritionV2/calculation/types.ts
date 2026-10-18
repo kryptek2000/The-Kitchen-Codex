@@ -15,6 +15,7 @@ import type { NutrientId } from '../nutrients';
 import type { CanonicalUnit } from '../units';
 import type { WrittenMassRangeEvidence } from '../schema';
 import type { UsdaDataType } from '../usda/types';
+import type { AiNutrientContribution } from '../aiContribution';
 
 export const CALCULATION_SCHEMA = 1;
 /**
@@ -29,7 +30,7 @@ export const CALCULATION_SCHEMA = 1;
  * portion/count/user-mass selections and previews are rejected rather than
  * reused.
  */
-export const CALCULATION_VERSION = 'usda_advisory_calc_v4';
+export const CALCULATION_VERSION = 'usda_advisory_calc_v5';
 export const CALCULATION_CONTEXT_VERSION = 'usda_calc_context_v3';
 
 // ---------------------------------------------------------------------------
@@ -186,7 +187,7 @@ export interface AiEstimateSelection {
   readonly snapshot_binding: string;
 }
 
-/** Bounded, truthful estimate evidence retained for display (never persisted). */
+/** Bounded, truthful estimate evidence retained for display and explicitly authorized schema-v4 persistence. */
 export interface AiEstimateEvidence {
   readonly lower_grams: number;
   readonly upper_grams: number;
@@ -203,9 +204,8 @@ export type MassSource =
   | 'household_portion'
   /**
    * BOUNDED AI MASS ESTIMATE (AI-3). The lowest mass authority, mutually
-   * exclusive with every other source, and never persisted: `conversion_basis`
-   * has no representation for it, so an estimate-backed line is omitted from
-   * the persisted block rather than mislabelled.
+   * exclusive with every other source. Explicit Apply preserves it under
+   * schema-v4 `estimated_quantity` evidence, never as an authenticated portion.
    */
   | 'ai_estimate';
 
@@ -245,7 +245,7 @@ export interface IngredientCalculationEvidence {
   /**
    * Bounded AI-3 estimate evidence. Present ONLY for a resolved `ai_estimate`
    * line; it retains the range and the locally derived representative for
-   * truthful display and is never written to persistence.
+   * truthful display and explicitly authorized persistence.
    */
   readonly ai_estimate?: AiEstimateEvidence;
   /**
@@ -302,6 +302,8 @@ export interface AdvisoryNutritionPreview {
   readonly totals: Readonly<Partial<Record<NutrientId, NutrientTotalResult>>>;
   readonly ingredients: ReadonlyArray<IngredientCalculationEvidence>;
   readonly unresolved: ReadonlyArray<UnresolvedIngredient>;
+  /** Validated AI contributions for unresolved lines; never USDA identity evidence. */
+  readonly ai_contributions?: ReadonlyArray<AiNutrientContribution>;
   readonly advisory_only: true;
   readonly application_authorized: false;
 }

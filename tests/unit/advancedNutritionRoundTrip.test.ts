@@ -6,6 +6,7 @@ import {
 import { nutritionForServings, resolveNutritionBase } from '../../src/utils/nutrition';
 import { DV_STANDARD_ID } from '../../src/core/nutritionV2/dailyValues';
 import type { CodexNutritionV1 } from '../../src/core/nutritionV2/schema';
+import { validateAiNutrientContributions } from '../../src/core/nutritionV2/aiContribution';
 import type { ObsidianRecipe } from '../../src/types';
 
 /**
@@ -140,15 +141,53 @@ describe('recognized schema v1 — canonical round-trip', () => {
   });
 });
 
+describe('recognized schema v5 — AI contribution round-trip', () => {
+  it('preserves AI provenance and assumptions through real Markdown serialization and parsing', () => {
+    const rawContribution = {
+      line_ref: 'line-achiote', ingredient: '2 tbsp achiote paste', quantity_basis: '2 tablespoons prepared paste',
+      weight_grams: 30, classification: 'ai_estimate', confidence: 'medium',
+      assumptions: ['Approximate prepared paste composition.'], sources: [], unknown_nutrients: ['vitamin_b12'],
+      nutrients: { calories: { amount: 36, unit: 'kcal' }, protein: { amount: 1.2, unit: 'g' } },
+    };
+    const checked = validateAiNutrientContributions([rawContribution], { recipe_digest: DIGEST, line_refs: ['line-achiote'] });
+    expect(checked.ok).toBe(true);
+    if (!checked.ok) return;
+    const block = {
+      ...validV1({
+        status: 'partial',
+        sources: ['usda_fdc', 'ai_estimate'],
+        nutrient_scope: ['calories', 'protein'],
+        nutrients: {
+          calories: { amount: 576, unit: 'kcal', status: 'partial', coverage: 2 / 3, covered_ingredient_count: 2, measurable_ingredient_count: 3 },
+          protein: { amount: 33.2, unit: 'g', status: 'partial', coverage: 2 / 3, covered_ingredient_count: 2, measurable_ingredient_count: 3 },
+        },
+      }),
+      schema: 5 as const,
+      sources: ['usda_fdc', 'ai_estimate'] as const,
+      ai_contributions: [...checked.contributions],
+    };
+    const md = serializeRecipeToObsidianMarkdown({
+      ...baseRecipe({ ingredients: [{ original: '454 g ground beef', name: 'ground beef' }, { original: '2 tbsp achiote paste', name: 'achiote paste' }] }),
+      frontmatter: { codex_nutrition: block },
+    });
+    expect(md).toContain('schema: 5');
+    expect(md).toContain('classification: ai_estimate');
+    expect(md).toContain('Approximate prepared paste composition.');
+    const reopened = parseObsidianRecipeMarkdown(md, 'r1.md', 'r1.md');
+    expect(reopened.codexNutrition).toMatchObject({ schema: 5, servings: 4, ai_contributions: [{ line_ref: 'line-achiote', classification: 'ai_estimate', unknown_nutrients: ['vitamin_b12'] }] });
+    expect((reopened.codexNutrition as { nutrients: { calories: { amount: number } } }).nutrients.calories.amount).toBe(576);
+  });
+});
+
 describe('unknown future schema — opaque, never interpreted', () => {
   it('2. safely round-trips an unknown future schema as bounded opaque data', () => {
-    const future = { schema: 4, basis: 'total', futureField: { nested: [1, 2, 3] }, note: 'future' };
+    const future = { schema: 6, basis: 'total', futureField: { nested: [1, 2, 3] }, note: 'future' };
     const md = serializeRecipeToObsidianMarkdown({
       ...baseRecipe(),
       frontmatter: { codex_nutrition: future },
     });
     const parsed = parseObsidianRecipeMarkdown(md, 'r1.md', 'r1.md');
-    expect(parsed.codexNutrition).toMatchObject({ kind: 'opaque', schema: 4 });
+    expect(parsed.codexNutrition).toMatchObject({ kind: 'opaque', schema: 6 });
     expect((parsed.codexNutrition as { data: Record<string, unknown> }).data.note).toBe('future');
 
     const reparsed = parseObsidianRecipeMarkdown(

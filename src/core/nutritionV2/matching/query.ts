@@ -44,7 +44,7 @@
  * helpers used by the deterministic ranking and confidence contract.
  */
 
-export const QUERY_PROJECTION_VERSION = 'usda_query_projection_v10';
+export const QUERY_PROJECTION_VERSION = 'usda_query_projection_v13';
 
 /**
  * Optional, bounded Phase 1 metadata that a caller can supply when it already
@@ -140,6 +140,7 @@ export interface IngredientQueryProjection {
  * salted/unsalted, whole/skim, ...) are deliberately NOT in this set.
  */
 const PREPARATION_QUALIFIERS: ReadonlySet<string> = new Set([
+  'ripe',
   'sliced',
   'slice',
   'slices',
@@ -163,6 +164,7 @@ const PREPARATION_QUALIFIERS: ReadonlySet<string> = new Set([
   'seeded',
   'cored',
   'shucked',
+  'husked',
   'julienned',
   'cubed',
   'cubing',
@@ -1617,9 +1619,11 @@ function stripPreparationClauses(text: string): { text: string; notes: string[] 
     const segment = segments[i].trim();
     if (segment.length === 0) continue;
     const tokens = segment.toLowerCase().split(/\s+/).filter(Boolean);
+    const eggPreparation = /\b(?:egg|eggs|egg whites?|egg yolks?)\b/i.test(segments[0]);
     const allNoise = tokens.every(
       (token) =>
         PREPARATION_QUALIFIERS.has(token) ||
+        (token === 'separated' && eggPreparation) ||
         SIZE_QUALIFIERS.has(token) ||
         COUNT_NOISE.has(token) ||
         NOISE_TOKENS.has(token) ||
@@ -1721,7 +1725,7 @@ interface TokenRoles {
 }
 
 /** Assigns the closed semantic roles to one normalized token sequence. */
-function assignRoles(tokens: ReadonlyArray<string>): TokenRoles {
+function assignRoles(tokens: ReadonlyArray<string>, eggPreparation = false): TokenRoles {
   const sizeQualifiers: string[] = [];
   const preparationQualifiers: string[] = [];
   const qualifierTokens: string[] = [];
@@ -1737,6 +1741,7 @@ function assignRoles(tokens: ReadonlyArray<string>): TokenRoles {
       sizeQualifiers.push(token);
     } else if (
       PREPARATION_QUALIFIERS.has(token) ||
+      (token === 'separated' && eggPreparation) ||
       COUNT_NOISE.has(token) ||
       NOISE_TOKENS.has(token) ||
       GENERIC_TOKENS.has(token)
@@ -1818,7 +1823,7 @@ export function projectQueryText(
   text: string,
   context?: QueryProjectionContext
 ): IngredientQueryProjection {
-  const normalized = String(text).trim();
+  const normalized = String(text).trim().replace(/\bjuiced\b/g, 'juice');
   const measurementTokens: string[] = [];
 
   const withoutParens = stripParentheticals(normalized);
@@ -1849,7 +1854,7 @@ export function projectQueryText(
       : orInfo.branches.flat()
     : withoutNumeric;
 
-  const roles = assignRoles(roleSource);
+  const roles = assignRoles(roleSource, /\b(?:egg|eggs|egg whites?|egg yolks?)\b/i.test(withoutParens));
   const identityTokens = roles.identityTokens;
 
   // Contextual rule for `ground`: identity-bearing only when a meat species is
@@ -2362,6 +2367,24 @@ export function unrequestedMaterialVariantCount(
     if (requestedList.some((requestedToken) => tokensEquivalent(requestedToken, token))) continue;
     count += 1;
   }
+
+  // USDA meat records commonly split a cut into `separable lean only` and
+  // `separable lean and fat`. Treat that composition as material: a bare cut
+  // (or a query naming only one side) cannot silently inherit the other. An
+  // explicitly requested lean-only / lean-and-fat identity remains eligible.
+  const requestsLean = requested.has('lean') || projection.qualifier_tokens.includes('lean');
+  const requestsFat = requested.has('fat') || projection.qualifier_tokens.includes('fat');
+  const hasLean = candidateTokens.includes('lean');
+  const hasFat = candidateTokens.includes('fat');
+  const hasOnly = candidateTokens.includes('only');
+  const leanOnly = hasLean && hasOnly;
+  const leanAndFat = hasLean && hasFat;
+  const requestedRatio = projection.numeric_qualifiers;
+  const hasRequestedRatio = requestedRatio.length === 2 &&
+    requestedRatio.every(token => candidateTokens.includes(token));
+  if ((leanOnly || leanAndFat) && !requestsLean && !requestsFat && !hasRequestedRatio) count += 1;
+  if (leanOnly && requestsFat) count += 1;
+  if (leanAndFat && requestsLean && !requestsFat) count += 1;
   return count;
 }
 

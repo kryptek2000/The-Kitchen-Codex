@@ -676,11 +676,15 @@ describe('catalog exposes the server-owned strict-structured candidate signal', 
 
       const liquid = all.find((m) => m.id === 'liquid/lfm-like:free');
       expect(liquid?.strictStructuredCandidate).toBe(true);
-      expect(liquid?.executionCompatible).toBe(false); // candidate != executable
+      expect(liquid?.executionCompatible).toBe(true); // Free conversational text transport only.
+      expect(liquid?.capabilities.structuredOutput).toBe(false);
+      expect(liquid?.recipeGenerationVerified).toBe(false);
 
       const gemma = all.find((m) => m.id === 'google/gemma-like:free');
       expect(gemma?.strictStructuredCandidate).toBe(false);
-      expect(gemma?.executionCompatible).toBe(false);
+      expect(gemma?.executionCompatible).toBe(true);
+      expect(gemma?.capabilities.structuredOutput).toBe(false);
+      expect(gemma?.capabilityVerified).toBe(false);
 
       expect(all.some((m) => m.id === 'google/lyria-like')).toBe(false);
     } finally {
@@ -722,10 +726,12 @@ describe('no automatic verification + rate limiting + no forge', () => {
       const { buildProviderCatalog } = await import('../../server/ai/providerCatalog.js');
       const built = buildProviderCatalog();
       const provider = built.textProviders.find((p) => p.providerId === 'openrouter')!;
-      const row = (provider.discoveredModels ?? []).find((m) => m.id === 'dynamic/free');
+      const row = [...provider.models, ...(provider.discoveredModels ?? [])].find((m) => m.id === 'dynamic/free');
       expect(row).toBeTruthy();
       expect(row?.capabilityVerified ?? false).toBe(false);
-      expect(row?.executionCompatible).toBe(false);
+      expect(row?.executionCompatible).toBe(true);
+      expect(row?.capabilities.structuredOutput).toBe(false);
+      expect(row?.recipeGenerationVerified).toBe(false);
     } finally {
       await new Promise<void>((r) => server.close(() => r()));
     }

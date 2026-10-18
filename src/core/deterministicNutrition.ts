@@ -41,12 +41,14 @@ import type {
 } from '../utils/measurements';
 import {
   findFoodReference,
+  getFoodCountWeight,
   resolveFoodMass,
   getFoodNutritionPer100g,
 } from '../data/foodReference';
 import type {
   FoodReferenceEntry,
   FoodNutritionPer100g,
+  FoodMassResolution,
   FoodMassResolutionReason,
 } from '../data/foodReference';
 import type { NutritionSource, NutritionConfidence } from '../schema/recipeSchema';
@@ -245,6 +247,47 @@ function addTotals(target: NutrientTotals, contribution: NutrientTotals): void {
   target.sodium += contribution.sodium;
 }
 
+/**
+ * BASIC-NUTRITION COUNT FALLBACK (engine-scoped).
+ *
+ * When a line carries a countable amount of a MATCHED food but no explicit unit
+ * token — "6 corn tortillas", "2 jalapeños", "1 onion" — the Step 2 household
+ * vocabulary may not enumerate that food noun, so the measurement stays
+ * `unknown` and the mass is unresolved. If (and only if) the curated reference
+ * states a typical item weight for that food, grams = amount × typical weight.
+ *
+ * This invents NOTHING: the gram figure is the curated record's own value, the
+ * amount is the recipe author's, and a food without a curated count weight
+ * still resolves to nothing. Lines with an explicit unit token are untouched —
+ * this only rescues plain counts.
+ */
+function coerceCountWeightMass(
+  mass: FoodMassResolution,
+  measurement: NormalizedMeasurement,
+  unitToken: string | null,
+  food: FoodReferenceEntry | undefined,
+): FoodMassResolution {
+  if (
+    mass.grams !== undefined ||
+    mass.reason !== 'unknown' ||
+    food === undefined ||
+    measurement.kind !== 'unknown' ||
+    (unitToken !== null && unitToken.length > 0)
+  ) {
+    return mass;
+  }
+  const amount = measurement.amount;
+  if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) return mass;
+  const countWeight = getFoodCountWeight(food, null);
+  if (countWeight === undefined) return mass;
+  return {
+    grams: amount * countWeight.gramsPerItem,
+    reason: 'count_weight',
+    confidence: countWeight.confidence,
+    note: countWeight.note,
+  };
+}
+
 function weakestConfidence(contributions: IngredientNutritionContribution[]): NutritionConfidence {
   let worst = Number.POSITIVE_INFINITY;
   for (const c of contributions) {
@@ -305,7 +348,12 @@ export function estimateDeterministicNutrition(
     } catch {
       food = undefined;
     }
-    const mass = resolveFoodMass(measurement, food);
+    const mass = coerceCountWeightMass(
+      resolveFoodMass(measurement, food),
+      measurement,
+      parts.unit,
+      food,
+    );
     const per100g = food ? getFoodNutritionPer100g(food) : undefined;
 
     const grams = mass.grams;

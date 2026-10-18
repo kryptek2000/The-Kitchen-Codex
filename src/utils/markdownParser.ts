@@ -810,7 +810,7 @@ export function parseObsidianRecipeMarkdown(
   if (
     decodedAdvanced.kind === 'v1' ||
     decodedAdvanced.kind === 'v2' ||
-    decodedAdvanced.kind === 'v3' ||
+    (decodedAdvanced.kind === 'v3' || decodedAdvanced.kind === 'v4' || decodedAdvanced.kind === 'v5') ||
     decodedAdvanced.kind === 'opaque'
   ) {
     parsed.codexNutrition = decodedAdvanced.value;
@@ -998,7 +998,7 @@ function applyAdvancedNutritionRoundTrip(
   const inert = materialized.value;
 
   const decoded = decodeCodexNutrition(inert);
-  if (decoded.kind === 'v1' || decoded.kind === 'v2' || decoded.kind === 'v3' || decoded.kind === 'opaque') {
+  if (decoded.kind === 'v1' || decoded.kind === 'v2' || (decoded.kind === 'v3' || decoded.kind === 'v4' || decoded.kind === 'v5') || decoded.kind === 'opaque') {
     try {
       frontmatterObj[key] = encodeCodexNutrition(decoded.value);
       return;
@@ -1123,7 +1123,13 @@ export function serializeRecipeToObsidianMarkdown(recipe: Partial<ObsidianRecipe
     if (Object.keys(nut).length > 0) {
       frontmatterObj.nutrition = nut;
       if (!frontmatterObj.calories && nut.calories) {
-        frontmatterObj.calories = nut.calories;
+        // Top-level `calories` is a PER-SERVING value, while the nutrition block
+        // stores WHOLE-RECIPE totals when it carries a serving denominator.
+        const baseServings = nut.servings;
+        frontmatterObj.calories =
+          typeof baseServings === 'number' && Number.isFinite(baseServings) && baseServings > 0
+            ? Math.round(nut.calories / baseServings)
+            : nut.calories;
       }
     }
   }

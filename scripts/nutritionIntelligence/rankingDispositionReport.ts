@@ -83,7 +83,7 @@ export const PORTION_LANE_ACTIONABLE_DEFECTS = 0;
 export const IDENTITY_LANE_ACTIONABLE_DEFECTS = 0;
 
 /** Observed blocker counts those two phases recorded; asserted, never recomputed. */
-export const PORTION_LANE_OBSERVED_BLOCKERS = 35;
+export const PORTION_LANE_OBSERVED_BLOCKERS = 31;
 export const IDENTITY_LANE_OBSERVED_BLOCKERS = 27;
 
 /**
@@ -362,6 +362,7 @@ export interface Ai6b4ReportLine {
 
 export interface Ai6b4RankingDispositionReport {
   readonly schema: string;
+  readonly measurement_baseline: 'pr12_ci_repair_v1';
   readonly tool: string;
   readonly base_phase: string;
   readonly base_commit: string;
@@ -853,6 +854,7 @@ export async function buildNutritionRankingDispositionReport(): Promise<Ai6b4Ran
 
   return {
     schema: RANKING_DISPOSITION_SCHEMA,
+    measurement_baseline: 'pr12_ci_repair_v1',
     tool: 'benchmark_nutrition_ranking_disposition',
     base_phase: BASE_PHASE,
     base_commit: BASE_COMMIT,

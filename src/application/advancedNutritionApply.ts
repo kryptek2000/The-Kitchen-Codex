@@ -42,7 +42,6 @@ import { decodeCodexNutrition, encodeCodexNutrition } from '../core/nutritionV2/
 import { authorizeNutritionPersistence } from '../core/nutritionV2/phase5';
 import {
   AI_ESTIMATE_APPLY_BLOCK_MESSAGE,
-  hasActiveAiEstimateForPreview,
 } from '../core/nutritionV2/phase4/aiEstimateApplyGate';
 import { readOwnDataField } from '../core/nutritionV2/phase4/materialize';
 import { parseObsidianRecipeMarkdown, serializeRecipeToObsidianMarkdown } from '../utils/markdownParser';
@@ -64,9 +63,8 @@ export type AdvancedNutritionApplyFailureCode =
   | 'post_write_verification_failed'
   | 'unsafe_request'
   /**
-   * AI-3: the working state carries an accepted BOUNDED AI MASS ESTIMATE.
-   * AI estimates are preview-only in AI-3, so this coordinator REFUSES before
-   * it authorizes anything and before the persistence writer is reached.
+   * Historical error code retained for older callers. Schema-v4 estimates now
+   * pass the same fresh authorization and serialization checks as other sources.
    */
   | 'ai_estimate_preview_only'
   | 'unavailable_write_target';
@@ -232,7 +230,7 @@ function verifyPersistedBlock(
 ): void {
   const parsed = parseObsidianRecipeMarkdown(markdown, recipe.fileName, recipe.filePath);
   const decoded = decodeCodexNutrition(parsed.codexNutrition);
-  if (decoded.kind !== 'v1' && decoded.kind !== 'v2' && decoded.kind !== 'v3') {
+  if (decoded.kind !== 'v1' && decoded.kind !== 'v2' && (decoded.kind !== 'v3' && decoded.kind !== 'v4' && decoded.kind !== 'v5')) {
     throw new Error('advanced_nutrition_verify');
   }
   const encoded = encodeCodexNutrition(decoded.value);
@@ -270,20 +268,6 @@ export async function applyAdvancedNutrition(requestRaw: unknown): Promise<Advan
       return fail('unsafe_request');
     }
 
-    // --- AI-3 LOAD-BEARING PERSISTENCE GUARD (LAYER B) ----------------------
-    // This is the safety boundary, not the UX one. The card hides Apply when an
-    // estimate is active, but a caller can invoke this coordinator DIRECTLY
-    // (bypassing the card entirely), so the refusal has to live HERE, before
-    // any authorization and before the writer is ever resolved.
-    //
-    // It inspects ONLY the caller-supplied working state and the ONE pure
-    // predicate. It does not touch Phase 5, the schema, or the Markdown
-    // writer, and it does not launder an estimate into user_mass or
-    // range_representative: an estimate simply cannot be persisted.
-    if (hasActiveAiEstimateForPreview(stateField.value as never)) {
-      return fail('ai_estimate_preview_only');
-    }
-
     const existing = readExistingBlock(recipeField.value);
     if (!existing.ok) return fail('unsafe_request');
 
@@ -293,7 +277,7 @@ export async function applyAdvancedNutrition(requestRaw: unknown): Promise<Advan
     if (decodedExisting.kind === 'opaque') return fail('unknown_future_schema');
     if (decodedExisting.kind === 'malformed') return fail('invalid_existing_block');
     const currentMode: 'create' | 'replace' =
-      decodedExisting.kind === 'v1' || decodedExisting.kind === 'v2' || decodedExisting.kind === 'v3'
+      decodedExisting.kind === 'v1' || decodedExisting.kind === 'v2' || (decodedExisting.kind === 'v3' || decodedExisting.kind === 'v4' || decodedExisting.kind === 'v5')
         ? 'replace'
         : 'create';
 

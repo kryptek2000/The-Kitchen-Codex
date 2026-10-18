@@ -86,6 +86,8 @@ import type {
   CodexNutritionV1,
   CodexNutritionV2,
   CodexNutritionV3,
+  CodexNutritionV4,
+  CodexNutritionV5,
   HouseholdPortionEvidence,
   IngredientEvidenceV2,
 } from '../../src/core/nutritionV2/schema';
@@ -234,7 +236,7 @@ function lineInput(flowValue: Flow, householdSelection?: unknown): Record<string
 
 /** Version-neutral household evidence accessor for persisted-block assertions. */
 function persistedHousehold(
-  block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3,
+  block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5,
   index = 0
 ): HouseholdPortionEvidence | undefined {
   const entry = block.ingredients[index] as IngredientEvidenceV2 | undefined;
@@ -460,7 +462,7 @@ const REAL_LINE_EXPECTATIONS: ReadonlyArray<RealLineExpectation> = Object.freeze
   { line: '3 cloves garlic', classification: 'household_reachable', fdc: 169230, massSource: 'household_portion', grams: 9 },
   { line: '3 garlic cloves, minced', classification: 'household_reachable', fdc: 169230, massSource: 'household_portion', grams: 9 },
   { line: '2 medium tomatoes, sliced', classification: 'household_reachable', fdc: 2709719, massSource: 'household_portion', grams: 246 },
-  { line: '1 stick unsalted butter', classification: 'household_reachable', fdc: 789828, massSource: 'household_portion', grams: 113 },
+  { line: '1 stick unsalted butter', classification: 'shadowed_by_count_portion', fdc: 173430, massSource: 'count_portion', grams: 113 },
   { line: '1 large egg', classification: 'shadowed_by_count_portion', fdc: 2707152, massSource: 'count_portion', grams: 50 },
   { line: '1 medium white mushroom', classification: 'shadowed_by_count_portion', fdc: 169251, massSource: 'count_portion', grams: 18 },
   { line: '1 medium zucchini', classification: 'identity_review_blocked', fdc: null, massSource: null, grams: null },
@@ -570,7 +572,7 @@ describe('phase 6 — real pipeline reachability and precedence', () => {
     const measured: ReadonlyArray<[string, number, string]> = [
       ['3 cloves garlic, minced', 9, 'garlic|clove|null|null'],
       ['2 medium tomatoes, sliced', 246, 'tomato|item|medium|null'],
-      ['1 stick unsalted butter', 113, 'unsalted butter|stick|null|null'],
+      ['1 stick unsalted butter', 113, undefined],
     ];
     for (const [line, grams, key] of measured) {
       const value = flow(line);
@@ -578,7 +580,7 @@ describe('phase 6 — real pipeline reachability and precedence', () => {
       expect(calculated.ok, line).toBe(true);
       if (!calculated.ok) continue;
       const evidence = calculated.preview.ingredients[0];
-      expect(evidence.mass_source, line).toBe('household_portion');
+      expect(evidence.mass_source, line).toBe(key === undefined ? 'count_portion' : 'household_portion');
       expect(evidence.resolved_grams, line).toBe(grams);
       expect(evidence.household_record_key, line).toBe(key);
       // NUTRIENT AUTHORITY: household provenance authorizes ONLY the mass. The
@@ -1230,12 +1232,16 @@ describe('phase 6 — household-choice invalidation', () => {
     }
 
     // Unit/state edits that cannot bind fail closed with no mass at all.
-    for (const line of ['1 cup unsalted butter', '1 cooked stick unsalted butter']) {
+    for (const line of ['1 cooked stick unsalted butter']) {
       const value = flow(line);
       expect(value.analysis.householdPortions[value.lineRef], line).toBeUndefined();
       expect(value.analysis.preview?.ingredients[0].resolved_grams ?? null, line).toBeNull();
       expect(liveOf(value, value.state).resolved_grams, line).toBeUndefined();
     }
+    const sourceCup = flow('1 cup unsalted butter');
+    expect(sourceCup.analysis.householdPortions[sourceCup.lineRef]).toBeUndefined();
+    expect(sourceCup.analysis.preview?.ingredients[0].mass_source).toBe('source_portion');
+    expect(sourceCup.analysis.preview?.ingredients[0].resolved_grams).toBe(227);
     // TEST-STABILITY ONLY. Drives the full recipe-quantity/unit/size/state
     // edit-invalidation flow over the authenticated bundle. Measured 2730ms in
     // isolation and over Vitest's accidental 5000ms unit default under
@@ -1409,7 +1415,7 @@ function authorizeReady(flowValue: Flow, state: Phase4State): Phase4State {
   } as Phase4State;
 }
 
-function authorize(flowValue: Flow, state: Phase4State): CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 {
+function authorize(flowValue: Flow, state: Phase4State): CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5 {
   const result = authorizeNutritionPersistence({
     session,
     recipe: flowValue.recipe,

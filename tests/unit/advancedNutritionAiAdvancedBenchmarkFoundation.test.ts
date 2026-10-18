@@ -142,11 +142,11 @@ describe('AI-0 benchmark foundation', () => {
     }
     const resolved = results.filter((result) => result.resolved).length;
     expect(results.length).toBe(97);
-    expect(resolved).toBe(48);
+    expect(resolved).toBe(51);
 
     const legacy = results.filter((result) => result.focus !== 'nutrient_annotation');
     expect(legacy.length).toBe(91);
-    expect(legacy.filter((result) => result.resolved).length).toBe(44);
+    expect(legacy.filter((result) => result.resolved).length).toBe(47);
   }, 180000);
 
   it('reports AI-Advanced buckets separately without inflating resolution credit', () => {

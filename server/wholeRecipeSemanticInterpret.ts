@@ -316,6 +316,7 @@ const LOGGABLE_PROVIDER_ERROR_CODES: ReadonlySet<string> = new Set<ProviderError
   'QUOTA',
   'RATE_LIMIT',
   'UNAVAILABLE',
+  'NETWORK',
   'TIMEOUT',
   'UNSUPPORTED_CAPABILITY',
   'INVALID_RESPONSE',

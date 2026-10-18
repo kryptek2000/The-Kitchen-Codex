@@ -466,7 +466,7 @@ describe('mid-flight user authority — mixed bulk', () => {
       expect(row.textContent).toMatch(/Matched/);
       expect(row.textContent).toMatch(/AI-assisted USDA count portion/i);
     }
-    expect(screen.getByTestId('advanced-nutrition-live-summary').textContent).toMatch(/2 matched/);
+    expect(screen.getByTestId('advanced-nutrition-live-summary').textContent).toMatch(/2 source-backed/);
   });
 
   it('TEST 3: conflicted row preserved, untouched row resolved, count credits ONLY the untouched row', async () => {
@@ -540,8 +540,8 @@ describe('mid-flight user authority — mixed bulk', () => {
     expect(messageText()).toMatch(/1 resolved automatically from verified local data/i);
     expect(messageText()).toMatch(/1 still needs review/i);
     const summary = screen.getByTestId('advanced-nutrition-live-summary').textContent ?? '';
-    expect(summary).toMatch(/1 matched/);
-    expect(summary).toMatch(/1 need amount/);
+    expect(summary).toMatch(/1 source-backed/);
+    expect(summary).toMatch(/1 amount/);
   });
 });
 

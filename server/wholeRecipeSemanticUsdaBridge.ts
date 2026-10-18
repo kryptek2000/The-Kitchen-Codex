@@ -202,15 +202,21 @@ function readOwnArray(target: Record<string, unknown>, key: string): unknown[] |
  * Filters advisory suggestions down to the rows the caller's trusted issue kinds
  * actually permit the DETERMINISTIC food resolver to act on.
  *
- * Purely subtractive and kind-scoped. `needs_amount` rows are excluded from FOOD
- * identity resolution because their amount authority belongs to the existing
- * amount resolver, and vice versa. This is a projection over already-authenticated
- * suggestions; it can only REMOVE entries, never add or rewrite one.
+ * Purely subtractive and kind-scoped. Only rows explicitly classified as
+ * `needs_match` or `review_suggested` may reach FOOD identity resolution;
+ * `needs_amount` rows belong to the amount resolver, and unclassified/resolved
+ * rows were not authorized for this operation. This projection can only REMOVE
+ * entries, never add or rewrite one.
  */
 export function selectFoodIdentitySuggestions(
   suggestions: ReadonlyArray<AiResolutionSuggestion>,
   issueKinds?: Readonly<Record<string, AiResolutionIssueKind>>
 ): ReadonlyArray<AiResolutionSuggestion> {
   if (issueKinds === undefined) return suggestions;
-  return Object.freeze(suggestions.filter((s) => issueKinds[s.line_ref] !== 'needs_amount'));
+  return Object.freeze(
+    suggestions.filter((suggestion) => {
+      const kind = issueKinds[suggestion.line_ref];
+      return kind === 'needs_match' || kind === 'review_suggested';
+    })
+  );
 }

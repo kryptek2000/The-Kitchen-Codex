@@ -276,7 +276,7 @@ describe('resolution coverage — semantic identity guard', () => {
   it('keeps a wrong-form candidate out of the automatic path even when a portion exists', () => {
     const f = flow('1/4 teaspoon crushed red pepper flakes');
     const bell = reviewOf(f).candidates.find((candidate) => candidate.fdc_id === 2258590);
-    expect(bell?.description).toMatch(/bell/i);
+    expect(bell).toBeUndefined(); // A missing flakes form excludes this bell-pepper candidate entirely.
     expect(f.analysis.rows[0].selected_fdc_id).not.toBe(2258590);
   });
 });

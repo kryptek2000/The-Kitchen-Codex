@@ -145,11 +145,11 @@ describe("DeepSeekProvider (v0.7 1C) — adapter", () => {
     expect(err.code).toBe("TIMEOUT");
   });
 
-  it("maps connection failure (no response) to UNAVAILABLE", async () => {
+  it("maps connection failure (no response) to NETWORK", async () => {
     vi.stubEnv("DEEPSEEK_API_KEY", "k");
     const provider = new DeepSeekProvider({ fetchFn: () => Promise.reject(new Error("fetch failed")) });
     const err = await provider.generate("x", { model: "m" }).catch((e) => e);
-    expect(err.code).toBe("UNAVAILABLE");
+    expect(err.code).toBe("NETWORK");
   });
 
   it("maps 5xx to UNAVAILABLE/PROVIDER_ERROR taxonomy", async () => {

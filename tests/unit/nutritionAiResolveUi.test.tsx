@@ -182,7 +182,7 @@ describe('AI-assisted resolution UI', () => {
     fireEvent.click(screen.getByTestId('advanced-nutrition-analyze'));
     await waitFor(() => {
       const after = document.querySelector('[data-testid="advanced-nutrition-row"]') as HTMLElement;
-      expect(after.textContent).toMatch(/Needs match/i);
+      expect(after.textContent).toMatch(/No confident source match/i);
       expect(after.textContent).not.toMatch(/Mystery, raw/);
     });
   });

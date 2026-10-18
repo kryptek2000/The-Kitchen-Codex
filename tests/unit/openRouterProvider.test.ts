@@ -165,7 +165,7 @@ describe("OpenRouterProvider (v0.7 1B)", () => {
     vi.stubEnv("OPENROUTER_API_KEY", "k");
     const provider = new OpenRouterProvider({ fetchFn: () => Promise.reject(new Error("fetch failed")) });
     const err = await provider.generate("x", { model: OPENROUTER_STRUCTURED_MODEL }).catch((e) => e);
-    expect(err.code).toBe("UNAVAILABLE");
+    expect(err.code).toBe("NETWORK");
   });
 
   it("maps 5xx to UNAVAILABLE/PROVIDER_ERROR taxonomy", async () => {

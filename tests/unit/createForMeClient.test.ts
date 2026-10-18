@@ -73,6 +73,21 @@ describe("create for me client logic (v0.7 2A)", () => {
     expect(result.provenance.providerId).toBe("gemini");
   });
 
+  it("sends the validated current draft on refinement through the same generation endpoint", async () => {
+    let sentBody: any;
+    const network = {
+      post: async (_path: string, body: unknown) => {
+        sentBody = body;
+        return { status: 200, ok: true, data: { draft: DRAFT, provenance: { generated: true, providerId: "openrouter", model: "selected-model" } } };
+      },
+      get: async () => ({ status: 200, ok: true, data: undefined }),
+      request: async () => ({ status: 200, ok: true, data: undefined }),
+    } as unknown as NetworkAdapter;
+    const currentDraft: GeneratedRecipeDraft = { title: "Chicken Casserole", servings: 6, ingredients: [{ name: "chicken", amount: 2, unit: "lb" }], steps: [{ text: "Bake." }] };
+    await requestGeneratedRecipe(network, "Make it dairy-free", {}, currentDraft);
+    expect(sentBody).toMatchObject({ prompt: "Make it dairy-free", currentDraft });
+  });
+
   it("returns a generic-safe error on a non-2xx response, preserving UNSUPPORTED_CAPABILITY code", async () => {
     await expect(requestGeneratedRecipe(postNetwork({ error: "No configured AI provider supports recipe generation.", code: "UNSUPPORTED_CAPABILITY" }, false, 503), "x", {})).rejects.toMatchObject({
       status: 503,

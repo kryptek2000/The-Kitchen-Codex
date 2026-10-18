@@ -277,7 +277,10 @@ function wholeRecipeSource() {
 describe('9B-3C — the existing AI action drives authenticated whole-recipe resolution', () => {
   it('one click -> whole recipe -> real wsem1 -> advisory -> REAL USDA candidate', async () => {
     const eggRef = adapted[0].line_ref as string;
-    expect(issueKinds[eggRef]).toBe('needs_match');
+    // The live deterministic matcher now resolves eggs, separated to the
+    // catalog's whole-egg identity. Its trusted classification correctly keeps
+    // it out of the semantic AI retargeting bridge.
+    expect(issueKinds[eggRef]).toBeUndefined();
 
     const result = await resolveUnresolvedRowsWithAi({
       network,

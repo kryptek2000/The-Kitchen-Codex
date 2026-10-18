@@ -235,12 +235,14 @@ describe('phase 4 isolation — dependency graph direction', () => {
     expect(phase4Graph.has(resolve(ROOT, 'src/data/foodReference.ts'))).toBe(false);
   });
 
-  it('the UI components reach Phase 4 and no forbidden module', () => {
+  it('the UI components reach Phase 4 without importing server or platform implementations', () => {
     const uiGraph = collectTransitiveGraph(COMPONENTS);
     const uiRels = Array.from(uiGraph).map((file) => file.slice(ROOT.length + 1).replace(/\\/g, '/'));
     expect(uiRels).toContain('src/core/nutritionV2/phase4/index.ts');
     for (const rel of uiRels) {
-      for (const segment of FORBIDDEN_GRAPH_SEGMENTS) {
+      // UI now composes Basic and SHISO application workflows. The pure
+      // Phase 4 graph above retains the stronger no-application boundary.
+      for (const segment of ['/server/', '/platform/', 'App.tsx', 'main.tsx', `${sep}tests${sep}`]) {
         expect(`/${rel}`.includes(segment), `${rel} matched ${segment}`).toBe(false);
       }
     }

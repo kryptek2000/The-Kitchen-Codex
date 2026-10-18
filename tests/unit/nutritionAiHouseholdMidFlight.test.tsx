@@ -396,7 +396,7 @@ describe('phase 7 — mid-flight household authority', () => {
     fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
     await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
     await waitFor(() => expect(screen.getByTestId('advanced-nutrition-live-summary')).toBeTruthy());
-    expect(screen.getByTestId('advanced-nutrition-live-summary').textContent).toMatch(/1 need amount/);
+    expect(screen.getByTestId('advanced-nutrition-live-summary').textContent).toMatch(/1 amount/);
   });
 });
 
@@ -637,7 +637,7 @@ describe('phase 7 — household Clear resurrection (I-2B)', () => {
     // Truthful summary counts: only the untouched row is credited.
     expect(messageText()).toMatch(/1 resolved automatically from verified local data/i);
     const summary = screen.getByTestId('advanced-nutrition-live-summary').textContent ?? '';
-    expect(summary).toMatch(/1 matched/);
-    expect(summary).toMatch(/1 need amount/);
+    expect(summary).toMatch(/1 source-backed/);
+    expect(summary).toMatch(/1 amount/);
   });
 });

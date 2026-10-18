@@ -1,3 +1,4 @@
+import { resolveRecipeNutritionPresentation } from '../core/nutritionV2/phase5c/presentation';
 import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { Activity, FlaskConical, Loader2, Lock, RefreshCw, ShieldAlert, ShieldCheck } from 'lucide-react';
 import type { ObsidianRecipe } from '../types';
@@ -23,6 +24,7 @@ import {
   phase4Reducer,
   phase4SessionIdentity,
   readStoredBlock,
+  summarizeStoredAdvanced,
   type AdvancedNutritionSession,
   type AdaptedIngredient,
   type AnalyzedRow,
@@ -36,11 +38,9 @@ import {
 } from '../core/nutritionV2/phase4';
 import { authorizeNutritionPersistence } from '../core/nutritionV2/phase5';
 import {
-  AI_ESTIMATE_APPLY_BLOCK_MESSAGE,
   activeAiEstimatesForPreview,
-  hasActiveAiEstimateForPreview,
 } from '../core/nutritionV2/phase4/aiEstimateApplyGate';
-import type { CodexNutritionV1, CodexNutritionV2, CodexNutritionV3 } from '../core/nutritionV2/schema';
+import type { CodexNutritionV1, CodexNutritionV2, CodexNutritionV3, CodexNutritionV4, CodexNutritionV5 } from '../core/nutritionV2/schema';
 import {
   actionableExceptionRows,
   buildUserChoiceFromAiAmountOffer,
@@ -69,7 +69,16 @@ import {
   type AiEstimateOffer,
 } from '../core/nutritionV2/phase4/aiEstimateAccept';
 import { aiEstimateSnapshotBinding } from '../core/nutritionV2/phase4/aiEstimateValidation';
+import { combineAiContributionsWithPreview } from '../core/nutritionV2/aiContribution';
 import type { AiEstimateSelectionEvidence } from '../core/nutritionV2/phase4/aiEstimateSelection';
+import { useShiso } from '../application-ui/shisoEntryPoints';
+import type { ShisoAnalysisOutcome, ShisoNutritionCorrectionsOutcome } from '../core/shiso/protocol';
+import { buildSupportedNutritionCorrections } from '../core/shiso/nutritionCorrections';
+import { deriveNutritionCoverage, nutritionCoverageSummary } from '../core/shiso/nutritionCoverage';
+import {
+  decideCorrectionDispatch,
+  evaluateCorrectionTransition,
+} from '../core/shiso/correctionTransition';
 import {
   AdvancedNutritionModal,
   type AdvancedNutritionAiAmountOffer,
@@ -137,7 +146,7 @@ interface AdvancedNutritionCardProps {
    * nutrition section. The saved report renders from this alone; no USDA
    * session is required. Absent for recipes without a recognized saved result.
    */
-  savedAdvancedBlock?: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3;
+  savedAdvancedBlock?: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5;
   /**
    * Optional AI-assisted USDA resolution port, injected by the shell (the shell
    * owns the network + application layer; the UI never imports the application
@@ -390,7 +399,14 @@ type ApplyUiState =
   | { readonly kind: 'success'; readonly message: string }
   | { readonly kind: 'error'; readonly message: string };
 
+type ShisoNutritionUiState =
+  | { readonly kind: 'idle'; readonly message: null }
+  | { readonly kind: 'running'; readonly message: string }
+  | { readonly kind: 'success'; readonly message: string }
+  | { readonly kind: 'error'; readonly message: string };
+
 const NO_INGREDIENTS: ReadonlyArray<AdaptedIngredient> = Object.freeze([]);
+const NO_AI_CONTRIBUTIONS = Object.freeze([]);
 
 export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
   recipe,
@@ -405,11 +421,16 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
 onReviewRecipeContextWithAi,
   advancedNutritionAiAvailability,
 }) => {
+  const shiso = useShiso();
+  const nutritionUnsaved = shiso.workingRecipe?.nutrition_unsaved === true;
   const [isOpen, setIsOpen] = useState(false);
   const [isSavedReportOpen, setIsSavedReportOpen] = useState(false);
   const [calculating, setCalculating] = useState(false);
   const [applyState, setApplyState] = useState<ApplyUiState>({ kind: 'idle' });
+  const [appliedNutritionSaved, setAppliedNutritionSaved] = useState(false);
   const [analysisRuns, setAnalysisRuns] = useState(0);
+  const [shisoNutritionState, setShisoNutritionState] = useState<ShisoNutritionUiState>({ kind: 'idle', message: null });
+  const shisoNutritionRunningRef = useRef(false);
   const [state, dispatch] = useReducer(phase4Reducer, INITIAL_PHASE4_STATE);
   /**
    * Recipe-bound pending open intent. A Generate/Edit click that triggers a lazy
@@ -770,7 +791,10 @@ onReviewRecipeContextWithAi,
     try {
       hydrated = hydrateWorkingReview({
         session,
+        recipeKey: adaptation.recipe.recipe_key,
+        baseServings: adaptation.recipe.base_servings,
         adapted,
+        instructions: recipe.instructions.map((step) => step.text),
         rows: state.rows,
         savedBlock,
       });
@@ -780,15 +804,17 @@ onReviewRecipeContextWithAi,
     if (!hydrated) return;
     dispatch({
       type: 'hydrate',
+      aiEstimates: hydrated.aiEstimates,
       matches: hydrated.matches,
       portions: hydrated.portions,
       countPortions: hydrated.countPortions,
       userMasses: hydrated.userMasses,
       householdPortions: hydrated.householdPortions,
+      aiNutrition: hydrated.aiNutrition,
     });
     setHydratedFromSaved(true);
     setWorkingTouched(false);
-  }, [session, adaptation, adapted, savedBlock, state.recipeKey, state.rows]);
+  }, [session, adaptation, adapted, recipe.instructions, savedBlock, state.recipeKey, state.rows]);
 
   /** Dispatch wrapper that records a genuine user edit as dirty. */
   const workingDispatch: React.Dispatch<Phase4Action> = useCallback((action: Phase4Action) => {
@@ -803,7 +829,14 @@ onReviewRecipeContextWithAi,
     dispatch(action);
   }, []);
 
-  const stored = useMemo(() => readStoredBlock(recipe), [recipe]);
+  // The saved report and this working review must share the SAME already-validated
+  // block. Re-reading only recipe.codexNutrition can miss a frontmatter-only
+  // block and manufacture a digest mismatch/duplicate UNSAVED REVIEW panel.
+  const stored = useMemo(
+    () => savedBlock ? summarizeStoredAdvanced(savedBlock) : readStoredBlock(recipe),
+    [savedBlock, recipe]
+  );
+  const savedPresentation = useMemo(() => resolveRecipeNutritionPresentation(recipe), [recipe]);
   const preview = state.preview;
   const display = useMemo(
     () =>
@@ -825,7 +858,7 @@ onReviewRecipeContextWithAi,
   const liveMatchesSaved = useMemo(
     () =>
       preview !== null &&
-      (stored.kind === 'v1' || stored.kind === 'v2' || stored.kind === 'v3') &&
+      (stored.kind === 'v1' || stored.kind === 'v2' || (stored.kind === 'v3' || stored.kind === 'v4' || stored.kind === 'v5')) &&
       typeof stored.ingredientDigest === 'string' &&
       stored.ingredientDigest === preview.ingredient_digest,
     [preview, stored.kind, stored.ingredientDigest]
@@ -851,22 +884,16 @@ onReviewRecipeContextWithAi,
       return null;
     }
     if (stored.kind === 'opaque') return false;
-    // AI-3 LAYER A (UX): an accepted BOUNDED AI MASS ESTIMATE is preview-only,
-    // so Apply is unavailable while the current preview depends on one. This is
-    // the friendly layer; `applyAdvancedNutrition` independently refuses in
-    // LAYER B even if this gate is removed entirely.
-    if (hasActiveAiEstimateForPreview(state)) return false;
+    // Genuine reauthorization checks accepted estimates and their provenance
+    // together with source-backed contributions before allowing Apply.
     return authorizeNutritionPersistence({ session, recipe, state }).ok;
   }, [session, recipe, adaptation, state, stored.kind]);
 
-  // The reason Apply is unavailable because of an AI estimate, so the UI can
-  // show the user exactly how to unblock it.
-  const aiEstimateApplyBlock = hasActiveAiEstimateForPreview(state)
-    ? activeAiEstimatesForPreview(state)
-    : null;
+  // Keep accepted quantity estimates visible alongside Apply eligibility.
+  const acceptedEstimates = activeAiEstimatesForPreview(state);
 
   const applyMode: 'create' | 'replace' | null =
-    stored.kind === 'v1' || stored.kind === 'v2' || stored.kind === 'v3'
+    stored.kind === 'v1' || stored.kind === 'v2' || (stored.kind === 'v3' || stored.kind === 'v4' || stored.kind === 'v5')
       ? 'replace'
       : stored.kind === 'none'
         ? 'create'
@@ -883,6 +910,7 @@ onReviewRecipeContextWithAi,
     if (applyState.kind !== 'confirming') return;
     const expectedMode = applyState.mode;
     setApplyState({ kind: 'applying' });
+    setAppliedNutritionSaved(false);
     try {
       const result = await onApplyAdvancedNutrition({ session, recipe, state, expectedMode });
       setApplyState(
@@ -899,6 +927,14 @@ onReviewRecipeContextWithAi,
     setApplyState((current) => (current.kind === 'confirming' ? { kind: 'idle' } : current));
   };
 
+  const handleSaveAppliedNutrition = async () => {
+    const result = await shiso.saveWorkingRecipe({ via: 'ui' });
+    setAppliedNutritionSaved(result.ok && result.saved);
+    setApplyState(result.ok && result.saved
+      ? { kind: 'success', message: result.message }
+      : { kind: 'error', message: result.message });
+  };
+
   const applyUi: AdvancedNutritionApplyUi | undefined = onApplyAdvancedNutrition
     ? {
         eligible: applyEligibility,
@@ -908,10 +944,11 @@ onReviewRecipeContextWithAi,
         onRequest: handleRequestApply,
         onConfirm: handleConfirmApply,
         onCancel: handleCancelApply,
+        onSave: appliedNutritionSaved || !shiso.canSaveWorkingRecipe ? undefined : handleSaveAppliedNutrition,
       }
     : undefined;
 
-  const handleCalculate = () => {
+  const handleCalculate = useCallback(() => {
     if (!session || !adaptation.ok) return;
     setCalculating(true);
     const seq = state.operationSeq;
@@ -920,11 +957,15 @@ onReviewRecipeContextWithAi,
     const result = session.calculate(request);
     setCalculating(false);
     if (result.ok) {
-      dispatch({ type: 'preview_succeeded', seq, recipeKey: key, preview: result.preview });
+      const ai = state.aiNutrition;
+      const preview = ai && ai.recipe_key === key && ai.servings === state.baseServings
+        ? combineAiContributionsWithPreview(result.preview, ai.contributions)
+        : result.preview;
+      dispatch({ type: 'preview_succeeded', seq, recipeKey: key, preview });
     } else {
       dispatch({ type: 'preview_failed', seq, failure: phase4Failure('validation_error') });
     }
-  };
+  }, [session, adaptation, adapted, state]);
 
   // Deterministic automatic analysis. Pure/offline; it never persists and never
   // mutates the recipe. Recomputed whenever the adaptation or session changes.
@@ -960,6 +1001,344 @@ onReviewRecipeContextWithAi,
     [session, adaptation, state, analyzedByRef, adapted, evidence, analysis]
   );
   liveRowsRef.current = liveRows;
+  /**
+   * H-2N: the AUTHORITATIVE working state at the moment a capability runs.
+   * The applier effect re-registers on every state change, but a ref removes
+   * every stale-closure window: corrections are ALWAYS built from, verified
+   * against, and dispatched as a delta of the state that exists right now.
+   */
+  const phase4StateRef = useRef(state);
+  phase4StateRef.current = state;
+
+  /**
+   * SHISO — the authorized analysis entry point.
+   *
+   * Registered HERE because this component owns everything the request needs: the
+   * authenticated session, the adaptation, the deterministic analyzer and
+   * `handleCalculate`, which runs the SAME calculator the Calculate button runs.
+   *
+   * Shiso may therefore ASK for nutrition analysis, and this delegates to the
+   * existing path rather than reimplementing any of it. It still does not decide
+   * anything: no match is auto-accepted, nothing is persisted, and the user
+   * still presses the existing final Apply control.
+   *
+   * Every number reported back is read from the LIVE projection this component
+   * already owns, so Shiso can never compute its own totals.
+   */
+  const handleAnalyzeRecipeWithShiso = async () => {
+    if (shisoNutritionRunningRef.current) return;
+    shisoNutritionRunningRef.current = true;
+    setShisoNutritionState({ kind: 'running', message: 'SHISO is analyzing the recipe and validating its nutrition contributions…' });
+    try {
+      const outcome = await shiso.runNutritionAnalysis?.();
+      if (outcome?.ok === true) {
+        setShisoNutritionState({
+          kind: 'success',
+          message: `${outcome.message} Review assumptions and unknown nutrients before Apply. Nothing was saved.`,
+        });
+      } else {
+        setShisoNutritionState({
+          kind: 'error',
+          message: outcome?.message ?? 'SHISO analysis is unavailable. Your existing review is unchanged; use Calculate Without AI to continue.',
+        });
+      }
+    } catch {
+      setShisoNutritionState({ kind: 'error', message: 'SHISO could not complete the analysis. Your existing review is unchanged; use Calculate Without AI to continue.' });
+    } finally {
+      shisoNutritionRunningRef.current = false;
+    }
+  };
+  const shisoRegisterAnalysis = shiso.registerAnalysisApplier;
+  useEffect(() => {
+    return shisoRegisterAnalysis(async (): Promise<ShisoAnalysisOutcome> => {
+      if (!session || !adaptation.ok) {
+        return {
+          ok: false,
+          analyzed: false,
+          summary: 'This recipe cannot be analysed yet.',
+          matched: 0,
+          needs_amount: 0,
+          needs_match: 0,
+          total_lines: 0,
+          unresolved_line_refs: [],
+          preview_state: 'absent',
+          message: 'Advanced Nutrition cannot analyse this recipe until its ingredients can be read.',
+        };
+      }
+      // Run the existing deterministic analysis + calculator. The projection is
+      // already memoized from exactly these inputs, so this is a refresh, not a
+      // second engine.
+      handleCalculate();
+      const rows = liveRowsRef.current;
+      const matched = rows.filter((r) => r.status === 'matched' || r.status === 'qualitative').length;
+      const needsAmount = rows.filter((r) => r.status === 'needs_amount').length;
+      const needsMatch = rows.filter((r) => r.status === 'needs_match').length;
+      const unresolved = rows
+        .filter((r) => r.status === 'needs_amount' || r.status === 'needs_match')
+        .map((r) => r.line_ref);
+      return {
+        ok: true,
+        analyzed: true,
+        summary: `${matched} of ${rows.length} ingredient lines resolved`,
+        matched,
+        needs_amount: needsAmount,
+        needs_match: needsMatch,
+        total_lines: rows.length,
+        unresolved_line_refs: unresolved,
+        preview_state: unresolved.length === 0 ? 'complete' : 'partial',
+      };
+    });
+  }, [session, adaptation.ok, handleCalculate, shisoRegisterAnalysis]);
+
+  /**
+   * H-2 — SHISO READ SNAPSHOT.
+   *
+   * The CARD is the always-mounted owner of the working review, so it publishes
+   * the CURRENT live projection for the conversation. (Previously only the
+   * modal published, so Shiso could not talk about the review unless the dialog
+   * happened to be open.) This publishes a READ-ONLY snapshot: publishing
+   * grants no authority.
+   */
+  const shisoPublishNutrition = shiso.publishNutrition;
+  const acceptedShisoContributions = state.aiNutrition?.recipe_key === state.recipeKey &&
+    state.aiNutrition?.servings === state.baseServings
+    ? state.aiNutrition.contributions
+    : NO_AI_CONTRIBUTIONS;
+  const nutritionSummaryText = useMemo(() => {
+    return nutritionCoverageSummary(deriveNutritionCoverage(liveRows, acceptedShisoContributions));
+  }, [liveRows, acceptedShisoContributions]);
+  useEffect(() => {
+    if (!session || !adaptation.ok) {
+      shisoPublishNutrition(null);
+      return undefined;
+    }
+    shisoPublishNutrition({
+      rows: liveRows,
+      summary: nutritionSummaryText,
+      unsaved: workingDirty,
+      recipeKey: state.recipeKey ?? null,
+      sessionIdentity: state.sessionIdentity ?? null,
+      reviewRows: state.rows,
+      aiContributions: acceptedShisoContributions,
+    });
+    return () => shisoPublishNutrition(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session, adaptation.ok, liveRows, nutritionSummaryText, workingDirty, state.recipeKey, state.sessionIdentity, state.rows, acceptedShisoContributions]);
+
+  const shisoRegisterAiNutrition = shiso.registerAiNutritionApplier;
+  useEffect(() => shisoRegisterAiNutrition((contributions) => {
+    const current = phase4StateRef.current;
+    if (!session || !adaptation.ok || current.recipeKey === null || current.baseServings !== adaptation.recipe.base_servings) return false;
+    if (contributions.some((entry) => !current.rows.some((row) => row.line_ref === entry.line_ref))) return false;
+    const calculated = session.calculate(buildCalculationRequest(adapted, current));
+    if (!calculated.ok) return false;
+    const combined = combineAiContributionsWithPreview(calculated.preview, contributions);
+    workingDispatch({ type: 'accept_ai_nutrition', recipeKey: current.recipeKey, servings: current.baseServings, contributions });
+    dispatch({ type: 'preview_succeeded', seq: current.operationSeq, recipeKey: current.recipeKey, preview: combined });
+    return true;
+  }), [session, adaptation, adapted, shisoRegisterAiNutrition, workingDispatch]);
+
+  /**
+   * H-2 — SHISO NUTRITION CORRECTIONS.
+   *
+   * Registered HERE because this component owns the Phase 4 reducer, the
+   * authenticated session, the adaptation and the calculator. The deterministic
+   * correction builder reads ONLY authenticated evidence (the same ranked
+   * candidate set the review UI shows); the actions it produces are the SAME
+   * existing reducer actions a user edit produces; and the preview is computed
+   * by the SAME calculator the Calculate button runs. Shiso never fabricates a
+   * match, a portion or a gram.
+   */
+  const shisoRegisterCorrections = shiso.registerCorrectionsApplier;
+  useEffect(() => {
+    return shisoRegisterCorrections(
+      async (lineRefs?: readonly string[]): Promise<ShisoNutritionCorrectionsOutcome> => {
+        const unavailable = (message: string): ShisoNutritionCorrectionsOutcome => ({
+          ok: false,
+          applied: [],
+          failed: [],
+          regressed: [],
+          changes: [],
+          unresolved: [],
+          summary: message,
+          resolved_count: 0,
+          total_count: 0,
+          recalculation: 'absent',
+          working_unsaved: workingDirty,
+        });
+        if (!session || !adaptation.ok) {
+          return unavailable('Advanced Nutrition cannot analyse this recipe yet.');
+        }
+        // H-2N: ALWAYS the current authoritative state, never a closure copy.
+        const currentState = phase4StateRef.current;
+        const beforeLive = liveRowsRef.current;
+        const before = summarizeLiveRows(beforeLive);
+        if (currentState.recipeKey === null || currentState.sessionIdentity === null) {
+          return unavailable('The nutrition review is not initialized yet for this recipe.');
+        }
+        if (currentState.recipeKey !== adaptation.recipe.recipe_key) {
+          return unavailable('The nutrition review belongs to a different version of this recipe. Re-analyse it first.');
+        }
+        const built = buildSupportedNutritionCorrections({
+          session,
+          liveRows: beforeLive,
+          adapted,
+          workingState: currentState,
+          ...(lineRefs !== undefined ? { lineRefs } : {}),
+        });
+        if (built.corrections.length === 0) {
+          const emptySubset = lineRefs !== undefined && lineRefs.length === 0;
+          return {
+            ok: false,
+            applied: [],
+            failed: [],
+            regressed: [],
+            changes: [],
+            unresolved: built.unresolved,
+            summary: emptySubset
+              ? 'No ingredient lines were specified for correction.'
+              : built.unresolved.length > 0
+                ? 'No supported correction was available. The remaining ingredients need information only the user can supply.'
+                : 'There was nothing to correct.',
+            before_resolved_count: before.matched + before.qualitative,
+            before_total_count: before.total,
+            resolved_count: before.matched + before.qualitative,
+            total_count: before.total,
+            recalculation: 'absent',
+            working_unsaved: workingDirty,
+          };
+        }
+
+        // H-2N STATE TRUTH. Compute the post-operation state and its REAL
+        // projection BEFORE dispatching anything, then verify:
+        //   - every attempted correction actually ends resolved with a mass;
+        //   - no previously resolved line regresses.
+        // Anything else is refused WHOLE — the working review is left untouched
+        // and the outcome reports exactly what was found.
+        let next = currentState;
+        for (const correction of built.corrections) {
+          for (const action of correction.actions) next = phase4Reducer(next, action);
+        }
+        const calculated = session.calculate(buildCalculationRequest(adapted, next));
+        if (!calculated.ok) {
+          return {
+            ok: false,
+            applied: [],
+            failed: [],
+            regressed: [],
+            changes: [],
+            unresolved: built.unresolved,
+            summary:
+              'No correction was applied: the recalculated review could not be authenticated, so the working review was left unchanged.',
+            before_resolved_count: before.matched + before.qualitative,
+            before_total_count: before.total,
+            resolved_count: before.matched + before.qualitative,
+            total_count: before.total,
+            recalculation: 'absent',
+            working_unsaved: workingDirty,
+          };
+        }
+        const afterLive = projectLiveRows(
+          next,
+          analyzedByRef,
+          adapted,
+          session,
+          // The post-operation projection uses the POST-operation preview
+          // evidence, so the reported state is exactly what the UI will show.
+          ingredientEvidenceViews(calculated.preview),
+          analysis?.portions,
+          analysis?.countPortions,
+        );
+        const transition = evaluateCorrectionTransition({
+          before: beforeLive,
+          after: afterLive,
+          corrections: built.corrections.map((correction) => ({
+            line_ref: correction.line_ref,
+            label: correction.label,
+            description: correction.description,
+          })),
+        });
+        const decision = decideCorrectionDispatch(transition);
+        const afterSummary = transition.after;
+        if (decision.ok !== true) {
+          // REFUSED: no dispatch; the user's working review is exactly as it was.
+          const regressed = decision.regressed.map((entry) => ({
+            line_ref: entry.line_ref,
+            label: entry.label,
+            reason: `would change ${entry.change} (previously resolved)`,
+          }));
+          return {
+            ok: false,
+            applied: [],
+            failed: decision.failed,
+            regressed,
+            changes: transition.changes.map((entry) => ({
+              line_ref: entry.line_ref,
+              label: entry.label,
+              change: entry.change,
+              before_status: entry.before_status,
+              after_status: entry.after_status,
+            })),
+            unresolved: built.unresolved,
+            summary:
+              decision.reason === 'regression'
+                ? `No correction was applied: the operation would have left ${decision.regressed.length} previously resolved ingredient(s) unresolved. The working review is unchanged.`
+                : `No correction was applied: ${decision.failed.length} correction(s) did not verify against the recalculated review. The working review is unchanged.`,
+            before_resolved_count: transition.before.resolved,
+            before_total_count: transition.before.total,
+            resolved_count: transition.before.resolved,
+            total_count: transition.before.total,
+            recalculation: 'absent',
+            working_unsaved: workingDirty,
+          };
+        }
+
+        // VERIFIED: dispatch the SAME state that was verified, atomically.
+        workingDispatch({
+          type: 'apply_analysis',
+          matches: next.matches,
+          portions: next.portions,
+          countPortions: next.countPortions,
+          householdPortions: next.householdPortions,
+          userMasses: next.userMasses,
+          aiEstimates: next.aiEstimates,
+          preview: calculated.preview,
+        });
+
+        const stillUnresolved = afterSummary.needs_amount + afterSummary.needs_match + afterSummary.review_suggested;
+        return {
+          ok: true,
+          applied: transition.verified.map((entry) => ({
+            line_ref: entry.line_ref,
+            label: entry.label,
+            description: entry.description,
+          })),
+          failed: [],
+          regressed: [],
+          changes: transition.changes.map((entry) => ({
+            line_ref: entry.line_ref,
+            label: entry.label,
+            change: entry.change,
+            before_status: entry.before_status,
+            after_status: entry.after_status,
+          })),
+          unresolved: built.unresolved,
+          summary:
+            `Verified ${transition.verified.length} correction(s) against the recalculated review: ` +
+            `resolved ${transition.before.resolved} → ${afterSummary.resolved} of ${afterSummary.total}; ` +
+            `${stillUnresolved} still unresolved.`,
+          before_resolved_count: transition.before.resolved,
+          before_total_count: transition.before.total,
+          resolved_count: afterSummary.resolved,
+          total_count: afterSummary.total,
+          recalculation: stillUnresolved === 0 ? 'complete' : 'partial',
+          working_unsaved: true,
+        };
+      },
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session, adaptation, state, adapted, analyzedByRef, evidence, analysis, workingDispatch, shisoRegisterCorrections, workingDirty]);
+
   /** The actionable exception rows derived from the SAME live projection. */
   const actionableRows = useMemo(
     () =>
@@ -1018,8 +1397,8 @@ onReviewRecipeContextWithAi,
     for (const row of state.rows) {
       const choice = state.matches[row.line_ref];
       if (!choice) continue;
-      // An AI-assisted AUTOMATIC acceptance is NOT a reviewed decision; only an
-      // explicit manual/user choice (no aiAccepted marker) is preserved.
+      // A deterministic AI acceptance is automatic, not a user decision.
+      // Explicit Use/Confirm actions strip aiAccepted and remain preserved.
       const userDecision =
         choice.aiAccepted !== true && (choice.kind === 'manual' || choice.automatic !== true);
       if (!userDecision) continue;
@@ -1027,7 +1406,12 @@ onReviewRecipeContextWithAi,
       const userMass = state.userMasses[row.line_ref];
       const portion = state.portions[row.line_ref];
       const countPortion = state.countPortions[row.line_ref];
-      if (userMass) {
+      if (state.aiEstimates?.[row.line_ref]) {
+        delete portions[row.line_ref];
+        delete countPortions[row.line_ref];
+        delete householdPortions[row.line_ref];
+        delete userMasses[row.line_ref];
+      } else if (userMass) {
         userMasses[row.line_ref] = userMass;
         delete portions[row.line_ref];
         delete countPortions[row.line_ref];
@@ -1058,7 +1442,9 @@ onReviewRecipeContextWithAi,
     } as Phase4State;
     let preview = current.preview;
     const calculated = session.calculate(buildCalculationRequest(adapted, mergedState));
-    if (calculated.ok) preview = calculated.preview;
+    if (calculated.ok) preview = state.aiNutrition && state.aiNutrition.recipe_key === state.recipeKey && state.aiNutrition.servings === state.baseServings
+      ? combineAiContributionsWithPreview(calculated.preview, state.aiNutrition.contributions)
+      : calculated.preview;
 
     dispatch({
       type: 'apply_analysis',
@@ -1202,6 +1588,7 @@ onReviewRecipeContextWithAi,
           countPortions: merged.countPortions,
           householdPortions: merged.householdPortions,
           userMasses: merged.userMasses,
+          aiEstimates: merged.aiEstimates,
           preview: calculated.preview,
         });
         return {
@@ -1677,11 +2064,12 @@ onReviewRecipeContextWithAi,
       setAiEstimateEvidence(nextEvidence);
       const refused = result.refused.length;
       setAiEstimateMessage(
-        result.offers.length === 0
+        result.message ?? (result.offers.length === 0
           ? `No lines are eligible for an AI estimate${refused > 0 ? ` (${refused} refused)` : ''}.`
           : `${result.offers.length} AI estimate offer${result.offers.length === 1 ? '' : 's'}${
               refused > 0 ? `, ${refused} refused` : ''
             }. Nothing is used until you choose one.`
+        )
       );
     } catch {
       // No automatic retry. The user can press the button again explicitly.
@@ -1965,7 +2353,7 @@ onReviewRecipeContextWithAi,
             }`}
           >
             <FlaskConical className="w-3.5 h-3.5" />
-            <span>{savedBlock ? 'Open Saved Advanced Report' : 'Generate Nutrition'}</span>
+            <span>{savedBlock ? (nutritionUnsaved ? 'Open Working Advanced Report' : 'Open Saved Advanced Report') : 'Generate Nutrition'}</span>
           </button>
         </div>
       )}
@@ -1975,7 +2363,7 @@ onReviewRecipeContextWithAi,
           {bundleStatus === 'loading' ||
           bundleStatus === 'failed' ||
           bundleStatus === 'unsupported' ||
-          (stored.kind !== 'v1' && stored.kind !== 'v2' && stored.kind !== 'v3') ? (
+          (stored.kind !== 'v1' && stored.kind !== 'v2' && (stored.kind !== 'v3' && stored.kind !== 'v4' && stored.kind !== 'v5')) ? (
             <p className="text-xs text-gray-300" role="status" aria-live="polite">
               {bundleStatus === 'loading'
                 ? PHASE4_LOADING_MESSAGE
@@ -1985,20 +2373,23 @@ onReviewRecipeContextWithAi,
                     ? PHASE4_UNSUPPORTED_MESSAGE
                     : PHASE4_IDLE_MESSAGE}
             </p>
-          ) : stored.status === 'complete' && stored.unresolvedCount === 0 ? (
+          ) : savedPresentation.advanced_unresolved_count === 0 ? (
             <div data-testid="advanced-saved-complete" role="status" aria-live="polite" className="space-y-0.5">
-              <p className="text-xs font-semibold text-emerald-300">Advanced Nutrition saved</p>
+              <p className="text-xs font-semibold text-emerald-300">Advanced Nutrition {nutritionUnsaved ? 'applied — not saved' : 'saved'}{savedPresentation.advanced_complete ? '' : ' · nutrient coverage partial'}</p>
               <p className="text-[11px] text-gray-400">
-                USDA reviewed · Complete coverage
+                {savedPresentation.advanced_stale ? 'Saved result needs review — recalculate before using these totals' : stored.kind === 'v5' ? 'Source-backed + AI-estimated contributions' : 'USDA reviewed'}
+                {savedPresentation.advanced_ingredient_count ? ` · ${savedPresentation.advanced_ingredient_count} ingredient lines accounted for` : ''}
+                {savedPresentation.advanced_excluded_count ? ` · ${savedPresentation.advanced_excluded_count} cooking wrapper excluded` : ''}
                 {stored.servings ? ` · base ${stored.servings} servings` : ''}
               </p>
             </div>
           ) : (
             <div data-testid="advanced-saved-partial" role="status" aria-live="polite" className="space-y-0.5">
-              <p className="text-xs font-semibold text-amber-300">Advanced Nutrition saved — partial</p>
+              <p className="text-xs font-semibold text-amber-300">Advanced Nutrition {nutritionUnsaved ? 'applied — not saved' : 'saved'} — partial</p>
               <p className="text-[11px] text-gray-400">
-                {stored.resolvedCount} of {stored.resolvedCount + stored.unresolvedCount} ingredient line
-                {stored.resolvedCount + stored.unresolvedCount === 1 ? '' : 's'} resolved
+                {savedPresentation.advanced_resolved_count + savedPresentation.advanced_excluded_count} of {savedPresentation.advanced_ingredient_count} ingredient line
+                {savedPresentation.advanced_ingredient_count === 1 ? '' : 's'} accounted for
+                {savedPresentation.advanced_excluded_count ? ` · ${savedPresentation.advanced_excluded_count} wrapper excluded` : ''}
                 {stored.servings ? ` · base ${stored.servings} servings` : ''}. Open Advanced Nutrition to
                 finish review.
               </p>
@@ -2035,7 +2426,7 @@ onReviewRecipeContextWithAi,
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-indigo-200 bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 transition-colors"
             >
               <FlaskConical className="w-3.5 h-3.5" />
-              <span>{savedBlock ? 'Open Saved Advanced Report' : 'Generate Nutrition'}</span>
+              <span>{savedBlock ? (nutritionUnsaved ? 'Open Working Advanced Report' : 'Open Saved Advanced Report') : 'Generate Nutrition'}</span>
             </button>
           )}
         </div>
@@ -2050,24 +2441,27 @@ onReviewRecipeContextWithAi,
 
       {session && adaptation.ok && (
         <div className="space-y-3">
-          {(stored.kind === 'v1' || stored.kind === 'v2' || stored.kind === 'v3') && (
+          {(stored.kind === 'v1' || stored.kind === 'v2' || (stored.kind === 'v3' || stored.kind === 'v4' || stored.kind === 'v5')) && (
             <div className="p-3 rounded-xl bg-[#0E0E0E] border border-white/5">
-              {stored.status === 'complete' && stored.unresolvedCount === 0 ? (
+              {savedPresentation.advanced_unresolved_count === 0 ? (
                 <div data-testid="advanced-saved-complete" className="space-y-0.5">
-                  <p className="text-[11px] font-semibold text-emerald-300">Advanced Nutrition saved</p>
+                  <p className="text-[11px] font-semibold text-emerald-300">Advanced Nutrition {nutritionUnsaved ? 'applied — not saved' : 'saved'}{savedPresentation.advanced_complete ? '' : ' · nutrient coverage partial'}</p>
                   <p className="text-[10px] text-gray-400">
-                    USDA reviewed · Complete coverage
+                    {savedPresentation.advanced_stale ? 'Saved result needs review — recalculate before using these totals' : stored.kind === 'v5' ? 'Source-backed + AI-estimated contributions' : 'USDA reviewed'}
+                    {savedPresentation.advanced_ingredient_count ? ` · ${savedPresentation.advanced_ingredient_count} ingredient lines accounted for` : ''}
+                    {savedPresentation.advanced_excluded_count ? ` · ${savedPresentation.advanced_excluded_count} cooking wrapper excluded` : ''}
                     {stored.servings ? ` · base ${stored.servings} servings` : ''}
                   </p>
                 </div>
               ) : (
                 <div data-testid="advanced-saved-partial" className="space-y-0.5">
                   <p className="text-[11px] font-semibold text-amber-300">
-                    Advanced Nutrition saved — partial
+                    Advanced Nutrition {nutritionUnsaved ? 'applied — not saved' : 'saved'} — partial
                   </p>
                   <p className="text-[10px] text-gray-400">
-                    {stored.resolvedCount} of {stored.resolvedCount + stored.unresolvedCount} ingredient line
-                    {stored.resolvedCount + stored.unresolvedCount === 1 ? '' : 's'} resolved
+                    {savedPresentation.advanced_resolved_count + savedPresentation.advanced_excluded_count} of {savedPresentation.advanced_ingredient_count} ingredient line
+                    {savedPresentation.advanced_ingredient_count === 1 ? '' : 's'} accounted for
+                    {savedPresentation.advanced_excluded_count ? ` · ${savedPresentation.advanced_excluded_count} wrapper excluded` : ''}
                     {stored.servings ? ` · base ${stored.servings} servings` : ''}. Open Advanced Nutrition to
                     finish review.
                   </p>
@@ -2119,17 +2513,17 @@ onReviewRecipeContextWithAi,
               <p className="text-[10px] text-gray-500 mt-1">
                 Review only — nothing is saved until you Apply.
               </p>
-              {aiEstimateApplyBlock !== null && (
+              {acceptedEstimates.length > 0 && (
                 <p
                   data-testid="advanced-nutrition-ai-estimate-apply-block"
                   className="text-[10px] mt-1 text-amber-300"
                 >
-                  {AI_ESTIMATE_APPLY_BLOCK_MESSAGE}
+                  Accepted estimated quantities — these remain labeled estimates when saved.
                 </p>
               )}
-              {aiEstimateApplyBlock !== null && (
+              {acceptedEstimates.length > 0 && (
                 <ul data-testid="advanced-nutrition-ai-estimate-apply-block-lines" className="text-[10px] text-amber-300/80 mt-1 list-disc pl-4">
-                  {aiEstimateApplyBlock.map((estimate) => (
+                  {acceptedEstimates.map((estimate) => (
                     <li key={estimate.lineRef} data-testid={`ai-estimate-block-${estimate.lineRef}`}>
                       {`${estimate.lower_grams}\u2013${estimate.upper_grams} g \u00b7 estimate uses ${estimate.representative_grams} g`}
                       {/* The accepted AI estimate is only ever removed by the user,
@@ -2148,13 +2542,13 @@ onReviewRecipeContextWithAi,
                   ))}
                 </ul>
               )}
-              {applyEligibility !== null && aiEstimateApplyBlock === null && (
+              {applyEligibility !== null && (
                 <p
                   data-testid="advanced-nutrition-apply-eligibility"
                   className={`text-[10px] mt-1 ${applyEligibility ? 'text-emerald-300' : 'text-amber-300'}`}
                 >
                   {applyEligibility
-                    ? 'This reviewed result is eligible for a future Apply. Nothing is saved automatically.'
+                    ? 'This reviewed result is eligible for Apply. Nothing is saved automatically.'
                     : 'This reviewed result is not eligible for Apply yet.'}
                 </p>
               )}
@@ -2184,7 +2578,7 @@ onReviewRecipeContextWithAi,
               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold text-indigo-200 bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 transition-colors"
             >
               <FlaskConical className="w-3.5 h-3.5" />
-              <span>{savedBlock ? 'Open Saved Advanced Report' : 'Generate Nutrition'}</span>
+              <span>{savedBlock ? (nutritionUnsaved ? 'Open Working Advanced Report' : 'Open Saved Advanced Report') : 'Generate Nutrition'}</span>
             </button>
           </div>
         </div>
@@ -2203,6 +2597,8 @@ onReviewRecipeContextWithAi,
           calculating={calculating}
           analysis={analysis}
           onAnalyze={handleAnalyze}
+          onAnalyzeRecipe={() => { void handleAnalyzeRecipeWithShiso(); }}
+          shisoAnalysisState={shisoNutritionState}
           analysisRuns={analysisRuns}
           apply={applyUi}
           workingDirty={workingDirty}
@@ -2215,9 +2611,11 @@ onReviewRecipeContextWithAi,
       {savedBlock && (
         <AdvancedNutritionSavedReport
           isOpen={isSavedReportOpen}
+          unsaved={nutritionUnsaved}
           onClose={() => setIsSavedReportOpen(false)}
           title={adaptation.ok ? adaptation.recipe.title : ''}
           block={savedBlock}
+          stale={savedPresentation.advanced_stale}
           onEdit={() => {
             setIsSavedReportOpen(false);
             openWorkingEditor();

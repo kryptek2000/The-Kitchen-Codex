@@ -64,7 +64,7 @@ const BUNDLE_DIR = join(
   'data/advanced-nutrition/usda/usda_fdc_87c5408a3e98838944a87be74824761e'
 );
 
-/** The base production state this disposition report is measured against. */
+/** Historical assessment lineage; measurement_baseline names current runtime data. */
 export const BASE_PHASE = 'AI-6B1';
 export const BASE_COMMIT = '210c511c40d7dfc642dc7143d89ffb88ff415b6d';
 
@@ -90,6 +90,7 @@ export interface Ai6b2ReportLine {
 
 export interface Ai6b2DispositionReport {
   readonly schema: string;
+  readonly measurement_baseline: 'pr12_ci_repair_v1';
   readonly tool: string;
   readonly base_phase: string;
   readonly base_commit: string;
@@ -395,6 +396,7 @@ export async function buildNutritionPortionDispositionReport(): Promise<Ai6b2Dis
 
   return {
     schema: PORTION_DISPOSITION_SCHEMA,
+    measurement_baseline: 'pr12_ci_repair_v1',
     tool: 'benchmark_nutrition_portion_disposition',
     base_phase: BASE_PHASE,
     base_commit: BASE_COMMIT,

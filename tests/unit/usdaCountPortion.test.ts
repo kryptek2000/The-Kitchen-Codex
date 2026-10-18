@@ -99,7 +99,9 @@ const COUNT_SPECS: ReadonlyArray<CalcRecordSpec> = [
   {
     fdcId: 5005,
     dataType: 'fndds',
-    description: 'Bun',
+    // The recipe names hamburger buns; a generic Bun record no longer
+    // satisfies that material form, even if it has a usable portion.
+    description: 'Hamburger bun',
     nutrients: { calories: 280 },
     portions: [
       { usda_portion_id: 7, measure: '1 hamburger bun', modifier: '64538', gram_weight: 52, sequence: 1 },
@@ -966,4 +968,20 @@ describe('phase 4.5E — real authenticated USDA bundle', () => {
     expect(review.review.applicable).toBe(true);
     expect(review.review.candidates.map((candidate) => candidate.display_label)).toContain('1 slice = 28 g');
   });
+});
+
+it.each([
+  ['1 lemon', 2709168, 65],
+  ['1 yellow onion', 790646, 143],
+  ['1 sweet onion', 170008, 331],
+  ['1 red onion', 790577, 197],
+] as const)('uses only the authenticated whole-item source portion for %s', (line, fdcId, grams) => {
+  const result = realCalculate(line, fdcId);
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  const evidence = result.preview.ingredients[0];
+  expect(evidence.fdc_id).toBe(fdcId);
+  expect(evidence.mass_source).toBe('count_portion');
+  expect(evidence.resolved_grams).toBe(grams);
+  expect(evidence.count_deterministic).toBe(true);
 });

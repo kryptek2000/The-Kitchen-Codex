@@ -1,3 +1,5 @@
+import { MAX_AI_ESTIMATE_BOUND_GRAMS } from './aiAdvancedEstimate';
+import { MAX_AI_ESTIMATE_RANGE_RATIO } from './aiEstimateBounds';
 /**
  * The Kitchen Codex — Advanced Nutrition v1: evidence validation, codec, and
  * advisory eligibility.
@@ -39,6 +41,8 @@ import {
   CODEX_NUTRITION_SCHEMA_V1,
   CODEX_NUTRITION_SCHEMA_V2,
   CODEX_NUTRITION_SCHEMA_V3,
+  CODEX_NUTRITION_SCHEMA_V4,
+  CODEX_NUTRITION_SCHEMA_V5,
   CODEX_NUTRITION_BASIS_TOTAL,
   NUTRITION_SOURCE_IDS,
   DATASET_BACKED_SOURCE_IDS,
@@ -68,6 +72,10 @@ import {
   type CodexNutritionV1,
   type CodexNutritionV2,
   type CodexNutritionV3,
+  type CodexNutritionV4,
+  type CodexNutritionV5,
+  type IngredientEvidenceV4,
+  type QuantityEstimateEvidence,
   type NutrientResult,
   type IngredientEvidence,
   type IngredientEvidenceV2,
@@ -80,6 +88,7 @@ import {
   type AdvancedNutritionBlock,
   type OpaqueCodexNutrition,
 } from './schema';
+import { validateAiNutrientContributions } from './aiContribution';
 
 /** Stable `sha256:<64 hex>` ingredient digest format. */
 export const INGREDIENT_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
@@ -148,6 +157,7 @@ const V1_KEYS = new Set([
 const V2_KEYS = V1_KEYS;
 /** v3 uses the same closed top-level key set as v1/v2. */
 const V3_KEYS = V1_KEYS;
+const V5_KEYS = new Set([...V1_KEYS, 'ai_contributions']);
 
 const NUTRIENT_RESULT_KEYS = new Set([
   'amount',
@@ -227,7 +237,7 @@ class Diagnostics {
   }
 }
 
-export interface AdvancedNutritionValidation<T = CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3> {
+export interface AdvancedNutritionValidation<T = CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5> {
   ok: boolean;
   errors: string[];
   /** Present only when `ok`. */
@@ -371,14 +381,16 @@ function validateNutrientResult(id: NutrientId, raw: unknown, diag: Diagnostics)
  */
 function validateInertCodexNutrition(
   raw: Record<string, unknown>,
-  version: 1 | 2 | 3
+  version: 1 | 2 | 3 | 4 | 5
 ): AdvancedNutritionValidation {
   const isV2 = version === CODEX_NUTRITION_SCHEMA_V2;
-  const isV3 = version === CODEX_NUTRITION_SCHEMA_V3;
+  const isV5 = version === CODEX_NUTRITION_SCHEMA_V5;
+  const isV4 = version === CODEX_NUTRITION_SCHEMA_V4 || isV5;
+  const isV3 = version === CODEX_NUTRITION_SCHEMA_V3 || isV4;
   const supportsHousehold = isV2 || isV3;
-  const topLevelKeys = isV3 ? V3_KEYS : isV2 ? V2_KEYS : V1_KEYS;
-  const evidenceKeys = isV3 ? EVIDENCE_KEYS_V3 : isV2 ? EVIDENCE_KEYS_V2 : EVIDENCE_KEYS_V1;
-  const conversionBases = isV3 ? CONVERSION_BASES_V3 : isV2 ? CONVERSION_BASES_V2 : CONVERSION_BASES_V1;
+  const topLevelKeys = isV5 ? V5_KEYS : isV3 ? V3_KEYS : isV2 ? V2_KEYS : V1_KEYS;
+  const evidenceKeys = isV4 ? new Set([...EVIDENCE_KEYS_V3, 'quantity_estimate', 'count_portion']) : isV3 ? EVIDENCE_KEYS_V3 : isV2 ? EVIDENCE_KEYS_V2 : EVIDENCE_KEYS_V1;
+  const conversionBases: ReadonlyArray<string> = isV4 ? [...CONVERSION_BASES_V3, 'estimated_quantity'] : isV3 ? CONVERSION_BASES_V3 : isV2 ? CONVERSION_BASES_V2 : CONVERSION_BASES_V1;
   const diag = new Diagnostics();
 
   for (const key of Object.keys(raw)) {
@@ -529,7 +541,7 @@ function validateInertCodexNutrition(
   }
 
   // Ingredients evidence.
-  const ingredients: IngredientEvidenceV3[] = [];
+  const ingredients: IngredientEvidenceV4[] = [];
   const lineRefs = new Set<string>();
   if (!Array.isArray(raw.ingredients) || raw.ingredients.length > MAX_INGREDIENT_EVIDENCE) {
     diag.add('invalid_ingredients');
@@ -614,7 +626,7 @@ function validateInertCodexNutrition(
           }
         }
       }
-      let conversionBasis: IngredientEvidenceV2['conversion_basis'];
+      let conversionBasis: IngredientEvidenceV4['conversion_basis'];
       if (hasOwn(entry, 'conversion_basis')) {
         if (
           typeof entry.conversion_basis !== 'string' ||
@@ -785,6 +797,39 @@ function validateInertCodexNutrition(
           }
         }
       }
+      let countPortion: IngredientEvidenceV4['count_portion'];
+      if (isV4 && hasOwn(entry, 'count_portion')) {
+        const c = entry.count_portion;
+        if (!isPlainObject(c) || Object.keys(c).some(key => !['unit','size','quantity','portion_amount','gram_weight'].includes(key))) diag.add('invalid_count_evidence');
+        else if (conversionBasis !== 'source_portion' || entry.resolved !== true || amount?.unit !== 'g' ||
+          !(c.unit === null || typeof c.unit === 'string' && c.unit.length > 0 && c.unit.length <= 64) ||
+          !(c.size === null || ['small','medium','large','jumbo','mini','petite','xl','xxl'].includes(c.size as string)) ||
+          ![c.quantity,c.portion_amount,c.gram_weight].every(n => typeof n === 'number' && Number.isFinite(n) && n > 0 && n <= 1000000) ||
+          Math.abs((c.quantity as number) / (c.portion_amount as number) * (c.gram_weight as number) - amount.value) > 0.000001) diag.add('invalid_count_evidence');
+        else countPortion = { unit:c.unit as string | null, size:c.size as string | null, quantity:c.quantity as number, portion_amount:c.portion_amount as number, gram_weight:c.gram_weight as number };
+      }
+      let quantityEstimate: QuantityEstimateEvidence | undefined;
+      if (isV4) {
+        const q = entry.quantity_estimate;
+        if ((conversionBasis === 'estimated_quantity') !== hasOwn(entry, 'quantity_estimate')) diag.add('estimate_basis_mismatch');
+        if (q !== undefined) {
+          if (!isPlainObject(q) || Object.keys(q).some(key => !['lower_grams', 'upper_grams', 'representative_grams', 'representative_policy', 'provenance'].includes(key))) {
+            diag.add('invalid_quantity_estimate');
+          } else {
+            const lo = q.lower_grams, hi = q.upper_grams, mid = q.representative_grams;
+            if (typeof lo !== 'number' || typeof hi !== 'number' || typeof mid !== 'number' ||
+                !Number.isFinite(lo) || !Number.isFinite(hi) || !Number.isFinite(mid) ||
+                lo <= 0 || hi > MAX_AI_ESTIMATE_BOUND_GRAMS || hi < lo || hi > lo * MAX_AI_ESTIMATE_RANGE_RATIO ||
+                Math.abs(mid - (lo + (hi - lo) / 2)) > 0.000001 ||
+                q.provenance !== 'ai_estimate' || q.representative_policy !== 'midpoint' ||
+                entry.resolved !== true || entry.user_confirmed !== true ||
+                amount?.unit !== 'g' || amount?.value !== mid ||
+                hasOwn(entry, 'household_portion') || hasOwn(entry, 'range_representative')) {
+              diag.add('invalid_quantity_estimate');
+            } else quantityEstimate = { lower_grams: lo, upper_grams: hi, representative_grams: mid, representative_policy: 'midpoint', provenance: 'ai_estimate' };
+          }
+        }
+      }
       ingredients.push({
         line_ref: typeof lineRef === 'string' ? lineRef : '',
         ...(typeof entry.line_digest === 'string' ? { line_digest: entry.line_digest } : {}),
@@ -798,6 +843,8 @@ function validateInertCodexNutrition(
         ...(conversionBasis ? { conversion_basis: conversionBasis } : {}),
         ...(householdPortion ? { household_portion: householdPortion } : {}),
         ...(rangeRepresentative ? { range_representative: rangeRepresentative } : {}),
+        ...(quantityEstimate ? { quantity_estimate: quantityEstimate } : {}),
+        ...(countPortion ? { count_portion: countPortion } : {}),
       });
     }
   }
@@ -875,6 +922,22 @@ function validateInertCodexNutrition(
     }
   }
 
+  let aiContributions: import('./aiContribution').AiNutrientContribution[] | undefined;
+  if (isV5) {
+    const rawContributions = raw.ai_contributions;
+    if (!Array.isArray(rawContributions) || rawContributions.length === 0) diag.add('invalid_ai_contributions');
+    else {
+      const refs = rawContributions.map((item) => isPlainObject(item) && typeof item.line_ref === 'string' ? item.line_ref : '');
+      const validated = validateAiNutrientContributions(rawContributions, {
+        recipe_digest: typeof raw.ingredient_digest === 'string' ? raw.ingredient_digest : '',
+        line_refs: refs,
+        requireExclusionContext: false,
+      });
+      if (!validated.ok || refs.some((ref) => !ref) || new Set(refs).size !== refs.length) diag.add('invalid_ai_contributions');
+      else aiContributions = [...validated.contributions];
+    }
+  }
+
   // Manual override (closed fields).
   let manualOverride: ManualOverrideMetadata | undefined;
   if (hasOwn(raw, 'manual_override')) {
@@ -947,7 +1010,7 @@ function validateInertCodexNutrition(
       // manual evidence. No dataset release/evidence can coexist (sources is
       // exactly ['user_manual']).
       if (manualOverride === undefined) diag.add('manual_only_requires_manual_override');
-    } else if (resolvedEvidenceSources.size === 0) {
+    } else if (resolvedEvidenceSources.size === 0 && !(isV5 && aiContributions && aiContributions.length > 0)) {
       diag.add('complete_without_evidence');
     }
   }
@@ -979,7 +1042,8 @@ function validateInertCodexNutrition(
     unresolved,
     ...(manualOverride ? { manual_override: manualOverride } : {}),
     ...(extensions ? { extensions } : {}),
-  } as CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3;
+    ...(aiContributions ? { ai_contributions: aiContributions } : {}),
+  } as CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5;
   return { ok: true, errors: [], value };
 }
 
@@ -1069,6 +1133,8 @@ export function validateCodexNutrition(
     }
     if (!isPlainObject(materialized.value)) return { ok: false, errors: ['not_an_object'] };
     const inert = materialized.value;
+    if (inert.schema === CODEX_NUTRITION_SCHEMA_V5) return validateInertCodexNutrition(inert, CODEX_NUTRITION_SCHEMA_V5);
+    if (inert.schema === CODEX_NUTRITION_SCHEMA_V4) return validateInertCodexNutrition(inert, CODEX_NUTRITION_SCHEMA_V4);
     if (inert.schema === CODEX_NUTRITION_SCHEMA_V3) {
       return validateInertCodexNutrition(inert, CODEX_NUTRITION_SCHEMA_V3);
     }
@@ -1086,6 +1152,8 @@ export type DecodeResult =
   | { kind: 'v1'; value: CodexNutritionV1 }
   | { kind: 'v2'; value: CodexNutritionV2 }
   | { kind: 'v3'; value: CodexNutritionV3 }
+  | { kind: 'v4'; value: CodexNutritionV4 }
+  | { kind: 'v5'; value: CodexNutritionV5 }
   | { kind: 'opaque'; value: OpaqueCodexNutrition }
   | { kind: 'malformed'; errors: string[] };
 
@@ -1117,6 +1185,16 @@ export function decodeCodexNutrition(raw: unknown): DecodeResult {
         return { kind: 'malformed', errors: validation.errors };
       }
 
+      if (inert.schema === CODEX_NUTRITION_SCHEMA_V4) {
+        const validation = validateInertCodexNutrition(inert, CODEX_NUTRITION_SCHEMA_V4);
+        if (validation.ok && validation.value) return { kind: 'v4', value: validation.value as CodexNutritionV4 };
+        return { kind: 'malformed', errors: validation.errors };
+      }
+      if (inert.schema === CODEX_NUTRITION_SCHEMA_V5) {
+        const validation = validateInertCodexNutrition(inert, CODEX_NUTRITION_SCHEMA_V5);
+        if (validation.ok && validation.value) return { kind: 'v5', value: validation.value as CodexNutritionV5 };
+        return { kind: 'malformed', errors: validation.errors };
+      }
       if (inert.schema === CODEX_NUTRITION_SCHEMA_V3) {
         const validation = validateInertCodexNutrition(inert, CODEX_NUTRITION_SCHEMA_V3);
         if (validation.ok && validation.value) return { kind: 'v3', value: validation.value as CodexNutritionV3 };
@@ -1179,7 +1257,11 @@ export function encodeCodexNutrition(block: AdvancedNutritionBlock): Record<stri
   // block is only ever encoded under schema v2/v3, a written-range block only
   // under schema v3, and a v1 block can never carry either extension.
   const validation =
-    inert.schema === CODEX_NUTRITION_SCHEMA_V3
+    inert.schema === CODEX_NUTRITION_SCHEMA_V5
+      ? validateInertCodexNutrition(inert, CODEX_NUTRITION_SCHEMA_V5)
+      : inert.schema === CODEX_NUTRITION_SCHEMA_V4
+      ? validateInertCodexNutrition(inert, CODEX_NUTRITION_SCHEMA_V4)
+      : inert.schema === CODEX_NUTRITION_SCHEMA_V3
       ? validateInertCodexNutrition(inert, CODEX_NUTRITION_SCHEMA_V3)
       : inert.schema === CODEX_NUTRITION_SCHEMA_V2
         ? validateInertCodexNutrition(inert, CODEX_NUTRITION_SCHEMA_V2)
@@ -1207,6 +1289,7 @@ export function encodeCodexNutrition(block: AdvancedNutritionBlock): Record<stri
     nutrients,
     ingredients: value.ingredients,
     unresolved: value.unresolved,
+    ...(value.schema === CODEX_NUTRITION_SCHEMA_V5 && 'ai_contributions' in value ? { ai_contributions: value.ai_contributions } : {}),
     ...(value.manual_override ? { manual_override: value.manual_override } : {}),
     ...(value.extensions ? { extensions: value.extensions } : {}),
   };

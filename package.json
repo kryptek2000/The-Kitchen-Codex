@@ -27,6 +27,7 @@
     "canvas-confetti": "^1.9.4",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
+    "express-rate-limit": "8.7.1",
     "helmet": "^8.3.0",
     "html2canvas": "^1.4.1",
     "js-yaml": "^5.3.0",
@@ -51,5 +52,8 @@
     "typescript": "7.0.2",
     "vite": "^6.2.3",
     "vitest": "^4.1.11"
+  },
+  "overrides": {
+    "moment": "2.31.0"
   }
 }

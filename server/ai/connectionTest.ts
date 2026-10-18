@@ -52,7 +52,6 @@
 
 import { MODEL_CONFIG } from "../modelConfig.js";
 import { getServerSecretSync } from "../platform/ServerEnvironmentSecretAdapter.js";
-import { classifyProviderError } from "./providerErrors.js";
 import { getRegisteredProviders, findRegisteredProvider } from "./providerRegistry.js";
 import { findRegisteredImageProvider } from "./imageProviderRegistry.js";
 import { DEEPSEEK_CHAT_ENDPOINT } from "./deepSeekProvider.js";
@@ -71,21 +70,39 @@ export type ConnectionTestResult =
       credentialSource: CredentialSource;
       code: string;
       message: string;
+      /** Bounded diagnostic metadata; never contains provider response text. */
+      diagnostic?: { stage: ConnectionDiagnosticStage; httpStatus?: number; providerCode?: string };
     };
+
+export type ConnectionDiagnosticStage =
+  | "preflight"
+  | "transport"
+  | "upstream_http"
+  | "response_parse"
+  | "response_validation"
+  | "unknown";
 
 /** The probe type surfaced to the catalog (non-secret). */
 export type ConnectionTestKind = "network_probe" | "credential_check" | "unavailable";
 
 /** Maps a normalized code to a provider-NEUTRAL, bounded UI message. */
 const BOUNDED_MESSAGES: Record<string, string> = {
+  AUTHENTICATION_FAILED: "Authentication failed. Check the configured credential.",
+  AUTHORIZATION_FAILED: "Provider permission was denied.",
+  INVALID_MODEL: "The selected model is unavailable or invalid for this request.",
+  INVALID_REQUEST: "The provider rejected the connection-test request.",
+  RATE_LIMIT: "The provider rate limit was reached. Try again later.",
+  QUOTA_EXHAUSTED: "The provider quota or billing limit was reached.",
+  UPSTREAM_ERROR: "The provider service returned an error.",
+  NETWORK_ERROR: "Could not connect to the provider. Check network or DNS access.",
+  RESPONSE_PARSE_ERROR: "The provider returned a response that could not be parsed.",
+  UNKNOWN_UPSTREAM: "The provider returned an unexpected error.",
   AUTH: "Authentication failed.",
-  RATE_LIMIT: "Rate limited.",
   QUOTA: "Quota unavailable.",
   UNAVAILABLE: "Provider temporarily unavailable.",
   TIMEOUT: "Connection timed out.",
   INVALID_RESPONSE: "The provider returned an unusable response.",
   UNSUPPORTED_CAPABILITY: "This model is not supported for connection testing.",
-  INVALID_MODEL: "The requested model is not in the server's curated model set for this provider.",
   BLOCKED: "Connection test was blocked.",
   OPERATOR_PIN: "This surface is managed by the server operator; only the pinned provider can be tested.",
   BUSY: "Too many connection tests are running. Please try again shortly.",
@@ -140,10 +157,16 @@ export function resetConnectionTestConcurrencyForTests(): void {
 
 class ReadyError extends Error {
   readonly code: string;
-  constructor(code: string, message: string) {
+  readonly diagnostic: { stage: ConnectionDiagnosticStage; httpStatus?: number; providerCode?: string };
+  constructor(
+    code: string,
+    message: string,
+    diagnostic: { stage: ConnectionDiagnosticStage; httpStatus?: number; providerCode?: string } = { stage: "preflight" }
+  ) {
     super(message);
     this.name = "ReadyError";
     this.code = code;
+    this.diagnostic = diagnostic;
   }
 }
 
@@ -230,20 +253,48 @@ async function readErrorText(res: Response): Promise<string> {
   }
 }
 
+const SAFE_PROVIDER_CODES = new Set([
+  "UNAUTHENTICATED", "PERMISSION_DENIED", "RESOURCE_EXHAUSTED", "INVALID_ARGUMENT", "NOT_FOUND",
+  "FAILED_PRECONDITION", "UNAVAILABLE", "INTERNAL", "DEADLINE_EXCEEDED",
+]);
+
+function parseSafeProviderError(text: string): { providerCode?: string } {
+  try {
+    const root = JSON.parse(text) as { error?: { status?: unknown } };
+    const status = typeof root?.error?.status === "string" ? root.error.status.toUpperCase() : undefined;
+    const providerCode = status && SAFE_PROVIDER_CODES.has(status) ? status : undefined;
+    return providerCode ? { providerCode } : {};
+  } catch {
+    return {};
+  }
+}
+
 function classifyHttp(status: number, text: string): ReadyError {
-  if (status === 401 || status === 403 || /unauthorized|forbidden|invalid api key/i.test(text)) {
-    return new ReadyError("AUTH", "Authentication failed.");
+  const safe = parseSafeProviderError(text);
+  const evidence = `${safe.providerCode ?? ""} ${text.slice(0, 512)}`;
+  const diagnostic = { stage: "upstream_http" as const, httpStatus: status, ...(safe.providerCode ? { providerCode: safe.providerCode } : {}) };
+  if (status === 401 || safe.providerCode === "UNAUTHENTICATED") {
+    return new ReadyError("AUTHENTICATION_FAILED", "Authentication failed.", diagnostic);
   }
-  if (status === 429 || /rate.?limit|too many requests/i.test(text)) {
-    return new ReadyError("RATE_LIMIT", "Rate limited.");
+  if (status === 403 || safe.providerCode === "PERMISSION_DENIED") {
+    return new ReadyError("AUTHORIZATION_FAILED", "Provider permission was denied.", diagnostic);
   }
-  if (status === 402 || /quota|billing|capacity|insufficient.?balance/i.test(text)) {
-    return new ReadyError("QUOTA", "Quota unavailable.");
+  if (status === 429 || safe.providerCode === "RESOURCE_EXHAUSTED") {
+    const hasRateEvidence = /rate.?limit|too many requests/i.test(text);
+    const quota = /quota|billing/i.test(evidence) || (safe.providerCode === "RESOURCE_EXHAUSTED" && !hasRateEvidence);
+    return new ReadyError(quota ? "QUOTA_EXHAUSTED" : "RATE_LIMIT", quota ? "Provider quota exhausted." : "Provider rate limit reached.", diagnostic);
   }
-  if (status === 503 || status === 502 || /\bunavailable\b|\bnot available\b/i.test(text)) {
-    return new ReadyError("UNAVAILABLE", "Provider temporarily unavailable.");
+  if (status === 402) return new ReadyError("QUOTA_EXHAUSTED", "Provider quota exhausted.", diagnostic);
+  if (status === 400 || safe.providerCode === "INVALID_ARGUMENT") {
+    return new ReadyError("INVALID_REQUEST", "Provider rejected the request.", diagnostic);
   }
-  return new ReadyError("PROVIDER_ERROR", "Could not reach the provider.");
+  if (status === 404 || safe.providerCode === "NOT_FOUND") {
+    return new ReadyError("INVALID_MODEL", "Selected model was not found.", diagnostic);
+  }
+  if (status >= 500 || safe.providerCode === "UNAVAILABLE" || safe.providerCode === "INTERNAL") {
+    return new ReadyError("UPSTREAM_ERROR", "Provider service error.", diagnostic);
+  }
+  return new ReadyError("UNKNOWN_UPSTREAM", "Unexpected provider response.", diagnostic);
 }
 
 // ---------------------------------------------------------------------------
@@ -310,6 +361,15 @@ function isGeminiGenerateSuccess(text: string): boolean {
   }
 }
 
+function isJson(text: string): boolean {
+  try {
+    JSON.parse(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Validates the Gemini `models` list success shape. */
 function isGeminiModelsSuccess(text: string): boolean {
   try {
@@ -349,8 +409,9 @@ async function probeGeminiText(model: string, credential?: string): Promise<void
     throw classifyHttp(res.status, text);
   }
   const { text, truncated } = await readBoundedResponse(res);
-  if (truncated) throw new ReadyError("INVALID_RESPONSE", "Gemini response exceeded the size limit.");
-  if (!isGeminiGenerateSuccess(text)) throw new ReadyError("INVALID_RESPONSE", "Gemini returned an unusable response.");
+  if (truncated) throw new ReadyError("RESPONSE_PARSE_ERROR", "Provider response exceeded the size limit.", { stage: "response_parse" });
+  if (!isJson(text)) throw new ReadyError("RESPONSE_PARSE_ERROR", "Provider response was not valid JSON.", { stage: "response_parse" });
+  if (!isGeminiGenerateSuccess(text)) throw new ReadyError("INVALID_RESPONSE", "Provider response had an unexpected shape.", { stage: "response_validation" });
 }
 
 async function probeOpenRouterText(_model: string, credential?: string): Promise<void> {
@@ -463,10 +524,21 @@ function probeImage(providerId: string, credential?: string): Promise<void> {
   return Promise.reject(new ReadyError("PROVIDER_ERROR", "Unknown image provider."));
 }
 
-function normalizeProbeError(err: unknown): string {
-  if (err instanceof ReadyError) return err.code;
-  const code = classifyProviderError(err);
-  return BOUNDED_MESSAGES[code] ? code : "PROVIDER_ERROR";
+function probeFailureDetails(err: unknown): {
+  code: string;
+  diagnostic: { stage: ConnectionDiagnosticStage; httpStatus?: number; providerCode?: string };
+} {
+  if (err instanceof ReadyError) return { code: err.code, diagnostic: err.diagnostic };
+  const error = (typeof err === "object" && err !== null ? err : {}) as { name?: unknown; message?: unknown };
+  const name = typeof error.name === "string" ? error.name : "";
+  const message = typeof error.message === "string" ? error.message : "";
+  if (name === "TimeoutError" || name === "AbortError" || /timeout|timed out/i.test(message)) {
+    return { code: "TIMEOUT", diagnostic: { stage: "transport" } };
+  }
+  if (err instanceof TypeError || /fetch failed|network|dns|econn|enotfound|socket/i.test(message)) {
+    return { code: "NETWORK_ERROR", diagnostic: { stage: "transport" } };
+  }
+  return { code: "UNKNOWN_UPSTREAM", diagnostic: { stage: "unknown" } };
 }
 
 /** Resolves the probe's curated model id, or undefined if the provider has none. */
@@ -546,7 +618,8 @@ export async function runConnectionTest(options: {
   const fail = (
     code: string,
     credentialSource: CredentialSource,
-    model: string = modelId ?? ""
+    model: string = modelId ?? "",
+    diagnostic?: { stage: ConnectionDiagnosticStage; httpStatus?: number; providerCode?: string }
   ): ConnectionTestResult => ({
     ok: false,
     providerId,
@@ -554,6 +627,7 @@ export async function runConnectionTest(options: {
     credentialSource,
     code,
     message: boundedMessage(code),
+    ...(diagnostic ? { diagnostic } : {}),
   });
 
   // Fail-fast: provider registered?
@@ -633,8 +707,8 @@ export async function runConnectionTest(options: {
       latencyMs: Date.now() - start,
     };
   } catch (err) {
-    const code = normalizeProbeError(err);
-    return fail(code, effectiveSource, model);
+    const failure = probeFailureDetails(err);
+    return fail(failure.code, effectiveSource, model, failure.diagnostic);
   } finally {
     inFlightConnectionTests = Math.max(0, inFlightConnectionTests - 1);
   }

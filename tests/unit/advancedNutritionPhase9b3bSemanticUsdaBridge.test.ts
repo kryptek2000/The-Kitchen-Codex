@@ -328,7 +328,10 @@ describe('9B-3B — real offline semantic-to-USDA path (pinned catalog)', () => 
     // decision, not ours. Both outcomes are legitimate; neither is fabricated.
     const covered = new Set(final.candidates.map((c) => c.line_ref));
     if (!covered.has(EGG_LINE_REF)) {
-      expect(final.unresolved).toContain(EGG_LINE_REF);
+      // A now-resolved source row is not unresolved merely because the advisory
+      // request repeated its identity. Still-unresolved rows remain explicit.
+      if (eggIssueKinds[EGG_LINE_REF] !== undefined) expect(final.unresolved).toContain(EGG_LINE_REF);
+      else expect(final.unresolved).not.toContain(EGG_LINE_REF);
     }
 
     // 11: EVERY candidate must be a genuine catalog record.
@@ -345,17 +348,17 @@ describe('9B-3B — real offline semantic-to-USDA path (pinned catalog)', () => 
     expect(final.candidates.every((c) => eggIssueKinds[c.line_ref] !== undefined)).toBe(true);
   }, 60000);
 
-  it('the deterministic system GRANTS a real whole-egg candidate for the AI wording', async () => {
-    // The genuine outcome of this recipe, observed rather than assumed:
-    //   "4 eggs, separated" -> live status `needs_match`
-    //   AI advisory wording "whole egg" -> deterministic match on a REAL record
-    //   whose description is a WHOLE EGG, and whose record digest comes from the
-    //   pinned catalog.
-    //
-    // Nothing here fabricates the identity: the FDC id, description and both
-    // digests are produced by the real matcher over the real bundle. The test
-    // asserts PROPERTIES of the genuine result, never a hard-coded FDC id.
-    expect(eggIssueKinds[EGG_LINE_REF]).toBe('needs_match');
+  it('does not re-resolve a whole egg that the deterministic source already authenticated', async () => {
+    // The current production matcher treats "separated" as preparation, so
+    // this row is already matched to a pinned whole-egg record. A repeated AI
+    // phrase cannot authorize another resolution for an unclassified row.
+    expect(eggIssueKinds[EGG_LINE_REF]).toBeUndefined();
+    const analyzed = analyzeRecipe(session, eggAdapted, 4);
+    const eggRow = analyzed.rows.find((row) => row.line_ref === EGG_LINE_REF);
+    expect(eggRow?.selected_fdc_id).toBe(2707152);
+    const wholeEgg = session.reviewIngredient({ name: 'whole egg' });
+    expect(wholeEgg.candidates[0]?.fdc_id).toBe(2707152);
+    expect(wholeEgg.candidates[0]?.description).toMatch(/egg.*whole|whole.*egg/i);
 
     const envelope = await issue();
     const bridge = bridgeAuthenticatedSemanticsToAdvisorySuggestions({
@@ -371,31 +374,15 @@ describe('9B-3B — real offline semantic-to-USDA path (pinned catalog)', () => 
       adapted: eggAdapted,
       suggestions: selectFoodIdentitySuggestions(bridge.suggestions, eggIssueKinds),
     });
+    expect(outcome.candidates).toEqual([]);
 
-    // The deterministic system did resolve this line.
-    expect(outcome.candidates.length).toBeGreaterThan(0);
-    const eggCandidate = outcome.candidates.find((c) => c.line_ref === EGG_LINE_REF);
-    expect(eggCandidate).toBeDefined();
-    if (!eggCandidate) return;
-
-    // It is a genuine catalog record.
-    expect(eggCandidate.fdc_id).toBeGreaterThan(0);
-    expect(eggCandidate.choice.record_digest).toMatch(/^[0-9a-f]{64}$/);
-    expect(eggCandidate.choice.catalog_digest).toBe(session.metadata().catalog_digest);
-
-    // It is a WHOLE EGG. The catalog also offers duck / goose / quail whole eggs
-    // for this wording; the source-constraint veto must have excluded them.
-    expect(eggCandidate.description).toMatch(/egg/i);
-    expect(eggCandidate.description).toMatch(/whole/i);
-    expect(eggCandidate.description).not.toMatch(/duck|goose|quail/i);
-
-    // Cross-check the SAME record is reachable by direct catalog review with NO
-    // AI involved, proving the identity is the catalog's, not the AI's.
+    // Cross-check the same source-selected identity through catalog review;
+    // no duplicate AI-derived candidate is needed.
     const direct = session.reviewIngredient({ name: 'whole egg' });
     expect(direct.outcome).not.toBe('invalid');
     expect(direct.outcome).not.toBe('unmatched');
     if (direct.outcome === 'invalid' || direct.outcome === 'unmatched') return;
-    expect(direct.candidates.some((c) => c.fdc_id === eggCandidate.fdc_id)).toBe(true);
+    expect(direct.candidates.some((candidate) => candidate.fdc_id === eggRow?.selected_fdc_id)).toBe(true);
   }, 60000);
 
   it('the transport carries NO USDA or nutrient authority field', async () => {
@@ -411,7 +398,7 @@ describe('9B-3B — real offline semantic-to-USDA path (pinned catalog)', () => 
     }
   });
 
-  it('a candidate produced from a real bridge suggestion is catalog-backed', async () => {
+  it('a repeated bridge suggestion cannot create a candidate for a resolved row', async () => {
     const envelope = await issue();
     const bridge = bridgeAuthenticatedSemanticsToAdvisorySuggestions({
       rawRequest: wholeRecipeRequest(),
@@ -423,13 +410,10 @@ describe('9B-3B — real offline semantic-to-USDA path (pinned catalog)', () => 
       session,
       rows: eggRows,
       adapted: eggAdapted,
-      suggestions: bridge.suggestions,
+      suggestions: selectFoodIdentitySuggestions(bridge.suggestions, eggIssueKinds),
     });
-    // Deterministic confidence is unchanged: the AI never set `auto`.
-    for (const candidate of outcome.candidates) {
-      expect(candidate.auto).toBeTypeOf('boolean');
-    }
-    expect(outcome.auto_count).toBe(outcome.candidates.filter((c) => c.auto).length);
+    expect(outcome.candidates).toEqual([]);
+    expect(outcome.auto_count).toBe(0);
   }, 60000);
 });
 
@@ -629,21 +613,22 @@ describe('9B-3B — ambiguity remains withheld from USDA discovery', () => {
 
 describe('9B-3B — needs_amount rows are excluded from FOOD identity resolution', () => {
   it('drops a needs_amount suggestion from the food-identity set (and keeps it when unclassified)', () => {
-    // The ONLY row this recipe classifies `needs_amount` is unsalted butter.
-    // Amount authority belongs to the existing AMOUNT resolver, so the bridge
-    // must never route such a row through food-identity matching.
-    const BUTTER_REF = 'ing:3:4fc703d60106';
-    expect(eggIssueKinds[BUTTER_REF]).toBe('needs_amount');
+    // Use an isolated needs_amount row: the live egg recipe now has no butter
+    // line, and authentic USDA portion evidence can resolve that amount case.
+    // The bridge must honor the caller's trusted row classification.
+    const NEEDS_AMOUNT_REF = 'ing:test:needs-amount';
+    const issueKinds = { [EGG_LINE_REF]: 'needs_match' as const, [NEEDS_AMOUNT_REF]: 'needs_amount' as const };
 
     const suggestions: AiResolutionSuggestion[] = [
       { line_ref: EGG_LINE_REF, interpreted_food_name: 'whole egg', suggested_usda_queries: ['whole egg'] },
-      { line_ref: BUTTER_REF, interpreted_food_name: 'unsalted butter', suggested_usda_queries: ['unsalted butter'] },
+      { line_ref: NEEDS_AMOUNT_REF, interpreted_food_name: 'test ingredient', suggested_usda_queries: ['test ingredient'] },
     ];
 
-    // With trusted issue kinds, the butter row is REMOVED.
-    const scoped = selectFoodIdentitySuggestions(suggestions, eggIssueKinds);
+    // Only the explicitly eligible identity row remains; the amount and
+    // unclassified rows are REMOVED.
+    const scoped = selectFoodIdentitySuggestions(suggestions, issueKinds);
     expect(scoped.map((s) => s.line_ref)).toEqual([EGG_LINE_REF]);
-    expect(scoped.some((s) => s.line_ref === BUTTER_REF)).toBe(false);
+    expect(scoped.some((s) => s.line_ref === NEEDS_AMOUNT_REF)).toBe(false);
 
     // With no kinds supplied the projection is the identity (existing behaviour:
     // the caller owns the classification).

@@ -18,7 +18,9 @@ import {
   BrainCircuit,
   Sparkles,
   Wand2,
+  MessageCircle,
 } from 'lucide-react';
+import { useShiso } from '../application-ui/shisoEntryPoints';
 import { VaultSyncStatus } from '../types';
 import { APP_VERSION } from '../version';
 import { KitchenCodexMark } from './BrandMark';
@@ -60,6 +62,9 @@ export function VaultHeader({
   legacyRecipeCount = 0,
   onRefreshVault,
 }: VaultHeaderProps) {
+  // SHISO global entry point. Read from context, not props, so every existing
+  // caller is unaffected and there is exactly one Shiso surface.
+  const shiso = useShiso();
   return (
     <header id="obsidian-vault-header" className="bg-[#141414] border-b border-white/5 sticky top-0 z-30 shadow-md">
       {/* Top Vault Path & Quick Status Bar */}
@@ -138,15 +143,28 @@ export function VaultHeader({
 
         {/* Action Buttons */}
         <div className="flex flex-wrap items-center gap-2">
-          {/* Create for Me Button */}
+          {/* Create with Shiso — the existing recipe-generation capability in the shared conversation. */}
           <button
             id="create-for-me-header-btn"
             onClick={onOpenCreateForMe}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-violet-500/10 hover:bg-violet-500/20 text-violet-300 border border-violet-500/30 transition-colors shadow-xs"
-            title="Invent a recipe from a prompt (AI-generated draft, saved only when you say so)"
+            title="Create and refine an AI-generated recipe draft with Shiso; save only when you choose"
           >
             <Wand2 className="w-4 h-4 text-violet-400" />
-            <span>Create for Me</span>
+            <span>Create with Shiso</span>
+          </button>
+
+          {/* Chat with Shiso Button — the global entry point to the single
+              Shiso conversation. */}
+          <button
+            id="shiso-header-btn"
+            data-testid="shiso-global-entry"
+            onClick={() => shiso.open('global')}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-teal-500/10 hover:bg-teal-500/20 text-teal-300 border border-teal-500/30 transition-colors shadow-xs"
+            title="Chat with Shiso about your recipes, nutrition and cooking"
+          >
+            <MessageCircle className="w-4 h-4 text-teal-400" />
+            <span>Chat with Shiso</span>
           </button>
 
           {/* Ask My Kitchen Button */}

@@ -91,6 +91,8 @@ export interface CreateRecipeConstraints {
 export interface CreateRecipeRequest {
   prompt: string;
   constraints?: CreateRecipeConstraints;
+  /** Validated prior draft supplied only when conversationally refining it. */
+  currentDraft?: GeneratedRecipeDraft;
 }
 
 /** Truthful generation provenance returned with a draft. */

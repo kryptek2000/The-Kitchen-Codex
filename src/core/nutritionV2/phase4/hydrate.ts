@@ -1,3 +1,8 @@
+import { buildAiEstimateSelection } from './aiEstimateSelection';
+import { aiEstimateSnapshotBinding } from './aiEstimateValidation';
+import { parseIngredient } from '../matching/parse';
+import { phase4SessionIdentity } from './types';
+import { validateAiNutrientContributions, type AiNutrientContribution } from '../aiContribution';
 /**
  * The Kitchen Codex — Advanced Nutrition: working-review hydration.
  *
@@ -37,9 +42,12 @@ import type {
   CodexNutritionV1,
   CodexNutritionV2,
   CodexNutritionV3,
+  CodexNutritionV4,
+  CodexNutritionV5,
   HouseholdPortionEvidence,
   IngredientEvidence,
   IngredientEvidenceV2,
+  IngredientEvidenceV4,
 } from '../schema';
 import { derivedCountPortionGrams } from './liveRow';
 import { derivedSourcePortionGrams, ingredientMeasurement } from './rows';
@@ -56,12 +64,15 @@ import type {
   Phase4Row,
   PortionChoice,
   UserMassChoice,
+  AiEstimateChoice,
 } from './types';
 
 /** ABSOLUTE tolerance (grams) for re-matching a persisted gram amount to a portion. */
 const GRAMS_EPSILON = 0.02;
 
 export interface HydratedWorkingReview {
+  readonly aiNutrition?: { readonly recipe_key: string; readonly servings: number; readonly contributions: ReadonlyArray<AiNutrientContribution> };
+  readonly aiEstimates: Readonly<Record<string, AiEstimateChoice>>;
   readonly matches: Readonly<Record<string, MatchChoice>>;
   readonly portions: Readonly<Record<string, PortionChoice>>;
   readonly countPortions: Readonly<Record<string, CountPortionChoice>>;
@@ -73,9 +84,12 @@ export interface HydratedWorkingReview {
 
 export interface HydrateWorkingReviewParams {
   readonly session: AdvancedNutritionSession;
+  readonly recipeKey?: string;
+  readonly baseServings?: number;
   readonly adapted: ReadonlyArray<AdaptedIngredient>;
+  readonly instructions?: ReadonlyArray<string>;
   readonly rows: ReadonlyArray<Phase4Row>;
-  readonly savedBlock: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3;
+  readonly savedBlock: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5;
 }
 
 function parseFdcId(value: unknown): number | undefined {
@@ -96,7 +110,7 @@ function closeEnough(a: number, b: number): boolean {
  * `conversion_basis === 'household_portion'` guard.
  */
 function householdEvidenceOf(
-  evidence: IngredientEvidence | IngredientEvidenceV2
+  evidence: IngredientEvidence | IngredientEvidenceV2 | IngredientEvidenceV4
 ): HouseholdPortionEvidence | undefined {
   return (evidence as IngredientEvidenceV2).household_portion;
 }
@@ -120,7 +134,7 @@ function manualSelectionObject(lineRef: string, match: MatchChoice): unknown {
 export function hydrateWorkingReview(
   params: HydrateWorkingReviewParams
 ): HydratedWorkingReview | undefined {
-  const { session, adapted, rows, savedBlock } = params;
+  const { session, recipeKey, baseServings, adapted, rows, savedBlock } = params;
   if (!session || !savedBlock || !Array.isArray(adapted) || adapted.length === 0) return undefined;
   // A genuine session always exposes the bounded discovery operations; a partial
   // structural fake does not, and hydration simply does nothing for it.
@@ -137,11 +151,26 @@ export function hydrateWorkingReview(
   const rowByRef = new Map(rows.map((row) => [row.line_ref, row]));
   const catalogDigest = session.metadata().catalog_digest;
 
+  const aiEstimates: Record<string, AiEstimateChoice> = {};
   const matches: Record<string, MatchChoice> = {};
   const portions: Record<string, PortionChoice> = {};
   const countPortions: Record<string, CountPortionChoice> = {};
   const userMasses: Record<string, UserMassChoice> = {};
   const householdPortions: Record<string, HouseholdPortionChoice> = {};
+  let aiNutrition: HydratedWorkingReview['aiNutrition'];
+  if (savedBlock.schema === 5 && Array.isArray(savedBlock.ai_contributions) && recipeKey && savedBlock.servings === baseServings) {
+    const lineRefs = adapted.map((entry) => entry.line_ref);
+    const validated = validateAiNutrientContributions(savedBlock.ai_contributions, {
+      recipe_digest: savedBlock.ingredient_digest,
+      line_refs: lineRefs,
+      line_text_by_ref: Object.fromEntries(adapted.map((entry) => [entry.line_ref, entry.ingredient.original])),
+      instructions: params.instructions,
+      requireExclusionContext: true,
+    });
+    if (validated.ok && validated.contributions.every((entry) => lineRefs.includes(entry.line_ref))) {
+      aiNutrition = { recipe_key: recipeKey, servings: savedBlock.servings, contributions: validated.contributions };
+    }
+  }
   let hydrated = 0;
 
   /** Re-derives a reviewed manual match for one line from the pinned catalog. */
@@ -172,7 +201,7 @@ export function hydrateWorkingReview(
     if (fdcId === undefined) continue;
 
     const match = reviewedMatchFor(lineRef, fdcId);
-    if (!match) continue;
+    if (!match || evidence.source_release !== session.metadata().bundle_release) continue;
     matches[lineRef] = match;
     hydrated += 1;
 
@@ -185,10 +214,36 @@ export function hydrateWorkingReview(
     const measurement = ingredientMeasurement(entry);
     const row = rowByRef.get(lineRef);
     const review = row && row.outcome === 'review_required' ? row.review : undefined;
+    if (evidence.conversion_basis === 'estimated_quantity') {
+      const q = (evidence as IngredientEvidenceV4).quantity_estimate;
+      // The schema validates the range/basis/amount coupling. Reopening still
+      // requires the same authored line and the current authenticated USDA food.
+      if (!q || !closeEnough(q.representative_grams, grams)) continue;
+      const dry = session.calculate({ servings: 1, nutrient_scope: ['calories'], ingredients: [{ line_ref: lineRef, ingredient: entry.ingredient, selection }] });
+      if (!dry.ok) continue;
+      const e = dry.preview.ingredients[0];
+      if (!e || e.fdc_id !== fdcId || !e.record_digest || e.resolved_grams !== undefined) continue;
+      const parsed = parseIngredient(entry.ingredient);
+      if (!parsed.ok) continue;
+      const snapshot = aiEstimateSnapshotBinding({
+        lineRef, sourceText: parsed.parsed.original_text, amount: parsed.parsed.amount,
+        unit: parsed.parsed.raw_unit ?? null, countNoun: parsed.parsed.count_noun ?? null,
+        fdcId, recordDigest: e.record_digest, reviewDigest: row?.review_digest ?? '',
+        bundleRelease: dry.preview.bundle_release, catalogDigest,
+        recipeKey: null, sessionIdentity: phase4SessionIdentity(session.metadata()),
+      });
+      const choice = { ...q, fdc_id: fdcId, record_digest: e.record_digest, review_digest: row?.review_digest ?? '', snapshot_binding: snapshot };
+      const built = buildAiEstimateSelection(lineRef, { line_ref: lineRef, fdc_id: fdcId, record_digest: e.record_digest, ingredient_identity_digest: e.ingredient_identity_digest, bundle_release: dry.preview.bundle_release }, choice as AiEstimateChoice);
+      if (built.ok) aiEstimates[lineRef] = { ...choice, selection: built.selection };
+      continue;
+    }
     let bound = false;
 
-    if (evidence.conversion_basis === 'source_portion' && measurement.measurement_kind === 'count') {
-      const countReview = session.reviewCountPortions(entry.ingredient, fdcId);
+    if (evidence.conversion_basis === 'source_portion' &&
+      (measurement.measurement_kind === 'count' || (evidence as IngredientEvidenceV4).count_portion !== undefined)) {
+      const savedCount = (evidence as IngredientEvidenceV4).count_portion;
+      const countHint = savedCount ? { unit: savedCount.unit, size: savedCount.size } : undefined;
+      const countReview = session.reviewCountPortions(entry.ingredient, fdcId, countHint);
       if (countReview.ok) {
         for (const candidate of countReview.review.candidates) {
           const choice = buildCountPortionChoice(session, {
@@ -198,6 +253,7 @@ export function hydrateWorkingReview(
             selection,
             fdcId,
             portionIndex: candidate.index,
+            ...(countHint ? { countRequirementHint: countHint } : {}),
           });
           if (!choice.ok) continue;
           const derived = derivedCountPortionGrams(
@@ -334,8 +390,10 @@ export function hydrateWorkingReview(
     hydrated += 1;
   }
 
-  if (hydrated === 0) return undefined;
+  if (hydrated === 0 && !aiNutrition) return undefined;
   return Object.freeze({
+    ...(aiNutrition ? { aiNutrition: Object.freeze(aiNutrition) } : {}),
+    aiEstimates: Object.freeze(aiEstimates),
     matches: Object.freeze(matches),
     portions: Object.freeze(portions),
     countPortions: Object.freeze(countPortions),

@@ -1,3 +1,4 @@
+import type { AiNutrientContribution } from './aiContribution';
 /**
  * The Kitchen Codex — Advanced Nutrition v1: canonical schema types & bounds.
  *
@@ -53,17 +54,21 @@ export const CODEX_NUTRITION_SCHEMA_V2 = 2;
  * on direct-mass lines and retain the v2 household meaning unchanged.
  */
 export const CODEX_NUTRITION_SCHEMA_V3 = 3;
+export const CODEX_NUTRITION_SCHEMA_V4 = 4;
+/** Schema v5 stores validated ingredient-level AI nutrient contributions. */
+export const CODEX_NUTRITION_SCHEMA_V5 = 5;
 export const CODEX_NUTRITION_BASIS_TOTAL = 'total';
 export const CODEX_NUTRITION_FRONTMATTER_KEY = 'codex_nutrition';
 
 /** Mixed authoritative sources; each contribution stays traceable. */
-export type NutritionSourceId = 'usda_fdc' | 'open_food_facts' | 'curated_reference' | 'user_manual';
+export type NutritionSourceId = 'usda_fdc' | 'open_food_facts' | 'curated_reference' | 'user_manual' | 'ai_estimate';
 
 export const NUTRITION_SOURCE_IDS: ReadonlyArray<NutritionSourceId> = Object.freeze([
   'usda_fdc',
   'open_food_facts',
   'curated_reference',
   'user_manual',
+  'ai_estimate',
 ]);
 
 /**
@@ -186,7 +191,7 @@ export interface WrittenMassRangeEvidence {
 }
 
 /** Version-neutral read view of per-ingredient evidence. */
-export type AnyIngredientEvidence = IngredientEvidence | IngredientEvidenceV2 | IngredientEvidenceV3;
+export type AnyIngredientEvidence = IngredientEvidence | IngredientEvidenceV2 | IngredientEvidenceV3 | IngredientEvidenceV4;
 
 export type UnresolvedReason = 'no_match' | 'ambiguous' | 'no_mass' | 'no_nutrition' | 'qualitative';
 
@@ -258,6 +263,34 @@ export interface CodexNutritionV3 extends Omit<CodexNutritionV1, 'schema' | 'ing
   ingredients: IngredientEvidenceV3[];
 }
 
+/** Explicitly accepted bounded quantity estimates remain distinct from portions. */
+export interface QuantityEstimateEvidence {
+  readonly lower_grams: number;
+  readonly upper_grams: number;
+  readonly representative_grams: number;
+  readonly representative_policy: 'midpoint';
+  readonly provenance: 'ai_estimate';
+}
+export interface IngredientEvidenceV4 extends Omit<IngredientEvidenceV3, 'conversion_basis'> {
+  conversion_basis?: IngredientEvidenceV3['conversion_basis'] | 'estimated_quantity';
+  quantity_estimate?: QuantityEstimateEvidence;
+  count_portion?: {
+    readonly unit: string | null;
+    readonly size: string | null;
+    readonly quantity: number;
+    readonly portion_amount: number;
+    readonly gram_weight: number;
+  };
+}
+export interface CodexNutritionV4 extends Omit<CodexNutritionV1, 'schema' | 'ingredients'> {
+  schema: 4;
+  ingredients: IngredientEvidenceV4[];
+}
+export interface CodexNutritionV5 extends Omit<CodexNutritionV4, 'schema'> {
+  schema: 5;
+  ai_contributions: AiNutrientContribution[];
+}
+
 /** Bounded opaque safe data for an unknown FUTURE schema value. */
 export interface OpaqueCodexNutrition {
   kind: 'opaque';
@@ -270,6 +303,8 @@ export type AdvancedNutritionBlock =
   | CodexNutritionV1
   | CodexNutritionV2
   | CodexNutritionV3
+  | CodexNutritionV4
+  | CodexNutritionV5
   | OpaqueCodexNutrition;
 
 export const MAX_SERVINGS = 1000;
@@ -365,6 +400,7 @@ function getTextEncoder(): TextEncoder | null {
  * available (browser, Node, Obsidian/Electron) with a pure fallback.
  */
 export function utf8ByteLength(text: string): number {
+  if (typeof text !== 'string') throw new TypeError('UTF-8 input must be a string');
   const encoder = getTextEncoder();
   if (encoder) return encoder.encode(text).length;
   let bytes = 0;
@@ -484,12 +520,11 @@ function materialize(value: unknown, bounds: MaterializeBounds, limit: number): 
       if (!add(4)) return { ok: false, reason: 'oversized' };
       return { ok: true, value: null };
     }
-    const type = typeof current;
-    if (type === 'boolean') {
+    if (typeof current === 'boolean') {
       if (!add(current ? 4 : 5)) return { ok: false, reason: 'oversized' };
       return { ok: true, value: current };
     }
-    if (type === 'number') {
+    if (typeof current === 'number') {
       if (!Number.isFinite(current)) {
         if (!bounds.allowNonFinite) return { ok: false, reason: 'non_finite_number' };
         if (!add(4)) return { ok: false, reason: 'oversized' };
@@ -498,14 +533,14 @@ function materialize(value: unknown, bounds: MaterializeBounds, limit: number): 
       if (!add(String(current).length)) return { ok: false, reason: 'oversized' };
       return { ok: true, value: current };
     }
-    if (type === 'string') {
-      const text = current as string;
+    if (typeof current === 'string') {
+      const text = current;
       if (text.length > bounds.maxString) return { ok: false, reason: 'string_too_long' };
       const length = jsonStringByteLength(text, limit - bytes);
       if (length < 0 || !add(length)) return { ok: false, reason: 'oversized' };
       return { ok: true, value: text };
     }
-    if (type !== 'object') return { ok: false, reason: 'unsupported_type' };
+    if (typeof current !== 'object') return { ok: false, reason: 'unsupported_type' };
 
     const object = current as object;
     if (stack.has(object)) return { ok: false, reason: 'cycle' };

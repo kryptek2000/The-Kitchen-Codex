@@ -304,7 +304,7 @@ describe('AI-5D UI — Basic/manual Nutrition is never gated', () => {
     await openEditor();
     // The whole deterministic working editor is still rendered and interactive.
     expect(screen.getByRole('button', { name: /Analyze/i })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Calculate|Recalculate/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^(Calculate|Recalculate) Preview$/i })).toBeTruthy();
   });
 
   it('disables AI controls for a revoked-credential window with no stale execution', async () => {

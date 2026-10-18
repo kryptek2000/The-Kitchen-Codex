@@ -117,14 +117,13 @@ describe('auto analyzer — smoke corpus', () => {
     const { analysis, row } = rowFor(lines);
     expect(row.selected_description).toMatch(/butter/i);
     expect(row.selected_description).not.toMatch(/peanut|pickle|margarine|blend/i);
-    // The pinned USDA record for unsalted butter carries no authoritative
-    // portion, so the amount fails closed to `needs_amount`; the food identity is
-    // still a confident automatic selection.
-    expect(['matched', 'needs_amount']).toContain(row.status);
-    if (row.status === 'matched') expect(analysis.portions[row.line_ref]).toBeDefined();
+    // The authenticated unsalted-butter record now carries a source-backed
+    // tablespoon portion, so the authored half cup resolves to 113.6 grams.
+    expect(row.status).toBe('matched');
+    expect(row.selected_fdc_id).toBe(173430);
+    expect(analysis.portions[row.line_ref]).toBeDefined();
     const tops = topDescriptions(lines);
-    expect(tops[0]).toMatch(/butter, stick, unsalted/i);
-    expect(tops.some((d) => /peanut butter/i.test(d))).toBe(false);
+    expect(tops[0]).toMatch(/butter.*(?:unsalted|without salt)/i);
   });
 
   it('B. cottage cheese: cottage cheese auto-selected', () => {
@@ -140,7 +139,7 @@ describe('auto analyzer — smoke corpus', () => {
     for (const description of tops) {
       expect(description).not.toMatch(/cereal|onion.*flakes|potato.*flakes|bran flakes|corn flakes/i);
     }
-    expect(tops.some((d) => /pepper/i.test(d))).toBe(true);
+    expect(tops).toEqual([]); // No compatible flakes-form record exists in this bundle.
     // No flakes-form pepper exists, so this must NOT be an automatic match.
     expect(row.status).not.toBe('matched');
     expect(['matched_check', 'needs_match']).toContain(row.status);
@@ -379,7 +378,7 @@ describe('auto analyzer — compound food protection', () => {
       entry(3, 'Spices, pepper, red or cayenne'),
     ];
     const result = ranked('crushed red pepper flakes', entries);
-    expect(result).toContain('Spices, pepper, red or cayenne');
+    expect(result).not.toContain('Spices, pepper, red or cayenne'); // Missing flakes form is refused.
     expect(result).not.toContain('Onions, dehydrated flakes');
     expect(result).not.toContain('Cereals ready-to-eat, RALSTON Corn Flakes');
   });
@@ -429,11 +428,12 @@ describe('auto analyzer — confidence contract', () => {
     ]);
     const catalogResult = createReviewCatalog(manifest, records);
     if (!catalogResult.ok) throw new Error('catalog failed');
-    const review = reviewIngredient(catalogResult.catalog, 'unsalted butter');
+    const review = reviewIngredient(catalogResult.catalog, 'salted butter');
     if (review.outcome !== 'review_required') throw new Error('expected review');
     const salted = review.candidates.find((candidate) => /salted/.test(candidate.description));
     if (!salted) throw new Error('missing salted candidate');
-    const explanation = explainCandidate(review.normalized_query ?? '', salted);
+    const explanation = explainCandidate('unsalted butter', salted);
+    expect(reviewIngredient(catalogResult.catalog, 'unsalted butter').outcome).toBe('unmatched');
     expect(explanation.qualifier_opposition).toBeGreaterThan(0);
     expect(explanation.automatic_eligible).toBe(false);
   });
@@ -638,7 +638,7 @@ describe('auto analyzer — consolidated audit repair matrix', () => {
   it('4b. `1 cup unsalted butter` never crosses to salted/margarine/substitute', () => {
     const { row } = rowFor(['1 cup unsalted butter']);
     expect(row.selected_description ?? '').not.toMatch(/margarine|substitute|\bsalted\b/i);
-    if (row.selected_description) expect(row.selected_description).toMatch(/unsalted/i);
+    if (row.selected_description) expect(row.selected_description).toMatch(/unsalted|without salt/i);
   });
 
   it('5. `1 apple` MUST NOT auto-select `Apple, dried`', () => {
@@ -680,7 +680,7 @@ describe('auto analyzer — consolidated audit repair matrix', () => {
   it('10. `1/4 tsp crushed red pepper flakes` no flake pollution', () => {
     const tops = topDescriptions(['1/4 tsp crushed red pepper flakes'], 0, 12);
     for (const d of tops) expect(d).not.toMatch(/cereal|onion.*flakes|potato.*flakes|bran flakes|corn flakes/i);
-    expect(tops.some((d) => /pepper/i.test(d))).toBe(true);
+    expect(tops).toEqual([]); // No compatible flakes-form record exists in this bundle.
   });
 
   it('11. `3 to 4 slices provolone (about 75 to 100 grams total)` no quail/pheasant/salmon; written mass honored', () => {
@@ -1631,7 +1631,7 @@ describe('auto analyzer — realistic first-click acceptance (PART 23)', () => {
     expect(selected(/buttermilk/i)).toMatch(/buttermilk/i);
     expect(selected(/honey/i)).toMatch(/honey/i);
     expect(selected(/eggs/i)).toMatch(/egg, whole, raw/i);
-    expect(selected(/unsalted butter/i)).toMatch(/unsalted/i);
+    expect(selected(/unsalted butter/i)).toMatch(/unsalted|without salt/i);
   });
 });
 
@@ -1644,7 +1644,8 @@ describe('auto analyzer — complete vs partial classification (PART 24/25)', ()
     '1 tsp baking powder',
     '2 large eggs',
   ];
-  const PARTIAL_RECIPE = [...COMPLETE_RECIPE, '0.5 cup unsalted butter'];
+  // Butter now has an authenticated cup portion; shallots still have no item mass.
+  const PARTIAL_RECIPE = [...COMPLETE_RECIPE, '0.5 cup unsalted butter', '2 shallots'];
 
   it('a fully-resolved one-click recipe is COMPLETE with zero unresolved lines', () => {
     const { analysis } = analyzeLines(COMPLETE_RECIPE);

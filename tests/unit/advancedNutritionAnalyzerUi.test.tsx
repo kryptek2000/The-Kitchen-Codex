@@ -68,9 +68,10 @@ beforeAll(() => {
 
 afterEach(() => cleanup());
 
-function renderModal(overrides: { onAnalyze?: () => void; dispatch?: ReturnType<typeof vi.fn> } = {}) {
+function renderModal(overrides: { state?: Phase4State; onAnalyze?: () => void; onAnalyzeRecipe?: () => void; shisoAnalysisState?: { kind: 'idle' | 'running' | 'success' | 'error'; message: string | null }; analysisRuns?: number; dispatch?: ReturnType<typeof vi.fn> } = {}) {
   const analysis = analyzeRecipe(session, adapted, 4);
   const onAnalyze = overrides.onAnalyze ?? vi.fn();
+  const onAnalyzeRecipe = overrides.onAnalyzeRecipe ?? vi.fn();
   const dispatch = (overrides.dispatch ?? vi.fn()) as unknown as React.Dispatch<never>;
   const utils = render(
     <AdvancedNutritionModal
@@ -79,24 +80,68 @@ function renderModal(overrides: { onAnalyze?: () => void; dispatch?: ReturnType<
       title="UI Test Recipe"
       session={session}
       adapted={adapted}
-      state={state}
+      state={overrides.state ?? state}
       dispatch={dispatch as never}
       onCalculate={vi.fn()}
       calculating={false}
       analysis={analysis}
       onAnalyze={onAnalyze}
+      onAnalyzeRecipe={onAnalyzeRecipe}
+      shisoAnalysisState={overrides.shisoAnalysisState}
+      analysisRuns={overrides.analysisRuns}
     />
   );
-  return { ...utils, onAnalyze, dispatch };
+  return { ...utils, onAnalyze, onAnalyzeRecipe, dispatch };
 }
 
 describe('post-Phase-5 — compact analyzer UI', () => {
-  it('exposes a primary Analyze Nutrition action', () => {
-    const { onAnalyze } = renderModal();
-    const button = screen.getByRole('button', { name: /Analyze Nutrition/i });
-    fireEvent.click(button);
-    expect(onAnalyze).toHaveBeenCalledTimes(1);
+  it('shows accepted estimated weight before the underlying USDA missing-amount evidence', () => {
+    const analysis = analyzeRecipe(session, adapted, 4);
+    const analyzed = phase4Reducer(state, { type: 'apply_analysis', ...analysis });
+    const withAi = phase4Reducer(analyzed, { type: 'accept_ai_nutrition', recipeKey: state.recipeKey!, servings: 4, contributions: [{
+      line_ref: adapted[0].line_ref, ingredient: '1/2 cup unsalted butter', quantity_basis: 'Half cup', weight_grams: 113,
+      disposition: 'edible', exclusion_role: 'none', exclusion_assumption: '',
+      classification: 'ai_estimate', confidence: 'medium', assumptions: ['Typical half-cup edible weight, not an authenticated portion.'],
+      sources: [], nutrients: { calories: { amount: 810, unit: 'kcal' } }, unknown_nutrients: ['protein'],
+    }] });
+    renderModal({ state: withAi });
+    const row = screen.getAllByTestId('advanced-nutrition-row')[0];
+    expect(row.textContent).toContain('113 g estimated weight');
+    expect(row.textContent).not.toContain('amount —');
+    expect(row.textContent).not.toContain('USDA reference:');
+    fireEvent.click(within(row).getByRole('button', { name: 'Edit' }));
+    expect(row.textContent).toContain('USDA reference:');
+    expect(row.textContent).toContain('No source-backed mass available');
   });
+
+  it('exposes one primary SHISO action and a local no-AI calculation', () => {
+    const { onAnalyze, onAnalyzeRecipe } = renderModal();
+    const button = screen.getByRole('button', { name: 'Analyze Recipe' });
+    fireEvent.click(button);
+    expect(onAnalyzeRecipe).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Calculate Without AI' }));
+    expect(onAnalyze).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: /Analyze with Shiso/i })).toBeNull();
+  });
+
+  it('announces real in-progress state and keeps the offline calculation available', () => {
+    renderModal({ shisoAnalysisState: { kind: 'running', message: 'SHISO is analyzing the recipe and validating its nutrition contributions…' } });
+    expect(screen.getByRole('status').textContent).toMatch(/analyzing the recipe/i);
+    expect((screen.getByTestId('advanced-nutrition-analyze-with-shiso') as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByTestId('advanced-nutrition-analyze') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('reports failed SHISO analysis without labeling the retained source review as applied', () => {
+    renderModal({
+      analysisRuns: 1,
+      shisoAnalysisState: { kind: 'error', message: 'SHISO could not validate the wrapper exclusion. Existing review results are unchanged.' },
+    });
+    expect(screen.getByRole('alert').textContent).toContain('Existing review results are unchanged');
+    expect(screen.getByTestId('advanced-nutrition-analysis-runs').textContent).toContain('Source review run 1');
+    expect(screen.getByTestId('advanced-nutrition-analysis-runs').textContent).not.toContain('Analysis applied');
+    expect(screen.getAllByTestId('advanced-nutrition-row').length).toBeGreaterThan(0);
+  });
+
 
   it('does NOT expand candidate lists by default', () => {
     renderModal();
@@ -204,11 +249,11 @@ describe('post-Phase-5 — Advanced card Analyze after saved-state reopen', () =
     // Edit / Re-analyze explicitly initializes the working analyzer.
     fireEvent.click(screen.getByTestId('saved-advanced-edit'));
     const analyze = await screen.findByTestId('advanced-nutrition-analyze');
-    expect(analyze.textContent).toMatch(/Analyze Nutrition/i);
+    expect(analyze.textContent).toMatch(/Calculate Without AI/i);
     fireEvent.click(analyze);
     // Visible transition: the run counter/state updates.
     expect(screen.getByTestId('advanced-nutrition-analysis-runs').textContent).toMatch(/run 1/i);
-    expect(screen.getByTestId('advanced-nutrition-analyze').textContent).toMatch(/Re-analyze/i);
+    expect(screen.getByTestId('advanced-nutrition-analyze').textContent).toMatch(/Calculate Without AI/i);
     fireEvent.click(screen.getByTestId('advanced-nutrition-analyze'));
     expect(screen.getByTestId('advanced-nutrition-analysis-runs').textContent).toMatch(/run 2/i);
     // Analyze NEVER persists.

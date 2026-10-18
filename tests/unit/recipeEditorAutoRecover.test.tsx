@@ -5,6 +5,7 @@ import { RecipeEditorModal } from '../../src/components/RecipeEditorModal';
 import { hydrateAiSelections } from '../../src/application/aiSelection';
 import type { NetworkAdapter } from '../../src/application/adapters/NetworkAdapter';
 import type { ObsidianRecipe } from '../../src/types';
+import { parseObsidianRecipeMarkdown } from '../../src/utils/markdownParser';
 
 /**
  * Mounted component-wiring regression for `RecipeEditorModal` Auto Recover.
@@ -103,7 +104,7 @@ afterEach(() => {
 });
 
 describe('RecipeEditorModal — real Auto Recover interaction', () => {
-  it('applies safe metadata, never overwrites existing nutrition, and saves only the original values', async () => {
+  it('preserves legacy per-serving nutrition when recovery establishes servings, then saves whole-recipe totals', async () => {
     const { network, post } = makeNetwork();
     const onSave = vi.fn();
     render(
@@ -128,7 +129,8 @@ describe('RecipeEditorModal — real Auto Recover interaction', () => {
     expect(inputValue('Italian, Japanese, etc.')).toBe('Italian');
     expect(screen.getByDisplayValue('Hard')).toBeTruthy();
 
-    // Existing nutrition fields are UNCHANGED (no overwrite).
+    // Recovering the missing serving count must keep the legacy per-serving
+    // display unchanged while establishing whole-recipe totals behind it.
     expect(inputValue('e.g. 520')).toBe(String(EXISTING.calories));
     expect(inputValue('e.g. 32')).toBe(String(EXISTING.protein));
     expect(inputValue('e.g. 45')).toBe(String(EXISTING.carbohydrates));
@@ -153,13 +155,15 @@ describe('RecipeEditorModal — real Auto Recover interaction', () => {
     }
     expect(md).not.toContain('GENERATED_RECOVERED_NUTRITION_NOTE');
 
-    // Original existing nutrition remains intact in the persisted recipe.
-    expect(saved.nutrition?.calories).toBe(EXISTING.calories);
-    expect(saved.nutrition?.protein).toBe(EXISTING.protein);
-    expect(saved.nutrition?.carbohydrates).toBe(EXISTING.carbohydrates);
-    expect(saved.nutrition?.fat).toBe(EXISTING.fat);
-    expect(saved.nutrition?.fiber).toBe(EXISTING.fiber);
-    expect(saved.nutrition?.sodium).toBe(EXISTING.sodium);
+    // The persisted schema stores totals with an explicit serving denominator.
+    expect(saved.nutrition?.servings).toBe(6);
+    expect(saved.nutrition?.calories).toBe(EXISTING.calories * 6);
+    expect(saved.nutrition?.protein).toBe(EXISTING.protein * 6);
+    expect(saved.nutrition?.carbohydrates).toBe(EXISTING.carbohydrates * 6);
+    expect(saved.nutrition?.fat).toBe(EXISTING.fat * 6);
+    expect(saved.nutrition?.fiber).toBe(EXISTING.fiber * 6);
+    expect(saved.nutrition?.sodium).toBe(EXISTING.sodium * 6);
+    expect(saved.calories).toBe(EXISTING.calories);
 
     // No generated nutrition source/provenance was attached.
     expect(saved.nutrition?.source).toBeUndefined();
@@ -167,6 +171,28 @@ describe('RecipeEditorModal — real Auto Recover interaction', () => {
 
     // The safe metadata was persisted.
     expect(md).toContain('prep_time: 15 mins');
+    expect(md).toContain('servings: 6');
+
+    // Exercise the production Markdown parser/reopen path and verify the
+    // per-serving editor values remain unchanged at the saved basis.
+    cleanup();
+    const reopened = parseObsidianRecipeMarkdown(md, 'r1.md', 'Recipes/r1.md');
+    render(
+      <RecipeEditorModal
+        initialRecipe={reopened}
+        network={network}
+        onSave={vi.fn()}
+        onClose={() => {}}
+      />
+    );
+    expect(inputValue('e.g. 520')).toBe(String(EXISTING.calories));
+    expect(inputValue('e.g. 32')).toBe(String(EXISTING.protein));
+
+    // A deliberate change to the known basis preserves batch totals and
+    // therefore changes per-serving values by the expected ratio.
+    fireEvent.change(screen.getByPlaceholderText('e.g. 4'), { target: { value: '3' } });
+    await waitFor(() => expect(inputValue('e.g. 520')).toBe('1000'));
+    expect(inputValue('e.g. 32')).toBe('40');
   });
 
   it('does not populate blank nutrition fields or serialize a nutrition block from rejected recovery', async () => {
@@ -200,5 +226,25 @@ describe('RecipeEditorModal — real Auto Recover interaction', () => {
       expect(saved.rawMarkdown).not.toContain(String(value));
     }
     expect(saved.rawMarkdown).not.toContain('nutrition:');
+  });
+
+  it('keeps a manually entered nutrient when servings are entered afterward, through save and reopen', async () => {
+    const { network } = makeNetwork();
+    const onSave = vi.fn();
+    render(<RecipeEditorModal initialRecipe={makeRecipe(false)} network={network} onSave={onSave} onClose={() => {}} />);
+
+    fireEvent.change(screen.getByPlaceholderText('e.g. 32'), { target: { value: '20' } });
+    fireEvent.change(screen.getByPlaceholderText('e.g. 4'), { target: { value: '4' } });
+    expect(inputValue('e.g. 32')).toBe('20');
+    fireEvent.click(screen.getByText('Save Obsidian Note'));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+
+    const saved = onSave.mock.calls[0][0] as ObsidianRecipe;
+    expect(saved.nutrition?.servings).toBe(4);
+    expect(saved.nutrition?.protein).toBe(80);
+    const reopened = parseObsidianRecipeMarkdown(saved.rawMarkdown, saved.fileName, saved.filePath);
+    cleanup();
+    render(<RecipeEditorModal initialRecipe={reopened} network={network} onSave={vi.fn()} onClose={() => {}} />);
+    expect(inputValue('e.g. 32')).toBe('20');
   });
 });

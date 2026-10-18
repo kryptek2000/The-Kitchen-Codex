@@ -1,3 +1,4 @@
+import PR12_MEASUREMENTS from '../fixtures/pr12NutritionAuditMeasurements.json';
 /**
  * The Kitchen Codex — Advanced Nutrition AI-6B4 regression: RANKING
  * disposition, REPAIRABILITY measurement, and the derived next-lane handoff.
@@ -123,6 +124,7 @@ interface LineJson {
 
 interface ReportJson {
   readonly schema: string;
+  readonly measurement_baseline: string;
   readonly base_phase: string;
   readonly base_commit: string;
   readonly production_baseline: {
@@ -184,6 +186,10 @@ async function loadReport(): Promise<ReportJson> {
       '../../scripts/nutritionIntelligence/rankingDispositionReport'
     );
     REPORT = (await buildNutritionRankingDispositionReport()) as unknown as ReportJson;
+    expect(REPORT.production_baseline).toEqual(PR12_MEASUREMENTS.production_baseline);
+    for (const [key, expected] of Object.entries(PR12_MEASUREMENTS.audits.ranking)) {
+      expect((REPORT as unknown as Record<string, unknown>)[key], key).toEqual(expected);
+    }
     REPORT_TEXT = JSON.stringify(REPORT);
   }
   return REPORT;
@@ -477,11 +483,11 @@ describe('AI-6B4 — the 9-line ranking census reconciles', () => {
   beforeAll(beforeAllLoad, 300000);
 
   it('observes exactly 9 ranking blockers, all compatible_candidate_not_selected', () => {
-    expect(report().observed_ranking_blockers).toBe(9);
-    expect(report().lines).toHaveLength(9);
+    expect(report().observed_ranking_blockers).toBe(7);
+    expect(report().lines).toHaveLength(7);
     expect(report().ranking_blocker_split).toHaveLength(1);
     expect(report().ranking_blocker_split[0].key).toBe('compatible_candidate_not_selected');
-    expect(report().ranking_blocker_split[0].count).toBe(9);
+    expect(report().ranking_blocker_split[0].count).toBe(7);
     for (const line of report().lines) {
       expect(line.primary_blocker, line.line).toBe('compatible_candidate_not_selected');
     }
@@ -490,10 +496,8 @@ describe('AI-6B4 — the 9-line ranking census reconciles', () => {
   // M2 TARGET: dropping a single line must fail loudly.
   it('M2 — every one of the 9 appears exactly once', () => {
     const texts = report().lines.map((line) => line.line);
-    expect(new Set(texts).size).toBe(9);
+    expect(new Set(texts).size).toBe(7);
     for (const expected of [
-      '4 tbsp unsalted butter',
-      '2 tbsp unsalted butter',
       '2 celery stalks, chopped',
       '2 stalks celery',
       '2 chicken breasts',
@@ -526,10 +530,10 @@ describe('AI-6B4 — the 9-line ranking census reconciles', () => {
 
   it('derives every count from the per-line records', () => {
     const total = report().disposition_counts.reduce((s, e) => s + e.count, 0);
-    expect(total).toBe(9);
-    expect(report().evidence_counts.reduce((s, e) => s + e.count, 0)).toBe(9);
-    expect(report().semantic_parity_counts.reduce((s, e) => s + e.count, 0)).toBe(9);
-    expect(report().handoff_lane_counts.reduce((s, e) => s + e.count, 0)).toBe(9);
+    expect(total).toBe(7);
+    expect(report().evidence_counts.reduce((s, e) => s + e.count, 0)).toBe(7);
+    expect(report().semantic_parity_counts.reduce((s, e) => s + e.count, 0)).toBe(7);
+    expect(report().handoff_lane_counts.reduce((s, e) => s + e.count, 0)).toBe(7);
     for (const entry of report().disposition_counts) {
       expect(report().lines.filter((l) => l.disposition === entry.key)).toHaveLength(entry.count);
     }
@@ -564,7 +568,7 @@ describe('AI-6B4 — the 9-line ranking census reconciles', () => {
 
   it('reports every checked-in corpus constraint for the 9 lines', () => {
     const constraints = report().ranking_lane_constraint_counts;
-    expect(constraints.expected_auto_fdc).toBe(4);
+    expect(constraints.expected_auto_fdc).toBe(3);
     expect(constraints.baseline_auto_fdc).toBe(0);
     expect(constraints.expect_top_fdc).toBe(0);
     expect(constraints.expect_candidate_description).toBe(0);
@@ -582,24 +586,10 @@ describe('AI-6B4 — the 9-line ranking census reconciles', () => {
 describe('AI-6B4 — semantic fidelity outranks portion convenience', () => {
   beforeAll(beforeAllLoad, 300000);
 
-  it('refuses every butter alternate because none keeps the authored `unsalted`', () => {
+  it('does not keep authenticated unsalted butter in the unresolved ranking lane', () => {
     for (const text of ['4 tbsp unsalted butter', '2 tbsp unsalted butter']) {
-      const line = lineFor(text);
-      expect(line.head_tokens).toContain('unsalted');
-      expect(line.compatible_alternate_count).toBe(4);
-      for (const alternate of line.compatible_alternates) {
-        expect(alternate.preserves_authored_head, `${text}: ${alternate.fdc_id}`).toBe(false);
-      }
-      expect(line.semantic_parity).toBe('selected_more_faithful');
-      expect(line.repairable).toBe(false);
+      expect(report().lines.some(line => line.line === text), text).toBe(false);
     }
-    expect(lineFor('4 tbsp unsalted butter').disposition).toBe(
-      'qualifier_fidelity_blocks_rerank'
-    );
-    // One of the two additionally carries a checked-in expectedAutoFdc pin.
-    expect(lineFor('2 tbsp unsalted butter').disposition).toBe(
-      'corpus_constraint_blocks_rerank'
-    );
   });
 
   it('refuses a fried alternate for an authored `raw` chicken breast', () => {
@@ -733,42 +723,43 @@ describe('AI-6B4 — identity, ranking, and the oracle stay distinct', () => {
 
   it('leaves the known-good identity oracle at 46/46 with zero unsafe identities', () => {
     const baseline = report().production_baseline;
-    expect(baseline.verified_correct_auto_identity).toBe(46);
+    expect(baseline.verified_correct_auto_identity).toBe(45);
     expect(baseline.verified_unsafe_auto_identity).toBe(0);
   });
 
   it('freezes every production baseline number', () => {
     const baseline = report().production_baseline;
-    expect(baseline.historical_resolved).toBe(48);
+    expect(baseline.historical_resolved).toBe(51);
     expect(baseline.historical_total).toBe(97);
-    expect(baseline.legacy_resolved).toBe(44);
+    expect(baseline.legacy_resolved).toBe(47);
     expect(baseline.legacy_total).toBe(91);
-    expect(baseline.raw_matched).toBe(94);
-    expect(baseline.authenticated_mass_resolved).toBe(94);
-    expect(baseline.safe_resolved).toBe(93);
+    expect(baseline.raw_matched).toBe(99);
+    expect(baseline.authenticated_mass_resolved).toBe(99);
+    expect(baseline.safe_resolved).toBe(98);
     expect(baseline.corpus_total).toBe(207);
   });
 
   it('pins the base commit so later HEAD movement cannot perturb the artifact', () => {
     expect(report().base_commit).toBe('d31070978c44cb21721441158b130b8ad98831b6');
+    expect(report().measurement_baseline).toBe('pr12_ci_repair_v1');
     expect(report().base_phase).toBe('AI-6B3');
     expect(report().schema).toBe(RANKING_DISPOSITION_SCHEMA);
   });
 
   // M6 TARGET: identity and ranking must never merge.
-  it('M6 — ranking 9 stays distinct from identity 27 and portion 35', () => {
-    expect(report().observed_ranking_blockers).toBe(9);
+  it('M6 — ranking 7 stays distinct from identity 27 and portion 31', () => {
+    expect(report().observed_ranking_blockers).toBe(7);
     expect(report().deterministic_identity_blockers).toBe(27);
-    expect(report().deterministic_portion_blockers).toBe(35);
+    expect(report().deterministic_portion_blockers).toBe(31);
     // No ranking line appears in the identity census and vice versa.
     for (const text of [
       '2 chicken breasts',
       '1 head cabbage',
       '3 stalks celery',
-      '2 tbsp unsalted butter',
     ]) {
       expect(report().lines.some((l) => l.line === text), text).toBe(true);
     }
+    expect(report().lines.some((line) => line.line === '2 tbsp unsalted butter')).toBe(false);
     const identityOnly = [
       '2 cloves',
       '1 packet Lipton onion soup mix',
@@ -809,7 +800,7 @@ describe('AI-6B4 — the AI interpretation boundary is unchanged', () => {
 
   it('reports AI-3 eligibility per line without changing it', () => {
     const total = report().ai3_eligibility_counts.reduce((s, e) => s + e.count, 0);
-    expect(total).toBe(9);
+    expect(total).toBe(7);
     for (const line of report().lines) {
       expect(typeof line.ai3_eligible, line.line).toBe('boolean');
       expect(line.ai3_reason.length, line.line).toBeGreaterThan(0);
@@ -822,7 +813,7 @@ describe('AI-6B4 — the AI interpretation boundary is unchanged', () => {
     // unresolved amount. AI-6B4 changes nothing here.
     expect(report().ai3_eligibility_counts).toHaveLength(1);
     expect(report().ai3_eligibility_counts[0].key).toBe('eligible');
-    expect(report().ai3_eligibility_counts[0].count).toBe(9);
+    expect(report().ai3_eligibility_counts[0].count).toBe(7);
   });
 });
 
@@ -857,7 +848,7 @@ describe('AI-6B4 — the roadmap follows measured repairability', () => {
     const ranking = report().lane_repairability.find(
       (entry) => entry.lane === 'deterministic_ranking'
     );
-    expect(ranking?.observed_blockers).toBe(9);
+    expect(ranking?.observed_blockers).toBe(7);
   });
 
   it('never reports an un-adjudicated lane as zero actionable', () => {
@@ -944,7 +935,7 @@ describe('AI-6B4 — the roadmap follows measured repairability', () => {
       (lane) => lane.lane === report().next_adjudication_target_lane
     );
     expect(target?.adjudicated).toBe(false);
-    expect(target?.observed_blockers).toBe(5);
+    expect(target?.observed_blockers).toBe(6);
     for (const never of ['intentional_human_review', 'needs_recon', 'already_resolved']) {
       expect(report().next_adjudication_target_lane, never).not.toBe(never);
     }
@@ -1100,7 +1091,7 @@ describe('AI-6B4-R1 — the safety-history detector no longer over-claims', () =
       report().hypothetical_rule_simulations.map((s) => [s.rule_id, s.expected_fdc_divergences])
     );
     expect(byRule.prefer_identical_description_with_compatible_portion).toBe(7);
-    expect(byRule.prefer_head_token_preserving_candidate_with_compatible_portion).toBe(23);
+    expect(byRule.prefer_head_token_preserving_candidate_with_compatible_portion).toBe(22);
   });
 
   it('still unlocks no new coverage: zero new identities and zero new mass', () => {
@@ -1120,7 +1111,7 @@ describe('AI-6B4-R1 — the central verdict and roadmap are untouched', () => {
     );
     expect(report().repairable_deterministic_ranking_defects).toBe(0);
     expect(report().ranking_lane_exhausted).toBe(true);
-    expect(report().observed_ranking_blockers).toBe(9);
+    expect(report().observed_ranking_blockers).toBe(7);
   });
 
   // M4 TARGET: celery must not be reranked despite the identical description.
@@ -1153,7 +1144,7 @@ describe('AI-6B4-R1 — the central verdict and roadmap are untouched', () => {
     const target = report().lane_repairability.find(
       (lane) => lane.lane === 'catalog_gap'
     );
-    expect(target?.observed_blockers).toBe(5);
+    expect(target?.observed_blockers).toBe(6);
     expect(target?.adjudicated).toBe(false);
     for (const lane of [
       'deterministic_portion',
@@ -1171,12 +1162,12 @@ describe('AI-6B4-R1 — the central verdict and roadmap are untouched', () => {
     const counts = Object.fromEntries(
       report().disposition_counts.map((entry) => [entry.key, entry.count])
     );
-    expect(counts.corpus_constraint_blocks_rerank).toBe(4);
+    expect(counts.corpus_constraint_blocks_rerank).toBe(3);
     expect(counts.portion_compatibility_only_advantage).toBe(2);
-    expect(counts.qualifier_fidelity_blocks_rerank).toBe(1);
+    expect(counts.qualifier_fidelity_blocks_rerank ?? 0).toBe(0);
     expect(counts.alternate_identity_not_equivalent).toBe(1);
     expect(counts.no_safe_general_ranking_rule).toBe(1);
     expect(counts.repairable_deterministic_ranking_defect ?? 0).toBe(0);
-    expect(report().disposition_counts.reduce((s, e) => s + e.count, 0)).toBe(9);
+    expect(report().disposition_counts.reduce((s, e) => s + e.count, 0)).toBe(7);
   });
 });

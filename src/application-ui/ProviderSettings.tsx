@@ -79,6 +79,7 @@ interface ConnectionTestView {
   model?: string;
   code?: string;
   message?: string;
+  diagnostic?: { stage: string; httpStatus?: number; providerCode?: string };
 }
 
 /** A surface selection draft held by the selection UI before Apply. */
@@ -1070,8 +1071,9 @@ export function SelectionControlCard({
               )}
               {envTest?.state === 'failure' && (
                 <div data-surface-test-result={kind} className="text-[11px] text-red-300">
-                  Connection failed
+                  {envTest.message ?? 'Connection test failed.'}
                   {envTest.code ? ` (${envTest.code})` : ''}
+                  {envTest.diagnostic && ` · ${envTest.diagnostic.stage}${envTest.diagnostic.httpStatus ? ` · HTTP ${envTest.diagnostic.httpStatus}` : ''}${envTest.diagnostic.providerCode ? ` · ${envTest.diagnostic.providerCode}` : ''}`}
                 </div>
               )}
             </div>
@@ -1278,6 +1280,7 @@ export function ProviderSelectionPanel({
           latencyMs?: number;
           code?: string;
           message?: string;
+          diagnostic?: { stage?: string; httpStatus?: number; providerCode?: string };
         }>(PROVIDER_TEST_CONNECTION_API_PATH, buildServerEnvironmentTestBody(providerId, kind, modelId));
         const data = res.data ?? {};
         if (res.ok && data.ok === true) {
@@ -1292,6 +1295,13 @@ export function ProviderSelectionPanel({
               state: 'failure',
               code: data.code ?? 'PROVIDER_ERROR',
               message: data.message ?? 'Connection test failed.',
+              diagnostic: data.diagnostic && typeof data.diagnostic.stage === 'string'
+                ? {
+                    stage: data.diagnostic.stage,
+                    ...(Number.isInteger(data.diagnostic.httpStatus) ? { httpStatus: data.diagnostic.httpStatus } : {}),
+                    ...(typeof data.diagnostic.providerCode === 'string' ? { providerCode: data.diagnostic.providerCode } : {}),
+                  }
+                : undefined,
             },
           }));
         }
@@ -1580,6 +1590,7 @@ export function ProviderSelectionPanel({
                       <div className="text-[11px] text-red-300">
                         {result.message ?? 'Connection test failed.'}
                         {result.code ? ` (${result.code})` : ''}
+                        {result.diagnostic && ` · ${result.diagnostic.stage}${result.diagnostic.httpStatus ? ` · HTTP ${result.diagnostic.httpStatus}` : ''}${result.diagnostic.providerCode ? ` · ${result.diagnostic.providerCode}` : ''}`}
                       </div>
                     )}
                   </div>

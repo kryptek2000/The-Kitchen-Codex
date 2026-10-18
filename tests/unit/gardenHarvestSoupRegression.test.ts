@@ -202,7 +202,11 @@ describe('Garden Harvest Vegetable Soup — live status authority', () => {
     // fallback, so it is no longer an actionable exception; the genuinely
     // unresolved lines remain offered.
     expect(texts).not.toMatch(/garlic/i);
-    expect(texts).toMatch(/vegetable broth/i);
+    expect(texts).not.toMatch(/vegetable broth/i);
+    const broth = liveRows.find((row) => /vegetable broth/i.test(row.original_text));
+    expect(broth?.status).toBe('matched');
+    expect(broth?.resolved_grams).toBeGreaterThan(0);
+    expect(broth?.mass_source).toBe('source_portion');
     expect(texts).toMatch(/zucchini/i);
     const garlic = liveRows.find((row) => /garlic/i.test(row.original_text));
     expect(garlic?.status).toBe('matched');

@@ -1,3 +1,5 @@
+import { parseCanonicalIngredientParts, convertMassToGrams, normalizeUnit } from '../../../utils/measurements';
+import { isPartialMachineNutrition } from '../../../utils/nutrition';
 /**
  * The Kitchen Codex — Advanced Nutrition Phase 5C: consolidated nutrition
  * presentation selector.
@@ -28,6 +30,8 @@ import {
   type CodexNutritionV1,
   type CodexNutritionV2,
   type CodexNutritionV3,
+  type CodexNutritionV4,
+  type CodexNutritionV5,
 } from '../schema';
 import { decodeCodexNutrition } from '../validate';
 import { readOwnDataField } from '../phase4/materialize';
@@ -38,6 +42,7 @@ import { isQualitativeIngredientText } from '../../../utils/ingredientSemantics'
 import { requestedServingAmount } from '../../../utils/servingMath';
 import { nutritionForRequestedServings } from '../../../utils/nutrition';
 import type { RecipeNutrition } from '../../../types';
+import { hasUsableAiNutrientValue } from '../aiContribution';
 
 export const NUTRITION_PRESENTATION_VERSION = 'usda_phase5c_presentation_v1';
 
@@ -49,13 +54,13 @@ export type NutritionPresentationKind =
   | 'legacy'
   | 'none';
 
-export type NutritionStaleReason = 'servings_changed' | 'ingredients_changed';
+export type NutritionStaleReason = 'servings_changed' | 'ingredients_changed' | 'quantity_conflict';
 
 export interface NutritionPresentation {
   readonly version: string;
   readonly kind: NutritionPresentationKind;
   /** The decoded recognized schema-v1/v2 block (advanced_saved / advanced_stale). */
-  readonly advanced: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | undefined;
+  readonly advanced: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5 | undefined;
   /** The stored whole-recipe serving denominator of the Advanced block. */
   readonly advanced_servings: number | undefined;
   /** The stored whole-recipe calories total of the Advanced block. */
@@ -82,6 +87,10 @@ export interface NutritionPresentation {
   readonly advanced_resolved_count: number;
   /** Total measurable ingredient-line count (resolved + unresolved). */
   readonly advanced_ingredient_count: number;
+  /** Explicitly excluded cooking materials; accounted for but not edible/resolved. */
+  readonly advanced_excluded_count: number;
+  /** Lines that still need a usable nutrition contribution. */
+  readonly advanced_unresolved_count: number;
 }
 
 function readField(object: object, key: string): { ok: true; present: boolean; value: unknown } | { ok: false } {
@@ -148,7 +157,7 @@ function sameStringSet(a: ReadonlyArray<string>, b: ReadonlyArray<string>): bool
  */
 function detectAdvancedStale(
   recipe: object,
-  block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3
+  block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5
 ): ReadonlyArray<NutritionStaleReason> {
   const reasons: NutritionStaleReason[] = [];
   const adaptation = adaptRecipe(recipe);
@@ -159,11 +168,34 @@ function detectAdvancedStale(
   const currentRefs = adaptation.recipe.adapted
     .filter((entry) => !isQualitativeAdapted(entry))
     .map((entry) => entry.line_ref);
-  const storedRefs = [
+  const storedRefs = new Set([
     ...block.ingredients.map((entry) => entry.line_ref),
     ...block.unresolved.map((entry) => entry.line_ref),
-  ];
-  if (!sameStringSet(currentRefs, storedRefs)) reasons.push('ingredients_changed');
+    ...(block.schema === 5 ? block.ai_contributions.map((entry) => entry.line_ref) : []),
+  ]);
+  if (!sameStringSet(currentRefs, [...storedRefs])) reasons.push('ingredients_changed');
+  // A matching line hash proves the text, not the correctness of saved grams.
+  // Check directly written weights without requiring a catalog or guessing food.
+  for (const entry of adaptation.recipe.adapted) {
+    const parsed = parseIngredient(entry.ingredient);
+    if (!parsed.ok) continue;
+    const parts = parseCanonicalIngredientParts(parsed.parsed.original_text);
+    if (parts.unitKind !== 'mass') continue;
+    const unit = normalizeUnit(parts.unit);
+    if (!unit) continue;
+    const q = parts.quantity;
+    const lower = q.kind === 'range' ? q.lower : q.amount;
+    const upper = q.kind === 'range' ? q.upper : q.amount;
+    if (lower === null || upper === null) continue;
+    const low = convertMassToGrams(lower, unit), high = convertMassToGrams(upper, unit);
+    const saved = block.ingredients.find(e => e.line_ref === entry.line_ref)?.amount?.value;
+    if (saved !== undefined && low !== undefined && high !== undefined &&
+        (saved < low - 0.01 || saved > high + 0.01)) {
+      reasons.push('quantity_conflict');
+      break;
+    }
+  }
+
   return reasons;
 }
 
@@ -189,6 +221,8 @@ export function resolveRecipeNutritionPresentation(recipe: unknown): NutritionPr
       advanced_complete: false,
       advanced_resolved_count: 0,
       advanced_ingredient_count: 0,
+      advanced_excluded_count: 0,
+      advanced_unresolved_count: 0,
     });
 
   if (!isPlainObject(recipe)) return base('none');
@@ -204,15 +238,33 @@ export function resolveRecipeNutritionPresentation(recipe: unknown): NutritionPr
     decoded = { kind: 'malformed' as const, errors: ['validation_error'] };
   }
 
-  if (decoded.kind === 'v1' || decoded.kind === 'v2' || decoded.kind === 'v3') {
+  if (decoded.kind === 'v1' || decoded.kind === 'v2' || (decoded.kind === 'v3' || decoded.kind === 'v4' || decoded.kind === 'v5')) {
     const block = decoded.value;
     const reasons = detectAdvancedStale(recipe, block);
     const stale = reasons.length > 0;
+    const currentAdaptation = adaptRecipe(recipe);
+    const currentRefs = currentAdaptation.ok
+      ? currentAdaptation.recipe.adapted.filter((entry) => !isQualitativeAdapted(entry)).map((entry) => entry.line_ref)
+      : [];
+    const aiContributions = block.schema === 5 ? block.ai_contributions : [];
+    const excludedRefs = new Set(aiContributions.filter((entry) => entry.disposition === 'excluded').map((entry) => entry.line_ref));
+    const resolvedRefs = new Set(block.ingredients.map((entry) => entry.line_ref));
+    for (const entry of aiContributions) {
+      if (entry.disposition !== 'excluded' && hasUsableAiNutrientValue(entry)) resolvedRefs.add(entry.line_ref);
+    }
+    const unresolvedRefs = new Set(block.unresolved.map((entry) => entry.line_ref));
+    for (const ref of currentRefs) {
+      if (!resolvedRefs.has(ref) && !excludedRefs.has(ref)) unresolvedRefs.add(ref);
+    }
+    for (const ref of excludedRefs) unresolvedRefs.delete(ref);
+    for (const ref of resolvedRefs) unresolvedRefs.delete(ref);
+    const accountedRefs = new Set([...resolvedRefs, ...excludedRefs, ...unresolvedRefs]);
     const calories = block.nutrients.calories?.amount;
-    const resolvedCount = block.ingredients.length;
-    const unresolvedCount = block.unresolved.length;
-    const ingredientCount = resolvedCount + unresolvedCount;
-    const complete = block.status === 'complete' && unresolvedCount === 0;
+    const resolvedCount = resolvedRefs.size;
+    const unresolvedCount = unresolvedRefs.size;
+    const excludedCount = excludedRefs.size;
+    const ingredientCount = new Set([...accountedRefs, ...currentRefs]).size;
+    const complete = block.status === 'complete' && unresolvedCount === 0 && !reasons.includes('quantity_conflict') && !reasons.includes('ingredients_changed');
     return Object.freeze({
       version: NUTRITION_PRESENTATION_VERSION,
       kind: stale ? 'advanced_stale' : 'advanced_saved',
@@ -229,6 +281,8 @@ export function resolveRecipeNutritionPresentation(recipe: unknown): NutritionPr
       advanced_complete: complete,
       advanced_resolved_count: resolvedCount,
       advanced_ingredient_count: ingredientCount,
+      advanced_excluded_count: excludedCount,
+      advanced_unresolved_count: unresolvedCount,
     });
   }
 
@@ -262,11 +316,9 @@ export function resolveRecipeNutritionPresentation(recipe: unknown): NutritionPr
  * saved Advanced block, so the NORMAL recipe presentation can stay visible and
  * authoritative without maintaining a second competing stored dataset.
  *
- * It returns the values whenever a recognized Advanced result is the preferred
- * authority — COMPLETE or PARTIAL. A PARTIAL block's values are the sum over the
- * RESOLVED ingredient lines only; the caller must label them as a partial
- * estimate (the presentation exposes `advanced_complete` and the resolved/
- * unresolved counts). It NEVER writes, never migrates, and never falls back to
+ * Complete nutrient values and explicitly labelled partial subtotals supply
+ * compact values. Ingredient-stale or conflicting saved quantities withhold all
+ * current totals. This NEVER writes, migrates, or falls back to
  * legacy values — the compact numbers come ONLY from the saved Advanced block.
  * A nutrient absent from the block is left absent (never topped up from legacy).
  */
@@ -278,6 +330,7 @@ export function deriveAdvancedCompactNutrition(
   }
   const block = presentation.advanced;
   const out: RecipeNutrition = { servings: block.servings };
+  if (presentation.stale_reasons.some(reason => reason !== 'servings_changed')) return Object.freeze(out);
   const calories = block.nutrients.calories?.amount;
   const protein = block.nutrients.protein?.amount;
   const carbohydrates = block.nutrients.carbohydrates?.amount;
@@ -291,6 +344,14 @@ export function deriveAdvancedCompactNutrition(
   if (typeof fiber === 'number' && Number.isFinite(fiber)) out.fiber = fiber;
   if (typeof sodium === 'number' && Number.isFinite(sodium)) out.sodium = sodium;
   return Object.freeze(out);
+}
+
+/** Per-nutrient partial status used to label known values as subtotals. */
+export function advancedPartialNutrients(presentation: NutritionPresentation): ReadonlyArray<'calories' | 'protein' | 'carbohydrates' | 'fat' | 'fiber' | 'sodium'> {
+  const block = presentation.advanced;
+  if (!presentation.advanced_preferred || !block || presentation.stale_reasons.some(reason => reason !== 'servings_changed')) return Object.freeze([]);
+  return Object.freeze((['calories', 'protein', 'carbohydrates', 'fat', 'fiber', 'sodium'] as const)
+    .filter((id) => block.nutrients[id]?.status === 'partial'));
 }
 
 /**
@@ -329,6 +390,7 @@ export function resolveNutritionDisplayCalories(
     return undefined;
   }
 
+  if (isPartialMachineNutrition(presentation.legacy_nutrition as RecipeNutrition)) return undefined;
   // Legacy fallback is permitted ONLY when Advanced is not the preferred authority.
   const legacy = nutritionForRequestedServings(
     presentation.legacy_nutrition as RecipeNutrition | undefined,
