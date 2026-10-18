@@ -15,10 +15,10 @@ new execution of application tests. Sid retains sole release authority.
 | [Merged PR #12](https://github.com/kryptek2000/The-Kitchen-Codex/pull/12) | Implementation and subsequent fixes merged at the baseline above | Its original PR body still says draft/unmerged; live PR metadata and merge commit supersede that text |
 
 PR #11 remains open, draft and unmerged on `docs/shiso-ai-first-nutrition-20261016`.
-No merge or cherry-pick is needed for this reconciliation. Preserve its product
-intent; after Sid approves these files, prefer a fresh docs-only PR based on
-current main and close #11 as superseded with a cross-link. Those GitHub actions
-require separate authorization and have not occurred.
+PR #13 is the replacement documentation PR and supersedes the intended
+documentation in PR #11. After PR #13 is approved and merged, PR #11 may be
+closed as superseded with a cross-reference to PR #13. Sid retains merge and
+release authority; neither merge nor closure is authorized by this document.
 
 ## Capability status and code evidence
 

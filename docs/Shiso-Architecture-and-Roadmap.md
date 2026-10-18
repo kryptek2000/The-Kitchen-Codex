@@ -401,5 +401,5 @@ item authorizes a provider call, Vault write, feature change or deployment.
 human acceptance and Sid's explicit release approval. The
 [acceptance record](./Shiso-Acceptance-Status.md) separates reported passes from
 pending coverage and fixed PR findings from the dated open-alert snapshot.
-Review this documentation locally before any commit, push or replacement of
-draft PR #11.
+This roadmap reconciliation is proposed in PR #13 and remains subject to review
+and merge approval. It does not authorize feature implementation or deployment.
