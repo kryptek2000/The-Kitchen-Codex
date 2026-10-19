@@ -435,45 +435,226 @@ The implementation streams below can be parallelized safely: UI design and provi
 
 Vendor docs: https://dev.opencode.ai/v2/docs/console/go/
 
-### P0-B — AI Settings Studio: complete visual and UX redesign (required)
+### P0-B — The Kitchen Codex AI Studio: a MAGNIFICENT flagship interface (required)
 
-**Owner feedback:** Current AI Settings is generic and much too small. Replace the crowded technical-dashboard feel with a designed, legible, *distinctively Kitchen Codex* AI control surface while preserving everything that already works.
+**Owner's explicit design bar, October 19:** *Magnificent. Not generic. Not tiny.*
+This is a major, differentiated product surface, not a font-size patch or a new
+coat of paint on `ProviderSettings.tsx`.
 
-**Current code/evidence:** `src/application-ui/ProviderSettings.tsx` (~1,735 lines), `ModelPicker.tsx`, `SessionKeyPanel.tsx`, `modelPicker.ts`, server `providerCatalog.ts` and theme tokens in `src/index.css`. The current ModelPicker uses explicit `text-[11px]` / `text-[12px]` classes and SessionKeyPanel has `text-[10px]` labels. This is a concrete typography problem, not a request to change every app font globally.
+**Source-derived implementation inventory:** The current AI Settings lives mainly
+in `src/application-ui/ProviderSettings.tsx` (roughly 1,735 lines),
+`ModelPicker.tsx`, `SessionKeyPanel.tsx`, `modelPicker.ts`,
+`providerCatalog.ts` and the shared application theme tokens. Existing controls
+use 10–12px labels and a narrow searchable picker with only
+`discoveredModels.slice(0, 100)` informational text entries. Those are real
+limitations to address, not a design preference to retain.
 
-**Design direction:**
+#### Art direction and product character
 
-- Working concept: **The Kitchen Codex — AI Studio**. SHISO is one companion; providers, model roles, image generation and security settings are the controls for that companion. Design an interface with editorial recipe-book elegance plus precise, modern AI tooling—not a generic settings form, SaaS admin template, or neon overload.
-- Reuse the app's theme variables, charcoal/ink surfaces, restrained green/teal accents and tasteful SHISO highlights; visually integrate with the approved existing app rather than wholesale redesigning TKC. Preserve all supported themes (including light/contrast modes).
-- Clear, intentionally composed navigation such as **Overview**, **Providers & Keys**, **SHISO / Text Models**, **Image Studio**, and **Advanced / Diagnostics**. A provider card should reveal verified connection status, key source, current selected model, supported tasks and a visible, *honest* test action. Keep text, vision and image-generation selection separate.
-- Make **16px the default body and control text**, **14px the minimum for secondary explanations/metadata**, section headings generally **20–24px**, and prominent page headings **28–32px** on roomy screens. No 10–12px crucial labels, prices, warnings, model IDs, or buttons; long identifiers can wrap or use an accessible detail affordance. Allow zoom and OS font scaling without clipping.
-- Spacious control groups, 44px or larger touch targets, obvious focus rings, high-contrast readable active/disabled/error states, restrained animation with reduced-motion support, keyboard and screen-reader accessibility, sensible collapsible advanced options, and a responsive experience at mobile/tablet/desktop widths.
-- Preserve capability and price transparency directly in model rows. Prefer readable name + vendor + searchable model ID + modality/cost/capability labels; provide deliberate cost acknowledgment for paid models and an explanation of why discovery does not equal execution eligibility.
-- Separate quick common choices from advanced diagnostics. Provide search/filter/sort, expandable details and a clear selected/current state; keep user settings from unexpectedly switching provider or losing unsaved changes.
-- Preserve session-only credential behavior: no secret display or persistence, no secret-copy UI; server-issued readiness and truthful expiration / revocation indicators. No false success or connection claim from a credential-format check.
-- **Design-first gate:** Inspect the actual current AI Settings UI, produce a concise design specification or mockup and have the owner approve the visual direction **before** replacing the production UI. Then implement with accessible component boundaries, reuse existing adapters/state contracts, and verify no regressions.
-- Add UI tests for model/selection visibility, responsive layout, readability, keyboard workflows, connection status, model eligibility, save/hydration, error handling and screen-reader labeling. Manually review 360/390/768/1440px and realistic zoom.
+**Working name:** **THE KITCHEN CODEX — AI STUDIO**.
+Signature concept: **A beautifully engineered culinary intelligence atelier**.
+Combine editorial cookbook typography, the familiar vault/index-card motif,
+warm ink/charcoal/paper surfaces, finely crafted herb/SHISO accents and
+precision AI-tooling interaction. It should feel like opening the control room
+of the user's personal culinary library, **not** a generic SaaS admin panel,
+basic form, dashboard-template collage, or cyberpunk neon display.
 
-**Definition of done:** The owner can comfortably read and navigate AI Settings, understands exactly what provider/model each SHISO capability will use, and sees a recognizable Kitchen Codex product rather than a miniature generic admin UI. Visual acceptance by the owner is mandatory.
+Three cohesive design territories to explore **before implementation**:
 
-### P0-C — OpenRouter full catalog, especially image models
+1. **The Codex Atelier (preferred):** high-end editorial and artisan kitchen
+   aesthetic, split-pane canvas, elegant titles and typographic contrast, tactile
+   paper/ink depth, meticulously spaced provider/model cards and a restrained,
+   living SHISO accent.
+2. **The Intelligence Workbench:** confident, calm, high-density pro-tool
+   organization with scannable cards, strong focus, and contextual model details.
+3. **The Living Library:** browse-first model archive with tasteful category
+   dividers, favorites and card/list views; lightweight recipe-card visual cues.
 
-**User issue:** TKC AI Settings does not list all expected OpenRouter models, especially those that generate images. This remains a critical usability/capability issue.
+Blend the strongest parts into ONE final consistent design after owner review.
+Protect visual continuity with current approved TKC UI and all supported themes.
+Do not make a separate design language that looks imported from another product.
 
-**Current code facts:** `server/ai/openRouterCatalog.ts` fetches `GET /api/v1/models`, currently bounds its normalization to 1,500 models and builds an image subset from returned modalities. `openRouterImageProvider.ts` implements a fixed `/api/v1/images` transport with a small curated allowlist. `imageProviderRegistry.ts` does not equate discovered models with executable models. `ModelPicker.tsx` has a compact searchable text/image UI and caps informational models shown, adding another potential display restriction.
+**Research references, for principles rather than imitation:**
 
-**Implementation direction:**
+- Linear UI design hierarchy and calm navigation:
+  https://linear.app/now/how-we-redesigned-the-linear-ui and
+  https://linear.app/now/behind-the-latest-design-refresh
+- OpenRouter's searchable, modality-aware, priced catalog:
+  https://openrouter.ai/models
+- Vercel AI Gateway's capability/price comparison and filterable browsing:
+  https://vercel.com/ai-gateway/models
+- Vercel's design-token/component fidelity practices:
+  https://vercel.com/blog/ai-powered-prototyping-with-design-systems
 
-1. Check live, paginated/filtered/bounded response semantics and whether `/api/v1/models` omits image output without explicit modality filters. Incorporate OpenRouter's documented `GET /api/v1/images/models` and per-model endpoint metadata; report freshness, result totals and any limits rather than claiming completeness when truncated.
-2. Show all genuinely discoverable **Text/Chat**, **Vision input**, and **Image Generation output** models in appropriately labeled, searchable UI categories. Reveal why unavailable/non-executable entries cannot yet be selected; a hidden list or unexplained disable is not sufficient.
-3. Extend production OpenRouter image-model execution **only where each model's real transport, parameters, output shape, size/mime constraints, pricing, entitlements and provider test prove it compatible**. Prefer verified model profiles/capability gates over permanent one-off hard-coded lists; do not enable an incompatible API merely for catalog parity.
-4. Retain trusted pricing, fixed-host/SSRF protections, credential isolation, cost consent, no-silent-fallback selection, generation quotas, response byte limits and cancellation. Never disguise AI images as USDA or treat image generation as a nutrition capability.
-5. Test model-set changes, no-key/expired-key states, failure caching, modality classification, large result counts, text-vs-image separation, selecting unsupported entries, verified image executions and clear diagnostic messages.
+Borrow **functional patterns**, not branded layouts or artwork.
 
-Vendor docs:
+#### Required information architecture and hero experience
+
+- **Overview / My AI:** a hero treatment with SHISO's current status and selected
+  model(s), concise connection/limit summaries, visible "Use for" paths, recent
+  model choices and a clean launch into configuration. A functional cockpit,
+  not an illustration-only splash.
+- **Providers & Credentials:** handsome, spacious connected/disconnected
+  provider cards for OpenRouter, OpenCode Go, Gemini, DeepSeek and real providers.
+  Enter an approved key once, validate honestly, then refresh that provider's
+  actual model catalog. Clearly show server key versus session-only key,
+  expiry/revoke capability, and supported operation types.
+- **Model Library:** first-class, full-width or roomy split-pane search and browse
+  of **the real full list the provider makes available**, including text,
+  reasoning, vision, image generation and any discoverable other modalities.
+  Let the user search all, filter rapidly, compare, favorite and deliberately
+  select a model for a supported task.
+- **Image Studio:** beautiful image-model discovery, clear generated-image task
+  capabilities (generation vs editing vs vision input), reference-image and
+  resolution support, output previews only when truly implemented, and pricing
+  by image/megapixel/token as applicable.
+- **Advanced / Diagnostics:** collapsed by default, but easily available
+  operational information: model/runtime verification, exact safe error class,
+  refresh timestamp, missing entitlement, unknown price, policy limits and
+  selection/cancellation state.
+
+Desktop: deliberate left navigation rail, substantial content canvas and optional
+right-side model detail/comparison inspector. Mobile: responsive stacked layout
+with no cropped names or horizontal overflow; preserve fast model search.
+
+#### Typography, accessibility and visual quality
+
+- Default body/control font size **16px**, necessary secondary/meta labels **at
+  least 14px**, section headings generally **20–24px**, prominent page titles
+  **28–32px** where space allows. Do NOT use 10–12px type for controls,
+  model IDs, prices, status, key messages or diagnostics.
+- Distinctive type pairing: tasteful editorial display typography for
+  hero/headings, highly legible application sans for dense catalogs, monospace
+  only for technical identifiers when helpful. Preserve theme/font availability.
+- Intentional whitespace, hierarchy, balanced panels, restrained depth,
+  excellent dark/light/theme contrast, prominent selected state, 44px+ hit
+  targets, keyboard search/navigation, high-visibility focus, useful hover/focus
+  details, screen reader announcements, reduced-motion support and robust
+  200% zoom behavior.
+- Data richness without visual noise: details in the inspector, not 15 tiny badges
+  crammed into every row. Costs and critical warnings must remain easy to see.
+- Thoughtful loading, empty, stale, key-expired, no-compatible-model and
+  provider-error states. Do not show a ghost list of supposedly selectable models.
+
+#### Design delivery gate: owner must SEE it
+
+1. Inspect current live AI Settings, actual component hierarchy, design tokens
+   and representative mobile/desktop layouts.
+2. Produce **three visually distinct high-fidelity concepts/mockups** based on
+   the art directions above (not three recolored generic dashboards).
+3. Present clear concept comparisons to the owner; get selection/feedback.
+4. Produce a **polished interactive UI prototype** of the chosen concept with
+   real-feeling provider lists, model browsing, settings cards, detail inspector,
+   key state and mobile behavior, using synthetic example data.
+5. **Do not replace the production UI until the owner approves the visual
+   direction and prototype.** Then integrate using existing state, adapters,
+   catalog contracts and secure credential flows, without unrelated rewrite.
+6. Verify visually at 360, 390, 768, 1024 and 1440px, normal and 200% zoom,
+   all app themes, keyboard, screen readers and reduced-motion modes.
+7. Add behavior regression tests, visual/screenshot reviews and owner hands-on
+   acceptance. A passing automated suite alone is not sufficient.
+
+**Definition of done:** The interface looks unmistakably like **The Kitchen
+Codex**, feels genuinely premium, is comfortably readable, and makes configuring
+hundreds of AI models genuinely easier than competing provider settings UIs.
+
+### P0-C — OpenRouter and OpenCode Go: the FULL LIVE MODEL LIBRARY experience
+
+**Owner's acceptance standard, October 19:** *When I add my OpenRouter or
+OpenCode Go key in Hermes or Obsidian Copilot, I see a huge list of models.
+I want the same kind of list inside The Kitchen Codex.*
+
+**Non-negotiable UX outcome:** Connect a key → discover the currently available
+provider model catalog → browse/search **all available returned models** with
+modality and capability filters → choose an eligible model for the desired
+SHISO/image operation. No artificial "only a few curated models" browsing
+experience and **no silently clipped list**. Never claim to list *every* model
+if the provider API supplied an incomplete or truncated result.
+
+#### Provider discovery contracts
+
+- **OpenRouter:** Investigate why TKC's current
+  `server/ai/openRouterCatalog.ts` fetches `GET /api/v1/models` without
+  `output_modalities=all` even though the documented default is text output.
+  Use the dedicated `GET /api/v1/images/models` and real model/endpoint metadata
+  for image generators. Audit the existing 1,500-entry normalization cap,
+  filtering/deduplication, catalog cache, and display-only `slice(0, 100)`.
+  A static model allowlist must no longer determine which models users can
+  **see**. Investigate current availability/price before allowing paid usage.
+- **OpenCode Go:** On connect, fetch the full account-accessible inventory from
+  the documented `https://opencode.ai/inference/go/v1/models`. Do not
+  hard-code the current published lineup as the UI's only options. Refresh
+  when requested and on credential changes. Supported model API protocols
+  differ: OpenAI Responses, Chat Completions, Anthropic Messages, and
+  Google-style paths; map each model's actual supported operations.
+  Don't promise hundreds of Go models if the Go account actually offers fewer.
+- **Other providers:** Keep the model-library components reusable rather than
+  special-casing a two-model Gemini or DeepSeek dropdown as the design ceiling.
+
+#### Product-level model browser requirements
+
+1. **All Models view selected by default**, with visible total counts,
+   filtering by provider, text/chat, reasoning, image input/vision, image
+   generation, video/audio where available, model family, available/free/paid,
+   verified/unknown, price, context and supported tool/structured operation.
+   Sorting: name, newest, context length, estimated cost and favorites.
+2. **Search by display name AND exact model ID**, with rapid local filtering,
+   keyboard navigation and optional favorites/recent choices saved as
+   non-secret preferences. Include a persistent selected model and operation
+   indication. Easily compare 2–3 models side by side when their comparable
+   metadata exists.
+3. **Every returned catalog model is discoverable**; when provider metadata
+   cannot establish operability, the row remains visible with a specific
+   reason and a contextual "Verify for Kitchen Codex" action when supported.
+   Don't default the entire library to a tiny *verified-free* selection.
+   Verification may safely expand usable models, but not fabricate
+   structured output, tool calling, image support, price or free status.
+4. **No arbitrary UI truncation:** avoid fixed first-100 selectors, hard cap
+   presentation and disconnected "catalog results not shown" states. Implement
+   virtual scrolling/windowing, bounded query processing and incremental
+   hydration or provider-supported pagination as applicable. Keep genuine
+   memory/network safety limits, but surface truncation/errors explicitly and
+   allow complete retrieval through bounded pages or a well-defined alternate
+   API strategy; no unchecked unbounded memory allocation.
+5. **Selection must mean something:** "Use for SHISO Chat", "Use for Recipe
+   Creation", "Use for Nutrition", and "Use for Images" actions as appropriate.
+   Validate each operation's capabilities and any needed runtime profiles;
+   preserve entitlements, signed/validated semantic authority and safe
+   persistence. If unsupported, explain what is missing, rather than silently
+   routing to another model or falsely reporting success.
+6. **Cost and privacy truth:** clear free/paid classification only with current
+   trusted pricing; token/image/megapixel billing basis; safe estimated cost
+   when derivable, warnings before paid test/generation, stale-price notices,
+   and no surprises from hidden fallback. Never send secrets to the browser
+   or persist keys in Vault content.
+7. **Smart empty/offline/credentials/expiry states** and a manual Refresh
+   button with timestamps and honest source ("live", "cached" or "unavailable").
+   Model list reflects provider additions and removals without shipping a new
+   TKC release whenever the catalog changes.
+8. **Images are first-class:** a text-output multimodal model and an
+   image-output generative model are different operations. Don't hide image
+   generators by applying a text-only filter or claim the current
+   `/images` adapter supports every discovered generator. Add verified
+   endpoint profiles/resolution/reference inputs as actual models become
+   executable. Keep image size/MIME validation and bounded transport.
+9. **Performance and test plan:** fixtures with 10, 100, 1,500 and >1,500
+   models, mixed modalities, duplicate/changed IDs, stale price, different
+   Go API protocol families, no key, invalid key, timeout, cancellation,
+   provider outage, invalid output and unsupported generation calls. Test
+   fast search, accessible scrolling, explicit selection and no duplicate
+   auto-requests when a panel opens.
+
+**Definition of done:** OpenRouter and OpenCode Go feel like a true model
+marketplace inside TKC. The owner sees the large, fresh model selection expected
+from Hermes/Obsidian Copilot, can actually select and use compatible models
+across supported TKC tasks, and gets truthful reasons for incompatible ones.
+This is NOT fulfilled by merely exposing 500 non-clickable names.
+
+Provider references:
 - https://openrouter.ai/docs/api/api-reference/models/get-models
 - https://openrouter.ai/docs/api/api-reference/images/list-image-models
-- https://openrouter.ai/docs/api/api-reference/images/list-image-model-endpoints
+- https://openrouter.ai/models
+- https://dev.opencode.ai/v2/docs/console/go/
 
 ### Sequencing, authorization and completion
 
