@@ -150,6 +150,7 @@ export function ShisoModal({
   const shiso = useShiso();
   const creationMode = shiso.source === 'create';
   const seqRef = useRef(0);
+  const activeTurnControllerRef = useRef<AbortController | null>(null);
   // H-2: the LATEST Shiso port surface. The conversation turn can outlive a
   // render (it awaits tool executions), so tools must never read a stale
   // closure of the ports — an edit applied mid-turn changes the recipe, and the
@@ -188,6 +189,8 @@ export function ShisoModal({
   const lastIdentityRef = useRef(identity);
   useEffect(() => {
     if (lastIdentityRef.current !== identity) {
+      activeTurnControllerRef.current?.abort();
+      activeTurnControllerRef.current = null;
       lastIdentityRef.current = identity;
       seqRef.current += 1;
       setBusy(false);
@@ -209,12 +212,22 @@ export function ShisoModal({
   // authorization, so a later reopen can never inherit one.
   useEffect(() => {
     if (!isOpen) {
+      activeTurnControllerRef.current?.abort();
+      activeTurnControllerRef.current = null;
       seqRef.current += 1;
       setBusy(false);
       setStatus(null);
       shisoRef.current.clearSaveAuthorization();
     }
   }, [isOpen]);
+
+  useEffect(() => () => {
+    activeTurnControllerRef.current?.abort();
+    activeTurnControllerRef.current = null;
+    // A remounted surface must never inherit authorization from a cancelled
+    // turn, even if the owning provider outlives this modal component.
+    shisoRef.current.clearSaveAuthorization();
+  }, []);
 
   const recipeContext = useShisoRecipeContext(recipe);
   const nutritionRowsMatchRecipe = recipeContext !== null &&
@@ -300,15 +313,16 @@ export function ShisoModal({
       // Without this the capability reports that Advanced Nutrition is not open
       // rather than inventing a result.
       runAnalysis: async () => shisoRef.current.runAnalysis(),
-      runAiNutrition: async () => {
+      runAiNutrition: async (signal) => {
         const currentRecipe = latest.current.recipeContext;
         if (!currentRecipe || currentRecipe.servings === null || currentRecipe.ingredients.length === 0) return { ok: false, message: 'Recipe ingredients or servings are unavailable.' };
         const requestSnapshot = JSON.stringify({ title: currentRecipe.title, servings: currentRecipe.servings, ingredients: currentRecipe.ingredients, instructions: currentRecipe.instructions });
         const response = await network.post<{ ok?: boolean; code?: string; reason?: string; recipe_digest?: string; contributions?: unknown }>(
           '/api/shiso/nutrition',
           { recipe: { title: currentRecipe.title, servings: currentRecipe.servings, ingredients: currentRecipe.ingredients.map((i) => ({ line_ref: i.line_ref, text: i.text })), instructions: currentRecipe.instructions.map((i) => i.text) } },
-          await buildAiSelectionRequestOptions(),
+          { ...(await buildAiSelectionRequestOptions()), ...(signal ? { signal } : {}) },
         );
+        if (signal?.aborted) return { ok: false, message: 'Nutrition estimation was cancelled.' };
         const stillCurrent = latest.current.recipeContext;
         if (!stillCurrent || JSON.stringify({ title: stillCurrent.title, servings: stillCurrent.servings, ingredients: stillCurrent.ingredients, instructions: stillCurrent.instructions }) !== requestSnapshot) return { ok: false, message: 'The recipe changed while SHISO was calculating; no stale estimate was used.' };
         if (!response.ok || response.data?.ok !== true || !response.data.recipe_digest) return { ok: false, message: shisoNutritionFailureMessage(response.data?.code, response.data?.reason) };
@@ -408,7 +422,12 @@ export function ShisoModal({
 
   const send = useCallback(async (requestedMessage?: string) => {
     const message = (requestedMessage ?? draft).trim();
-    if (message.length === 0 || busy) return;
+    if (message.length === 0) return;
+    // A new turn supersedes the old one. Abort is idempotent; the sequence guard
+    // remains as defense against transports that resolve after abort.
+    activeTurnControllerRef.current?.abort();
+    const controller = new AbortController();
+    activeTurnControllerRef.current = controller;
     const seq = seqRef.current + 1;
     seqRef.current = seq;
     if (requestedMessage === undefined) setDraft('');
@@ -446,7 +465,7 @@ export function ShisoModal({
         const previous = createdDraft ? editableCreatedDraft() : undefined;
         const requestedServings = explicitServingCount(message);
         const constraints = requestedServings === undefined ? {} : { servings: requestedServings };
-        const result = await requestGeneratedRecipe(network, message, constraints, previous);
+        const result = await requestGeneratedRecipe(network, message, constraints, previous, controller.signal);
         if (requestedServings !== undefined && result.draft.servings !== requestedServings) {
           throw new Error(`The selected model did not return a draft for ${requestedServings} servings. Your existing draft was kept unchanged; try stating the serving count again.`);
         }
@@ -525,6 +544,7 @@ export function ShisoModal({
           sessionIdentity,
         },
         toolContext,
+        signal: controller.signal,
       },
       conversation,
       message,
@@ -532,6 +552,11 @@ export function ShisoModal({
 
     // A superseded turn can never paint over a newer one.
     if (seqRef.current !== seq) return;
+    if (outcome.cancelled) {
+      setBusy(false);
+      setStatus('This turn was cancelled.');
+      return;
+    }
     setConversation(outcome.state);
     setBusy(false);
     if (outcome.ok && outcome.message !== null) {
@@ -1034,16 +1059,16 @@ export function ShisoModal({
               }}
               rows={2}
               placeholder={creationMode ? 'Describe the recipe, or request a change to this draft…' : 'Ask Shiso…'}
-              disabled={busy}
+              disabled={createdSaveBusy}
               className="flex-1 px-3 py-2 text-sm bg-[#141414] border border-white/10 rounded-xl text-gray-200 placeholder:text-gray-600 focus:outline-none focus:border-amber-500 resize-none disabled:opacity-50"
             />
             <button
               type="submit"
-              disabled={busy || draft.trim().length === 0}
+              disabled={createdSaveBusy || draft.trim().length === 0}
               className="px-3.5 py-2 bg-amber-500 hover:bg-amber-400 disabled:opacity-40 disabled:hover:bg-amber-500 text-black rounded-xl flex items-center gap-1.5 text-sm font-bold"
             >
               <Send className="w-3.5 h-3.5" />
-              Send
+              {busy ? 'Replace turn' : 'Send'}
             </button>
           </form>
           <p className="text-[10px] text-gray-600 mt-2">

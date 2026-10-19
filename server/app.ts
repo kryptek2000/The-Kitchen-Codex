@@ -337,6 +337,57 @@ export function capabilityVerificationHttpStatus(code: CapabilityVerificationErr
   }
 }
 
+type RouteCancellation = { readonly controller: AbortController; cleanup: () => void };
+const routeCancellations = new WeakMap<express.Request, RouteCancellation>();
+
+/**
+ * Install disconnect handling before any route gate can await (in particular,
+ * product-entitlement resolution). Register listeners first, then inspect the
+ * live socket state in this synchronous middleware turn so a disconnect
+ * between middleware and handler cannot escape cancellation.
+ */
+function routeCancellationMiddleware(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction,
+): void {
+  const controller = new AbortController();
+  let cleaned = false;
+  let cleanup: () => void;
+  const abortOnRequestAborted = () => {
+    controller.abort();
+    cleanup();
+  };
+  const abortOnIncompleteResponseClose = () => {
+    if (!res.writableFinished) controller.abort();
+    cleanup();
+  };
+  cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    req.off("aborted", abortOnRequestAborted);
+    res.off("close", abortOnIncompleteResponseClose);
+    res.off("finish", cleanup);
+  };
+  req.once("aborted", abortOnRequestAborted);
+  res.once("close", abortOnIncompleteResponseClose);
+  res.once("finish", cleanup);
+  const state = { controller, cleanup };
+  routeCancellations.set(req, state);
+
+  // `req.aborted` is the IncomingMessage cancellation signal. A destroyed or
+  // already-ended response cannot accept a result. Do not use `req.complete`
+  // or a normally finished response as cancellation: both are ordinary HTTP.
+  if (req.aborted || res.destroyed || res.writableEnded) controller.abort();
+  next();
+}
+
+function cancellationFor(req: express.Request): RouteCancellation {
+  const state = routeCancellations.get(req);
+  if (!state) throw new Error("Route cancellation middleware was not installed.");
+  return state;
+}
+
 /**
  * Builds the configured Express application containing security headers, JSON
  * parsing, all `/api` routes, and the final centralized error handler.
@@ -1144,13 +1195,17 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // fifth entitlement feature.
   app.post(
     "/api/shiso/turn",
+    routeCancellationMiddleware,
     requireAiAccessToken,
     shisoConversationRateLimiter,
     requireNutritionProductFeature(nutritionProductAccessAuthority, "ai_interpretation"),
     textPricingGuard,
     async (req, res) => {
       res.setHeader("Cache-Control", "no-store");
+      const routeState = cancellationFor(req);
+      const cancellation = routeState.controller;
       try {
+        if (cancellation.signal.aborted || res.destroyed || res.writableEnded) return;
         const body = readShisoTurnRequest(req.body);
         if (body === null) {
           return res.status(400).json({
@@ -1161,19 +1216,23 @@ export function createApp(opts: CreateAppOptions): express.Express {
           });
         }
         const userSelection = parseTextSelectionHeader(req.headers);
-        const result = await runShisoTurn(body, { userSelection });
+        const result = await runShisoTurn(body, { userSelection, signal: cancellation.signal });
+        if (cancellation.signal.aborted || res.destroyed || res.writableEnded) return;
         if (result.ok !== true) {
           const status = result.code === "budget_exhausted" ? 429 : 503;
           return res.status(status).json(result);
         }
         return res.status(200).json(result);
       } catch {
+        if (cancellation.signal.aborted || res.destroyed || res.writableEnded) return;
         return res.status(500).json({
           ok: false,
           code: "internal_error",
           message: "Shiso hit an application error before completing this turn. No Vault changes were made; try again or report the issue.",
           aiAttempted: false,
         });
+      } finally {
+        routeState.cleanup();
       }
     },
   );
@@ -1181,12 +1240,23 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // SHISO AI-first nutrient analysis. This is a bounded structured estimate,
   // kept separate from the deterministic USDA mass-estimate endpoint. Its
   // output carries no USDA identity and remains advisory until reviewed/applied.
-  app.post("/api/shiso/nutrition", requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccessAuthority, "ai_interpretation"), textPricingGuard, shisoConversationRateLimiter, async (req, res) => {
-    const selection = parseTextSelectionHeader(req.headers);
-    const result = await estimateRecipeNutrientsWithAi(req.body, selection);
-    if (result.ok === true) return res.json(result);
-    const status = result.code === 'unavailable' ? 503 : result.code === 'provider_error' ? 502 : result.code === 'request_too_large' ? 413 : 400;
-    return res.status(status).json({ ok: false, code: result.code, ...(result.reason ? { reason: result.reason } : {}) });
+  app.post("/api/shiso/nutrition", routeCancellationMiddleware, requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccessAuthority, "ai_interpretation"), textPricingGuard, shisoConversationRateLimiter, async (req, res) => {
+    const routeState = cancellationFor(req);
+    const cancellation = routeState.controller;
+    try {
+      if (cancellation.signal.aborted || res.destroyed || res.writableEnded) return;
+      const selection = parseTextSelectionHeader(req.headers);
+      const result = await estimateRecipeNutrientsWithAi(req.body, selection, cancellation.signal);
+      if (cancellation.signal.aborted || res.destroyed || res.writableEnded) return;
+      if (result.ok === true) return res.json(result);
+      const status = result.code === 'unavailable' ? 503 : result.code === 'provider_error' ? 502 : result.code === 'request_too_large' ? 413 : 400;
+      return res.status(status).json({ ok: false, code: result.code, ...(result.reason ? { reason: result.reason } : {}) });
+    } catch (error) {
+      if (cancellation.signal.aborted || res.destroyed || res.writableEnded) return;
+      throw error;
+    } finally {
+      routeState.cleanup();
+    }
   });
 
   // AI-2B — live provider-neutral candidate PLANNING for the frozen
@@ -2131,8 +2201,11 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // vault write path). NEVER saves, NEVER mutates the vault, NEVER returns a
   // prompt, secret, or raw provider response. Gated + rate-limited like other AI
   // endpoints; no semantic downgrade (unsupported capability -> explicit 503).
-  app.post("/api/recipes/generate", requireAiAccessToken, textPricingGuard, createRecipeRateLimiter, async (req, res) => {
+  app.post("/api/recipes/generate", routeCancellationMiddleware, requireAiAccessToken, textPricingGuard, createRecipeRateLimiter, async (req, res) => {
+    const routeState = cancellationFor(req);
+    const cancellation = routeState.controller;
     try {
+      if (cancellation.signal.aborted || res.destroyed || res.writableEnded) return;
       if (!req.body || typeof req.body !== "object") {
         return res.status(400).json({ error: "Invalid request payload.", code: "INVALID_REQUEST" });
       }
@@ -2148,9 +2221,11 @@ export function createApp(opts: CreateAppOptions): express.Express {
         });
       }
 
-      const result = await generateRecipeDraftOnServer(req.body as any, { userSelection });
+      const result = await generateRecipeDraftOnServer(req.body as any, { userSelection, signal: cancellation.signal });
+      if (cancellation.signal.aborted || res.destroyed || res.writableEnded) return;
       return res.json(result);
     } catch (error: any) {
+      if (cancellation.signal.aborted || res.destroyed || res.writableEnded) return;
       if (error instanceof CreateRecipeValidationError || error?.name === "CreateRecipeValidationError") {
         return res.status(400).json({ error: error?.message || "Invalid generation request.", code: "INVALID_REQUEST" });
       }
@@ -2162,6 +2237,8 @@ export function createApp(opts: CreateAppOptions): express.Express {
       }
       // Generic, secret-safe error. Never leak provider secrets / raw errors.
       return res.status(502).json({ error: "Couldn't generate a recipe right now." });
+    } finally {
+      routeState.cleanup();
     }
   });
 

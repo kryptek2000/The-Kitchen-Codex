@@ -176,6 +176,41 @@ function transport(script: unknown[] = []): { network: NetworkAdapter; calls: nu
 // ===========================================================================
 
 describe('H-2S — the exact human scenario', () => {
+  it('reports cancellation when an already-started edit owner completes after abort', async () => {
+    const recipe = parseRecipe(ENCHILADAS_MD) as unknown as Record<string, unknown>;
+    const applier = createRealApplier(recipe);
+    const controller = new AbortController();
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const ctx = {
+      ...toolContextFor(recipe, applier),
+      applyIngredientEdits: async (edits: readonly unknown[]) => {
+        markStarted();
+        await held;
+        return applier.applyEdits(edits);
+      },
+    } as ShisoToolContext;
+    const { network, calls } = transport();
+    const turn = runShisoConversationTurn({
+      network,
+      signal: controller.signal,
+      context: CONVERSATION_CONTEXT as never,
+      toolContext: ctx,
+    }, initialShisoConversation(), 'Change the 2 jalapeños to 3 jalapeños. Do not save.');
+
+    await started;
+    controller.abort();
+    release();
+    const outcome = await turn;
+
+    expect(outcome).toMatchObject({ ok: false, cancelled: true, message: null, status: null });
+    expect(calls).toHaveLength(0);
+    expect((applier.raw()['ingredients'] as Array<{ original: string }>).map((line) => line.original)).toContain('3 jalapeños');
+    expect(applier.saveCalls).toHaveLength(0);
+  }, 60000);
+
   it('"Change the 2 jalapeños to 3 jalapeños. Do not save." mutates the working copy with ZERO provider calls', async () => {
     const recipe = parseRecipe(ENCHILADAS_MD) as unknown as Record<string, unknown>;
     const applier = createRealApplier(recipe);

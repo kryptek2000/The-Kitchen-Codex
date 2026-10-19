@@ -9,7 +9,7 @@
  * any model ID, thinking level, or the grounding-only URL contract.
  */
 
-import { ProviderOperationError } from "./providerErrors.js";
+import { ProviderOperationError, callerCancellationError, throwIfCallerCancelled } from "./providerErrors.js";
 import { ThinkingLevel, Type } from "@google/genai";
 import type { GoogleGenAI } from "@google/genai";
 import { createGeminiClientWithKey, getGemini } from "../geminiClient.js";
@@ -142,15 +142,21 @@ export class GeminiProvider implements AiProvider {
   }
 
   async generate(prompt: string, options: AiGenerateOptions): Promise<string> {
+    throwIfCallerCancelled(options.signal, { providerId: this.id, model: options.model });
     const gemini = this.client();
     const response = await gemini.models.generateContent({
       model: options.model,
       contents: prompt,
       config: {
         ...(typeof options.temperature === "number" ? { temperature: options.temperature } : {}),
+        ...(options.signal ? { abortSignal: options.signal } : {}),
         ...geminiProviderOptions(options),
       },
+    }).catch((error: unknown) => {
+      if (options.signal?.aborted) throw callerCancellationError({ providerId: this.id, model: options.model }, error);
+      throw error;
     });
+    throwIfCallerCancelled(options.signal, { providerId: this.id, model: options.model });
     const text = response.text?.trim();
     if (!text) throw new Error("Empty response returned from AI provider.");
     return text;
@@ -161,18 +167,24 @@ export class GeminiProvider implements AiProvider {
     schema: AiJsonSchema,
     options: AiStructuredOptions
   ): Promise<T> {
+    throwIfCallerCancelled(options.signal, { providerId: this.id, model: options.model });
     const gemini = this.client();
     const response = await gemini.models.generateContent({
       model: options.model,
       contents: prompt,
       config: {
         ...(typeof options.temperature === "number" ? { temperature: options.temperature } : {}),
+        ...(options.signal ? { abortSignal: options.signal } : {}),
         responseMimeType: "application/json",
         responseSchema: toGeminiSchema(schema),
         ...(options.webSearch === true ? { tools: [{ googleSearch: {} }] } : {}),
         ...geminiProviderOptions(options),
       },
+    }).catch((error: unknown) => {
+      if (options.signal?.aborted) throw callerCancellationError({ providerId: this.id, model: options.model }, error);
+      throw error;
     });
+    throwIfCallerCancelled(options.signal, { providerId: this.id, model: options.model });
     const text = response.text?.trim();
     if (response.candidates?.some(candidate => candidate.finishReason === 'MAX_TOKENS')) {
       throw new ProviderOperationError('INVALID_RESPONSE', 'Gemini output was truncated.', { responseFailure: 'output_truncated' });

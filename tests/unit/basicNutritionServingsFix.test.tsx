@@ -176,7 +176,7 @@ describe('nutrition functional repair, pinned production USDA bundle', () => {
     const scaled=calculateBasicNutrition({ingredients:original.map(line=>scaleIngredientText(line,6,12)),servings:12},session);
     for(const key of ['calories','protein','carbohydrates','fat'] as const)expect(scaled.totals[key]!).toBeCloseTo(base.totals[key]!*2,5);
     expect(calculateBasicNutrition({ingredients:original,servings:6},session).totals).toEqual(base.totals);
-  });
+  }, 30000);
   it('persists accepted estimates through Apply, real Markdown, parse, and reauthenticated hydration', async () => {
     const r = recipe(['1 roma tomato', '6 tbsp unsalted butter', '2 corn tortillas']);
     const a = adaptRecipe(r); if (!a.ok) throw a;

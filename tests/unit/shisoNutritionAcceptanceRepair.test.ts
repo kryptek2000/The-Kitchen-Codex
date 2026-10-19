@@ -53,6 +53,28 @@ function contributions() {
 }
 beforeEach(() => { harness.calls = []; harness.response = { contributions: contributions() }; });
 describe('Cochinita structured nutrition boundary', () => {
+  it('does not dispatch a nutrition provider call when cancellation already occurred', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const result = await estimateRecipeNutrientsWithAi(request, undefined, controller.signal);
+    expect(result).toMatchObject({ ok: false, code: 'cancelled' });
+    expect(harness.calls).toHaveLength(0);
+  });
+
+  it('passes cancellation into the pending nutrition provider and rejects its late result', async () => {
+    const controller = new AbortController();
+    let resolveResponse!: (value: unknown) => void;
+    const pending = new Promise<unknown>((resolve) => { resolveResponse = resolve; });
+    harness.response = pending;
+    const result = estimateRecipeNutrientsWithAi(request, undefined, controller.signal);
+    await vi.waitFor(() => expect(harness.calls).toHaveLength(1));
+    expect((harness.calls[0]!.options as { signal?: AbortSignal }).signal).toBe(controller.signal);
+    controller.abort();
+    resolveResponse({ contributions: contributions() });
+    expect(await result).toMatchObject({ ok: false, code: 'cancelled' });
+    expect(harness.calls).toHaveLength(1);
+  });
+
   it('accepts schema-defined nullable optionals without turning unknowns into zero', async () => {
     harness.response.contributions = contributions().map(row => ({ ...row,
       nutrients: { ...Object.fromEntries(NUTRIENT_IDS.map(id => [id, null])), ...row.nutrients },

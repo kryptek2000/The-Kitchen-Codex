@@ -25,7 +25,7 @@ import { MODEL_CONFIG } from "../modelConfig.js";
 import { APPLICATION_VALIDATED_JSON_PROFILE, type OpenRouterProfile } from '../../src/core/ai/openRouterProfile.js';
 import { structuredRequestFields, completionContent, validatesAiSchema, readRuntimeCompletion, OPENROUTER_RUNTIME_TOKENS, type StreamResponse } from './openRouterOutput.js';
 import { getServerSecretSync } from "../platform/ServerEnvironmentSecretAdapter.js";
-import { ProviderOperationError, classifyProviderError } from "./providerErrors.js";
+import { ProviderOperationError, callerCancellationError, classifyProviderError, throwIfCallerCancelled, throwIfProviderRequestAborted } from "./providerErrors.js";
 import type {
   AiCapabilities,
   AiGenerateOptions,
@@ -142,11 +142,17 @@ function defaultFetch(): OpenRouterFetchLike {
  * ONLY to `curated` execution; verified-dynamic execution keeps the bounded
  * 256 KiB streamed reader in `openRouterOutput.ts`.
  */
-async function asJson<T>(res: OpenRouterFetchResponse): Promise<T | undefined> {
+async function asJson<T>(res: OpenRouterFetchResponse, signal?: AbortSignal, timeoutSignal?: AbortSignal): Promise<T | undefined> {
   try {
     if (typeof res.json !== "function") return undefined;
     return (await res.json()) as T;
-  } catch {
+  } catch (error) {
+    if (timeoutSignal) throwIfProviderRequestAborted(signal, timeoutSignal, { providerId: "openrouter" });
+    throwIfCallerCancelled(signal, { providerId: "openrouter" });
+    const code = classifyProviderError(error);
+    if (code === "TIMEOUT" || code === "NETWORK") {
+      throw new ProviderOperationError(code, "OpenRouter response reading failed.", { providerId: "openrouter" }, error);
+    }
     return undefined;
   }
 }
@@ -243,9 +249,11 @@ export class OpenRouterProvider implements AiProvider {
     options: AiGenerateOptions,
     schema?: AiJsonSchema
   ): Promise<string> {
+    throwIfCallerCancelled(options.signal, { providerId: this.id, model: options.model });
     // Dynamic import avoids the catalog/provider construction cycle. No await
     // between the final authorization check and dispatch below.
     const catalog = await import('./openRouterCatalog.js');
+    throwIfCallerCancelled(options.signal, { providerId: this.id, model: options.model });
     // TRUSTED server-side execution context. A verified-dynamic context requires a
     // CURRENT verification record; curated membership is a separate server-owned
     // signal. The model id is never compared to a hard-coded curated slug.
@@ -263,6 +271,8 @@ export class OpenRouterProvider implements AiProvider {
     const key = this.requireKey();
     const body = this.buildRequest(prompt, options, schema, execution);
 
+    const timeoutSignal = AbortSignal.timeout(MODEL_CONFIG.requestTimeoutMs);
+    const providerSignal = options.signal ? AbortSignal.any([timeoutSignal, options.signal]) : timeoutSignal;
     let res: OpenRouterFetchResponse;
     try {
       res = await this.fetchFn(OPENROUTER_CHAT_ENDPOINT, {
@@ -273,9 +283,11 @@ export class OpenRouterProvider implements AiProvider {
         },
         body: JSON.stringify(body),
         redirect: 'error',
-        signal: AbortSignal.timeout(MODEL_CONFIG.requestTimeoutMs),
+        signal: providerSignal,
       });
     } catch (err) {
+      if (providerSignal.aborted) throwIfProviderRequestAborted(options.signal, timeoutSignal, { providerId: this.id, model: options.model });
+      if (options.signal?.aborted) throw callerCancellationError({ providerId: this.id, model: options.model }, err);
       // Transport-level failure / timeout. Connection failures map to UNAVAILABLE;
       // timeouts/aborts to TIMEOUT. Never leaks secrets.
       const code = classifyProviderError(err);
@@ -287,6 +299,7 @@ export class OpenRouterProvider implements AiProvider {
     }
 
     if (!res.ok) {
+      throwIfProviderRequestAborted(options.signal, timeoutSignal, { providerId: this.id, model: options.model });
       const error = Object.assign(new Error('OpenRouter request failed.'), { status: res.status });
       const code = classifyProviderError(error);
       throw new ProviderOperationError(code, 'OpenRouter request failed.', { status: res.status });
@@ -299,9 +312,16 @@ export class OpenRouterProvider implements AiProvider {
       let parsed: unknown;
       try {
         parsed = await readRuntimeCompletion(res);
-      } catch {
+      } catch (error) {
+        if (providerSignal.aborted) throwIfProviderRequestAborted(options.signal, timeoutSignal, { providerId: this.id, model: options.model });
+        if (options.signal?.aborted) throw callerCancellationError({ providerId: this.id, model: options.model });
+        const code = classifyProviderError(error);
+        if (code === "TIMEOUT" || code === "NETWORK") {
+          throw new ProviderOperationError(code, "OpenRouter response reading failed.", { providerId: this.id, model: options.model }, error);
+        }
         throw new ProviderOperationError('INVALID_RESPONSE', 'OpenRouter returned an unreadable or oversized response.', {});
       }
+      throwIfProviderRequestAborted(options.signal, timeoutSignal, { providerId: this.id, model: options.model });
       const extracted = completionContent(parsed);
       if (extracted.ok === false) throw new ProviderOperationError('INVALID_RESPONSE', 'OpenRouter did not return a complete supported answer.', { responseFailure: extracted.reason });
       return extracted.content;
@@ -309,7 +329,8 @@ export class OpenRouterProvider implements AiProvider {
 
     // Curated/server-default execution: EXACT baseline (pre-Astra) reading with
     // NO streamed byte ceiling. The body is read EXACTLY once here.
-    const parsed = await asJson<unknown>(res);
+    const parsed = await asJson<unknown>(res, options.signal, timeoutSignal);
+    throwIfProviderRequestAborted(options.signal, timeoutSignal, { providerId: this.id, model: options.model });
     const extracted = completionContent(parsed);
     if (extracted.ok === false) {
       throw new ProviderOperationError('INVALID_RESPONSE', 'OpenRouter did not return a complete supported answer.', { responseFailure: extracted.reason });
