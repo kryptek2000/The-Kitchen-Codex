@@ -41,7 +41,7 @@
 
 import { MODEL_CONFIG } from "../modelConfig.js";
 import { getServerSecretSync } from "../platform/ServerEnvironmentSecretAdapter.js";
-import { ProviderOperationError, classifyProviderError } from "./providerErrors.js";
+import { ProviderOperationError, callerCancellationError, classifyProviderError, throwIfCallerCancelled, throwIfProviderRequestAborted } from "./providerErrors.js";
 import type {
   AiCapabilities,
   AiGenerateOptions,
@@ -85,10 +85,16 @@ function defaultFetch(): DeepSeekFetchLike {
   return (url, init) => (globalThis as any).fetch(url, init);
 }
 
-async function asJson<T>(res: DeepSeekFetchResponse): Promise<T | undefined> {
+async function asJson<T>(res: DeepSeekFetchResponse, signal?: AbortSignal, timeoutSignal?: AbortSignal): Promise<T | undefined> {
   try {
     return (await res.json()) as T;
-  } catch {
+  } catch (error) {
+    if (timeoutSignal) throwIfProviderRequestAborted(signal, timeoutSignal, { providerId: "deepseek" });
+    throwIfCallerCancelled(signal, { providerId: "deepseek" });
+    const code = classifyProviderError(error);
+    if (code === "TIMEOUT" || code === "NETWORK") {
+      throw new ProviderOperationError(code, "DeepSeek response reading failed.", { providerId: "deepseek" }, error);
+    }
     return undefined;
   }
 }
@@ -150,9 +156,12 @@ export class DeepSeekProvider implements AiProvider {
   }
 
   private async chat(prompt: string, options: AiGenerateOptions): Promise<string> {
+    throwIfCallerCancelled(options.signal, { providerId: this.id, model: options.model });
     const key = this.requireKey();
     const body = this.buildRequest(prompt, options);
 
+    const timeoutSignal = AbortSignal.timeout(MODEL_CONFIG.requestTimeoutMs);
+    const providerSignal = options.signal ? AbortSignal.any([timeoutSignal, options.signal]) : timeoutSignal;
     let res: DeepSeekFetchResponse;
     try {
       res = await this.fetchFn(DEEPSEEK_CHAT_ENDPOINT, {
@@ -162,9 +171,11 @@ export class DeepSeekProvider implements AiProvider {
           "Content-Type": "application/json",
         },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(MODEL_CONFIG.requestTimeoutMs),
+        signal: providerSignal,
       });
     } catch (err) {
+      if (providerSignal.aborted) throwIfProviderRequestAborted(options.signal, timeoutSignal, { providerId: this.id, model: options.model });
+      if (options.signal?.aborted) throw callerCancellationError({ providerId: this.id, model: options.model }, err);
       // Transport-level failure / timeout. Connection failures map to UNAVAILABLE;
       // timeouts/aborts to TIMEOUT. Never leaks secrets.
       const code = classifyProviderError(err);
@@ -177,14 +188,16 @@ export class DeepSeekProvider implements AiProvider {
     }
 
     if (!res.ok) {
-      const parsed = await asJson<{ error?: { message?: string } }>(res);
+      const parsed = await asJson<{ error?: { message?: string } }>(res, options.signal, timeoutSignal);
+      throwIfProviderRequestAborted(options.signal, timeoutSignal, { providerId: this.id, model: options.model });
       const rawMessage = parsed?.error?.message ?? `DeepSeek request failed (HTTP ${res.status}).`;
       const error = Object.assign(new Error(rawMessage), { status: res.status });
       const code = classifyProviderError(error);
       throw new ProviderOperationError(code, rawMessage, {}, error);
     }
 
-    const parsed = await asJson<unknown>(res);
+    const parsed = await asJson<unknown>(res, options.signal, timeoutSignal);
+    throwIfProviderRequestAborted(options.signal, timeoutSignal, { providerId: this.id, model: options.model });
     const text = extractContent(parsed);
     if (!text) {
       throw new ProviderOperationError("INVALID_RESPONSE", "DeepSeek returned an empty response.", {});

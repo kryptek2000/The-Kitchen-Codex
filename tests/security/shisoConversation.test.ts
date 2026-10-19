@@ -51,6 +51,7 @@ const AI_ENDPOINT_TOKEN = 'shiso-c1-token';
 const prov = vi.hoisted(() => ({
   prompts: [] as string[],
   calls: 0,
+  cancelledCalls: 0,
   script: [] as unknown[],
   index: 0,
 }));
@@ -72,11 +73,21 @@ function stubProvider(id: string): AiProvider {
     isAvailable: () => true,
     testConnection: async () => true,
     generate: async () => '',
-    generateStructured: async (prompt: string, _s: AiJsonSchema, _o?: AiStructuredOptions) => {
+    generateStructured: async (prompt: string, _s: AiJsonSchema, options?: AiStructuredOptions) => {
       prov.prompts.push(prompt);
       prov.calls += 1;
       const next = prov.script[Math.min(prov.index, prov.script.length - 1)];
       prov.index += 1;
+      if (next === 'wait-for-abort') {
+        return await new Promise<never>((_resolve, reject) => {
+          const signal = options?.signal;
+          if (!signal) throw new Error('provider call did not receive a cancellation signal');
+          signal.addEventListener('abort', () => {
+            prov.cancelledCalls += 1;
+            reject(Object.assign(new Error('request aborted'), { name: 'AbortError' }));
+          }, { once: true });
+        });
+      }
       if (next === 'throw') throw new Error('provider unavailable');
       // H-1: an entry of the form { throws: {...} } raises a provider error with
       // a realistic shape, so classification can be tested WITHOUT any live
@@ -376,6 +387,7 @@ describe('SHISO — bounded conversational turn against the real route', () => {
   beforeEach(() => {
     prov.prompts = [];
     prov.calls = 0;
+    prov.cancelledCalls = 0;
     prov.script = [];
     prov.index = 0;
     // A RegisteredProvider is { provider, defaultCapabilities }, NOT the provider
@@ -468,6 +480,26 @@ describe('SHISO — bounded conversational turn against the real route', () => {
     });
     expect(res.status).toBe(400);
     expect(prov.calls).toBe(0);
+  });
+
+  it('cancels provider work when the HTTP client disconnects and writes no closed response', async () => {
+    prov.script = ['wait-for-abort'];
+    const client = new AbortController();
+    const pending = fetch(`${baseUrl}/api/shiso/turn`, {
+      method: 'POST',
+      signal: client.signal,
+      headers: { 'Content-Type': 'application/json', authorization: `Bearer ${AI_ENDPOINT_TOKEN}` },
+      body: JSON.stringify({
+        turn_version: 'shiso_turn_request_v1', user_message: 'hello', history: [],
+        context: { recipe: null, nutrition: { available: false } },
+        model_invocations_used: 0, tool_calls_used: 0,
+      }),
+    });
+    await vi.waitFor(() => expect(prov.calls).toBe(1));
+    client.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    await vi.waitFor(() => expect(prov.cancelledCalls).toBe(1));
+    expect(prov.calls).toBe(1); // no retry or next model invocation
   });
 
   it('runs a genuine tool cycle: request -> browser executes -> final reply', async () => {

@@ -26,6 +26,7 @@ import {
   runWithAiFallback,
   ProviderOperationError,
 } from "./ai/provider.js";
+import { throwIfCallerCancelled } from "./ai/providerErrors.js";
 import type { AiCandidate, RegisteredProvider } from "./ai/provider.js";
 import { isOpenRouterRecipeGenerationAuthorized, verifiedOpenRouterProfile } from "./ai/openRouterCatalog.js";
 import { getRecipeGenerationVerification } from "./ai/capabilityVerificationStore.js";
@@ -66,6 +67,8 @@ export interface CreateRecipeOverrides {
   registry?: RegisteredProvider[];
   /** Per-request user selection metadata (honored only when valid + no pin). */
   userSelection?: SelectionInput;
+  /** Request-scoped client cancellation; never persisted or reused. */
+  signal?: AbortSignal;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -263,13 +266,17 @@ export function isRecipeGenerationNotVerifiedSelection(userSelection?: Selection
 async function generateDraftForCandidate(
   candidate: AiCandidate,
   prompt: string,
-  schema: ReturnType<typeof buildGeneratedRecipeSchema>
+  schema: ReturnType<typeof buildGeneratedRecipeSchema>,
+  signal?: AbortSignal,
 ): Promise<GeneratedRecipeDraft> {
+  throwIfCallerCancelled(signal, { providerId: candidate.provider.id, model: candidate.model });
   assertRecipeGenerationAuthorized(candidate);
   const raw = await candidate.provider.generateStructured<unknown>(prompt, schema, {
     model: candidate.model,
     temperature: 0.4,
+    ...(signal ? { signal } : {}),
   });
+  throwIfCallerCancelled(signal, { providerId: candidate.provider.id, model: candidate.model });
   try {
     return normalizeGeneratedRecipeDraft(raw);
   } catch {
@@ -298,13 +305,15 @@ export async function generateRecipeDraftOnServer(
   const schema = buildGeneratedRecipeSchema();
   const candidates = overrides.candidates ?? resolveRoleCandidates("createRecipe", undefined, overrides.userSelection);
   const registry = overrides.registry;
+  throwIfCallerCancelled(overrides.signal);
 
   const { result, providerId, model } = await runWithAiFallback<GeneratedRecipeDraft>({
     candidates,
     requiredCapabilities: ["structuredOutput", "recipeGeneration"],
     registry,
-    run: (candidate: AiCandidate) => generateDraftForCandidate(candidate, prompt, schema),
+    run: (candidate: AiCandidate) => generateDraftForCandidate(candidate, prompt, schema, overrides.signal),
   });
+  throwIfCallerCancelled(overrides.signal, { providerId, model });
 
   return {
     draft: result,

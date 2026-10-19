@@ -51,6 +51,12 @@ export interface AiGenerateOptions {
   model: string;
   temperature?: number;
   /**
+   * Cancels the client-side request when the owning application turn ends.
+   * Provider cancellation is best-effort; an upstream service may still finish
+   * processing or bill a request after its client connection is aborted.
+   */
+  signal?: AbortSignal;
+  /**
    * Provider-specific options, allowlisted by each adapter. Adapters must only
    * read a FIXED set of safe keys and must NEVER blindly spread this object into
    * a request config. No secret-bearing fields are allowed.

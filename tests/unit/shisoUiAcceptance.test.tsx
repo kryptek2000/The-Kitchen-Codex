@@ -15,7 +15,7 @@
 import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react';
 import { useEffect, useState } from 'react';
 
 import { ShisoModal } from '../../src/components/ShisoModal';
@@ -195,6 +195,74 @@ async function askShiso(network: NetworkAdapter) {
 }
 
 describe('SHISO-C1 — the user can actually reach acceptance', () => {
+  function pendingNetwork() {
+    const calls: Array<{ signal?: AbortSignal; resolve: (value: unknown) => void }> = [];
+    const adapter = {
+      post: (_path: string, _body: unknown, options?: { signal?: AbortSignal }) => new Promise((resolve) => {
+        calls.push({ signal: options?.signal, resolve });
+      }),
+      get: async () => ({ status: 404, ok: false, data: {} }),
+      request: async () => ({ status: 404, ok: false, data: {} }),
+    } as unknown as NetworkAdapter;
+    return { adapter, calls };
+  }
+
+  const successfulReply = (text: string) => ({ status: 200, ok: true, data: {
+    ok: true, kind: 'reply', text, proposals: [], model_invocations_used: 1, tool_calls_used: 0,
+  } });
+
+  it('closing SHISO aborts the active request and ignores a late success', async () => {
+    const pending = pendingNetwork();
+    render(<Host network={pending.adapter} canApply={false} onApplied={async () => ({ ok: true }) as never} />);
+    fireEvent.click(screen.getByText('open shiso'));
+    fireEvent.change(screen.getByPlaceholderText('Ask Shiso…'), { target: { value: 'Hi' } });
+    fireEvent.click(screen.getByText('Send'));
+    await waitFor(() => expect(pending.calls).toHaveLength(1));
+    const signal = pending.calls[0]!.signal!;
+    expect(signal.aborted).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Close Shiso' }));
+    await waitFor(() => expect(signal.aborted).toBe(true));
+    fireEvent.click(screen.getByText('open shiso'));
+    await act(async () => {
+      pending.calls[0]!.resolve(successfulReply('Late reply must not appear.'));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.queryByText('Late reply must not appear.')).toBeNull());
+    expect(screen.getByPlaceholderText('Ask Shiso…')).toBeTruthy();
+  });
+
+  it('a replacement turn aborts the prior request and only the current reply is shown', async () => {
+    const pending = pendingNetwork();
+    render(<Host network={pending.adapter} canApply={false} onApplied={async () => ({ ok: true }) as never} />);
+    fireEvent.click(screen.getByText('open shiso'));
+    fireEvent.change(screen.getByPlaceholderText('Ask Shiso…'), { target: { value: 'First question' } });
+    fireEvent.click(screen.getByText('Send'));
+    await waitFor(() => expect(pending.calls).toHaveLength(1));
+    const firstSignal = pending.calls[0]!.signal!;
+    fireEvent.change(screen.getByPlaceholderText('Ask Shiso…'), { target: { value: 'Second question' } });
+    fireEvent.click(screen.getByText('Replace turn'));
+    await waitFor(() => expect(pending.calls).toHaveLength(2));
+    expect(firstSignal.aborted).toBe(true);
+    expect(pending.calls[1]!.signal?.aborted).toBe(false);
+    pending.calls[0]!.resolve(successfulReply('Stale first response.'));
+    pending.calls[1]!.resolve(successfulReply('Current second response.'));
+    await waitFor(() => expect(screen.getByText('Current second response.')).toBeTruthy());
+    expect(screen.queryByText('Stale first response.')).toBeNull();
+  });
+
+  it('unmount aborts an outstanding request', async () => {
+    const pending = pendingNetwork();
+    const view = render(<Host network={pending.adapter} canApply={false} onApplied={async () => ({ ok: true }) as never} />);
+    fireEvent.click(screen.getByText('open shiso'));
+    fireEvent.change(screen.getByPlaceholderText('Ask Shiso…'), { target: { value: 'Hi' } });
+    fireEvent.click(screen.getByText('Send'));
+    await waitFor(() => expect(pending.calls).toHaveLength(1));
+    const signal = pending.calls[0]!.signal!;
+    view.unmount();
+    expect(signal.aborted).toBe(true);
+  });
+
   it('registers the single structured nutrition route for the in-place review action', async () => {
     let requests = 0;
     const adapter = {

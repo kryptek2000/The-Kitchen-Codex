@@ -64,9 +64,9 @@ export interface ShisoToolContext {
    * owns it. Registered by that owner; absent means Advanced Nutrition is not
    * open, and SHISO says so instead of simulating a result.
    */
-  readonly runAnalysis?: (() => Promise<ShisoAnalysisOutcome>) | undefined;
+  readonly runAnalysis?: ((signal?: AbortSignal) => Promise<ShisoAnalysisOutcome>) | undefined;
   /** Structured whole-recipe AI contribution pass, independently validated by the application. */
-  readonly runAiNutrition?: (() => Promise<{ readonly ok: boolean; readonly contributions?: readonly AiNutrientContribution[]; readonly totals?: Readonly<Record<string, unknown>>; readonly message?: string }>) | undefined;
+  readonly runAiNutrition?: ((signal?: AbortSignal) => Promise<{ readonly ok: boolean; readonly contributions?: readonly AiNutrientContribution[]; readonly totals?: Readonly<Record<string, unknown>>; readonly message?: string }>) | undefined;
   /**
    * H-1F. Loads the authenticated USDA bundle through the EXISTING application
    * controller (`useAdvancedNutritionBundle().load`).
@@ -591,7 +591,7 @@ function investigateUnresolvedIngredients(
  * deterministic matcher, the same portion authority and the same calculator the
  * Calculate button runs. SHISO learns the outcome; it does not produce it.
  */
-async function runNutritionAnalysis(ctx: ShisoToolContext): Promise<ShisoObservation> {
+async function runNutritionAnalysis(ctx: ShisoToolContext, signal?: AbortSignal): Promise<ShisoObservation> {
   if (ctx.recipe === null) {
     return fail(
       'run_nutrition_analysis',
@@ -633,7 +633,7 @@ async function runNutritionAnalysis(ctx: ShisoToolContext): Promise<ShisoObserva
   }
   let outcome: ShisoAnalysisOutcome;
   try {
-    outcome = await ctx.runAnalysis();
+    outcome = await ctx.runAnalysis(signal);
   } catch {
     return fail(
       'run_nutrition_analysis',
@@ -648,6 +648,12 @@ async function runNutritionAnalysis(ctx: ShisoToolContext): Promise<ShisoObserva
       outcome.message ?? 'Advanced Nutrition could not complete the analysis.',
     );
   }
+  if (signal?.aborted) {
+    // Cancellation is represented by the turn-level outcome, not by the
+    // capability observation vocabulary. The conversation checks the owning
+    // signal immediately after this promise settles and discards the result.
+    return fail('run_nutrition_analysis', 'analysis_unavailable', 'The nutrition analysis was cancelled.');
+  }
   const beforeAiNutrition = ctx.nutrition;
   if (beforeAiNutrition && !nutritionMatchesActiveRecipe(ctx)) {
     return fail('run_nutrition_analysis', 'stale_recipe', 'The nutrition review belongs to an older recipe revision. Refresh Advanced Nutrition for the current recipe and retry.');
@@ -660,7 +666,7 @@ async function runNutritionAnalysis(ctx: ShisoToolContext): Promise<ShisoObserva
   // Remaining unknown nutrients are reported for review instead of triggering
   // the same estimate pass repeatedly.
   if (ctx.runAiNutrition !== undefined && (beforeAiCoverage === null || beforeAiCoverage.unresolved > 0)) {
-    try { aiResult = await ctx.runAiNutrition(); } catch { aiResult = { ok: false, message: 'The AI estimate service could not be reached.' }; }
+    try { aiResult = await ctx.runAiNutrition(signal); } catch { aiResult = { ok: false, message: 'The AI estimate service could not be reached.' }; }
   }
   const currentNutrition = ctx.nutrition;
   const freshAiContributions = aiResult?.ok ? aiResult.contributions ?? [] : [];
@@ -1029,6 +1035,7 @@ function getCapabilityStatus(ctx: ShisoToolContext): ShisoObservation {
 export function executeShisoTool(
   args: ShisoToolArgs,
   ctx: ShisoToolContext,
+  signal?: AbortSignal,
 ): ShisoObservation | Promise<ShisoObservation> {
   try {
     switch (args.tool) {
@@ -1049,7 +1056,7 @@ export function executeShisoTool(
           args.statuses as readonly ('needs_amount' | 'needs_match')[] | undefined,
         );
       case 'run_nutrition_analysis':
-        return runNutritionAnalysis(ctx);
+        return runNutritionAnalysis(ctx, signal);
       case 'get_capability_status':
         return getCapabilityStatus(ctx);
       case 'apply_ingredient_edits':

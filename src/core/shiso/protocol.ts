@@ -650,6 +650,7 @@ export type ShisoTurnFailureCode =
   | 'credentials_missing'
   | 'no_capability_available'
   | 'provider_invalid_response'
+  | 'cancelled'
   | 'internal_error';
 
 export type ShisoTurnResponse =

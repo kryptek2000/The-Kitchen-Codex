@@ -159,10 +159,13 @@ export interface ShisoTurnDeps {
   readonly network: NetworkAdapter;
   readonly context: ShisoConversationContext;
   readonly toolContext: ShisoToolContext;
+  readonly signal?: AbortSignal;
 }
 
 export interface ShisoTurnOutcome {
   readonly ok: boolean;
+  /** True means this turn was explicitly cancelled; it is not an AI failure. */
+  readonly cancelled?: boolean;
   readonly state: ShisoConversationState;
   /** The assistant's final message, when the turn completed. */
   readonly message: string | null;
@@ -284,6 +287,10 @@ export async function runShisoConversationTurn(
   state: ShisoConversationState,
   userMessage: string,
 ): Promise<ShisoTurnOutcome> {
+  const cancelled = (state: ShisoConversationState, toolsUsed: readonly string[] = []): ShisoTurnOutcome => ({
+    ok: false, cancelled: true, state, message: null, status: null, toolsUsed,
+  });
+  if (deps.signal?.aborted) return cancelled(state);
   const trimmed = userMessage.trim().slice(0, SHISO_LIMITS.maxUserMessageChars);
   if (trimmed.length === 0) {
     return {
@@ -314,12 +321,14 @@ export async function runShisoConversationTurn(
   // unsaved Advanced Nutrition review. Route deterministically so they cannot
   // be misread as a recipe-edit command or spend an unnecessary chat turn.
   if (requestsEstimatedNutrition(trimmed) && !classifySaveIntent(trimmed).authorized) {
+    if (deps.signal?.aborted) return cancelled(working, toolsUsed);
     let result: ShisoObservation;
     try {
-      result = await executeShisoTool({ tool: 'run_nutrition_analysis' }, deps.toolContext);
+      result = await executeShisoTool({ tool: 'run_nutrition_analysis' }, deps.toolContext, deps.signal);
     } catch {
       result = { ok: false, tool: 'run_nutrition_analysis', code: 'unsupported', message: 'Nutrition estimation could not be completed.' };
     }
+    if (deps.signal?.aborted) return cancelled(working, toolsUsed);
     const summary = result.ok ? result.summary : (result as { readonly message: string }).message;
     const data = result.ok ? result.data : {};
     const aiEstimated = typeof data['ai_estimated'] === 'number' ? data['ai_estimated'] : 0;
@@ -355,6 +364,10 @@ export async function runShisoConversationTurn(
    * Anything unclear falls through to the normal conversation below.
    */
   const deterministic = await tryDeterministicEdit(deps.toolContext, trimmed);
+  // The owner may have completed an already-started edit while this turn was
+  // being cancelled. Preserve that underlying change, but never publish it as
+  // the active turn's successful result after cancellation was observed.
+  if (deps.signal?.aborted) return cancelled(working, toolsUsed);
   if (deterministic !== null) {
     const assistantMessage: ShisoConversationMessage = {
       role: 'assistant',
@@ -513,6 +526,7 @@ export async function runShisoConversationTurn(
   // Bounded by construction: every iteration either returns, increments a
   // counter the server also enforces, or exhausts the hard ceiling below.
   for (let step = 0; step <= SHISO_LIMITS.maxModelInvocationsPerTurn; step += 1) {
+    if (deps.signal?.aborted) return cancelled(working, toolsUsed);
     const outOfModels = modelInvocations >= SHISO_LIMITS.maxModelInvocationsPerTurn;
     const outOfTools = toolCalls >= SHISO_LIMITS.maxToolCallsPerTurn;
 
@@ -547,9 +561,10 @@ export async function runShisoConversationTurn(
       response = await deps.network.post<ShisoTurnResponse>(
         SHISO_ENDPOINT,
         body as unknown as Record<string, unknown>,
-        await buildAiSelectionRequestOptions(),
+        { ...(await buildAiSelectionRequestOptions()), ...(deps.signal ? { signal: deps.signal } : {}) },
       );
     } catch {
+      if (deps.signal?.aborted) return cancelled(working, toolsUsed);
       // H-1F: a transport failure must not withhold results already verified.
       return collected.length > 0
         ? {
@@ -561,6 +576,10 @@ export async function runShisoConversationTurn(
           }
         : { ok: false, state: working, message: null, status: 'Shiso could not reach the assistant service.', toolsUsed };
     }
+
+    // A transport may resolve just as cancellation is requested. Discard that
+    // response before interpreting it or starting a capability.
+    if (deps.signal?.aborted) return cancelled(working, toolsUsed);
 
     const data: ShisoTurnResponse | undefined = response?.data;
     if (!response || response.ok !== true || data === undefined || data.ok !== true) {
@@ -595,6 +614,7 @@ export async function runShisoConversationTurn(
       typeof turn.tool_calls_used === 'number' ? turn.tool_calls_used : toolCalls;
 
     if (turn.kind === 'tool_request') {
+      if (deps.signal?.aborted) return cancelled(working, toolsUsed);
       // H-1F: refuse a dependent capability the moment a prerequisite is known,
       // WITHOUT spending a model call on a guaranteed-identical failure.
       if (block !== null && block.blocked.includes(turn.tool)) {
@@ -615,7 +635,7 @@ export async function runShisoConversationTurn(
       toolCalls += 1;
       let executed: ShisoObservation;
       try {
-        executed = await executeShisoTool(turn.args, deps.toolContext);
+        executed = await executeShisoTool(turn.args, deps.toolContext, deps.signal);
       } catch {
         executed = {
           ok: false,
@@ -624,6 +644,9 @@ export async function runShisoConversationTurn(
           message: 'That capability could not be completed.',
         };
       }
+      // An already-started operation is not rolled back. Do not retain a late
+      // result as the current turn or begin another provider/tool iteration.
+      if (deps.signal?.aborted) return cancelled(working, toolsUsed);
       cache.set(signature, executed);
       detectBlock(executed);
       // H-2S: a repeated EQUIVALENT failure ends the turn with a truthful

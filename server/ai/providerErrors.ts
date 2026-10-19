@@ -22,6 +22,7 @@ export type ProviderErrorCode =
   | "UNAVAILABLE"
   | "NETWORK"
   | "TIMEOUT"
+  | "CANCELLED"
   | "UNSUPPORTED_CAPABILITY"
   | "INVALID_RESPONSE"
   | "PROVIDER_ERROR"
@@ -94,6 +95,26 @@ export class ProviderOperationError extends Error {
   get cause(): unknown | undefined {
     return this.rawCause;
   }
+}
+
+/** A caller-initiated abort is terminal and must never be treated as timeout/fallback. */
+export function callerCancellationError(ctx: ProviderErrorContext = {}, cause?: unknown): ProviderOperationError {
+  return new ProviderOperationError("CANCELLED", "The provider request was cancelled by its caller.", ctx, cause);
+}
+
+/** Throws a typed terminal cancellation before dispatch when the owner has aborted. */
+export function throwIfCallerCancelled(signal?: AbortSignal, ctx: ProviderErrorContext = {}): void {
+  if (signal?.aborted) throw callerCancellationError(ctx);
+}
+
+/** Preserves caller cancellation separately from the provider's own request deadline. */
+export function throwIfProviderRequestAborted(
+  callerSignal: AbortSignal | undefined,
+  timeoutSignal: AbortSignal,
+  ctx: ProviderErrorContext = {},
+): void {
+  if (callerSignal?.aborted) throw callerCancellationError(ctx);
+  if (timeoutSignal.aborted) throw new ProviderOperationError("TIMEOUT", "The provider request timed out.", ctx);
 }
 
 /** Extracts a best-effort numeric status/code from a raw error. */

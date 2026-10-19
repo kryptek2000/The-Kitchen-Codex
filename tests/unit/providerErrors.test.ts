@@ -87,6 +87,14 @@ describe("provider error taxonomy (v0.7 1A)", () => {
     for (const code of eligible) expect(isFallbackEligible(code as any), code).toBe(true);
     expect(isFallbackEligible("AUTH")).toBe(false);
     expect(isFallbackEligible("UNSUPPORTED_CAPABILITY")).toBe(false);
+    expect(isFallbackEligible("CANCELLED")).toBe(false);
     expect(FALLBACK_ELIGIBLE_ERROR_CODES.has("AUTH")).toBe(false);
+  });
+
+  it("keeps typed caller cancellation distinct and terminal", () => {
+    const cancelled = new ProviderOperationError("CANCELLED", "caller cancelled");
+    expect(classifyProviderError(cancelled)).toBe("CANCELLED");
+    expect(normalizeProviderError(cancelled)).toBe(cancelled);
+    expect(isFallbackEligible(cancelled.code)).toBe(false);
   });
 });

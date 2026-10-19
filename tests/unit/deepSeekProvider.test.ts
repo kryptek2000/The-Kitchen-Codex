@@ -8,6 +8,7 @@ import {
 } from "../../server/ai/deepSeekProvider.js";
 import type { DeepSeekFetchLike } from "../../server/ai/deepSeekProvider.js";
 import { ProviderOperationError } from "../../server/ai/providerErrors.js";
+import { runWithAiFallback } from "../../server/ai/providerRegistry.js";
 import {
   effectiveCapabilities,
   hasAllCapabilities,
@@ -113,6 +114,33 @@ describe("DeepSeekProvider (v0.7 1C) — adapter", () => {
     await expect(provider.generate("x", { model: "m" })).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
   });
 
+  it("preserves a genuine transport failure while reading the response body", async () => {
+    vi.stubEnv("DEEPSEEK_API_KEY", "k");
+    const provider = new DeepSeekProvider({ fetchFn: () => Promise.resolve({
+      ok: true, status: 200,
+      json: async () => { throw Object.assign(new Error('socket closed'), { code: 'ECONNRESET' }); },
+    }) });
+    await expect(provider.generate('x', { model: 'm' })).rejects.toMatchObject({ code: 'NETWORK' });
+  });
+
+  it("keeps caller cancellation terminal while reading a pending response body", async () => {
+    vi.stubEnv("DEEPSEEK_API_KEY", "k");
+    const controller = new AbortController();
+    let markReadStarted!: () => void;
+    const readStarted = new Promise<void>(resolve => { markReadStarted = resolve; });
+    const provider = new DeepSeekProvider({ fetchFn: async (_url, init) => ({
+      ok: true, status: 200,
+      json: () => {
+        markReadStarted();
+        return new Promise((_resolve, reject) => init.signal?.addEventListener('abort', () => reject(new Error('body read aborted')), { once: true }));
+      },
+    }) });
+    const running = provider.generate('x', { model: 'm', signal: controller.signal });
+    await readStarted;
+    controller.abort();
+    await expect(running).rejects.toMatchObject({ code: 'CANCELLED' });
+  });
+
   it("maps 401/403 to AUTH and never leaks the key", async () => {
     vi.stubEnv("DEEPSEEK_API_KEY", "sk-deepseek-super-secret");
     const provider = new DeepSeekProvider({ fetchFn: () => Promise.resolve(errorResponse(401, "invalid api key")) });
@@ -143,6 +171,45 @@ describe("DeepSeekProvider (v0.7 1C) — adapter", () => {
     });
     const err = await provider.generate("x", { model: "m" }).catch((e) => e);
     expect(err.code).toBe("TIMEOUT");
+  });
+
+  it("does not dispatch an already-cancelled call", async () => {
+    let calls = 0;
+    const controller = new AbortController();
+    controller.abort();
+    const provider = new DeepSeekProvider({ fetchFn: async () => { calls += 1; return okResponse({}); } });
+    await expect(provider.generate('x', { model: DEEPSEEK_FLASH_MODEL, signal: controller.signal }))
+      .rejects.toMatchObject({ code: 'CANCELLED' });
+    expect(calls).toBe(0);
+  });
+
+  it("keeps caller cancellation terminal during fallback-capable execution", async () => {
+    vi.stubEnv("DEEPSEEK_API_KEY", "k");
+    const controller = new AbortController();
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    let fallbackCalls = 0;
+    const provider = new DeepSeekProvider({ fetchFn: (_url, init) => new Promise((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true });
+      markStarted();
+    }) });
+    const fallback: AiProvider = {
+      id: 'fallback', name: 'fallback', capabilities: { reasoning: false, structuredOutput: false, recipeGeneration: false, webSearch: false },
+      isAvailable: () => true, testConnection: async () => true,
+      generate: async () => { fallbackCalls += 1; return 'unexpected'; },
+      generateStructured: async () => { fallbackCalls += 1; return {} as never; },
+    };
+    const candidates = [{ provider, model: DEEPSEEK_FLASH_MODEL }, { provider: fallback, model: 'fallback-model' }];
+    const running = runWithAiFallback({
+      candidates,
+      registry: candidates.map(({ provider: registered }) => ({ provider: registered, defaultCapabilities: registered.capabilities })),
+      requiredCapabilities: [],
+      run: (candidate) => candidate.provider.generate('x', { model: candidate.model, signal: controller.signal }),
+    });
+    await started;
+    controller.abort();
+    await expect(running).rejects.toMatchObject({ code: 'CANCELLED' });
+    expect(fallbackCalls).toBe(0);
   });
 
   it("maps connection failure (no response) to NETWORK", async () => {

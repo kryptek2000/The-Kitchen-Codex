@@ -133,12 +133,13 @@ export async function requestGeneratedRecipe(
   prompt: string,
   constraints: CreateForMeConstraintsInput = {},
   currentDraft?: GeneratedRecipeDraft,
+  signal?: AbortSignal,
 ): Promise<GeneratedRecipeClientResult> {
   const body = buildCreateRecipeRequest(prompt, constraints, currentDraft);
   const res: NetworkResponse<unknown> = await network.post<unknown, CreateRecipeRequest>(
     CREATE_RECIPE_PATH,
     body,
-    await buildAiSelectionRequestOptions()
+    { ...(await buildAiSelectionRequestOptions()), ...(signal ? { signal } : {}) }
   );
   if (!res.ok) {
     const data = (typeof res.data === 'object' && res.data !== null ? res.data : {}) as Record<string, string>;

@@ -605,6 +605,7 @@ function readProposals(raw: unknown): ShisoProposal[] {
 export interface ShisoTurnOptions {
   readonly registry?: unknown;
   readonly userSelection: unknown;
+  readonly signal?: AbortSignal;
 }
 
 /**
@@ -731,6 +732,9 @@ export async function runShisoTurn(
   body: ShisoTurnRequestBody,
   options: ShisoTurnOptions,
 ): Promise<ShisoTurnResponse> {
+  if (options.signal?.aborted) {
+    return { ok: false, code: 'cancelled', message: 'This Shiso turn was cancelled.', aiAttempted: false };
+  }
   const modelInvocations = body.model_invocations_used + 1;
   const used = {
     model_invocations_used: modelInvocations,
@@ -801,7 +805,11 @@ export async function runShisoTurn(
     return { ok: false, code: 'internal_error', message: 'Shiso could not resolve the selected provider configuration. Try again or report this issue.', aiAttempted: false };
   }
   const structured = effectiveCapabilities(registration, candidate.model).structuredOutput;
+  const cancellationSignal = options.signal;
   try {
+    if (cancellationSignal?.aborted) {
+      return { ok: false, code: 'cancelled', message: 'This Shiso turn was cancelled.', aiAttempted: false };
+    }
     const outcome = await runWithAiFallback<unknown>({
       candidates: [{ ...candidate, singleAttempt: true, terminalOnFailure: true }],
       requiredCapabilities: [],
@@ -813,6 +821,7 @@ export async function runShisoTurn(
         const options = {
           model: selected.model,
           temperature: 0,
+          ...(cancellationSignal ? { signal: cancellationSignal } : {}),
           providerOptions: resolveThinkingProviderOptions(selected.provider.id, selected.model),
         };
         if (structured) {
@@ -828,7 +837,13 @@ export async function runShisoTurn(
       },
     });
     raw = outcome.result;
+    if (cancellationSignal?.aborted) {
+      return { ok: false, code: 'cancelled', message: 'This Shiso turn was cancelled.', aiAttempted: true };
+    }
   } catch (error) {
+    if (cancellationSignal?.aborted) {
+      return { ok: false, code: 'cancelled', message: 'This Shiso turn was cancelled.', aiAttempted: true };
+    }
     // Audit H-1: the human test saw "the AI provider is unavailable right now."
     // for a failure that was actually a 504 DEADLINE_EXCEEDED. Every distinct
     // cause collapsed into one string, so the user could not tell a timeout from

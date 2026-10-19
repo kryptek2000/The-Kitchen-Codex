@@ -130,6 +130,15 @@ describe("OpenRouterProvider (v0.7 1B)", () => {
     await expect(provider.generate("x", { model: OPENROUTER_STRUCTURED_MODEL })).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
   });
 
+  it("preserves a genuine response-body transport failure as NETWORK", async () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "k");
+    const provider = new OpenRouterProvider({ fetchFn: async () => ({
+      ok: true, status: 200,
+      json: async () => { throw Object.assign(new Error('socket closed'), { code: 'ECONNRESET' }); },
+    }) });
+    await expect(provider.generate('x', { model: OPENROUTER_STRUCTURED_MODEL })).rejects.toMatchObject({ code: 'NETWORK' });
+  });
+
   it("maps malformed structured JSON to INVALID_RESPONSE", async () => {
     vi.stubEnv("OPENROUTER_API_KEY", "k");
     const provider = new OpenRouterProvider({ fetchFn: () => Promise.resolve(okResponse({ choices: [{ message: { content: "{ not json" } }] })) });
@@ -159,6 +168,38 @@ describe("OpenRouterProvider (v0.7 1B)", () => {
     });
     const err = await provider.generate("x", { model: OPENROUTER_STRUCTURED_MODEL }).catch((e) => e);
     expect(err.code).toBe("TIMEOUT");
+  });
+
+  it("distinguishes caller cancellation during fetch from a provider timeout", async () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "k");
+    const controller = new AbortController();
+    let dispatches = 0;
+    const provider = new OpenRouterProvider({ fetchFn: (_url, init) => new Promise((_resolve, reject) => {
+      dispatches += 1;
+      init.signal?.addEventListener('abort', () => reject(Object.assign(new Error('request aborted'), { name: 'AbortError' })), { once: true });
+    }) });
+    const running = provider.generate('x', { model: OPENROUTER_STRUCTURED_MODEL, signal: controller.signal });
+    await vi.waitFor(() => expect(dispatches).toBe(1));
+    controller.abort();
+    await expect(running).rejects.toMatchObject({ code: 'CANCELLED' });
+  });
+
+  it("preserves caller cancellation while reading a pending response body", async () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "k");
+    const controller = new AbortController();
+    let markReadStarted!: () => void;
+    const readStarted = new Promise<void>((resolve) => { markReadStarted = resolve; });
+    const provider = new OpenRouterProvider({ fetchFn: async (_url, init) => ({
+      ok: true,
+      status: 200,
+      json: () => { markReadStarted(); return new Promise((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => reject(new Error('body read aborted')), { once: true });
+      }); },
+    }) });
+    const running = provider.generate('x', { model: OPENROUTER_STRUCTURED_MODEL, signal: controller.signal });
+    await readStarted;
+    controller.abort();
+    await expect(running).rejects.toMatchObject({ code: 'CANCELLED' });
   });
 
   it("maps connection failure (no response) to UNAVAILABLE", async () => {

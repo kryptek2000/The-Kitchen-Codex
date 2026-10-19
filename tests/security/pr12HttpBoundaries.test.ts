@@ -14,7 +14,7 @@ vi.mock('../../server/geminiClient', () => ({ getGemini: vi.fn(() => null) }));
 
 afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); vi.restoreAllMocks(); resetRateLimitersForTests(); });
 
-async function withServer(run: (base: string, authority: { resolve: ReturnType<typeof vi.fn> }) => Promise<void>, trustProxy = '') {
+async function withServer(run: (base: string, authority: { resolve: ReturnType<typeof vi.fn> }, app?: ReturnType<typeof createApp>) => Promise<void>, trustProxy = '') {
   vi.stubEnv('AI_ENDPOINT_TOKEN', '');
   vi.stubEnv('GEMINI_API_KEY', '');
   vi.stubEnv('TRUST_PROXY', trustProxy);
@@ -22,9 +22,10 @@ async function withServer(run: (base: string, authority: { resolve: ReturnType<t
   vi.stubEnv('SHISO_CONVERSATION_RATE_LIMIT', '2');
   const deployment = createDeploymentNutritionProductAccessAuthority('ai_advanced');
   const authority = { resolve: vi.fn(deployment.resolve) };
-  const server = http.createServer(createApp({ isProduction: false, nutritionProductAccessAuthority: authority }));
+  const app = createApp({ isProduction: false, nutritionProductAccessAuthority: authority });
+  const server = http.createServer(app);
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-  try { await run(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, authority); }
+  try { await run(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, authority, app); }
   finally { await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); }); }
 }
 async function withMultiClientServer(run: (port: number) => Promise<void>) {
@@ -50,6 +51,11 @@ function getFromClient(port: number, localAddress: string, forwardedFor?: string
 const post = (base: string, path: string, body: unknown, headers: Record<string,string> = {}) => fetch(base + path, {
   method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body),
 });
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(done => { resolve = done; });
+  return { promise, resolve };
+}
 const valid = () => ({ request_version: 'nutrition_ai_advanced_plan_request_v1', request_id: 'req-boundary',
   plan_request: { contract_version: 'nutrition_ai_advanced_plan_v1', lines: [{ line_ref: 'sauce', candidates: [
     { candidate_ref: 'c1', display_description: 'Tomato sauce', semantic_tags: ['tomato'] },
@@ -95,12 +101,143 @@ describe('PR12 parameter tampering over real HTTP', () => {
     estimator.mockRestore();
   });
   it('allows a legitimately entitled SHISO nutrition request to reach its estimator', async () => {
-    const estimator = vi.spyOn(aiNutrition, 'estimateRecipeNutrientsWithAi').mockResolvedValue({ ok: true, result: 'estimated' } as never);
+    let estimatorSignal: AbortSignal | undefined;
+    const estimator = vi.spyOn(aiNutrition, 'estimateRecipeNutrientsWithAi').mockImplementation((_raw, _selection, signal) => {
+      estimatorSignal = signal;
+      return Promise.resolve({ ok: true, result: 'estimated' } as never);
+    });
     await withServer(async (base, authority) => {
       authority.resolve.mockResolvedValue({ status: 'resolved', access: AI_ADVANCED_NUTRITION_PRODUCT_ACCESS });
       const response = await post(base, '/api/shiso/nutrition', {});
       expect(response.status).toBe(200);
       expect(estimator).toHaveBeenCalledTimes(1);
+      expect(estimatorSignal?.aborted).toBe(false); // a normal completed response never counts as cancellation
+    });
+    estimator.mockRestore();
+  });
+  it('cancels SHISO nutrition on a real client disconnect and cleans lifecycle listeners without writing a response', async () => {
+    let observedSignal: AbortSignal | undefined;
+    const estimator = vi.spyOn(aiNutrition, 'estimateRecipeNutrientsWithAi').mockImplementation((_raw, _selection, signal) => new Promise(resolve => {
+      observedSignal = signal;
+      signal?.addEventListener('abort', () => resolve({ ok: false, code: 'cancelled' } as never), { once: true });
+    }));
+    await withServer(async (base, authority, app) => {
+      authority.resolve.mockResolvedValue({ status: 'resolved', access: AI_ADVANCED_NUTRITION_PRODUCT_ACCESS });
+      const reqProto = app!.request as any;
+      const resProto = app!.response as any;
+      const reqOnce = reqProto.once; const reqOff = reqProto.off;
+      const resOnce = resProto.once; const resOff = resProto.off;
+      const responseJson = resProto.json;
+      let requestListenersAdded = 0; let requestListenersRemoved = 0;
+      let responseListenersAdded = 0; let responseListenersRemoved = 0;
+      let closedResponseAttempts = 0;
+      reqProto.once = function (event: string, listener: (...args: unknown[]) => void) {
+        if (event === 'aborted' && listener.name === 'abortOnRequestAborted') requestListenersAdded += 1;
+        return reqOnce.call(this, event, listener);
+      };
+      reqProto.off = function (event: string, listener: (...args: unknown[]) => void) {
+        if (event === 'aborted' && listener.name === 'abortOnRequestAborted') requestListenersRemoved += 1;
+        return reqOff.call(this, event, listener);
+      };
+      resProto.once = function (event: string, listener: (...args: unknown[]) => void) {
+        if (event === 'close' && listener.name === 'abortOnIncompleteResponseClose') responseListenersAdded += 1;
+        return resOnce.call(this, event, listener);
+      };
+      resProto.off = function (event: string, listener: (...args: unknown[]) => void) {
+        if (event === 'close' && listener.name === 'abortOnIncompleteResponseClose') responseListenersRemoved += 1;
+        return resOff.call(this, event, listener);
+      };
+      resProto.json = function (...args: unknown[]) {
+        if (this.destroyed) closedResponseAttempts += 1;
+        return responseJson.apply(this, args);
+      };
+      try {
+        const client = new AbortController();
+        const pending = fetch(`${base}/api/shiso/nutrition`, {
+          method: 'POST', signal: client.signal,
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+        });
+        await vi.waitFor(() => expect(estimator).toHaveBeenCalledTimes(1));
+        expect(observedSignal?.aborted).toBe(false);
+        client.abort();
+        await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+        await vi.waitFor(() => expect(observedSignal?.aborted).toBe(true));
+        expect(requestListenersAdded).toBe(1);
+        expect(requestListenersRemoved).toBe(1);
+        expect(responseListenersAdded).toBe(1);
+        expect(responseListenersRemoved).toBe(1);
+        expect(closedResponseAttempts).toBe(0);
+      } finally {
+        reqProto.once = reqOnce; reqProto.off = reqOff;
+        resProto.once = resOnce; resProto.off = resOff; resProto.json = responseJson;
+      }
+    });
+    estimator.mockRestore();
+  });
+  it.each([
+    ['/api/shiso/turn', 'conversation'],
+    ['/api/shiso/nutrition', 'nutrition'],
+  ] as const)('%s does not dispatch after disconnect during pending entitlement resolution', async (path, kind) => {
+    let estimatorCalls = 0;
+    const estimator = vi.spyOn(aiNutrition, 'estimateRecipeNutrientsWithAi').mockImplementation(() => {
+      estimatorCalls += 1;
+      return Promise.resolve({ ok: true } as never);
+    });
+    const conversation = vi.mocked(runShisoTurn);
+    conversation.mockClear();
+    const access = deferred<{ status: 'resolved'; access: typeof AI_ADVANCED_NUTRITION_PRODUCT_ACCESS }>();
+    let handlerEntered = false;
+    let serverSawDisconnect!: () => void;
+    const disconnectSeen = new Promise<void>(resolve => { serverSawDisconnect = resolve; });
+    await withServer(async (base, authority, app) => {
+      authority.resolve.mockImplementation(() => access.promise);
+      const reqProto = app!.request as any;
+      const resProto = app!.response as any;
+      const reqOnce = reqProto.once;
+      const resOnce = resProto.once;
+      const originalJson = resProto.json;
+      const routeStack = ((app as any)._router?.stack ?? (app as any).router?.stack);
+      const routeLayer = routeStack.find((layer: any) => layer.route?.path === path);
+      expect(routeLayer).toBeTruthy();
+      const terminal = routeLayer.route.stack.at(-1);
+      const originalHandler = terminal.handle;
+      let responseAttemptsAfterClose = 0;
+      resProto.json = function (...args: unknown[]) {
+        if (this.destroyed) responseAttemptsAfterClose += 1;
+        return originalJson.apply(this, args);
+      };
+      terminal.handle = function (...args: unknown[]) {
+        handlerEntered = true;
+        return originalHandler.apply(this, args);
+      };
+      reqProto.once = function (event: string, listener: (...args: unknown[]) => void) {
+        return reqOnce.call(this, event, listener);
+      };
+      resProto.once = function (event: string, listener: (...args: unknown[]) => void) {
+        if (event === 'close') resOnce.call(this, event, () => serverSawDisconnect());
+        return resOnce.call(this, event, listener);
+      };
+
+      const url = new URL(`${base}${path}`);
+      const client = http.request({ hostname: url.hostname, port: Number(url.port), path: url.pathname, method: 'POST', headers: { 'Content-Type': 'application/json' } });
+      client.on('error', () => {});
+      try {
+        client.end(JSON.stringify(kind === 'conversation' ? { turn_version: 'shiso_turn_request_v1', user_message: 'Hi' } : {}));
+        await vi.waitFor(() => expect(authority.resolve).toHaveBeenCalledTimes(1));
+        client.destroy();
+        await disconnectSeen;
+        access.resolve({ status: 'resolved', access: AI_ADVANCED_NUTRITION_PRODUCT_ACCESS });
+        await vi.waitFor(() => expect(handlerEntered).toBe(true));
+        if (kind === 'conversation') expect(conversation).not.toHaveBeenCalled();
+        else expect(estimatorCalls).toBe(0);
+        expect(responseAttemptsAfterClose).toBe(0);
+        expect(authority.resolve).toHaveBeenCalledTimes(1);
+      } finally {
+        terminal.handle = originalHandler;
+        reqProto.once = reqOnce;
+        resProto.once = resOnce;
+        resProto.json = originalJson;
+      }
     });
     estimator.mockRestore();
   });
