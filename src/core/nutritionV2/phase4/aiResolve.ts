@@ -33,6 +33,7 @@ import {
   impliedStateCompatibilityMismatchCount,
   missingQualifierTokenCount,
   missingFormTokenCount,
+  missingPrimaryIdentityAnchorCount,
   preparationFormContradictionCount,
   projectQueryText,
   stateContradictionCount,
@@ -132,9 +133,11 @@ function sourceProjectionFor(row: Phase4Row): IngredientQueryProjection | undefi
  */
 function candidateContradictsSource(
   candidateTokens: ReadonlyArray<string>,
-  source: IngredientQueryProjection | undefined
+  source: IngredientQueryProjection | undefined,
+  sourceHasIdentityCandidate: boolean = true
 ): boolean {
   if (!source) return false;
+  if (sourceHasIdentityCandidate && missingPrimaryIdentityAnchorCount(candidateTokens, source) > 0) return true;
   // Suggestion wording cannot erase an authored salt/fat qualifier or product
   // form merely because the original row has no compatible catalog candidate.
   if (missingQualifierTokenCount(candidateTokens, source) > 0) return true;
@@ -200,8 +203,12 @@ export function resolveFoodsFromAiSuggestions(params: AiResolveParams): AiResolv
       // NEGATIVE SOURCE VETO: provider wording may never erase an authenticated
       // source constraint (container-implied state, explicit state, or form).
       const candidateTokens = candidate.normalized_description.split(' ').filter(Boolean);
-      if (candidateContradictsSource(candidateTokens, sourceProjection)) continue;
-      const autoAccepted = automatic !== undefined;
+      if (candidateContradictsSource(candidateTokens, sourceProjection, row.candidates.length > 0)) continue;
+      // A source with no genuine catalog identity has no authoritative identity
+      // to preserve. AI may still propose a credible candidate for explicit
+      // review, but it must never receive automatic authority.
+      const sourceHasIdentity = row.candidates.length > 0;
+      const autoAccepted = sourceHasIdentity && automatic !== undefined;
       const bound = Object.freeze({
         line_ref: suggestion.line_ref,
         query,

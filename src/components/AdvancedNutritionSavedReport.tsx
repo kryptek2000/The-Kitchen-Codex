@@ -18,6 +18,7 @@ interface AdvancedNutritionSavedReportProps {
   isOpen: boolean;
   stale?: boolean;
   unsaved?: boolean;
+  servingBasisAssumed?: boolean;
   onClose: () => void;
   /** Materialized, bounded recipe title (never a raw untrusted recipe). */
   title: string;
@@ -39,6 +40,7 @@ export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReport
   isOpen,
   stale = false,
   unsaved = false,
+  servingBasisAssumed = false,
   onClose,
   title,
   block,
@@ -124,6 +126,7 @@ export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReport
               {meta.excluded_count > 0 ? ` · ${meta.excluded_count} cooking wrapper excluded` : ''}
               {meta.unresolved_count > 0 ? ` · ${meta.unresolved_count} unresolved` : ''}
               {' · '}base {meta.servings} serving{meta.servings === 1 ? '' : 's'}
+              {servingBasisAssumed ? ' · assumed because the recipe yield is unspecified' : ''}
             </p>
           </div>
 

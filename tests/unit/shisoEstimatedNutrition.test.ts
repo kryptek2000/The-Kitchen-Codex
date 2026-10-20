@@ -100,6 +100,108 @@ describe('SHISO AI-estimated nutrition resolution', () => {
     expect(tools.applyIngredientEdits).not.toHaveBeenCalled();
   });
 
+  it('stops after a correction returns no resolved-count progress', async () => {
+    const tools = {
+      ...context(),
+      applyNutritionCorrections: vi.fn(async () => ({
+        ok: true, summary: 'No source corrections resolved.', applied: [], failed: [], regressed: [], changes: [], unresolved: [],
+        before_resolved_count: 5, resolved_count: 5, total_count: 13, recalculation: 'partial' as const, working_unsaved: true,
+      })),
+    };
+    const network = { ...noProviderNetwork, post: vi.fn(async () => ({ ok: true, status: 200, data: {
+      ok: true, kind: 'tool_request', tool: 'apply_nutrition_corrections', args: { tool: 'apply_nutrition_corrections' }, model_invocations_used: 1, tool_calls_used: 0,
+    } })) } as unknown as NetworkAdapter;
+    const result = await runShisoConversationTurn({ network, toolContext: tools,
+      context: { recipe: { title: 'Oats', servings: 4, ingredientCount: 13, stepCount: 2 },
+        nutrition: { available: true, summary: null, unresolvedCount: 8, needsAmountCount: 4, needsMatchCount: 4, unsavedWorkingReview: true },
+        recipeKey: 'oats', sessionIdentity: 'session' },
+    }, initialShisoConversation(), 'Fix the nutrition');
+    expect(result.message).toContain('made no coverage progress: 5 of 13');
+    expect(result.message).toContain('Nothing was saved');
+    expect(tools.applyNutritionCorrections).toHaveBeenCalledTimes(1);
+    expect(network.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('recognizes a meaningful correction even when the resolved count is unchanged', async () => {
+    const tools = {
+      ...context(),
+      applyNutritionCorrections: vi.fn(async (lineRefs?: string[]) => {
+        if (Array.isArray(lineRefs) && lineRefs.includes('line-a')) {
+          return {
+            ok: true, summary: 'Updated an existing match.', applied: [{ line_ref: 'line-a', label: 'flour', description: 'Wheat flour' }],
+            failed: [], regressed: [], changes: [{ line_ref: 'line-a', label: 'flour', change: 'identity', before_status: 'needs_match', after_status: 'matched' }],
+            unresolved: [], before_resolved_count: 5, resolved_count: 5, total_count: 13, recalculation: 'partial' as const, working_unsaved: true,
+          };
+        }
+        return {
+          ok: true, summary: 'No source corrections resolved.', applied: [], failed: [], regressed: [], changes: [], unresolved: [],
+          before_resolved_count: 5, resolved_count: 5, total_count: 13, recalculation: 'partial' as const, working_unsaved: true,
+        };
+      }),
+    };
+    const replies = [
+      { ok: true, kind: 'tool_request', tool: 'apply_nutrition_corrections', args: { tool: 'apply_nutrition_corrections', line_refs: ['line-a'] }, model_invocations_used: 1, tool_calls_used: 0 },
+      { ok: true, kind: 'tool_request', tool: 'apply_nutrition_corrections', args: { tool: 'apply_nutrition_corrections', line_refs: ['line-b'] }, model_invocations_used: 2, tool_calls_used: 1 },
+    ];
+    const network = { ...noProviderNetwork, post: vi.fn(async () => ({ ok: true, status: 200, data: replies.shift() })) } as unknown as NetworkAdapter;
+    const result = await runShisoConversationTurn({ network, toolContext: tools,
+      context: { recipe: { title: 'Oats', servings: 4, ingredientCount: 13, stepCount: 2 },
+        nutrition: { available: true, summary: null, unresolvedCount: 8, needsAmountCount: 4, needsMatchCount: 4, unsavedWorkingReview: true },
+        recipeKey: 'oats', sessionIdentity: 'session' },
+    }, initialShisoConversation(), 'Fix the nutrition');
+    expect(result.message).toContain('made no coverage progress: 5 of 13');
+    expect(result.message).toContain('Nothing was saved');
+    expect(tools.applyNutritionCorrections).toHaveBeenCalledTimes(2);
+    expect(network.post).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not re-run a cached successful nutrition correction', async () => {
+    const tools = {
+      ...context(),
+      applyNutritionCorrections: vi.fn(async () => ({
+        ok: true, summary: 'One line resolved.', applied: [{ line_ref: 'r', label: 'flour', description: 'Wheat flour' }], failed: [], regressed: [], changes: [], unresolved: [],
+        before_resolved_count: 5, resolved_count: 6, total_count: 13, recalculation: 'partial' as const, working_unsaved: true,
+      })),
+    };
+    const replies = [1, 2].map((invocation) => ({ ok: true, kind: 'tool_request', tool: 'apply_nutrition_corrections',
+      args: { tool: 'apply_nutrition_corrections' }, model_invocations_used: invocation, tool_calls_used: invocation - 1 }));
+    const network = { ...noProviderNetwork, post: vi.fn(async () => ({ ok: true, status: 200, data: replies.shift() })) } as unknown as NetworkAdapter;
+    const result = await runShisoConversationTurn({ network, toolContext: tools,
+      context: { recipe: { title: 'Oats', servings: 4, ingredientCount: 13, stepCount: 2 },
+        nutrition: { available: true, summary: null, unresolvedCount: 8, needsAmountCount: 4, needsMatchCount: 4, unsavedWorkingReview: true },
+        recipeKey: 'oats', sessionIdentity: 'session' },
+    }, initialShisoConversation(), 'Fix the nutrition');
+    expect(result.message).toContain('same nutrition correction was requested again');
+    expect(result.message).toContain('6 of 13 ingredient lines resolved');
+    expect(tools.applyNutritionCorrections).toHaveBeenCalledTimes(1);
+    expect(network.post).toHaveBeenCalledTimes(2);
+  });
+
+  it('routes an ingredient request to the read-only nutrition investigation', async () => {
+    const tools = context();
+    const result = await runShisoConversationTurn({ network: noProviderNetwork, toolContext: tools,
+      context: { recipe: { title: 'Oatmeal Bars', servings: 8, ingredientCount: 7, stepCount: 4 },
+        nutrition: { available: true, summary: null, unresolvedCount: 1, needsAmountCount: 0, needsMatchCount: 1, unsavedWorkingReview: true },
+        recipeKey: 'oatmeal-bars', sessionIdentity: 'session' },
+    }, initialShisoConversation(), 'Resolve the light brown sugar.');
+    expect(result.toolsUsed).toEqual(['investigate_unresolved_ingredients']);
+    expect(result.message).toContain('Investigated all 1 unresolved ingredient');
+    expect(tools.runAnalysis).not.toHaveBeenCalled();
+    expect(tools.runAiNutrition).not.toHaveBeenCalled();
+    expect(tools.applyIngredientEdits).not.toHaveBeenCalled();
+  });
+
+  it('directs USDA food choices to the explicit Advanced Nutrition control', async () => {
+    const result = await runShisoConversationTurn({ network: noProviderNetwork, toolContext: context(),
+      context: { recipe: { title: 'Guacamole', servings: 4, ingredientCount: 1, stepCount: 0 },
+        nutrition: { available: true, summary: null, unresolvedCount: 1, needsAmountCount: 0, needsMatchCount: 1, unsavedWorkingReview: true },
+        recipeKey: 'guacamole', sessionIdentity: 'session' },
+    }, initialShisoConversation(), 'Use this USDA food.');
+    expect(result.message).toContain('“Use this match”');
+    expect(result.toolsUsed).toEqual([]);
+    expect(noProviderNetwork.post).not.toHaveBeenCalled();
+  });
+
   it.each([
     'Fix any missing ingredients.',
     "Resolve it with estimated nutrition. It doesn't have to be exact.",

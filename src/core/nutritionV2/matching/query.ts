@@ -356,7 +356,7 @@ const NOISE_TOKENS: ReadonlySet<string> = new Set([
  * evidence (agreement/opposition) but are NOT the required anchor and NOT part
  * of core food identity.
  */
-const QUALIFIER_TOKENS: ReadonlySet<string> = new Set([
+export const QUALIFIER_TOKENS: ReadonlySet<string> = new Set([
   'salted',
   'unsalted',
   'raw',
@@ -402,6 +402,11 @@ const QUALIFIER_TOKENS: ReadonlySet<string> = new Set([
   'vegan',
   'vegetarian',
   'tofu',
+  // Oat processing changes the food form and should not silently collapse to
+  // generic/raw oats when the recipe explicitly asks for rolled/quick oats.
+  'rolled',
+  'quick',
+  'instant',
 ]);
 
 /**
@@ -880,9 +885,6 @@ const DESCRIPTOR_TOKENS: ReadonlySet<string> = new Set([
   'shelled',
   'unshelled',
   'cracked',
-  'rolled',
-  'quick',
-  'instant',
   'old',
   'fashioned',
   'style',
@@ -2076,6 +2078,17 @@ export function missingCoreTokenCount(
     if (!tokenInSet(candidateTokens, token)) missing += 1;
   }
   return missing;
+}
+
+/** Counts missing required food-head anchors without treating refinements such
+ * as long-grain as a different primary food (rice remains rice). */
+export function missingPrimaryIdentityAnchorCount(
+  candidateTokens: ReadonlyArray<string>,
+  projection: IngredientQueryProjection,
+): number {
+  return projection.anchor_groups.filter(
+    (group) => !group.accepted.some((token) => tokenInSet(candidateTokens, token)),
+  ).length;
 }
 
 /** Number of requested qualifier/form tokens present in the candidate. */

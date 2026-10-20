@@ -135,6 +135,20 @@ describe('nutrition production UI integration',()=>{
   expect(screen.getByText('4 eggs, separated')).toBeTruthy();
   expect(reopened.nutrition?.calories).toBe(estimate.totals.calories);
  },30000);
+ it('discloses an assumed four-serving basis for recipes without authored yield',async()=>{
+  const initial=makeRecipe();initial.servings=undefined;const save=vi.fn(async (_nutrition: unknown)=>true);
+  const view=render(<RecipeNutritionCard recipe={initial} network={network} onUpdateNutrition={save} />);
+  expect(screen.getByTestId('basic-assumed-serving-basis')).toBeTruthy();
+  fireEvent.click(screen.getByTestId('calculate-basic-nutrition-empty-btn'));
+  await screen.findByTestId('basic-nutrition-review',{}, {timeout:15000});
+  fireEvent.click(screen.getByTestId('save-nutrition-btn'));
+  await waitFor(()=>expect(save).toHaveBeenCalledTimes(1));
+  expect(save.mock.calls[0][0].confidenceNote).toMatch(/assumed 4-serving basis/);
+  view.unmount();
+  const authored=makeRecipe();
+  render(<RecipeNutritionCard recipe={authored} network={network} onUpdateNutrition={vi.fn()} />);
+  expect(screen.queryByTestId('basic-assumed-serving-basis')).toBeNull();
+ },30000);
  it('preserves decimal legacy calories and manual edits as precise batch totals',async()=>{
   const r=makeRecipe();r.calories='374.8 kcal';r.nutrition=undefined;
   const save=vi.fn();

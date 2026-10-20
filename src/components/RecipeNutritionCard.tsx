@@ -102,6 +102,7 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
   const estimateKey = useRef<string | null>(null);
   useEffect(() => { setBasicEstimate(null); setIsLoading(false); }, [recipeKey]);
   const savedPartial = !derivedNutrition && isPartialMachineNutrition(currentNutrition);
+  const servingBasisAssumed = !(typeof recipe.servings === 'number' && Number.isFinite(recipe.servings) && recipe.servings > 0);
 
   // The display authority is the Advanced-derived compact nutrition when a
   // recognized saved Advanced block exists; otherwise the recipe's own stored
@@ -176,7 +177,7 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
       const ingredientList = recipe.ingredients.map((ing) => ing.original || ing.name);
       const estimate = await calculateProductionBasicNutrition({
         ingredients: ingredientList,
-        servings: recipeBaseServings,
+        servings: recipe.servings,
       });
       if (capturedKey !== currentKey.current) return;
       if (!estimate.ok) {
@@ -263,6 +264,12 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
         </div>
       </div>
 
+      {servingBasisAssumed && (
+        <p className="mb-3 text-[11px] text-amber-200" data-testid="basic-assumed-serving-basis">
+          Recipe yield is not authored. Per-serving calculations use an assumed 4-serving basis; set Servings in the recipe to replace this assumption.
+        </p>
+      )}
+
       {errorMsg && (
         <div className="mb-3 p-3 rounded-xl bg-rose-950/40 border border-rose-800/40 text-rose-300 text-xs flex items-start gap-2">
           <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
@@ -336,7 +343,7 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
           </div>
 
           <p className="text-[10px] font-mono text-gray-500 text-center">
-            Per serving at {currentServings} servings{basicEstimate.coverage.complete ? '' : ' · partial subtotal'}: {basicPerServing?.calories ?? '—'} kcal
+            Per serving at {currentServings} servings{basicEstimate.coverage.complete ? '' : ' · partial subtotal'}{typeof recipe.servings === 'number' && recipe.servings > 0 ? '' : ' · assumed 4-serving basis; recipe yield not authored'}: {basicPerServing?.calories ?? '—'} kcal
             {' · '}{basicPerServing?.protein ?? '—'} g protein
             {' · '}{basicEstimate.coverage.resolved}/{basicEstimate.coverage.total} ingredient lines covered
           </p>

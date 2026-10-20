@@ -695,7 +695,14 @@ export function RecipeEditorModal({
         throw new Error('Please add ingredients before calculating nutrition.');
       }
 
-      const numServings = typeof servings === 'number' ? servings : parseFloat(String(servings)) || 4;
+      // Preserve the authored serving count for disclosure purposes. Calculation
+      // falls back to the shared four-serving basis inside the nutrition engine.
+      const authoredServings = typeof servings === 'number'
+        ? servings
+        : (String(servings ?? '').trim() === '' ? undefined : parseFloat(String(servings)));
+      const numServings = Number.isFinite(authoredServings) && (authoredServings as number) > 0
+        ? (authoredServings as number)
+        : undefined;
 
       // ONE shared Basic Nutrition engine (the SAME service the main recipe page
       // uses). Deterministic, local, no provider call: the pinned USDA
@@ -739,7 +746,8 @@ export function RecipeEditorModal({
       setNutritionDirtyFields(new Set()); // Clear dirty flags on new calculation
 
       // Set per-serving editor fields from the estimate
-      const perServing = (value: number | null | undefined, whole = false) => value == null ? '' : String(whole ? Math.round(value / numServings) : Math.round((value / numServings) * 10) / 10);
+      const perServingBasis = estimate.baseServings > 0 ? estimate.baseServings : 4;
+      const perServing = (value: number | null | undefined, whole = false) => value == null ? '' : String(whole ? Math.round(value / perServingBasis) : Math.round((value / perServingBasis) * 10) / 10);
       setCalories(perServing(values.calories, true));
       setProtein(perServing(values.protein));
       setCarbs(perServing(values.carbohydrates));

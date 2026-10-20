@@ -31,6 +31,12 @@ beforeAll(async () => {
 }, 300000);
 
 describe('nutrition functional repair, pinned production USDA bundle', () => {
+  it('discloses the shared four-serving fallback when the recipe has no authored yield', () => {
+    const estimate = calculateBasicNutrition({ ingredients: ['2 eggs'] }, session);
+    expect(estimate.baseServings).toBe(4);
+    expect(estimate.confidenceNote).toContain('assumed 4-serving basis');
+  });
+
   it('compares Cochinita Basic assumptions against Advanced at the same whole-batch basis', () => {
     const r = parseObsidianRecipeMarkdown(readFileSync(join(__dirname, '../fixtures/nutritionRepairCochinitaPibil.md'), 'utf8'), 'cochinita.md', 'Recipes/cochinita.md');
     const a = adaptRecipe(r); if (!a.ok) throw new Error('adaptation failed');

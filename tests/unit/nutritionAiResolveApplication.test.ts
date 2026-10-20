@@ -208,7 +208,7 @@ describe('AI resolution — application request/response', () => {
     expect(result.ok).toBe(true);
     expect(result.outcome.candidates).toHaveLength(1);
     expect(result.outcome.candidates[0].fdc_id).toBe(6002);
-    expect(result.outcome.candidates[0].auto).toBe(true);
+    expect(result.outcome.candidates[0].auto).toBe(false);
     // No mass authority from AI.
     expect((result.outcome.candidates[0].choice as { record_digest?: string }).record_digest).toMatch(/^[0-9a-f]{64}$/);
   });

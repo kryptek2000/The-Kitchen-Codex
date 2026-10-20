@@ -83,7 +83,7 @@ export async function estimateRecipeNutrientsWithAi(raw: unknown, selection?: Se
     } });
     throwIfCallerCancelled(signal);
     if (!isPlainObject(result) || !Array.isArray(result.contributions)) return failure('invalid_response', 'response_shape');
-    if (result.contributions.length === 0 || result.contributions.length > ingredients.length) return failure('invalid_response', 'invalid_contributions');
+    if (result.contributions.length === 0) return failure('invalid_response', 'invalid_contributions');
     // Strict OpenRouter schemas encode optional fields as null; translate only
     // those schema-defined nulls into omissions before semantic validation.
     const normalized = result.contributions.map((item) => {

@@ -554,13 +554,12 @@ describe('AI-1 canonical live — AUTO-APPLICABLE stale responses (audit repair)
       await Promise.resolve();
     });
 
-    // PROOF OF AUTO-APPLICABILITY: the deterministic pipeline accepted the
-    // reading and the CARD applied it automatically.
-    await waitFor(() => expect(rowElement('Zzz').textContent).toMatch(/Mystery, raw/));
+    // R1: an unmatched source has no authoritative identity, so the proposed
+    // candidate is offered for explicit review rather than auto-applied.
+    await waitFor(() => expect(messageText()).toMatch(/No additional ingredients could be resolved automatically/i));
     const row = rowElement('Zzz');
-    expect(row.textContent).toMatch(/AI-assisted USDA match/i);
-    expect(row.textContent).not.toMatch(/needs match/i);
-    expect(messageText()).toMatch(/resolved automatically/i);
+    expect(row.textContent).toMatch(/needs match/i);
+    expect(row.textContent).not.toMatch(/AI-assisted USDA match/i);
     // Advisory only: nothing was persisted by the AI pass.
     expect(onApply).not.toHaveBeenCalled();
   });
