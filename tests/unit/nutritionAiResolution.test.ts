@@ -219,7 +219,7 @@ describe('AI resolution — local deterministic resolution', () => {
     expect(outcome.candidates).toHaveLength(1);
     const candidate = outcome.candidates[0];
     expect(candidate.fdc_id).toBe(6002);
-    expect(candidate.auto).toBe(true);
+    expect(candidate.auto).toBe(false);
     expect(candidate.choice.kind).toBe('manual');
     expect(candidate.choice.review_digest).toBe(zzzRow.review_digest);
 
@@ -253,7 +253,7 @@ describe('AI resolution — local deterministic resolution', () => {
     expect(live.status).toBe('needs_amount');
     // AI-assisted DETERMINISTIC acceptance: automatic provenance, NOT
     // human-reviewed authority.
-    expect(live.food_authority).toBe('ai_assisted');
+    expect(live.food_authority).toBe('user_confirmed');
     expect(live.resolved_grams).toBeUndefined();
   });
 

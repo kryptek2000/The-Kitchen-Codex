@@ -421,6 +421,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
 onReviewRecipeContextWithAi,
   advancedNutritionAiAvailability,
 }) => {
+  const servingBasisAssumed = !(typeof recipe.servings === 'number' && Number.isFinite(recipe.servings) && recipe.servings > 0);
   const shiso = useShiso();
   const nutritionUnsaved = shiso.workingRecipe?.nutrition_unsaved === true;
   const [isOpen, setIsOpen] = useState(false);
@@ -2381,6 +2382,7 @@ onReviewRecipeContextWithAi,
                 {savedPresentation.advanced_ingredient_count ? ` · ${savedPresentation.advanced_ingredient_count} ingredient lines accounted for` : ''}
                 {savedPresentation.advanced_excluded_count ? ` · ${savedPresentation.advanced_excluded_count} cooking wrapper excluded` : ''}
                 {stored.servings ? ` · base ${stored.servings} servings` : ''}
+                {servingBasisAssumed ? ' · assumed basis; recipe yield is unspecified' : ''}
               </p>
             </div>
           ) : (
@@ -2390,7 +2392,8 @@ onReviewRecipeContextWithAi,
                 {savedPresentation.advanced_resolved_count + savedPresentation.advanced_excluded_count} of {savedPresentation.advanced_ingredient_count} ingredient line
                 {savedPresentation.advanced_ingredient_count === 1 ? '' : 's'} accounted for
                 {savedPresentation.advanced_excluded_count ? ` · ${savedPresentation.advanced_excluded_count} wrapper excluded` : ''}
-                {stored.servings ? ` · base ${stored.servings} servings` : ''}. Open Advanced Nutrition to
+                {stored.servings ? ` · base ${stored.servings} servings` : ''}
+                {servingBasisAssumed ? ' · assumed basis; recipe yield is unspecified' : ''}. Open Advanced Nutrition to
                 finish review.
               </p>
             </div>
@@ -2589,6 +2592,7 @@ onReviewRecipeContextWithAi,
           isOpen={isOpen}
           onClose={() => setIsOpen(false)}
           title={adaptation.recipe.title}
+          assumedServingBasis={servingBasisAssumed}
           session={session}
           adapted={adapted}
           state={state}
@@ -2616,6 +2620,7 @@ onReviewRecipeContextWithAi,
           title={adaptation.ok ? adaptation.recipe.title : ''}
           block={savedBlock}
           stale={savedPresentation.advanced_stale}
+          servingBasisAssumed={servingBasisAssumed}
           onEdit={() => {
             setIsSavedReportOpen(false);
             openWorkingEditor();

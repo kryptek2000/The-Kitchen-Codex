@@ -221,6 +221,8 @@ interface AdvancedNutritionModalProps {
   onClose: () => void;
   /** Materialized, bounded recipe title (never a raw untrusted recipe). */
   title: string;
+  /** The recipe has no authored serving count, so the shared 4-serving fallback is in use. */
+  assumedServingBasis?: boolean;
   session: AdvancedNutritionSession;
   adapted: ReadonlyArray<AdaptedIngredient>;
   state: Phase4State;
@@ -1010,6 +1012,7 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
   isOpen,
   onClose,
   title,
+  assumedServingBasis = false,
   session,
   adapted,
   state,
@@ -1537,6 +1540,11 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
 
           <section aria-label="Display basis" className="space-y-2">
             <h3 className="text-xs font-bold text-white">Display basis</h3>
+            {assumedServingBasis ? (
+              <p className="text-[11px] text-amber-200" data-testid="advanced-assumed-serving-basis">
+                Recipe yield is not authored. Per-serving calculations use an assumed 4-serving basis; enter the recipe yield to replace this assumption. This does not change the saved recipe.
+              </p>
+            ) : null}
             <div role="radiogroup" aria-label="Display basis" className="flex flex-wrap gap-3 text-xs">
               {(
                 [

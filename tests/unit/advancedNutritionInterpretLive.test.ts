@@ -452,10 +452,10 @@ describe('AI-1 live canonical request — real deterministic semantics', () => {
     );
     const result = await resolveUnresolvedRowsWithAi(liveArgs(double.network, ['1 cup Zzz']));
     expect(result.ok).toBe(true);
-    expect(result.outcome.auto_count).toBe(1);
+    expect(result.outcome.auto_count).toBe(0);
     const candidate = result.outcome.candidates[0] as { fdc_id: number; auto: boolean };
     expect(candidate.fdc_id).toBe(8005);
-    expect(candidate.auto).toBe(true);
+    expect(candidate.auto).toBe(false);
   });
 
   it('CONFIDENCE IS NOT AUTHORITY: a high-confidence wrong candidate is refused', async () => {
@@ -486,7 +486,7 @@ describe('AI-1 live canonical request — real deterministic semantics', () => {
       }))
     );
     const result = await resolveUnresolvedRowsWithAi(liveArgs(double.network, ['1 cup Zzz, cooked']));
-    expect(result.outcome.auto_count).toBe(1);
+    expect(result.outcome.auto_count).toBe(0);
     const candidate = result.outcome.candidates[0] as { fdc_id: number };
     expect(candidate.fdc_id).toBe(8006);
   });
@@ -521,7 +521,7 @@ describe('AI-1 live canonical request — real deterministic semantics', () => {
       }))
     );
     const controlResult = await resolveUnresolvedRowsWithAi(liveArgs(control.network, ['1 cup Zzz']));
-    expect(controlResult.outcome.auto_count).toBe(1);
+    expect(controlResult.outcome.auto_count).toBe(0);
   });
 
   it('NEVER collapses authored alternatives into one selected food', async () => {

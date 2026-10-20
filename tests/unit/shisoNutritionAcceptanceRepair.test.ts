@@ -158,4 +158,33 @@ describe('Cochinita structured nutrition boundary', () => {
     expect(shisoNutritionFailureMessage('provider_error', 'secret')).not.toContain('secret');
     expect(harness.calls).toHaveLength(1);
   });
+
+  it.each([
+    ['foreign line', (rows: any[]) => { rows[0].line_ref = 'outside-recipe'; }, 'unknown_line_ref'],
+    ['duplicate line', (rows: any[]) => { rows.push({ ...rows[0] }); }, 'duplicate_line_ref'],
+    ['changed ingredient text', (rows: any[]) => { rows[0].ingredient = 'bread'; }, 'line_text_mismatch'],
+  ])('reports a bounded diagnostic for %s while preserving strict rejection', async (_label, mutate, reason) => {
+    harness.response.contributions = contributions();
+    mutate(harness.response.contributions);
+    const result = await estimateRecipeNutrientsWithAi(request);
+    expect(result).toMatchObject({ ok: false, code: 'invalid_response', reason });
+    const message = shisoNutritionFailureMessage('invalid_response', reason);
+    expect(message).toContain(reason === 'unknown_line_ref'
+      ? 'outside the current recipe'
+      : reason === 'duplicate_line_ref'
+        ? 'repeated an ingredient line'
+        : 'exact ingredient text');
+    expect(message).not.toContain(request.recipe.ingredients[0].text);
+  });
+
+  it.each([
+    ['AUTH', 'credential'], ['QUOTA', 'quota'], ['RATE_LIMIT', 'rate limit'],
+    ['UNAVAILABLE', 'temporarily unavailable'], ['TIMEOUT', 'timed out'],
+    ['NETWORK', 'could not be reached'], ['UNSUPPORTED_CAPABILITY', 'does not support'],
+    ['PROVIDER_ERROR', 'unexpected error'],
+  ])('shows sanitized %s provider failure detail', (reason, fragment) => {
+    const message = shisoNutritionFailureMessage('provider_error', reason);
+    expect(message).toContain(fragment);
+    expect(message).not.toContain('response content');
+  });
 });

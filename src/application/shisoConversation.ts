@@ -100,6 +100,19 @@ function requestsEstimatedNutrition(message: string): boolean {
   );
 }
 
+/** Short nutrition-resolution language is routed to the live nutrition review,
+ * never to recipe-edit intent classification. */
+function requestsNutritionInvestigation(message: string): boolean {
+  const text = message.toLowerCase().replace(/[’']/g, '');
+  return /^\s*(?:please\s+)?(?:resolve|find|match|investigate|look up)\s+(?:(?:the|this|that)\s+)?[\p{L}\p{N}][\p{L}\p{N}\s,'-]{0,80}[\p{L}\p{N}]\s*[.!]?$/u.test(text) ||
+    /\b(?:resolve|find|match|investigate|look up)\b.{0,70}\b(?:ingredient|food|usda|nutrition|match)\b/.test(text) ||
+    /\b(?:use|choose|select)\b.{0,45}\bthis\s+(?:usda\s+)?(?:food|match|record)\b/.test(text);
+}
+
+function requestsManualUsdaChoice(message: string): boolean {
+  return /\b(?:use|choose|select)\b.{0,45}\bthis\s+(?:usda\s+)?(?:food|match|record)\b/i.test(message);
+}
+
 export interface ShisoConversationState {
   readonly messages: readonly ShisoConversationMessage[];
   readonly proposals: readonly ShisoBoundProposal[];
@@ -353,6 +366,62 @@ export async function runShisoConversationTurn(
       status: null,
       toolsUsed: Object.freeze(['run_nutrition_analysis']) as readonly string[],
     };
+  }
+
+  // USDA choices remain an explicit action in the open Advanced Nutrition
+  // review. Explain the scoped control directly instead of sending a selection
+  // request through recipe-edit interpretation or silently choosing a record.
+  if (requestsManualUsdaChoice(trimmed)) {
+    const message = deps.toolContext.nutrition === null
+      ? 'Open Advanced Nutrition for this recipe, then choose the intended USDA record from that ingredient row. I cannot apply a food choice from chat without the review selection control. Nothing was changed or saved.'
+      : 'In the open Advanced Nutrition review, use the “Use this match” control on the intended ingredient row. That explicit selection is bound to this recipe and its current USDA review. I will not choose or apply a USDA record from chat. Nothing was changed or saved.';
+    return {
+      ok: true,
+      state: appendShisoMessage(working, { role: 'assistant', text: message, proposalCount: 0 }),
+      message,
+      status: null,
+      toolsUsed: [],
+    };
+  }
+
+  // “Resolve [ingredient]” is nutrition work, not an ingredient text edit.
+  // Investigation is read-only and uses the current authenticated review; it
+  // returns the real alternatives and leaves any choice to the established UI.
+  if (
+    requestsNutritionInvestigation(trimmed) &&
+    (deps.toolContext.nutrition !== null || /\b(?:nutrition|usda|ingredient)\b/i.test(trimmed)) &&
+    !classifySaveIntent(trimmed).authorized
+  ) {
+    if (deps.signal?.aborted) return cancelled(working, toolsUsed);
+    let result: ShisoObservation;
+    try {
+      result = await executeShisoTool({ tool: 'investigate_unresolved_ingredients' }, deps.toolContext, deps.signal);
+    } catch {
+      result = { ok: false, tool: 'investigate_unresolved_ingredients', code: 'unsupported', message: 'The nutrition review could not be investigated.' };
+    }
+    if (deps.signal?.aborted) return cancelled(working, toolsUsed);
+    const lineNotes = result.ok && Array.isArray(result.data['lines'])
+      ? result.data['lines'].slice(0, 6).flatMap((rawLine) => {
+          if (rawLine === null || typeof rawLine !== 'object' || Array.isArray(rawLine)) return [];
+          const line = rawLine as Record<string, unknown>;
+          if (typeof line['label'] !== 'string') return [];
+          const label = line['label'].slice(0, 200);
+          const reason = typeof line['reason'] === 'string' ? ` — ${line['reason'].slice(0, 180)}` : '';
+          const alternatives = Array.isArray(line['alternatives'])
+            ? line['alternatives'].slice(0, 2).flatMap((candidate) =>
+                candidate !== null && typeof candidate === 'object' && !Array.isArray(candidate) && typeof (candidate as Record<string, unknown>)['description'] === 'string'
+                  ? [(candidate as Record<string, string>)['description'].slice(0, 160)]
+                  : [])
+            : [];
+          return [`${label}${reason}${alternatives.length ? ` · USDA options: ${alternatives.join('; ')}` : ''}`];
+        }).join('\n')
+      : '';
+    const message = result.ok
+      ? `${result.summary}${lineNotes ? `\n${lineNotes}` : ''} ${result.data['remaining'] ? 'Open Advanced Nutrition to review candidate records and choose “Use this match” where appropriate.' : 'No food was changed.'} Nothing was saved.`
+      : `${(result as { message: string }).message} No recipe edit or save was made.`;
+    let next = appendShisoMessage(working, { role: 'assistant', text: message, proposalCount: 0 });
+    if (result.ok) next = recordFinding(next, { tool: result.tool, ok: true, summary: result.summary });
+    return { ok: true, state: next, message, status: null, toolsUsed: Object.freeze(['investigate_unresolved_ingredients']) };
   }
 
   /**
@@ -626,6 +695,19 @@ export async function runShisoConversationTurn(
         // Identical repeat: serve the verified result without spending budget,
         // and without claiming a capability ran that did not run again.
         // H-2S: a SECOND identical failure is terminal — no silent spinning.
+        if (turn.tool === 'apply_nutrition_corrections') {
+          const data = cached.ok ? cached.data : {};
+          const resolved = typeof data['resolved_count'] === 'number' ? data['resolved_count'] : null;
+          const total = typeof data['total_count'] === 'number' ? data['total_count'] : null;
+          const complete = resolved !== null && total !== null && resolved >= total;
+          return {
+            ok: true,
+            state: working,
+            message: `I stopped because the same nutrition correction was requested again; it was not applied a second time. The last verified review showed ${resolved === null || total === null ? 'no new coverage count' : `${resolved} of ${total} ingredient lines resolved`}. ${complete ? 'The review already has complete ingredient coverage.' : 'Review the remaining lines in Advanced Nutrition.'} Earlier valid corrections remain in the unsaved review. Nothing was saved.`,
+            status: null,
+            toolsUsed,
+          };
+        }
         const terminal = noteFailure(signature, cached);
         if (terminal !== null) return terminal;
         retain(cached);
@@ -660,6 +742,33 @@ export async function runShisoConversationTurn(
       if (executed.ok) retain(executed);
       observation = executed;
       toolsUsed.push(turn.tool);
+      if (turn.tool === 'apply_nutrition_corrections' && executed.ok) {
+        const before = executed.data['before_resolved_count'];
+        const after = executed.data['resolved_count'];
+        const appliedCount = executed.data['applied_count'];
+        const changes = executed.data['changes'];
+        const total = executed.data['total_count'];
+        const complete = typeof after === 'number' && typeof total === 'number' && after >= total;
+        const meaningfulChange =
+          (typeof appliedCount === 'number' && appliedCount > 0) ||
+          (Array.isArray(changes) && changes.length > 0) ||
+          (typeof before === 'number' && typeof after === 'number' && before !== after);
+        if (
+          typeof before === 'number' &&
+          typeof after === 'number' &&
+          after <= before &&
+          !meaningfulChange &&
+          !complete
+        ) {
+          return {
+            ok: true,
+            state: working,
+            message: `I stopped because the nutrition correction made no coverage progress: ${after} of ${typeof total === 'number' ? total : 'an unknown number of'} ingredient lines are resolved. Earlier valid corrections remain in the unsaved review. Review the remaining lines in Advanced Nutrition. Nothing was saved.`,
+            status: null,
+            toolsUsed,
+          };
+        }
+      }
       continue;
     }
 

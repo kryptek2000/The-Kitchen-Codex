@@ -600,7 +600,9 @@ export function parseObsidianRecipeMarkdown(
 
   // 7. Cuisine & Category (Case-insensitive lookup across frontmatter and dataview inline fields)
   const cuisine = findFlexibleKey(frontmatter, ['cuisine']) || findFlexibleKey(dataviewFields, ['cuisine']) || 'General';
-  const category = findFlexibleKey(frontmatter, ['category', 'course']) || findFlexibleKey(dataviewFields, ['category', 'course']) || 'Main Course';
+  // Missing metadata is genuinely unknown. Defaulting every recipe to Main
+  // Course mislabels generated desserts and baked goods after a save/reopen.
+  const category = findFlexibleKey(frontmatter, ['category', 'course']) || findFlexibleKey(dataviewFields, ['category', 'course']) || 'General';
 
   // 8. Timings, Servings & Calories (Strict extraction without fake fallback values)
   const prepTime = extractPrepTime(frontmatter, dataviewFields, content);
@@ -777,7 +779,7 @@ export function parseObsidianRecipeMarkdown(
     prepTime,
     cookTime,
     totalTime,
-    servings,
+    ...(typeof servings === 'number' ? { servings } : {}),
     difficulty,
     rating,
     calories,

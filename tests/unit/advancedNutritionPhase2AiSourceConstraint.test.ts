@@ -169,6 +169,25 @@ describe('phase 2 AI source-constraint parity — explicit state and form', () =
 
 describe('phase 2 AI source-constraint parity — legitimate resolutions preserved', () => {
   it.each([
+    ['1 large egg', 'bread'],
+    ['1 cup all-purpose flour', 'gluten-free bread'],
+    ['1 cup rolled oats', 'raw oats'],
+  ])('rejects incompatible AI identity suggestions: %s → %s', (source, query) => {
+    const { outcome } = resolveFor(source, [
+      { interpreted_food_name: query, suggested_usda_queries: [query] },
+    ]);
+    expect(outcome.candidates).toEqual([]);
+    expect(outcome.auto_count).toBe(0);
+  });
+
+  it('keeps a same-identity egg suggestion eligible', () => {
+    const { outcome } = resolveFor('1 large egg', [
+      { interpreted_food_name: 'egg', suggested_usda_queries: ['egg'] },
+    ]);
+    expect(outcome.candidates[0]?.description).toMatch(/egg/i);
+  });
+
+  it.each([
     ['1 can tuna', 'tuna', 2706309],
     ['1 can black beans', 'black beans', 2707359],
     ['2 cups cooked long-grain rice (cooled)', 'cooked rice', 2708402],

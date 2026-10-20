@@ -341,7 +341,7 @@ describe('H1-B — the egg food identity was DETERMINISTICALLY ACCEPTED, not mer
     );
     expect(src).toContain('...(autoAccepted ? { aiAccepted: true } : {})');
     expect(src.match(/aiAccepted:\s*true/g) ?? []).toHaveLength(1);
-    expect(src).toContain('const autoAccepted = automatic !== undefined;');
+    expect(src).toContain('const autoAccepted = sourceHasIdentity && automatic !== undefined;');
   });
 
   it('unusable advisory wording fabricates no candidate at all', () => {

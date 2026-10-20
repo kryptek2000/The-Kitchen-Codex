@@ -131,6 +131,33 @@ describe('canonicalization — preparation noise, modifiers, parentheticals', ()
   });
 });
 
+describe('light brown sugar identity and manual USDA discovery', () => {
+  it('keeps light brown sugar unresolved automatically while exposing the generic brown-sugar record to manual review', () => {
+    const { row } = analyzeLine('1 cup light brown sugar, packed');
+    expect(row.status).toBe('needs_match');
+    const manual = session.searchFoods('brown sugar', 10);
+    expect(manual.ok).toBe(true);
+    if (manual.ok) expect(manual.results.some((entry) => /sugars?, brown/i.test(entry.description))).toBe(true);
+    // The generic record does not prove the authored light subtype, so it must
+    // remain a user-visible choice rather than a silent automatic match.
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R4 — qualifier fallback regression
+describe('R4 qualifier fallback regression', () => {
+  it('exposes review candidates for over-narrowing preparation qualifiers without auto-authorizing them', () => {
+    for (const line of ['1 cup quick brown rice', '1 cup instant noodles', '1 cup instant quinoa']) {
+      const { row } = analyzeLine(line);
+      expect(row.candidates.length).toBeGreaterThan(0);
+      expect(row.selected_fdc_id).toBeUndefined();
+    }
+    const { row: oats } = analyzeLine('1 cup rolled oats');
+    expect(oats.candidates.length).toBeGreaterThan(0);
+    expect(oats.candidates.every((candidate) => /rolled/i.test(candidate.description))).toBe(true);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Acceptance matrix
 // ---------------------------------------------------------------------------

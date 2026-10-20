@@ -146,14 +146,16 @@ function readTitle(object: object): FieldResult<string> {
 function readBaseServings(object: object): FieldResult<number> {
   const field = readOwnDataField(object, 'servings');
   if (!field.ok) return fail('unsafe_request');
-  if (!field.present) return { ok: true, value: 1 };
+  // Match Basic Nutrition's established calculation basis. This is a disclosed
+  // display/calculation assumption only; it is never written as authored data.
+  if (!field.present) return { ok: true, value: 4 };
   const materialized = materializeNarrow(field.value);
   if (!materialized.ok) return materializationFailure(materialized.unsafe);
   const value = materialized.value;
-  if (value === null) return { ok: true, value: 1 };
+  if (value === null) return { ok: true, value: 4 };
   if (typeof value !== 'number' || !Number.isFinite(value)) return fail('invalid_recipe');
   // Historical fallback for non-positive/invalid counts.
-  if (value <= 0 || Object.is(value, -0)) return { ok: true, value: 1 };
+  if (value <= 0 || Object.is(value, -0)) return { ok: true, value: 4 };
   return { ok: true, value };
 }
 

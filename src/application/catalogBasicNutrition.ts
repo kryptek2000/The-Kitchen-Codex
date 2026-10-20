@@ -125,7 +125,10 @@ export function calculateCatalogBasicNutrition(input: BasicNutritionInput, sessi
   const qualitative = lines.filter(l => l.status === 'qualitative').length;
   const unresolved = lines.length - resolved - qualitative;
   const complete = unresolved === 0 && resolved > 0;
-  const confidenceNote = `${resolved}/${lines.length - qualitative} measurable ingredient lines resolved using the pinned USDA catalog. ${complete ? 'Ingredient quantities covered.' : 'PARTIAL estimate: recipe totals are unknown; resolved contributions are only a subtotal.'} ${missingNutrients.length ? `Unknown nutrients: ${missingNutrients.join(', ')} (incomplete source coverage).` : ''} ${[...assumed.values()].join(' ')}`;
+  const servingsNote = typeof input.servings === 'number' && Number.isFinite(input.servings) && input.servings > 0
+    ? ''
+    : ' Servings were not authored; per-serving figures use an assumed 4-serving basis. Enter the recipe yield to replace this assumption.';
+  const confidenceNote = `${resolved}/${lines.length - qualitative} measurable ingredient lines resolved using the pinned USDA catalog. ${complete ? 'Ingredient quantities covered.' : 'PARTIAL estimate: recipe totals are unknown; resolved contributions are only a subtotal.'} ${missingNutrients.length ? `Unknown nutrients: ${missingNutrients.join(', ')} (incomplete source coverage).` : ''}${servingsNote} ${[...assumed.values()].join(' ')}`;
   return {
     ok: resolved > 0, message: resolved ? null : 'No ingredient contribution could be calculated. Review food identities and quantities.',
     source: 'offline_heuristic', confidence: assumed.size ? 'low' : 'medium', confidenceNote, baseServings: servings,

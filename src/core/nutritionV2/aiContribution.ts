@@ -83,10 +83,12 @@ export function validateAiNutrientContributions(
     if (!item || typeof item !== 'object' || Array.isArray(item)) return { ok: false, code: 'invalid_contribution' };
     const row = item as Record<string, unknown>;
     const ref = row.line_ref;
-    if (!boundedString(ref, 500) || !allowed.has(ref) || seen.has(ref)) return { ok: false, code: 'stale_or_duplicate_line' };
+    if (!boundedString(ref, 500)) return { ok: false, code: 'missing_line_ref' };
+    if (!allowed.has(ref)) return { ok: false, code: 'unknown_line_ref' };
+    if (seen.has(ref)) return { ok: false, code: 'duplicate_line_ref' };
     if (!boundedString(row.ingredient, 200) || !boundedString(row.quantity_basis, 200)) return { ok: false, code: 'invalid_identity_or_basis' };
     const authoredLine = binding.line_text_by_ref?.[ref];
-    if (authoredLine !== undefined && row.ingredient.trim() !== authoredLine.trim()) return { ok: false, code: 'stale_or_duplicate_line' };
+    if (authoredLine !== undefined && row.ingredient.trim() !== authoredLine.trim()) return { ok: false, code: 'line_text_mismatch' };
     // Legacy positive-weight AI rows predate the explicit disposition fields;
     // they remain edible. A zero weight never receives this compatibility default.
     const disposition = row.disposition ?? (row.weight_grams === 0 ? undefined : 'edible');
