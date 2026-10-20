@@ -15,7 +15,7 @@ import { AdvancedNutritionSavedReport } from '../../src/components/AdvancedNutri
 import { parseObsidianRecipeMarkdown, serializeRecipeToObsidianMarkdown } from '../../src/utils/markdownParser';
 import { isPartialMachineNutrition } from '../../src/utils/nutrition';
 import type { AdvancedNutritionSession } from '../../src/core/nutritionV2/phase4/types';
-import type { ObsidianRecipe } from '../../src/types';
+import type { ObsidianRecipe, RecipeNutrition } from '../../src/types';
 
 // jsdom uses a separate typed-array realm. Decode the exact locked gzip bytes
 // through Node's platform adapter; authentication and all nutrition code stay real.
@@ -136,7 +136,7 @@ describe('nutrition production UI integration',()=>{
   expect(reopened.nutrition?.calories).toBe(estimate.totals.calories);
  },30000);
  it('discloses an assumed four-serving basis for recipes without authored yield',async()=>{
-  const initial=makeRecipe();initial.servings=undefined;const save=vi.fn(async (_nutrition: unknown)=>true);
+  const initial=makeRecipe();initial.servings=undefined;const save=vi.fn(async (_nutrition: RecipeNutrition)=>true);
   const view=render(<RecipeNutritionCard recipe={initial} network={network} onUpdateNutrition={save} />);
   expect(screen.getByTestId('basic-assumed-serving-basis')).toBeTruthy();
   fireEvent.click(screen.getByTestId('calculate-basic-nutrition-empty-btn'));
