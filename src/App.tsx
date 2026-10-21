@@ -137,6 +137,10 @@ import {
 import { VaultHeader } from './components/VaultHeader';
 import { RecipeFilterBar } from './components/RecipeFilterBar';
 import { RecipeCard } from './components/RecipeCard';
+import { splitFeatured } from './utils/featuredRecipe';
+import { MobileRecipeRow } from './components/MobileRecipeRow';
+import { SideNav } from './components/SideNav';
+import { BottomNav } from './components/BottomNav';
 import { RecipeDetailView } from './components/RecipeDetailView';
 import type {
   AdvancedNutritionAiResolveHandler,
@@ -369,6 +373,34 @@ export default function App() {
 
   // Navigation & View State (persisted via SettingsAdapter; hydrated on mount)
   const [activeTab, setActiveTab] = useState<'grid' | 'dataview' | 'mealplan' | 'shopping' | 'themes' | 'providers'>('grid');
+  const [isMoreOpen, setIsMoreOpen] = useState(false);
+  const moreDialogRef = useRef<HTMLDialogElement>(null);
+  const [isDesktop, setIsDesktop] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth >= 768 : true
+  );
+  useEffect(() => {
+    const onResize = () => {
+      const desktop = window.innerWidth >= 768;
+      setIsDesktop(desktop);
+      if (desktop) setIsMoreOpen(false);
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  useEffect(() => {
+    const dlg = moreDialogRef.current;
+    if (!dlg) return;
+    if (isMoreOpen) {
+      try {
+        dlg.showModal();
+      } catch {
+        // already open
+      }
+    } else if (dlg.open) {
+      dlg.close();
+    }
+  }, [isMoreOpen]);
 
   const [selectedRecipe, setSelectedRecipe] = useState<ObsidianRecipe | null>(null);
   const [cookingRecipe, setCookingRecipe] = useState<{ recipe: ObsidianRecipe; servings: number } | null>(null);
@@ -2032,7 +2064,7 @@ export default function App() {
   return (
     <div
       data-theme={theme}
-      className="min-h-screen bg-[#0C0C0C] text-gray-200 flex flex-col font-sans selection:bg-amber-500/30 selection:text-amber-200 relative transition-colors duration-200"
+      className="min-h-screen bg-[#0C0C0C] text-gray-200 flex flex-col md:flex-row font-sans selection:bg-amber-500/30 selection:text-amber-200 relative transition-colors duration-200"
       onDragOver={(e) => {
         e.preventDefault();
         setIsWindowDragging(true);
@@ -2110,6 +2142,37 @@ export default function App() {
         </div>
       )}
 
+      {/* Unified application shell — desktop sidebar */}
+      <SideNav
+        activeTab={activeTab}
+        setActiveTab={(tab) => {
+          setActiveTab(tab);
+          setSelectedRecipe(null);
+          setIsMoreOpen(false);
+        }}
+        vaultStatus={vaultStatus}
+        onOpenConnectVaultModal={() => setIsConnectVaultOpen(true)}
+        onOpenNewRecipeModal={() => {
+          setEditingRecipe(null);
+          setIsEditorOpen(true);
+        }}
+        onOpenAskMyKitchen={() => setIsAskMyKitchenOpen(true)}
+        onOpenCreateForMe={() => setIsCreateForMeOpen(true)}
+        onOpenRecipeGrabber={() => setIsGrabberOpen(true)}
+        onOpenVaultIntelligence={() => {
+          setVaultIntelligenceRecipeId(null);
+          setIsVaultIntelligenceOpen(true);
+        }}
+        legacyRecipeCount={vaultHealthSummary.legacyCount + vaultHealthSummary.incompleteCount}
+        onShisoOpen={() => shiso.open('global')}
+        onFavorites={() => {
+          setFilters((f) => ({ ...f, onlyFavorites: true }));
+          setActiveTab('grid');
+          setSelectedRecipe(null);
+        }}
+      />
+
+      <div className="flex-1 flex flex-col min-w-0">
       {/* Top Header */}
       <VaultHeader
         vaultStatus={vaultStatus}
@@ -2168,7 +2231,7 @@ export default function App() {
       )}
 
       {/* Main View Router */}
-      <main className="flex-1">
+      <main className="flex-1 pb-20 md:pb-0">
         {selectedRecipe && displayRecipe ? (
           <>
             {/* SHISO H-2 — the ONE visible account of unauthorized-not-yet-saved
@@ -2313,18 +2376,64 @@ export default function App() {
                 </div>
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
-                {filteredRecipes.map((recipe) => (
-                  <RecipeCard
-                    key={recipe.id}
-                    recipe={recipe}
-                    onSelectRecipe={(r) => setSelectedRecipe(r)}
-                    onStartCooking={(r) => handleStartCooking(r)}
-                    onToggleFavorite={handleToggleFavorite}
-                    onAddToMealPlan={(r) => handleAddToMealPlan(r)}
-                  />
-                ))}
-              </div>
+              <>
+                {/* Featured recipe (deterministic: first eligible favorite, else first stable recipe) */}
+                {(() => {
+                  const { featured, rest } = splitFeatured(filteredRecipes);
+                  if (!featured) return null;
+                  return (
+                    <div id="recipe-gallery">
+                      {isDesktop ? (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
+                          <RecipeCard
+                            key={`featured-${featured.id}`}
+                            recipe={featured}
+                            featured
+                            onSelectRecipe={(r) => setSelectedRecipe(r)}
+                            onStartCooking={(r) => handleStartCooking(r)}
+                            onToggleFavorite={handleToggleFavorite}
+                            onAddToMealPlan={(r) => handleAddToMealPlan(r)}
+                          />
+                          {rest.map((recipe) => (
+                            <RecipeCard
+                              key={recipe.id}
+                              recipe={recipe}
+                              onSelectRecipe={(r) => setSelectedRecipe(r)}
+                              onStartCooking={(r) => handleStartCooking(r)}
+                              onToggleFavorite={handleToggleFavorite}
+                              onAddToMealPlan={(r) => handleAddToMealPlan(r)}
+                            />
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="space-y-4">
+                          <RecipeCard
+                            key={`mfeatured-${featured.id}`}
+                            recipe={featured}
+                            featured
+                            onSelectRecipe={(r) => setSelectedRecipe(r)}
+                            onStartCooking={(r) => handleStartCooking(r)}
+                            onToggleFavorite={handleToggleFavorite}
+                            onAddToMealPlan={(r) => handleAddToMealPlan(r)}
+                          />
+                          <div className="divide-y divide-white/5">
+                            {rest.map((recipe) => (
+                              <MobileRecipeRow
+                                key={recipe.id}
+                                recipe={recipe}
+                                onSelectRecipe={(r) => setSelectedRecipe(r)}
+                                onStartCooking={(r) => handleStartCooking(r)}
+                                onToggleFavorite={handleToggleFavorite}
+                                onAddToMealPlan={(r) => handleAddToMealPlan(r)}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+              </>
             )}
           </div>
         ) : activeTab === 'dataview' ? (
@@ -2396,6 +2505,75 @@ export default function App() {
           </div>
         </div>
       </footer>
+
+      </div>
+
+      {/* Mobile bottom navigation */}
+      <BottomNav
+        activeTab={activeTab}
+        onVault={() => {
+          setActiveTab('grid');
+          setSelectedRecipe(null);
+        }}
+        onStudio={() => {
+          setActiveTab('providers');
+          setSelectedRecipe(null);
+        }}
+        onShiso={() => shiso.open('global')}
+        onMore={() => setIsMoreOpen(true)}
+      />
+
+      {/* More dialog (mobile) */}
+      {isMoreOpen && (
+        <dialog
+          ref={moreDialogRef}
+          aria-labelledby="more-dialog-title"
+          onClose={() => setIsMoreOpen(false)}
+          className="md:hidden fixed inset-0 z-50 m-0 w-full h-full max-w-none max-h-none border-0 bg-transparent p-0"
+        >
+          <div className="absolute inset-0 bg-black/60" onClick={() => setIsMoreOpen(false)} />
+          <div
+            className="absolute bottom-0 left-0 right-0 bg-[#141414] rounded-t-2xl border-t border-white/10 p-4 space-y-2 focus:outline-none"
+            role="document"
+          >
+            <div className="flex items-center justify-between mb-2">
+              <h2 id="more-dialog-title" className="text-sm font-semibold text-white">More</h2>
+              <button
+                onClick={() => setIsMoreOpen(false)}
+                aria-label="Close More menu"
+                className="text-gray-400 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+            {[
+              { label: 'New Recipe Note', action: () => { setEditingRecipe(null); setIsEditorOpen(true); } },
+              { label: 'Create with SHISO', action: () => setIsCreateForMeOpen(true) },
+              { label: 'Grab from Web', action: () => setIsGrabberOpen(true) },
+              { label: 'Vault Intelligence', action: () => { setVaultIntelligenceRecipeId(null); setIsVaultIntelligenceOpen(true); } },
+              { label: 'Meal Planner', action: () => setActiveTab('mealplan') },
+              { label: 'Shopping List', action: () => setActiveTab('shopping') },
+              { label: 'Themes', action: () => setActiveTab('themes') },
+              { label: 'AI Settings', action: () => setActiveTab('providers') },
+              { label: 'Connect Vault', action: () => setIsConnectVaultOpen(true) },
+              { label: 'Ask My Kitchen', action: () => setIsAskMyKitchenOpen(true) },
+              { label: 'Dataview Table', action: () => setActiveTab('dataview') },
+            ].map((item) => (
+              <button
+                key={item.label}
+                onClick={() => {
+                  item.action();
+                  setSelectedRecipe(null);
+                  setIsMoreOpen(false);
+                }}
+                className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-200 hover:bg-white/5"
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </dialog>
+      )}
 
       {/* Floating Active Timers Bar */}
       <ActiveTimersBar

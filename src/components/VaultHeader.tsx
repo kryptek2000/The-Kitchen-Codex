@@ -122,7 +122,7 @@ export function VaultHeader({
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3.5 flex flex-col md:flex-row md:items-center justify-between gap-3">
         {/* App Title & Branding */}
         <div className="flex items-center gap-4">
-          <KitchenCodexMark size={74} decorative className="shrink-0" />
+          <KitchenCodexMark size={74} decorative className="shrink-0 md:hidden" />
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <h1 className="text-lg font-serif font-bold text-white tracking-tight leading-tight">The Kitchen Codex</h1>
@@ -132,7 +132,7 @@ export function VaultHeader({
             </div>
             <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
               <span className="text-[10px] uppercase tracking-widest px-1.5 py-0.5 rounded bg-white/5 text-gray-400 border border-white/5 font-medium">
-                Obsidian Culinary Vault
+                Culinary Vault
               </span>
               <p className="text-xs text-gray-500 leading-tight">
                 Markdown-native kitchen companion &amp; culinary note system for Obsidian
@@ -143,30 +143,6 @@ export function VaultHeader({
 
         {/* Action Buttons */}
         <div className="flex flex-wrap items-center gap-2">
-          {/* Create with Shiso — the existing recipe-generation capability in the shared conversation. */}
-          <button
-            id="create-for-me-header-btn"
-            onClick={onOpenCreateForMe}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-violet-500/10 hover:bg-violet-500/20 text-violet-300 border border-violet-500/30 transition-colors shadow-xs"
-            title="Create and refine an AI-generated recipe draft with Shiso; save only when you choose"
-          >
-            <Wand2 className="w-4 h-4 text-violet-400" />
-            <span>Create with Shiso</span>
-          </button>
-
-          {/* Chat with Shiso Button — the global entry point to the single
-              Shiso conversation. */}
-          <button
-            id="shiso-header-btn"
-            data-testid="shiso-global-entry"
-            onClick={() => shiso.open('global')}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-teal-500/10 hover:bg-teal-500/20 text-teal-300 border border-teal-500/30 transition-colors shadow-xs"
-            title="Chat with Shiso about your recipes, nutrition and cooking"
-          >
-            <MessageCircle className="w-4 h-4 text-teal-400" />
-            <span>Chat with Shiso</span>
-          </button>
-
           {/* Ask My Kitchen Button */}
           <button
             id="ask-my-kitchen-header-btn"
@@ -176,33 +152,6 @@ export function VaultHeader({
           >
             <Sparkles className="w-4 h-4 text-amber-400" />
             <span>Ask My Kitchen</span>
-          </button>
-
-          {/* Vault Intelligence Button */}
-          <button
-            id="vault-intelligence-header-btn"
-            onClick={onOpenVaultIntelligence}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 border border-purple-500/30 transition-colors shadow-xs"
-            title="Scan recipe metadata health, recover missing fields, and detect legacy formats"
-          >
-            <BrainCircuit className="w-4 h-4 text-purple-400" />
-            <span>Vault Intelligence</span>
-            {legacyRecipeCount > 0 && (
-              <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-purple-500 text-black font-bold">
-                {legacyRecipeCount}
-              </span>
-            )}
-          </button>
-
-          {/* Grab Recipe from Web Button */}
-          <button
-            id="grab-recipe-header-btn"
-            onClick={onOpenRecipeGrabber}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-sky-500/10 hover:bg-sky-500/20 text-sky-300 border border-sky-500/30 transition-colors shadow-xs"
-            title="Import & grab recipes directly from website URLs or text"
-          >
-            <Globe className="w-4 h-4 text-sky-400" />
-            <span>Grab from Web</span>
           </button>
 
           {/* Connect Vault Modal Button */}
@@ -230,88 +179,7 @@ export function VaultHeader({
 
       {/* Navigation Tabs & Search Controls */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 pb-3 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-        {/* Navigation Tabs */}
-        <nav id="vault-view-tabs" className="flex items-center gap-1 bg-[#0C0C0C] p-1 rounded-xl border border-white/5 self-start">
-          <button
-            id="tab-recipe-cards"
-            onClick={() => setActiveTab('grid')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-              activeTab === 'grid'
-                ? 'bg-white/10 text-amber-400 font-semibold border border-white/10'
-                : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
-            }`}
-          >
-            <LayoutGrid className="w-3.5 h-3.5" />
-            <span>Recipe Gallery</span>
-          </button>
-
-          <button
-            id="tab-dataview-table"
-            onClick={() => setActiveTab('dataview')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-              activeTab === 'dataview'
-                ? 'bg-white/10 text-amber-400 font-semibold border border-white/10'
-                : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
-            }`}
-          >
-            <Table className="w-3.5 h-3.5" />
-            <span>Dataview Table</span>
-          </button>
-
-          <button
-            id="tab-meal-planner"
-            onClick={() => setActiveTab('mealplan')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-              activeTab === 'mealplan'
-                ? 'bg-white/10 text-amber-400 font-semibold border border-white/10'
-                : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
-            }`}
-          >
-            <CalendarDays className="w-3.5 h-3.5" />
-            <span>Meal Plan</span>
-          </button>
-
-          <button
-            id="tab-shopping-list"
-            onClick={() => setActiveTab('shopping')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-              activeTab === 'shopping'
-                ? 'bg-white/10 text-amber-400 font-semibold border border-white/10'
-                : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
-            }`}
-          >
-            <ShoppingCart className="w-3.5 h-3.5" />
-            <span>Shopping List</span>
-          </button>
-
-          <button
-            id="tab-themes"
-            onClick={() => setActiveTab('themes')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-              activeTab === 'themes'
-                ? 'bg-white/10 text-amber-400 font-semibold border border-white/10'
-                : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
-            }`}
-          >
-            <Palette className="w-3.5 h-3.5" />
-            <span>Themes</span>
-          </button>
-
-          <button
-            id="tab-providers"
-            onClick={() => setActiveTab('providers')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-              activeTab === 'providers'
-                ? 'bg-white/10 text-amber-400 font-semibold border border-white/10'
-                : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
-            }`}
-          >
-            <BrainCircuit className="w-3.5 h-3.5" />
-            <span>AI Settings</span>
-          </button>
-        </nav>
-
-        {/* Search & Filter Controls */}
+        {/* Search & Filter Controls (primary navigation now lives in the shell) */}
         <div className="flex items-center gap-2">
           <div className="relative flex-1 sm:w-64">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />

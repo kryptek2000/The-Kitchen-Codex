@@ -142,8 +142,18 @@ async function hoverBackground(cdp: Cdp, id: string): Promise<{ rest: string; ho
   return { rest, hov };
 }
 
-async function focusVisibleCheck(cdp: Cdp, prevId: string, id: string): Promise<{ focused: boolean; visible: boolean }> {
-  await evaluate(cdp, `document.getElementById(${JSON.stringify(prevId)}).focus()`);
+async function focusVisibleCheck(cdp: Cdp, prevId: string, id: string): Promise<{ focused: boolean; visible: boolean; missing?: string }> {
+  const prevExists = await evaluate(cdp, `!!document.getElementById(${JSON.stringify(prevId)})`);
+  const targetExists = await evaluate(cdp, `!!document.getElementById(${JSON.stringify(id)})`);
+  if (!prevExists || !targetExists) {
+    const missing = !prevExists ? prevId : id;
+    return { focused: false, visible: false, missing };
+  }
+  try {
+    await evaluate(cdp, `document.getElementById(${JSON.stringify(prevId)}).focus()`);
+  } catch {
+    return { focused: false, visible: false, missing: prevId };
+  }
   await sleep(150);
   await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
   await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
@@ -204,7 +214,7 @@ async function main(): Promise<void> {
 
     const url = `http://127.0.0.1:${APP_PORT}/`;
     await cdp.send('Page.navigate', { url });
-    await waitFor(cdp, `(document.body?document.body.innerText:'').includes('Recipe Gallery')`, 25000);
+    await waitFor(cdp, `document.querySelectorAll('[id^="recipe-card-"]').length > 0`, 25000);
     await sleep(400);
 
     // --- 1. Brand mark in the header --------------------------------------
@@ -241,7 +251,7 @@ async function main(): Promise<void> {
     );
 
     // --- 2. Theme picker exposes Blood Moon --------------------------------
-    await evaluate(cdp, `document.getElementById('tab-themes').click()`);
+    await evaluate(cdp, `document.getElementById('nav-themes').click()`);
     await waitFor(cdp, `!!document.getElementById('theme-card-blood-moon')`, 10000);
     const pickerText = await evaluate(cdp, `(document.body?document.body.innerText:'')`);
     record('theme picker lists The Blood Moon', pickerText.includes('The Blood Moon'));
@@ -275,9 +285,9 @@ async function main(): Promise<void> {
       {
         name: 'recipe gallery',
         step: async () => {
-          await evaluate(cdp, `document.getElementById('tab-recipe-cards').click()`);
+          await evaluate(cdp, `document.getElementById('nav-recipe-vault').click()`);
         },
-        waitText: 'Recipe Gallery',
+        waitText: 'Recipe Vault',
       },
       {
         name: 'recipe detail',
@@ -293,21 +303,21 @@ async function main(): Promise<void> {
       {
         name: 'meal planner',
         step: async () => {
-          await evaluate(cdp, `document.getElementById('tab-meal-planner').click()`);
+          await evaluate(cdp, `document.getElementById('nav-meal-planner').click()`);
         },
         waitText: 'Meal Plan',
       },
       {
         name: 'shopping list',
         step: async () => {
-          await evaluate(cdp, `document.getElementById('tab-shopping-list').click()`);
+          await evaluate(cdp, `document.getElementById('nav-shopping-list').click()`);
         },
         waitText: 'Shopping',
       },
       {
         name: 'themes',
         step: async () => {
-          await evaluate(cdp, `document.getElementById('tab-themes').click()`);
+          await evaluate(cdp, `document.getElementById('nav-themes').click()`);
         },
         waitText: 'Themes',
       },
@@ -330,15 +340,15 @@ async function main(): Promise<void> {
     await screenshot(cdp, '/tmp/kc-brand-bloodmoon-gallery.png');
 
     // --- 6. Persistence across reload -------------------------------------
-    await evaluate(cdp, `document.getElementById('tab-themes').click()`);
+    await evaluate(cdp, `document.getElementById('nav-themes').click()`);
     await sleep(300);
     await cdp.send('Page.navigate', { url });
-    await waitFor(cdp, `(document.body?document.body.innerText:'').includes('Recipe Gallery')`, 25000);
+    await waitFor(cdp, `!!document.getElementById('nav-recipe-vault')`, 25000);
     await waitFor(cdp, `${THEME_EXPR} === 'blood-moon'`, 10000);
     record('Blood Moon persists across reload', (await evaluate(cdp, THEME_EXPR)) === 'blood-moon');
 
     // --- 7. Switch away, reload, switch back ------------------------------
-    await evaluate(cdp, `document.getElementById('tab-themes').click()`);
+    await evaluate(cdp, `document.getElementById('nav-themes').click()`);
     await waitFor(cdp, `!!document.getElementById('theme-card-nordic')`, 10000);
     await evaluate(cdp, `document.getElementById('theme-card-nordic').click()`);
     await waitFor(cdp, `${THEME_EXPR} === 'nordic'`, 10000);
@@ -347,17 +357,17 @@ async function main(): Promise<void> {
     record('theme-color follows Nordic Sage when active', nordicMeta === '#0A120F', nordicMeta);
     await screenshot(cdp, '/tmp/kc-brand-header-nordic.png');
     await cdp.send('Page.navigate', { url });
-    await waitFor(cdp, `(document.body?document.body.innerText:'').includes('Recipe Gallery')`, 25000);
+    await waitFor(cdp, `!!document.getElementById('nav-recipe-vault')`, 25000);
     await waitFor(cdp, `${THEME_EXPR} === 'nordic'`, 10000);
     record('Nordic Sage persists across reload', (await evaluate(cdp, THEME_EXPR)) === 'nordic');
-    await evaluate(cdp, `document.getElementById('tab-themes').click()`);
+    await evaluate(cdp, `document.getElementById('nav-themes').click()`);
     await waitFor(cdp, `!!document.getElementById('theme-card-blood-moon')`, 10000);
     await evaluate(cdp, `document.getElementById('theme-card-blood-moon').click()`);
     await waitFor(cdp, `${THEME_EXPR} === 'blood-moon'`, 10000);
     record('switching back to Blood Moon works', (await evaluate(cdp, THEME_EXPR)) === 'blood-moon');
 
     // --- 7b. Brand readability on the light theme --------------------------
-    await evaluate(cdp, `document.getElementById('tab-themes').click()`);
+    await evaluate(cdp, `document.getElementById('nav-themes').click()`);
     await waitFor(cdp, `!!document.getElementById('theme-card-parchment')`, 10000);
     await evaluate(cdp, `document.getElementById('theme-card-parchment').click()`);
     await waitFor(cdp, `${THEME_EXPR} === 'parchment'`, 10000);
@@ -411,14 +421,14 @@ async function main(): Promise<void> {
     // --- 7e. Keyboard focus-visible -------------------------------------
     await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 5, y: 5 });
     await sleep(150);
-    const askFocus = await focusVisibleCheck(cdp, 'create-for-me-header-btn', 'ask-my-kitchen-header-btn');
+    const askFocus = await focusVisibleCheck(cdp, 'refresh-vault-btn', 'ask-my-kitchen-header-btn');
     record('Ask My Kitchen is keyboard-focusable with focus-visible', askFocus.focused && askFocus.visible, JSON.stringify(askFocus));
-    const connectFocus = await focusVisibleCheck(cdp, 'grab-recipe-header-btn', 'connect-local-vault-btn');
+    const connectFocus = await focusVisibleCheck(cdp, 'ask-my-kitchen-header-btn', 'connect-local-vault-btn');
     record('Connect Vault is keyboard-focusable with focus-visible', connectFocus.focused && connectFocus.visible, JSON.stringify(connectFocus));
 
     // --- 7f. Hover states across the remaining themes -------------------
     for (const [themeId, label] of [['obsidian', 'Obsidian'], ['parchment', 'Parchment'], ['nordic', 'Nordic']] as const) {
-      await evaluate(cdp, `document.getElementById('tab-themes').click()`);
+      await evaluate(cdp, `document.getElementById('nav-themes').click()`);
       await waitFor(cdp, `!!document.getElementById('theme-card-${themeId}')`, 10000);
       await evaluate(cdp, `document.getElementById('theme-card-${themeId}').click()`);
       await waitFor(cdp, `${THEME_EXPR} === '${themeId}'`, 10000);
@@ -431,7 +441,7 @@ async function main(): Promise<void> {
       record(`Connect Vault brightens on hover (${label})`, !!cc && cc.rest !== cc.hov, JSON.stringify(cc));
     }
     // Restore Blood Moon for the narrow check.
-    await evaluate(cdp, `document.getElementById('tab-themes').click()`);
+    await evaluate(cdp, `document.getElementById('nav-themes').click()`);
     await waitFor(cdp, `!!document.getElementById('theme-card-blood-moon')`, 10000);
     await evaluate(cdp, `document.getElementById('theme-card-blood-moon').click()`);
     await waitFor(cdp, `${THEME_EXPR} === 'blood-moon'`, 10000);
