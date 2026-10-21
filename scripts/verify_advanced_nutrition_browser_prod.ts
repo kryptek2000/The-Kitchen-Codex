@@ -159,7 +159,7 @@ function isPresentationOnly(url: string): boolean {
 
 async function openApp(session: BrowserSession, origin: string): Promise<void> {
   await session.cdp.send('Page.navigate', { url: `${origin}/` });
-  await session.waitFor(`(${bodyText}).includes('Recipe Gallery')`, 45000, 'recipe gallery rendered');
+  await session.waitFor(`document.querySelectorAll('[id^="recipe-card-"]').length > 0`, 45000, 'recipe gallery rendered');
   await sleep(400);
 }
 
