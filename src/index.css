@@ -1,5 +1,23 @@
 @import "tailwindcss";
 
+/* =========================================================================
+   DESIGN TOKENS — Sol RV-2 / UD-1 type scale
+   -------------------------------------------------------------------------
+   Tailwind v4 resolves the `font-serif` / `font-sans` / `font-mono`
+   utilities from these theme variables. The editorial serif MUST be declared
+   here rather than as a hand-written `.font-serif` rule inside `@layer base`:
+   Tailwind emits its own `.font-serif` utility in `@layer utilities`, and a
+   layered utility always beats a layered base rule, so a base-layer rule could
+   never take effect (the heading silently fell back to the generic `ui-serif`
+   stack). Declaring the token once in `@theme` makes the utility itself carry
+   Lora, and keeps one source of truth for every component.
+   ========================================================================= */
+@theme {
+  --font-serif: 'Lora', Georgia, Cambria, 'Times New Roman', Times, serif;
+  --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
 @layer base {
   body {
     font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -8,12 +26,301 @@
     transition: background-color 0.25s ease, color 0.25s ease;
   }
 
-  .font-serif {
-    font-family: 'Lora', Georgia, Cambria, 'Times New Roman', Times, serif;
+  /* =========================================================================
+     STICKY HEADER / SCROLL POSITIONING — UD-2A.1B R-1
+     -------------------------------------------------------------------------
+     The vault header is `static` below 768px and `sticky` from 768px up. While
+     it is sticky it owns the top of the viewport and paints above the
+     scrolling content column, so any content that is scrolled into view must
+     land BELOW it.
+
+     `scroll-padding-top` on the scrolling element is the canonical mechanism
+     for exactly that relationship: it insets the scrollport, so scroll
+     alignment (`scrollIntoView`, fragment navigation, `scrollTo` to an
+     element) positions the target inside the region the sticky header does
+     not occupy.
+
+     The value must be the header's own measured height, which is
+     content-driven (198px at the desktop rail, 253px in the stacked tablet
+     layout) and therefore cannot be a hard-coded constant. VaultHeader
+     publishes it as `--kc-sticky-header-h`; when the header is not sticky the
+     published value is 0, so mobile scrolling is unaffected and the compact
+     mobile header still scrolls away with the content.
+     ========================================================================= */
+  html {
+    scroll-padding-top: var(--kc-sticky-header-h, 0px);
+  }
+}
+
+/* =========================================================================
+   KEYBOARD FOCUS — 3px accent outline, 3px offset (Sol UD-1 / RV-2)
+   -------------------------------------------------------------------------
+   Deliberately UNLAYERED. Tailwind v4 emits every utility inside
+   `@layer utilities`, and an unlayered author style outranks all layered
+   rules, so the indicator can never be suppressed by a component-level
+   `focus:outline-none`. The colour comes from the active theme's accent-text
+   role, so the ring stays readable in all four palettes.
+   ========================================================================= */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible,
+[tabindex]:not([tabindex='-1']):focus-visible {
+  outline: 3px solid var(--focus-ring, var(--accent-text, #F59E0B));
+  outline-offset: 3px;
+}
+
+/* =========================================================================
+   VAULT RESPONSIVE COMPOSITION — Sol RV-2 approved breakpoints
+   -------------------------------------------------------------------------
+     ≥1200px     240px rail · 40px gutters · 4 tracks · featured spans 2
+                 24px horizontal / 36px vertical gap · 224px photographs
+     1024–1199px 216px rail · 28px gutters · 3 tracks · no featured span
+     768–1023px  32px gutters · 2 tracks · featured spans both · 272px photo
+     ≤767px      20px gutters (16px below 375) · 1 track · compact rows
+     ========================================================================= */
+@layer components {
+  /* Content gutters ------------------------------------------------------ */
+  .kc-vault-surface {
+    padding-left: 20px;
+    padding-right: 20px;
   }
 
-  .font-mono {
-    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  @media (max-width: 374.98px) {
+    .kc-vault-surface {
+      padding-left: 16px;
+      padding-right: 16px;
+    }
+  }
+
+  @media (min-width: 768px) {
+    .kc-vault-surface {
+      padding-left: 32px;
+      padding-right: 32px;
+    }
+  }
+
+  @media (min-width: 1024px) {
+    .kc-vault-surface {
+      padding-left: 28px;
+      padding-right: 28px;
+    }
+  }
+
+  @media (min-width: 1200px) {
+    .kc-vault-surface {
+      padding-left: 40px;
+      padding-right: 40px;
+    }
+  }
+
+  /* Recipe shelf tracks --------------------------------------------------- */
+  .kc-vault-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px 20px;
+  }
+
+  @media (min-width: 768px) {
+    .kc-vault-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 32px 24px;
+    }
+  }
+
+  @media (min-width: 1024px) {
+    .kc-vault-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+
+  @media (min-width: 1200px) {
+    .kc-vault-grid {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 36px 24px;
+    }
+  }
+
+  /* Featured card placement ---------------------------------------------- */
+  .kc-vault-card--featured {
+    grid-column: span 1 / span 1;
+  }
+
+  @media (min-width: 768px) and (max-width: 1023.98px) {
+    .kc-vault-card--featured {
+      grid-column: span 2 / span 2;
+    }
+  }
+
+  @media (min-width: 1200px) {
+    .kc-vault-card--featured {
+      grid-column: span 2 / span 2;
+    }
+  }
+
+  /* Photography ----------------------------------------------------------- */
+  .kc-vault-photo {
+    height: 224px;
+  }
+
+  .kc-vault-photo--featured {
+    height: 176px;
+  }
+
+  @media (min-width: 768px) and (max-width: 1023.98px) {
+    .kc-vault-photo--featured {
+      height: 272px;
+    }
+  }
+
+  @media (min-width: 1024px) {
+    .kc-vault-photo--featured {
+      height: 224px;
+    }
+  }
+
+  /* Editorial titles ------------------------------------------------------ */
+  .kc-vault-title {
+    font-size: 22px;
+    line-height: 1.3;
+  }
+
+  @media (min-width: 768px) and (max-width: 1023.98px) {
+    .kc-vault-title {
+      font-size: 25px;
+    }
+  }
+
+  @media (min-width: 1024px) {
+    .kc-vault-title {
+      font-size: 24px;
+    }
+  }
+
+  @media (max-width: 374.98px) {
+    .kc-vault-title {
+      font-size: 21px;
+    }
+  }
+
+  .kc-vault-title--featured {
+    font-size: 27px;
+    line-height: 1.28;
+  }
+
+  @media (min-width: 768px) and (max-width: 1023.98px) {
+    .kc-vault-title--featured {
+      font-size: 30px;
+    }
+  }
+
+  @media (min-width: 1024px) and (max-width: 1199.98px) {
+    .kc-vault-title--featured {
+      font-size: 24px;
+    }
+  }
+
+  @media (min-width: 1200px) {
+    .kc-vault-title--featured {
+      font-size: 30px;
+    }
+  }
+
+  @media (max-width: 374.98px) {
+    .kc-vault-title--featured {
+      font-size: 26px;
+    }
+  }
+
+  /* Page heading ---------------------------------------------------------- */
+  .kc-vault-page-title {
+    font-size: 32px;
+    line-height: 1.2;
+    letter-spacing: -0.02em;
+  }
+
+  @media (max-width: 374.98px) {
+    .kc-vault-page-title {
+      font-size: 30px;
+    }
+  }
+
+  @media (min-width: 768px) {
+    .kc-vault-page-title {
+      font-size: 40px;
+    }
+  }
+
+  @media (min-width: 1024px) {
+    .kc-vault-page-title {
+      font-size: 46px;
+    }
+  }
+
+  /* Compact mobile recipe rows ------------------------------------------- */
+  .kc-vault-row-photo {
+    width: 112px;
+    height: 148px;
+  }
+
+  @media (max-width: 374.98px) {
+    .kc-vault-row-photo {
+      width: 104px;
+    }
+  }
+
+  .kc-vault-row-title {
+    font-size: 22px;
+    line-height: 1.28;
+  }
+
+  @media (max-width: 374.98px) {
+    .kc-vault-row-title {
+      font-size: 21px;
+    }
+  }
+
+  /* Application rail ------------------------------------------------------ */
+  .kc-app-rail {
+    width: 240px;
+  }
+
+  @media (min-width: 1024px) and (max-width: 1199.98px) {
+    .kc-app-rail {
+      width: 216px;
+    }
+  }
+}
+
+/* =========================================================================
+   FAVORITE CONTROL — theme aware heart
+   -------------------------------------------------------------------------
+   Replaces the hard-coded rose fill with semantic roles: an idle heart uses
+   the theme's secondary text colour, hover and the selected (aria-pressed)
+   state use the theme's accent-text colour and fill the glyph.
+   ========================================================================= */
+.kc-favorite-control {
+  color: var(--text-secondary, #9CA3AF);
+  transition: color 140ms ease, background-color 140ms ease;
+}
+
+.kc-favorite-control:hover {
+  color: var(--accent-text, #F59E0B);
+}
+
+.kc-favorite-control[aria-pressed='true'] {
+  color: var(--accent-text, #F59E0B);
+}
+
+.kc-favorite-control[aria-pressed='true'] svg {
+  fill: currentColor;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kc-favorite-control {
+    transition: none;
   }
 }
 
@@ -35,6 +342,8 @@
   --accent-subtle: rgba(245, 158, 11, 0.15);
   --border-subtle: rgba(255, 255, 255, 0.08);
   --border-focus: rgba(245, 158, 11, 0.4);
+  /* Keyboard focus ring — 3px solid accent-text (Sol UD-1 focus role). */
+  --focus-ring: #F59E0B;
 }
 
 /* Explicit default-theme hover so amber buttons brighten consistently in every
@@ -62,6 +371,7 @@
   --accent-subtle: rgba(194, 65, 12, 0.12);
   --border-subtle: rgba(40, 30, 20, 0.12);
   --border-focus: rgba(194, 65, 12, 0.45);
+  --focus-ring: #C2410C;
 }
 
 [data-theme="parchment"] body {
@@ -184,6 +494,7 @@
   --accent-subtle: rgba(16, 185, 129, 0.15);
   --border-subtle: rgba(52, 211, 153, 0.14);
   --border-focus: rgba(16, 185, 129, 0.45);
+  --focus-ring: #34D399;
 }
 
 [data-theme="nordic"] body {
@@ -266,6 +577,7 @@
   --accent-subtle: rgba(183, 42, 58, 0.16);
   --border-subtle: rgba(242, 236, 231, 0.09);
   --border-focus: rgba(217, 102, 90, 0.5);
+  --focus-ring: #D9665A;
 }
 
 [data-theme="blood-moon"] body {

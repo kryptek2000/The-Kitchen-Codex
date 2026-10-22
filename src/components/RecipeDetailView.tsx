@@ -629,7 +629,7 @@ export function RecipeDetailView({
                         type="checkbox"
                         checked={isChecked}
                         onChange={() => {}}
-                        className="mt-0.5 rounded text-amber-500 focus:ring-amber-400 bg-[#0C0C0C] border-white/20 cursor-pointer"
+                        className="mt-0.5 rounded text-amber-500 bg-[#0C0C0C] border-white/20 cursor-pointer"
                       />
                       <span className="flex-1 leading-snug">
                         {scaledText}

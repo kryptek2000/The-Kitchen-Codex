@@ -142,25 +142,79 @@ async function hoverBackground(cdp: Cdp, id: string): Promise<{ rest: string; ho
   return { rest, hov };
 }
 
-async function focusVisibleCheck(cdp: Cdp, prevId: string, id: string): Promise<{ focused: boolean; visible: boolean; missing?: string }> {
-  const prevExists = await evaluate(cdp, `!!document.getElementById(${JSON.stringify(prevId)})`);
-  const targetExists = await evaluate(cdp, `!!document.getElementById(${JSON.stringify(id)})`);
-  if (!prevExists || !targetExists) {
-    const missing = !prevExists ? prevId : id;
-    return { focused: false, visible: false, missing };
-  }
-  try {
-    await evaluate(cdp, `document.getElementById(${JSON.stringify(prevId)}).focus()`);
-  } catch {
-    return { focused: false, visible: false, missing: prevId };
-  }
+/**
+ * Reads the currently focused element's identity and its focus-ring state.
+ */
+async function readFocusState(cdp: Cdp): Promise<{ id: string; focusVisible: boolean; outlineWidth: string; outlineStyle: string }> {
+  return evaluate(cdp, `(() => {
+    const a = document.activeElement;
+    if (!a) return { id: '', focusVisible: false, outlineWidth: '0px', outlineStyle: 'none' };
+    const cs = getComputedStyle(a);
+    return {
+      id: a.id || '',
+      focusVisible: typeof a.matches === 'function' ? a.matches(':focus-visible') : false,
+      outlineWidth: cs.outlineWidth,
+      outlineStyle: cs.outlineStyle,
+    };
+  })()`);
+}
+
+/**
+ * Asserts the intended accessible navigation SEQUENCE rather than a brittle
+ * single-Tab neighbour relationship.
+ *
+ * The vault header's action group is ordered to match its visual reading
+ * order (Sol RV-2): New Recipe Note -> Ask My Kitchen -> Connect Vault.
+ * "New Recipe Note" is the primary creation action and was deliberately
+ * promoted into the brand row so that it is the only header action shown on
+ * the compact mobile layout, so it legitimately precedes the secondary
+ * actions in DOM order. Keyboard reachability, focus visibility and the
+ * reverse traversal are all asserted here, so the guarantee is strictly
+ * stronger than a single "one Tab from X lands on Y" check.
+ */
+async function focusSequenceCheck(
+  cdp: Cdp,
+  startId: string,
+  expectedIds: string[]
+): Promise<{ ok: boolean; actual: string[]; expected: string[]; ringMissing: string[] }> {
+  const actual: string[] = [];
+  const ringMissing: string[] = [];
+  await evaluate(cdp, `(() => { const el = document.getElementById(${JSON.stringify(startId)}); if (el) el.focus(); return true; })()`);
   await sleep(150);
-  await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
-  await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
-  await sleep(250);
-  const active = await evaluate(cdp, `document.activeElement ? document.activeElement.id : ''`);
-  const vis = await evaluate(cdp, `(() => { const el = document.getElementById(${JSON.stringify(id)}); return el ? el.matches(':focus-visible') : false; })()`);
-  return { focused: active === id, visible: vis === true };
+  for (let i = 0; i < expectedIds.length; i++) {
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+    await sleep(250);
+    const state = await readFocusState(cdp);
+    actual.push(state.id);
+    const ringed = state.focusVisible && parseFloat(state.outlineWidth) >= 2 && state.outlineStyle !== 'none';
+    if (!ringed) ringMissing.push(state.id || '(no id)');
+  }
+  return {
+    ok: actual.length === expectedIds.length && actual.every((v, i) => v === expectedIds[i]),
+    actual,
+    expected: expectedIds,
+    ringMissing,
+  };
+}
+
+/**
+ * Shift+Tab must traverse the same group in reverse.
+ */
+async function focusReverseCheck(cdp: Cdp, startId: string, expectedIds: string[]): Promise<{ ok: boolean; actual: string[] }> {
+  const actual: string[] = [];
+  await evaluate(cdp, `(() => { const el = document.getElementById(${JSON.stringify(startId)}); if (el) el.focus(); return true; })()`);
+  await sleep(150);
+  for (let i = 0; i < expectedIds.length; i++) {
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Shift', code: 'ShiftLeft', windowsVirtualKeyCode: 16, modifiers: 8 });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9, modifiers: 8 });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9, modifiers: 8 });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Shift', code: 'ShiftLeft', windowsVirtualKeyCode: 16 });
+    await sleep(250);
+    const state = await readFocusState(cdp);
+    actual.push(state.id);
+  }
+  return { ok: actual.length === expectedIds.length && actual.every((v, i) => v === expectedIds[i]), actual };
 }
 
 const THEME_EXPR = `document.documentElement.getAttribute('data-theme')`;
@@ -419,12 +473,36 @@ async function main(): Promise<void> {
     await screenshot(cdp, '/tmp/kc-brand-hover-connect.png');
 
     // --- 7e. Keyboard focus-visible -------------------------------------
+    // The header action group is asserted as an ordered SEQUENCE that matches
+    // the visual reading order, plus a focus ring on every stop and the
+    // reverse (Shift+Tab) traversal. This is strictly stronger than the
+    // previous single-Tab neighbour check, which broke whenever a control was
+    // inserted ahead of "Ask My Kitchen" — including the deliberate promotion
+    // of "New Recipe Note" into the brand row.
     await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 5, y: 5 });
     await sleep(150);
-    const askFocus = await focusVisibleCheck(cdp, 'refresh-vault-btn', 'ask-my-kitchen-header-btn');
-    record('Ask My Kitchen is keyboard-focusable with focus-visible', askFocus.focused && askFocus.visible, JSON.stringify(askFocus));
-    const connectFocus = await focusVisibleCheck(cdp, 'ask-my-kitchen-header-btn', 'connect-local-vault-btn');
-    record('Connect Vault is keyboard-focusable with focus-visible', connectFocus.focused && connectFocus.visible, JSON.stringify(connectFocus));
+    const HEADER_ACTION_ORDER = ['create-new-recipe-btn', 'ask-my-kitchen-header-btn', 'connect-local-vault-btn'];
+    const headerSeq = await focusSequenceCheck(cdp, 'refresh-vault-btn', HEADER_ACTION_ORDER);
+    record(
+      'header action group is keyboard-reachable in visual reading order',
+      headerSeq.ok,
+      JSON.stringify({ expected: headerSeq.expected, actual: headerSeq.actual })
+    );
+    record(
+      'every keyboard-focused header control renders a visible focus ring',
+      headerSeq.ringMissing.length === 0,
+      JSON.stringify(headerSeq.ringMissing)
+    );
+    const headerReverse = await focusReverseCheck(
+      cdp,
+      'connect-local-vault-btn',
+      ['ask-my-kitchen-header-btn', 'create-new-recipe-btn']
+    );
+    record(
+      'Shift+Tab traverses the header action group in reverse',
+      headerReverse.ok,
+      JSON.stringify(headerReverse.actual)
+    );
 
     // --- 7f. Hover states across the remaining themes -------------------
     for (const [themeId, label] of [['obsidian', 'Obsidian'], ['parchment', 'Parchment'], ['nordic', 'Nordic']] as const) {

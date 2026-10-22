@@ -1535,7 +1535,7 @@ export function RecipeEditorModal({
             </div>
             <div>
               <h2 className="text-base font-serif font-bold text-white">
-                {initialRecipe ? `Edit: ${initialRecipe.title}` : 'Create New Obsidian Recipe Note'}
+                {initialRecipe ? `Edit: ${initialRecipe.title}` : 'Create New Recipe Note'}
               </h2>
               <span className="text-xs text-gray-500 font-mono">
                 {initialRecipe ? initialRecipe.filePath : fileName}
@@ -1645,7 +1645,7 @@ export function RecipeEditorModal({
 
                 <div>
                   <label className="block font-medium text-gray-300 mb-1">
-                    Obsidian File Name
+                    Recipe File Name
                   </label>
                   <input
                     type="text"
@@ -1920,7 +1920,7 @@ export function RecipeEditorModal({
                 {isAssetPickerOpen && (
                   <div className="p-3 bg-[#0A0A0A] border border-amber-500/30 rounded-xl space-y-2 max-h-48 overflow-y-auto">
                     <div className="flex items-center justify-between text-xs text-amber-400 font-semibold pb-1 border-b border-white/5">
-                      <span>Select Image from Obsidian Assets</span>
+                      <span>Select Image from Vault Assets</span>
                       <button
                         type="button"
                         onClick={() => setIsAssetPickerOpen(false)}

@@ -2,7 +2,7 @@ import { ObsidianRecipe, VaultNote, MealPlanDay, ShoppingCategoryGroup } from '.
 import { parseObsidianRecipeMarkdown, parseVaultNoteMarkdown } from '../utils/markdownParser';
 import { resolveNewRecipeVaultPath } from '../core/vaultPath';
 
-export const DEFAULT_VAULT_PATH = 'Obsidian Vault / Kitchen Codex';
+export const DEFAULT_VAULT_PATH = 'My Recipe Vault / Kitchen Codex';
 
 /**
  * Initial demo meal plan shown before a vault is connected. Reference titles
