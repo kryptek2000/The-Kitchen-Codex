@@ -17,6 +17,12 @@ interface SideNavProps {
   activeTab: 'grid' | 'dataview' | 'mealplan' | 'shopping' | 'themes' | 'providers';
   setActiveTab: (tab: 'grid' | 'dataview' | 'mealplan' | 'shopping' | 'themes' | 'providers') => void;
   vaultStatus: VaultSyncStatus;
+  /** The RECIPE count of the active vault — the same total the header and gallery show. */
+  recipeCount: number;
+  /** The count of non-recipe vault notes. Labelled as notes, never as recipes. */
+  noteCount: number;
+  /** Re-authorises a remembered Vault. Invoked from a user gesture. */
+  onReconnectVault: () => void;
   onOpenConnectVaultModal: () => void;
   onOpenNewRecipeModal: () => void;
   onOpenAskMyKitchen: () => void;
@@ -39,6 +45,9 @@ export function SideNav({
   activeTab,
   setActiveTab,
   vaultStatus,
+  recipeCount,
+  noteCount,
+  onReconnectVault,
   onOpenConnectVaultModal,
   onOpenNewRecipeModal,
   onOpenAskMyKitchen,
@@ -49,6 +58,12 @@ export function SideNav({
   onShisoOpen,
   onFavorites,
 }: SideNavProps) {
+  // A remembered Vault that still needs the browser's permission must be
+  // surfaced explicitly (UD-2A.2) — never silently replaced by the starter
+  // Vault as though it were the user's own data.
+  const connectionState = vaultStatus.connectionState ?? (vaultStatus.isConnected ? 'connected' : 'starter');
+  const needsReconnect = connectionState === 'reauthorization_required' || connectionState === 'permission_denied';
+
   return (
     <aside className="kc-app-rail hidden lg:flex flex-col shrink-0 border-r border-white/5 bg-[#111111] sticky top-0 h-screen">
       <div className="px-4 py-4 flex items-center gap-3 border-b border-white/5">
@@ -119,11 +134,29 @@ export function SideNav({
         </button>
       </nav>
 
-      <div className="px-3 py-3 border-t border-white/5 text-sm text-gray-500">
-        {vaultStatus.isConnected ? (
-          <span className="text-emerald-400">Vault linked · {vaultStatus.fileCount} notes</span>
-        ) : (
-          <span className="text-amber-400">Starter vault · {vaultStatus.fileCount} notes</span>
+      {/* Vault status. The quantity is always the RECIPE count — the same total
+          the header strip and the gallery heading report. A note count is
+          reported separately, and only when there are notes, so the two are
+          never conflated (UD-2A.2). */}
+      <div id="sidenav-vault-status" className="px-3 py-3 border-t border-white/5 text-sm text-gray-500 space-y-1">
+        <div id="sidenav-vault-status-line" className={vaultStatus.isConnected ? 'text-emerald-400' : 'text-amber-400'}>
+          {vaultStatus.isConnected
+            ? `Vault linked · ${recipeCount} ${recipeCount === 1 ? 'recipe' : 'recipes'}${
+                noteCount > 0 ? ` · ${noteCount} ${noteCount === 1 ? 'note' : 'notes'}` : ''
+              }`
+            : `Starter vault · ${recipeCount} sample ${recipeCount === 1 ? 'recipe' : 'recipes'}`}
+        </div>
+        {needsReconnect && (
+          <button
+            id="sidenav-reconnect-vault-btn"
+            onClick={onReconnectVault}
+            className="text-amber-300 underline underline-offset-2 hover:text-amber-200 text-left"
+            title={vaultStatus.rememberedVaultName
+              ? `“${vaultStatus.rememberedVaultName}” is remembered — click to grant access and reconnect it.`
+              : 'Your Vault is remembered — click to grant access and reconnect it.'}
+          >
+            Reconnect your Vault
+          </button>
         )}
       </div>
     </aside>

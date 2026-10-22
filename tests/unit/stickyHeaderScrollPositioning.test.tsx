@@ -34,7 +34,7 @@ afterEach(() => {
 function renderHeader() {
   return render(
     <VaultHeader
-      vaultStatus={{ isConnected: true, vaultPath: '/vault', fileCount: 3 } as any}
+      vaultStatus={{ isConnected: true, vaultPath: '/vault' } as any}
       activeTab="grid"
       setActiveTab={() => {}}
       searchQuery=""
@@ -49,6 +49,9 @@ function renderHeader() {
       onOpenAskMyKitchen={() => {}}
       onOpenCreateForMe={() => {}}
       onRefreshVault={() => {}}
+      recipeCount={3}
+      noteCount={0}
+      onReconnectVault={() => {}}
     />
   );
 }

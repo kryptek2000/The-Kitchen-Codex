@@ -180,6 +180,9 @@ describe('Brand lockup scale & surfaces', () => {
         onOpenAskMyKitchen={() => {}}
         onOpenCreateForMe={() => {}}
         onRefreshVault={() => {}}
+        recipeCount={3}
+        noteCount={0}
+        onReconnectVault={() => {}}
       />
     );
     const header = container.querySelector('#obsidian-vault-header')!;
@@ -280,6 +283,9 @@ describe('Header action hover states', () => {
         onOpenAskMyKitchen={() => {}}
         onOpenCreateForMe={() => {}}
         onRefreshVault={() => {}}
+        recipeCount={3}
+        noteCount={0}
+        onReconnectVault={() => {}}
       />
     );
     return {
