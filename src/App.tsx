@@ -380,9 +380,13 @@ export default function App() {
   );
   useEffect(() => {
     const onResize = () => {
+      // The recipe shelf switches between the card tree and the compact row
+      // tree at 768px (Sol RV-2 tablet composition).
       const desktop = window.innerWidth >= 768;
       setIsDesktop(desktop);
-      if (desktop) setIsMoreOpen(false);
+      // The "More" sheet belongs to the bottom-navigation composition, which
+      // ends at the desktop rail breakpoint.
+      if (window.innerWidth >= 1024) setIsMoreOpen(false);
     };
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
@@ -510,7 +514,7 @@ export default function App() {
 
   // Update document title with version
   useEffect(() => {
-    document.title = `The Kitchen Codex ${APP_VERSION} — Obsidian Culinary Vault`;
+    document.title = `The Kitchen Codex ${APP_VERSION} — My Recipe Vault`;
   }, []);
 
   // 1. Reconnect to IndexedDB directory handle on mount if permission granted
@@ -2057,6 +2061,10 @@ export default function App() {
     (filters.maxCookTime ? 1 : 0) +
     (filters.onlyFavorites ? 1 : 0);
 
+  // The vault result count only switches to the "Showing X of Y" form while a
+  // search or filter is actually active, so the number is never printed twice.
+  const vaultResultIsFiltered = Boolean(searchQuery) || activeFilterCount > 0;
+
   const vaultHealthSummary = useMemo(() => {
     return summarizeVaultHealth(recipes);
   }, [recipes]);
@@ -2064,7 +2072,7 @@ export default function App() {
   return (
     <div
       data-theme={theme}
-      className="min-h-screen bg-[#0C0C0C] text-gray-200 flex flex-col md:flex-row font-sans selection:bg-amber-500/30 selection:text-amber-200 relative transition-colors duration-200"
+      className="min-h-screen bg-[#0C0C0C] text-gray-200 flex flex-col lg:flex-row font-sans selection:bg-amber-500/30 selection:text-amber-200 relative transition-colors duration-200"
       onDragOver={(e) => {
         e.preventDefault();
         setIsWindowDragging(true);
@@ -2117,7 +2125,7 @@ export default function App() {
               <span className="text-2xl font-bold">📂</span>
             </div>
             <h3 className="text-lg font-serif font-bold text-white mb-1">
-              Drop Obsidian Recipe Files or Folder
+              Drop Recipe Files or Folder
             </h3>
             <p className="text-xs text-gray-400">
               Release to instantly parse recipes, notes, Meal Plan.md, and Shopping List.md into The Kitchen Codex.
@@ -2230,8 +2238,9 @@ export default function App() {
         />
       )}
 
-      {/* Main View Router */}
-      <main className="flex-1 pb-20 md:pb-0">
+      {/* Main View Router — the bottom navigation is fixed below 1024px, so the
+          content column reserves 116px of clearance (Sol: ≥110px). */}
+      <main className="flex-1 pb-[116px] lg:pb-0">
         {selectedRecipe && displayRecipe ? (
           <>
             {/* SHISO H-2 — the ONE visible account of unauthorized-not-yet-saved
@@ -2239,7 +2248,7 @@ export default function App() {
             {shisoWorkingForSelected !== null && (
               <div
                 data-testid="shiso-working-recipe-banner"
-                className="max-w-5xl mx-auto mt-4 px-4 sm:px-6"
+                className="max-w-5xl mx-auto mt-4 kc-vault-surface"
               >
                 <div className="rounded-xl border border-teal-500/30 bg-teal-500/10 px-4 py-3 space-y-2">
                   <div className="flex flex-wrap items-center justify-between gap-3">
@@ -2332,16 +2341,33 @@ export default function App() {
           </>
         ) : activeTab === 'grid' ? (
           /* Recipe Gallery View */
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
-            {/* Gallery Stats & Info */}
-            <div className="flex items-center justify-between text-xs text-gray-400 pb-2 border-b border-white/5">
-              <span>
-                Showing <strong className="text-white">{filteredRecipes.length}</strong> of {recipes.length} recipes in vault
-              </span>
+          <div className="max-w-7xl mx-auto kc-vault-surface py-6 space-y-6">
+            {/* Gallery heading — a single result count. The previous design
+                printed the same number twice ("9 of 9 recipes" under the
+                heading AND "Showing 9 of 9 recipes" in a stats bar); the
+                filtered-result form is used only while a search or filter is
+                actually active. */}
+            <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
+              <div>
+                <h1 className="kc-vault-page-title font-serif font-semibold text-white">
+                  My Recipe Vault
+                </h1>
+                <p className="text-sm text-gray-400 mt-1">
+                  {vaultResultIsFiltered ? (
+                    <>
+                      Showing <strong className="text-white">{filteredRecipes.length}</strong> of {recipes.length} recipes
+                    </>
+                  ) : (
+                    <>
+                      {recipes.length} {recipes.length === 1 ? 'recipe' : 'recipes'}
+                    </>
+                  )}
+                </p>
+              </div>
               {searchQuery && (
                 <button
                   onClick={() => setSearchQuery('')}
-                  className="text-amber-400 font-semibold hover:underline"
+                  className="self-start sm:self-auto text-sm text-amber-400 font-semibold hover:underline"
                 >
                   Clear search: &quot;{searchQuery}&quot;
                 </button>
@@ -2354,7 +2380,7 @@ export default function App() {
                   <span className="text-xl">🔍</span>
                 </div>
                 <h3 className="font-serif font-bold text-base text-white">No matching recipes found</h3>
-                <p className="text-xs text-gray-400 max-w-sm mx-auto">
+                <p className="text-sm text-gray-400 max-w-sm mx-auto">
                   Try adjusting your search terms, clearing active tag filters, or creating/importing new recipe markdown notes.
                 </p>
                 <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
@@ -2363,13 +2389,13 @@ export default function App() {
                       setSearchQuery('');
                       setFilters(INITIAL_FILTERS);
                     }}
-                    className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-black rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                    className="px-4 py-2 min-h-[44px] bg-amber-500 hover:bg-amber-400 text-black rounded-xl text-sm font-bold transition-colors cursor-pointer"
                   >
                     Reset All Filters
                   </button>
                   <button
                     onClick={() => setIsGrabberOpen(true)}
-                    className="px-4 py-2 bg-sky-500/10 hover:bg-sky-500/20 text-sky-300 border border-sky-500/30 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                    className="px-4 py-2 min-h-[44px] bg-sky-500/10 hover:bg-sky-500/20 text-sky-300 border border-sky-500/30 rounded-xl text-sm font-bold transition-colors cursor-pointer"
                   >
                     🌐 Grab Recipe from Web
                   </button>
@@ -2384,7 +2410,7 @@ export default function App() {
                   return (
                     <div id="recipe-gallery">
                       {isDesktop ? (
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
+                        <div className="kc-vault-grid">
                           <RecipeCard
                             key={`featured-${featured.id}`}
                             recipe={featured}
@@ -2406,7 +2432,7 @@ export default function App() {
                           ))}
                         </div>
                       ) : (
-                        <div className="space-y-4">
+                        <div className="space-y-5">
                           <RecipeCard
                             key={`mfeatured-${featured.id}`}
                             recipe={featured}
@@ -2416,7 +2442,7 @@ export default function App() {
                             onToggleFavorite={handleToggleFavorite}
                             onAddToMealPlan={(r) => handleAddToMealPlan(r)}
                           />
-                          <div className="divide-y divide-white/5">
+                          <div className="space-y-5">
                             {rest.map((recipe) => (
                               <MobileRecipeRow
                                 key={recipe.id}
@@ -2478,7 +2504,7 @@ export default function App() {
           />
         ) : (
           /* Themes View */
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+          <div className="max-w-7xl mx-auto kc-vault-surface py-6">
             <ThemesView
               currentTheme={theme}
               onSelectTheme={(newTheme) => setTheme(newTheme)}
@@ -2487,21 +2513,21 @@ export default function App() {
         )}
       </main>
 
-      {/* App Footer */}
+      {/* App Footer — below 1024px the fixed bottom navigation overlays the
+          last 76–80px of the viewport, so the footer reserves that space and
+          its own content stays clear of the navigation. */}
       <footer className="border-t border-stone-800/60 bg-stone-900/40 mt-auto">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-stone-500">
+        <div className="max-w-7xl mx-auto kc-vault-surface py-4 pb-[92px] lg:pb-4 flex flex-col sm:flex-row items-center justify-between gap-2 text-sm text-stone-500">
           <div className="flex items-center gap-2">
-            <span className="font-medium text-stone-400">The Kitchen Codex</span>
-            <span>•</span>
-            <span>Markdown-Native Culinary Vault</span>
-            <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-medium">
+            <span className="font-medium text-stone-400">My Recipe Vault</span>
+            <span className="font-mono text-xs px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-medium">
               {APP_VERSION}
             </span>
           </div>
-          <div className="flex items-center gap-4 text-[11px]">
+          <div className="flex items-center gap-4 text-sm">
             <span>Obsidian Compatible</span>
             <span>•</span>
-            <span>Local-First & Schema v1 Compliant</span>
+            <span>Local-First &amp; Schema v1 Compliant</span>
           </div>
         </div>
       </footer>
@@ -2514,6 +2540,10 @@ export default function App() {
         onVault={() => {
           setActiveTab('grid');
           setSelectedRecipe(null);
+          // The mobile header scrolls away with the document (the recipe rows
+          // own the screen), so the Vault destination returns to the top where
+          // the brand row and the search field live.
+          window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
         onStudio={() => {
           setActiveTab('providers');
@@ -2523,25 +2553,25 @@ export default function App() {
         onMore={() => setIsMoreOpen(true)}
       />
 
-      {/* More dialog (mobile) */}
+      {/* More dialog (below the desktop rail breakpoint) */}
       {isMoreOpen && (
         <dialog
           ref={moreDialogRef}
           aria-labelledby="more-dialog-title"
           onClose={() => setIsMoreOpen(false)}
-          className="md:hidden fixed inset-0 z-50 m-0 w-full h-full max-w-none max-h-none border-0 bg-transparent p-0"
+          className="lg:hidden fixed inset-0 z-50 m-0 w-full h-full max-w-none max-h-none border-0 bg-transparent p-0"
         >
           <div className="absolute inset-0 bg-black/60" onClick={() => setIsMoreOpen(false)} />
           <div
-            className="absolute bottom-0 left-0 right-0 bg-[#141414] rounded-t-2xl border-t border-white/10 p-4 space-y-2 focus:outline-none"
+            className="absolute bottom-0 left-0 right-0 bg-[#141414] rounded-t-2xl border-t border-white/10 p-4 space-y-2"
             role="document"
           >
             <div className="flex items-center justify-between mb-2">
-              <h2 id="more-dialog-title" className="text-sm font-semibold text-white">More</h2>
+              <h2 id="more-dialog-title" className="text-base font-semibold text-white">More</h2>
               <button
                 onClick={() => setIsMoreOpen(false)}
                 aria-label="Close More menu"
-                className="text-gray-400 hover:text-white"
+                className="w-11 h-11 flex items-center justify-center text-gray-400 hover:text-white"
               >
                 ✕
               </button>
@@ -2566,7 +2596,7 @@ export default function App() {
                   setSelectedRecipe(null);
                   setIsMoreOpen(false);
                 }}
-                className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-200 hover:bg-white/5"
+                className="w-full text-left px-3 py-2 min-h-[44px] flex items-center rounded-lg text-base text-gray-200 hover:bg-white/5 transition-colors duration-[140ms]"
               >
                 {item.label}
               </button>

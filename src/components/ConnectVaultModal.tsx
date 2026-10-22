@@ -95,7 +95,7 @@ export function ConnectVaultModal({
         });
         setStatusMessage({
           type: 'success',
-          text: `Successfully imported ${parsedRecipes.length} Obsidian recipe ${
+          text: `Successfully imported ${parsedRecipes.length} recipe ${
             parsedRecipes.length === 1 ? 'note' : 'notes'
           }${result.mealPlan ? ' and Meal Plan.md' : ''}${result.shoppingList ? ' and Shopping List.md' : ''} from "${folderName}"!`,
         });
@@ -140,7 +140,7 @@ export function ConnectVaultModal({
         }));
         setStatusMessage({
           type: 'success',
-          text: `Added ${parsedRecipes.length} recipe note(s) to your culinary vault!`,
+          text: `Added ${parsedRecipes.length} recipe note(s) to your recipe vault!`,
         });
       } else if (result.mealPlan || result.shoppingList) {
         setStatusMessage({
@@ -222,11 +222,11 @@ export function ConnectVaultModal({
       // The picker only returns the handle. Markdown hydration + asset pass are
       // performed by the App bootstrap edge (adapter-backed, single Markdown scan).
       const counts = await onDirectVaultConnected?.(folderHandle);
-      const label = folderHandle.name || 'Obsidian Vault';
+      const label = folderHandle.name || 'My Recipe Vault';
       if (counts && counts.recipeCount > 0) {
         setStatusMessage({
           type: 'success',
-          text: `Connected live to Obsidian folder "${label}" (${counts.recipeCount} notes synced)!`,
+          text: `Connected live to vault "${label}" (${counts.recipeCount} notes synced)!`,
         });
       } else {
         setStatusMessage({
@@ -327,13 +327,13 @@ export function ConnectVaultModal({
             </div>
             <div>
               <h2 className="text-base sm:text-lg font-serif font-bold text-white flex items-center gap-2">
-                <span>Connect Obsidian Vault</span>
+                <span>Connect My Recipe Vault</span>
                 <span className="text-[10px] uppercase font-sans font-medium px-2 py-0.5 rounded bg-white/5 text-amber-300 border border-white/5">
                   Markdown Sync
                 </span>
               </h2>
               <p className="text-xs text-gray-400 mt-0.5">
-                Load recipe notes directly from your local Obsidian vault or files.
+                Load recipe notes directly from your local vault or files.
               </p>
             </div>
           </div>
@@ -467,7 +467,7 @@ export function ConnectVaultModal({
                 </div>
                 <div>
                   <h4 className="font-serif font-bold text-sm text-white">
-                    Drag &amp; Drop your Obsidian Recipe folder or .md files here
+                    Drag &amp; Drop your recipe folder or .md files here
                   </h4>
                   <p className="text-xs text-gray-400 mt-1 max-w-md mx-auto">
                     Drop your entire <span className="font-mono text-amber-300">Recipes</span> directory or multiple recipe notes. We will parse YAML frontmatter, Dataview fields, wikilinks, and checklist ingredients automatically.
@@ -539,7 +539,7 @@ export function ConnectVaultModal({
                   <span>Two-Way Local File System Integration</span>
                 </div>
                 <p className="text-xs text-gray-300 leading-relaxed">
-                  Connect directly to your local file system using the modern File System Access API. Any edits, new recipes, or checklist updates can be written directly to your disk into your Obsidian vault.
+                  Connect directly to your local file system using the modern File System Access API. Any edits, new recipes, or checklist updates can be written directly to your disk into your vault.
                 </p>
                 <div className="p-3 bg-white/5 rounded-lg border border-white/5 text-[11px] text-gray-400 space-y-1 font-mono">
                   <div>• Vault Location: {customVaultPath}</div>
@@ -553,7 +553,7 @@ export function ConnectVaultModal({
                 className="w-full py-3 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-black font-bold text-xs rounded-xl shadow-lg shadow-amber-500/20 transition-all flex items-center justify-center gap-2"
               >
                 <FolderOpen className="w-4 h-4" />
-                <span>{isProcessing ? 'Reading directory...' : 'Choose Local Obsidian Vault Folder'}</span>
+                <span>{isProcessing ? 'Reading directory...' : 'Choose Local Vault Folder'}</span>
               </button>
 
               <div className="text-[11px] text-gray-500 bg-[#0A0A0A] p-3 rounded-lg border border-white/5 leading-relaxed">

@@ -479,7 +479,7 @@ export function AskMyKitchenModal({
                 disabled={isBusy}
                 onChange={(e) => setQuestion(e.target.value)}
                 placeholder="e.g. What can I make with chicken and rice?"
-                className="flex-1 px-3 py-2.5 text-sm bg-[#0C0C0C] border border-white/10 rounded-xl text-gray-200 placeholder-gray-500 focus:outline-none focus:border-amber-500/60 focus:ring-1 focus:ring-amber-500/40 disabled:opacity-60 transition-all"
+                className="flex-1 px-3 py-2.5 text-sm bg-[#0C0C0C] border border-white/10 rounded-xl text-gray-200 placeholder-gray-500 focus:outline-none focus:border-amber-500/60 disabled:opacity-60 transition-all"
               />
               <button
                 id="ask-my-kitchen-submit"

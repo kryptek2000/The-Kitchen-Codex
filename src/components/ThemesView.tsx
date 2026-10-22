@@ -124,7 +124,7 @@ export function ThemesView({ currentTheme, onSelectTheme }: ThemesViewProps) {
               </span>
             </div>
             <p className="text-xs text-gray-400 mt-0.5">
-              Personalize your culinary vault for kitchen daylight, late-night cooking, or botanical aesthetics.
+              Personalize your recipe vault for kitchen daylight, late-night cooking, or botanical aesthetics.
             </p>
           </div>
         </div>

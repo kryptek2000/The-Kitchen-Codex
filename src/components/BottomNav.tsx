@@ -10,7 +10,7 @@ interface BottomNavProps {
 }
 
 const item = (active: boolean) =>
-  `flex flex-col items-center justify-center gap-0.5 flex-1 py-2 text-[11px] font-medium transition-colors ${
+  `flex flex-col items-center justify-center gap-1 flex-1 min-w-[72px] min-h-[60px] py-2 text-sm font-medium transition-colors duration-[140ms] ${
     active ? 'text-amber-400' : 'text-gray-400'
   }`;
 
@@ -18,7 +18,7 @@ export function BottomNav({ activeTab, onVault, onStudio, onShiso, onMore }: Bot
   return (
     <nav
       aria-label="Mobile primary"
-      className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-[#111111] border-t border-white/5 flex items-stretch h-16"
+      className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-[#111111] border-t border-white/5 flex items-stretch h-[76px] md:h-20"
     >
       <button className={item(activeTab === 'grid')} onClick={onVault}>
         <LayoutGrid className="w-5 h-5" /> Vault

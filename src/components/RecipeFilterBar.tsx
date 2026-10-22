@@ -96,7 +96,7 @@ export function RecipeFilterBar({
                   cuisine: e.target.value || null,
                 }))
               }
-              className="w-full text-xs bg-[#141414] border border-white/10 rounded-lg p-1.5 text-gray-200 focus:ring-1 focus:ring-amber-500/50 focus:border-amber-500/60 focus:outline-none"
+              className="w-full text-xs bg-[#141414] border border-white/10 rounded-lg p-1.5 text-gray-200 focus:border-amber-500/60 focus:outline-none"
             >
               <option value="" className="bg-[#141414] text-gray-300">All Cuisines</option>
               {availableCuisines.map((c) => (
@@ -121,7 +121,7 @@ export function RecipeFilterBar({
                   category: e.target.value || null,
                 }))
               }
-              className="w-full text-xs bg-[#141414] border border-white/10 rounded-lg p-1.5 text-gray-200 focus:ring-1 focus:ring-amber-500/50 focus:border-amber-500/60 focus:outline-none"
+              className="w-full text-xs bg-[#141414] border border-white/10 rounded-lg p-1.5 text-gray-200 focus:border-amber-500/60 focus:outline-none"
             >
               <option value="" className="bg-[#141414] text-gray-300">All Categories</option>
               {availableCategories.map((cat) => (
@@ -146,7 +146,7 @@ export function RecipeFilterBar({
                   maxCookTime: e.target.value ? parseInt(e.target.value, 10) : null,
                 }))
               }
-              className="w-full text-xs bg-[#141414] border border-white/10 rounded-lg p-1.5 text-gray-200 focus:ring-1 focus:ring-amber-500/50 focus:border-amber-500/60 focus:outline-none"
+              className="w-full text-xs bg-[#141414] border border-white/10 rounded-lg p-1.5 text-gray-200 focus:border-amber-500/60 focus:outline-none"
             >
               <option value="" className="bg-[#141414] text-gray-300">Any Duration</option>
               <option value="15" className="bg-[#141414] text-gray-300">≤ 15 mins (Super Fast)</option>
@@ -170,7 +170,7 @@ export function RecipeFilterBar({
                   difficulty: e.target.value || null,
                 }))
               }
-              className="w-full text-xs bg-[#141414] border border-white/10 rounded-lg p-1.5 text-gray-200 focus:ring-1 focus:ring-amber-500/50 focus:border-amber-500/60 focus:outline-none"
+              className="w-full text-xs bg-[#141414] border border-white/10 rounded-lg p-1.5 text-gray-200 focus:border-amber-500/60 focus:outline-none"
             >
               <option value="" className="bg-[#141414] text-gray-300">All Difficulties</option>
               <option value="Easy" className="bg-[#141414] text-gray-300">Easy</option>
@@ -193,7 +193,7 @@ export function RecipeFilterBar({
                   sortBy: e.target.value as any,
                 }))
               }
-              className="w-full text-xs bg-[#141414] border border-white/10 rounded-lg p-1.5 text-gray-200 focus:ring-1 focus:ring-amber-500/50 focus:border-amber-500/60 focus:outline-none"
+              className="w-full text-xs bg-[#141414] border border-white/10 rounded-lg p-1.5 text-gray-200 focus:border-amber-500/60 focus:outline-none"
             >
               <option value="title" className="bg-[#141414] text-gray-300">Title (A - Z)</option>
               <option value="rating" className="bg-[#141414] text-gray-300">Rating (Highest)</option>

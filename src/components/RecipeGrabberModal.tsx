@@ -658,7 +658,7 @@ export function RecipeGrabberModal({
                             type="checkbox"
                             checked={saveImageToAssets}
                             onChange={(e) => setSaveImageToAssets(e.target.checked)}
-                            className="rounded border-white/20 bg-[#141414] text-amber-500 focus:ring-amber-400 focus:ring-offset-0 w-3.5 h-3.5"
+                            className="rounded border-white/20 bg-[#141414] text-amber-500 w-3.5 h-3.5"
                           />
                           <span className="text-[11px] text-amber-300 font-medium flex items-center gap-1">
                             <FolderDown className="w-3.5 h-3.5 text-amber-400 shrink-0" />
