@@ -629,7 +629,7 @@ function formatMaxBytes(bytes: number): string {
 }
 
 /** Renders one read-only selection-truth block (text or image). */
-function SelectionSummaryCard({
+export function SelectionSummaryCard({
   kind,
   selection,
   executable,
@@ -1121,6 +1121,8 @@ export function ProviderSelectionPanel({
   onSessionStatusChange,
   onSurfaceRuntimeChanged,
   onTextConnectionTestSettled,
+  showText = true,
+  showImage = true,
 }: {
   catalog: ProviderCatalogView;
   settings: SettingsAdapter;
@@ -1141,6 +1143,9 @@ export function ProviderSelectionPanel({
   onSurfaceRuntimeChanged?: (kind: 'text' | 'image') => void;
   /** AI-5D: a TEXT connection test settled and may indicate changed availability. */
   onTextConnectionTestSettled?: () => void;
+  /** Visual focus: when 'image' is false for text, hide the text surface card. */
+  showText?: boolean;
+  showImage?: boolean;
 }) {
   // The selection-control slice is a pure reducer (component-used) so the
   // Apply/Reset interaction is directly testable without a DOM harness. The
@@ -1475,7 +1480,8 @@ export function ProviderSelectionPanel({
           operator pin is removed.
         </div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className={`grid gap-4 ${showText && showImage ? 'grid-cols-1 lg:grid-cols-2' : 'grid-cols-1'}`}>
+          {showText && (
           <SelectionControlCard
             kind="text"
             label="Text AI"
@@ -1498,6 +1504,8 @@ export function ProviderSelectionPanel({
             recipeVerifications={recipeVerifications}
             onVerifyRecipeModel={verifyRecipeModel}
           />
+          )}
+          {showImage && (
           <SelectionControlCard
             kind="image"
             label="Image AI"
@@ -1516,6 +1524,7 @@ export function ProviderSelectionPanel({
             onReset={() => resetSelection('image')}
             onTestServerEnvironment={(providerId, modelId) => testConnection('image', providerId, modelId)}
           />
+          )}
         </div>
       )}
 
@@ -1614,6 +1623,7 @@ export function ProviderSettings({
   network,
   settings,
   onTextAiRuntimeChanged,
+  focus,
 }: {
   network: NetworkAdapter;
   settings: SettingsAdapter;
@@ -1633,7 +1643,12 @@ export function ProviderSettings({
    * depends on TEXT AI only.
    */
   onTextAiRuntimeChanged?: () => void;
+  /** Visual focus: 'image' hides text surfaces/catalog for the Image configuration section. Default 'all'. */
+  focus?: 'all' | 'image';
 }) {
+  const resolvedFocus = focus ?? 'all';
+  const showText = resolvedFocus !== 'image';
+  const showImage = true;
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [statuses, setStatuses] = useState<ProviderStatusView[]>([]);
   const [catalog, setCatalog] = useState<ProviderCatalogView | null>(null);
@@ -1725,6 +1740,8 @@ export function ProviderSettings({
             // it must never set a nutrition capability directly.
             onTextAiRuntimeChanged?.();
           }}
+          showText={showText}
+          showImage={showImage}
         />
       )}
     </>
