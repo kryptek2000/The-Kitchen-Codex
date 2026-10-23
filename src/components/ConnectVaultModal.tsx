@@ -18,7 +18,7 @@ import {
   Check,
   Globe,
 } from 'lucide-react';
-import { ObsidianRecipe, VaultSyncStatus, MealPlanDay, ShoppingCategoryGroup } from '../types';
+import { ObsidianRecipe, VaultNote, VaultSyncStatus, MealPlanDay, ShoppingCategoryGroup } from '../types';
 import {
   pickVaultDirectory,
   parseUploadedFileList,
@@ -39,6 +39,8 @@ interface ConnectVaultModalProps {
   setRecipes: React.Dispatch<React.SetStateAction<ObsidianRecipe[]>>;
   setMealPlan?: React.Dispatch<React.SetStateAction<MealPlanDay[]>>;
   setShoppingCategories?: React.Dispatch<React.SetStateAction<ShoppingCategoryGroup[]>>;
+  /** Used to clear the previous Vault's notes when the starter Vault is restored. */
+  setNotes?: React.Dispatch<React.SetStateAction<VaultNote[]>>;
   onOpenWebGrabber?: () => void;
   /**
    * Receives the authoritative handle from the picker and performs the
@@ -57,6 +59,7 @@ export function ConnectVaultModal({
   setRecipes,
   setMealPlan,
   setShoppingCategories,
+  setNotes,
   onOpenWebGrabber,
   onDirectVaultConnected,
 }: ConnectVaultModalProps) {
@@ -90,8 +93,8 @@ export function ConnectVaultModal({
         setVaultStatus({
           isConnected: true,
           vaultPath: folderName ? `Vault / ${folderName}` : 'Recipes',
-          fileCount: parsedRecipes.length,
           accessType: 'uploaded_folder',
+          connectionState: 'connected',
         });
         setStatusMessage({
           type: 'success',
@@ -136,7 +139,7 @@ export function ConnectVaultModal({
         setVaultStatus((prev) => ({
           ...prev,
           isConnected: true,
-          fileCount: recipes.length + parsedRecipes.length,
+          connectionState: 'connected',
         }));
         setStatusMessage({
           type: 'success',
@@ -185,7 +188,7 @@ export function ConnectVaultModal({
         setVaultStatus((prev) => ({
           ...prev,
           isConnected: true,
-          fileCount: prev.fileCount + parsedRecipes.length,
+          connectionState: 'connected',
         }));
         setStatusMessage({
           type: 'success',
@@ -282,15 +285,17 @@ export function ConnectVaultModal({
   const handleRestoreStarterVault = () => {
     const starters = getStarterVaultRecipes();
     setRecipes(starters);
+    // The starter Vault carries no notes: clearing them keeps the note count
+    // truthful after a Vault switch (UD-2A.2).
+    setNotes?.([]);
     setVaultStatus({
       isConnected: false,
       vaultPath: DEFAULT_VAULT_PATH,
-      fileCount: starters.length,
       accessType: 'starter_vault',
     });
     setStatusMessage({
       type: 'success',
-      text: `Vault reset to the 9 curated gourmet starter recipes!`,
+      text: `Vault reset to the ${starters.length} curated gourmet starter recipes!`,
     });
   };
 
@@ -666,7 +671,7 @@ export function ConnectVaultModal({
                   type="button"
                   onClick={handleRestoreStarterVault}
                   className="py-2 px-3 bg-white/5 hover:bg-white/10 text-gray-300 border border-white/10 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5"
-                  title="Reload default 8 rich gourmet starter recipes"
+                  title={`Reload the ${getStarterVaultRecipes().length} curated gourmet starter recipes`}
                 >
                   <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
                   <span>Restore Starter Vault</span>

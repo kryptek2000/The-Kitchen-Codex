@@ -117,13 +117,40 @@ export interface MealPlanDay {
   snacks?: MealPlanSlot[];
 }
 
+/**
+ * The explicit state of the Vault connection (UD-2A.2).
+ *
+ * The starter Vault is NEVER presented as the user's connected Vault. A Vault
+ * that is remembered but still needs the browser's permission is reported as
+ * such, so the interface can offer an explicit reconnect action instead of
+ * silently swapping the user's data for sample data.
+ */
+export type VaultConnectionState =
+  /** No Vault is connected; the application is showing the starter sample data. */
+  | 'starter'
+  /** A live Vault is connected and authorised. */
+  | 'connected'
+  /** A Vault is remembered, but the browser requires a user gesture to re-authorise it. */
+  | 'reauthorization_required'
+  /** A Vault is remembered, but the browser refused access. */
+  | 'permission_denied';
+
 export interface VaultSyncStatus {
   isConnected: boolean;
   vaultPath: string;
-  fileCount: number;
   lastSynced?: string;
   accessType: 'filesystem_api' | 'drag_drop' | 'uploaded_folder' | 'starter_vault';
   folderHandle?: any;
+  /**
+   * Explicit connection state. When absent it is derived from `isConnected`
+   * (connected when `isConnected` is true, starter otherwise).
+   */
+  connectionState?: VaultConnectionState;
+  /**
+   * Display name of a Vault that is remembered but not yet authorised. Shown
+   * in the reconnect prompt so the user can tell WHICH Vault needs attention.
+   */
+  rememberedVaultName?: string;
 }
 
 export interface FilterState {

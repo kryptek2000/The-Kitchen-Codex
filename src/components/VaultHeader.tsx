@@ -42,6 +42,16 @@ interface VaultHeaderProps {
   onOpenCreateForMe: () => void;
   legacyRecipeCount?: number;
   onRefreshVault: () => void;
+  /**
+   * The RECIPE count of the active vault (UD-2A.2). It is passed in from the
+   * canonical in-memory state rather than stored in the vault status, so the
+   * status strip can never disagree with the gallery heading.
+   */
+  recipeCount: number;
+  /** The count of non-recipe vault notes. Reported separately, never as recipes. */
+  noteCount: number;
+  /** Re-authorises a remembered Vault. Invoked from a user gesture. */
+  onReconnectVault: () => void;
 }
 
 export function VaultHeader({
@@ -61,6 +71,9 @@ export function VaultHeader({
   onOpenCreateForMe,
   legacyRecipeCount = 0,
   onRefreshVault,
+  recipeCount,
+  noteCount,
+  onReconnectVault,
 }: VaultHeaderProps) {
   // SHISO global entry point. Read from context, not props, so every existing
   // caller is unaffected and there is exactly one Shiso surface.
@@ -72,7 +85,14 @@ export function VaultHeader({
   const fullPath = vaultStatus.vaultPath || '';
   const pathSegments = fullPath.split(/[\\/]/).filter(Boolean);
   const pathLabel = pathSegments.length ? pathSegments[pathSegments.length - 1] : fullPath;
-  const recipeNoun = vaultStatus.fileCount === 1 ? 'recipe' : 'recipes';
+  const recipeNoun = recipeCount === 1 ? 'recipe' : 'recipes';
+
+  // The connection state drives the status strip's action (UD-2A.2). A Vault
+  // that is remembered but not yet authorised gets an explicit "Reconnect
+  // Vault" action instead of the ordinary "Connect Vault" flow, so the user is
+  // never silently shown the starter Vault as though it were their own data.
+  const connectionState = vaultStatus.connectionState ?? (vaultStatus.isConnected ? 'connected' : 'starter');
+  const needsReconnect = connectionState === 'reauthorization_required' || connectionState === 'permission_denied';
 
   // STICKY HEADER GEOMETRY — published for scroll positioning (UD-2A.1B R-1).
   //
@@ -125,7 +145,7 @@ export function VaultHeader({
           Connected  -> quiet "Vault Linked" chip (the vault action is not
                         prominent while a vault is connected).
           Not linked -> prominent "Connect Vault" (still discoverable). */}
-      <div className="bg-[#080808] text-gray-400 text-sm px-3 sm:px-4 py-0 sm:py-0.5 flex flex-nowrap items-center justify-between gap-2 border-b border-white/5">
+      <div id="vault-status-strip" className="bg-[#080808] text-gray-400 text-sm px-3 sm:px-4 py-0 sm:py-0.5 flex flex-nowrap items-center justify-between gap-2 border-b border-white/5">
         <button
           onClick={onOpenConnectVaultModal}
           className="flex items-center gap-1.5 min-w-0 flex-1 min-h-[44px] text-left hover:opacity-90 transition-opacity"
@@ -134,14 +154,34 @@ export function VaultHeader({
           <FolderCheck className="w-3.5 h-3.5 text-amber-400 shrink-0" />
           <span className="font-mono text-gray-300 truncate min-w-0">{pathLabel}</span>
           <span className="text-gray-600 hidden sm:inline">•</span>
-          <span className="text-gray-400 font-medium whitespace-nowrap shrink-0">
-            {vaultStatus.fileCount} {recipeNoun}
+          <span id="vault-recipe-count" className="text-gray-400 font-medium whitespace-nowrap shrink-0">
+            {recipeCount} {recipeNoun}
           </span>
         </button>
 
         <div className="flex items-center gap-1 shrink-0">
-          {vaultStatus.isConnected ? (
+          {needsReconnect ? (
+            /* A Vault is remembered but the browser needs a user gesture to
+               re-authorise it (UD-2A.2). This button performs that gesture:
+               it calls requestPermission() and reconnects the remembered
+               Vault. It is deliberately NOT the ordinary "Connect Vault"
+               flow, and the starter Vault is never shown as the user's data. */
             <button
+              id="reconnect-vault-btn"
+              onClick={onReconnectVault}
+              className="flex items-center gap-1 text-sm font-semibold text-amber-300 bg-amber-500/15 px-2.5 min-h-[44px] rounded-md border border-amber-500/40 hover:bg-amber-500/25 transition-colors duration-[140ms]"
+              title={
+                connectionState === 'permission_denied'
+                  ? `Access to “${vaultStatus.rememberedVaultName || 'your Vault'}” was denied. Click to try again, or pick the folder again.`
+                  : `“${vaultStatus.rememberedVaultName || 'Your Vault'}” is remembered. Click to grant access and reconnect it.`
+              }
+            >
+              <BookOpen className="w-4 h-4 shrink-0" />
+              <span className="whitespace-nowrap">Reconnect Vault</span>
+            </button>
+          ) : vaultStatus.isConnected ? (
+            <button
+              id="vault-linked-chip"
               onClick={onOpenConnectVaultModal}
               className="flex items-center gap-1 text-sm text-emerald-400/90 bg-emerald-950/30 px-2 min-h-[44px] rounded-md border border-emerald-800/30 hover:bg-emerald-950/60 transition-colors duration-[140ms]"
               title="Vault connected — open Vault settings"
@@ -151,6 +191,7 @@ export function VaultHeader({
             </button>
           ) : (
             <button
+              id="connect-vault-chip"
               onClick={onOpenConnectVaultModal}
               className="flex items-center gap-1 text-sm font-semibold text-amber-300 bg-amber-500/15 px-2.5 min-h-[44px] rounded-md border border-amber-500/40 hover:bg-amber-500/25 transition-colors duration-[140ms]"
               title="Connect your recipe vault folder"

@@ -15,6 +15,11 @@ import {
   ParsedIngredient,
 } from './types';
 import { DEFAULT_VAULT_PATH, getStarterVaultRecipes, getStarterVaultNotes, STARTER_MEAL_PLAN, STARTER_SHOPPING_CATEGORIES } from './data/starterVault';
+import {
+  connectionStateForRestoreAction,
+  reconnectRememberedVault,
+  resolveVaultRestoreAction,
+} from './core/vaultConnection';
 import { getRecipeImage } from './utils/imageHelper';
 import { cleanRecipeTitle, parseObsidianRecipeMarkdown, serializeRecipeToObsidianMarkdown } from './utils/markdownParser';
 import {
@@ -244,12 +249,16 @@ export default function App() {
     return [];
   });
 
-  // Vault Sync Status
+  // Vault Sync Status.
+  // NOTE (UD-2A.2): there is deliberately NO count field here. The recipe and
+  // note totals are derived from the canonical in-memory state (`recipes.length`
+  // / `notes.length`) and passed to the interface as props, so a count can
+  // never drift from the collection it describes.
   const [vaultStatus, setVaultStatus] = useState<VaultSyncStatus>({
     isConnected: false,
     vaultPath: DEFAULT_VAULT_PATH,
-    fileCount: 8,
     accessType: 'starter_vault',
+    connectionState: 'starter',
   });
 
   // Non-vault browser adapters (always available, independent of vault connection).
@@ -495,13 +504,39 @@ export default function App() {
       ...s,
       isConnected: true,
       accessType: 'filesystem_api',
+      connectionState: 'connected',
       vaultPath: result.folderName ? `Vault / ${result.folderName}` : s.vaultPath,
-      fileCount: result.recipes.length + result.notes.length,
       folderHandle: folderHandle ?? s.folderHandle,
     }));
     setVaultHydrated(true);
     return true;
   }, []);
+
+  // Re-authorise a REMEMBERED Vault and reconnect it. The browser only allows
+  // `requestPermission()` from a user gesture, so this is invoked directly
+  // from the "Reconnect Vault" button. It never writes to the Vault and never
+  // clears the remembered handle: if the user declines, the Vault stays
+  // remembered and the starter Vault is never presented as their data.
+  const handleReconnectVault = useCallback(async () => {
+    const outcome = await reconnectRememberedVault<LoadedVaultData>({
+      getHandle: () => getDirectoryHandleFromIDB(),
+      requestPermission: (handle: any) => handle.requestPermission({ mode: 'readwrite' }),
+      load: (handle: any) => loadVaultFromHandle(handle),
+    });
+    if (outcome.status === 'reconnected') {
+      const generation = vaultScanGeneration.current.begin();
+      commitVaultSnapshot(outcome.data, generation);
+      return;
+    }
+    if (outcome.status === 'no-handle' || outcome.status === 'unsupported') {
+      // Nothing usable is remembered: fall back to the ordinary connect flow.
+      setVaultStatus((s) => ({ ...s, isConnected: false, connectionState: 'starter' }));
+      return;
+    }
+    // 'denied' and 'error': the Vault stays remembered, but the browser will
+    // not re-authorise it — say so plainly instead of showing sample data.
+    setVaultStatus((s) => ({ ...s, isConnected: false, connectionState: 'permission_denied' }));
+  }, [commitVaultSnapshot]);
 
   // In-memory canonical state update AFTER a successful image save (the vault
   // write itself already happened inside the save flow — never re-written here).
@@ -518,21 +553,44 @@ export default function App() {
   }, []);
 
   // 1. Reconnect to IndexedDB directory handle on mount if permission granted
+  //    (UD-2A.2). The handle is persisted across browser restarts, but the
+  //    browser's PERMISSION is session-scoped: after a restart `queryPermission`
+  //    reports 'prompt'. The previous implementation treated anything other
+  //    than 'granted' as "no vault" and silently fell back to the starter
+  //    Vault, so a remembered Vault looked like a fresh install. The restore
+  //    decision is now explicit: reconnect when permitted, otherwise remember
+  //    the Vault and offer a user-gesture reconnect (requestPermission).
   useEffect(() => {
     let isMounted = true;
     async function restoreVaultConnection() {
       try {
         const handle = await getDirectoryHandleFromIDB();
-        if (handle && typeof handle.queryPermission === 'function') {
-          const status = await handle.queryPermission({ mode: 'readwrite' });
-          if (status === 'granted') {
-            const generation = vaultScanGeneration.current.begin();
-            const result = await loadVaultFromHandle(handle);
-            if (isMounted) {
-              commitVaultSnapshot(result, generation, handle);
-            }
+        const permission = handle && typeof handle.queryPermission === 'function'
+          ? await handle.queryPermission({ mode: 'readwrite' })
+          : null;
+        if (!isMounted) return;
+        const action = resolveVaultRestoreAction(!!handle, permission);
+        if (action.kind === 'reconnect') {
+          const generation = vaultScanGeneration.current.begin();
+          const result = await loadVaultFromHandle(handle);
+          if (isMounted) {
+            commitVaultSnapshot(result, generation, handle);
           }
+          return;
         }
+        if (action.kind === 'none') return;
+        // The Vault IS remembered, but the browser will not re-authorise it
+        // without a user gesture. Remember it and surface an explicit
+        // "Reconnect Vault" action — never silently present the starter Vault
+        // as though it were the user's connected Vault.
+        setVaultStatus((s) => ({
+          ...s,
+          isConnected: false,
+          accessType: 'starter_vault',
+          connectionState: connectionStateForRestoreAction(action),
+          rememberedVaultName:
+            handle && typeof handle.name === 'string' ? handle.name : undefined,
+        }));
       } catch (err) {
         console.warn('Auto-reconnect vault check:', err);
       }
@@ -805,9 +863,10 @@ export default function App() {
       if (parsed.recipes.length > 0) {
         setRecipes(parsed.recipes);
       }
-      if (parsed.notes && parsed.notes.length > 0) {
-        setNotes(parsed.notes);
-      }
+      // A NEW vault replaces the note set outright (UD-2A.2). Leaving the
+      // previous vault's notes in place would make the note count describe a
+      // Vault the user is no longer connected to.
+      setNotes(parsed.notes || []);
       if (parsed.mealPlan) setMealPlan(parsed.mealPlan);
       if (parsed.shoppingList) setShoppingCategories(parsed.shoppingList);
 
@@ -815,8 +874,8 @@ export default function App() {
         setVaultStatus((prev) => ({
           ...prev,
           isConnected: true,
-          fileCount: parsed.recipes.length + (parsed.notes?.length || 0),
           accessType: 'uploaded_folder',
+          connectionState: 'connected',
         }));
       }
     } catch (err) {
@@ -2109,7 +2168,7 @@ export default function App() {
             setVaultStatus((prev) => ({
               ...prev,
               isConnected: true,
-              fileCount: prev.fileCount + result.recipes.length + (result.notes?.length || 0),
+              connectionState: 'connected',
             }));
           }
         } catch (err) {
@@ -2159,6 +2218,9 @@ export default function App() {
           setIsMoreOpen(false);
         }}
         vaultStatus={vaultStatus}
+        recipeCount={recipes.length}
+        noteCount={notes.length}
+        onReconnectVault={handleReconnectVault}
         onOpenConnectVaultModal={() => setIsConnectVaultOpen(true)}
         onOpenNewRecipeModal={() => {
           setEditingRecipe(null);
@@ -2195,6 +2257,9 @@ export default function App() {
         setIsFilterOpen={setIsFilterOpen}
         activeFilterCount={activeFilterCount}
         onOpenConnectVaultModal={() => setIsConnectVaultOpen(true)}
+        recipeCount={recipes.length}
+        noteCount={notes.length}
+        onReconnectVault={handleReconnectVault}
         onOpenNewRecipeModal={() => {
           setEditingRecipe(null);
           setIsEditorOpen(true);
@@ -2660,6 +2725,7 @@ export default function App() {
         setRecipes={setRecipes}
         setMealPlan={setMealPlan}
         setShoppingCategories={setShoppingCategories}
+        setNotes={setNotes}
         onOpenWebGrabber={() => setIsGrabberOpen(true)}
         onDirectVaultConnected={handleDirectVaultConnected}
       />
