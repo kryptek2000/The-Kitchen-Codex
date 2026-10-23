@@ -175,17 +175,38 @@ function AtelierOverview({
     void load();
   }, [load]);
 
+  const selectableCount = catalog
+    ? new Set(
+        [...catalog.textProviders, ...catalog.imageProviders]
+          .filter((p) => p.selectable)
+          .map((p) => p.providerId)
+      ).size
+    : 0;
+  const textAssignment = catalog
+    ? catalog.selection.text.selectedProviderId
+      ? `${catalog.selection.text.selectedProviderId} / ${catalog.selection.text.selectedModelId ?? 'default'}`
+      : 'Server default'
+    : '—';
+  const imageAssignment = catalog
+    ? catalog.selection.image.selectedProviderId
+      ? `${catalog.selection.image.selectedProviderId} / ${catalog.selection.image.selectedModelId ?? 'default'}`
+      : 'Server default'
+    : '—';
+
   return (
     <div className="space-y-6">
+      {/* Editorial Atelier introduction */}
       <div className="rounded-2xl border border-[var(--color-rule,var(--bg-elevated))] bg-[var(--bg-surface,#141414)] p-5 sm:p-6 space-y-3">
         <div className="flex items-center gap-2">
           <Sparkles className="w-5 h-5 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
           <h2 className="font-serif text-[22px] text-[var(--text-primary,#F3F4F6)]">Welcome to the Atelier</h2>
         </div>
         <p className="text-[14px] leading-[1.55] text-[var(--text-secondary,#9CA3AF)] max-w-2xl">
-          Configure the AI providers Kitchen Codex uses for text and image work. Keys and catalog
-          truth stay server-owned; here you choose non-secret preferences, verify connectivity,
-          and review what the server can actually execute.
+          The Codex Atelier is the control center for the AI providers Kitchen Codex uses for
+          text and image work. Keys and catalog truth stay server-owned; here you choose
+          non-secret preferences, verify connectivity, and review what the server can execute.
+          Provider and model details live under Providers; full model discovery arrives with
+          the Living Library (UD-2C).
         </p>
         <div className="flex flex-wrap gap-2 pt-1">
           <button
@@ -216,9 +237,48 @@ function AtelierOverview({
       {state === 'error' && <ProviderStatusError onRefresh={load} />}
       {state === 'ready' && catalog && (
         <>
+          {/* Assignment summaries — prominent */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="rounded-2xl border border-[var(--color-rule,var(--bg-elevated))] bg-[var(--bg-surface,#141414)] p-5 sm:p-6 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="font-serif text-[18px] text-[var(--text-primary,#F3F4F6)]">Text AI assignment</h3>
+                <span className="text-[10px] uppercase tracking-wide font-semibold text-[var(--text-muted,#6B7280)]">Text</span>
+              </div>
+              <p className="text-[14px] font-medium text-[var(--text-primary,#F3F4F6)] break-words">{textAssignment}</p>
+              <p className="text-[12px] text-[var(--text-muted,#6B7280)]">
+                {catalog.selection.userSelectionAllowed.text ? 'User-selectable surface' : 'Server-managed surface'}
+              </p>
+              <button
+                type="button"
+                onClick={() => onNavigate('providers')}
+                className="text-[12px] text-[var(--accent-text,#F59E0B)] hover:underline underline-offset-2"
+              >
+                Configure Text AI →
+              </button>
+            </div>
+            <div className="rounded-2xl border border-[var(--color-rule,var(--bg-elevated))] bg-[var(--bg-surface,#141414)] p-5 sm:p-6 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="font-serif text-[18px] text-[var(--text-primary,#F3F4F6)]">Image AI assignment</h3>
+                <span className="text-[10px] uppercase tracking-wide font-semibold text-[var(--text-muted,#6B7280)]">Image</span>
+              </div>
+              <p className="text-[14px] font-medium text-[var(--text-primary,#F3F4F6)] break-words">{imageAssignment}</p>
+              <p className="text-[12px] text-[var(--text-muted,#6B7280)]">
+                {catalog.selection.userSelectionAllowed.image ? 'User-selectable surface' : 'Server-managed surface'}
+              </p>
+              <button
+                type="button"
+                onClick={() => onNavigate('image')}
+                className="text-[12px] text-[var(--accent-text,#F59E0B)] hover:underline underline-offset-2"
+              >
+                Configure Image AI →
+              </button>
+            </div>
+          </div>
+
+          {/* Compact provider readiness summary — no full catalog */}
           <div className="rounded-2xl border border-[var(--color-rule,var(--bg-elevated))] bg-[var(--bg-surface,#141414)] p-5 sm:p-6 space-y-4">
             <div className="flex items-center justify-between gap-3">
-              <h3 className="font-serif text-[18px] text-[var(--text-primary,#F3F4F6)]">Provider status</h3>
+              <h3 className="font-serif text-[18px] text-[var(--text-primary,#F3F4F6)]">Provider readiness</h3>
               <button
                 type="button"
                 onClick={load}
@@ -228,26 +288,73 @@ function AtelierOverview({
                 Refresh
               </button>
             </div>
-            <ProviderStatusPanel statuses={statuses} catalog={catalog} onRefresh={load} />
+            <div className="flex flex-wrap gap-3 text-[12px] text-[var(--text-secondary,#9CA3AF)]">
+              <span className="px-2.5 py-1 rounded-md bg-[var(--bg-elevated,#1E1E1E)] border border-[var(--color-control-border,rgba(255,255,255,0.1))]">
+                {statuses.length} provider{statuses.length === 1 ? '' : 's'}
+              </span>
+              <span className="px-2.5 py-1 rounded-md bg-[var(--bg-elevated,#1E1E1E)] border border-[var(--color-control-border,rgba(255,255,255,0.1))]">
+                {selectableCount} selectable
+              </span>
+              <span className="px-2.5 py-1 rounded-md bg-[var(--bg-elevated,#1E1E1E)] border border-[var(--color-control-border,rgba(255,255,255,0.1))]">
+                {statuses.filter((s) => s.configured).length} with operator key
+              </span>
+            </div>
+            {statuses.length === 0 ? (
+              <p className="text-[12px] text-[var(--text-muted,#6B7280)]">No provider status available.</p>
+            ) : (
+              <ul className="divide-y divide-[var(--color-rule,var(--bg-elevated))]">
+                {statuses.map((s) => (
+                  <li key={s.providerId} className="flex items-center justify-between gap-3 py-2">
+                    <div className="min-w-0">
+                      <div className="text-[13px] text-[var(--text-primary,#F3F4F6)] truncate">{s.name || s.providerId}</div>
+                      <div className="text-[11px] text-[var(--text-muted,#6B7280)] truncate">{s.providerId}</div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="text-[10px] uppercase tracking-wide font-semibold text-[var(--text-muted,#6B7280)]">
+                        {s.configured ? 'Operator key' : 'No operator key'}
+                      </span>
+                      <span
+                        className={`text-[10px] font-semibold px-2 py-0.5 rounded-md border ${
+                          s.enabled
+                            ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+                            : 'bg-white/5 text-gray-400 border-white/10'
+                        }`}
+                      >
+                        {s.enabled ? 'Enabled' : 'Disabled'}
+                      </span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <button
+              type="button"
+              onClick={() => onNavigate('providers')}
+              className="text-[12px] text-[var(--accent-text,#F59E0B)] hover:underline underline-offset-2"
+            >
+              View full provider details and catalog →
+            </button>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="rounded-2xl border border-[var(--color-rule,var(--bg-elevated))] bg-[var(--bg-surface,#141414)] p-5 space-y-2">
-              <h3 className="font-serif text-[16px] text-[var(--text-primary,#F3F4F6)]">Text AI assignment</h3>
-              <p className="text-[12px] text-[var(--text-muted,#6B7280)]">
-                {catalog.selection.text.selectedProviderId
-                  ? `${catalog.selection.text.selectedProviderId} / ${catalog.selection.text.selectedModelId ?? 'default'}`
-                  : 'Server default'}
+          {/* Living Library entry */}
+          <div className="rounded-2xl border border-dashed border-[var(--color-control-border,rgba(255,255,255,0.1))] bg-[var(--bg-surface,#141414)] p-5 sm:p-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <BookOpen className="w-4 h-4 text-[var(--text-muted,#6B7280)]" aria-hidden="true" />
+                <h3 className="font-serif text-[16px] text-[var(--text-primary,#F3F4F6)]">Living Library</h3>
+              </div>
+              <p className="text-[12px] text-[var(--text-muted,#6B7280)] max-w-xl">
+                Full model discovery, filtering, comparison and pricing arrive in UD-2C. Reserved
+                here so the Atelier shell stays stable.
               </p>
             </div>
-            <div className="rounded-2xl border border-[var(--color-rule,var(--bg-elevated))] bg-[var(--bg-surface,#141414)] p-5 space-y-2">
-              <h3 className="font-serif text-[16px] text-[var(--text-primary,#F3F4F6)]">Image AI assignment</h3>
-              <p className="text-[12px] text-[var(--text-muted,#6B7280)]">
-                {catalog.selection.image.selectedProviderId
-                  ? `${catalog.selection.image.selectedProviderId} / ${catalog.selection.image.selectedModelId ?? 'default'}`
-                  : 'Server default'}
-              </p>
-            </div>
+            <button
+              type="button"
+              onClick={() => onNavigate('library')}
+              className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[var(--bg-elevated,#1E1E1E)] text-[var(--text-primary,#F3F4F6)] border border-[var(--color-control-border,rgba(255,255,255,0.1))] min-h-[44px] shrink-0"
+            >
+              Open Living Library
+            </button>
           </div>
         </>
       )}
