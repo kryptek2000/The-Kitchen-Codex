@@ -126,6 +126,7 @@ import { playTimerChime } from './utils/audioAlert';
 import { buildGalleryRoute, buildRecipeRoute, parseRecipeRoute } from './utils/recipeRoute';
 import { APP_VERSION } from './version';
 import ProviderSettings from './application-ui/ProviderSettings';
+import { CodexAtelier } from './components/CodexAtelier';
 import { CreateForMeModal } from './components/CreateForMeModal';
 import { generatedDraftToObsidianRecipe, saveGeneratedRecipeToVault, GeneratedRecipePathCollisionError } from './application/createForMe';
 import type { GeneratedRecipeDraft, GeneratedRecipeProvenance } from './schema/generatedRecipe';
@@ -2561,8 +2562,8 @@ export default function App() {
             onNavigateToMealPlan={() => setActiveTab('mealplan')}
           />
         ) : activeTab === 'providers' ? (
-          /* AI Provider Status / Selection View (read-only truth + safe client preferences) */
-          <ProviderSettings
+          /* The Codex Atelier — unified AI Studio workspace (UD-2B) */
+          <CodexAtelier
             network={networkAdapter}
             settings={settingsAdapter}
             onTextAiRuntimeChanged={invalidateNutritionReadiness}
