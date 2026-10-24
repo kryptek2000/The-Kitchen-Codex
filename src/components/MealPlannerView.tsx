@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   Calendar,
   Plus,
@@ -39,6 +39,11 @@ export function MealPlannerView({
   const [selectingSlot, setSelectingSlot] = useState<{ dayIndex: number; mealType: 'breakfast' | 'lunch' | 'dinner' } | null>(null);
   const [modalSearchQuery, setModalSearchQuery] = useState('');
 
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const closeBtnRef = useRef<HTMLButtonElement>(null);
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+
   const sortedRecipes = useMemo(() => {
     return [...recipes].sort((a, b) =>
       (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base', numeric: true })
@@ -77,6 +82,49 @@ export function MealPlannerView({
   const handleRemoveSlot = (dayIndex: number, mealType: 'breakfast' | 'lunch' | 'dinner') => {
     onRemoveSlotRecipe(dayIndex, mealType);
   };
+
+  // Focus management for the recipe selector dialog.
+  useEffect(() => {
+    if (!selectingSlot) return;
+    // Focus the search input (or close button) on open.
+    const focusTarget = searchInputRef.current || closeBtnRef.current;
+    // Defer to allow the modal to render.
+    const t = window.setTimeout(() => {
+      (searchInputRef.current || closeBtnRef.current)?.focus();
+    }, 0);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setSelectingSlot(null);
+        setModalSearchQuery('');
+        return;
+      }
+      if (e.key !== 'Tab' || !dialogRef.current) return;
+      const focusables = dialogRef.current.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      );
+      if (focusables.length === 0) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => {
+      window.clearTimeout(t);
+      document.removeEventListener('keydown', onKey);
+      // Restore focus to the trigger if it still exists.
+      const trigger = previouslyFocusedRef.current;
+      if (trigger && typeof trigger.focus === 'function') {
+        try { trigger.focus(); } catch { /* ignore */ }
+      }
+    };
+  }, [selectingSlot]);
 
   const SLOT_LABEL: Record<'breakfast' | 'lunch' | 'dinner', string> = {
     breakfast: 'Breakfast',
@@ -192,7 +240,10 @@ export function MealPlannerView({
                       </div>
                     ) : (
                       <button
-                        onClick={() => setSelectingSlot({ dayIndex, mealType })}
+                        onClick={(e) => {
+                          previouslyFocusedRef.current = e.currentTarget as HTMLElement;
+                          setSelectingSlot({ dayIndex, mealType });
+                        }}
                         className="w-full py-2 px-2 rounded-xl border border-dashed border-[var(--color-control-border,rgba(255,255,255,0.1))] hover:border-[var(--accent-text,#F59E0B)] hover:bg-[var(--accent-subtle,rgba(245,158,11,0.1))] text-[var(--text-muted,#6B7280)] hover:text-[var(--text-primary,#F3F4F6)] text-[11px] flex items-center justify-center gap-1 transition-colors duration-[140ms] min-h-[44px]"
                       >
                         <Plus className="w-3.5 h-3.5" aria-hidden="true" />
@@ -222,7 +273,7 @@ export function MealPlannerView({
 
       {/* Recipe Selection Modal */}
       {selectingSlot && (
-        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="meal-select-title">
+        <div ref={dialogRef} className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="meal-select-title">
           <div className="bg-[var(--bg-surface,#141414)] rounded-2xl border border-[var(--color-control-border,rgba(255,255,255,0.1))] max-w-lg w-full p-5 shadow-2xl space-y-4 max-h-[85vh] flex flex-col text-[var(--text-primary,#F3F4F6)]">
             <div className="flex items-center justify-between pb-3 border-b border-[var(--color-rule,var(--bg-elevated))]">
               <div className="space-y-0.5">
@@ -239,6 +290,7 @@ export function MealPlannerView({
                 </p>
               </div>
               <button
+                ref={closeBtnRef}
                 onClick={() => {
                   setSelectingSlot(null);
                   setModalSearchQuery('');
@@ -254,6 +306,7 @@ export function MealPlannerView({
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[var(--text-muted,#6B7280)]" aria-hidden="true" />
                 <input
+                  ref={searchInputRef}
                   type="text"
                   value={modalSearchQuery}
                   onChange={(e) => setModalSearchQuery(e.target.value)}
