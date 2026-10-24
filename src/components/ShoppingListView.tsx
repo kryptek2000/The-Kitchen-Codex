@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   ShoppingCart,
   Copy,
@@ -45,7 +45,7 @@ export function ShoppingListView({
     0
   );
 
-  const availableCategories = React.useMemo(() => {
+  const availableCategories = useMemo(() => {
     const existing = categories.map((c) => c.category);
     const defaults = [
       'Produce & Fresh Herbs',
@@ -93,67 +93,71 @@ export function ShoppingListView({
   };
 
   return (
-    <div id="obsidian-shopping-list-view" className="max-w-4xl mx-auto px-4 sm:px-6 py-6 space-y-6">
-      {/* Header Banner */}
-      <div className="bg-[#141414] rounded-2xl border border-white/10 p-5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2">
-            <h2 className="text-lg font-serif font-bold text-white flex items-center gap-2">
-              <ShoppingCart className="w-5 h-5 text-amber-400" />
-              <span>Smart Grocery &amp; Pantry List</span>
-            </h2>
-            <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium border ${
-              totalPlannedMeals > 0
-                ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                : 'bg-white/5 text-gray-500 border-white/5'
-            }`}>
-              {totalPlannedMeals} {totalPlannedMeals === 1 ? 'meal on plan' : 'meals on plan'}
-            </span>
+    <div id="obsidian-shopping-list-view" className="max-w-4xl mx-auto kc-vault-surface py-6 space-y-6">
+      {/* Editorial header */}
+      <header className="space-y-2 pb-4 border-b border-[var(--color-rule,var(--bg-elevated))]">
+        <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] font-semibold text-[var(--text-muted,#6B7280)]">
+          <ShoppingCart className="w-4 h-4" aria-hidden="true" />
+          <span>Shopping List</span>
+        </div>
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div className="space-y-1">
+            <h1 className="font-serif text-[32px] sm:text-[40px] leading-[1.15] text-[var(--text-primary,#F3F4F6)]">
+              Smart Grocery &amp; Pantry List
+            </h1>
+            <p className="text-[14px] leading-[1.55] text-[var(--text-secondary,#9CA3AF)] max-w-2xl">
+              {totalItems === 0
+                ? 'Only ingredients for meals on your weekly meal plan are displayed here.'
+                : `${checkedItems} of ${totalItems} items completed`}
+            </p>
           </div>
-          <p className="text-xs text-gray-400 mt-0.5">
-            {totalItems === 0
-              ? 'Only ingredients for meals on your weekly meal plan are displayed here.'
-              : `${checkedItems} of ${totalItems} items completed`}
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          {onNavigateToMealPlan && (
-            <button
-              onClick={onNavigateToMealPlan}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-xs font-semibold transition-colors cursor-pointer"
-            >
-              <Calendar className="w-3.5 h-3.5" />
-              <span>Weekly Planner</span>
-            </button>
-          )}
-
-          {/* Copy as Obsidian Markdown */}
-          <button
-            id="copy-obsidian-checklist-btn"
-            onClick={handleCopyObsidianMarkdown}
-            disabled={totalItems === 0}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-gray-200 border border-white/10 text-xs font-semibold transition-colors disabled:opacity-40 cursor-pointer"
-            title="Copy as Obsidian Markdown Checklist format"
+          <span
+            className={`inline-flex items-center px-3 py-1 rounded-full text-[12px] font-semibold border ${
+              totalPlannedMeals > 0
+                ? 'bg-[var(--accent-subtle,rgba(245,158,11,0.15))] text-[var(--accent-text,#F59E0B)] border-[var(--accent-text,#F59E0B)]'
+                : 'bg-[var(--bg-elevated,#1E1E1E)] text-[var(--text-muted,#6B7280)] border-[var(--color-control-border,rgba(255,255,255,0.1))]'
+            }`}
           >
-            {copiedObsidian ? <Check className="w-4 h-4 text-emerald-400" /> : <FileCode className="w-4 h-4 text-amber-400" />}
-            <span>{copiedObsidian ? 'Copied Markdown!' : 'Copy for Obsidian'}</span>
-          </button>
-
-          {/* Clear Checked */}
-          {checkedItems > 0 && (
-            <button
-              onClick={onClearChecked}
-              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium text-gray-400 hover:text-white hover:bg-white/5 transition-colors cursor-pointer"
-            >
-              <CheckCheck className="w-3.5 h-3.5" />
-              <span>Clear Done</span>
-            </button>
-          )}
+            {totalPlannedMeals} {totalPlannedMeals === 1 ? 'meal on plan' : 'meals on plan'}
+          </span>
         </div>
+      </header>
+
+      {/* Action bar */}
+      <div className="flex flex-wrap items-center gap-2">
+        {onNavigateToMealPlan && (
+          <button
+            onClick={onNavigateToMealPlan}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[var(--bg-elevated,#1E1E1E)] hover:bg-[var(--bg-surface,#141414)] text-[var(--text-primary,#F3F4F6)] border border-[var(--color-control-border,rgba(255,255,255,0.1))] text-[13px] font-semibold transition-colors duration-[140ms] min-h-[44px]"
+          >
+            <Calendar className="w-4 h-4" aria-hidden="true" />
+            <span>Weekly Planner</span>
+          </button>
+        )}
+
+        <button
+          id="copy-obsidian-checklist-btn"
+          onClick={handleCopyObsidianMarkdown}
+          disabled={totalItems === 0}
+          title="Copy as Obsidian Markdown Checklist format"
+          className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[var(--bg-elevated,#1E1E1E)] hover:bg-[var(--bg-surface,#141414)] text-[var(--text-secondary,#9CA3AF)] border border-[var(--color-control-border,rgba(255,255,255,0.1))] text-[13px] font-semibold transition-colors duration-[140ms] min-h-[44px] disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {copiedObsidian ? <Check className="w-4 h-4 text-emerald-400" aria-hidden="true" /> : <FileCode className="w-4 h-4 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />}
+          <span>{copiedObsidian ? 'Copied Markdown!' : 'Copy as Markdown'}</span>
+        </button>
+
+        {checkedItems > 0 && (
+          <button
+            onClick={onClearChecked}
+            className="flex items-center gap-1 px-4 py-2 rounded-lg text-[13px] font-medium text-[var(--text-secondary,#9CA3AF)] hover:text-[var(--text-primary,#F3F4F6)] hover:bg-[var(--bg-elevated,#1E1E1E)] transition-colors duration-[140ms] min-h-[44px]"
+          >
+            <CheckCheck className="w-4 h-4" aria-hidden="true" />
+            <span>Clear Done</span>
+          </button>
+        )}
       </div>
 
-      {/* Add Custom Item Form */}
+      {/* Add custom item form */}
       <form onSubmit={handleAddNewItem} className="flex flex-col sm:flex-row gap-2">
         <input
           id="new-grocery-item-input"
@@ -161,39 +165,41 @@ export function ShoppingListView({
           value={newItemText}
           onChange={(e) => setNewItemText(e.target.value)}
           placeholder="Add custom item (e.g. 2 ripe Avocados, Sea Salt)..."
-          className="flex-1 text-xs bg-[#141414] border border-white/10 rounded-xl px-3.5 py-2.5 text-gray-200 placeholder:text-gray-600 focus:outline-none focus:border-amber-500 shadow-xs"
+          aria-label="New grocery item"
+          className="flex-1 text-sm bg-[var(--bg-elevated,#1E1E1E)] border border-[var(--color-control-border,rgba(255,255,255,0.1))] rounded-xl px-3.5 py-2.5 text-[var(--text-primary,#F3F4F6)] placeholder:text-[var(--text-muted,#6B7280)] focus:outline-none focus:border-[var(--accent-text,#F59E0B)] min-h-[44px]"
         />
         <select
           value={activeCategoryChoice}
           onChange={(e) => setSelectedCategory(e.target.value)}
-          className="text-xs bg-[#141414] border border-white/10 rounded-xl px-3 py-2 text-gray-300 focus:outline-none focus:border-amber-500 max-w-xs truncate"
+          aria-label="Category for new item"
+          className="text-sm bg-[var(--bg-elevated,#1E1E1E)] border border-[var(--color-control-border,rgba(255,255,255,0.1))] rounded-xl px-3 py-2 text-[var(--text-secondary,#9CA3AF)] focus:outline-none focus:border-[var(--accent-text,#F59E0B)] min-h-[44px] sm:max-w-xs"
         >
           {availableCategories.map((cat) => (
-            <option key={cat} value={cat} className="bg-[#141414]">
+            <option key={cat} value={cat} className="bg-[var(--bg-elevated,#1E1E1E)]">
               {cat}
             </option>
           ))}
         </select>
         <button
           type="submit"
-          className="flex items-center justify-center gap-1 px-4 py-2 bg-amber-500 hover:bg-amber-400 text-black rounded-xl text-xs font-bold shadow-md shadow-amber-500/20 transition-colors cursor-pointer"
+          className="flex items-center justify-center gap-1 px-4 py-2 bg-[var(--accent,#F59E0B)] hover:bg-[var(--accent-hover,#D97706)] text-[var(--color-on-accent,#0C0C0C)] rounded-xl text-sm font-bold transition-colors duration-[140ms] min-h-[44px]"
         >
-          <Plus className="w-4 h-4" />
+          <Plus className="w-4 h-4" aria-hidden="true" />
           <span>Add</span>
         </button>
       </form>
 
-      {/* Categorized Lists or Empty State */}
+      {/* Categorized lists or empty state */}
       {totalItems === 0 ? (
-        <div className="bg-[#141414] rounded-2xl border border-dashed border-white/10 p-8 text-center space-y-4">
-          <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mx-auto">
-            <ShoppingCart className="w-6 h-6" />
+        <div className="rounded-2xl border border-dashed border-[var(--color-control-border,rgba(255,255,255,0.1))] bg-[var(--bg-surface,#141414)] p-8 text-center space-y-4">
+          <div className="w-12 h-12 rounded-2xl bg-[var(--accent-subtle,rgba(245,158,11,0.15))] border border-[var(--accent-text,#F59E0B)] text-[var(--accent-text,#F59E0B)] flex items-center justify-center mx-auto">
+            <ShoppingCart className="w-6 h-6" aria-hidden="true" />
           </div>
           <div className="space-y-1">
-            <h3 className="font-serif font-bold text-sm text-gray-200">
+            <h3 className="font-serif font-bold text-sm text-[var(--text-primary,#F3F4F6)]">
               {totalPlannedMeals === 0 ? 'Weekly Meal Plan is Empty' : 'Your shopping list is empty'}
             </h3>
-            <p className="text-xs text-gray-400 max-w-md mx-auto leading-relaxed">
+            <p className="text-xs text-[var(--text-secondary,#9CA3AF)] max-w-md mx-auto leading-relaxed">
               {totalPlannedMeals === 0
                 ? 'The shopping list only displays ingredients when meals are scheduled on your weekly meal plan. Schedule meals in the planner to automatically generate your grocery list.'
                 : 'All items have been completed or removed. Add more meals to your weekly meal plan or add custom items above.'}
@@ -203,11 +209,11 @@ export function ShoppingListView({
           {onNavigateToMealPlan && (
             <button
               onClick={onNavigateToMealPlan}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs transition-all shadow-md shadow-amber-500/20 cursor-pointer"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[var(--accent,#F59E0B)] hover:bg-[var(--accent-hover,#D97706)] text-[var(--color-on-accent,#0C0C0C)] font-bold text-xs transition-all duration-[140ms] shadow-sm min-h-[44px]"
             >
-              <Calendar className="w-4 h-4" />
+              <Calendar className="w-4 h-4" aria-hidden="true" />
               <span>Go to Weekly Meal Planner</span>
-              <ChevronRight className="w-3.5 h-3.5" />
+              <ChevronRight className="w-3.5 h-3.5" aria-hidden="true" />
             </button>
           )}
         </div>
@@ -219,12 +225,12 @@ export function ShoppingListView({
             return (
               <div
                 key={group.category}
-                className="bg-[#141414] rounded-2xl border border-white/10 p-4 shadow-xs space-y-2"
+                className="rounded-2xl border border-[var(--color-rule,var(--bg-elevated))] bg-[var(--bg-surface,#141414)] p-4 shadow-xs space-y-2"
               >
-                <h3 className="text-xs font-bold text-white uppercase tracking-wider pb-2 border-b border-white/5 flex items-center justify-between">
+                <h3 className="text-xs font-bold text-[var(--text-primary,#F3F4F6)] uppercase tracking-wider pb-2 border-b border-[var(--color-rule,var(--bg-elevated))] flex items-center justify-between">
                   <span>{group.category}</span>
-                  <span className="text-[11px] font-normal text-gray-500">
-                    {group.items.length} items
+                  <span className="text-[11px] font-normal text-[var(--text-muted,#6B7280)]">
+                    {group.items.length} {group.items.length === 1 ? 'item' : 'items'}
                   </span>
                 </h3>
 
@@ -232,26 +238,26 @@ export function ShoppingListView({
                   {group.items.map((item) => (
                     <li
                       key={item.id}
-                      onClick={() => onToggleItem(group.category, item.id)}
-                      className={`flex items-center justify-between gap-3 p-2 rounded-lg cursor-pointer transition-colors group ${
+                      className={`flex items-center justify-between gap-3 p-2.5 rounded-lg transition-colors group ${
                         item.isChecked
-                          ? 'bg-white/5 text-gray-600 line-through'
-                          : 'hover:bg-white/5 text-gray-200'
+                          ? 'bg-[var(--bg-elevated,#1E1E1E)] text-[var(--text-muted,#6B7280)] line-through'
+                          : 'hover:bg-[var(--bg-elevated,#1E1E1E)] text-[var(--text-primary,#F3F4F6)]'
                       }`}
                     >
-                      <div className="flex items-center gap-2.5 min-w-0">
+                      <label className="flex items-center gap-2.5 min-w-0 flex-1 cursor-pointer">
                         <input
                           type="checkbox"
                           checked={item.isChecked}
-                          onChange={() => {}}
-                          className="rounded accent-amber-500 cursor-pointer"
+                          onChange={() => onToggleItem(group.category, item.id)}
+                          aria-label={item.text}
+                          className="rounded accent-[var(--accent,#F59E0B)] cursor-pointer w-4 h-4 shrink-0"
                         />
                         <span className="text-xs sm:text-sm truncate">{item.text}</span>
-                      </div>
+                      </label>
 
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 shrink-0">
                         {item.recipeSources && item.recipeSources.length > 0 && (
-                          <span className="text-[10px] font-mono text-gray-500 hidden sm:inline truncate max-w-xs">
+                          <span className="text-[10px] font-mono text-[var(--text-muted,#6B7280)] hidden sm:inline truncate max-w-xs">
                             {item.recipeSources.join(', ')}
                           </span>
                         )}
@@ -260,9 +266,10 @@ export function ShoppingListView({
                             e.stopPropagation();
                             onDeleteItem(group.category, item.id);
                           }}
-                          className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-rose-400 p-1 transition-opacity cursor-pointer"
+                          aria-label={`Delete ${item.text}`}
+                          className="w-11 h-11 flex items-center justify-center rounded-lg text-[var(--text-muted,#6B7280)] hover:text-rose-400 hover:bg-rose-500/10 transition-colors duration-[140ms]"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <Trash2 className="w-4 h-4" aria-hidden="true" />
                         </button>
                       </div>
                     </li>

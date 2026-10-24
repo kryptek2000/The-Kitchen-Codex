@@ -8,7 +8,6 @@ import {
   ChevronRight,
   Utensils,
   BookOpen,
-  ChefHat,
   RotateCcw,
   Search,
   X,
@@ -40,14 +39,12 @@ export function MealPlannerView({
   const [selectingSlot, setSelectingSlot] = useState<{ dayIndex: number; mealType: 'breakfast' | 'lunch' | 'dinner' } | null>(null);
   const [modalSearchQuery, setModalSearchQuery] = useState('');
 
-  // Always sort recipes in alphabetical order (A-Z) by title
   const sortedRecipes = useMemo(() => {
     return [...recipes].sort((a, b) =>
       (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base', numeric: true })
     );
   }, [recipes]);
 
-  // Filter sorted recipes if a search query is entered
   const filteredModalRecipes = useMemo(() => {
     const query = modalSearchQuery.trim().toLowerCase();
     if (!query) return sortedRecipes;
@@ -81,59 +78,67 @@ export function MealPlannerView({
     onRemoveSlotRecipe(dayIndex, mealType);
   };
 
+  const SLOT_LABEL: Record<'breakfast' | 'lunch' | 'dinner', string> = {
+    breakfast: 'Breakfast',
+    lunch: 'Lunch',
+    dinner: 'Dinner',
+  };
+
   return (
-    <div id="obsidian-meal-planner-view" className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
-      {/* Top Banner with Actions */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-[#141414] p-5 rounded-2xl border border-white/10 shadow-xs">
-        <div>
-          <div className="flex items-center gap-2">
-            <h2 className="text-lg font-serif font-bold text-white flex items-center gap-2">
-              <Calendar className="w-5 h-5 text-amber-400" />
-              <span>Weekly Meal Plan</span>
-            </h2>
-            <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium border ${
-              totalPlannedMeals > 0
-                ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                : 'bg-white/5 text-gray-500 border-white/5'
-            }`}>
-              {totalPlannedMeals} {totalPlannedMeals === 1 ? 'meal planned' : 'meals planned'}
-            </span>
+    <div id="obsidian-meal-planner-view" className="max-w-7xl mx-auto kc-vault-surface py-6 space-y-6">
+      {/* Editorial header */}
+      <header className="space-y-2 pb-4 border-b border-[var(--color-rule,var(--bg-elevated))]">
+        <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] font-semibold text-[var(--text-muted,#6B7280)]">
+          <Calendar className="w-4 h-4" aria-hidden="true" />
+          <span>Meal Planner</span>
+        </div>
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div className="space-y-1">
+            <h1 className="font-serif text-[32px] sm:text-[40px] leading-[1.15] text-[var(--text-primary,#F3F4F6)]">
+              Weekly Meal Plan
+            </h1>
+            <p className="text-[14px] leading-[1.55] text-[var(--text-secondary,#9CA3AF)] max-w-2xl">
+              Plan your favorite meals for the week, then bring everything you need into your shopping list.
+            </p>
           </div>
-          <p className="text-xs text-gray-400 mt-0.5">
-            {totalPlannedMeals === 0
-              ? 'Plan meals across your week to automatically populate your grocery shopping checklist.'
-              : 'Ingredients from planned meals are synced directly to your weekly shopping list.'}
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Generate Full Week Shopping List */}
-          <button
-            id="generate-full-week-shopping-btn"
-            onClick={onGenerateWeeklyShoppingList}
-            disabled={totalPlannedMeals === 0}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-lg bg-amber-500 hover:bg-amber-400 text-black shadow-md shadow-amber-500/20 transition-all disabled:opacity-40 disabled:hover:bg-amber-500 disabled:cursor-not-allowed cursor-pointer"
-            title={totalPlannedMeals === 0 ? 'Add meals to generate shopping list' : 'View ingredients for all planned meals'}
+          <span
+            className={`inline-flex items-center px-3 py-1 rounded-full text-[12px] font-semibold border ${
+              totalPlannedMeals > 0
+                ? 'bg-[var(--accent-subtle,rgba(245,158,11,0.15))] text-[var(--accent-text,#F59E0B)] border-[var(--accent-text,#F59E0B)]'
+                : 'bg-[var(--bg-elevated,#1E1E1E)] text-[var(--text-muted,#6B7280)] border-[var(--color-control-border,rgba(255,255,255,0.1))]'
+            }`}
           >
-            <ShoppingCart className="w-3.5 h-3.5" />
-            <span>Weekly Shopping List {totalPlannedMeals > 0 ? `(${totalPlannedMeals})` : ''}</span>
-          </button>
-
-          {/* Reset Week Button */}
-          <button
-            id="reset-meal-plan-btn"
-            onClick={onResetMealPlan}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-400 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg transition-colors cursor-pointer"
-            title="Reset meal plan and clear shopping list"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-            <span>Reset Week</span>
-          </button>
+            {totalPlannedMeals} {totalPlannedMeals === 1 ? 'meal planned' : 'meals planned'}
+          </span>
         </div>
+      </header>
+
+      {/* Action bar */}
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          id="generate-full-week-shopping-btn"
+          onClick={onGenerateWeeklyShoppingList}
+          disabled={totalPlannedMeals === 0}
+          title={totalPlannedMeals === 0 ? 'Add meals to generate shopping list' : 'View ingredients for all planned meals'}
+          className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-[13px] font-semibold bg-[var(--accent,#F59E0B)] text-[var(--color-on-accent,#0C0C0C)] min-h-[44px] shadow-sm disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-[140ms]"
+        >
+          <ShoppingCart className="w-4 h-4" aria-hidden="true" />
+          <span>Weekly Shopping List{totalPlannedMeals > 0 ? ` (${totalPlannedMeals})` : ''}</span>
+        </button>
+
+        <button
+          id="reset-meal-plan-btn"
+          onClick={onResetMealPlan}
+          title="Reset meal plan and clear shopping list"
+          className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-[13px] font-medium bg-[var(--bg-elevated,#1E1E1E)] text-[var(--text-secondary,#9CA3AF)] border border-[var(--color-control-border,rgba(255,255,255,0.1))] min-h-[44px] hover:text-[var(--text-primary,#F3F4F6)] transition-colors duration-[140ms]"
+        >
+          <RotateCcw className="w-4 h-4" aria-hidden="true" />
+          <span>Reset Week</span>
+        </button>
       </div>
 
-      {/* 7-Day Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-7 gap-4">
+      {/* 7-day grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 min-[1800px]:grid-cols-7 gap-4">
         {mealPlan.map((day, dayIndex) => {
           const dayRecipeCount =
             (day.breakfast?.recipeTitle ? 1 : 0) +
@@ -144,132 +149,70 @@ export function MealPlannerView({
             <div
               key={day.dayName}
               id={`meal-plan-day-${day.dayName.toLowerCase()}`}
-              className="bg-[#141414] rounded-2xl border border-white/10 p-3.5 flex flex-col justify-between shadow-xs space-y-3"
+              className="rounded-2xl border border-[var(--color-rule,var(--bg-elevated))] bg-[var(--bg-surface,#141414)] p-4 flex flex-col gap-3"
             >
-              <div className="space-y-3">
-                <div className="pb-2 border-b border-white/5 flex items-center justify-between">
-                  <h3 className="font-bold text-xs text-white uppercase tracking-wider">
-                    {day.dayName}
-                  </h3>
-                  <span
-                    className={`w-2 h-2 rounded-full ${
-                      dayRecipeCount > 0 ? 'bg-amber-500' : 'bg-zinc-700'
-                    }`}
-                  />
-                </div>
-
-                {/* Breakfast Slot */}
-                <div className="space-y-1">
-                  <span className="text-[10px] font-semibold text-gray-500 uppercase">
-                    Breakfast
-                  </span>
-                  {day.breakfast?.recipeTitle ? (
-                    <div className="p-2 rounded-xl bg-white/5 border border-white/10 text-xs text-gray-200 flex items-start justify-between gap-1 group">
-                      <span
-                        onClick={() => day.breakfast?.recipeId && onOpenRecipe(day.breakfast.recipeId)}
-                        className="font-medium cursor-pointer hover:text-amber-400 leading-tight line-clamp-2 transition-colors"
-                      >
-                        {day.breakfast.recipeTitle}
-                      </span>
-                      <button
-                        onClick={() => handleRemoveSlot(dayIndex, 'breakfast')}
-                        className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-rose-400 transition-opacity"
-                        title="Remove breakfast"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => setSelectingSlot({ dayIndex, mealType: 'breakfast' })}
-                      className="w-full py-1.5 px-2 rounded-lg border border-dashed border-white/10 hover:border-amber-500/50 hover:bg-amber-500/5 text-gray-400 hover:text-gray-200 text-[11px] flex items-center justify-center gap-1 transition-colors"
-                    >
-                      <Plus className="w-3 h-3" />
-                      <span>Add Breakfast</span>
-                    </button>
-                  )}
-                </div>
-
-                {/* Lunch Slot */}
-                <div className="space-y-1">
-                  <span className="text-[10px] font-semibold text-gray-500 uppercase">
-                    Lunch
-                  </span>
-                  {day.lunch?.recipeTitle ? (
-                    <div className="p-2 rounded-xl bg-white/5 border border-white/10 text-xs text-gray-200 flex items-start justify-between gap-1 group">
-                      <span
-                        onClick={() => day.lunch?.recipeId && onOpenRecipe(day.lunch.recipeId)}
-                        className="font-medium cursor-pointer hover:text-amber-400 leading-tight line-clamp-2 transition-colors"
-                      >
-                        {day.lunch.recipeTitle}
-                      </span>
-                      <button
-                        onClick={() => handleRemoveSlot(dayIndex, 'lunch')}
-                        className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-rose-400 transition-opacity"
-                        title="Remove lunch"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => setSelectingSlot({ dayIndex, mealType: 'lunch' })}
-                      className="w-full py-1.5 px-2 rounded-lg border border-dashed border-white/10 hover:border-amber-500/50 hover:bg-amber-500/5 text-gray-400 hover:text-gray-200 text-[11px] flex items-center justify-center gap-1 transition-colors"
-                    >
-                      <Plus className="w-3 h-3" />
-                      <span>Add Lunch</span>
-                    </button>
-                  )}
-                </div>
-
-                {/* Dinner Slot */}
-                <div className="space-y-1">
-                  <span className="text-[10px] font-semibold text-gray-500 uppercase">
-                    Dinner
-                  </span>
-                  {day.dinner?.recipeTitle ? (
-                    <div className="p-2 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300 flex items-start justify-between gap-1 group">
-                      <span
-                        onClick={() => day.dinner?.recipeId && onOpenRecipe(day.dinner.recipeId)}
-                        className="font-medium cursor-pointer hover:text-amber-200 leading-tight line-clamp-2 transition-colors"
-                      >
-                        {day.dinner.recipeTitle}
-                      </span>
-                      <button
-                        onClick={() => handleRemoveSlot(dayIndex, 'dinner')}
-                        className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-rose-400 transition-opacity"
-                        title="Remove dinner"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => setSelectingSlot({ dayIndex, mealType: 'dinner' })}
-                      className="w-full py-1.5 px-2 rounded-lg border border-dashed border-white/10 hover:border-amber-500/50 hover:bg-amber-500/5 text-gray-400 hover:text-gray-200 text-[11px] flex items-center justify-center gap-1 transition-colors"
-                    >
-                      <Plus className="w-3 h-3" />
-                      <span>Add Dinner</span>
-                    </button>
-                  )}
-                </div>
+              <div className="pb-2 border-b border-[var(--color-rule,var(--bg-elevated))] flex items-center justify-between">
+                <h3 className="font-serif text-[14px] font-semibold text-[var(--text-primary,#F3F4F6)] uppercase tracking-wider">
+                  {day.dayName}
+                </h3>
+                <span
+                  className={`w-2 h-2 rounded-full ${dayRecipeCount > 0 ? 'bg-[var(--accent-text,#F59E0B)]' : 'bg-[var(--text-muted,#6B7280)]'}`}
+                  aria-hidden="true"
+                />
               </div>
 
-              {/* Per-Day Generate Shopping List Button */}
-              <div className="pt-2 border-t border-white/5">
+              {(['breakfast', 'lunch', 'dinner'] as const).map((mealType) => {
+                const slot = day[mealType];
+                const filled = !!slot?.recipeTitle;
+                return (
+                  <div key={mealType} className="space-y-1">
+                    <span className="text-[10px] font-semibold text-[var(--text-muted,#6B7280)] uppercase tracking-wide">
+                      {SLOT_LABEL[mealType]}
+                    </span>
+                    {filled ? (
+                      <div className="p-2.5 rounded-xl bg-[var(--bg-elevated,#1E1E1E)] border border-[var(--color-control-border,rgba(255,255,255,0.1))] text-[12px] text-[var(--text-primary,#F3F4F6)] flex items-start justify-between gap-2 group">
+                        <span
+                          onClick={() => slot?.recipeId && onOpenRecipe(slot.recipeId)}
+                          className="font-medium cursor-pointer hover:text-[var(--accent-text,#F59E0B)] leading-tight line-clamp-2 transition-colors"
+                        >
+                          {slot!.recipeTitle}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRemoveSlot(dayIndex, mealType);
+                          }}
+                          aria-label={`Remove ${slot!.recipeTitle} from ${day.dayName} ${mealType}`}
+                          title={`Remove ${slot!.recipeTitle}`}
+                          className="shrink-0 w-11 h-11 flex items-center justify-center rounded-lg text-[var(--text-muted,#6B7280)] hover:text-rose-400 hover:bg-rose-500/10 transition-colors duration-[140ms] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring,#F59E0B)]"
+                        >
+                          <Trash2 className="w-4 h-4" aria-hidden="true" />
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setSelectingSlot({ dayIndex, mealType })}
+                        className="w-full py-2 px-2 rounded-xl border border-dashed border-[var(--color-control-border,rgba(255,255,255,0.1))] hover:border-[var(--accent-text,#F59E0B)] hover:bg-[var(--accent-subtle,rgba(245,158,11,0.1))] text-[var(--text-muted,#6B7280)] hover:text-[var(--text-primary,#F3F4F6)] text-[11px] flex items-center justify-center gap-1 transition-colors duration-[140ms] min-h-[44px]"
+                      >
+                        <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>Add {SLOT_LABEL[mealType]}</span>
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+
+              <div className="pt-2 border-t border-[var(--color-rule,var(--bg-elevated))]">
                 <button
                   id={`generate-shopping-${day.dayName.toLowerCase()}-btn`}
                   onClick={() => onGenerateDayShoppingList(day)}
                   disabled={dayRecipeCount === 0}
-                  title={
-                    dayRecipeCount === 0
-                      ? `No meals planned for ${day.dayName}`
-                      : `Generate shopping list for ${day.dayName}`
-                  }
-                  className="w-full flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-30 disabled:hover:bg-amber-500 disabled:cursor-not-allowed text-black text-xs font-bold transition-all shadow-xs"
+                  title={dayRecipeCount === 0 ? `No meals planned for ${day.dayName}` : `Generate shopping list for ${day.dayName}`}
+                  className="w-full flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-xl bg-[var(--bg-elevated,#1E1E1E)] hover:bg-[var(--bg-surface,#141414)] disabled:opacity-30 disabled:cursor-not-allowed text-[var(--text-secondary,#9CA3AF)] hover:text-[var(--text-primary,#F3F4F6)] text-xs font-semibold transition-colors duration-[140ms] border border-[var(--color-control-border,rgba(255,255,255,0.1))]"
                 >
-                  <ShoppingCart className="w-3.5 h-3.5" />
-                  <span>Shopping List {dayRecipeCount > 0 ? `(${dayRecipeCount})` : ''}</span>
+                  <ShoppingCart className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Shopping List{dayRecipeCount > 0 ? ` (${dayRecipeCount})` : ''}</span>
                 </button>
               </div>
             </div>
@@ -279,20 +222,19 @@ export function MealPlannerView({
 
       {/* Recipe Selection Modal */}
       {selectingSlot && (
-        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-[#141414] rounded-2xl border border-white/10 max-w-lg w-full p-5 shadow-2xl space-y-4 max-h-[85vh] flex flex-col text-gray-200">
-            {/* Modal Header */}
-            <div className="flex items-center justify-between pb-3 border-b border-white/10">
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="meal-select-title">
+          <div className="bg-[var(--bg-surface,#141414)] rounded-2xl border border-[var(--color-control-border,rgba(255,255,255,0.1))] max-w-lg w-full p-5 shadow-2xl space-y-4 max-h-[85vh] flex flex-col text-[var(--text-primary,#F3F4F6)]">
+            <div className="flex items-center justify-between pb-3 border-b border-[var(--color-rule,var(--bg-elevated))]">
               <div className="space-y-0.5">
                 <div className="flex items-center gap-2">
-                  <h3 className="font-serif font-bold text-sm text-white">
+                  <h3 id="meal-select-title" className="font-serif font-bold text-sm text-[var(--text-primary,#F3F4F6)]">
                     Select Recipe for {mealPlan[selectingSlot.dayIndex]?.dayName}
                   </h3>
-                  <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 capitalize">
+                  <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-[var(--accent-subtle,rgba(245,158,11,0.15))] text-[var(--accent-text,#F59E0B)] border border-[var(--accent-text,#F59E0B)] capitalize">
                     {selectingSlot.mealType}
                   </span>
                 </div>
-                <p className="text-[11px] text-gray-400">
+                <p className="text-[11px] text-[var(--text-muted,#6B7280)]">
                   Sorted alphabetically ({filteredModalRecipes.length} of {recipes.length} {recipes.length === 1 ? 'recipe' : 'recipes'})
                 </p>
               </div>
@@ -301,48 +243,48 @@ export function MealPlannerView({
                   setSelectingSlot(null);
                   setModalSearchQuery('');
                 }}
-                className="p-1 text-gray-400 hover:text-white rounded-lg hover:bg-white/5 transition-colors"
-                title="Close"
+                aria-label="Close recipe selector"
+                className="p-1 text-[var(--text-muted,#6B7280)] hover:text-[var(--text-primary,#F3F4F6)] rounded-lg hover:bg-[var(--bg-elevated,#1E1E1E)] transition-colors"
               >
-                <X className="w-4 h-4" />
+                <X className="w-4 h-4" aria-hidden="true" />
               </button>
             </div>
 
-            {/* Search Input for fast lookup */}
             {recipes.length > 5 && (
               <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[var(--text-muted,#6B7280)]" aria-hidden="true" />
                 <input
                   type="text"
                   value={modalSearchQuery}
                   onChange={(e) => setModalSearchQuery(e.target.value)}
                   placeholder="Filter recipes by title, cuisine, or tag..."
                   autoFocus
-                  className="w-full pl-8 pr-8 py-2 bg-[#0C0C0C] border border-white/10 rounded-xl text-xs text-white placeholder-gray-500 focus:outline-none focus:border-amber-500"
+                  aria-label="Filter recipes"
+                  className="w-full pl-8 pr-8 py-2 bg-[var(--bg-elevated,#1E1E1E)] border border-[var(--color-control-border,rgba(255,255,255,0.1))] rounded-xl text-xs text-[var(--text-primary,#F3F4F6)] placeholder:text-[var(--text-muted,#6B7280)] focus:outline-none focus:border-[var(--accent-text,#F59E0B)] min-h-[44px]"
                 />
                 {modalSearchQuery && (
                   <button
                     onClick={() => setModalSearchQuery('')}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white p-0.5"
+                    aria-label="Clear search"
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--text-muted,#6B7280)] hover:text-[var(--text-primary,#F3F4F6)] p-0.5"
                   >
-                    <X className="w-3.5 h-3.5" />
+                    <X className="w-3.5 h-3.5" aria-hidden="true" />
                   </button>
                 )}
               </div>
             )}
 
-            {/* Alphabetical Recipe List */}
             <div className="overflow-y-auto space-y-2 flex-1 pr-1">
               {filteredModalRecipes.length === 0 ? (
-                <div className="text-center py-8 text-gray-500 space-y-1.5">
-                  <Utensils className="w-7 h-7 mx-auto opacity-40 text-amber-400" />
-                  <p className="text-xs font-medium text-gray-400">
+                <div className="text-center py-8 text-[var(--text-muted,#6B7280)] space-y-1.5">
+                  <Utensils className="w-7 h-7 mx-auto opacity-40 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
+                  <p className="text-xs font-medium text-[var(--text-secondary,#9CA3AF)]">
                     {modalSearchQuery ? `No recipes matching "${modalSearchQuery}"` : 'No recipes available in your vault.'}
                   </p>
                   {modalSearchQuery && (
                     <button
                       onClick={() => setModalSearchQuery('')}
-                      className="text-[11px] text-amber-400 hover:underline"
+                      className="text-[11px] text-[var(--accent-text,#F59E0B)] hover:underline"
                     >
                       Clear search filter
                     </button>
@@ -355,11 +297,11 @@ export function MealPlannerView({
                     <div
                       key={recipe.id}
                       onClick={() => handleSelectRecipeForSlot(recipe)}
-                      className="p-2.5 rounded-xl border border-white/5 bg-[#0C0C0C] hover:border-amber-500/40 hover:bg-white/5 cursor-pointer transition-all flex items-center justify-between gap-3 group"
+                      className="p-2.5 rounded-xl border border-[var(--color-control-border,rgba(255,255,255,0.1))] bg-[var(--bg-elevated,#1E1E1E)] hover:border-[var(--accent-text,#F59E0B)] hover:bg-[var(--bg-surface,#141414)] cursor-pointer transition-all flex items-center justify-between gap-3 group"
                     >
                       <div className="flex items-center gap-3 min-w-0">
                         {thumb && (
-                          <div className="w-10 h-10 rounded-lg overflow-hidden shrink-0 border border-white/10 bg-black/50">
+                          <div className="w-10 h-10 rounded-lg overflow-hidden shrink-0 border border-[var(--color-control-border,rgba(255,255,255,0.1))] bg-black/50">
                             <img
                               src={thumb}
                               alt={recipe.title}
@@ -369,17 +311,17 @@ export function MealPlannerView({
                           </div>
                         )}
                         <div className="min-w-0">
-                          <h4 className="font-serif font-bold text-xs text-white group-hover:text-amber-400 transition-colors truncate">
+                          <h4 className="font-serif font-bold text-xs text-[var(--text-primary,#F3F4F6)] group-hover:text-[var(--accent-text,#F59E0B)] transition-colors truncate">
                             {recipe.title}
                           </h4>
-                          <div className="flex items-center gap-2 text-[10px] text-gray-400 mt-0.5">
+                          <div className="flex items-center gap-2 text-[10px] text-[var(--text-muted,#6B7280)] mt-0.5">
                             {recipe.cuisine && <span>{recipe.cuisine}</span>}
                             {recipe.cookTime && <span>• {recipe.cookTime}</span>}
                             {recipe.difficulty && <span>• {recipe.difficulty}</span>}
                           </div>
                         </div>
                       </div>
-                      <ChevronRight className="w-4 h-4 text-gray-500 group-hover:text-amber-400 group-hover:translate-x-0.5 transition-all shrink-0" />
+                      <ChevronRight className="w-4 h-4 text-[var(--text-muted,#6B7280)] group-hover:text-[var(--accent-text,#F59E0B)] group-hover:translate-x-0.5 transition-all shrink-0" aria-hidden="true" />
                     </div>
                   );
                 })
