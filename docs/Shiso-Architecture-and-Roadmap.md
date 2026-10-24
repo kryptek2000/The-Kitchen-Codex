@@ -403,3 +403,264 @@ human acceptance and Sid's explicit release approval. The
 pending coverage and fixed PR findings from the dated open-alert snapshot.
 This roadmap reconciliation is proposed in PR #13 and remains subject to review
 and merge approval. It does not authorize feature implementation or deployment.
+
+---
+
+## 12. ASAP — AI Settings Studio redesign, complete OpenRouter models, and native OpenCode Go BYOK (October 19, 2026)
+
+**Owner's revised direction (supersedes the earlier §12 implementation-eligibility wording):**
+
+- **Build OpenCode Go as a native, first-class BYOK provider in The Kitchen Codex.** This is an implementation goal, not a speculative feasibility-only feature. The owner cites a working OpenCode Go integration in an Obsidian Copilot plugin as a precedent worth studying; determine the actual transport and authentication contract, rather than merely concluding "Go is for coding."
+- **Redesign the entire AI Settings interface.** Current UI typography is too small and the presentation is too generic. Deliver a distinct, approachable Kitchen Codex experience with readable fonts, strong hierarchy, useful controls, and polished responsive behavior.
+- **Fix incomplete OpenRouter model discovery, especially image-generation models.** Discover what is available separately from what the current adapter can safely execute, then expand proven execution support.
+- **ASAP means ahead of broader SHISO feature expansion** (Explore My Vault, Vault Intelligence tool expansion, animated mascot). Keep Beam's already-active SHISO H-1 recipe/nutrition repair isolated; do not clobber its workspace or combine unrelated commits.
+
+The implementation streams below can be parallelized safely: UI design and provider research may start immediately in separate branches; integration and source repairs must preserve the current validated main baseline.
+
+### P0-A — Native OpenCode Go integration (required product capability)
+
+**User story:** In TKC AI Settings, I can select **OpenCode Go** alongside existing providers, supply *my own* Go API key or another explicitly supported credential, browse models available to my account, test the connection and deliberately use an eligible model for SHISO chat, recipe creation, nutrition interpretation and supported image capabilities. Unsupported capabilities are clearly marked, not simulated.
+
+**Implementation direction:**
+
+1. Add `opencode-go` to the existing server-owned AI provider registry, catalog, settings selection and credential lifecycle. Use the established provider abstraction; do not build a second SHISO brain. Keep provider endpoints fixed/allowlisted and credentials server-only; never persist a user's secret in Vault Markdown, settings preferences or browser storage.
+2. Verify OpenCode Go's current model listing (`GET https://opencode.ai/inference/go/v1/models`) and actual supported credential and protocol paths (potentially Chat Completions, Responses, Messages, and Gemini-style APIs). Implement per-model protocol dispatch where supported, not a universal OpenAI-compatibility guess. Existing Obsidian Copilot behavior is a reference to inspect, not proof that all model operations share one API.
+3. Expose honest model selection and readiness: display name/ID, model availability, input/output modalities, verified structured output/tools, per-operation compatibility, costs/credits/limits and credential state. A model that only supports ordinary chat must not claim to support structured nutrition or image generation.
+4. End-to-end SHISO operation selection must honor the exact chosen provider/model without silent fallback; keep conversation/session continuity, required identifying headers and session ID where documented, cancellation, typed error reporting, request budgets, rate limits, entitlements, cost consent and explicit Apply/Save boundaries.
+5. Give the user an understandable connection test and service-error state. Do not imply that merely connecting an API key authorizes or verifies every model. Maintain free/offline Basic Nutrition independently of Go.
+6. Add fixture-driven adapter tests plus focused integration for model discovery, authentication, capability gates, malformed responses, quotas, provider switching, cancellation, no-secret leakage, and successful permitted SHISO operations. An owner-approved live smoke comes later, with a disposable Vault.
+7. **Service compatibility is an engineering dependency, not permission to abandon this owner-requested feature.** Read provider documentation, confirm the allowed credential and traffic for this product and document any restriction precisely. BYOK does not itself override upstream service terms. If direct Go subscription traffic is not permitted for a general-purpose recipe app, implement the reusable provider adapter/configuration where technically appropriate, do not secretly circumvent access restrictions or generate unauthorized traffic, and present a specific compliant activation path or unresolved blocker to the owner. Do not silently swap Go for another paid provider.
+
+**Definition of done:** A real OpenCode Go choice appears in AI Settings and can be configured and used for verified, allowed TKC operations; any blocked service entitlement is explicit and truthful. A mocked "connected" message or an empty provider dropdown is not done.
+
+Vendor docs: https://dev.opencode.ai/v2/docs/console/go/
+
+### P0-B — The Kitchen Codex AI Studio: a MAGNIFICENT flagship interface (required)
+
+**Owner's explicit design bar, October 19:** *Magnificent. Not generic. Not tiny.*
+This is a major, differentiated product surface, not a font-size patch or a new
+coat of paint on `ProviderSettings.tsx`.
+
+**Source-derived implementation inventory:** The current AI Settings lives mainly
+in `src/application-ui/ProviderSettings.tsx` (roughly 1,735 lines),
+`ModelPicker.tsx`, `SessionKeyPanel.tsx`, `modelPicker.ts`,
+`providerCatalog.ts` and the shared application theme tokens. Existing controls
+use 10–12px labels and a narrow searchable picker with only
+`discoveredModels.slice(0, 100)` informational text entries. Those are real
+limitations to address, not a design preference to retain.
+
+#### Art direction and product character
+
+**Working name:** **THE KITCHEN CODEX — AI STUDIO**.
+Signature concept: **A beautifully engineered culinary intelligence atelier**.
+Combine editorial cookbook typography, the familiar vault/index-card motif,
+warm ink/charcoal/paper surfaces, finely crafted herb/SHISO accents and
+precision AI-tooling interaction. It should feel like opening the control room
+of the user's personal culinary library, **not** a generic SaaS admin panel,
+basic form, dashboard-template collage, or cyberpunk neon display.
+
+Three cohesive design territories to explore **before implementation**:
+
+1. **The Codex Atelier (preferred):** high-end editorial and artisan kitchen
+   aesthetic, split-pane canvas, elegant titles and typographic contrast, tactile
+   paper/ink depth, meticulously spaced provider/model cards and a restrained,
+   living SHISO accent.
+2. **The Intelligence Workbench:** confident, calm, high-density pro-tool
+   organization with scannable cards, strong focus, and contextual model details.
+3. **The Living Library:** browse-first model archive with tasteful category
+   dividers, favorites and card/list views; lightweight recipe-card visual cues.
+
+Blend the strongest parts into ONE final consistent design after owner review.
+Protect visual continuity with current approved TKC UI and all supported themes.
+Do not make a separate design language that looks imported from another product.
+
+**Research references, for principles rather than imitation:**
+
+- Linear UI design hierarchy and calm navigation:
+  https://linear.app/now/how-we-redesigned-the-linear-ui and
+  https://linear.app/now/behind-the-latest-design-refresh
+- OpenRouter's searchable, modality-aware, priced catalog:
+  https://openrouter.ai/models
+- Vercel AI Gateway's capability/price comparison and filterable browsing:
+  https://vercel.com/ai-gateway/models
+- Vercel's design-token/component fidelity practices:
+  https://vercel.com/blog/ai-powered-prototyping-with-design-systems
+
+Borrow **functional patterns**, not branded layouts or artwork.
+
+#### Required information architecture and hero experience
+
+- **Overview / My AI:** a hero treatment with SHISO's current status and selected
+  model(s), concise connection/limit summaries, visible "Use for" paths, recent
+  model choices and a clean launch into configuration. A functional cockpit,
+  not an illustration-only splash.
+- **Providers & Credentials:** handsome, spacious connected/disconnected
+  provider cards for OpenRouter, OpenCode Go, Gemini, DeepSeek and real providers.
+  Enter an approved key once, validate honestly, then refresh that provider's
+  actual model catalog. Clearly show server key versus session-only key,
+  expiry/revoke capability, and supported operation types.
+- **Model Library:** first-class, full-width or roomy split-pane search and browse
+  of **the real full list the provider makes available**, including text,
+  reasoning, vision, image generation and any discoverable other modalities.
+  Let the user search all, filter rapidly, compare, favorite and deliberately
+  select a model for a supported task.
+- **Image Studio:** beautiful image-model discovery, clear generated-image task
+  capabilities (generation vs editing vs vision input), reference-image and
+  resolution support, output previews only when truly implemented, and pricing
+  by image/megapixel/token as applicable.
+- **Advanced / Diagnostics:** collapsed by default, but easily available
+  operational information: model/runtime verification, exact safe error class,
+  refresh timestamp, missing entitlement, unknown price, policy limits and
+  selection/cancellation state.
+
+Desktop: deliberate left navigation rail, substantial content canvas and optional
+right-side model detail/comparison inspector. Mobile: responsive stacked layout
+with no cropped names or horizontal overflow; preserve fast model search.
+
+#### Typography, accessibility and visual quality
+
+- Default body/control font size **16px**, necessary secondary/meta labels **at
+  least 14px**, section headings generally **20–24px**, prominent page titles
+  **28–32px** where space allows. Do NOT use 10–12px type for controls,
+  model IDs, prices, status, key messages or diagnostics.
+- Distinctive type pairing: tasteful editorial display typography for
+  hero/headings, highly legible application sans for dense catalogs, monospace
+  only for technical identifiers when helpful. Preserve theme/font availability.
+- Intentional whitespace, hierarchy, balanced panels, restrained depth,
+  excellent dark/light/theme contrast, prominent selected state, 44px+ hit
+  targets, keyboard search/navigation, high-visibility focus, useful hover/focus
+  details, screen reader announcements, reduced-motion support and robust
+  200% zoom behavior.
+- Data richness without visual noise: details in the inspector, not 15 tiny badges
+  crammed into every row. Costs and critical warnings must remain easy to see.
+- Thoughtful loading, empty, stale, key-expired, no-compatible-model and
+  provider-error states. Do not show a ghost list of supposedly selectable models.
+
+#### Design delivery gate: owner must SEE it
+
+1. Inspect current live AI Settings, actual component hierarchy, design tokens
+   and representative mobile/desktop layouts.
+2. Produce **three visually distinct high-fidelity concepts/mockups** based on
+   the art directions above (not three recolored generic dashboards).
+3. Present clear concept comparisons to the owner; get selection/feedback.
+4. Produce a **polished interactive UI prototype** of the chosen concept with
+   real-feeling provider lists, model browsing, settings cards, detail inspector,
+   key state and mobile behavior, using synthetic example data.
+5. **Do not replace the production UI until the owner approves the visual
+   direction and prototype.** Then integrate using existing state, adapters,
+   catalog contracts and secure credential flows, without unrelated rewrite.
+6. Verify visually at 360, 390, 768, 1024 and 1440px, normal and 200% zoom,
+   all app themes, keyboard, screen readers and reduced-motion modes.
+7. Add behavior regression tests, visual/screenshot reviews and owner hands-on
+   acceptance. A passing automated suite alone is not sufficient.
+
+**Definition of done:** The interface looks unmistakably like **The Kitchen
+Codex**, feels genuinely premium, is comfortably readable, and makes configuring
+hundreds of AI models genuinely easier than competing provider settings UIs.
+
+### P0-C — OpenRouter and OpenCode Go: the FULL LIVE MODEL LIBRARY experience
+
+**Owner's acceptance standard, October 19:** *When I add my OpenRouter or
+OpenCode Go key in Hermes or Obsidian Copilot, I see a huge list of models.
+I want the same kind of list inside The Kitchen Codex.*
+
+**Non-negotiable UX outcome:** Connect a key → discover the currently available
+provider model catalog → browse/search **all available returned models** with
+modality and capability filters → choose an eligible model for the desired
+SHISO/image operation. No artificial "only a few curated models" browsing
+experience and **no silently clipped list**. Never claim to list *every* model
+if the provider API supplied an incomplete or truncated result.
+
+#### Provider discovery contracts
+
+- **OpenRouter:** Investigate why TKC's current
+  `server/ai/openRouterCatalog.ts` fetches `GET /api/v1/models` without
+  `output_modalities=all` even though the documented default is text output.
+  Use the dedicated `GET /api/v1/images/models` and real model/endpoint metadata
+  for image generators. Audit the existing 1,500-entry normalization cap,
+  filtering/deduplication, catalog cache, and display-only `slice(0, 100)`.
+  A static model allowlist must no longer determine which models users can
+  **see**. Investigate current availability/price before allowing paid usage.
+- **OpenCode Go:** On connect, fetch the full account-accessible inventory from
+  the documented `https://opencode.ai/inference/go/v1/models`. Do not
+  hard-code the current published lineup as the UI's only options. Refresh
+  when requested and on credential changes. Supported model API protocols
+  differ: OpenAI Responses, Chat Completions, Anthropic Messages, and
+  Google-style paths; map each model's actual supported operations.
+  Don't promise hundreds of Go models if the Go account actually offers fewer.
+- **Other providers:** Keep the model-library components reusable rather than
+  special-casing a two-model Gemini or DeepSeek dropdown as the design ceiling.
+
+#### Product-level model browser requirements
+
+1. **All Models view selected by default**, with visible total counts,
+   filtering by provider, text/chat, reasoning, image input/vision, image
+   generation, video/audio where available, model family, available/free/paid,
+   verified/unknown, price, context and supported tool/structured operation.
+   Sorting: name, newest, context length, estimated cost and favorites.
+2. **Search by display name AND exact model ID**, with rapid local filtering,
+   keyboard navigation and optional favorites/recent choices saved as
+   non-secret preferences. Include a persistent selected model and operation
+   indication. Easily compare 2–3 models side by side when their comparable
+   metadata exists.
+3. **Every returned catalog model is discoverable**; when provider metadata
+   cannot establish operability, the row remains visible with a specific
+   reason and a contextual "Verify for Kitchen Codex" action when supported.
+   Don't default the entire library to a tiny *verified-free* selection.
+   Verification may safely expand usable models, but not fabricate
+   structured output, tool calling, image support, price or free status.
+4. **No arbitrary UI truncation:** avoid fixed first-100 selectors, hard cap
+   presentation and disconnected "catalog results not shown" states. Implement
+   virtual scrolling/windowing, bounded query processing and incremental
+   hydration or provider-supported pagination as applicable. Keep genuine
+   memory/network safety limits, but surface truncation/errors explicitly and
+   allow complete retrieval through bounded pages or a well-defined alternate
+   API strategy; no unchecked unbounded memory allocation.
+5. **Selection must mean something:** "Use for SHISO Chat", "Use for Recipe
+   Creation", "Use for Nutrition", and "Use for Images" actions as appropriate.
+   Validate each operation's capabilities and any needed runtime profiles;
+   preserve entitlements, signed/validated semantic authority and safe
+   persistence. If unsupported, explain what is missing, rather than silently
+   routing to another model or falsely reporting success.
+6. **Cost and privacy truth:** clear free/paid classification only with current
+   trusted pricing; token/image/megapixel billing basis; safe estimated cost
+   when derivable, warnings before paid test/generation, stale-price notices,
+   and no surprises from hidden fallback. Never send secrets to the browser
+   or persist keys in Vault content.
+7. **Smart empty/offline/credentials/expiry states** and a manual Refresh
+   button with timestamps and honest source ("live", "cached" or "unavailable").
+   Model list reflects provider additions and removals without shipping a new
+   TKC release whenever the catalog changes.
+8. **Images are first-class:** a text-output multimodal model and an
+   image-output generative model are different operations. Don't hide image
+   generators by applying a text-only filter or claim the current
+   `/images` adapter supports every discovered generator. Add verified
+   endpoint profiles/resolution/reference inputs as actual models become
+   executable. Keep image size/MIME validation and bounded transport.
+9. **Performance and test plan:** fixtures with 10, 100, 1,500 and >1,500
+   models, mixed modalities, duplicate/changed IDs, stale price, different
+   Go API protocol families, no key, invalid key, timeout, cancellation,
+   provider outage, invalid output and unsupported generation calls. Test
+   fast search, accessible scrolling, explicit selection and no duplicate
+   auto-requests when a panel opens.
+
+**Definition of done:** OpenRouter and OpenCode Go feel like a true model
+marketplace inside TKC. The owner sees the large, fresh model selection expected
+from Hermes/Obsidian Copilot, can actually select and use compatible models
+across supported TKC tasks, and gets truthful reasons for incompatible ones.
+This is NOT fulfilled by merely exposing 500 non-clickable names.
+
+Provider references:
+- https://openrouter.ai/docs/api/api-reference/models/get-models
+- https://openrouter.ai/docs/api/api-reference/images/list-image-models
+- https://openrouter.ai/models
+- https://dev.opencode.ai/v2/docs/console/go/
+
+### Sequencing, authorization and completion
+
+- **Immediately:** Complete Beam's isolated SHISO H-1 nutrition safety/integrity repair; AI Settings visual discovery/design and provider transport assessment may proceed in parallel without touching Beam's branch.
+- **ASAP next:** Deliver the OpenRouter catalog repair, approved AI Settings Studio redesign and native OpenCode Go provider through appropriately scoped implementation changes. Owners may choose split release branches if that keeps testing and rollback simple.
+- **Independent audit:** Muse Spark 1.3. GPT-6 coordinates architecture. Owner alone authorizes commit/push, merges, paid live calls, Vault mutations and deployment in the established TKC protocol.
+- **Acceptance:** Focused regressions, security/provider tests, TypeScript, application and plugin builds, relevant browser checks, green GitHub CI and owner hands-on review. Do not change the app's working nutrition calculation or selection authority as collateral damage.
+
+This is a roadmap commitment and design/implementation brief, not a completed integration, authorization for provider usage, or deployment.
