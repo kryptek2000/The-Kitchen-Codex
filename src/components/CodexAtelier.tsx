@@ -2,8 +2,6 @@ import React, { useEffect, useState, useCallback } from 'react';
 import {
   BrainCircuit,
   Sparkles,
-  BookOpen,
-  Library,
   Image as ImageIcon,
   LayoutGrid,
   RefreshCw,
@@ -13,6 +11,7 @@ import { SettingsAdapter } from '../application/adapters/SettingsAdapter';
 import { ProviderSettings, ProviderStatusPanel, ProviderStatusLoading, ProviderStatusError } from '../application-ui/ProviderSettings';
 import { fetchProviderStatus } from '../application-ui/providerStatus';
 import { fetchProviderCatalog } from '../application-ui/providerCatalog';
+import LivingLibrary from './LivingLibrary';
 import type { ProviderStatusView } from '../application-ui/providerStatus';
 import type { ProviderCatalogView } from '../application-ui/providerCatalog';
 
@@ -127,7 +126,7 @@ export function CodexAtelier({ network, settings, onTextAiRuntimeChanged }: Code
             focus="all"
           />
         )}
-        {section === 'library' && <AtelierLibraryPlaceholder onNavigate={setSection} />}
+        {section === 'library' && <LivingLibrary network={network} />}
         {section === 'image' && (
           <ProviderSettings
             network={network}
@@ -340,7 +339,7 @@ function AtelierOverview({
           <div className="rounded-2xl border border-dashed border-[var(--color-control-border,rgba(255,255,255,0.1))] bg-[var(--bg-surface,#141414)] p-5 sm:p-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
             <div className="space-y-1">
               <div className="flex items-center gap-2">
-                <BookOpen className="w-4 h-4 text-[var(--text-muted,#6B7280)]" aria-hidden="true" />
+                <Sparkles className="w-4 h-4 text-[var(--text-muted,#6B7280)]" aria-hidden="true" />
                 <h3 className="font-serif text-[16px] text-[var(--text-primary,#F3F4F6)]">Living Library</h3>
               </div>
               <p className="text-[12px] text-[var(--text-muted,#6B7280)] max-w-xl">
@@ -358,27 +357,6 @@ function AtelierOverview({
           </div>
         </>
       )}
-    </div>
-  );
-}
-
-function AtelierLibraryPlaceholder({ onNavigate }: { onNavigate: (s: StudioSection) => void }) {
-  return (
-    <div className="rounded-2xl border border-dashed border-[var(--color-control-border,rgba(255,255,255,0.1))] bg-[var(--bg-surface,#141414)] p-8 sm:p-10 text-center space-y-3">
-      <Library className="w-8 h-8 mx-auto text-[var(--text-muted,#6B7280)]" aria-hidden="true" />
-      <h2 className="font-serif text-[22px] text-[var(--text-primary,#F3F4F6)]">The Living Library</h2>
-      <p className="text-[14px] leading-[1.55] text-[var(--text-secondary,#9CA3AF)] max-w-xl mx-auto">
-        Full model discovery, categorical browsing, verification badges and comparison tools
-        arrive in UD-2C. This surface is intentionally reserved so the Atelier shell stays
-        stable while the Library is built.
-      </p>
-      <button
-        type="button"
-        onClick={() => onNavigate('providers')}
-        className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[var(--bg-elevated,#1E1E1E)] text-[var(--text-primary,#F3F4F6)] border border-[var(--color-control-border,rgba(255,255,255,0.1))] min-h-[44px]"
-      >
-        Back to Providers
-      </button>
     </div>
   );
 }
