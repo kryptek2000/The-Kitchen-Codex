@@ -19,8 +19,6 @@ import { ObsidianRecipe, ActiveTimer } from '../types';
 import { scaleIngredientText } from '../utils/markdownParser';
 import { playTimerChime } from '../utils/audioAlert';
 import { stepTimerKey, findTimerByKey } from '../application/timers';
-import { useVaultImage } from '../hooks/useVaultImage';
-import { getRecipeImage } from '../utils/imageHelper';
 
 interface CookingModeModalProps {
   recipe: ObsidianRecipe;
@@ -70,14 +68,16 @@ export function CookingModeModal({
   const stepKey = stepTimerKey(recipe.id, stepNumber);
   const stepTimer = stepTimerKey(recipe.id, stepNumber) ? findTimerByKey(activeTimers, stepKey) : undefined;
 
-  const defaultImg = getRecipeImage(recipe);
-  const reactiveVaultImage = useVaultImage(recipe.image, defaultImg);
+  // Only render directly-addressable, safe image URLs. This avoids
+  // reinterpreting untrusted/DOM-derived text as an attribute value.
+  const rawImage = typeof recipe.image === 'string' ? recipe.image.trim() : '';
+  const isSafeImageUrl = /^(https?:|data:|blob:)/i.test(rawImage);
   const hasExplicitPhoto =
-    Boolean(recipe.image) ||
+    isSafeImageUrl ||
     /!\[\[(?:[^\]]*\|)?[^\]]+\.(?:jpg|jpeg|png|webp|avif|gif|svg)\]\]/i.test(recipe.rawMarkdown || '') ||
     /!\[[^\]]*\]\([^\)]*\.(?:jpg|jpeg|png|webp|avif|gif|svg)\)/i.test(recipe.rawMarkdown || '');
-  const imageUrl = hasExplicitPhoto ? reactiveVaultImage || defaultImg : null;
-  const showPhoto = hasExplicitPhoto && !!imageUrl;
+  const imageUrl = isSafeImageUrl ? rawImage : null;
+  const showPhoto = isSafeImageUrl && !!imageUrl;
 
   const previouslyFocused = useRef<HTMLElement | null>(null);
   const modalRef = useRef<HTMLDivElement | null>(null);
