@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import {
   X,
   ChevronLeft,
@@ -95,6 +95,7 @@ export function CookingModeModal({
 
   const previouslyFocused = useRef<HTMLElement | null>(null);
   const modalRef = useRef<HTMLDivElement | null>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
   useEffect(() => {
     previouslyFocused.current = (document.activeElement as HTMLElement) || null;
     const node = modalRef.current;
@@ -110,6 +111,16 @@ export function CookingModeModal({
       }
     };
   }, []);
+
+  useLayoutEffect(() => {
+    const el = imgRef.current;
+    if (!el) return;
+    if (imageUrl && /^(https?:|data:|blob:)/i.test(imageUrl)) {
+      el.setAttribute('src', imageUrl);
+    } else {
+      el.removeAttribute('src');
+    }
+  }, [imageUrl]);
 
   useEffect(() => {
     let wakeLock: any = null;
@@ -262,7 +273,7 @@ export function CookingModeModal({
           <div className="shrink-0">
             {showPhoto && imageUrl ? (
               <img
-                src={imageUrl}
+                ref={imgRef}
                 alt={recipe.title}
                 referrerPolicy="no-referrer"
                 className="w-11 h-11 sm:w-12 sm:h-12 rounded-lg object-cover border border-white/10"
