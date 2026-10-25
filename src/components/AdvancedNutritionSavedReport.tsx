@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { X, ShieldCheck, FlaskConical, Pencil, Info } from 'lucide-react';
 import {
   PHASE4_NOT_MEDICAL_ADVICE,
@@ -13,6 +13,9 @@ import {
   savedReportMeta,
 } from '../core/nutritionV2/phase5c/savedReport';
 import type { CodexNutritionV1, CodexNutritionV2, CodexNutritionV3, CodexNutritionV4, CodexNutritionV5 } from '../core/nutritionV2/schema';
+
+const DIALOG_FOCUSABLE =
+  'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
 interface AdvancedNutritionSavedReportProps {
   isOpen: boolean;
@@ -64,12 +67,65 @@ export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReport
     [block, basis, effectiveSelectedServings]
   );
   const groups = useMemo(() => savedReportGroups(), []);
+  const missingNutrients = useMemo(
+    () =>
+      groups.flatMap((group) =>
+        group.nutrients
+          .map((id) => nutrients.find((entry) => entry.nutrient === id))
+          .filter(
+            (entry): entry is NonNullable<typeof entry> =>
+              entry !== undefined && entry.coverage === 'missing'
+          )
+      ),
+    [groups, nutrients]
+  );
+
+  // Accessible dialog behaviour: this read-only report is presented in a modal,
+  // so it receives the same initial focus, Escape handling, Tab containment and
+  // focus restoration as the analyzer. No nutrition behaviour is involved.
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!isOpen || typeof document === 'undefined') return undefined;
+    restoreFocusRef.current = (document.activeElement as HTMLElement | null) ?? null;
+    const node = dialogRef.current;
+    if (node) {
+      node.focus({ preventScroll: true });
+    }
+    return () => {
+      const restore = restoreFocusRef.current;
+      if (restore && typeof restore.focus === 'function') restore.focus({ preventScroll: true });
+    };
+  }, [isOpen]);
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      event.stopPropagation();
+      onClose();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const node = dialogRef.current;
+    if (!node) return;
+    const focusables = Array.from(node.querySelectorAll<HTMLElement>(DIALOG_FOCUSABLE)).filter(
+      (element) => element.offsetParent !== null || element === document.activeElement
+    );
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
 
   if (!isOpen) return null;
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto"
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 p-2 backdrop-blur-sm sm:items-center sm:p-4"
       role="dialog"
       aria-modal="true"
       aria-label={`${unsaved ? 'Working' : 'Saved'} Advanced Nutrition for ${title}`}
@@ -77,22 +133,27 @@ export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReport
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <div className="w-full max-w-3xl bg-[#0F0F0F] border border-indigo-500/20 rounded-2xl shadow-2xl my-4">
-        {block.schema === 4 && <div className="p-4 text-amber-300 text-xs">Includes accepted estimated quantities (not authenticated portions).
-          {block.ingredients.filter(e => e.quantity_estimate).map(e => <p key={e.line_ref}>AI estimate · {e.line_ref}: {e.quantity_estimate!.lower_grams}–{e.quantity_estimate!.upper_grams} g · midpoint {e.quantity_estimate!.representative_grams} g</p>)}
-        </div>}
+      <div
+        ref={dialogRef}
+        onKeyDown={onKeyDown}
+        tabIndex={-1}
+        className="my-2 w-full max-w-4xl overflow-y-auto rounded-2xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] text-[var(--text-primary,#F3F4F6)] shadow-2xl focus:outline-none sm:my-4 max-h-[94vh]"
+      >
         {/* Header */}
-        <div className="flex items-start justify-between gap-3 p-5 border-b border-white/5">
-          <div className="flex items-start gap-3 min-w-0">
-            <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 flex items-center justify-center shrink-0">
-              <FlaskConical className="w-4.5 h-4.5" />
+        <div className="flex items-start justify-between gap-3 border-b border-[var(--border-subtle,rgba(255,255,255,0.08))] px-4 py-4 sm:px-5">
+          <div className="flex min-w-0 items-start gap-3">
+            <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--accent-subtle,rgba(245,158,11,0.15))] text-[var(--accent-text,#F59E0B)]">
+              <FlaskConical className="h-4.5 w-4.5" aria-hidden="true" />
             </div>
             <div className="min-w-0">
-              <h2 className="text-base font-serif font-bold text-white truncate">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary,#9CA3AF)]">
+                {unsaved ? 'Working advanced report' : 'Saved advanced report'}
+              </p>
+              <h2 className="font-serif text-[22px] leading-snug text-[var(--text-primary,#F3F4F6)]">
                 Advanced Nutrition {unsaved ? 'applied — not saved' : 'saved'}
               </h2>
-              <p className="text-[11px] text-gray-400 truncate">{title}</p>
-              <p className="text-[10px] font-mono uppercase tracking-wide text-indigo-300 mt-0.5">
+              <p className="truncate text-[13px] text-[var(--text-secondary,#9CA3AF)]">{title}</p>
+              <p className="mt-0.5 font-mono text-[11px] uppercase tracking-wide text-[var(--text-secondary,#9CA3AF)]">
                 {block.schema === 5 ? 'Source-backed + AI-estimated · read-only' : 'USDA reviewed · read-only'}
               </p>
             </div>
@@ -101,26 +162,31 @@ export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReport
             type="button"
             onClick={onClose}
             aria-label={unsaved ? 'Close working Advanced Nutrition report' : 'Close saved Advanced Nutrition report'}
-            className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/10 transition-colors shrink-0"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-[var(--text-secondary,#9CA3AF)] transition-colors hover:bg-[var(--bg-elevated,#1E1E1E)] hover:text-[var(--text-primary,#F3F4F6)]"
           >
-            <X className="w-4 h-4" />
+            <X className="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
 
-        <div className="p-5 space-y-4">
+        <div className="space-y-5 px-4 py-5 sm:px-5">
+          {block.schema === 4 && (
+            <div className="space-y-1 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] border-l-[3px] border-l-[var(--accent-text,#F59E0B)] bg-[var(--bg-elevated,#1E1E1E)] p-3 text-[13px] text-[var(--text-primary,#F3F4F6)]">
+              <p>Includes accepted estimated quantities (not authenticated portions).</p>
+              {block.ingredients.filter(e => e.quantity_estimate).map(e => <p key={e.line_ref} className="text-[12px] text-[var(--text-secondary,#9CA3AF)]">AI estimate · {e.line_ref}: {e.quantity_estimate!.lower_grams}–{e.quantity_estimate!.upper_grams} g · midpoint {e.quantity_estimate!.representative_grams} g</p>)}
+            </div>
+          )}
+
           {/* Status + base servings */}
           <div
             data-testid="saved-advanced-status"
-            className={`p-3 rounded-xl border text-[11px] ${
-              meta.complete && !stale
-                ? 'bg-emerald-950/25 border-emerald-800/40 text-emerald-200'
-                : 'bg-amber-950/25 border-amber-800/40 text-amber-200'
+            className={`rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] border-l-[3px] bg-[var(--bg-elevated,#1E1E1E)] p-4 text-[13px] ${
+              stale ? 'border-l-[var(--accent-text,#F59E0B)]' : meta.complete ? 'border-l-[var(--accent,#F59E0B)]' : 'border-l-[var(--accent-text,#F59E0B)]'
             }`}
           >
-            <p className="font-semibold">
+            <p className="text-[15px] font-semibold text-[var(--text-primary,#F3F4F6)]">
               {stale ? 'Historical saved values — recalculate before using these totals' : meta.unresolved_count === 0 ? 'All ingredient lines accounted for' : 'Partial ingredient coverage'}
             </p>
-            <p className="text-[11px] opacity-90">
+            <p className="mt-1 text-[13px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
               {meta.resolved_count + meta.excluded_count} of {meta.ingredient_count} ingredient line
               {meta.ingredient_count === 1 ? '' : 's'} accounted for
               {meta.excluded_count > 0 ? ` · ${meta.excluded_count} cooking wrapper excluded` : ''}
@@ -131,19 +197,19 @@ export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReport
           </div>
 
           {block.schema === 5 && (
-            <details className="p-3 rounded-xl bg-[#141414] border border-white/5" data-testid="saved-advanced-line-evidence">
-              <summary className="cursor-pointer text-[11px] font-semibold text-gray-200">
+            <details className="rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)]" data-testid="saved-advanced-line-evidence">
+              <summary className="min-h-[44px] cursor-pointer px-4 py-3 text-[13px] font-semibold text-[var(--text-primary,#F3F4F6)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring,#F59E0B)]">
                 Ingredient evidence · {meta.resolved_count} nutrition contributions · {meta.excluded_count} excluded · {meta.unresolved_count} unresolved
               </summary>
-              <ul className="mt-2 space-y-1.5 text-[10px] text-gray-400">
+              <ul className="space-y-1.5 px-4 pb-3 text-[12px] text-[var(--text-secondary,#9CA3AF)]">
                 {block.ingredients.map((entry) => (
                   <li key={`source-${entry.line_ref}`} data-testid="saved-line-source-backed">
-                    <span className="text-emerald-300">Source-backed</span> · {entry.line_ref} · USDA {entry.source_food_id}
+                    <span className="text-[var(--text-primary,#F3F4F6)]">Source-backed</span> · {entry.line_ref} · USDA {entry.source_food_id}
                   </li>
                 ))}
                 {block.ai_contributions.map((entry) => (
                   <li key={`ai-${entry.line_ref}`} data-testid={`saved-line-${entry.disposition === 'excluded' ? 'excluded' : entry.classification}`}>
-                    <span className={entry.disposition === 'excluded' ? 'text-gray-300' : entry.classification === 'ai_estimate' ? 'text-amber-300' : 'text-emerald-300'}>
+                    <span className="text-[var(--text-primary,#F3F4F6)]">
                       {entry.disposition === 'excluded' ? 'Excluded cooking wrapper' : entry.classification === 'ai_estimate' ? 'AI estimate' : 'Source-backed contribution'}
                     </span>
                     {' · '}{entry.ingredient}
@@ -152,7 +218,7 @@ export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReport
                 ))}
                 {block.unresolved.map((entry) => (
                   <li key={`unresolved-${entry.line_ref}`} data-testid="saved-line-unresolved">
-                    <span className="text-rose-300">Unresolved</span> · {entry.line_ref} · {entry.reason}
+                    <span className="text-[var(--text-primary,#F3F4F6)]">Unresolved</span> · {entry.line_ref} · {entry.reason}
                   </li>
                 ))}
               </ul>
@@ -160,30 +226,37 @@ export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReport
           )}
 
           {/* Display basis controls */}
-          <div className="flex flex-wrap items-center gap-2" data-testid="saved-advanced-basis">
-            <span className="text-[11px] text-gray-400">Display basis:</span>
-            {(['entire_recipe', 'per_serving', 'selected_servings'] as const).map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                data-testid={`saved-advanced-basis-${mode}`}
-                onClick={() => setBasis(mode)}
-                aria-pressed={basis === mode}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors ${
-                  basis === mode
-                    ? 'bg-indigo-500/25 border-indigo-400/40 text-indigo-100'
-                    : 'bg-white/5 hover:bg-white/10 border-white/10 text-gray-300'
-                }`}
-              >
-                {mode === 'entire_recipe'
-                  ? 'Entire recipe'
-                  : mode === 'per_serving'
-                    ? 'Per serving'
-                    : 'Selected servings'}
-              </button>
-            ))}
+          <section aria-label="Report display basis" className="space-y-2 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-[13px] font-semibold text-[var(--text-primary,#F3F4F6)]">Display basis</span>
+              <span className="text-[12px] text-[var(--text-secondary,#9CA3AF)]" data-testid="saved-advanced-basis-label">
+                {basisLabel(basis, effectiveSelectedServings)}
+              </span>
+            </div>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3" data-testid="saved-advanced-basis">
+              {(['entire_recipe', 'per_serving', 'selected_servings'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  data-testid={`saved-advanced-basis-${mode}`}
+                  onClick={() => setBasis(mode)}
+                  aria-pressed={basis === mode}
+                  className={`min-h-[44px] rounded-lg border px-3 text-[13px] font-medium transition-colors ${
+                    basis === mode
+                      ? 'border-[var(--accent-text,#F59E0B)] bg-[var(--accent-subtle,rgba(245,158,11,0.15))] text-[var(--text-primary,#F3F4F6)]'
+                      : 'border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] text-[var(--text-secondary,#9CA3AF)] hover:text-[var(--text-primary,#F3F4F6)]'
+                  }`}
+                >
+                  {mode === 'entire_recipe'
+                    ? 'Entire recipe'
+                    : mode === 'per_serving'
+                      ? 'Per serving'
+                      : 'Selected servings'}
+                </button>
+              ))}
+            </div>
             {basis === 'selected_servings' && (
-              <label className="flex items-center gap-1.5 text-[11px] text-gray-300">
+              <label className="flex flex-wrap items-center gap-2 text-[13px] text-[var(--text-secondary,#9CA3AF)]">
                 <span>Servings</span>
                 <input
                   type="number"
@@ -192,65 +265,85 @@ export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReport
                   step={1}
                   value={selectedServings}
                   onChange={(event) => setSelectedServings(Number(event.target.value))}
-                  className="w-20 px-2 py-1 rounded-lg bg-[#141414] border border-white/10 text-gray-100 text-xs"
+                  className="min-h-[44px] w-24 rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-3 text-[var(--text-primary,#F3F4F6)]"
                 />
               </label>
             )}
-            <span className="text-[11px] text-gray-500" data-testid="saved-advanced-basis-label">
-              {basisLabel(basis, effectiveSelectedServings)}
-            </span>
-          </div>
+          </section>
 
           {/* Nutrient groups */}
-          {groups.map((group) => {
-            const rows = group.nutrients
-              .map((id) => nutrients.find((entry) => entry.nutrient === id))
-              .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
-            const visible = rows.filter((entry) => entry.coverage !== 'missing');
-            if (visible.length === 0) return null;
-            return (
-              <div key={group.id} className="space-y-1">
-                <h3 className="text-[11px] font-semibold text-gray-300 uppercase tracking-wide">
-                  {group.label}
-                </h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1">
-                  {rows.map((entry) => (
-                    <div
-                      key={entry.nutrient}
-                      className="flex items-center justify-between gap-2 text-[11px] border-b border-white/5 py-0.5"
-                    >
-                      <span className="text-gray-300 truncate">{entry.label}</span>
-                      <span className="flex items-center gap-2 shrink-0">
-                        <span className="font-mono text-white">
-                          {formatAmount(entry.amount)} {entry.amount !== undefined ? entry.unit_label : ''}
-                        </span>
-                        <span className="text-gray-500 w-12 text-right">
-                          {entry.coverage === 'missing' ? '' : formatDailyValue(entry.percent_daily_value)}
-                        </span>
-                        {entry.coverage === 'partial' && (
-                          <span
-                            data-testid={`saved-advanced-partial-${entry.nutrient}`}
-                            className="text-[9px] font-mono uppercase px-1.5 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/25 text-amber-300"
-                          >
-                            subtotal · total unknown
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+            {groups.map((group) => {
+              const rows = group.nutrients
+                .map((id) => nutrients.find((entry) => entry.nutrient === id))
+                .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+              const visible = rows.filter((entry) => entry.coverage !== 'missing');
+              if (visible.length === 0) return null;
+              return (
+                <section key={group.id} className="rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-4 py-3">
+                  <h3 className="mb-1.5 font-serif text-[15px] text-[var(--text-primary,#F3F4F6)]">
+                    {group.label}
+                  </h3>
+                  <dl>
+                    {visible.map((entry) => (
+                      <div
+                        key={entry.nutrient}
+                        className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b border-[var(--border-subtle,rgba(255,255,255,0.08))] py-1.5 text-[13px] last:border-b-0"
+                      >
+                        <dt className="min-w-0 text-[var(--text-secondary,#9CA3AF)]">{entry.label}</dt>
+                        <dd className="flex shrink-0 flex-wrap items-baseline justify-end gap-2 text-right">
+                          <span className="font-mono text-[var(--text-primary,#F3F4F6)]">
+                            {formatAmount(entry.amount)} {entry.amount !== undefined ? entry.unit_label : ''}
                           </span>
-                        )}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
+                          <span className="w-[58px] text-right font-mono text-[12px] text-[var(--text-secondary,#9CA3AF)]">
+                            {formatDailyValue(entry.percent_daily_value)} DV
+                          </span>
+                          {entry.coverage === 'partial' && (
+                            <span
+                              data-testid={`saved-advanced-partial-${entry.nutrient}`}
+                              title="Known subtotal from partial ingredient coverage — the full recipe total is unknown."
+                              className="rounded-full border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--text-primary,#F3F4F6)]"
+                            >
+                              subtotal
+                            </span>
+                          )}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                </section>
+              );
+            })}
+          </div>
+
+          {missingNutrients.length > 0 && (
+            <section className="rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-4 py-3">
+              <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--text-secondary,#9CA3AF)]">
+                Not reported in this saved result
+              </h3>
+              <p className="mt-1 text-[13px] leading-relaxed text-[var(--text-primary,#F3F4F6)]">
+                {missingNutrients.map((entry) => entry.label).join(' · ')}
+              </p>
+              <p className="mt-1 text-[12px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
+                Missing nutrients remain missing. They are never treated as zero.
+              </p>
+            </section>
+          )}
+
+          {(nutrients.some((entry) => entry.coverage === 'partial')) && (
+            <p className="text-[12px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
+              Values marked <span className="rounded-full border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--text-primary,#F3F4F6)]">subtotal</span> are known subtotals from partial ingredient coverage — the full recipe total is unknown.
+            </p>
+          )}
 
           {/* Provenance */}
-          <div className="p-3 rounded-xl bg-[#141414] border border-white/5 text-[11px] text-gray-400 space-y-0.5">
+          <div className="space-y-1 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] p-4 text-[13px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
             <p>
-              Source: <span className="text-gray-200">{block.schema === 5 ? 'USDA FoodData Central + saved AI contributions' : 'USDA FoodData Central'}</span>
+              Source: <span className="text-[var(--text-primary,#F3F4F6)]">{block.schema === 5 ? 'USDA FoodData Central + saved AI contributions' : 'USDA FoodData Central'}</span>
               {meta.usda_release ? (
                 <>
                   {' '}
-                  · bundle <span className="font-mono text-gray-300">{meta.usda_release}</span>
+                  · bundle <span className="font-mono text-[var(--text-primary,#F3F4F6)]">{meta.usda_release}</span>
                 </>
               ) : null}
             </p>
@@ -260,28 +353,28 @@ export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReport
             </p>
             {meta.computed_at && <p>Reviewed {meta.computed_at}</p>}
             {meta.unresolved_count > 0 && (
-              <p className="text-amber-300">
+              <p className="text-[var(--text-primary,#F3F4F6)]">
                 {meta.unresolved_count} unresolved ingredient line
                 {meta.unresolved_count === 1 ? '' : 's'}.
               </p>
             )}
           </div>
 
-          <p className="text-[10px] text-gray-500 flex items-start gap-1.5">
-            <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+          <p className="flex items-start gap-1.5 text-[12px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
+            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
             <span>{PHASE4_NOT_MEDICAL_ADVICE}</span>
           </p>
 
-          <div className="flex items-center justify-between pt-1 border-t border-white/5">
-            <span className="text-[10px] text-gray-500 flex items-center gap-1">
-              <ShieldCheck className="w-3 h-3" />
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-subtle,rgba(255,255,255,0.08))] pt-4">
+            <span className="flex items-center gap-1.5 text-[12px] text-[var(--text-secondary,#9CA3AF)]">
+              <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
               <span>Saved result · no automatic writes</span>
             </span>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={onClose}
-                className="px-3 py-1.5 rounded-lg text-xs font-medium text-gray-300 bg-white/5 hover:bg-white/10 border border-white/10 transition-colors"
+                className="min-h-[44px] rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-4 text-[13px] font-medium text-[var(--text-secondary,#9CA3AF)] transition-colors hover:bg-[var(--bg-root,#0C0C0C)] hover:text-[var(--text-primary,#F3F4F6)]"
               >
                 Close
               </button>
@@ -289,9 +382,9 @@ export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReport
                 type="button"
                 data-testid="saved-advanced-edit"
                 onClick={onEdit}
-                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold text-indigo-100 bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-400/40 transition-colors"
+                className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-amber-500 px-4 text-[13px] font-semibold text-black transition-colors hover:bg-amber-400"
               >
-                <Pencil className="w-3.5 h-3.5" />
+                <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
                 <span>Edit / Re-analyze Nutrition</span>
               </button>
             </div>
@@ -301,5 +394,3 @@ export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReport
     </div>
   );
 };
-
-export default AdvancedNutritionSavedReport;

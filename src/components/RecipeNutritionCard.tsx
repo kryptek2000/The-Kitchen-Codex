@@ -151,15 +151,42 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
     : [currentSourceLabel, currentConfidenceLabel].filter(Boolean).join(' · ');
   const partialNutrientSet = new Set(derivedPartialNutrients);
 
-  // Macro calculations for ratio bar (ratios are scale-invariant)
-  const protein = displayedNutrition?.protein || 0;
-  const carbs = displayedNutrition?.carbohydrates || 0;
-  const fat = displayedNutrition?.fat || 0;
-  const totalMacroGrams = protein + carbs + fat;
+  // Macro comparison bar. Ratios are scale-invariant and unchanged; the bar is
+  // only drawn when ALL three macro values are known, so a missing nutrient is
+  // never silently treated as zero and never fabricates a distribution.
+  const protein = displayedNutrition?.protein;
+  const carbs = displayedNutrition?.carbohydrates;
+  const fat = displayedNutrition?.fat;
+  const hasMacroComparison =
+    typeof protein === 'number' &&
+    Number.isFinite(protein) &&
+    typeof carbs === 'number' &&
+    Number.isFinite(carbs) &&
+    typeof fat === 'number' &&
+    Number.isFinite(fat);
+  const totalMacroGrams = hasMacroComparison ? protein + carbs + fat : 0;
 
   const proteinPct = totalMacroGrams > 0 ? Math.round((protein / totalMacroGrams) * 100) : 0;
   const carbsPct = totalMacroGrams > 0 ? Math.round((carbs / totalMacroGrams) * 100) : 0;
   const fatPct = totalMacroGrams > 0 ? Math.max(0, 100 - proteinPct - carbsPct) : 0;
+
+  // The displayed nutrient values are authoritative and untouched: a known
+  // value renders, a missing value stays missing (never 0, never topped up).
+  const caloriesValue =
+    displayedNutrition?.calories ?? (derivedNutrition || savedPartial ? undefined : recipe.calories) ?? '—';
+  const hasNutritionDisplay = Boolean(
+    effectiveNutrition || (recipe.calories !== undefined && recipe.calories !== null)
+  );
+  const showCalculateAction = (!effectiveNutrition || savedPartial) && !derivedNutrition;
+  const caloriesLabel =
+    savedPartial || partialNutrientSet.has('calories') ? 'Calories · subtotal' : 'Calories';
+  const proteinLabel =
+    savedPartial || partialNutrientSet.has('protein') ? 'Protein · subtotal' : 'Protein';
+  const carbsLabel =
+    savedPartial || partialNutrientSet.has('carbohydrates') ? 'Carbs · subtotal' : 'Carbs';
+  const fatLabel = savedPartial || partialNutrientSet.has('fat') ? 'Fat · subtotal' : 'Fat';
+  const fiberLabel = savedPartial || partialNutrientSet.has('fiber') ? 'Fiber · subtotal' : 'Fiber';
+  const sodiumLabel = savedPartial || partialNutrientSet.has('sodium') ? 'Sodium · subtotal' : 'Sodium';
 
   /**
    * The ONE Basic Nutrition action, shared with the Visual Recipe Editor
@@ -217,343 +244,395 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
   const estimateUnresolved = basicEstimate?.lines.filter((line) => line.status === 'unresolved') ?? [];
 
   return (
-    <div
+    <article
       id="recipe-nutrition-card"
-      className="bg-[#141414] rounded-2xl border border-white/5 p-5 shadow-xs text-gray-200"
+      className="overflow-hidden rounded-2xl border border-[var(--color-rule,var(--border-subtle,rgba(255,255,255,0.08)))] bg-[var(--bg-surface,#141414)] text-[var(--text-primary,#F3F4F6)] shadow-sm"
     >
-      <div className="flex items-center justify-between pb-3 mb-3 border-b border-white/5">
-        <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center">
-            <Activity className="w-4 h-4" />
-          </div>
-          <div>
-            <h3 className="text-sm font-serif font-bold text-white flex items-center gap-1.5">
-              <span>Nutrition & Macros</span>
-              <span className="text-[10px] font-mono text-gray-400 font-normal">
+      <header className="flex items-start justify-between gap-3 px-5 pt-5 pb-4">
+        <div className="flex min-w-0 items-start gap-3">
+          <span
+            aria-hidden="true"
+            className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--accent-subtle,rgba(245,158,11,0.15))] text-[var(--accent-text,#F59E0B)]"
+          >
+            <Activity className="h-4 w-4" />
+          </span>
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary,#9CA3AF)]">
+              Basic nutrition
+            </p>
+            <h3 className="flex flex-wrap items-baseline gap-x-2 font-serif text-[19px] leading-snug text-[var(--text-primary,#F3F4F6)]">
+              <span>{'Nutrition & Macros'}</span>
+              <span className="font-mono text-[11px] font-normal tracking-normal text-[var(--text-secondary,#9CA3AF)]">
                 ({derivedNutrition ? `current recipe: ${currentServings} serving${currentServings === 1 ? '' : 's'}` : `for ${currentServings} servings`})
               </span>
             </h3>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          {(!effectiveNutrition || savedPartial) && !derivedNutrition && (
+        <button
+          type="button"
+          onClick={() => setIsExpanded(!isExpanded)}
+          aria-expanded={isExpanded}
+          aria-controls="recipe-nutrition-card-body"
+          aria-label={isExpanded ? 'Collapse nutrition details' : 'Expand nutrition details'}
+          className="-mr-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-[var(--text-secondary,#9CA3AF)] transition-colors duration-[140ms] hover:bg-[var(--bg-elevated,#1E1E1E)] hover:text-[var(--text-primary,#F3F4F6)]"
+        >
+          {isExpanded ? <ChevronUp className="h-4 w-4" aria-hidden="true" /> : <ChevronDown className="h-4 w-4" aria-hidden="true" />}
+        </button>
+      </header>
+
+      <div id="recipe-nutrition-card-body" className="space-y-4 px-5 pb-5">
+        {servingBasisAssumed && (
+          <p
+            data-testid="basic-assumed-serving-basis"
+            className="rounded-xl border-l-[3px] border-l-[var(--accent-text,#F59E0B)] bg-[var(--bg-elevated,#1E1E1E)] px-3 py-2 text-[11px] leading-relaxed text-[var(--text-primary,#F3F4F6)]"
+          >
+            Recipe yield is not authored. Per-serving calculations use an assumed 4-serving basis; set Servings in the recipe to replace this assumption.
+          </p>
+        )}
+
+        {errorMsg && (
+          <div
+            role="alert"
+            className="flex items-start gap-2 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] border-l-[3px] border-l-[var(--accent-text,#F59E0B)] bg-[var(--bg-elevated,#1E1E1E)] p-3"
+          >
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
+            <div className="flex-1">
+              <p className="text-xs font-semibold text-[var(--text-primary,#F3F4F6)]">Nutrition Calculation Notice</p>
+              <p className="mt-0.5 text-[11px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">{errorMsg}</p>
+            </div>
+          </div>
+        )}
+
+        {saveSuccess && (
+          <div
+            role="status"
+            className="flex items-center gap-2 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] border-l-[3px] border-l-[var(--accent-text,#F59E0B)] bg-[var(--bg-elevated,#1E1E1E)] px-3 py-2.5 text-xs text-[var(--text-primary,#F3F4F6)] motion-safe:animate-in motion-safe:fade-in"
+          >
+            <ShieldCheck className="h-4 w-4 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
+            <span>Nutrition saved to recipe Obsidian Markdown frontmatter!</span>
+          </div>
+        )}
+
+        {/* Basic estimate review (explicit save — never silent) */}
+        {basicEstimate && (
+          <div
+            data-testid="basic-nutrition-review"
+            className="space-y-3 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] p-4"
+          >
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
+                <p className="text-xs font-semibold text-[var(--text-primary,#F3F4F6)]">
+                  {basicEstimate.coverage.complete ? 'Basic Nutrition Estimate — Review & Save' : 'Basic Nutrition Partial Subtotal — Review & Save'}
+                </p>
+              </div>
+              <span className="font-mono text-[11px] text-[var(--text-secondary,#9CA3AF)]">
+                {currentServings === recipeBaseServings
+                  ? `Entire recipe · base ${recipeBaseServings} servings`
+                  : `Total for ${currentServings} servings · base ${recipeBaseServings}`}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 text-left sm:grid-cols-3">
+              <div className="rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-2.5 py-2">
+                <span className="block font-mono text-[11px] uppercase tracking-normal text-[var(--text-secondary,#9CA3AF)]">{basicEstimate.coverage.complete ? 'Calories' : 'Calories · subtotal'}</span>
+                <span className="mt-0.5 block font-mono text-sm font-semibold text-[var(--text-primary,#F3F4F6)]">{displayedBasic?.calories ?? basicEstimate.totals.calories ?? '—'}</span>
+                <span className="block text-[11px] text-[var(--text-secondary,#9CA3AF)]">kcal</span>
+              </div>
+              <div className="rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-2.5 py-2">
+                <span className="block font-mono text-[11px] uppercase tracking-normal text-[var(--text-secondary,#9CA3AF)]">{basicEstimate.coverage.complete ? 'Protein' : 'Protein · subtotal'}</span>
+                <span className="mt-0.5 block font-mono text-sm font-semibold text-[var(--text-primary,#F3F4F6)]">{displayedBasic?.protein ?? basicEstimate.totals.protein ?? '—'}</span>
+                <span className="block text-[11px] text-[var(--text-secondary,#9CA3AF)]">g</span>
+              </div>
+              <div className="rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-2.5 py-2">
+                <span className="block font-mono text-[11px] uppercase tracking-normal text-[var(--text-secondary,#9CA3AF)]">{basicEstimate.coverage.complete ? 'Carbs' : 'Carbs · subtotal'}</span>
+                <span className="mt-0.5 block font-mono text-sm font-semibold text-[var(--text-primary,#F3F4F6)]">{displayedBasic?.carbohydrates ?? basicEstimate.totals.carbohydrates ?? '—'}</span>
+                <span className="block text-[11px] text-[var(--text-secondary,#9CA3AF)]">g</span>
+              </div>
+              <div className="rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-2.5 py-2">
+                <span className="block font-mono text-[11px] uppercase tracking-normal text-[var(--text-secondary,#9CA3AF)]">{basicEstimate.coverage.complete ? 'Fat' : 'Fat · subtotal'}</span>
+                <span className="mt-0.5 block font-mono text-sm font-semibold text-[var(--text-primary,#F3F4F6)]">{displayedBasic?.fat ?? basicEstimate.totals.fat ?? '—'}</span>
+                <span className="block text-[11px] text-[var(--text-secondary,#9CA3AF)]">g</span>
+              </div>
+              <div className="rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-2.5 py-2">
+                <span className="block font-mono text-[11px] uppercase tracking-normal text-[var(--text-secondary,#9CA3AF)]">{basicEstimate.coverage.complete ? 'Fiber' : 'Fiber · subtotal'}</span>
+                <span className="mt-0.5 block font-mono text-sm font-semibold text-[var(--text-primary,#F3F4F6)]">{displayedBasic?.fiber ?? '—'}</span>
+                <span className="block text-[11px] text-[var(--text-secondary,#9CA3AF)]">g</span>
+              </div>
+              <div className="rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-2.5 py-2">
+                <span className="block font-mono text-[11px] uppercase tracking-normal text-[var(--text-secondary,#9CA3AF)]">{basicEstimate.coverage.complete ? 'Sodium' : 'Sodium · subtotal'}</span>
+                <span className="mt-0.5 block font-mono text-sm font-semibold text-[var(--text-primary,#F3F4F6)]">{displayedBasic?.sodium ?? '—'}</span>
+                <span className="block text-[11px] text-[var(--text-secondary,#9CA3AF)]">mg</span>
+              </div>
+            </div>
+
+            <p className="font-mono text-[11px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
+              Per serving at {currentServings} servings{basicEstimate.coverage.complete ? '' : ' · partial subtotal'}{typeof recipe.servings === 'number' && recipe.servings > 0 ? '' : ' · assumed 4-serving basis; recipe yield not authored'}: {basicPerServing?.calories ?? '—'} kcal
+              {' · '}{basicPerServing?.protein ?? '—'} g protein
+              {' · '}{basicEstimate.coverage.resolved}/{basicEstimate.coverage.total} ingredient lines covered
+            </p>
+
+            <p className="text-[11px] font-medium text-[var(--text-secondary,#9CA3AF)]">
+              Offline Estimate · {basicEstimate.confidence === 'high' ? 'High confidence' : basicEstimate.confidence === 'medium' ? 'Medium confidence' : basicEstimate.confidence === 'low' ? 'Low confidence' : 'Unknown confidence'}
+            </p>
+
+            {!basicEstimate.coverage.complete && (
+              <div
+                data-testid="basic-nutrition-partial"
+                className="flex items-start gap-2 rounded-xl border-l-[3px] border-l-[var(--accent-text,#F59E0B)] bg-[var(--bg-surface,#141414)] p-3 text-xs text-[var(--text-primary,#F3F4F6)]"
+              >
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
+                <div className="space-y-1">
+                  <p className="leading-relaxed">
+                    Partial estimate — {basicEstimate.coverage.resolved} of {estimateLineCount} ingredient lines contributed.
+                    The figures above are known subtotals per serving. Unresolved lines are excluded; full recipe totals are unknown.
+                  </p>
+                  {estimateUnresolved.length > 0 && (
+                    <ul className="list-disc list-inside space-y-0.5 text-[11px] text-[var(--text-secondary,#9CA3AF)]">
+                      {estimateUnresolved.slice(0, 5).map((line) => (
+                        <li key={line.ingredient} className="break-words">{line.ingredient}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {basicEstimate.assumptions.length > 0 && (
+              <details className="text-[11px] text-[var(--text-secondary,#9CA3AF)]">
+                <summary className="cursor-pointer text-[var(--text-secondary,#9CA3AF)] hover:text-[var(--text-primary,#F3F4F6)]">
+                  Portion assumptions ({basicEstimate.assumptions.length})
+                </summary>
+                <ul className="mt-1 list-disc list-inside space-y-0.5">
+                  {basicEstimate.assumptions.map((note) => (
+                    <li key={note} className="break-words">{note}</li>
+                  ))}
+                </ul>
+              </details>
+            )}
+
+            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-[var(--border-subtle,rgba(255,255,255,0.08))] pt-3">
+              <button
+                type="button"
+                onClick={handleDiscardEstimate}
+                className="min-h-[44px] rounded-lg px-3 text-xs font-medium text-[var(--text-secondary,#9CA3AF)] transition-colors hover:bg-[var(--bg-surface,#141414)] hover:text-[var(--text-primary,#F3F4F6)]"
+              >
+                Discard
+              </button>
+              <button
+                type="button"
+                id="save-nutrition-btn"
+                data-testid="save-nutrition-btn"
+                onClick={handleApplyEstimate}
+                disabled={!basicEstimateToNutrition(basicEstimate, { allowPartial: true })}
+                className="flex min-h-[44px] items-center gap-1.5 rounded-lg border border-transparent bg-amber-500 px-4 text-xs font-semibold text-black shadow-sm transition-colors hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>{basicEstimate.coverage.complete ? 'Save to Recipe Markdown' : 'Save labeled partial subtotal'}</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {showCalculateAction && hasNutritionDisplay && (
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <button
+              type="button"
               id="calculate-basic-nutrition-btn"
               data-testid="calculate-basic-nutrition-btn"
               onClick={handleEstimate}
               disabled={isLoading}
-              className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold text-amber-300 bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 transition-all disabled:opacity-50 shadow-xs"
               title="Estimate per-serving nutrition from the curated local food reference — offline, no AI required"
+              className="flex min-h-[44px] items-center gap-1.5 rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-3 text-xs font-semibold text-[var(--text-primary,#F3F4F6)] transition-colors hover:border-[var(--accent-text,#F59E0B)] disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isLoading ? (
-                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                <RefreshCw className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
               ) : (
-                <Sparkles className="w-3.5 h-3.5" />
+                <Sparkles className="h-3.5 w-3.5 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
               )}
               <span>{isLoading ? 'Calculating…' : 'Calculate Basic Nutrition'}</span>
             </button>
-          )}
-
-          <button
-            onClick={() => setIsExpanded(!isExpanded)}
-            className="p-1 rounded-lg text-gray-400 hover:text-gray-200 hover:bg-white/5 transition-colors"
-          >
-            {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-          </button>
-        </div>
-      </div>
-
-      {servingBasisAssumed && (
-        <p className="mb-3 text-[11px] text-amber-200" data-testid="basic-assumed-serving-basis">
-          Recipe yield is not authored. Per-serving calculations use an assumed 4-serving basis; set Servings in the recipe to replace this assumption.
-        </p>
-      )}
-
-      {errorMsg && (
-        <div className="mb-3 p-3 rounded-xl bg-rose-950/40 border border-rose-800/40 text-rose-300 text-xs flex items-start gap-2">
-          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-          <div className="flex-1">
-            <p className="font-semibold">Nutrition Calculation Notice</p>
-            <p className="text-[11px] text-rose-200/90 mt-0.5">{errorMsg}</p>
           </div>
-        </div>
-      )}
+        )}
 
-      {saveSuccess && (
-        <div className="mb-3 p-2.5 rounded-xl bg-emerald-950/40 border border-emerald-800/40 text-emerald-300 text-xs flex items-center gap-2 animate-in fade-in">
-          <ShieldCheck className="w-4 h-4 text-emerald-400" />
-          <span>Nutrition saved to recipe Obsidian Markdown frontmatter!</span>
-        </div>
-      )}
-
-      {/* Basic estimate review (explicit save — never silent) */}
-      {basicEstimate && (
-        <div
-          data-testid="basic-nutrition-review"
-          className="mb-4 p-4 rounded-xl bg-[#1A1A1A] border border-amber-500/30 space-y-3 animate-in fade-in"
-        >
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-amber-300 text-xs font-bold">
-              <Sparkles className="w-4 h-4" />
-              <span>{basicEstimate.coverage.complete ? 'Basic Nutrition Estimate — Review & Save' : 'Basic Nutrition Partial Subtotal — Review & Save'}</span>
-            </div>
-            <span className="text-[10px] font-mono text-gray-400">
-              {currentServings === recipeBaseServings
-                ? `Entire recipe · base ${recipeBaseServings} servings`
-                : `Total for ${currentServings} servings · base ${recipeBaseServings}`}
-            </span>
-          </div>
-
-          <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 text-center">
-            <div className="p-2 rounded-lg bg-[#111] border border-white/5">
-              <span className="text-[10px] text-gray-400 uppercase font-mono block">{basicEstimate.coverage.complete ? 'Calories' : 'Calories · subtotal'}</span>
-              <span className="text-sm font-bold text-white">{displayedBasic?.calories ?? basicEstimate.totals.calories ?? '—'}</span>
-              <span className="text-[10px] text-gray-500 block">kcal</span>
-            </div>
-            <div className="p-2 rounded-lg bg-[#111] border border-white/5">
-              <span className="text-[10px] text-gray-400 uppercase font-mono block">{basicEstimate.coverage.complete ? 'Protein' : 'Protein · subtotal'}</span>
-              <span className="text-sm font-bold text-emerald-400">{displayedBasic?.protein ?? basicEstimate.totals.protein ?? '—'}</span>
-              <span className="text-[10px] text-gray-500 block">g</span>
-            </div>
-            <div className="p-2 rounded-lg bg-[#111] border border-white/5">
-              <span className="text-[10px] text-gray-400 uppercase font-mono block">{basicEstimate.coverage.complete ? 'Carbs' : 'Carbs · subtotal'}</span>
-              <span className="text-sm font-bold text-blue-400">{displayedBasic?.carbohydrates ?? basicEstimate.totals.carbohydrates ?? '—'}</span>
-              <span className="text-[10px] text-gray-500 block">g</span>
-            </div>
-            <div className="p-2 rounded-lg bg-[#111] border border-white/5">
-              <span className="text-[10px] text-gray-400 uppercase font-mono block">{basicEstimate.coverage.complete ? 'Fat' : 'Fat · subtotal'}</span>
-              <span className="text-sm font-bold text-amber-400">{displayedBasic?.fat ?? basicEstimate.totals.fat ?? '—'}</span>
-              <span className="text-[10px] text-gray-500 block">g</span>
-            </div>
-            <div className="p-2 rounded-lg bg-[#111] border border-white/5">
-              <span className="text-[10px] text-gray-400 uppercase font-mono block">{basicEstimate.coverage.complete ? 'Fiber' : 'Fiber · subtotal'}</span>
-              <span className="text-sm font-bold text-purple-400">
-                {displayedBasic?.fiber ?? '—'}
-              </span>
-              <span className="text-[10px] text-gray-500 block">g</span>
-            </div>
-            <div className="p-2 rounded-lg bg-[#111] border border-white/5">
-              <span className="text-[10px] text-gray-400 uppercase font-mono block">{basicEstimate.coverage.complete ? 'Sodium' : 'Sodium · subtotal'}</span>
-              <span className="text-sm font-bold text-orange-400">
-                {displayedBasic?.sodium ?? '—'}
-              </span>
-              <span className="text-[10px] text-gray-500 block">mg</span>
-            </div>
-          </div>
-
-          <p className="text-[10px] font-mono text-gray-500 text-center">
-            Per serving at {currentServings} servings{basicEstimate.coverage.complete ? '' : ' · partial subtotal'}{typeof recipe.servings === 'number' && recipe.servings > 0 ? '' : ' · assumed 4-serving basis; recipe yield not authored'}: {basicPerServing?.calories ?? '—'} kcal
-            {' · '}{basicPerServing?.protein ?? '—'} g protein
-            {' · '}{basicEstimate.coverage.resolved}/{basicEstimate.coverage.total} ingredient lines covered
-          </p>
-
-          <p className="text-[11px] text-gray-400 font-medium">
-            Offline Estimate · {basicEstimate.confidence === 'high' ? 'High confidence' : basicEstimate.confidence === 'medium' ? 'Medium confidence' : basicEstimate.confidence === 'low' ? 'Low confidence' : 'Unknown confidence'}
-          </p>
-
-          {!basicEstimate.coverage.complete && (
-            <div
-              data-testid="basic-nutrition-partial"
-              className="p-3 rounded-xl bg-amber-950/40 border border-amber-800/40 text-amber-200 text-xs flex items-start gap-2"
-            >
-              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-              <div className="space-y-1">
-                <p>
-                  Partial estimate — {basicEstimate.coverage.resolved} of {estimateLineCount} ingredient lines contributed.
-                  The figures above are known subtotals per serving. Unresolved lines are excluded; full recipe totals are unknown.
-                </p>
-                {estimateUnresolved.length > 0 && (
-                  <ul className="list-disc list-inside space-y-0.5 text-[11px]">
-                    {estimateUnresolved.slice(0, 5).map((line) => (
-                      <li key={line.ingredient} className="break-words">{line.ingredient}</li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </div>
-          )}
-
-          {basicEstimate.assumptions.length > 0 && (
-            <details className="text-[11px] text-gray-400">
-              <summary className="cursor-pointer text-gray-400 hover:text-gray-300">
-                Portion assumptions ({basicEstimate.assumptions.length})
-              </summary>
-              <ul className="list-disc list-inside space-y-0.5 mt-1">
-                {basicEstimate.assumptions.map((note) => (
-                  <li key={note} className="break-words">{note}</li>
-                ))}
-              </ul>
-            </details>
-          )}
-
-          <div className="flex items-center justify-end gap-2 pt-1">
-            <button
-              onClick={handleDiscardEstimate}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
-            >
-              Discard
-            </button>
-            <button
-              id="save-nutrition-btn"
-              data-testid="save-nutrition-btn"
-              onClick={handleApplyEstimate}
-              disabled={!basicEstimateToNutrition(basicEstimate, { allowPartial: true })}
-              className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-semibold bg-emerald-500 hover:bg-emerald-400 text-black transition-colors shadow-sm"
-            >
-              <Check className="w-3.5 h-3.5" />
-              <span>{basicEstimate.coverage.complete ? 'Save to Recipe Markdown' : 'Save labeled partial subtotal'}</span>
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Main Nutrition Visual Display */}
-      {isExpanded && (
-        <div className="space-y-4">
-          {savedPartial && <p className="text-xs text-amber-300" data-testid="saved-basic-partial">Saved partial subtotal — recipe totals are unknown. Recalculate and review before saving.</p>}
-          {advancedIncomplete && (
-            <div
-              data-testid="nutrition-advanced-incomplete"
-              className="p-3 rounded-xl bg-amber-950/25 border border-amber-800/40 space-y-1"
-            >
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-200">
-                  {advancedIncomplete.stale ? 'Needs recalculation' : 'Partial estimate'}
-                </span>
-                <p className="text-xs font-semibold text-amber-200">Advanced nutrition incomplete</p>
-              </div>
-              <p className="text-[11px] text-amber-200/90">
-                {advancedIncomplete.resolved + (advancedIncomplete.excluded ?? 0)} of {advancedIncomplete.total} ingredient line
-                {advancedIncomplete.total === 1 ? '' : 's'} accounted for
-                {advancedIncomplete.excluded ? ` · ${advancedIncomplete.excluded} wrapper excluded` : ''}.
+        {isExpanded && (
+          <div className="space-y-4">
+            {savedPartial && (
+              <p data-testid="saved-basic-partial" className="rounded-xl border-l-[3px] border-l-[var(--accent-text,#F59E0B)] bg-[var(--bg-elevated,#1E1E1E)] px-3 py-2 text-xs leading-relaxed text-[var(--text-primary,#F3F4F6)]">
+                Saved partial subtotal — recipe totals are unknown. Recalculate and review before saving.
               </p>
-              <p className="text-[11px] text-gray-400">
-                {advancedIncomplete.stale ? <>Saved evidence does not match the current recipe. Totals are unknown. Recalculate Advanced Nutrition.</> : advancedIncomplete.unresolved === 0 ? <>
-                  Nutrient coverage is partial; known amounts are subtotals and missing nutrients remain unknown.
-                </> : <>
-                  Partial estimate — {advancedIncomplete.unresolved ?? Math.max(0, advancedIncomplete.total - advancedIncomplete.resolved - (advancedIncomplete.excluded ?? 0))} unresolved ingredient line{(advancedIncomplete.unresolved ?? Math.max(0, advancedIncomplete.total - advancedIncomplete.resolved - (advancedIncomplete.excluded ?? 0))) === 1 ? '' : 's'}.
-                  Known amounts are subtotals; full recipe totals are unknown. Open Advanced Nutrition to finish review.
-                </>}
-              </p>
-            </div>
-          )}
-          {effectiveNutrition || (recipe.calories !== undefined && recipe.calories !== null) ? (
-            <>
-              {/* Provenance (subtle; omitted when absent) */}
-              {provenanceText && (
-                <div className="flex items-center justify-center">
-                  <span className="text-[10px] font-mono text-gray-500 uppercase tracking-wide bg-white/5 border border-white/5 rounded-full px-2 py-0.5">
-                    {provenanceText}
-                  </span>
-                </div>
-              )}
-              {!derivedNutrition && currentNutrition?.confidenceNote && (
-                <p data-testid="saved-basic-evidence" className="text-[11px] text-gray-400">{currentNutrition.confidenceNote}</p>
-              )}
-              {/* Macro Cards Grid */}
-              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 text-center">
-                <div className="p-2.5 rounded-xl bg-[#0E0E0E] border border-white/5">
-                  <span className="text-[10px] text-gray-500 uppercase font-mono block">{savedPartial || partialNutrientSet.has('calories') ? 'Calories · subtotal' : 'Calories'}</span>
-                  <span className="text-base font-serif font-bold text-white">
-                    {displayedNutrition?.calories ?? (derivedNutrition || savedPartial ? undefined : recipe.calories) ?? '—'}
-                  </span>
-                  <span className="text-[10px] text-gray-500 block">kcal</span>
-                </div>
-
-                <div className="p-2.5 rounded-xl bg-[#0E0E0E] border border-white/5">
-                  <span className="text-[10px] text-gray-500 uppercase font-mono block">{savedPartial || partialNutrientSet.has('protein') ? 'Protein · subtotal' : 'Protein'}</span>
-                  <span className="text-base font-serif font-bold text-emerald-400">
-                    {displayedNutrition?.protein !== undefined ? `${displayedNutrition.protein}g` : '—'}
-                  </span>
-                  <span className="text-[10px] text-gray-500 block">{proteinPct > 0 ? `${proteinPct}% of macro grams` : 'macro'}</span>
-                </div>
-
-                <div className="p-2.5 rounded-xl bg-[#0E0E0E] border border-white/5">
-                  <span className="text-[10px] text-gray-500 uppercase font-mono block">{savedPartial || partialNutrientSet.has('carbohydrates') ? 'Carbs · subtotal' : 'Carbs'}</span>
-                  <span className="text-base font-serif font-bold text-blue-400">
-                    {displayedNutrition?.carbohydrates !== undefined ? `${displayedNutrition.carbohydrates}g` : '—'}
-                  </span>
-                  <span className="text-[10px] text-gray-500 block">{carbsPct > 0 ? `${carbsPct}% of macro grams` : 'macro'}</span>
-                </div>
-
-                <div className="p-2.5 rounded-xl bg-[#0E0E0E] border border-white/5">
-                  <span className="text-[10px] text-gray-500 uppercase font-mono block">{savedPartial || partialNutrientSet.has('fat') ? 'Fat · subtotal' : 'Fat'}</span>
-                  <span className="text-base font-serif font-bold text-amber-400">
-                    {displayedNutrition?.fat !== undefined ? `${displayedNutrition.fat}g` : '—'}
-                  </span>
-                  <span className="text-[10px] text-gray-500 block">{fatPct > 0 ? `${fatPct}% of macro grams` : 'macro'}</span>
-                </div>
-
-                <div className="p-2.5 rounded-xl bg-[#0E0E0E] border border-white/5">
-                  <span className="text-[10px] text-gray-500 uppercase font-mono block">{savedPartial || partialNutrientSet.has('fiber') ? 'Fiber · subtotal' : 'Fiber'}</span>
-                  <span className="text-base font-serif font-bold text-purple-400">
-                    {displayedNutrition?.fiber !== undefined ? `${displayedNutrition.fiber}g` : '—'}
-                  </span>
-                  <span className="text-[10px] text-gray-500 block">dietary</span>
-                </div>
-
-                <div className="p-2.5 rounded-xl bg-[#0E0E0E] border border-white/5">
-                  <span className="text-[10px] text-gray-500 uppercase font-mono block">{savedPartial || partialNutrientSet.has('sodium') ? 'Sodium · subtotal' : 'Sodium'}</span>
-                  <span className="text-base font-serif font-bold text-orange-400">
-                    {displayedNutrition?.sodium !== undefined ? `${displayedNutrition.sodium}mg` : '—'}
-                  </span>
-                  <span className="text-[10px] text-gray-500 block">mineral</span>
-                </div>
-              </div>
-
-              {/* Macro Distribution Ratio Bar */}
-              <p className="text-[10px] text-gray-500">Macro percentages compare grams, not calories.</p>
-              {totalMacroGrams > 0 && (
-                <div className="space-y-1.5">
-                  <div className="flex justify-between text-[11px] font-mono">
-                    <span className="text-emerald-400 font-medium">Protein {proteinPct}%</span>
-                    <span className="text-blue-400 font-medium">Carbs {carbsPct}%</span>
-                    <span className="text-amber-400 font-medium">Fat {fatPct}%</span>
-                  </div>
-                  <div className="h-2 w-full rounded-full overflow-hidden bg-white/5 flex">
-                    <div
-                      style={{ width: `${proteinPct}%` }}
-                      className="bg-emerald-500 h-full transition-all duration-500"
-                      title={`Protein: ${protein}g (${proteinPct}%)`}
-                    />
-                    <div
-                      style={{ width: `${carbsPct}%` }}
-                      className="bg-blue-500 h-full transition-all duration-500"
-                      title={`Carbohydrates: ${carbs}g (${carbsPct}%)`}
-                    />
-                    <div
-                      style={{ width: `${fatPct}%` }}
-                      className="bg-amber-500 h-full transition-all duration-500"
-                      title={`Fat: ${fat}g (${fatPct}%)`}
-                    />
-                  </div>
-                </div>
-              )}
-            </>
-          ) : (
-            <div className="text-center py-5 px-4 rounded-xl bg-[#0E0E0E] border border-dashed border-white/10 space-y-2">
-              <p className="text-xs text-gray-400">
-                No nutrition is recorded for this recipe yet.
-              </p>
-              <p className="text-[11px] text-gray-500">
-                Calculate a basic estimate from the pinned local USDA catalog — no AI
-                required. Nothing is saved until you choose to save it.
-              </p>
-              <button
-                id="calculate-basic-nutrition-empty-btn"
-                data-testid="calculate-basic-nutrition-empty-btn"
-                onClick={handleEstimate}
-                disabled={isLoading}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 transition-colors"
+            )}
+            {advancedIncomplete && (
+              <div
+                data-testid="nutrition-advanced-incomplete"
+                className="space-y-1.5 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] border-l-[3px] border-l-[var(--accent-text,#F59E0B)] bg-[var(--bg-elevated,#1E1E1E)] p-3"
               >
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>{isLoading ? 'Calculating…' : 'Calculate Basic Nutrition'}</span>
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-2 py-0.5 font-mono text-[11px] uppercase tracking-normal text-[var(--text-primary,#F3F4F6)]">
+                    {advancedIncomplete.stale ? 'Needs recalculation' : 'Partial estimate'}
+                  </span>
+                  <p className="text-xs font-semibold text-[var(--text-primary,#F3F4F6)]">Advanced nutrition incomplete</p>
+                </div>
+                <p className="text-[11px] text-[var(--text-secondary,#9CA3AF)]">
+                  {advancedIncomplete.resolved + (advancedIncomplete.excluded ?? 0)} of {advancedIncomplete.total} ingredient line
+                  {advancedIncomplete.total === 1 ? '' : 's'} accounted for
+                  {advancedIncomplete.excluded ? ` · ${advancedIncomplete.excluded} wrapper excluded` : ''}.
+                </p>
+                <p className="text-[11px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
+                  {advancedIncomplete.stale ? <>Saved evidence does not match the current recipe. Totals are unknown. Recalculate Advanced Nutrition.</> : advancedIncomplete.unresolved === 0 ? <>
+                    Nutrient coverage is partial; known amounts are subtotals and missing nutrients remain unknown.
+                  </> : <>
+                    Partial estimate — {advancedIncomplete.unresolved ?? Math.max(0, advancedIncomplete.total - advancedIncomplete.resolved - (advancedIncomplete.excluded ?? 0))} unresolved ingredient line{(advancedIncomplete.unresolved ?? Math.max(0, advancedIncomplete.total - advancedIncomplete.resolved - (advancedIncomplete.excluded ?? 0))) === 1 ? '' : 's'}.
+                    Known amounts are subtotals; full recipe totals are unknown. Open Advanced Nutrition to finish review.
+                  </>}
+                </p>
+              </div>
+            )}
+
+            {hasNutritionDisplay ? (
+              <>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {provenanceText && (
+                      <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-2.5 py-1 font-mono text-[11px] uppercase tracking-normal text-[var(--text-secondary,#9CA3AF)]">
+                        <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-[var(--accent-text,#F59E0B)]" />
+                        {provenanceText}
+                      </span>
+                    )}
+                    <span className="rounded-full border border-[var(--border-subtle,rgba(255,255,255,0.08))] px-2.5 py-1 font-mono text-[11px] text-[var(--text-secondary,#9CA3AF)]">
+                      {currentServings} serving{currentServings === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                </div>
+
+                {!derivedNutrition && currentNutrition?.confidenceNote && (
+                  <p data-testid="saved-basic-evidence" className="text-[11px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
+                    {currentNutrition.confidenceNote}
+                  </p>
+                )}
+
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-2 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-4 py-4">
+                    <div className="min-w-0">
+                      <p className="font-mono text-[11px] uppercase tracking-[0.08em] text-[var(--text-secondary,#9CA3AF)]">{caloriesLabel}</p>
+                      <div className="mt-1.5 flex items-baseline gap-1.5">
+                        <span className="font-serif text-[44px] leading-none text-[var(--text-primary,#F3F4F6)]">{caloriesValue}</span>
+                        <span className="text-[13px] font-medium text-[var(--text-secondary,#9CA3AF)]">kcal</span>
+                      </div>
+                    </div>
+                    <p className="text-[11px] text-[var(--text-secondary,#9CA3AF)]">
+                      Total for {currentServings} serving{currentServings === 1 ? '' : 's'}
+                    </p>
+                  </div>
+
+                  <dl className="grid grid-cols-2 gap-x-3 gap-y-2.5 sm:grid-cols-3">
+                    <div className="min-w-0 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] px-3 py-2.5">
+                      <dt className="font-mono text-[11px] uppercase tracking-normal text-[var(--text-secondary,#9CA3AF)]">{proteinLabel}</dt>
+                      <dd className="mt-0.5 flex items-baseline gap-1">
+                        <span className="font-mono text-[17px] font-semibold leading-tight text-[var(--text-primary,#F3F4F6)]">
+                          {displayedNutrition?.protein !== undefined ? `${displayedNutrition.protein}g` : '—'}
+                        </span>
+                      </dd>
+                      <dd className="mt-0.5 text-[11px] text-[var(--text-secondary,#9CA3AF)]">
+                        {displayedNutrition?.protein === undefined ? 'not recorded' : hasMacroComparison && proteinPct > 0 ? `${proteinPct}% of macro grams` : 'macro'}
+                      </dd>
+                    </div>
+
+                    <div className="min-w-0 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] px-3 py-2.5">
+                      <dt className="font-mono text-[11px] uppercase tracking-normal text-[var(--text-secondary,#9CA3AF)]">{carbsLabel}</dt>
+                      <dd className="mt-0.5 flex items-baseline gap-1">
+                        <span className="font-mono text-[17px] font-semibold leading-tight text-[var(--text-primary,#F3F4F6)]">
+                          {displayedNutrition?.carbohydrates !== undefined ? `${displayedNutrition.carbohydrates}g` : '—'}
+                        </span>
+                      </dd>
+                      <dd className="mt-0.5 text-[11px] text-[var(--text-secondary,#9CA3AF)]">
+                        {displayedNutrition?.carbohydrates === undefined ? 'not recorded' : hasMacroComparison && carbsPct > 0 ? `${carbsPct}% of macro grams` : 'macro'}
+                      </dd>
+                    </div>
+
+                    <div className="min-w-0 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] px-3 py-2.5">
+                      <dt className="font-mono text-[11px] uppercase tracking-normal text-[var(--text-secondary,#9CA3AF)]">{fatLabel}</dt>
+                      <dd className="mt-0.5 flex items-baseline gap-1">
+                        <span className="font-mono text-[17px] font-semibold leading-tight text-[var(--text-primary,#F3F4F6)]">
+                          {displayedNutrition?.fat !== undefined ? `${displayedNutrition.fat}g` : '—'}
+                        </span>
+                      </dd>
+                      <dd className="mt-0.5 text-[11px] text-[var(--text-secondary,#9CA3AF)]">
+                        {displayedNutrition?.fat === undefined ? 'not recorded' : hasMacroComparison && fatPct > 0 ? `${fatPct}% of macro grams` : 'macro'}
+                      </dd>
+                    </div>
+
+                    <div className="min-w-0 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] px-3 py-2.5">
+                      <dt className="font-mono text-[11px] uppercase tracking-normal text-[var(--text-secondary,#9CA3AF)]">{fiberLabel}</dt>
+                      <dd className="mt-0.5 flex items-baseline gap-1">
+                        <span className="font-mono text-[17px] font-semibold leading-tight text-[var(--text-primary,#F3F4F6)]">
+                          {displayedNutrition?.fiber !== undefined ? `${displayedNutrition.fiber}g` : '—'}
+                        </span>
+                      </dd>
+                      <dd className="mt-0.5 text-[11px] text-[var(--text-secondary,#9CA3AF)]">{displayedNutrition?.fiber === undefined ? 'not recorded' : 'dietary'}</dd>
+                    </div>
+
+                    <div className="min-w-0 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] px-3 py-2.5">
+                      <dt className="font-mono text-[11px] uppercase tracking-normal text-[var(--text-secondary,#9CA3AF)]">{sodiumLabel}</dt>
+                      <dd className="mt-0.5 flex items-baseline gap-1">
+                        <span className="font-mono text-[17px] font-semibold leading-tight text-[var(--text-primary,#F3F4F6)]">
+                          {displayedNutrition?.sodium !== undefined ? `${displayedNutrition.sodium}mg` : '—'}
+                        </span>
+                      </dd>
+                      <dd className="mt-0.5 text-[11px] text-[var(--text-secondary,#9CA3AF)]">{displayedNutrition?.sodium === undefined ? 'not recorded' : 'mineral'}</dd>
+                    </div>
+                  </dl>
+                </div>
+
+                {hasMacroComparison && totalMacroGrams > 0 && !savedPartial && !partialNutrientSet.has('protein') && !partialNutrientSet.has('carbohydrates') && !partialNutrientSet.has('fat') && (
+                  <div className="space-y-2 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-3 py-3">
+                    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                      <p className="text-[11px] font-semibold text-[var(--text-primary,#F3F4F6)]">Macro distribution</p>
+                      <p className="text-[11px] text-[var(--text-secondary,#9CA3AF)]">Macro percentages compare grams, not calories.</p>
+                    </div>
+                    <div
+                      className="flex h-2.5 w-full overflow-hidden rounded-full bg-[var(--bg-surface,#141414)]"
+                      role="img"
+                      aria-label={`Macro distribution by grams: protein ${proteinPct} percent, carbohydrates ${carbsPct} percent, fat ${fatPct} percent`}
+                    >
+                      <div style={{ width: `${proteinPct}%` }} className="h-full bg-[var(--accent,#F59E0B)] transition-all duration-500 motion-reduce:transition-none" title={`Protein: ${protein}g (${proteinPct}%)`} />
+                      <div style={{ width: `${carbsPct}%` }} className="h-full bg-[var(--accent,#F59E0B)] opacity-60 transition-all duration-500 motion-reduce:transition-none" title={`Carbohydrates: ${carbs}g (${carbsPct}%)`} />
+                      <div style={{ width: `${fatPct}%` }} className="h-full bg-[var(--accent,#F59E0B)] opacity-30 transition-all duration-500 motion-reduce:transition-none" title={`Fat: ${fat}g (${fatPct}%)`} />
+                    </div>
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-[11px] text-[var(--text-secondary,#9CA3AF)]">
+                      <span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-[var(--accent,#F59E0B)]" />Protein {proteinPct}%</span>
+                      <span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-[var(--accent,#F59E0B)] opacity-60" />Carbs {carbsPct}%</span>
+                      <span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-[var(--accent,#F59E0B)] opacity-30" />Fat {fatPct}%</span>
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="space-y-2 rounded-xl border border-dashed border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-4 py-5 text-center">
+                <p className="text-xs text-[var(--text-secondary,#9CA3AF)]">
+                  No nutrition is recorded for this recipe yet.
+                </p>
+                <p className="text-[11px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
+                  Calculate a basic estimate from the pinned local USDA catalog — no AI
+                  required. Nothing is saved until you choose to save it.
+                </p>
+                <button
+                  type="button"
+                  id="calculate-basic-nutrition-empty-btn"
+                  data-testid="calculate-basic-nutrition-empty-btn"
+                  onClick={handleEstimate}
+                  disabled={isLoading}
+                  className="mx-auto flex min-h-[44px] items-center gap-1.5 rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-4 text-xs font-semibold text-[var(--text-primary,#F3F4F6)] transition-colors hover:border-[var(--accent-text,#F59E0B)] disabled:opacity-50"
+                >
+                  <Sparkles className="h-3.5 w-3.5 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
+                  <span>{isLoading ? 'Calculating…' : 'Calculate Basic Nutrition'}</span>
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </article>
   );
 };
