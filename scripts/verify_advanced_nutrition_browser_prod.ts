@@ -549,21 +549,60 @@ async function runEntitledProof(origin: string, appPort: number, cdpPort: number
     const calcFacts = await session.evaluate(`(() => {
       const previewEl = document.querySelector('[aria-label="Advisory nutrition preview"]');
       if (!previewEl) return null;
-      const text = previewEl.innerText.replaceAll(String.fromCharCode(10), ' ').replaceAll(String.fromCharCode(13), ' ').split(' ').filter(Boolean).join(' ');
-      const dialogText = ((document.querySelector('[role=dialog]') || {}).innerText || '').replace(/\\s+/g, ' ');
-      // The production UI deliberately renders only the first 32 hex characters
-      // of the digest plus an ellipsis, so compare prefixes, not the full value.
-      const digest = /Ingredient digest:\\s*(sha256:[0-9a-f]+)/.exec(dialogText);
-      const coverageText = (text.includes('Coverage') ? text : dialogText).replaceAll(String.fromCharCode(10), ' ').replaceAll(String.fromCharCode(13), ' ').split(' ').filter(Boolean).join(' ');
-      const coverage = /Coverage ([A-Za-z]+) · ([0-9]+) unresolved line/.exec(coverageText);
+      const normalize = (value) => String(value == null ? '' : value).replace(/\\s+/g, ' ').trim();
+      const text = normalize(previewEl.innerText);
+      // Semantic definition-list extraction: locate the exact label, then read
+      // its value within the SAME item. Missing or ambiguous labels/values are
+      // explicit extraction failures, never silently defaulted.
+      const definition = (label) => {
+        const matches = Array.from(previewEl.querySelectorAll('dt')).filter((dt) => normalize(dt.textContent) === label);
+        if (matches.length === 0) return { ok: false, reason: label + ':missing' };
+        if (matches.length > 1) return { ok: false, reason: label + ':ambiguous' };
+        const item = matches[0].parentElement;
+        if (!item) return { ok: false, reason: label + ':missing_item' };
+        const values = Array.from(item.querySelectorAll('dd'));
+        if (values.length === 0) return { ok: false, reason: label + ':missing_value' };
+        if (values.length > 1) return { ok: false, reason: label + ':ambiguous_value' };
+        const value = normalize(values[0].textContent);
+        return value.length > 0 ? { ok: true, value } : { ok: false, reason: label + ':empty_value' };
+      };
+      const integer = (label) => {
+        const field = definition(label);
+        if (!field.ok) return field;
+        if (!/^(0|[1-9][0-9]*)$/.test(field.value)) return { ok: false, reason: label + ':invalid_integer' };
+        return { ok: true, value: Number(field.value) };
+      };
+      const digestField = definition('Ingredient digest');
+      const digestMatch = digestField.ok ? /^(sha256:[0-9a-f]{20,})(?:…|\\.\\.\\.)?$/.exec(digestField.value) : null;
+      const digest = digestMatch
+        ? { ok: true, value: digestMatch[1] }
+        : { ok: false, reason: digestField.ok ? 'Ingredient digest:invalid_format' : digestField.reason };
+      const scope = integer('Nutrients in scope');
+      const unresolved = integer('Unresolved ingredients');
+      // Coverage is read from its own rendered sentence inside the preview only.
+      const coverageCandidates = Array.from(previewEl.querySelectorAll('p'))
+        .map((p) => normalize(p.textContent))
+        .filter((value) => /^Coverage:/.test(value));
+      const coverageParagraph = coverageCandidates.length === 1 ? coverageCandidates[0] : '';
+      const coverage = /Coverage:\\s*([A-Za-z]+)\\s*·\\s*([0-9]+)\\s+of\\s+([0-9]+)\\s+ingredient lines?\\s+unresolved\\.?/i.exec(coverageParagraph);
+      const extractionErrors = [];
+      if (!digest.ok) extractionErrors.push(digest.reason);
+      if (!scope.ok) extractionErrors.push(scope.reason);
+      if (!unresolved.ok) extractionErrors.push(unresolved.reason);
+      if (coverageCandidates.length === 0) extractionErrors.push('Coverage:missing');
+      else if (coverageCandidates.length > 1) extractionErrors.push('Coverage:ambiguous');
+      else if (!coverage) extractionErrors.push('Coverage:invalid_format');
       return {
         text,
-        digestPrefix: digest ? digest[1] : '',
+        digestPrefix: digest.ok ? digest.value : '',
         coverageStatus: coverage ? coverage[1] : '',
+        coverageUnresolvedCount: coverage ? Number(coverage[2]) : -1,
+        coverageTotalIngredients: coverage ? Number(coverage[3]) : -1,
         unresolvedCount: coverage ? Number(coverage[2]) : -1,
         totalIngredients: document.querySelectorAll('[data-testid=advanced-nutrition-row]').length,
-        nutrientsInScope: (() => { const m = /Nutrients in scope:\\s*(\\d+)/.exec(dialogText); return m ? Number(m[1]) : -1; })(),
-        unresolvedIngredientsShown: (() => { const m = /Unresolved ingredients:\\s*(\\d+)/.exec(dialogText); return m ? Number(m[1]) : -1; })(),
+        nutrientsInScope: scope.ok ? scope.value : -1,
+        unresolvedIngredientsShown: unresolved.ok ? unresolved.value : -1,
+        extractionErrors,
         mentionsPartial: /partial|Some ingredient lines are unresolved/i.test(text),
         mentionsUnresolvedCount: /unresolved/i.test(text),
         hasCalories: /Calories/i.test(text),
@@ -585,11 +624,19 @@ async function runEntitledProof(origin: string, appPort: number, cdpPort: number
       String(calcFacts?.digestPrefix)
     );
     check(
+      'preview exposes unambiguous machine-readable evidence',
+      (calcFacts?.extractionErrors?.length ?? 1) === 0,
+      JSON.stringify(calcFacts?.extractionErrors ?? ['preview missing'])
+    );
+    check(
       'preview reports the truthful coverage denominator',
-      calcFacts?.totalIngredients === RECIPE_LEVEL_EXPECTATIONS.totalIngredientCount &&
+      calcFacts?.coverageStatus === RECIPE_LEVEL_EXPECTATIONS.calculationStatus &&
+        calcFacts?.totalIngredients === RECIPE_LEVEL_EXPECTATIONS.totalIngredientCount &&
         calcFacts?.unresolvedIngredientsShown === RECIPE_LEVEL_EXPECTATIONS.unresolvedCount &&
+        calcFacts?.coverageUnresolvedCount === calcFacts?.unresolvedIngredientsShown &&
+        calcFacts?.coverageTotalIngredients === calcFacts?.totalIngredients &&
         calcFacts?.mentionsPartial === true,
-      `coverage=${calcFacts?.coverageStatus} unresolved=${calcFacts?.unresolvedIngredientsShown}/${calcFacts?.totalIngredients}`
+      `coverage=${calcFacts?.coverageStatus} ${calcFacts?.coverageUnresolvedCount}/${calcFacts?.coverageTotalIngredients} rows=${calcFacts?.totalIngredients} unresolved=${calcFacts?.unresolvedIngredientsShown}`
     );
     check(
       'preview reports the full nutrient scope and unresolved count',
