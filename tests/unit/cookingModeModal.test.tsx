@@ -331,7 +331,7 @@ import { vaultAssets } from '../../src/utils/vaultAssets';
 describe('CookingModeModal image compatibility', () => {
   afterEach(() => vaultAssets.clear());
 
-  it('renders a safe remote recipe photograph', () => {
+  it('renders a safe remote recipe photograph', async () => {
     render(
       <CookingModeModal
         recipe={makeRecipe({ image: 'https://example.com/bread.jpg' })}
@@ -343,12 +343,13 @@ describe('CookingModeModal image compatibility', () => {
         onClose={() => {}}
       />
     );
-    const img = document.querySelector('#fullscreen-cooking-mode img') as HTMLImageElement;
+    await new Promise((r) => setTimeout(r, 0));
+    const img = document.querySelector('#fullscreen-cooking-mode [role="img"]') as HTMLElement;
     expect(img).toBeTruthy();
-    expect(img.getAttribute('src')).toBe('https://example.com/bread.jpg');
+    expect(img.style.backgroundImage).toContain('https://example.com/bread.jpg');
   });
 
-  it('renders an explicit Vault-relative image reference', () => {
+  it('renders an explicit Vault-relative image reference', async () => {
     vaultAssets.registerAsset('Assets/My Bread.jpg', new File(['x'], 'My Bread.jpg', { type: 'image/jpeg' }));
     render(
       <CookingModeModal
@@ -361,12 +362,13 @@ describe('CookingModeModal image compatibility', () => {
         onClose={() => {}}
       />
     );
-    const img = document.querySelector('#fullscreen-cooking-mode img') as HTMLImageElement;
+    await new Promise((r) => setTimeout(r, 0));
+    const img = document.querySelector('#fullscreen-cooking-mode [role="img"]') as HTMLElement;
     expect(img).toBeTruthy();
-    expect(img.getAttribute('src')).toMatch(/^blob:/);
+    expect(img.style.backgroundImage).toMatch(/blob:/);
   });
 
-  it('renders a Markdown image embed when supported', () => {
+  it('renders a Markdown image embed when supported', async () => {
     vaultAssets.registerAsset('Assets/Bread.jpg', new File(['x'], 'Bread.jpg', { type: 'image/jpeg' }));
     render(
       <CookingModeModal
@@ -379,9 +381,10 @@ describe('CookingModeModal image compatibility', () => {
         onClose={() => {}}
       />
     );
-    const img = document.querySelector('#fullscreen-cooking-mode img') as HTMLImageElement;
+    await new Promise((r) => setTimeout(r, 0));
+    const img = document.querySelector('#fullscreen-cooking-mode [role="img"]') as HTMLElement;
     expect(img).toBeTruthy();
-    expect(img.getAttribute('src')).toMatch(/^blob:/);
+    expect(img.style.backgroundImage).toMatch(/blob:/);
   });
 
   it('renders an asynchronously resolved Vault asset', async () => {
@@ -400,12 +403,13 @@ describe('CookingModeModal image compatibility', () => {
     );
     // allow async resolution
     await new Promise((r) => setTimeout(r, 50));
-    const img = document.querySelector('#fullscreen-cooking-mode img') as HTMLImageElement;
+    await new Promise((r) => setTimeout(r, 0));
+    const img = document.querySelector('#fullscreen-cooking-mode [role="img"]') as HTMLElement;
     expect(img).toBeTruthy();
-    expect(img.getAttribute('src')).toMatch(/^blob:/);
+    expect(img.style.backgroundImage).toMatch(/blob:/);
   });
 
-  it('shows fallback when no explicit image', () => {
+  it('shows fallback when no explicit image', async () => {
     render(
       <CookingModeModal
         recipe={makeRecipe({ image: undefined, rawMarkdown: '' })}
@@ -417,11 +421,12 @@ describe('CookingModeModal image compatibility', () => {
         onClose={() => {}}
       />
     );
-    const img = document.querySelector('#fullscreen-cooking-mode img');
+    await new Promise((r) => setTimeout(r, 0));
+    const img = document.querySelector('#fullscreen-cooking-mode [role="img"]');
     expect(img).toBeNull();
   });
 
-  it('rejects unsafe URL schemes', () => {
+  it('rejects unsafe URL schemes', async () => {
     render(
       <CookingModeModal
         recipe={makeRecipe({ image: 'javascript:alert(1)' })}
@@ -433,11 +438,12 @@ describe('CookingModeModal image compatibility', () => {
         onClose={() => {}}
       />
     );
-    const img = document.querySelector('#fullscreen-cooking-mode img');
+    await new Promise((r) => setTimeout(r, 0));
+    const img = document.querySelector('#fullscreen-cooking-mode [role="img"]');
     expect(img).toBeNull();
   });
 
-  it('fails safely for missing Vault references', () => {
+  it('fails safely for missing Vault references', async () => {
     render(
       <CookingModeModal
         recipe={makeRecipe({ image: 'Assets/missing.jpg' })}
@@ -449,7 +455,8 @@ describe('CookingModeModal image compatibility', () => {
         onClose={() => {}}
       />
     );
-    const img = document.querySelector('#fullscreen-cooking-mode img');
+    await new Promise((r) => setTimeout(r, 0));
+    const img = document.querySelector('#fullscreen-cooking-mode [role="img"]');
     expect(img).toBeNull();
   });
 });

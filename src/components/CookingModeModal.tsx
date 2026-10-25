@@ -95,7 +95,6 @@ export function CookingModeModal({
 
   const previouslyFocused = useRef<HTMLElement | null>(null);
   const modalRef = useRef<HTMLDivElement | null>(null);
-  const imgRef = useRef<HTMLImageElement | null>(null);
   useEffect(() => {
     previouslyFocused.current = (document.activeElement as HTMLElement) || null;
     const node = modalRef.current;
@@ -111,16 +110,6 @@ export function CookingModeModal({
       }
     };
   }, []);
-
-  useLayoutEffect(() => {
-    const el = imgRef.current;
-    if (!el) return;
-    if (imageUrl && /^(https?:|data:|blob:)/i.test(imageUrl)) {
-      el.setAttribute('src', imageUrl);
-    } else {
-      el.removeAttribute('src');
-    }
-  }, [imageUrl]);
 
   useEffect(() => {
     let wakeLock: any = null;
@@ -272,11 +261,11 @@ export function CookingModeModal({
         <div className="flex items-center gap-3 min-w-0">
           <div className="shrink-0">
             {showPhoto && imageUrl ? (
-              <img
-                ref={imgRef}
-                alt={recipe.title}
-                referrerPolicy="no-referrer"
-                className="w-11 h-11 sm:w-12 sm:h-12 rounded-lg object-cover border border-white/10"
+              <div
+                role="img"
+                aria-label={recipe.title}
+                className="w-11 h-11 sm:w-12 sm:h-12 rounded-lg border border-white/10 bg-cover bg-center"
+                style={{ backgroundImage: `url(${JSON.stringify(imageUrl)})` }}
               />
             ) : (
               <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-lg bg-[#0C0C0C] border border-white/10 flex items-center justify-center text-amber-400">
