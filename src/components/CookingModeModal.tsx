@@ -19,6 +19,8 @@ import { ObsidianRecipe, ActiveTimer } from '../types';
 import { scaleIngredientText } from '../utils/markdownParser';
 import { playTimerChime } from '../utils/audioAlert';
 import { stepTimerKey, findTimerByKey } from '../application/timers';
+import { useVaultImage } from '../hooks/useVaultImage';
+import { getRecipeImage } from '../utils/imageHelper';
 
 interface CookingModeModalProps {
   recipe: ObsidianRecipe;
@@ -68,16 +70,28 @@ export function CookingModeModal({
   const stepKey = stepTimerKey(recipe.id, stepNumber);
   const stepTimer = stepTimerKey(recipe.id, stepNumber) ? findTimerByKey(activeTimers, stepKey) : undefined;
 
-  // Only render directly-addressable, safe image URLs. This avoids
-  // reinterpreting untrusted/DOM-derived text as an attribute value.
+  const defaultImg = getRecipeImage(recipe);
+  const reactiveVaultImage = useVaultImage(recipe.image, defaultImg);
+
   const rawImage = typeof recipe.image === 'string' ? recipe.image.trim() : '';
-  const isSafeImageUrl = /^(https?:|data:|blob:)/i.test(rawImage);
-  const hasExplicitPhoto =
-    isSafeImageUrl ||
-    /!\[\[(?:[^\]]*\|)?[^\]]+\.(?:jpg|jpeg|png|webp|avif|gif|svg)\]\]/i.test(recipe.rawMarkdown || '') ||
-    /!\[[^\]]*\]\([^\)]*\.(?:jpg|jpeg|png|webp|avif|gif|svg)\)/i.test(recipe.rawMarkdown || '');
-  const imageUrl = isSafeImageUrl ? rawImage : null;
-  const showPhoto = isSafeImageUrl && !!imageUrl;
+  const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(rawImage);
+  const isUnsafeScheme = hasScheme && !/^(https?:|data:|blob:)/i.test(rawImage);
+
+  const hasExplicitImage =
+    !isUnsafeScheme && (
+      Boolean(recipe.image) ||
+      /!\[\[(?:[^\]]*\|)?[^\]]+\.(?:jpg|jpeg|png|webp|avif|gif|svg)\]\]/i.test(recipe.rawMarkdown || '') ||
+      /!\[[^\]]*\]\([^\)]*\.(?:jpg|jpeg|png|webp|avif|gif|svg)\)/i.test(recipe.rawMarkdown || '')
+    );
+
+  const resolvedImageUrl = hasExplicitImage ? (reactiveVaultImage || defaultImg) : null;
+  // Preserve the CodeQL security fix: only render directly-addressable,
+  // safe image URLs. Vault-resolved blob URLs are also allowed.
+  const isSafeImageUrl =
+    typeof resolvedImageUrl === 'string' &&
+    /^(https?:|data:|blob:)/i.test(resolvedImageUrl.trim());
+  const imageUrl = isSafeImageUrl ? resolvedImageUrl.trim() : null;
+  const showPhoto = hasExplicitImage && !!imageUrl;
 
   const previouslyFocused = useRef<HTMLElement | null>(null);
   const modalRef = useRef<HTMLDivElement | null>(null);

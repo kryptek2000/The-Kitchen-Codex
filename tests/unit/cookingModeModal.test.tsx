@@ -325,3 +325,131 @@ describe('CookingModeModal correction pass', () => {
     expect(screen.getByText('Add the egg and stir.')).toBeTruthy();
   });
 });
+
+import { vaultAssets } from '../../src/utils/vaultAssets';
+
+describe('CookingModeModal image compatibility', () => {
+  afterEach(() => vaultAssets.clear());
+
+  it('renders a safe remote recipe photograph', () => {
+    render(
+      <CookingModeModal
+        recipe={makeRecipe({ image: 'https://example.com/bread.jpg' })}
+        servings={4}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    const img = document.querySelector('#fullscreen-cooking-mode img') as HTMLImageElement;
+    expect(img).toBeTruthy();
+    expect(img.getAttribute('src')).toBe('https://example.com/bread.jpg');
+  });
+
+  it('renders an explicit Vault-relative image reference', () => {
+    vaultAssets.registerAsset('Assets/My Bread.jpg', new File(['x'], 'My Bread.jpg', { type: 'image/jpeg' }));
+    render(
+      <CookingModeModal
+        recipe={makeRecipe({ image: 'Assets/My Bread.jpg' })}
+        servings={4}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    const img = document.querySelector('#fullscreen-cooking-mode img') as HTMLImageElement;
+    expect(img).toBeTruthy();
+    expect(img.getAttribute('src')).toMatch(/^blob:/);
+  });
+
+  it('renders a Markdown image embed when supported', () => {
+    vaultAssets.registerAsset('Assets/Bread.jpg', new File(['x'], 'Bread.jpg', { type: 'image/jpeg' }));
+    render(
+      <CookingModeModal
+        recipe={makeRecipe({ rawMarkdown: '![Bread](Assets/Bread.jpg)' })}
+        servings={4}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    const img = document.querySelector('#fullscreen-cooking-mode img') as HTMLImageElement;
+    expect(img).toBeTruthy();
+    expect(img.getAttribute('src')).toMatch(/^blob:/);
+  });
+
+  it('renders an asynchronously resolved Vault asset', async () => {
+    const handle = { getFile: async () => new File(['x'], 'Async.jpg', { type: 'image/jpeg' }) };
+    vaultAssets.registerAsset('Assets/Async.jpg', handle);
+    render(
+      <CookingModeModal
+        recipe={makeRecipe({ image: 'Assets/Async.jpg' })}
+        servings={4}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    // allow async resolution
+    await new Promise((r) => setTimeout(r, 50));
+    const img = document.querySelector('#fullscreen-cooking-mode img') as HTMLImageElement;
+    expect(img).toBeTruthy();
+    expect(img.getAttribute('src')).toMatch(/^blob:/);
+  });
+
+  it('shows fallback when no explicit image', () => {
+    render(
+      <CookingModeModal
+        recipe={makeRecipe({ image: undefined, rawMarkdown: '' })}
+        servings={4}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    const img = document.querySelector('#fullscreen-cooking-mode img');
+    expect(img).toBeNull();
+  });
+
+  it('rejects unsafe URL schemes', () => {
+    render(
+      <CookingModeModal
+        recipe={makeRecipe({ image: 'javascript:alert(1)' })}
+        servings={4}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    const img = document.querySelector('#fullscreen-cooking-mode img');
+    expect(img).toBeNull();
+  });
+
+  it('fails safely for missing Vault references', () => {
+    render(
+      <CookingModeModal
+        recipe={makeRecipe({ image: 'Assets/missing.jpg' })}
+        servings={4}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    const img = document.querySelector('#fullscreen-cooking-mode img');
+    expect(img).toBeNull();
+  });
+});
