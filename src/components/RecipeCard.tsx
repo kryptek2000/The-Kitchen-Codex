@@ -143,7 +143,7 @@ export function RecipeCard({
             <button
               type="button"
               onClick={() => onSelectRecipe(recipe)}
-              className="text-left text-white group-hover:text-amber-300 transition-colors duration-[140ms] rounded min-h-0 md:min-h-[36px]"
+              className="text-left text-white group-hover:text-amber-300 transition-colors duration-[140ms] rounded min-h-[44px]"
             >
               {recipe.title}
             </button>

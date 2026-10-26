@@ -460,3 +460,24 @@ describe('CookingModeModal image compatibility', () => {
     expect(img).toBeNull();
   });
 });
+
+describe('CookingModeModal focus recovery', () => {
+  it('recovers focus into the dialog when it escapes', () => {
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    // Move focus outside the dialog.
+    document.body.focus();
+    fireEvent.keyDown(window, { key: 'Tab' });
+    const root = document.getElementById('fullscreen-cooking-mode')!;
+    expect(root.contains(document.activeElement)).toBe(true);
+  });
+});

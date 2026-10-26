@@ -163,6 +163,12 @@ export function CookingModeModal({
         if (focusable.length === 0) return;
         const first = focusable[0];
         const last = focusable[focusable.length - 1];
+        // Recover if focus has escaped the dialog.
+        if (!root.contains(document.activeElement)) {
+          e.preventDefault();
+          (e.shiftKey ? last : first).focus();
+          return;
+        }
         if (e.shiftKey) {
           if (document.activeElement === first) {
             e.preventDefault();
@@ -302,7 +308,7 @@ export function CookingModeModal({
             onClick={() => setShowIngredientsDrawer((prev) => !prev)}
             aria-pressed={showIngredientsDrawer}
             aria-label="Toggle ingredients list"
-            className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold border transition-colors min-h-[44px] ${
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold border transition-colors min-h-[44px] min-w-[44px] ${
               showIngredientsDrawer
                 ? 'bg-amber-500 text-black border-amber-400'
                 : 'bg-white/5 hover:bg-white/10 text-gray-200 border-white/10'
