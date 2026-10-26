@@ -1,10 +1,9 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   FolderOpen,
   Upload,
   FolderGit2,
   FileText,
-  Sparkles,
   CheckCircle2,
   AlertCircle,
   X,
@@ -12,10 +11,7 @@ import {
   Download,
   FolderTree,
   FileCode,
-  ArrowRight,
   HardDrive,
-  Copy,
-  Check,
   Globe,
 } from 'lucide-react';
 import { ObsidianRecipe, VaultNote, VaultSyncStatus, MealPlanDay, ShoppingCategoryGroup } from '../types';
@@ -73,8 +69,47 @@ export function ConnectVaultModal({
 
   const folderInputRef = useRef<HTMLInputElement>(null);
   const filesInputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!isOpen || typeof document === 'undefined') return undefined;
+    previouslyFocusedRef.current = (document.activeElement as HTMLElement | null) ?? null;
+    const node = dialogRef.current;
+    if (node) node.focus({ preventScroll: true });
+    return () => {
+      const previous = previouslyFocusedRef.current;
+      if (previous && typeof previous.focus === 'function') previous.focus({ preventScroll: true });
+    };
+  }, [isOpen]);
 
   if (!isOpen) return null;
+
+  const handleDialogKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      event.stopPropagation();
+      onClose();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const node = dialogRef.current;
+    if (!node) return;
+    const focusables = Array.from(
+      node.querySelectorAll<HTMLElement>(
+        'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'
+      )
+    ).filter((element) => element.offsetParent !== null || element === document.activeElement);
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (event.shiftKey && (document.activeElement === first || document.activeElement === node)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
 
   // Handle Folder Picker via standard webkitdirectory (Works in all iframes and browsers)
   const handleFolderUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -312,385 +347,448 @@ export function ConnectVaultModal({
     });
   };
 
+  const connectionState = vaultStatus.connectionState ?? (vaultStatus.isConnected ? 'connected' : 'starter');
+  const needsReconnect = connectionState === 'reauthorization_required' || connectionState === 'permission_denied';
+  const isLiveVault = vaultStatus.isConnected && vaultStatus.accessType === 'filesystem_api';
+  const connectionLabel =
+    connectionState === 'connected' && isLiveVault
+      ? 'Local Vault Connected'
+      : connectionState === 'connected'
+        ? 'Recipes loaded'
+        : connectionState === 'reauthorization_required'
+          ? 'Reconnect required'
+          : connectionState === 'permission_denied'
+            ? 'Vault access denied'
+            : 'Starter library';
+  const connectionDescription =
+    connectionState === 'connected' && isLiveVault
+      ? 'Changes can sync to the folder you chose.'
+      : connectionState === 'connected'
+        ? 'These recipes are loaded in this app. Live folder sync is not connected.'
+        : connectionState === 'reauthorization_required'
+          ? 'Your Vault is remembered; the browser needs permission to reopen it.'
+          : connectionState === 'permission_denied'
+            ? 'The browser refused access. Choose the folder again or reconnect.'
+            : 'Sample recipes are loaded. Connect your own Vault to see your recipes.';
+  const vaultTabs = [
+    { id: 'upload' as const, label: 'Import Folder / Files', icon: Upload },
+    { id: 'direct' as const, label: 'Live Directory Sync', icon: FolderOpen },
+    { id: 'paste' as const, label: 'Paste Markdown', icon: FileCode },
+    { id: 'manage' as const, label: `Vault Stats (${recipes.length})`, icon: FolderTree },
+  ];
+
   return (
     <div
       id="connect-vault-modal-overlay"
-      className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5 overflow-y-auto"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+      className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/65 p-3 backdrop-blur-sm sm:p-5"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
       }}
     >
       <div
         id="connect-vault-modal-card"
-        className="bg-[#141414] border border-white/10 rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col text-gray-200 animate-in fade-in zoom-in-95 duration-150"
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="connect-vault-title"
+        aria-describedby="connect-vault-description"
+        tabIndex={-1}
+        onKeyDown={handleDialogKeyDown}
+        className="my-2 flex max-h-[94vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] text-[var(--text-primary,#F3F4F6)] shadow-2xl focus:outline-none sm:my-4"
       >
-        {/* Modal Header */}
-        <div className="p-5 border-b border-white/5 flex items-start justify-between bg-[#181818]/60">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center justify-center">
-              <FolderGit2 className="w-5 h-5" />
-            </div>
-            <div>
-              <h2 className="text-base sm:text-lg font-serif font-bold text-white flex items-center gap-2">
-                <span>Connect My Recipe Vault</span>
-                <span className="text-[10px] uppercase font-sans font-medium px-2 py-0.5 rounded bg-white/5 text-amber-300 border border-white/5">
-                  Markdown Sync
-                </span>
+        <div className="flex items-start justify-between gap-3 border-b border-[var(--border-subtle,rgba(255,255,255,0.08))] px-4 py-4 sm:px-5">
+          <div className="flex min-w-0 items-start gap-3">
+            <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--accent-subtle,rgba(245,158,11,0.12))] text-[var(--accent-text,#F59E0B)]">
+              <FolderGit2 className="h-5 w-5" aria-hidden="true" />
+            </span>
+            <div className="min-w-0">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary,#9CA3AF)]">My Recipe Vault</p>
+              <h2 id="connect-vault-title" className="font-serif text-[22px] leading-snug text-[var(--text-primary,#F3F4F6)] sm:text-[25px]">
+                Connect or manage your recipes
               </h2>
-              <p className="text-xs text-gray-400 mt-0.5">
-                Load recipe notes directly from your local vault or files.
+              <p id="connect-vault-description" className="mt-0.5 line-clamp-2 text-[12px] leading-relaxed text-[var(--text-secondary,#9CA3AF)] sm:line-clamp-none">
+                Bring your own Markdown recipes into The Kitchen Codex, or keep using the sample library.
               </p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            <span className={`hidden rounded-full border px-2.5 py-1 text-[11px] font-medium sm:inline-flex ${
+              connectionState === 'connected'
+                ? 'border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] text-[var(--text-primary,#F3F4F6)]'
+                : needsReconnect
+                  ? 'border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--accent-subtle,rgba(245,158,11,0.12))] text-[var(--text-primary,#F3F4F6)]'
+                  : 'border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] text-[var(--text-secondary,#9CA3AF)]'
+            }`}>
+              {connectionLabel}
+            </span>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close Vault settings"
+              className="flex h-11 w-11 items-center justify-center rounded-lg text-[var(--text-secondary,#9CA3AF)] transition-colors hover:bg-[var(--bg-elevated,#1E1E1E)] hover:text-[var(--text-primary,#F3F4F6)]"
+            >
+              <X className="h-5 w-5" aria-hidden="true" />
+            </button>
+          </div>
         </div>
 
-        {/* Modal Tabs */}
-        <div className="flex items-center gap-1 px-5 pt-3 border-b border-white/5 bg-[#0F0F0F] overflow-x-auto">
-          <button
-            onClick={() => {
-              setActiveTab('upload');
-              setStatusMessage(null);
-            }}
-            className={`flex items-center gap-2 px-3 py-2 text-xs font-semibold rounded-t-lg transition-colors border-b-2 whitespace-nowrap ${
-              activeTab === 'upload'
-                ? 'text-amber-400 border-amber-500 bg-[#141414]'
-                : 'text-gray-400 border-transparent hover:text-gray-200'
-            }`}
-          >
-            <Upload className="w-3.5 h-3.5" />
-            <span>Import Folder / Files</span>
-          </button>
-
-          <button
-            onClick={() => {
-              setActiveTab('direct');
-              setStatusMessage(null);
-            }}
-            className={`flex items-center gap-2 px-3 py-2 text-xs font-semibold rounded-t-lg transition-colors border-b-2 whitespace-nowrap ${
-              activeTab === 'direct'
-                ? 'text-amber-400 border-amber-500 bg-[#141414]'
-                : 'text-gray-400 border-transparent hover:text-gray-200'
-            }`}
-          >
-            <FolderOpen className="w-3.5 h-3.5" />
-            <span>Live Directory Sync</span>
-          </button>
-
-          <button
-            onClick={() => {
-              setActiveTab('paste');
-              setStatusMessage(null);
-            }}
-            className={`flex items-center gap-2 px-3 py-2 text-xs font-semibold rounded-t-lg transition-colors border-b-2 whitespace-nowrap ${
-              activeTab === 'paste'
-                ? 'text-amber-400 border-amber-500 bg-[#141414]'
-                : 'text-gray-400 border-transparent hover:text-gray-200'
-            }`}
-          >
-            <FileCode className="w-3.5 h-3.5" />
-            <span>Paste Markdown</span>
-          </button>
-
-          <button
-            onClick={() => {
-              setActiveTab('manage');
-              setStatusMessage(null);
-            }}
-            className={`flex items-center gap-2 px-3 py-2 text-xs font-semibold rounded-t-lg transition-colors border-b-2 whitespace-nowrap ${
-              activeTab === 'manage'
-                ? 'text-amber-400 border-amber-500 bg-[#141414]'
-                : 'text-gray-400 border-transparent hover:text-gray-200'
-            }`}
-          >
-            <FolderTree className="w-3.5 h-3.5" />
-            <span>Vault Stats ({recipes.length})</span>
-          </button>
-
+        <div
+          className="hidden items-center gap-1 overflow-x-auto border-b border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-root,#0C0C0C)] px-5 sm:flex"
+          role="tablist"
+          aria-label="Vault options"
+          onKeyDown={(event) => {
+            const ids = vaultTabs.map((tab) => tab.id);
+            const index = ids.indexOf(activeTab);
+            if (index < 0) return;
+            let nextIndex: number | null = null;
+            if (event.key === 'ArrowRight') nextIndex = (index + 1) % ids.length;
+            else if (event.key === 'ArrowLeft') nextIndex = (index - 1 + ids.length) % ids.length;
+            else if (event.key === 'Home') nextIndex = 0;
+            else if (event.key === 'End') nextIndex = ids.length - 1;
+            if (nextIndex === null) return;
+            event.preventDefault();
+            const next = ids[nextIndex];
+            setActiveTab(next);
+            setStatusMessage(null);
+            window.requestAnimationFrame(() => document.getElementById(`vault-tab-${next}`)?.focus());
+          }}
+        >
+          {vaultTabs.map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              id={`vault-tab-${id}`}
+              type="button"
+              role="tab"
+              aria-selected={activeTab === id}
+              aria-controls={`vault-panel-${id}`}
+              onClick={() => {
+                setActiveTab(id);
+                setStatusMessage(null);
+              }}
+              className={`flex min-h-[48px] items-center justify-center gap-2 whitespace-nowrap border-b-2 px-3 text-[12px] font-semibold transition-colors ${
+                activeTab === id
+                  ? 'border-[var(--accent-text,#F59E0B)] text-[var(--text-primary,#F3F4F6)]'
+                  : 'border-transparent text-[var(--text-secondary,#9CA3AF)] hover:text-[var(--text-primary,#F3F4F6)]'
+              }`}
+            >
+              <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>{label}</span>
+            </button>
+          ))}
           {onOpenWebGrabber && (
             <button
+              type="button"
               onClick={() => {
                 onClose();
                 onOpenWebGrabber();
               }}
-              className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-t-lg transition-colors border-b-2 border-transparent text-sky-400 hover:text-sky-300 hover:bg-sky-500/10 ml-auto whitespace-nowrap"
-              title="Import recipe from website URL"
+              className="ml-auto flex min-h-[48px] items-center gap-1.5 whitespace-nowrap border-b-2 border-transparent px-3 text-[12px] font-semibold text-[var(--accent-text,#F59E0B)] hover:bg-[var(--bg-elevated,#1E1E1E)]"
+              title="Import recipe from a website URL"
             >
-              <Globe className="w-3.5 h-3.5" />
-              <span>Web Grabber</span>
+              <Globe className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>Grab from Web</span>
             </button>
           )}
         </div>
 
-        {/* Modal Body */}
-        <div className="p-5 space-y-4 max-h-[65vh] overflow-y-auto">
-          {/* Status Alert if any */}
+        <div className="flex items-center gap-2 border-b border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-root,#0C0C0C)] px-3 py-2 sm:hidden">
+          <label className="sr-only" htmlFor="vault-section-select">Vault section</label>
+          <select
+            id="vault-section-select"
+            aria-label="Vault section"
+            value={activeTab}
+            onChange={(event) => {
+              setActiveTab(event.target.value as typeof activeTab);
+              setStatusMessage(null);
+            }}
+            className="min-h-[44px] flex-1 rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-3 text-[13px] text-[var(--text-primary,#F3F4F6)]"
+          >
+            {vaultTabs.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}
+          </select>
+          {onOpenWebGrabber && (
+            <button
+              type="button"
+              aria-label="Grab recipe from web"
+              title="Import recipe from a website URL"
+              onClick={() => {
+                onClose();
+                onOpenWebGrabber();
+              }}
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] text-[var(--accent-text,#F59E0B)]"
+            >
+              <Globe className="h-4 w-4" aria-hidden="true" />
+            </button>
+          )}
+        </div>
+
+        <div className="max-h-[65vh] flex-1 space-y-4 overflow-y-auto p-4 sm:p-5">
           {statusMessage && (
             <div
-              className={`p-3 rounded-xl text-xs flex items-start gap-2.5 ${
+              role={statusMessage.type === 'error' ? 'alert' : 'status'}
+              className={`flex items-start gap-2.5 rounded-xl border p-3 text-[12px] ${
                 statusMessage.type === 'success'
-                  ? 'bg-emerald-950/40 border border-emerald-800/40 text-emerald-300'
+                  ? 'border-[var(--border-subtle,rgba(255,255,255,0.08))] border-l-[3px] border-l-[var(--accent-text,#F59E0B)] bg-[var(--bg-elevated,#1E1E1E)] text-[var(--text-primary,#F3F4F6)]'
                   : statusMessage.type === 'info'
-                  ? 'bg-blue-950/40 border border-blue-800/40 text-blue-300'
-                  : 'bg-rose-950/40 border border-rose-800/40 text-rose-300'
+                    ? 'border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] text-[var(--text-secondary,#9CA3AF)]'
+                    : 'border-[var(--border-subtle,rgba(255,255,255,0.08))] border-l-[3px] border-l-amber-500 bg-[var(--bg-elevated,#1E1E1E)] text-[var(--text-primary,#F3F4F6)]'
               }`}
             >
               {statusMessage.type === 'success' ? (
-                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
               ) : (
-                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
               )}
               <span className="flex-1 leading-relaxed">{statusMessage.text}</span>
             </div>
           )}
 
-          {/* TAB 1: UPLOAD / DRAG & DROP */}
+          <div className="flex items-center justify-between gap-2 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-3 py-2 sm:hidden">
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--text-secondary,#9CA3AF)]">Current connection</p>
+              <p className="truncate font-serif text-[15px] text-[var(--text-primary,#F3F4F6)]">{connectionLabel}</p>
+            </div>
+            <span className="shrink-0 font-mono text-[10px] text-[var(--text-secondary,#9CA3AF)]">{recipes.length} recipe{recipes.length === 1 ? '' : 's'}</span>
+          </div>
+          <div className="hidden flex-wrap items-start justify-between gap-3 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-4 py-3 sm:flex">
+            <div className="min-w-0">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--text-secondary,#9CA3AF)]">Current connection</p>
+              <p className="mt-0.5 font-serif text-[17px] text-[var(--text-primary,#F3F4F6)]">{connectionLabel}</p>
+              <p className="mt-0.5 text-[12px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">{connectionDescription}</p>
+            </div>
+            <div className="text-right">
+              <p className="font-mono text-[12px] text-[var(--text-primary,#F3F4F6)]">{recipes.length} recipe{recipes.length === 1 ? '' : 's'} loaded</p>
+              <p className="mt-0.5 max-w-[220px] truncate font-mono text-[10px] text-[var(--text-secondary,#9CA3AF)]" title={vaultStatus.vaultPath || DEFAULT_VAULT_PATH}>
+                {vaultStatus.vaultPath || DEFAULT_VAULT_PATH}
+              </p>
+            </div>
+          </div>
+
           {activeTab === 'upload' && (
-            <div className="space-y-4">
-              {/* Drag and Drop Zone */}
+            <div
+              id="vault-panel-upload"
+              role="tabpanel"
+              aria-labelledby="vault-tab-upload"
+              className="space-y-4"
+            >
               <div
-                onDragOver={(e) => {
-                  e.preventDefault();
+                onDragOver={(event) => {
+                  event.preventDefault();
                   setDragOver(true);
                 }}
                 onDragLeave={() => setDragOver(false)}
                 onDrop={handleDrop}
-                className={`border-2 border-dashed rounded-2xl p-6 sm:p-8 text-center transition-all flex flex-col items-center justify-center space-y-3 cursor-pointer ${
-                  dragOver
-                    ? 'border-amber-500 bg-amber-500/10'
-                    : 'border-white/10 bg-[#0C0C0C] hover:border-amber-500/40 hover:bg-white/5'
-                }`}
                 onClick={() => folderInputRef.current?.click()}
+                className={`flex cursor-pointer flex-col items-center justify-center space-y-3 rounded-2xl border-2 border-dashed p-4 text-center transition-colors sm:p-8 ${
+                  dragOver
+                    ? 'border-[var(--accent-text,#F59E0B)] bg-[var(--accent-subtle,rgba(245,158,11,0.12))]'
+                    : 'border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-root,#0C0C0C)] hover:border-[var(--accent-text,#F59E0B)]'
+                }`}
               >
-                <div className="w-12 h-12 rounded-2xl bg-amber-500/10 text-amber-400 flex items-center justify-center border border-amber-500/20">
-                  <Upload className="w-6 h-6" />
-                </div>
+                <span className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--accent-subtle,rgba(245,158,11,0.12))] text-[var(--accent-text,#F59E0B)]">
+                  <Upload className="h-6 w-6" aria-hidden="true" />
+                </span>
                 <div>
-                  <h4 className="font-serif font-bold text-sm text-white">
-                    Drag &amp; Drop your recipe folder or .md files here
-                  </h4>
-                  <p className="text-xs text-gray-400 mt-1 max-w-md mx-auto">
-                    Drop your entire <span className="font-mono text-amber-300">Recipes</span> directory or multiple recipe notes. We will parse YAML frontmatter, Dataview fields, wikilinks, and checklist ingredients automatically.
+                  <h3 className="font-serif text-[16px] text-[var(--text-primary,#F3F4F6)] sm:text-[18px]">
+                    Drop your recipe folder or Markdown files
+                  </h3>
+                  <p className="mx-auto mt-1 max-w-md text-[12px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
+                    We read recipe notes, Meal Plan.md and Shopping List.md. Your files stay in the
+                    folder you choose — nothing is uploaded to a service.
                   </p>
                 </div>
-
-                <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+                <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
                   <button
                     type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
+                    onClick={(event) => {
+                      event.stopPropagation();
                       folderInputRef.current?.click();
                     }}
-                    className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-black rounded-xl text-xs font-bold shadow-md shadow-amber-500/20 transition-all flex items-center gap-1.5"
+                    className="flex min-h-[44px] items-center gap-1.5 rounded-lg bg-amber-500 px-4 text-[12px] font-semibold text-black transition-colors hover:bg-amber-400"
                   >
-                    <FolderOpen className="w-4 h-4" />
-                    <span>Select Recipes Folder</span>
+                    <FolderOpen className="h-4 w-4" aria-hidden="true" />
+                    <span>Choose recipe folder</span>
                   </button>
-
                   <button
                     type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
+                    onClick={(event) => {
+                      event.stopPropagation();
                       filesInputRef.current?.click();
                     }}
-                    className="px-4 py-2 bg-white/5 hover:bg-white/10 text-gray-200 border border-white/10 rounded-xl text-xs font-medium transition-all flex items-center gap-1.5"
+                    className="flex min-h-[44px] items-center gap-1.5 rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-4 text-[12px] font-medium text-[var(--text-primary,#F3F4F6)] transition-colors hover:bg-[var(--bg-root,#0C0C0C)]"
                   >
-                    <FileText className="w-4 h-4 text-amber-400" />
-                    <span>Select .md Files</span>
+                    <FileText className="h-4 w-4 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
+                    <span>Choose .md files</span>
                   </button>
                 </div>
               </div>
 
-              {/* Hidden Inputs */}
-              <input
-                type="file"
-                ref={folderInputRef}
-                onChange={handleFolderUpload}
-                // @ts-ignore
-                webkitdirectory="true"
-                directory="true"
-                multiple
-                className="hidden"
-              />
-              <input
-                type="file"
-                ref={filesInputRef}
-                onChange={handleFilesUpload}
-                accept=".md,.markdown,text/markdown"
-                multiple
-                className="hidden"
-              />
+              <input type="file" ref={folderInputRef} onChange={handleFolderUpload} {...({ webkitdirectory: 'true', directory: 'true' } as any)} multiple className="hidden" />
+              <input type="file" ref={filesInputRef} onChange={handleFilesUpload} accept=".md,.markdown,text/markdown" multiple className="hidden" />
 
-              <div className="bg-[#0C0C0C] p-3.5 rounded-xl border border-white/5 text-xs text-gray-400 flex items-center justify-between">
-                <span>Currently active vault contains:</span>
-                <span className="font-mono font-semibold text-amber-300">
-                  {recipes.length} recipe notes loaded
-                </span>
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-3.5 py-3 text-[12px] text-[var(--text-secondary,#9CA3AF)]">
+                <span>This import adds recipes to the library currently loaded here.</span>
+                <span className="font-mono text-[var(--text-primary,#F3F4F6)]">{recipes.length} recipe{recipes.length === 1 ? '' : 's'} loaded</span>
               </div>
             </div>
           )}
 
-          {/* TAB 2: DIRECT TWO-WAY FILE SYSTEM API */}
           {activeTab === 'direct' && (
-            <div className="space-y-4">
-              <div className="bg-[#0C0C0C] p-4 rounded-xl border border-white/5 space-y-3">
-                <div className="flex items-center gap-2 text-amber-400 font-semibold text-xs">
-                  <HardDrive className="w-4 h-4" />
-                  <span>Two-Way Local File System Integration</span>
+            <div id="vault-panel-direct" role="tabpanel" aria-labelledby="vault-tab-direct" className="space-y-4">
+              <div className="space-y-3 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] p-4">
+                <div className="flex items-center gap-2 text-[12px] font-semibold text-[var(--text-primary,#F3F4F6)]">
+                  <HardDrive className="h-4 w-4 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
+                  <span>Keep your Vault and this app in step</span>
                 </div>
-                <p className="text-xs text-gray-300 leading-relaxed">
-                  Connect directly to your local file system using the modern File System Access API. Any edits, new recipes, or checklist updates can be written directly to your disk into your vault.
+                <p className="text-[12px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
+                  Choose the folder that holds your recipe notes. When you save a recipe here,
+                  The Kitchen Codex can write the updated Markdown back to that folder.
                 </p>
-                <div className="p-3 bg-white/5 rounded-lg border border-white/5 text-[11px] text-gray-400 space-y-1 font-mono">
-                  <div>• Vault Location: {customVaultPath}</div>
-                  <div>• Status: {vaultStatus.isConnected ? 'Connected' : 'Ready to link folder'}</div>
-                </div>
+                <dl className="grid gap-2 text-[12px] sm:grid-cols-2">
+                  <div className="rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-3 py-2">
+                    <dt className="text-[10px] uppercase tracking-wide text-[var(--text-secondary,#9CA3AF)]">Folder</dt>
+                    <dd className="mt-0.5 break-all font-mono text-[11px] text-[var(--text-primary,#F3F4F6)]">{customVaultPath}</dd>
+                  </div>
+                  <div className="rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-3 py-2">
+                    <dt className="text-[10px] uppercase tracking-wide text-[var(--text-secondary,#9CA3AF)]">Status</dt>
+                    <dd className="mt-0.5 text-[11px] text-[var(--text-primary,#F3F4F6)]">{connectionLabel}</dd>
+                  </div>
+                </dl>
               </div>
 
               <button
+                type="button"
                 onClick={handleDirectFileSystemConnect}
                 disabled={isProcessing}
-                className="w-full py-3 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-black font-bold text-xs rounded-xl shadow-lg shadow-amber-500/20 transition-all flex items-center justify-center gap-2"
+                className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-xl bg-amber-500 px-4 text-[13px] font-semibold text-black shadow-md shadow-amber-500/20 transition-colors hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <FolderOpen className="w-4 h-4" />
-                <span>{isProcessing ? 'Reading directory...' : 'Choose Local Vault Folder'}</span>
+                <FolderOpen className="h-4 w-4" aria-hidden="true" />
+                <span>{isProcessing ? 'Opening folder…' : 'Choose Local Obsidian Vault Folder'}</span>
               </button>
 
-              <div className="text-[11px] text-gray-500 bg-[#0A0A0A] p-3 rounded-lg border border-white/5 leading-relaxed">
-                💡 <strong>Browser Note:</strong> When running inside embedded web previews or iframes, browsers may enforce strict security rules on direct disk handles. If prompted with a permission notice, click allow, or use the <strong>Import Folder / Files</strong> tab to import effortlessly.
-              </div>
+              <p className="rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-root,#0C0C0C)] p-3 text-[11px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
+                Browsers only grant folder access after you choose the folder. If you are viewing this
+                app inside an embedded preview, use <strong className="text-[var(--text-primary,#F3F4F6)]">Import Files</strong> or open the app in its own tab.
+              </p>
+
+              {needsReconnect && (
+                <p className="rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] border-l-[3px] border-l-[var(--accent-text,#F59E0B)] bg-[var(--bg-elevated,#1E1E1E)] p-3 text-[12px] leading-relaxed text-[var(--text-primary,#F3F4F6)]">
+                  {connectionDescription}
+                </p>
+              )}
             </div>
           )}
 
-          {/* TAB 3: PASTE MARKDOWN NOTE */}
           {activeTab === 'paste' && (
-            <div className="space-y-3">
+            <div id="vault-panel-paste" role="tabpanel" aria-labelledby="vault-tab-paste" className="space-y-3">
               <div>
-                <label className="block text-xs font-semibold text-gray-300 mb-1">
-                  Recipe Note Title (Optional)
+                <label htmlFor="vault-paste-title" className="mb-1 block text-[12px] font-semibold text-[var(--text-primary,#F3F4F6)]">
+                  Recipe note title <span className="font-normal text-[var(--text-secondary,#9CA3AF)]">(optional)</span>
                 </label>
                 <input
+                  id="vault-paste-title"
                   type="text"
                   value={pasteTitle}
-                  onChange={(e) => setPasteTitle(e.target.value)}
+                  onChange={(event) => setPasteTitle(event.target.value)}
                   placeholder="e.g. Sourdough Pizza Crust"
-                  className="w-full text-xs bg-[#0C0C0C] border border-white/10 rounded-xl px-3.5 py-2.5 text-gray-200 placeholder:text-gray-600 focus:outline-none focus:border-amber-500"
+                  className="min-h-[44px] w-full rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-root,#0C0C0C)] px-3.5 text-[13px] text-[var(--text-primary,#F3F4F6)] placeholder:text-[var(--text-muted,#6B7280)] focus:border-[var(--accent-text,#F59E0B)]"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-300 mb-1">
-                  Raw Obsidian Markdown Note (with YAML frontmatter)
+                <label htmlFor="vault-paste-markdown" className="mb-1 block text-[12px] font-semibold text-[var(--text-primary,#F3F4F6)]">
+                  Markdown note
                 </label>
                 <textarea
+                  id="vault-paste-markdown"
                   rows={8}
                   value={pasteContent}
-                  onChange={(e) => setPasteContent(e.target.value)}
-                  placeholder={`---\ntitle: Garlic Butter Shrimp\ntags:\n  - food/recipes\n  - quick-15min\ncuisine: Seafood\nprep_time: 5 mins\ncook_time: 10 mins\nservings: 2\ndifficulty: Easy\n---\n\n# Garlic Butter Shrimp\n\n## 🥘 Ingredients\n- [ ] 1 lb [[Jumbo Shrimp]], peeled\n- [ ] 4 tbsp [[Unsalted Butter]]\n- [ ] 4 cloves [[Garlic]], minced\n\n## 🍳 Instructions\n1. Sauté garlic in butter for 1 minute.\n2. Add shrimp and cook for 4-5 minutes until pink.`}
-                  className="w-full text-xs font-mono bg-[#0C0C0C] border border-white/10 rounded-xl p-3 text-gray-200 placeholder:text-gray-600 focus:outline-none focus:border-amber-500 leading-relaxed"
+                  onChange={(event) => setPasteContent(event.target.value)}
+                  placeholder={`---\ntitle: Garlic Butter Shrimp\ntags:\n  - food/recipes\nservings: 2\n---\n\n# Garlic Butter Shrimp\n\n## Ingredients\n- 1 lb shrimp, peeled\n- 4 tbsp butter\n\n## Instructions\n1. Cook until pink.`}
+                  className="w-full rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-root,#0C0C0C)] p-3 font-mono text-[12px] leading-relaxed text-[var(--text-primary,#F3F4F6)] placeholder:text-[var(--text-muted,#6B7280)] focus:border-[var(--accent-text,#F59E0B)]"
                 />
               </div>
 
               <button
                 type="button"
                 onClick={handleImportPastedNote}
-                className="w-full py-2.5 bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-2"
+                className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg bg-amber-500 px-4 text-[13px] font-semibold text-black transition-colors hover:bg-amber-400"
               >
-                <FileCode className="w-4 h-4" />
-                <span>Parse &amp; Add to Vault</span>
+                <FileCode className="h-4 w-4" aria-hidden="true" />
+                <span>Add recipe from Markdown</span>
               </button>
             </div>
           )}
 
-          {/* TAB 4: MANAGE & VAULT STATS */}
           {activeTab === 'manage' && (
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                <div className="bg-[#0C0C0C] p-3 rounded-xl border border-white/5">
-                  <span className="text-[10px] text-gray-500 block uppercase">Recipe Notes</span>
-                  <span className="text-lg font-mono font-bold text-amber-400">{recipes.length}</span>
-                </div>
-                <div className="bg-[#0C0C0C] p-3 rounded-xl border border-white/5">
-                  <span className="text-[10px] text-gray-500 block uppercase">Ingredients</span>
-                  <span className="text-lg font-mono font-bold text-white">
-                    {recipes.reduce((acc, r) => acc + (r.ingredients?.length || 0), 0)}
-                  </span>
-                </div>
-                <div className="bg-[#0C0C0C] p-3 rounded-xl border border-white/5">
-                  <span className="text-[10px] text-gray-500 block uppercase">Wikilinks</span>
-                  <span className="text-lg font-mono font-bold text-white">
-                    {recipes.reduce((acc, r) => acc + (r.wikilinks?.length || 0), 0)}
-                  </span>
-                </div>
-                <div className="bg-[#0C0C0C] p-3 rounded-xl border border-white/5">
-                  <span className="text-[10px] text-gray-500 block uppercase">Callouts</span>
-                  <span className="text-lg font-mono font-bold text-white">
-                    {recipes.reduce((acc, r) => acc + (r.callouts?.length || 0), 0)}
-                  </span>
-                </div>
+            <div id="vault-panel-manage" role="tabpanel" aria-labelledby="vault-tab-manage" className="space-y-4">
+              <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+                {[
+                  ['Recipe notes', recipes.length],
+                  ['Ingredients', recipes.reduce((total, recipe) => total + (recipe.ingredients?.length || 0), 0)],
+                  ['Wikilinks', recipes.reduce((total, recipe) => total + (recipe.wikilinks?.length || 0), 0)],
+                  ['Callouts', recipes.reduce((total, recipe) => total + (recipe.callouts?.length || 0), 0)],
+                ].map(([label, value]) => (
+                  <div key={String(label)} className="rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-3 py-2.5">
+                    <span className="block text-[10px] uppercase tracking-wide text-[var(--text-secondary,#9CA3AF)]">{label}</span>
+                    <span className="mt-0.5 block font-mono text-[19px] font-semibold text-[var(--text-primary,#F3F4F6)]">{value}</span>
+                  </div>
+                ))}
               </div>
 
-              {/* Recipe List preview */}
-              <div className="bg-[#0C0C0C] rounded-xl border border-white/5 p-3 space-y-2">
-                <h4 className="text-xs font-bold text-gray-300 uppercase tracking-wider pb-1 border-b border-white/5 flex items-center justify-between">
-                  <span>Current Notes in Vault</span>
-                  <span className="text-[10px] text-gray-500 font-normal">{recipes.length} files</span>
-                </h4>
-                <div className="max-h-36 overflow-y-auto space-y-1 pr-1">
-                  {recipes.map((r) => (
-                    <div
-                      key={r.id}
-                      className="flex items-center justify-between text-xs py-1 px-2 rounded-lg bg-white/5 text-gray-300"
-                    >
-                      <span className="truncate font-mono">{r.fileName}</span>
-                      <span className="text-[10px] text-amber-400 shrink-0 font-sans ml-2">
-                        {r.cuisine} • {r.cookTime}
-                      </span>
+              <div className="rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] p-3">
+                <div className="flex items-center justify-between gap-2 border-b border-[var(--border-subtle,rgba(255,255,255,0.08))] pb-2">
+                  <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--text-secondary,#9CA3AF)]">Recipes currently loaded</h3>
+                  <span className="font-mono text-[10px] text-[var(--text-secondary,#9CA3AF)]">{recipes.length} files</span>
+                </div>
+                <div className="mt-2 max-h-36 space-y-1 overflow-y-auto pr-1">
+                  {recipes.map((recipe) => (
+                    <div key={recipe.id} className="flex min-h-[32px] items-center justify-between gap-2 rounded-md px-2 text-[12px] text-[var(--text-primary,#F3F4F6)] hover:bg-[var(--bg-surface,#141414)]">
+                      <span className="truncate font-mono text-[11px]">{recipe.fileName}</span>
+                      <span className="shrink-0 text-[10px] text-[var(--text-secondary,#9CA3AF)]">{recipe.cuisine || 'Uncategorized'}</span>
                     </div>
                   ))}
                 </div>
               </div>
 
-              {/* Action Buttons */}
-              <div className="flex flex-wrap gap-2 pt-2 border-t border-white/5">
+              <div className="flex flex-wrap gap-2 border-t border-[var(--border-subtle,rgba(255,255,255,0.08))] pt-3">
                 <button
                   type="button"
                   onClick={handleExportAllMarkdown}
-                  className="flex-1 py-2 px-3 bg-white/5 hover:bg-white/10 text-gray-200 border border-white/10 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5"
+                  className="flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-3 text-[12px] font-semibold text-[var(--text-primary,#F3F4F6)] transition-colors hover:bg-[var(--bg-root,#0C0C0C)]"
                 >
-                  <Download className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Export All .md Files</span>
+                  <Download className="h-3.5 w-3.5 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
+                  <span>Export Markdown</span>
                 </button>
-
                 <button
                   type="button"
                   onClick={handleRestoreStarterVault}
-                  className="py-2 px-3 bg-white/5 hover:bg-white/10 text-gray-300 border border-white/10 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5"
-                  title={`Reload the ${getStarterVaultRecipes().length} curated gourmet starter recipes`}
+                  title={`Reload the ${getStarterVaultRecipes().length} curated starter recipes`}
+                  className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-3 text-[12px] font-semibold text-[var(--text-primary,#F3F4F6)] transition-colors hover:bg-[var(--bg-root,#0C0C0C)]"
                 >
-                  <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Restore Starter Vault</span>
+                  <RotateCcw className="h-3.5 w-3.5 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
+                  <span>Use starter library</span>
                 </button>
               </div>
+
+              <p className="text-[11px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
+                “Use starter library” replaces the recipes loaded in this app with the curated
+                starter set. It does not delete or change files in your folder.
+              </p>
             </div>
           )}
         </div>
 
-        {/* Modal Footer */}
-        <div className="p-4 border-t border-white/5 bg-[#0F0F0F] flex items-center justify-between">
-          <div className="flex items-center gap-2 text-xs text-gray-400 truncate max-w-xs">
-            <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-            <span className="truncate font-mono text-[11px]">{vaultStatus.vaultPath}</span>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-root,#0C0C0C)] px-4 py-3 sm:px-5">
+          <div className="flex min-w-0 items-center gap-2">
+            <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${connectionState === 'connected' ? 'bg-[var(--accent-text,#F59E0B)]' : needsReconnect ? 'bg-amber-500' : 'bg-[var(--text-muted,#6B7280)]'}`} />
+            <span className="truncate font-mono text-[11px] text-[var(--text-secondary,#9CA3AF)]" title={vaultStatus.vaultPath || DEFAULT_VAULT_PATH}>
+              {connectionLabel} · {vaultStatus.vaultPath || DEFAULT_VAULT_PATH}
+            </span>
           </div>
-
           <button
+            type="button"
             onClick={onClose}
-            className="px-4 py-2 bg-white/10 hover:bg-white/15 text-white rounded-xl text-xs font-semibold transition-colors"
+            className="min-h-[44px] rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-4 text-[12px] font-semibold text-[var(--text-primary,#F3F4F6)] transition-colors hover:bg-[var(--bg-root,#0C0C0C)]"
           >
             Done
           </button>

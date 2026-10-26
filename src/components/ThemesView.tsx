@@ -1,15 +1,13 @@
-import React, { useState } from 'react';
+import React from 'react';
 import {
   Palette,
   Check,
-  Sparkles,
   Sun,
   Moon,
-  Tag,
   Eye,
 } from 'lucide-react';
 import { ThemeId, AppThemeConfig } from '../types';
-import { KitchenCodexBrand, KitchenCodexMark } from './BrandMark';
+import { KitchenCodexMark } from './BrandMark';
 
 interface ThemesViewProps {
   currentTheme: ThemeId;
@@ -106,410 +104,312 @@ export function themeBackgroundColor(id: ThemeId): string {
 }
 
 export function ThemesView({ currentTheme, onSelectTheme }: ThemesViewProps) {
-  const [previewTheme, setPreviewTheme] = useState<ThemeId>(currentTheme);
   const activeThemeConfig = APP_THEMES.find((t) => t.id === currentTheme) || APP_THEMES[0];
-  const inspectedThemeConfig = APP_THEMES.find((t) => t.id === previewTheme) || activeThemeConfig;
+  const activeMode = activeThemeConfig.mode === 'dark' ? 'Dark canvas' : 'Light canvas';
+
+  const selectTheme = (theme: ThemeId) => {
+    onSelectTheme(theme);
+  };
 
   return (
-    <div className="space-y-6">
-      {/* Top Banner */}
-      <div className="p-5 sm:p-6 rounded-2xl bg-[#141414] border border-white/10 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-xl">
-        <div className="flex items-start sm:items-center gap-3.5">
-          <KitchenCodexBrand variant="icon" size="lg" />
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-lg font-serif font-bold text-white tracking-tight">Themes &amp; Appearance</h2>
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-white/5 border border-white/10 text-gray-300">
-                {APP_THEMES.length} Handcrafted Palettes
-              </span>
-            </div>
-            <p className="text-xs text-gray-400 mt-0.5">
-              Personalize your recipe vault for kitchen daylight, late-night cooking, or botanical aesthetics.
+    <section className="space-y-7 sm:space-y-8">
+      <header className="space-y-3 border-b border-[var(--color-rule,var(--border-subtle,rgba(255,255,255,0.08)))] pb-5 sm:pb-6">
+        <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary,#9CA3AF)]">
+          <Palette className="h-4 w-4 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
+          <span>Appearance</span>
+        </div>
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+          <div className="max-w-2xl space-y-2">
+            <h1 className="font-serif text-[32px] leading-[1.15] text-[var(--text-primary,#F3F4F6)] sm:text-[40px]">
+              Themes &amp; Appearance
+            </h1>
+            <p className="max-w-xl text-[14px] leading-[1.6] text-[var(--text-secondary,#9CA3AF)]">
+              A cookbook for daylight counters and late-night kitchens. Choose the palette that
+              makes your recipes most comfortable to read. Changes apply immediately and are
+              remembered on this device.
             </p>
           </div>
-        </div>
 
-        <div className="flex items-center gap-2 bg-[#0C0C0C] px-3 py-1.5 rounded-xl border border-white/10 self-start md:self-auto">
-          <span className="text-xs text-gray-400">Active Theme:</span>
-          <span className="text-xs font-bold text-amber-400 flex items-center gap-1.5">
+          <div className="flex items-center gap-3 rounded-2xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-4 py-3">
             <span
-              className="w-2.5 h-2.5 rounded-full inline-block"
-              style={{ backgroundColor: activeThemeConfig.palette.accent }}
-            />
-            {activeThemeConfig.name}
-          </span>
+              aria-hidden="true"
+              className="flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))]"
+              style={{ backgroundColor: activeThemeConfig.palette.bgElevated }}
+            >
+              <span
+                className="h-4 w-4 rounded-full"
+                style={{ backgroundColor: activeThemeConfig.palette.accent }}
+              />
+            </span>
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--text-muted,#6B7280)]">
+                Current theme
+              </p>
+              <p className="truncate font-serif text-[17px] text-[var(--text-primary,#F3F4F6)]">
+                {activeThemeConfig.name}
+              </p>
+              <p className="text-[11px] text-[var(--text-secondary,#9CA3AF)]">{activeMode}</p>
+            </div>
+          </div>
         </div>
-      </div>
+      </header>
 
-      {/* Handcrafted Palettes Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 sm:gap-5">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5 xl:grid-cols-4">
         {APP_THEMES.map((theme) => {
           const isActive = currentTheme === theme.id;
-          const isInspected = previewTheme === theme.id;
+          const isDark = theme.mode === 'dark';
 
           return (
             <div
               key={theme.id}
               id={`theme-card-${theme.id}`}
-              onClick={() => {
-                setPreviewTheme(theme.id);
-                onSelectTheme(theme.id);
-              }}
-              className={`rounded-2xl border p-5 flex flex-col justify-between transition-all duration-200 cursor-pointer relative overflow-hidden group ${
+              role="group"
+              aria-label={`${theme.name} theme preview`}
+              onClick={() => selectTheme(theme.id)}
+              className={`relative flex cursor-pointer flex-col overflow-hidden rounded-2xl border transition-all duration-200 ${
                 isActive
-                  ? 'bg-[#181818] border-[color:var(--accent)] shadow-lg ring-1 ring-[color:var(--accent-subtle)]'
-                  : 'bg-[#141414] border-white/10 hover:border-white/20 hover:bg-[#161616]'
+                  ? 'bg-[var(--bg-elevated,#1E1E1E)] border-[color:var(--accent)] shadow-lg ring-1 ring-[color:var(--accent-subtle)]'
+                  : 'bg-[var(--bg-surface,#141414)] border-[var(--border-subtle,rgba(255,255,255,0.08))] hover:border-[var(--accent-text,#F59E0B)] hover:shadow-md'
               }`}
             >
-              {/* Active Badge — card-level layer above the preview panel */}
               {isActive && (
-                <div className="absolute top-3 right-3 z-10 flex items-center gap-1 bg-amber-500 text-black px-2 py-0.5 rounded-full text-[10px] font-bold shadow-xs">
-                  <Check className="w-3 h-3 stroke-[3]" />
+                <div className="absolute top-3 right-3 z-10 flex items-center gap-1 rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-bold text-black shadow-xs">
+                  <Check className="h-3 w-3 stroke-[3]" aria-hidden="true" />
                   <span>ACTIVE</span>
                 </div>
               )}
 
-              <div>
-                {/* Visual Swatch Header */}
+              <div className="p-4 sm:p-5">
                 <div
-                  className="w-full h-24 rounded-xl p-3 mb-4 flex flex-col justify-between border relative overflow-hidden shadow-inner"
+                  className="mb-4 flex h-[176px] flex-col justify-between overflow-hidden rounded-xl border p-3.5 sm:h-[188px]"
                   style={{
                     backgroundColor: theme.palette.bgRoot,
                     borderColor: theme.palette.border,
+                    color: theme.palette.textPrimary,
                   }}
                 >
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span
+                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border"
+                        style={{ backgroundColor: theme.palette.bgElevated, borderColor: theme.palette.border, ["--text-primary" as any]: theme.palette.textPrimary, ["--accent-text" as any]: theme.palette.accent }}
+                      >
+                        <KitchenCodexMark size={16} decorative />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="truncate font-serif text-[12px] font-semibold" style={{ color: theme.palette.textPrimary }}>
+                          Kitchen Codex
+                        </p>
+                        <p className="truncate text-[9px] uppercase tracking-[0.14em]" style={{ color: theme.palette.textSecondary }}>
+                          My Recipe Vault
+                        </p>
+                      </div>
+                    </div>
                     <span
-                      className="text-[11px] font-bold font-serif px-2 py-0.5 rounded-md flex items-center gap-1"
-                      style={{
-                        backgroundColor: theme.palette.bgSurface,
-                        color: theme.palette.textPrimary,
-                        border: `1px solid ${theme.palette.border}`,
-                      }}
+                      className="shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-medium"
+                      style={{ backgroundColor: theme.palette.bgSurface, borderColor: theme.palette.border, color: theme.palette.accent }}
                     >
-                      {theme.mode === 'dark' ? <Moon className="w-3 h-3" /> : <Sun className="w-3 h-3" />}
-                      {theme.mode === 'dark' ? 'Dark Canvas' : 'Light Canvas'}
+                      {isDark ? <Moon className="mr-0.5 inline h-2.5 w-2.5" aria-hidden="true" /> : <Sun className="mr-0.5 inline h-2.5 w-2.5" aria-hidden="true" />}
+                      {isDark ? 'Dark' : 'Light'}
                     </span>
+                  </div>
 
-                    {/* Color Dots */}
-                    <div className="flex items-center gap-1.5">
-                      <div
-                        className="w-3.5 h-3.5 rounded-full border border-black/20 shadow-xs"
-                        style={{ backgroundColor: theme.palette.accent }}
-                        title="Accent"
-                      />
-                      <div
-                        className="w-3.5 h-3.5 rounded-full border border-black/20 shadow-xs"
-                        style={{ backgroundColor: theme.palette.bgSurface }}
-                        title="Surface"
-                      />
-                      <div
-                        className="w-3.5 h-3.5 rounded-full border border-black/20 shadow-xs"
-                        style={{ backgroundColor: theme.palette.bgElevated }}
-                        title="Elevated"
-                      />
+                  <div
+                    className="rounded-lg border px-3 py-2.5"
+                    style={{ backgroundColor: theme.palette.bgSurface, borderColor: theme.palette.border }}
+                  >
+                    <p className="font-serif text-[14px] leading-snug" style={{ color: theme.palette.textPrimary }}>
+                      Lemon &amp; Herb Roast Chicken
+                    </p>
+                    <p className="mt-0.5 text-[10px]" style={{ color: theme.palette.textSecondary }}>
+                      45 min · 4 servings · Dinner
+                    </p>
+                    <div className="mt-2 flex items-center justify-between gap-2">
+                      <span
+                        className="rounded px-1.5 py-0.5 font-mono text-[9px]"
+                        style={{ backgroundColor: theme.palette.bgElevated, color: theme.palette.accent }}
+                      >
+                        #food/recipes
+                      </span>
+                      <span
+                        className="rounded px-1.5 py-0.5 text-[9px] font-semibold"
+                        style={{ backgroundColor: theme.palette.accent, color: isDark ? '#000000' : '#FFFFFF' }}
+                      >
+                        Open recipe
+                      </span>
                     </div>
                   </div>
 
-                  {/* Micro Sample Pill */}
-                  <div className="flex items-center gap-2">
-                    <span
-                      className="text-[10px] font-mono font-medium px-2 py-0.5 rounded-md truncate max-w-[170px]"
-                      style={{
-                        backgroundColor: theme.palette.bgSurface,
-                        color: theme.palette.accent,
-                        border: `1px solid ${theme.palette.border}`,
-                      }}
-                    >
-                      #food/recipes
-                    </span>
-                    <span
-                      className="text-[10px] font-mono px-1.5 py-0.5 rounded"
-                      style={{
-                        color: theme.palette.textSecondary,
-                        backgroundColor: theme.palette.bgElevated,
-                      }}
-                    >
-                      [[Wikilink]]
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5">
+                      {[theme.palette.accent, theme.palette.bgSurface, theme.palette.bgElevated].map((color, index) => (
+                        <span
+                          key={`${theme.id}-${index}`}
+                          className="h-2.5 w-2.5 rounded-full border border-black/20"
+                          style={{ backgroundColor: color }}
+                          title={['Accent', 'Surface', 'Elevated'][index]}
+                        />
+                      ))}
+                    </div>
+                    <span className="text-[9px] font-mono" style={{ color: theme.palette.textSecondary }}>
+                      {theme.palette.accent}
                     </span>
                   </div>
                 </div>
 
-                {/* Title & Info */}
-                <div className="space-y-1 mb-3">
-                  <h3 className="text-base font-serif font-bold text-white group-hover:text-amber-400 transition-colors">
-                    {theme.name}
-                  </h3>
-                  {theme.badge ? (
-                    <span className="kc-brand-badge inline-block text-[9px] uppercase tracking-widest px-1.5 py-0.5 rounded border font-medium">
-                      {theme.badge}
-                    </span>
-                  ) : null}
-                  <p className="text-xs font-medium text-amber-400/90">{theme.subtitle}</p>
-                  <p className="text-xs text-gray-400 leading-relaxed pt-1">{theme.description}</p>
+                <div className="space-y-1.5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="font-serif text-[20px] leading-tight text-[var(--text-primary,#F3F4F6)]">
+                      {theme.name}
+                    </h3>
+                    {theme.badge ? (
+                      <span className="kc-brand-badge inline-block rounded border px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-widest" style={{ color: 'var(--text-primary,#F3F4F6)' }}>
+                        {theme.badge}
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className={`text-[12px] font-semibold ${isActive ? 'text-[var(--text-primary,#F3F4F6)]' : 'text-[var(--accent-text,#F59E0B)]'}`}>{theme.subtitle}</p>
+                  <p data-theme-description className="text-[12px] leading-[1.55] text-[var(--text-secondary,#9CA3AF)]">
+                    {theme.description}
+                  </p>
                 </div>
 
-                {/* Tags / Highlights */}
-                <div className="flex flex-wrap gap-1.5 mb-4">
-                  {theme.highlights.map((h, i) => (
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {theme.highlights.map((highlight) => (
                     <span
-                      key={i}
-                      className="text-[10px] px-2 py-0.5 rounded-md bg-white/5 text-gray-300 border border-white/5"
+                      key={highlight}
+                      className="rounded-md border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-2 py-0.5 text-[10px] text-[var(--text-secondary,#9CA3AF)]"
                     >
-                      {h}
+                      {highlight}
                     </span>
                   ))}
                 </div>
               </div>
 
-              {/* Action Button */}
-              <button
-                id={`apply-theme-${theme.id}-btn`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onSelectTheme(theme.id);
-                }}
-                className={`w-full py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
-                  isActive
-                    ? 'bg-amber-500 text-black shadow-md shadow-amber-500/20'
-                    : 'bg-white/5 hover:bg-white/10 text-gray-200 border border-white/10 hover:border-amber-500/30'
-                }`}
-              >
-                {isActive ? (
-                  <>
-                    <Check className="w-3.5 h-3.5 stroke-[2.5]" />
-                    <span>Current Active Theme</span>
-                  </>
-                ) : (
-                  <>
-                    <Palette className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Apply {theme.name}</span>
-                  </>
-                )}
-              </button>
+              <div className="mt-auto p-4 pt-0 sm:p-5 sm:pt-0">
+                <button
+                  id={`apply-theme-${theme.id}-btn`}
+                  type="button"
+                  aria-pressed={isActive}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    selectTheme(theme.id);
+                  }}
+                  className={`flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-lg px-3 text-[12px] font-semibold transition-colors ${
+                    isActive
+                      ? 'bg-amber-500 text-black shadow-md shadow-amber-500/20'
+                      : 'border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] text-[var(--text-secondary,#9CA3AF)] hover:border-[var(--accent-text,#F59E0B)] hover:text-[var(--text-primary,#F3F4F6)]'
+                  }`}
+                >
+                  {isActive ? (
+                    <>
+                      <Check className="h-3.5 w-3.5 stroke-[2.5]" aria-hidden="true" />
+                      <span>Current active theme</span>
+                    </>
+                  ) : (
+                    <>
+                      <Palette className="h-3.5 w-3.5 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
+                      <span>Apply {theme.name}</span>
+                    </>
+                  )}
+                </button>
+                <p className="mt-2 text-center text-[10px] text-[var(--text-muted,#6B7280)]">
+                  {isActive ? 'This is the theme you are using.' : 'Preview and apply instantly.'}
+                </p>
+              </div>
             </div>
           );
         })}
       </div>
 
-      {/* Live Component Sandbox / Theme Preview */}
-      <div className="p-5 sm:p-6 rounded-2xl bg-[#141414] border border-white/10 space-y-4 shadow-xl">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-white/10 gap-2">
+      <section
+        aria-label="Current theme in context"
+        className="overflow-hidden rounded-2xl border border-[var(--color-rule,var(--border-subtle,rgba(255,255,255,0.08)))] bg-[var(--bg-surface,#141414)]"
+      >
+        <div className="flex flex-col gap-2 border-b border-[var(--color-rule,var(--border-subtle,rgba(255,255,255,0.08)))] px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-2">
-            <Eye className="w-4 h-4 text-amber-400" />
-            <h3 className="font-serif font-bold text-sm text-white">
-              Live Theme Showcase &amp; Markdown Preview
-            </h3>
+            <Eye className="h-4 w-4 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
+            <h2 className="font-serif text-[19px] text-[var(--text-primary,#F3F4F6)]">Your cookbook in context</h2>
           </div>
-          <div className="flex items-center gap-2 text-xs text-gray-400">
-            <span>Viewing elements in:</span>
-            <span className="font-bold text-white px-2 py-0.5 rounded bg-white/5 border border-white/10">
-              {activeThemeConfig.name}
-            </span>
-          </div>
+          <span className="text-[11px] text-[var(--text-secondary,#9CA3AF)]">
+            {activeThemeConfig.name} · {activeThemeConfig.subtitle}
+          </span>
         </div>
 
-        {/* Interactive Preview Canvas */}
         <div
-          className="p-5 sm:p-6 rounded-xl border transition-colors duration-300 space-y-5"
-          style={{
-            backgroundColor: activeThemeConfig.palette.bgRoot,
-            borderColor: activeThemeConfig.palette.border,
-            color: activeThemeConfig.palette.textPrimary,
-          }}
+          className="grid grid-cols-1 gap-4 p-4 sm:p-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]"
+          style={{ backgroundColor: activeThemeConfig.palette.bgRoot }}
         >
-          {/* Mock Header Row */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b"
-            style={{ borderColor: activeThemeConfig.palette.border }}
+          <div
+            className="rounded-xl border p-4 sm:p-5"
+            style={{ backgroundColor: activeThemeConfig.palette.bgSurface, borderColor: activeThemeConfig.palette.border }}
           >
-            <div className="flex items-center gap-2.5">
-              <div
-                className="w-7 h-7 rounded-lg flex items-center justify-center"
-                style={{
-                  backgroundColor: activeThemeConfig.palette.bgElevated,
-                  border: `1px solid ${activeThemeConfig.palette.border}`,
-                }}
-              >
-                <KitchenCodexMark size={18} decorative />
-              </div>
-              <div>
-                <h4
-                  className="font-serif font-bold text-sm"
-                  style={{ color: activeThemeConfig.palette.textPrimary }}
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em]" style={{ color: activeThemeConfig.palette.textSecondary }}>
+              Recipe detail
+            </p>
+            <h3 className="mt-1 font-serif text-[24px] leading-tight sm:text-[28px]" style={{ color: activeThemeConfig.palette.textPrimary }}>
+              Roast Chicken with Preserved Lemon
+            </h3>
+            <p className="mt-1 text-[12px]" style={{ color: activeThemeConfig.palette.textSecondary }}>
+              Dinner · 45 minutes · 4 servings
+            </p>
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {['#food/recipes', '#weeknight', 'Easy'].map((tag) => (
+                <span
+                  key={tag}
+                  className="rounded-md border px-2 py-0.5 font-mono text-[10px]"
+                  style={{ backgroundColor: activeThemeConfig.palette.bgElevated, borderColor: activeThemeConfig.palette.border, color: activeThemeConfig.palette.accent }}
                 >
-                  Classic Spaghetti Carbonara.md
-                </h4>
-                <p className="text-[11px]" style={{ color: activeThemeConfig.palette.textSecondary }}>
-                  6 - Full Notes/Food/Recipes/Italian
-                </p>
-              </div>
+                  {tag}
+                </span>
+              ))}
             </div>
-
-            <div className="flex flex-wrap items-center gap-1.5">
+            <div className="mt-4 flex flex-wrap items-center gap-2">
               <span
-                className="text-[10px] font-mono px-2 py-0.5 rounded font-medium"
-                style={{
-                  backgroundColor: activeThemeConfig.palette.bgSurface,
-                  color: activeThemeConfig.palette.accent,
-                  border: `1px solid ${activeThemeConfig.palette.border}`,
-                }}
+                className="inline-flex min-h-[40px] items-center rounded-lg px-4 text-[12px] font-semibold"
+                style={{ backgroundColor: activeThemeConfig.palette.accent, color: activeThemeConfig.mode === 'light' ? '#FFFFFF' : '#000000' }}
               >
-                #food/recipes
+                Start cooking
               </span>
-              <span
-                className="text-[10px] font-mono px-2 py-0.5 rounded font-medium"
-                style={{
-                  backgroundColor: activeThemeConfig.palette.bgSurface,
-                  color: activeThemeConfig.palette.accent,
-                  border: `1px solid ${activeThemeConfig.palette.border}`,
-                }}
-              >
-                #italian
-              </span>
-              <span
-                className="text-[10px] font-mono px-2 py-0.5 rounded"
-                style={{
-                  backgroundColor: activeThemeConfig.palette.bgElevated,
-                  color: activeThemeConfig.palette.textSecondary,
-                }}
-              >
-                Difficulty: Medium
+              <span className="text-[11px]" style={{ color: activeThemeConfig.palette.textSecondary }}>
+                Ingredients scale with servings.
               </span>
             </div>
           </div>
 
-          {/* 2-Column Mock Content */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Card Left: Dataview Fields & Wikilinks */}
-            <div
-              className="p-4 rounded-xl border space-y-3"
-              style={{
-                backgroundColor: activeThemeConfig.palette.bgSurface,
-                borderColor: activeThemeConfig.palette.border,
-              }}
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold font-serif flex items-center gap-1.5">
-                  <Tag className="w-3.5 h-3.5" style={{ color: activeThemeConfig.palette.accent }} />
-                  <span>Dataview Frontmatter &amp; Ingredients</span>
-                </span>
-                <span
-                  className="text-[10px] font-mono px-1.5 py-0.5 rounded"
-                  style={{
-                    backgroundColor: activeThemeConfig.palette.bgElevated,
-                    color: activeThemeConfig.palette.textSecondary,
-                  }}
-                >
-                  YAML Block
-                </span>
-              </div>
-
-              <div className="space-y-1.5 text-xs">
-                <div
-                  className="flex items-center justify-between p-2 rounded"
-                  style={{ backgroundColor: activeThemeConfig.palette.bgElevated }}
-                >
-                  <span style={{ color: activeThemeConfig.palette.textSecondary }}>prepTime:</span>
-                  <span className="font-mono font-medium">10 mins</span>
-                </div>
-                <div
-                  className="flex items-center justify-between p-2 rounded"
-                  style={{ backgroundColor: activeThemeConfig.palette.bgElevated }}
-                >
-                  <span style={{ color: activeThemeConfig.palette.textSecondary }}>cookTime:</span>
-                  <span className="font-mono font-medium">15 mins</span>
-                </div>
-                <div
-                  className="flex items-center justify-between p-2 rounded"
-                  style={{ backgroundColor: activeThemeConfig.palette.bgElevated }}
-                >
-                  <span style={{ color: activeThemeConfig.palette.textSecondary }}>servings:</span>
-                  <span className="font-mono font-medium">4 portions</span>
-                </div>
-              </div>
-
-              {/* Wikilinks pill row */}
-              <div className="pt-2 border-t" style={{ borderColor: activeThemeConfig.palette.border }}>
-                <span className="text-[11px] block mb-1.5" style={{ color: activeThemeConfig.palette.textSecondary }}>
-                  Connected Obsidian Graph Wikilinks:
-                </span>
-                <div className="flex flex-wrap gap-1.5">
-                  {['[[Guanciale]]', '[[Pecorino Romano]]', '[[Spaghetti]]', '[[Black Pepper]]'].map((wiki, i) => (
-                    <span
-                      key={i}
-                      className="px-2 py-0.5 rounded text-[11px] font-mono font-medium cursor-pointer transition-colors"
-                      style={{
-                        backgroundColor: activeThemeConfig.palette.bgElevated,
-                        color: activeThemeConfig.palette.accent,
-                        border: `1px solid ${activeThemeConfig.palette.border}`,
-                      }}
-                    >
-                      {wiki}
-                    </span>
-                  ))}
-                </div>
-              </div>
+          <div
+            className="rounded-xl border p-4 sm:p-5"
+            style={{ backgroundColor: activeThemeConfig.palette.bgSurface, borderColor: activeThemeConfig.palette.border }}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em]" style={{ color: activeThemeConfig.palette.textSecondary }}>
+                Nutrition at a glance
+              </p>
+              <span className="rounded-full border px-2 py-0.5 text-[9px]" style={{ borderColor: activeThemeConfig.palette.border, color: activeThemeConfig.palette.accent }}>
+                Advisory
+              </span>
             </div>
-
-            {/* Card Right: Obsidian Callout Box */}
-            <div
-              className="p-4 rounded-xl border space-y-3 flex flex-col justify-between"
-              style={{
-                backgroundColor: activeThemeConfig.palette.bgSurface,
-                borderColor: activeThemeConfig.palette.border,
-              }}
-            >
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-bold font-serif flex items-center gap-1.5">
-                    <Sparkles className="w-3.5 h-3.5" style={{ color: activeThemeConfig.palette.accent }} />
-                    <span>Obsidian Callout Rendering</span>
-                  </span>
-                  <span
-                    className="text-[10px] font-mono px-1.5 py-0.5 rounded"
-                    style={{
-                      backgroundColor: activeThemeConfig.palette.bgElevated,
-                      color: activeThemeConfig.palette.textSecondary,
-                    }}
-                  >
-                    &gt; [!tip]
-                  </span>
+            <p className="mt-2 font-serif text-[36px] leading-none" style={{ color: activeThemeConfig.palette.textPrimary }}>
+              486<span className="ml-1 font-sans text-[12px]" style={{ color: activeThemeConfig.palette.textSecondary }}>kcal</span>
+            </p>
+            <div className="mt-3 grid grid-cols-3 gap-2 text-[11px]">
+              {[
+                ['Protein', '18g'],
+                ['Carbs', '62g'],
+                ['Fat', '18g'],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-lg border px-2 py-1.5" style={{ backgroundColor: activeThemeConfig.palette.bgElevated, borderColor: activeThemeConfig.palette.border }}>
+                  <span className="block text-[9px] uppercase tracking-wide" style={{ color: activeThemeConfig.palette.textSecondary }}>{label}</span>
+                  <span className="font-mono font-semibold" style={{ color: activeThemeConfig.palette.textPrimary }}>{value}</span>
                 </div>
-
-                {/* Callout box */}
-                <div
-                  className="p-3 rounded-lg border-l-4 text-xs leading-relaxed space-y-1"
-                  style={{
-                    backgroundColor: activeThemeConfig.palette.bgElevated,
-                    borderLeftColor: activeThemeConfig.palette.accent,
-                    borderColor: activeThemeConfig.palette.border,
-                  }}
-                >
-                  <p className="font-bold flex items-center gap-1" style={{ color: activeThemeConfig.palette.accent }}>
-                    <span>💡 Authentic Roman Technique:</span>
-                  </p>
-                  <p style={{ color: activeThemeConfig.palette.textSecondary }}>
-                    Never use heavy cream. Emulsify hot starchy pasta cooking water with whisked egg yolks and freshly grated Pecorino Romano off the heat to create a silky, glossy pan sauce.
-                  </p>
-                </div>
-              </div>
-
-              {/* Sample Action Button inside the theme */}
-              <div className="flex items-center justify-end gap-2 pt-2">
-                <button
-                  className="px-3 py-1.5 rounded-lg text-xs font-bold transition-transform shadow-xs"
-                  style={{
-                    backgroundColor: activeThemeConfig.palette.accent,
-                    color: activeThemeConfig.mode === 'light' ? '#ffffff' : '#000000',
-                  }}
-                >
-                  Start Cooking Mode
-                </button>
-              </div>
+              ))}
             </div>
+            <p className="mt-3 text-[11px] leading-relaxed" style={{ color: activeThemeConfig.palette.textSecondary }}>
+              Values, provenance and completeness stay readable in every palette.
+            </p>
           </div>
         </div>
-      </div>
-    </div>
+      </section>
+    </section>
   );
 }
