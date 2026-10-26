@@ -408,6 +408,38 @@ type ShisoNutritionUiState =
 const NO_INGREDIENTS: ReadonlyArray<AdaptedIngredient> = Object.freeze([]);
 const NO_AI_CONTRIBUTIONS = Object.freeze([]);
 
+/**
+ * The Advanced card's single status-label authority. Precedence is deliberate
+ * and presentation-only:
+ *   1. not analyzed / applied-not-saved (the persisted-state distinction);
+ *   2. stale / needs review;
+ *   3. partial / incomplete;
+ *   4. includes AI estimates;
+ *   5. complete.
+ * Qualifiers compose so a partial result can never hide behind an AI badge.
+ */
+export function advancedNutritionStatusLabel(input: {
+  readonly hasSavedBlock: boolean;
+  readonly nutritionUnsaved: boolean;
+  readonly stale: boolean;
+  readonly partial: boolean;
+  readonly hasAiEstimate: boolean;
+}): string {
+  if (!input.hasSavedBlock) return 'Not analyzed';
+  const qualifiers = [
+    input.partial ? 'partial' : null,
+    input.hasAiEstimate ? 'includes AI estimates' : null,
+  ].filter((value): value is string => value !== null);
+  if (input.nutritionUnsaved) {
+    return ['Applied · not saved', ...qualifiers].join(' · ');
+  }
+  if (input.stale) {
+    return ['Saved · needs review', ...qualifiers].join(' · ');
+  }
+  if (qualifiers.length === 0) return 'Saved · complete';
+  return ['Saved', ...qualifiers].join(' · ');
+}
+
 export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
   recipe,
   session = null,
@@ -2308,36 +2340,69 @@ onReviewRecipeContextWithAi,
   return (
     <div
       id="advanced-nutrition-card"
-      className="bg-[#141414] rounded-2xl border border-indigo-500/20 p-5 shadow-xs text-gray-200"
+      className="rounded-2xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] p-5 text-[var(--text-primary,#F3F4F6)] shadow-sm"
     >
-      <div className="flex items-center justify-between pb-3 mb-3 border-b border-white/5">
-        <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 flex items-center justify-center">
-            <FlaskConical className="w-4 h-4" />
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3 border-b border-[var(--border-subtle,rgba(255,255,255,0.08))] pb-4">
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--accent-subtle,rgba(245,158,11,0.15))] text-[var(--accent-text,#F59E0B)]">
+            <FlaskConical className="h-4 w-4" aria-hidden="true" />
           </div>
-          <div>
-            <h3 className="text-sm font-serif font-bold text-white flex items-center gap-1.5">
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary,#9CA3AF)]">
+              Reviewed source analysis
+            </p>
+            <h3 className="flex flex-wrap items-baseline gap-x-2 font-serif text-[19px] leading-snug text-[var(--text-primary,#F3F4F6)]">
               <span>Advanced Nutrition</span>
-              <span className="text-[10px] font-mono text-indigo-300 font-normal uppercase">Advisory</span>
+              <span className="font-mono text-[11px] font-normal uppercase tracking-wide text-[var(--text-secondary,#9CA3AF)]">Advisory</span>
             </h3>
-            <p className="text-[10px] text-gray-500">
-              Reviewed USDA source matching · authenticated saved result
+            <p className="mt-0.5 text-[12px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
+              {savedBlock ? 'Reviewed USDA source matching · saved result' : 'Reviewed USDA source matching · advisory analysis'}
             </p>
           </div>
         </div>
+
+        {(() => {
+          // Existing authoritative evidence only: saved schema-5 AI
+          // contributions and schema-4 accepted quantity estimates. No nutrient
+          // numbers are inspected and no new status authority is introduced.
+          const hasAiEstimate =
+            (savedBlock?.schema === 5 &&
+              savedBlock.ai_contributions.some(
+                (entry) => entry.classification === 'ai_estimate' && entry.disposition !== 'excluded'
+              )) ||
+            (savedBlock?.schema === 4 &&
+              savedBlock.ingredients.some((entry) => entry.quantity_estimate !== undefined));
+          const isPartial =
+            savedPresentation.advanced_unresolved_count > 0 || !savedPresentation.advanced_complete;
+          const label = advancedNutritionStatusLabel({
+            hasSavedBlock: savedBlock !== undefined,
+            nutritionUnsaved,
+            stale: savedPresentation.advanced_stale,
+            partial: isPartial,
+            hasAiEstimate,
+          });
+          return (
+            <span
+              data-testid="advanced-nutrition-status-chip"
+              className="max-w-full shrink-0 whitespace-normal rounded-full border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-2.5 py-1 text-[11px] font-medium text-[var(--text-secondary,#9CA3AF)]"
+            >
+              {label}
+            </span>
+          );
+        })()}
       </div>
 
       {!session && !onLoadBundle && (
-        <div className="p-3 rounded-xl bg-[#0E0E0E] border border-dashed border-white/10 space-y-2">
+        <div className="p-3 rounded-xl bg-[var(--bg-elevated,#1E1E1E)] border border-dashed border-[var(--border-subtle,rgba(255,255,255,0.08))] space-y-2">
           {savedBlock ? (
-            <p className="text-[11px] text-gray-400" data-testid="advanced-saved-readonly-note">
+            <p className="text-[13px] text-[var(--text-secondary,#9CA3AF)]" data-testid="advanced-saved-readonly-note">
               Saved Advanced Nutrition is available to view. Editing requires the USDA review tools,
               which are unavailable in this build.
             </p>
           ) : (
-            <p className="text-xs text-gray-300">{PHASE4_UNAVAILABLE_MESSAGE}</p>
+            <p className="text-[14px] text-[var(--text-secondary,#9CA3AF)]">{PHASE4_UNAVAILABLE_MESSAGE}</p>
           )}
-          <p className="text-[11px] text-gray-500 flex items-center gap-1.5">
+          <p className="text-[13px] text-[var(--text-secondary,#9CA3AF)] flex items-center gap-1.5">
             <Lock className="w-3.5 h-3.5" />
             <span>This is not an error in the recipe.</span>
           </p>
@@ -2347,10 +2412,10 @@ onReviewRecipeContextWithAi,
             onClick={handleOpenRequest}
             disabled={!savedBlock}
             aria-disabled={!savedBlock}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[14px] font-medium border transition-colors ${
               savedBlock
-                ? 'text-indigo-200 bg-indigo-500/15 hover:bg-indigo-500/25 border-indigo-500/30'
-                : 'text-gray-500 bg-white/5 border-white/10 cursor-not-allowed'
+                ? 'text-[var(--text-primary,#F3F4F6)] bg-[var(--accent-subtle,rgba(245,158,11,0.15))] hover:bg-[var(--bg-root,#0C0C0C)] border-[var(--border-subtle,rgba(255,255,255,0.08))]'
+                : 'text-[var(--text-secondary,#9CA3AF)] bg-[var(--bg-elevated,#1E1E1E)] border-[var(--border-subtle,rgba(255,255,255,0.08))] cursor-not-allowed'
             }`}
           >
             <FlaskConical className="w-3.5 h-3.5" />
@@ -2360,12 +2425,12 @@ onReviewRecipeContextWithAi,
       )}
 
       {!session && onLoadBundle && (
-        <div className="p-3 rounded-xl bg-[#0E0E0E] border border-dashed border-white/10 space-y-2">
+        <div className="p-3 rounded-xl bg-[var(--bg-elevated,#1E1E1E)] border border-dashed border-[var(--border-subtle,rgba(255,255,255,0.08))] space-y-2">
           {bundleStatus === 'loading' ||
           bundleStatus === 'failed' ||
           bundleStatus === 'unsupported' ||
           (stored.kind !== 'v1' && stored.kind !== 'v2' && (stored.kind !== 'v3' && stored.kind !== 'v4' && stored.kind !== 'v5')) ? (
-            <p className="text-xs text-gray-300" role="status" aria-live="polite">
+            <p className="text-[14px] text-[var(--text-secondary,#9CA3AF)]" role="status" aria-live="polite">
               {bundleStatus === 'loading'
                 ? PHASE4_LOADING_MESSAGE
                 : bundleStatus === 'failed'
@@ -2376,8 +2441,8 @@ onReviewRecipeContextWithAi,
             </p>
           ) : savedPresentation.advanced_unresolved_count === 0 ? (
             <div data-testid="advanced-saved-complete" role="status" aria-live="polite" className="space-y-0.5">
-              <p className="text-xs font-semibold text-emerald-300">Advanced Nutrition {nutritionUnsaved ? 'applied — not saved' : 'saved'}{savedPresentation.advanced_complete ? '' : ' · nutrient coverage partial'}</p>
-              <p className="text-[11px] text-gray-400">
+              <p className="text-[14px] font-semibold text-[var(--text-primary,#F3F4F6)]">Advanced Nutrition {nutritionUnsaved ? 'applied — not saved' : 'saved'}{savedPresentation.advanced_complete ? '' : ' · nutrient coverage partial'}</p>
+              <p className="text-[13px] text-[var(--text-secondary,#9CA3AF)]">
                 {savedPresentation.advanced_stale ? 'Saved result needs review — recalculate before using these totals' : stored.kind === 'v5' ? 'Source-backed + AI-estimated contributions' : 'USDA reviewed'}
                 {savedPresentation.advanced_ingredient_count ? ` · ${savedPresentation.advanced_ingredient_count} ingredient lines accounted for` : ''}
                 {savedPresentation.advanced_excluded_count ? ` · ${savedPresentation.advanced_excluded_count} cooking wrapper excluded` : ''}
@@ -2387,8 +2452,8 @@ onReviewRecipeContextWithAi,
             </div>
           ) : (
             <div data-testid="advanced-saved-partial" role="status" aria-live="polite" className="space-y-0.5">
-              <p className="text-xs font-semibold text-amber-300">Advanced Nutrition {nutritionUnsaved ? 'applied — not saved' : 'saved'} — partial</p>
-              <p className="text-[11px] text-gray-400">
+              <p className="text-[14px] font-semibold text-[var(--text-primary,#F3F4F6)]">Advanced Nutrition {nutritionUnsaved ? 'applied — not saved' : 'saved'} — partial</p>
+              <p className="text-[13px] text-[var(--text-secondary,#9CA3AF)]">
                 {savedPresentation.advanced_resolved_count + savedPresentation.advanced_excluded_count} of {savedPresentation.advanced_ingredient_count} ingredient line
                 {savedPresentation.advanced_ingredient_count === 1 ? '' : 's'} accounted for
                 {savedPresentation.advanced_excluded_count ? ` · ${savedPresentation.advanced_excluded_count} wrapper excluded` : ''}
@@ -2398,7 +2463,7 @@ onReviewRecipeContextWithAi,
               </p>
             </div>
           )}
-          <p className="text-[11px] text-gray-500 flex items-center gap-1.5">
+          <p className="text-[13px] text-[var(--text-secondary,#9CA3AF)] flex items-center gap-1.5">
             <Lock className="w-3.5 h-3.5" />
             <span>This is not an error in the recipe.</span>
           </p>
@@ -2407,7 +2472,7 @@ onReviewRecipeContextWithAi,
               type="button"
               disabled
               aria-disabled="true"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-gray-400 bg-white/5 border border-white/10 cursor-wait"
+              className="inline-flex min-h-[44px] items-center gap-1.5 px-4 rounded-lg text-[14px] font-medium text-[var(--text-secondary,#9CA3AF)] bg-[var(--bg-elevated,#1E1E1E)] border border-[var(--border-subtle,rgba(255,255,255,0.08))] cursor-wait"
             >
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
               <span>Authenticating…</span>
@@ -2416,7 +2481,7 @@ onReviewRecipeContextWithAi,
             <button
               type="button"
               onClick={handleOpenRequest}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-amber-200 bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 transition-colors"
+              className="inline-flex min-h-[44px] items-center gap-1.5 px-4 rounded-lg text-[14px] font-semibold text-[var(--text-primary,#F3F4F6)] bg-[var(--accent-subtle,rgba(245,158,11,0.15))] hover:bg-[var(--bg-root,#0C0C0C)] border border-[var(--border-subtle,rgba(255,255,255,0.08))] transition-colors"
             >
               <RefreshCw className="w-3.5 h-3.5" />
               <span>{PHASE4_BUNDLE_RETRY_LABEL}</span>
@@ -2426,7 +2491,7 @@ onReviewRecipeContextWithAi,
               type="button"
               data-testid="advanced-nutrition-open"
               onClick={savedBlock ? handleOpenRequest : handleGenerate}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-indigo-200 bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 transition-colors"
+              className="inline-flex min-h-[44px] items-center gap-1.5 px-4 rounded-lg text-[14px] font-semibold text-[var(--text-primary,#F3F4F6)] bg-[var(--accent-subtle,rgba(245,158,11,0.15))] hover:bg-[var(--bg-root,#0C0C0C)] border border-[var(--border-subtle,rgba(255,255,255,0.08))] transition-colors"
             >
               <FlaskConical className="w-3.5 h-3.5" />
               <span>{savedBlock ? (nutritionUnsaved ? 'Open Working Advanced Report' : 'Open Saved Advanced Report') : 'Generate Nutrition'}</span>
@@ -2436,7 +2501,7 @@ onReviewRecipeContextWithAi,
       )}
 
       {session && !adaptation.ok && (
-        <div className="p-3 rounded-xl bg-amber-950/30 border border-amber-800/40 text-amber-200 text-xs flex items-start gap-2">
+        <div className="p-3 rounded-xl bg-[var(--bg-elevated,#1E1E1E)] border border-[var(--border-subtle,rgba(255,255,255,0.08))] text-[var(--text-primary,#F3F4F6)] text-[14px] flex items-start gap-2">
           <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5" />
           <span>{PHASE4_UNREADABLE_MESSAGE}</span>
         </div>
@@ -2445,11 +2510,11 @@ onReviewRecipeContextWithAi,
       {session && adaptation.ok && (
         <div className="space-y-3">
           {(stored.kind === 'v1' || stored.kind === 'v2' || (stored.kind === 'v3' || stored.kind === 'v4' || stored.kind === 'v5')) && (
-            <div className="p-3 rounded-xl bg-[#0E0E0E] border border-white/5">
+            <div className="p-3 rounded-xl bg-[var(--bg-elevated,#1E1E1E)] border border-[var(--border-subtle,rgba(255,255,255,0.08))]">
               {savedPresentation.advanced_unresolved_count === 0 ? (
                 <div data-testid="advanced-saved-complete" className="space-y-0.5">
-                  <p className="text-[11px] font-semibold text-emerald-300">Advanced Nutrition {nutritionUnsaved ? 'applied — not saved' : 'saved'}{savedPresentation.advanced_complete ? '' : ' · nutrient coverage partial'}</p>
-                  <p className="text-[10px] text-gray-400">
+                  <p className="text-[13px] font-semibold text-[var(--text-primary,#F3F4F6)]">Advanced Nutrition {nutritionUnsaved ? 'applied — not saved' : 'saved'}{savedPresentation.advanced_complete ? '' : ' · nutrient coverage partial'}</p>
+                  <p className="text-[12px] text-[var(--text-secondary,#9CA3AF)]">
                     {savedPresentation.advanced_stale ? 'Saved result needs review — recalculate before using these totals' : stored.kind === 'v5' ? 'Source-backed + AI-estimated contributions' : 'USDA reviewed'}
                     {savedPresentation.advanced_ingredient_count ? ` · ${savedPresentation.advanced_ingredient_count} ingredient lines accounted for` : ''}
                     {savedPresentation.advanced_excluded_count ? ` · ${savedPresentation.advanced_excluded_count} cooking wrapper excluded` : ''}
@@ -2458,10 +2523,10 @@ onReviewRecipeContextWithAi,
                 </div>
               ) : (
                 <div data-testid="advanced-saved-partial" className="space-y-0.5">
-                  <p className="text-[11px] font-semibold text-amber-300">
+                  <p className="text-[13px] font-semibold text-[var(--text-primary,#F3F4F6)]">
                     Advanced Nutrition {nutritionUnsaved ? 'applied — not saved' : 'saved'} — partial
                   </p>
-                  <p className="text-[10px] text-gray-400">
+                  <p className="text-[12px] text-[var(--text-secondary,#9CA3AF)]">
                     {savedPresentation.advanced_resolved_count + savedPresentation.advanced_excluded_count} of {savedPresentation.advanced_ingredient_count} ingredient line
                     {savedPresentation.advanced_ingredient_count === 1 ? '' : 's'} accounted for
                     {savedPresentation.advanced_excluded_count ? ` · ${savedPresentation.advanced_excluded_count} wrapper excluded` : ''}
@@ -2470,21 +2535,21 @@ onReviewRecipeContextWithAi,
                   </p>
                 </div>
               )}
-              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs mt-1.5">
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-[14px] mt-1.5">
                 {(stored.values ?? []).map((value) => (
-                  <span key={value.label} className="text-gray-300">
-                    {value.label}: <span className="font-mono text-white">{value.amount}</span> {value.unit}
+                  <span key={value.label} className="text-[var(--text-secondary,#9CA3AF)]">
+                    {value.label}: <span className="font-mono text-[var(--text-primary,#F3F4F6)]">{value.amount}</span> {value.unit}
                   </span>
                 ))}
                 {(stored.values ?? []).length === 0 && (
-                  <span className="text-gray-500">No recognized nutrient amounts.</span>
+                  <span className="text-[var(--text-secondary,#9CA3AF)]">No recognized nutrient amounts.</span>
                 )}
               </div>
             </div>
           )}
           {stored.kind === 'opaque' && (
-            <div className="p-3 rounded-xl bg-[#0E0E0E] border border-white/5">
-              <p className="text-[11px] text-gray-400">
+            <div className="p-3 rounded-xl bg-[var(--bg-elevated,#1E1E1E)] border border-[var(--border-subtle,rgba(255,255,255,0.08))]">
+              <p className="text-[13px] text-[var(--text-secondary,#9CA3AF)]">
                 This recipe carries an unrecognized advanced-nutrition format. It is preserved but not
                 interpreted or displayed as trusted data.
               </p>
@@ -2492,40 +2557,40 @@ onReviewRecipeContextWithAi,
           )}
 
           {preview && compact && !liveMatchesSaved && (
-            <div className="p-3 rounded-xl bg-indigo-950/20 border border-indigo-500/20">
-              <p className="text-[10px] font-mono uppercase text-indigo-300 mb-1">
+            <div className="p-3 rounded-xl bg-[var(--bg-elevated,#1E1E1E)] border border-[var(--border-subtle,rgba(255,255,255,0.08))]">
+              <p className="mb-1 font-mono text-[12px] uppercase text-[var(--text-primary,#F3F4F6)]">
                 Unsaved review — not applied · {basisLabel(state.basis, state.selectedServings)}
                 {state.status === 'preview_stale' ? ' · stale' : ''}
               </p>
-              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-[14px]">
                 {compact.map((nutrient) =>
                   nutrient ? (
-                    <span key={nutrient.nutrient} className="text-gray-300">
+                    <span key={nutrient.nutrient} className="text-[var(--text-secondary,#9CA3AF)]">
                       {nutrient.label}:{' '}
-                      <span className="font-mono text-white">{formatAmount(nutrient.amount)}</span>{' '}
+                      <span className="font-mono text-[var(--text-primary,#F3F4F6)]">{formatAmount(nutrient.amount)}</span>{' '}
                       {nutrient.amount !== undefined ? nutrient.unit_label : ''}
                     </span>
                   ) : null
                 )}
               </div>
               {coverage && (
-                <p className="text-[10px] text-gray-400 mt-1">
+                <p className="text-[12px] text-[var(--text-secondary,#9CA3AF)] mt-1">
                   Coverage {coverage.status} · {coverage.unresolved_count} unresolved line(s)
                 </p>
               )}
-              <p className="text-[10px] text-gray-500 mt-1">
+              <p className="text-[12px] text-[var(--text-secondary,#9CA3AF)] mt-1">
                 Review only — nothing is saved until you Apply.
               </p>
               {acceptedEstimates.length > 0 && (
                 <p
                   data-testid="advanced-nutrition-ai-estimate-apply-block"
-                  className="text-[10px] mt-1 text-amber-300"
+                  className="text-[12px] mt-1 text-[var(--text-primary,#F3F4F6)]"
                 >
                   Accepted estimated quantities — these remain labeled estimates when saved.
                 </p>
               )}
               {acceptedEstimates.length > 0 && (
-                <ul data-testid="advanced-nutrition-ai-estimate-apply-block-lines" className="text-[10px] text-amber-300/80 mt-1 list-disc pl-4">
+                <ul data-testid="advanced-nutrition-ai-estimate-apply-block-lines" className="text-[12px] text-[var(--text-secondary,#9CA3AF)] mt-1 list-disc pl-4">
                   {acceptedEstimates.map((estimate) => (
                     <li key={estimate.lineRef} data-testid={`ai-estimate-block-${estimate.lineRef}`}>
                       {`${estimate.lower_grams}\u2013${estimate.upper_grams} g \u00b7 estimate uses ${estimate.representative_grams} g`}
@@ -2537,7 +2602,7 @@ onReviewRecipeContextWithAi,
                         type="button"
                         data-testid={`advanced-nutrition-ai-estimate-clear-${estimate.lineRef}`}
                         onClick={() => dispatch({ type: 'clear_ai_estimate', lineRef: estimate.lineRef })}
-                        className="ml-1.5 px-1.5 py-0.5 rounded border border-amber-500/30 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20"
+                        className="ml-1.5 px-1.5 py-0.5 rounded border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--accent-subtle,rgba(245,158,11,0.15))] text-[var(--text-primary,#F3F4F6)] hover:bg-amber-500/20"
                       >
                         {AI_ESTIMATE_CLEAR_LABEL}
                       </button>
@@ -2548,7 +2613,7 @@ onReviewRecipeContextWithAi,
               {applyEligibility !== null && (
                 <p
                   data-testid="advanced-nutrition-apply-eligibility"
-                  className={`text-[10px] mt-1 ${applyEligibility ? 'text-emerald-300' : 'text-amber-300'}`}
+                  className={`text-[12px] mt-1 ${applyEligibility ? 'text-[var(--text-primary,#F3F4F6)]' : 'text-[var(--text-primary,#F3F4F6)]'}`}
                 >
                   {applyEligibility
                     ? 'This reviewed result is eligible for Apply. Nothing is saved automatically.'
@@ -2559,8 +2624,8 @@ onReviewRecipeContextWithAi,
           )}
 
           {!preview && (
-            <p className="text-[11px] text-gray-400 flex items-center gap-1.5">
-              <Activity className="w-3.5 h-3.5 text-indigo-300" />
+            <p className="text-[13px] text-[var(--text-secondary,#9CA3AF)] flex items-center gap-1.5">
+              <Activity className="w-3.5 h-3.5 text-[var(--accent-text,#F59E0B)]" />
               <span>
                 Review each ingredient's source match, then calculate an advisory preview. Nothing is
                 calculated automatically.
@@ -2569,7 +2634,7 @@ onReviewRecipeContextWithAi,
           )}
 
           <div className="flex items-center justify-between">
-            <span className="text-[10px] text-gray-500 flex items-center gap-1">
+            <span className="text-[12px] text-[var(--text-secondary,#9CA3AF)] flex items-center gap-1">
               <ShieldCheck className="w-3 h-3" />
               <span>Advisory · not saved · not medical advice</span>
             </span>
@@ -2578,7 +2643,7 @@ onReviewRecipeContextWithAi,
               ref={openerRef}
               data-testid="advanced-nutrition-open"
               onClick={savedBlock ? handleOpenRequest : handleGenerate}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold text-indigo-200 bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 transition-colors"
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-[14px] font-semibold text-[var(--text-primary,#F3F4F6)] bg-[var(--accent-subtle,rgba(245,158,11,0.15))] hover:bg-[var(--bg-root,#0C0C0C)] border border-[var(--border-subtle,rgba(255,255,255,0.08))] transition-colors"
             >
               <FlaskConical className="w-3.5 h-3.5" />
               <span>{savedBlock ? (nutritionUnsaved ? 'Open Working Advanced Report' : 'Open Saved Advanced Report') : 'Generate Nutrition'}</span>

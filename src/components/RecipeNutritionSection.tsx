@@ -95,13 +95,24 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
     presentation.kind === 'advanced_unsupported' || presentation.kind === 'advanced_invalid';
 
   return (
-    <section id="recipe-nutrition-section" aria-label="Nutrition" className="space-y-3">
+    <section
+      id="recipe-nutrition-section"
+      aria-label="Nutrition"
+      className="space-y-3"
+    >
+      <div className="flex items-center gap-3">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary,#9CA3AF)]">
+          Nutrition
+        </span>
+        <span aria-hidden="true" className="h-px flex-1 bg-[var(--color-rule,var(--border-subtle,rgba(255,255,255,0.08)))]" />
+      </div>
+
       {presentation.kind === 'advanced_stale' && (
         <div
           role="status"
-          className="p-3 rounded-xl bg-amber-950/30 border border-amber-800/40 text-[11px] text-amber-200 flex items-start gap-2"
+          className="flex items-start gap-2 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] border-l-[3px] border-l-[var(--accent-text,#F59E0B)] bg-[var(--bg-elevated,#1E1E1E)] p-3 text-[11px] leading-relaxed text-[var(--text-primary,#F3F4F6)]"
         >
-          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
           <span>
             Saved Advanced Nutrition may be out of date for the current recipe
             {presentation.stale_reasons.includes('servings_changed') ? ' (servings changed)' : ''}
@@ -115,9 +126,9 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
       {presentation.kind === 'advanced_unsupported' && (
         <div
           role="status"
-          className="p-3 rounded-xl bg-amber-950/30 border border-amber-800/40 text-[11px] text-amber-200 flex items-start gap-2"
+          className="flex items-start gap-2 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] border-l-[3px] border-l-[var(--accent-text,#F59E0B)] bg-[var(--bg-elevated,#1E1E1E)] p-3 text-[11px] leading-relaxed text-[var(--text-primary,#F3F4F6)]"
         >
-          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
           <span>
             Saved Advanced Nutrition uses a newer format this version cannot read. It is preserved and
             will not be replaced.
@@ -128,9 +139,9 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
       {presentation.kind === 'advanced_invalid' && (
         <div
           role="status"
-          className="p-3 rounded-xl bg-amber-950/30 border border-amber-800/40 text-[11px] text-amber-200 flex items-start gap-2"
+          className="flex items-start gap-2 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] border-l-[3px] border-l-[var(--accent-text,#F59E0B)] bg-[var(--bg-elevated,#1E1E1E)] p-3 text-[11px] leading-relaxed text-[var(--text-primary,#F3F4F6)]"
         >
-          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
           <span>
             Saved Advanced Nutrition data cannot be read safely. It is preserved and will not be
             replaced.
@@ -144,8 +155,8 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
       {legacyVisible && (
         <div className="space-y-2">
           {legacyFallbackNote && (
-            <p className="text-[10px] text-gray-500 flex items-center gap-1.5">
-              <Info className="w-3.5 h-3.5" />
+            <p className="flex items-center gap-1.5 text-[11px] text-[var(--text-secondary,#9CA3AF)]">
+              <Info className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
               <span>Legacy estimate — shown only because saved Advanced Nutrition is unavailable.</span>
             </p>
           )}
