@@ -434,72 +434,72 @@ function ProviderCard({ status }: { status: ProviderStatusView }) {
   return (
     <article
       data-provider-id={status.providerId}
-      className="border border-white/10 rounded-2xl bg-[#141414] p-4 space-y-3"
+      className="border border-[var(--border-subtle,rgba(255,255,255,0.08))] rounded-2xl bg-[var(--bg-surface,#141414)] p-4 space-y-3"
     >
       <div className="flex items-center justify-between gap-3">
-        <h3 className="text-sm font-semibold text-white">{status.name}</h3>
+        <h3 className="text-sm font-semibold text-[var(--text-primary,#F3F4F6)]">{status.name}</h3>
         {/* Optional providers that are simply unconfigured are normal, not errors. */}
-        <span className="text-[10px] font-medium text-gray-500">{status.providerId}</span>
+        <span className="text-[12px] font-medium text-[var(--text-secondary,#9CA3AF)]">{status.providerId}</span>
       </div>
 
       <div className="flex flex-wrap gap-1.5">
         <span
-          className={`px-2 py-0.5 rounded-md text-[10px] font-semibold border ${
+          className={`px-2 py-0.5 rounded-md text-[12px] font-semibold border ${
             status.configured
-              ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
-              : 'bg-white/5 text-gray-400 border-white/10'
+              ? 'bg-[var(--bg-elevated,#1E1E1E)] text-[var(--text-primary,#F3F4F6)] border-[var(--border-subtle,rgba(255,255,255,0.08))]'
+              : 'bg-[var(--bg-elevated,#1E1E1E)] text-[var(--text-secondary,#9CA3AF)] border-[var(--border-subtle,rgba(255,255,255,0.08))]'
           }`}
         >
           {configured}
         </span>
         <span
-          className={`px-2 py-0.5 rounded-md text-[10px] font-semibold border ${
+          className={`px-2 py-0.5 rounded-md text-[12px] font-semibold border ${
             status.enabled
-              ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
-              : 'bg-white/5 text-gray-400 border-white/10'
+              ? 'bg-[var(--accent-subtle,rgba(245,158,11,0.12))] text-[var(--text-primary,#F3F4F6)] border-[var(--border-subtle,rgba(255,255,255,0.08))]'
+              : 'bg-[var(--bg-elevated,#1E1E1E)] text-[var(--text-secondary,#9CA3AF)] border-[var(--border-subtle,rgba(255,255,255,0.08))]'
           }`}
         >
           {enabled}
         </span>
         <span
-          className={`px-2 py-0.5 rounded-md text-[10px] font-semibold border ${
+          className={`px-2 py-0.5 rounded-md text-[12px] font-semibold border ${
             status.available
-              ? 'bg-sky-500/10 text-sky-300 border-sky-500/30'
-              : 'bg-white/5 text-gray-400 border-white/10'
+              ? 'bg-[var(--accent-subtle,rgba(245,158,11,0.12))] text-[var(--text-primary,#F3F4F6)] border-[var(--border-subtle,rgba(255,255,255,0.08))]'
+              : 'bg-[var(--bg-elevated,#1E1E1E)] text-[var(--text-secondary,#9CA3AF)] border-[var(--border-subtle,rgba(255,255,255,0.08))]'
           }`}
         >
           {available}
         </span>
       </div>
 
-      <div className="text-[11px] text-gray-400 space-y-1">
+      <div className="text-[12px] text-[var(--text-secondary,#9CA3AF)] space-y-1">
         <div>
           Secret source:{' '}
-          <span className="text-gray-300">{storageScopeLabel(status.storageScope)}</span>
+          <span className="text-[var(--text-secondary,#9CA3AF)]">{storageScopeLabel(status.storageScope)}</span>
         </div>
         <div>
-          Managed by: <span className="text-gray-300">server operator</span>
+          Managed by: <span className="text-[var(--text-secondary,#9CA3AF)]">server operator</span>
         </div>
         <div>
-          Secret writes: <span className="text-gray-300">{status.supportsSecretWrites ? 'Supported' : 'Not supported'}</span>
+          Secret writes: <span className="text-[var(--text-secondary,#9CA3AF)]">{status.supportsSecretWrites ? 'Supported' : 'Not supported'}</span>
         </div>
       </div>
 
       <div className="space-y-1.5">
-        <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Capabilities</div>
+        <div className="text-[12px] uppercase tracking-wide text-[var(--text-secondary,#9CA3AF)] font-semibold">Capabilities</div>
         {supportedCapabilities.length > 0 ? (
           <div className="flex flex-wrap gap-1.5">
             {supportedCapabilities.map((k) => (
               <span
                 key={k}
-                className="px-2 py-0.5 rounded-md text-[10px] text-gray-300 bg-white/5 border border-white/10"
+                className="px-2 py-0.5 rounded-md text-[12px] text-[var(--text-secondary,#9CA3AF)] bg-[var(--bg-elevated,#1E1E1E)] border border-[var(--border-subtle,rgba(255,255,255,0.08))]"
               >
                 {capabilityLabel(k)}
               </span>
             ))}
           </div>
         ) : (
-          <div className="text-[11px] text-gray-500">No provider-backed capabilities for this provider.</div>
+          <div className="text-[12px] text-[var(--text-secondary,#9CA3AF)]">No provider-backed capabilities for this provider.</div>
         )}
       </div>
     </article>
@@ -510,14 +510,14 @@ function ProviderCard({ status }: { status: ProviderStatusView }) {
 function ModelCapabilities({ capabilities }: { capabilities: AiCapabilities }) {
   const supported = CAPABILITY_KEYS.filter((k) => capabilities[k] === true);
   if (supported.length === 0) {
-    return <div className="text-[10px] text-gray-500">No curated capabilities for this model.</div>;
+    return <div className="text-[12px] text-[var(--text-secondary,#9CA3AF)]">No curated capabilities for this model.</div>;
   }
   return (
     <div className="flex flex-wrap gap-1.5">
       {supported.map((k) => (
         <span
           key={k}
-          className="px-2 py-0.5 rounded-md text-[10px] text-gray-300 bg-white/5 border border-white/10"
+          className="px-2 py-0.5 rounded-md text-[12px] text-[var(--text-secondary,#9CA3AF)] bg-[var(--bg-elevated,#1E1E1E)] border border-[var(--border-subtle,rgba(255,255,255,0.08))]"
         >
           {capabilityLabel(k)}
         </span>
@@ -531,22 +531,22 @@ function ModelCatalogTextCard({ provider }: { provider: ProviderCatalogTextProvi
   return (
     <article
       data-catalog-provider-id={provider.providerId}
-      className="border border-white/10 rounded-2xl bg-[#141414] p-4 space-y-3"
+      className="border border-[var(--border-subtle,rgba(255,255,255,0.08))] rounded-2xl bg-[var(--bg-surface,#141414)] p-4 space-y-3"
     >
       <div className="flex items-center justify-between gap-3">
-        <h4 className="text-sm font-semibold text-white">{provider.name}</h4>
-        <span className="text-[10px] font-medium text-gray-500">{provider.providerId}</span>
+        <h4 className="text-sm font-semibold text-[var(--text-primary,#F3F4F6)]">{provider.name}</h4>
+        <span className="text-[12px] font-medium text-[var(--text-secondary,#9CA3AF)]">{provider.providerId}</span>
       </div>
       <div className="flex flex-wrap gap-1.5">
-        <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold border bg-white/5 text-gray-400 border-white/10">
+        <span className="px-2 py-0.5 rounded-md text-[12px] font-semibold border bg-[var(--bg-elevated,#1E1E1E)] text-[var(--text-secondary,#9CA3AF)] border-[var(--border-subtle,rgba(255,255,255,0.08))]">
           Connection: {connectionTestKindLabel(provider.connectionTest)}
         </span>
         {provider.selectable ? (
-          <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold border bg-emerald-500/10 text-emerald-300 border-emerald-500/30">
+          <span className="px-2 py-0.5 rounded-md text-[12px] font-semibold border bg-[var(--bg-elevated,#1E1E1E)] text-[var(--text-primary,#F3F4F6)] border-[var(--border-subtle,rgba(255,255,255,0.08))]">
             Selectable
           </span>
         ) : (
-          <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold border bg-white/5 text-gray-400 border-white/10">
+          <span className="px-2 py-0.5 rounded-md text-[12px] font-semibold border bg-[var(--bg-elevated,#1E1E1E)] text-[var(--text-secondary,#9CA3AF)] border-[var(--border-subtle,rgba(255,255,255,0.08))]">
             Not selectable
           </span>
         )}
@@ -557,12 +557,12 @@ function ModelCatalogTextCard({ provider }: { provider: ProviderCatalogTextProvi
             <div
               key={model.id}
               data-model-id={model.id}
-              className="space-y-1.5 border border-white/5 rounded-xl p-3"
+              className="space-y-1.5 border border-[var(--border-subtle,rgba(255,255,255,0.08))] rounded-xl p-3"
             >
               <div className="flex items-center gap-2">
-                <span className="text-[12px] font-medium text-gray-200 font-mono">{model.id}</span>
+                <span className="text-[12px] font-medium text-[var(--text-primary,#F3F4F6)] font-mono">{model.id}</span>
                 {model.default && (
-                  <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-white/10 text-gray-300 border border-white/10">
+                  <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-[var(--bg-elevated,#1E1E1E)] text-[var(--text-secondary,#9CA3AF)] border border-[var(--border-subtle,rgba(255,255,255,0.08))]">
                     Default
                   </span>
                 )}
@@ -571,7 +571,7 @@ function ModelCatalogTextCard({ provider }: { provider: ProviderCatalogTextProvi
             </div>
           ))
         ) : (
-          <div className="text-[11px] text-gray-500">No curated models for this provider.</div>
+          <div className="text-[12px] text-[var(--text-secondary,#9CA3AF)]">No curated models for this provider.</div>
         )}
       </div>
     </article>
@@ -583,32 +583,32 @@ function ImageModelCatalogCard({ provider }: { provider: ProviderCatalogImagePro
   return (
     <article
       data-catalog-provider-id={provider.providerId}
-      className="border border-white/10 rounded-2xl bg-[#141414] p-4 space-y-3"
+      className="border border-[var(--border-subtle,rgba(255,255,255,0.08))] rounded-2xl bg-[var(--bg-surface,#141414)] p-4 space-y-3"
     >
       <div className="flex items-center justify-between gap-3">
-        <h4 className="text-sm font-semibold text-white">{provider.name}</h4>
-        <span className="text-[10px] font-medium text-gray-500">{provider.providerId}</span>
+        <h4 className="text-sm font-semibold text-[var(--text-primary,#F3F4F6)]">{provider.name}</h4>
+        <span className="text-[12px] font-medium text-[var(--text-secondary,#9CA3AF)]">{provider.providerId}</span>
       </div>
       <div className="flex flex-wrap gap-1.5">
-        <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold border bg-white/5 text-gray-400 border-white/10">
+        <span className="px-2 py-0.5 rounded-md text-[12px] font-semibold border bg-[var(--bg-elevated,#1E1E1E)] text-[var(--text-secondary,#9CA3AF)] border-[var(--border-subtle,rgba(255,255,255,0.08))]">
           Image generation: {provider.imageGeneration ? 'Enabled' : 'Disabled'}
         </span>
-        <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold border bg-white/5 text-gray-400 border-white/10">
+        <span className="px-2 py-0.5 rounded-md text-[12px] font-semibold border bg-[var(--bg-elevated,#1E1E1E)] text-[var(--text-secondary,#9CA3AF)] border-[var(--border-subtle,rgba(255,255,255,0.08))]">
           Connection: {connectionTestKindLabel(provider.connectionTest)}
         </span>
-        <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold border bg-white/5 text-gray-400 border-white/10">
+        <span className="px-2 py-0.5 rounded-md text-[12px] font-semibold border bg-[var(--bg-elevated,#1E1E1E)] text-[var(--text-secondary,#9CA3AF)] border-[var(--border-subtle,rgba(255,255,255,0.08))]">
           Formats: {provider.formats.join(', ')}
         </span>
-        <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold border bg-white/5 text-gray-400 border-white/10">
+        <span className="px-2 py-0.5 rounded-md text-[12px] font-semibold border bg-[var(--bg-elevated,#1E1E1E)] text-[var(--text-secondary,#9CA3AF)] border-[var(--border-subtle,rgba(255,255,255,0.08))]">
           Max size: {formatMaxBytes(provider.maxBytes)}
         </span>
       </div>
       <div className="space-y-2">
         {provider.models.map((model) => (
           <div key={model.id} data-model-id={model.id} className="flex items-center gap-2">
-            <span className="text-[12px] font-medium text-gray-200 font-mono">{model.id}</span>
+            <span className="text-[12px] font-medium text-[var(--text-primary,#F3F4F6)] font-mono">{model.id}</span>
             {model.default && (
-              <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-white/10 text-gray-300 border border-white/10">
+              <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-[var(--bg-elevated,#1E1E1E)] text-[var(--text-secondary,#9CA3AF)] border border-[var(--border-subtle,rgba(255,255,255,0.08))]">
                 Default
               </span>
             )}
@@ -647,23 +647,23 @@ export function SelectionSummaryCard({
   return (
     <div
       data-selection-kind={kind}
-      className="border border-white/10 rounded-xl bg-white/[0.03] p-3 space-y-1"
+      className="border border-[var(--border-subtle,rgba(255,255,255,0.08))] rounded-xl bg-[var(--bg-elevated,#1E1E1E)] p-3 space-y-1"
     >
-      <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">{label}</div>
-      <div className="text-[12px] text-gray-200">{value}</div>
-      <div className="text-[10px] text-gray-500">
+      <div className="text-[12px] uppercase tracking-wide text-[var(--text-secondary,#9CA3AF)] font-semibold">{label}</div>
+      <div className="text-[12px] text-[var(--text-primary,#F3F4F6)]">{value}</div>
+      <div className="text-[12px] text-[var(--text-secondary,#9CA3AF)]">
         Operator/server truth (not your browser selection).
       </div>
       {executable !== undefined && (
         <div
           data-selection-executable={kind}
-          className={`text-[11px] ${executable ? 'text-emerald-300' : 'text-amber-300'}`}
+          className={`text-[12px] ${executable ? 'text-[var(--text-primary,#F3F4F6)]' : 'text-[var(--text-primary,#F3F4F6)]'}`}
         >
           Runtime provider: {executable ? 'Available' : 'Unavailable'}
         </div>
       )}
       {selection.selectionMode === 'server_managed' && !selection.valid && (
-        <div className="text-[11px] text-amber-300">Server-managed provider selection is invalid; Kitchen Codex will not use another provider until the selection is fixed.</div>
+        <div className="text-[12px] text-[var(--text-primary,#F3F4F6)]">Server-managed provider selection is invalid; Kitchen Codex will not use another provider until the selection is fixed.</div>
       )}
     </div>
   );
@@ -680,18 +680,18 @@ export function ProviderStatusPanel({
   catalog?: ProviderCatalogView;
 }) {
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3 pb-2 border-b border-white/5">
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 pb-2 border-b border-[var(--border-subtle,rgba(255,255,255,0.08))]">
         <div>
-          <h2 className="font-serif font-bold text-base text-white">AI Providers</h2>
-          <p className="text-xs text-gray-400 mt-1 max-w-2xl">
+          <h2 className="font-serif font-bold text-base text-[var(--text-primary,#F3F4F6)]">AI Providers</h2>
+          <p className="mt-1 max-w-2xl text-[13px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
             AI providers are configured by the server operator. API keys are not stored in your
             browser or vault.
           </p>
         </div>
         <button
           onClick={onRefresh}
-          className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white/10 text-gray-200 hover:bg-white/15 border border-white/10 transition-colors"
+          className="min-h-[44px] rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-4 text-[12px] font-medium text-[var(--text-primary,#F3F4F6)] transition-colors hover:bg-[var(--bg-root,#0C0C0C)]"
         >
           Refresh
         </button>
@@ -706,11 +706,11 @@ export function ProviderStatusPanel({
       {catalog && (
         <section
           data-catalog-section="provider-model-catalog"
-          className="space-y-5 pt-4 border-t border-white/5"
+          className="space-y-5 pt-4 border-t border-[var(--border-subtle,rgba(255,255,255,0.08))]"
         >
           <div>
-            <h3 className="font-serif font-semibold text-sm text-white">Provider Model Catalog</h3>
-            <p className="text-xs text-gray-400 mt-1 max-w-2xl">
+            <h3 className="font-serif text-[18px] font-semibold text-[var(--text-primary,#F3F4F6)]">Provider Model Catalog</h3>
+            <p className="mt-1 max-w-2xl text-[13px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
               The curated models this server can actually execute, with their effective
               capabilities. Read-only — selection and keys are managed by the server operator.
             </p>
@@ -736,7 +736,7 @@ export function ProviderStatusPanel({
           </div>
 
           <div className="space-y-3">
-            <h4 className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">
+            <h4 className="text-[12px] uppercase tracking-wide text-[var(--text-secondary,#9CA3AF)] font-semibold">
               Image Providers
             </h4>
             <div data-catalog-kind="image" className="space-y-3">
@@ -754,7 +754,7 @@ export function ProviderStatusPanel({
 /** Presentational loading state. */
 export function ProviderStatusLoading() {
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 text-sm text-gray-400">
+    <div className="py-6 text-[14px] text-[var(--text-secondary,#9CA3AF)]">
       Loading provider status…
     </div>
   );
@@ -763,12 +763,12 @@ export function ProviderStatusLoading() {
 /** Presentational fail-closed error state (a fetch failure is NOT provider-unavailable). */
 export function ProviderStatusError({ onRefresh }: { onRefresh: () => void }) {
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
-      <div className="border border-white/10 rounded-2xl bg-[#141414] p-4 space-y-3 max-w-md">
-        <p className="text-sm text-white">Provider status unavailable.</p>
+    <div className="py-6">
+      <div className="max-w-md space-y-3 rounded-2xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] p-4">
+        <p className="text-sm text-[var(--text-primary,#F3F4F6)]">Provider status unavailable.</p>
         <button
           onClick={onRefresh}
-          className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white/10 text-gray-200 hover:bg-white/15 border border-white/10 transition-colors"
+          className="min-h-[44px] rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-4 text-[12px] font-medium text-[var(--text-primary,#F3F4F6)] transition-colors hover:bg-[var(--bg-root,#0C0C0C)]"
         >
           Refresh
         </button>
@@ -894,12 +894,12 @@ export function SelectionControlCard({
     <div
       data-selection-control-kind={kind}
       data-ai-surface-card={kind}
-      className="border border-white/10 rounded-2xl bg-[#141414] p-4 sm:p-5 space-y-4 flex flex-col"
+      className="border border-[var(--border-subtle,rgba(255,255,255,0.08))] rounded-2xl bg-[var(--bg-surface,#141414)] p-4 sm:p-5 space-y-4 flex flex-col"
     >
       <div className="flex items-center justify-between gap-3">
-        <h4 className="font-serif text-base font-semibold text-white">{label}</h4>
+        <h4 className="font-serif text-base font-semibold text-[var(--text-primary,#F3F4F6)]">{label}</h4>
         {!allowed && (
-          <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold border bg-amber-500/10 text-amber-300 border-amber-500/30">
+          <span className="px-2 py-0.5 rounded-md text-[12px] font-semibold border bg-[var(--accent-subtle,rgba(245,158,11,0.12))] text-[var(--text-primary,#F3F4F6)] border-[var(--border-subtle,rgba(255,255,255,0.08))]">
             Server locked
           </span>
         )}
@@ -908,28 +908,28 @@ export function SelectionControlCard({
       {/* Friendly active summary (never secret). */}
       <div
         data-active-summary={kind}
-        className="rounded-xl bg-white/[0.03] border border-white/10 px-3 py-2.5 space-y-0.5"
+        className="rounded-xl bg-[var(--bg-elevated,#1E1E1E)] border border-[var(--border-subtle,rgba(255,255,255,0.08))] px-3 py-2.5 space-y-0.5"
       >
-        <div className="text-[13px] text-gray-100">
+        <div className="text-[13px] text-[var(--text-primary,#F3F4F6)]">
           {summaryProviderName ?? 'Server default'}
         </div>
         {summaryModelId && (
-          <div className="text-[12px] text-gray-300">{friendlyModelName(summaryModelId)}</div>
+          <div className="text-[12px] text-[var(--text-secondary,#9CA3AF)]">{friendlyModelName(summaryModelId)}</div>
         )}
-        <div className="text-[11px] text-gray-400">
+        <div className="text-[12px] text-[var(--text-secondary,#9CA3AF)]">
           {!allowed
             ? 'Server default'
             : isUserSelected
             ? credentialUsageLabel(activeSource)
             : 'Server default'}
         </div>
-        <div data-surface-status={kind} className="text-[11px] text-emerald-300/90">
+        <div data-surface-status={kind} className="text-[12px] text-[var(--text-primary,#F3F4F6)]">
           {activeStatus}
         </div>
       </div>
 
       {!allowed ? (
-        <div className="text-[11px] text-gray-400">
+        <div className="text-[12px] text-[var(--text-secondary,#9CA3AF)]">
           This surface is managed by the server operator and cannot be changed here.
         </div>
       ) : (
@@ -937,7 +937,7 @@ export function SelectionControlCard({
           {invalid && (
             <div
               data-selection-invalid={kind}
-              className="text-[11px] rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-200 px-2.5 py-2"
+              className="text-[12px] rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--accent-subtle,rgba(245,158,11,0.12))] text-[var(--text-primary,#F3F4F6)] px-2.5 py-2"
             >
               Your saved selection is no longer available. It fails closed — no other provider is
               used — until you choose another provider or reset to server default.
@@ -945,7 +945,7 @@ export function SelectionControlCard({
           )}
 
           <label className="block space-y-1">
-            <span className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Provider</span>
+            <span className="text-[12px] uppercase tracking-wide text-[var(--text-secondary,#9CA3AF)] font-semibold">Provider</span>
             <select
               data-surface-provider-select={kind}
               value={draft.providerId ?? ''}
@@ -956,7 +956,7 @@ export function SelectionControlCard({
                 const defaultCost = p?.models.find((m) => m.id === defaultModel)?.costClass;
                 onChangeDraft({ mode: 'user_selected', providerId: id, modelId: defaultModel, selectedCostClass: defaultCost });
               }}
-              className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[12px] text-gray-200"
+              className="min-h-[44px] w-full rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-2.5 text-[12px] text-[var(--text-primary,#F3F4F6)]"
             >
               <option value="">Choose a provider…</option>
               {providers.map((p) => (
@@ -969,7 +969,7 @@ export function SelectionControlCard({
 
           {selectedProvider && selectedProvider.models.length > 0 && (
             <div className="block space-y-1">
-              <span className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Model</span>
+              <span className="text-[12px] uppercase tracking-wide text-[var(--text-secondary,#9CA3AF)] font-semibold">Model</span>
               {selectedProvider.providerId === 'openrouter' ||
               selectedProvider.providerId === 'openrouter-image' ? (
                 <ModelPicker
@@ -999,7 +999,7 @@ export function SelectionControlCard({
                   data-surface-model-select={kind}
                   value={draft.modelId ?? ''}
                   onChange={(e) => onChangeDraft({ modelId: e.target.value || undefined })}
-                  className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[12px] text-gray-200"
+                  className="min-h-[44px] w-full rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-2.5 text-[12px] text-[var(--text-primary,#F3F4F6)]"
                 >
                   <option value="">Provider default</option>
                   {selectedProvider.models.map((m) => (
@@ -1013,7 +1013,7 @@ export function SelectionControlCard({
           )}
 
           <label className="block space-y-1">
-            <span className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">
+            <span className="text-[12px] uppercase tracking-wide text-[var(--text-secondary,#9CA3AF)] font-semibold">
               Credential
             </span>
             <select
@@ -1025,7 +1025,7 @@ export function SelectionControlCard({
                     e.target.value === 'session_only' ? 'session_only' : 'server_environment',
                 })
               }
-              className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[12px] text-gray-200"
+              className="min-h-[44px] w-full rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-2.5 text-[12px] text-[var(--text-primary,#F3F4F6)]"
             >
               <option value="server_environment">Server API key</option>
               <option value="session_only">Use my API key</option>
@@ -1034,7 +1034,7 @@ export function SelectionControlCard({
 
           {source === 'session_only' ? (
             <div className="space-y-2" data-surface-key-panel={kind}>
-              <div className="text-[11px] text-gray-500">{SESSION_KEY_EXPLANATION}</div>
+              <div className="text-[12px] text-[var(--text-secondary,#9CA3AF)]">{SESSION_KEY_EXPLANATION}</div>
               {selectedProvider && (
                 <SessionKeyPanel
                   key={selectedProvider.providerId}
@@ -1058,19 +1058,19 @@ export function SelectionControlCard({
                   if (draft.providerId) onTestServerEnvironment(draft.providerId, draft.modelId);
                 }}
                 disabled={envTest?.state === 'testing'}
-                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white/10 text-gray-200 hover:bg-white/15 border border-white/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                className="min-h-[44px] rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-3 text-[12px] font-medium text-[var(--text-primary,#F3F4F6)] transition-colors hover:bg-[var(--bg-root,#0C0C0C)] disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {envTest?.state === 'testing' ? 'Testing…' : 'Test Connection'}
               </button>
               {envTest?.state === 'success' && (
-                <div data-surface-test-result={kind} className="text-[11px] text-emerald-300">
+                <div data-surface-test-result={kind} className="text-[12px] text-[var(--text-primary,#F3F4F6)]">
                   Connection passed
                   {envTest.model ? ` · ${friendlyModelName(envTest.model)}` : ''}
                   {envTest.latencyMs !== undefined ? ` · ${envTest.latencyMs} ms` : ''}
                 </div>
               )}
               {envTest?.state === 'failure' && (
-                <div data-surface-test-result={kind} className="text-[11px] text-red-300">
+                <div data-surface-test-result={kind} className="text-[12px] text-[var(--text-primary,#F3F4F6)]">
                   {envTest.message ?? 'Connection test failed.'}
                   {envTest.code ? ` (${envTest.code})` : ''}
                   {envTest.diagnostic && ` · ${envTest.diagnostic.stage}${envTest.diagnostic.httpStatus ? ` · HTTP ${envTest.diagnostic.httpStatus}` : ''}${envTest.diagnostic.providerCode ? ` · ${envTest.diagnostic.providerCode}` : ''}`}
@@ -1090,7 +1090,7 @@ export function SelectionControlCard({
               data-surface-notice={kind}
               role="status"
               aria-live="polite"
-              className="min-w-0 text-[11px] text-emerald-300"
+              className="min-w-0 text-[12px] text-[var(--text-primary,#F3F4F6)]"
             >
               {notice ? `✓ ${notice}` : ''}
             </div>
@@ -1098,7 +1098,7 @@ export function SelectionControlCard({
               type="button"
               data-surface-reset={kind}
               onClick={onReset}
-              className="shrink-0 text-[11px] text-gray-500 hover:text-gray-300 underline-offset-2 hover:underline"
+              className="inline-flex min-h-[44px] shrink-0 items-center text-[12px] text-[var(--text-secondary,#9CA3AF)] underline-offset-2 hover:text-[var(--text-primary,#F3F4F6)] hover:underline"
             >
               Reset to server default
             </button>
@@ -1454,11 +1454,11 @@ export function ProviderSelectionPanel({
   return (
     <section
       data-selection-panel="provider-selection"
-      className="max-w-7xl mx-auto px-4 sm:px-6 space-y-6"
+      className="space-y-6"
     >
-      <div className="pt-4 border-t border-white/5">
-        <h3 className="font-serif font-semibold text-sm text-white">AI Settings</h3>
-        <p className="text-xs text-gray-400 mt-1 max-w-2xl">
+      <div className="pt-4 border-t border-[var(--border-subtle,rgba(255,255,255,0.08))]">
+        <h3 className="font-serif text-[20px] font-semibold leading-snug text-[var(--text-primary,#F3F4F6)]">AI Settings</h3>
+        <p className="mt-1 max-w-2xl text-[13px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
           Choose the AI provider and model Kitchen Codex uses. Preferences are stored in this browser
           only — never API keys.
         </p>
@@ -1467,7 +1467,7 @@ export function ProviderSelectionPanel({
       {hydrationError && (
         <div
           data-selection-hydration-error="true"
-          className="text-[11px] rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-200 px-3 py-2"
+          className="text-[12px] rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--accent-subtle,rgba(245,158,11,0.12))] text-[var(--text-primary,#F3F4F6)] px-3 py-2"
         >
           Your saved AI provider selection could not be read. AI requests fail closed (no provider
           is charged) until this is resolved — they do not silently fall back to the server default.
@@ -1475,7 +1475,7 @@ export function ProviderSelectionPanel({
       )}
 
       {!catalog.selection.userSelectionAllowed.text && !catalog.selection.userSelectionAllowed.image ? (
-        <div className="text-[12px] text-gray-400">
+        <div className="text-[12px] text-[var(--text-secondary,#9CA3AF)]">
           All provider surfaces are currently server-managed. Selections are read-only until an
           operator pin is removed.
         </div>
@@ -1528,10 +1528,10 @@ export function ProviderSelectionPanel({
         </div>
       )}
 
-      <p className="text-[11px] text-gray-500">Text and image credentials are kept separate for security.</p>
+      <p className="text-[12px] text-[var(--text-secondary,#9CA3AF)]">Text and image credentials are kept separate for security.</p>
 
-      <details data-advanced-diagnostics="true" className="pt-2 border-t border-white/5">
-        <summary className="cursor-pointer text-[11px] uppercase tracking-wide text-gray-500 font-semibold select-none">
+      <details data-advanced-diagnostics="true" className="pt-2 border-t border-[var(--border-subtle,rgba(255,255,255,0.08))]">
+        <summary className="flex min-h-[44px] cursor-pointer items-center text-[12px] font-semibold uppercase tracking-wide text-[var(--text-secondary,#9CA3AF)] select-none">
           Advanced / Server Diagnostics
         </summary>
         <div className="mt-3 space-y-5">
@@ -1542,10 +1542,10 @@ export function ProviderSelectionPanel({
           />
 
           <div>
-            <h4 className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">
+            <h4 className="text-[12px] uppercase tracking-wide text-[var(--text-secondary,#9CA3AF)] font-semibold">
               Server Environment Connection Tests
             </h4>
-            <p className="text-xs text-gray-400 mt-1 max-w-2xl">
+            <p className="mt-1 max-w-2xl text-[13px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
               These tests check credentials configured by the server operator (the environment
               credential source). Text providers execute a minimal chat call; image providers run a
               quota-free credential check. Session credentials are tested beside the provider in the
@@ -1565,12 +1565,12 @@ export function ProviderSelectionPanel({
                   <div
                     key={key}
                     data-connection-test-provider={p.providerId}
-                    className="border border-white/10 rounded-xl bg-white/[0.03] p-3 space-y-2"
+                    className="border border-[var(--border-subtle,rgba(255,255,255,0.08))] rounded-xl bg-[var(--bg-elevated,#1E1E1E)] p-3 space-y-2"
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <div className="text-[12px] text-gray-200">
+                      <div className="text-[12px] text-[var(--text-primary,#F3F4F6)]">
                         <span className="font-medium">{p.name}</span>{' '}
-                        <span className="text-[10px] text-gray-500">{p.providerId}</span>
+                        <span className="text-[12px] text-[var(--text-secondary,#9CA3AF)]">{p.providerId}</span>
                       </div>
                       <button
                         type="button"
@@ -1578,25 +1578,25 @@ export function ProviderSelectionPanel({
                         onClick={() => testConnection(p.kind, p.providerId, p.defaultModelId)}
                         disabled={result?.state === 'testing' || unavailable}
                         title={unavailable ? 'No server operator key is configured for this provider (environment test unavailable).' : undefined}
-                        className="px-2.5 py-1 rounded-lg text-[11px] font-medium bg-white/10 text-gray-200 hover:bg-white/15 border border-white/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        className="min-h-[44px] rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-3 text-[12px] font-medium text-[var(--text-primary,#F3F4F6)] transition-colors hover:bg-[var(--bg-root,#0C0C0C)] disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         {result?.state === 'testing' ? 'Testing…' : 'Test Connection'}
                       </button>
                     </div>
                     {sessionAlternative && (
-                      <div className="text-[11px] text-amber-300/90">
+                      <div className="text-[12px] text-[var(--text-primary,#F3F4F6)]">
                         Environment credential unavailable. This provider is session-capable — use
                         the session credential in the card above.
                       </div>
                     )}
                     {result?.state === 'success' && (
-                      <div className="text-[11px] text-emerald-300">
+                      <div className="text-[12px] text-[var(--text-primary,#F3F4F6)]">
                         {connectionTestSuccessLabel(p.connectionTest, result.model)}
                         {result.latencyMs !== undefined ? ` · ${result.latencyMs} ms` : ''}
                       </div>
                     )}
                     {result?.state === 'failure' && (
-                      <div className="text-[11px] text-red-300">
+                      <div className="text-[12px] text-[var(--text-primary,#F3F4F6)]">
                         {result.message ?? 'Connection test failed.'}
                         {result.code ? ` (${result.code})` : ''}
                         {result.diagnostic && ` · ${result.diagnostic.stage}${result.diagnostic.httpStatus ? ` · HTTP ${result.diagnostic.httpStatus}` : ''}${result.diagnostic.providerCode ? ` · ${result.diagnostic.providerCode}` : ''}`}
@@ -1699,7 +1699,7 @@ export function ProviderSettings({
     return (
       <>
         <ProviderStatusError onRefresh={load} />
-        <div className="text-xs text-gray-500 max-w-2xl px-4 sm:px-6 pb-6">
+        <div className="text-xs text-[var(--text-secondary,#9CA3AF)] max-w-2xl px-4 sm:px-6 pb-6">
           {PROVIDER_CATALOG_UNAVAILABLE_COPY}
         </div>
       </>

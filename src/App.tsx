@@ -2132,7 +2132,7 @@ export default function App() {
   return (
     <div
       data-theme={theme}
-      className="min-h-screen bg-[#0C0C0C] text-gray-200 flex flex-col lg:flex-row font-sans selection:bg-amber-500/30 selection:text-amber-200 relative transition-colors duration-200"
+      className="relative flex min-h-screen flex-col bg-[var(--bg-root,#0C0C0C)] font-sans text-[var(--text-primary,#F3F4F6)] transition-colors duration-200 selection:bg-amber-500/30 selection:text-amber-200 lg:flex-row"
       onDragOver={(e) => {
         e.preventDefault();
         setIsWindowDragging(true);
@@ -2180,14 +2180,14 @@ export default function App() {
       {/* Global Drag and Drop Dropzone Indicator */}
       {isWindowDragging && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-xs flex flex-col items-center justify-center p-6 border-4 border-dashed border-amber-500 pointer-events-none">
-          <div className="bg-[#141414] p-8 rounded-2xl border border-amber-500/40 text-center max-w-md shadow-2xl">
-            <div className="w-16 h-16 rounded-2xl bg-amber-500/20 text-amber-400 flex items-center justify-center mx-auto mb-4 border border-amber-500/30 animate-bounce">
+          <div className="max-w-md rounded-2xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] p-8 text-center shadow-2xl">
+            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--accent-subtle,rgba(245,158,11,0.12))] text-[var(--accent-text,#F59E0B)] motion-safe:animate-bounce">
               <span className="text-2xl font-bold">📂</span>
             </div>
-            <h3 className="text-lg font-serif font-bold text-white mb-1">
+            <h3 className="mb-1 font-serif text-[20px] font-semibold text-[var(--text-primary,#F3F4F6)]">
               Drop Recipe Files or Folder
             </h3>
-            <p className="text-xs text-gray-400">
+            <p className="text-[12px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
               Release to instantly parse recipes, notes, Meal Plan.md, and Shopping List.md into The Kitchen Codex.
             </p>
           </div>
@@ -2197,12 +2197,12 @@ export default function App() {
       {/* Lightweight adapter save/delete error surface (inline alert, no new framework) */}
       {vaultError && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[60] w-[calc(100%-2rem)] max-w-xl">
-          <div className="bg-rose-950/90 border border-rose-500/40 rounded-xl px-4 py-3 shadow-2xl flex items-start gap-3 text-rose-100">
+          <div className="flex items-start gap-3 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] border-l-[3px] border-l-[var(--accent-text,#F59E0B)] bg-[var(--bg-surface,#141414)] px-4 py-3 text-[var(--text-primary,#F3F4F6)] shadow-2xl">
             <span className="text-base">⚠️</span>
-            <p className="flex-1 text-xs leading-relaxed text-rose-200">{vaultError}</p>
+            <p className="flex-1 text-[12px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">{vaultError}</p>
             <button
               onClick={clearVaultError}
-              className="px-2 py-0.5 rounded-md text-rose-300 hover:text-white hover:bg-white/10 text-xs transition-colors shrink-0"
+              className="min-h-[40px] shrink-0 rounded-md px-2 text-[12px] text-[var(--text-primary,#F3F4F6)] transition-colors hover:bg-[var(--bg-elevated,#1E1E1E)]"
             >
               Dismiss
             </button>
@@ -2582,10 +2582,10 @@ export default function App() {
       {/* App Footer — below 1024px the fixed bottom navigation overlays the
           last 76–80px of the viewport, so the footer reserves that space and
           its own content stays clear of the navigation. */}
-      <footer className="border-t border-stone-800/60 bg-stone-900/40 mt-auto">
-        <div className="max-w-7xl mx-auto kc-vault-surface py-4 pb-[92px] lg:pb-4 flex flex-col sm:flex-row items-center justify-between gap-2 text-sm text-stone-500">
+      <footer className="mt-auto border-t border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)]">
+        <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-2 kc-vault-surface py-4 pb-[92px] text-sm text-[var(--text-secondary,#9CA3AF)] sm:flex-row lg:pb-4">
           <div className="flex items-center gap-2">
-            <span className="font-medium text-stone-400">My Recipe Vault</span>
+            <span className="font-medium text-[var(--text-primary,#F3F4F6)]">My Recipe Vault</span>
             <span className="font-mono text-xs px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-medium">
               {APP_VERSION}
             </span>
@@ -2625,19 +2625,19 @@ export default function App() {
           ref={moreDialogRef}
           aria-labelledby="more-dialog-title"
           onClose={() => setIsMoreOpen(false)}
-          className="lg:hidden fixed inset-0 z-50 m-0 w-full h-full max-w-none max-h-none border-0 bg-transparent p-0"
+          className="fixed inset-0 z-50 m-0 h-full w-full max-w-none max-h-none border-0 bg-transparent p-0 lg:hidden"
         >
-          <div className="absolute inset-0 bg-black/60" onClick={() => setIsMoreOpen(false)} />
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-[2px]" onClick={() => setIsMoreOpen(false)} />
           <div
-            className="absolute bottom-0 left-0 right-0 bg-[#141414] rounded-t-2xl border-t border-white/10 p-4 space-y-2"
+            className="absolute inset-x-0 bottom-0 max-h-[88vh] overflow-y-auto rounded-t-2xl border-t border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] text-[var(--text-primary,#F3F4F6)] shadow-2xl"
             role="document"
           >
-            <div className="flex items-center justify-between mb-2">
-              <h2 id="more-dialog-title" className="text-base font-semibold text-white">More</h2>
+            <div className="mb-3 flex items-center justify-between">
+              <div><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary,#9CA3AF)]">The Kitchen Codex</p><h2 id="more-dialog-title" className="font-serif text-[22px] text-[var(--text-primary,#F3F4F6)]">More</h2></div>
               <button
                 onClick={() => setIsMoreOpen(false)}
                 aria-label="Close More menu"
-                className="w-11 h-11 flex items-center justify-center text-gray-400 hover:text-white"
+                className="flex h-11 w-11 items-center justify-center rounded-lg text-[var(--text-secondary,#9CA3AF)] transition-colors hover:bg-[var(--bg-elevated,#1E1E1E)] hover:text-[var(--text-primary,#F3F4F6)]"
               >
                 ✕
               </button>
@@ -2662,9 +2662,10 @@ export default function App() {
                   setSelectedRecipe(null);
                   setIsMoreOpen(false);
                 }}
-                className="w-full text-left px-3 py-2 min-h-[44px] flex items-center rounded-lg text-base text-gray-200 hover:bg-white/5 transition-colors duration-[140ms]"
+                className="flex min-h-[48px] w-full items-center justify-between rounded-lg px-3 text-left text-[15px] text-[var(--text-primary,#F3F4F6)] transition-colors duration-[140ms] hover:bg-[var(--bg-elevated,#1E1E1E)]"
               >
-                {item.label}
+                <span>{item.label}</span>
+                <span aria-hidden="true" className="text-[18px] text-[var(--text-muted,#6B7280)]">›</span>
               </button>
             ))}
           </div>

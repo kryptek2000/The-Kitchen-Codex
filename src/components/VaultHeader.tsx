@@ -93,6 +93,9 @@ export function VaultHeader({
   // never silently shown the starter Vault as though it were their own data.
   const connectionState = vaultStatus.connectionState ?? (vaultStatus.isConnected ? 'connected' : 'starter');
   const needsReconnect = connectionState === 'reauthorization_required' || connectionState === 'permission_denied';
+  // A live folder handle is the only state that supports two-way disk sync.
+  // Imported files/folders are loaded in this app but are not a live Vault.
+  const isLiveVault = vaultStatus.isConnected && vaultStatus.accessType === 'filesystem_api';
 
   // STICKY HEADER GEOMETRY — published for scroll positioning (UD-2A.1B R-1).
   //
@@ -140,21 +143,21 @@ export function VaultHeader({
   }, []);
 
   return (
-    <header ref={headerRef} id="obsidian-vault-header" className="bg-[#141414] border-b border-white/5 static md:sticky md:top-0 z-30 shadow-sm">
+    <header ref={headerRef} id="obsidian-vault-header" className="bg-[var(--bg-surface,#141414)] border-b border-[var(--border-subtle,rgba(255,255,255,0.08))] static md:sticky md:top-0 z-30 shadow-sm">
       {/* Vault status strip — one line, never wraps.
           Connected  -> quiet "Vault Linked" chip (the vault action is not
                         prominent while a vault is connected).
           Not linked -> prominent "Connect Vault" (still discoverable). */}
-      <div id="vault-status-strip" className="bg-[#080808] text-gray-400 text-sm px-3 sm:px-4 py-0 sm:py-0.5 flex flex-nowrap items-center justify-between gap-2 border-b border-white/5">
+      <div id="vault-status-strip" className="bg-[var(--bg-root,#0C0C0C)] text-[var(--text-secondary,#9CA3AF)] text-sm px-3 sm:px-4 py-0 sm:py-0.5 flex flex-nowrap items-center justify-between gap-2 border-b border-[var(--border-subtle,rgba(255,255,255,0.08))]">
         <button
           onClick={onOpenConnectVaultModal}
-          className="flex items-center gap-1.5 min-w-0 flex-1 min-h-[44px] text-left hover:opacity-90 transition-opacity"
+          className="flex min-h-[44px] min-w-0 flex-1 items-center gap-1.5 rounded-sm text-left transition-colors hover:text-[var(--text-primary,#F3F4F6)]"
           title={fullPath ? `${fullPath} — open Vault settings` : 'Open Vault settings & connect folders'}
         >
-          <FolderCheck className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-          <span className="font-mono text-gray-300 truncate min-w-0">{pathLabel}</span>
-          <span className="text-gray-600 hidden sm:inline">•</span>
-          <span id="vault-recipe-count" className="text-gray-400 font-medium whitespace-nowrap shrink-0">
+          <FolderCheck className="h-3.5 w-3.5 shrink-0 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
+          <span className="hidden min-w-0 truncate font-mono text-[var(--text-secondary,#9CA3AF)] sm:inline">{pathLabel}</span>
+          <span className="hidden text-[var(--text-muted,#6B7280)] sm:inline">•</span>
+          <span id="vault-recipe-count" className="shrink-0 whitespace-nowrap font-medium text-[var(--text-secondary,#9CA3AF)]">
             {recipeCount} {recipeNoun}
           </span>
         </button>
@@ -169,34 +172,34 @@ export function VaultHeader({
             <button
               id="reconnect-vault-btn"
               onClick={onReconnectVault}
-              className="flex items-center gap-1 text-sm font-semibold text-amber-300 bg-amber-500/15 px-2.5 min-h-[44px] rounded-md border border-amber-500/40 hover:bg-amber-500/25 transition-colors duration-[140ms]"
+              className="flex items-center gap-1 rounded-md border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--accent-subtle,rgba(245,158,11,0.12))] px-2.5 text-sm font-semibold text-[var(--text-primary,#F3F4F6)] transition-colors duration-[140ms] hover:bg-amber-500/20 min-h-[44px]"
               title={
                 connectionState === 'permission_denied'
                   ? `Access to “${vaultStatus.rememberedVaultName || 'your Vault'}” was denied. Click to try again, or pick the folder again.`
                   : `“${vaultStatus.rememberedVaultName || 'Your Vault'}” is remembered. Click to grant access and reconnect it.`
               }
             >
-              <BookOpen className="w-4 h-4 shrink-0" />
+              <BookOpen className="h-4 w-4 shrink-0 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
               <span className="whitespace-nowrap">Reconnect Vault</span>
             </button>
           ) : vaultStatus.isConnected ? (
             <button
               id="vault-linked-chip"
               onClick={onOpenConnectVaultModal}
-              className="flex items-center gap-1 text-sm text-emerald-400/90 bg-emerald-950/30 px-2 min-h-[44px] rounded-md border border-emerald-800/30 hover:bg-emerald-950/60 transition-colors duration-[140ms]"
-              title="Vault connected — open Vault settings"
+              className="flex min-h-[44px] items-center gap-1 rounded-md border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-2.5 text-sm text-[var(--text-primary,#F3F4F6)] transition-colors duration-[140ms] hover:bg-[var(--bg-root,#0C0C0C)]"
+              title={isLiveVault ? 'Vault connected — open Vault settings' : 'Recipes loaded from files — open Vault settings'}
             >
-              <CheckCircle2 className="w-4 h-4 shrink-0" />
-              <span className="whitespace-nowrap">Vault Linked</span>
+              <CheckCircle2 className="h-4 w-4 shrink-0 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
+              <span className="whitespace-nowrap">{isLiveVault ? 'Vault Linked' : 'Recipes Loaded'}</span>
             </button>
           ) : (
             <button
               id="connect-vault-chip"
               onClick={onOpenConnectVaultModal}
-              className="flex items-center gap-1 text-sm font-semibold text-amber-300 bg-amber-500/15 px-2.5 min-h-[44px] rounded-md border border-amber-500/40 hover:bg-amber-500/25 transition-colors duration-[140ms]"
+              className="flex items-center gap-1 rounded-md border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--accent-subtle,rgba(245,158,11,0.12))] px-2.5 text-sm font-semibold text-[var(--text-primary,#F3F4F6)] transition-colors duration-[140ms] hover:bg-amber-500/20 min-h-[44px]"
               title="Connect your recipe vault folder"
             >
-              <BookOpen className="w-4 h-4 shrink-0" />
+              <BookOpen className="h-4 w-4 shrink-0 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
               <span className="whitespace-nowrap">Connect Vault</span>
             </button>
           )}
@@ -204,7 +207,7 @@ export function VaultHeader({
           <button
             id="refresh-vault-btn"
             onClick={onRefreshVault}
-            className="w-11 h-11 flex items-center justify-center text-gray-400 hover:text-gray-100 hover:bg-white/5 rounded transition-colors duration-[140ms]"
+            className="w-11 h-11 flex items-center justify-center text-[var(--text-secondary,#9CA3AF)] hover:text-[var(--text-primary,#F3F4F6)] hover:bg-[var(--bg-elevated,#1E1E1E)] rounded transition-colors duration-[140ms]"
             title="Reload vault markdown notes"
             aria-label="Reload vault markdown notes"
           >
@@ -217,7 +220,7 @@ export function VaultHeader({
           Mobile (<768px): ONE horizontal brand row — hero mark + wordmark +
           compact New Recipe. The secondary actions (Ask My Kitchen, Connect
           Vault) are not stacked here; they live in the More dialog. */}
-      <div className="max-w-7xl mx-auto kc-vault-surface py-2.5 md:py-3.5 flex flex-row md:flex-col lg:flex-row items-center lg:items-center justify-between gap-2 md:gap-3">
+      <div className="max-w-7xl mx-auto kc-vault-surface py-2.5 md:py-3.5 flex flex-row items-center justify-between gap-2 md:flex-col md:items-start md:gap-3 lg:flex-row lg:items-center">
         {/* Compact brand — only below the desktop rail breakpoint, so the
             product identity is never duplicated in two places. The hero mark
             keeps the full (non-compact) brand detail below 768px. */}
@@ -225,14 +228,14 @@ export function VaultHeader({
           <KitchenCodexMark size={64} decorative className="shrink-0 md:hidden" />
           <div className="min-w-0">
             <div className="flex items-center gap-2 min-w-0">
-              <h1 className="text-base md:text-xl font-serif font-bold text-white tracking-tight leading-tight truncate">
+              <h1 className="text-base md:text-xl font-serif font-bold text-[var(--text-primary,#F3F4F6)] tracking-tight leading-tight truncate">
                 The Kitchen Codex
               </h1>
-              <span className="hidden md:inline-flex shrink-0 text-sm font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-medium">
+              <span className="hidden md:inline-flex shrink-0 rounded border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--accent-subtle,rgba(245,158,11,0.12))] px-1.5 py-0.5 font-mono text-sm font-medium text-[var(--accent-text,#F59E0B)]">
                 {APP_VERSION}
               </span>
             </div>
-            <p className="text-sm text-gray-400 leading-tight truncate">
+            <p className="text-sm text-[var(--text-secondary,#9CA3AF)] leading-tight truncate">
               My Recipe Vault
             </p>
           </div>
@@ -258,10 +261,10 @@ export function VaultHeader({
           <button
             id="ask-my-kitchen-header-btn"
             onClick={onOpenAskMyKitchen}
-            className="hidden md:inline-flex items-center gap-2 px-4 min-h-[52px] text-base font-semibold rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition-colors duration-[140ms] shadow-xs"
+            className="hidden md:inline-flex items-center gap-2 px-4 min-h-[52px] text-base font-semibold rounded-lg bg-[var(--accent-subtle,rgba(245,158,11,0.12))] hover:bg-amber-500/20 text-[var(--text-primary,#F3F4F6)] border border-[var(--border-subtle,rgba(255,255,255,0.08))] transition-colors duration-[140ms] shadow-xs"
             title="Ask a question and search your vault for matching recipes"
           >
-            <Sparkles className="w-5 h-5 text-amber-400" />
+            <Sparkles className="w-5 h-5 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
             <span>Ask My Kitchen</span>
           </button>
 
@@ -269,10 +272,10 @@ export function VaultHeader({
           <button
             id="connect-local-vault-btn"
             onClick={onOpenConnectVaultModal}
-            className="hidden md:inline-flex items-center gap-2 px-4 min-h-[52px] text-base font-semibold rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition-colors duration-[140ms] shadow-xs"
+            className="hidden md:inline-flex items-center gap-2 px-4 min-h-[52px] text-base font-semibold rounded-lg bg-[var(--accent-subtle,rgba(245,158,11,0.12))] hover:bg-amber-500/20 text-[var(--text-primary,#F3F4F6)] border border-[var(--border-subtle,rgba(255,255,255,0.08))] transition-colors duration-[140ms] shadow-xs"
             title="Connect your recipe vault folder, import .md files, or drop recipes"
           >
-            <FolderOpen className="w-5 h-5 text-amber-400" />
+            <FolderOpen className="w-5 h-5 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
             <span>Connect Vault</span>
           </button>
         </div>
@@ -282,19 +285,19 @@ export function VaultHeader({
       <div className="max-w-7xl mx-auto kc-vault-surface pb-2.5 md:pb-3 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 md:gap-3">
         <div className="flex items-center gap-2">
           <div className="relative flex-1 sm:w-80">
-            <Search className="w-5 h-5 absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-500" />
+            <Search className="w-5 h-5 absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--text-muted,#6B7280)]" />
             <input
               id="recipe-search-input"
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search recipes, tags, ingredients..."
-              className="w-full pl-11 pr-10 h-[52px] md:h-14 text-base bg-[#0C0C0C] border border-white/10 rounded-lg text-gray-200 placeholder-gray-500 focus:border-amber-500/60 transition-colors duration-[140ms]"
+              className="w-full pl-11 pr-10 h-[52px] md:h-14 text-base bg-[var(--bg-root,#0C0C0C)] border border-[var(--border-subtle,rgba(255,255,255,0.08))] rounded-lg text-[var(--text-primary,#F3F4F6)] placeholder:text-[var(--text-muted,#6B7280)] focus:border-[var(--accent-text,#F59E0B)] transition-colors duration-[140ms]"
             />
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery('')}
-                className="absolute right-1 top-1/2 -translate-y-1/2 w-10 h-10 flex items-center justify-center text-base text-gray-500 hover:text-gray-300"
+                className="absolute right-1 top-1/2 -translate-y-1/2 w-10 h-10 flex items-center justify-center text-base text-[var(--text-muted,#6B7280)] hover:text-[var(--text-secondary,#9CA3AF)]"
                 aria-label="Clear search"
               >
                 ×
@@ -308,8 +311,8 @@ export function VaultHeader({
             aria-label={activeFilterCount > 0 ? `Filters (${activeFilterCount} active)` : 'Filters'}
             className={`relative flex items-center justify-center gap-1.5 sm:gap-2 w-12 h-12 md:w-auto md:h-auto md:px-4 md:min-h-[52px] text-base font-medium rounded-lg border transition-colors duration-[140ms] ${
               isFilterOpen || activeFilterCount > 0
-                ? 'bg-amber-500/10 border-amber-500/30 text-amber-300 font-semibold'
-                : 'bg-white/5 border-white/10 text-gray-300 hover:bg-white/10'
+                ? 'bg-[var(--accent-subtle,rgba(245,158,11,0.12))] border-[var(--border-subtle,rgba(255,255,255,0.08))] text-[var(--text-primary,#F3F4F6)] font-semibold'
+                : 'bg-[var(--bg-elevated,#1E1E1E)] border-[var(--border-subtle,rgba(255,255,255,0.08))] text-[var(--text-secondary,#9CA3AF)] hover:bg-[var(--bg-root,#0C0C0C)]'
             }`}
           >
             <SlidersHorizontal className="w-5 h-5 shrink-0" />

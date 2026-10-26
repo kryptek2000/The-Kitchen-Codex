@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { KitchenCodexMark } from './BrandMark';
 import { VaultSyncStatus } from '../types';
+import { describeVaultConnection } from '../core/vaultConnection';
 
 interface SideNavProps {
   activeTab: 'grid' | 'dataview' | 'mealplan' | 'shopping' | 'themes' | 'providers';
@@ -35,11 +36,13 @@ interface SideNavProps {
 }
 
 const navItem = (active: boolean) =>
-  `flex items-center gap-3 px-3 py-2 min-h-[44px] rounded-lg text-base font-medium transition-colors duration-[140ms] ${
+  `flex items-center gap-3 rounded-lg border px-3 py-2 text-[15px] font-medium transition-colors duration-[140ms] min-h-[44px] ${
     active
-      ? 'bg-white/10 text-amber-400 border border-white/10'
-      : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
+      ? 'border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--accent-subtle,rgba(245,158,11,0.12))] text-[var(--text-primary,#F3F4F6)]'
+      : 'border-transparent text-[var(--text-secondary,#9CA3AF)] hover:bg-[var(--bg-elevated,#1E1E1E)] hover:text-[var(--text-primary,#F3F4F6)]'
   }`;
+
+const sectionLabel = 'px-3 pb-1 pt-4 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted,#6B7280)]';
 
 export function SideNav({
   activeTab,
@@ -63,18 +66,38 @@ export function SideNav({
   // Vault as though it were the user's own data.
   const connectionState = vaultStatus.connectionState ?? (vaultStatus.isConnected ? 'connected' : 'starter');
   const needsReconnect = connectionState === 'reauthorization_required' || connectionState === 'permission_denied';
+  const isLiveVault = vaultStatus.isConnected && vaultStatus.accessType === 'filesystem_api';
+  const described = describeVaultConnection({
+    state: connectionState,
+    recipeCount,
+    noteCount,
+    rememberedVaultName: vaultStatus.rememberedVaultName,
+  });
+  const statusLine = needsReconnect
+    ? described.label
+    : vaultStatus.isConnected
+      ? `${isLiveVault ? 'Vault linked' : 'Recipes loaded'} · ${recipeCount} ${recipeCount === 1 ? 'recipe' : 'recipes'}${
+          noteCount > 0 ? ` · ${noteCount} ${noteCount === 1 ? 'note' : 'notes'}` : ''
+        }`
+      : `Starter vault · ${recipeCount} sample ${recipeCount === 1 ? 'recipe' : 'recipes'}`;
+  const statusTone = needsReconnect
+    ? 'text-[var(--text-primary,#F3F4F6)]'
+    : vaultStatus.isConnected
+      ? 'text-[var(--accent-text,#F59E0B)]'
+      : 'text-[var(--text-secondary,#9CA3AF)]';
 
   return (
-    <aside className="kc-app-rail hidden lg:flex flex-col shrink-0 border-r border-white/5 bg-[#111111] sticky top-0 h-screen">
-      <div className="px-4 py-4 flex items-center gap-3 border-b border-white/5">
+    <aside className="kc-app-rail sticky top-0 hidden h-screen shrink-0 flex-col border-r border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-header,#111111)] lg:flex">
+      <div className="flex items-center gap-3 border-b border-[var(--border-subtle,rgba(255,255,255,0.08))] px-4 py-4">
         <KitchenCodexMark size={40} decorative className="shrink-0" />
         <div className="min-w-0">
-          <div className="font-serif font-bold text-xl text-white leading-tight">The Kitchen Codex</div>
-          <div className="text-sm uppercase tracking-widest text-gray-500">My Recipe Vault</div>
+          <div className="font-serif text-xl font-semibold leading-tight text-[var(--text-primary,#F3F4F6)]">The Kitchen Codex</div>
+          <div className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-secondary,#9CA3AF)]">My Recipe Vault</div>
         </div>
       </div>
 
-      <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1" aria-label="Primary">
+      <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-3" aria-label="Primary">
+        <div className="px-3 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted,#6B7280)]">Library</div>
         <button id="nav-recipe-vault" aria-current={activeTab === 'grid' ? 'page' : undefined} className={navItem(activeTab === 'grid')} onClick={() => setActiveTab('grid')}>
           <LayoutGrid className="w-5 h-5" /> My Recipe Vault
         </button>
@@ -84,6 +107,7 @@ export function SideNav({
         <button id="nav-dataview-table" aria-current={activeTab === 'dataview' ? 'page' : undefined} className={navItem(activeTab === 'dataview')} onClick={() => setActiveTab('dataview')}>
           <LayoutGrid className="w-5 h-5" /> Dataview Table
         </button>
+        <div className="px-3 pb-1 pt-4 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted,#6B7280)]">Kitchen</div>
         <button id="nav-meal-planner" aria-current={activeTab === 'mealplan' ? 'page' : undefined} className={navItem(activeTab === 'mealplan')} onClick={() => setActiveTab('mealplan')}>
           <CalendarDays className="w-5 h-5" /> Meal Planner
         </button>
@@ -91,7 +115,7 @@ export function SideNav({
           <ShoppingCart className="w-5 h-5" /> Shopping List
         </button>
 
-        <div className="pt-4 pb-1 px-3 text-sm uppercase tracking-widest text-gray-600">Tools</div>
+        <div className="px-3 pb-1 pt-4 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted,#6B7280)]">Tools</div>
         <button id="nav-ai-studio" aria-current={activeTab === 'providers' ? 'page' : undefined} className={navItem(activeTab === 'providers')} onClick={() => setActiveTab('providers')}>
           <BrainCircuit className="w-5 h-5" /> AI Studio
         </button>
@@ -102,7 +126,7 @@ export function SideNav({
           <FolderOpen className="w-5 h-5" /> Vault Settings
         </button>
         <button className={navItem(false)} onClick={onOpenNewRecipeModal}>
-          <span className="w-5 h-5 inline-flex items-center justify-center text-amber-400">+</span> New Recipe
+          <span className="inline-flex h-5 w-5 items-center justify-center text-[var(--accent-text,#F59E0B)]" aria-hidden="true">+</span> New Recipe
         </button>
         <button className={navItem(false)} onClick={onOpenCreateForMe}>
           <span className="w-5 h-5 inline-flex items-center justify-center text-violet-400">✦</span> Create with SHISO
@@ -119,16 +143,16 @@ export function SideNav({
           )}
         </button>
 
-        <div className="pt-4 pb-1 px-3 text-sm uppercase tracking-widest text-gray-600">Companion</div>
+        <div className="px-3 pb-1 pt-4 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted,#6B7280)]">Companion</div>
         <button
           onClick={onShisoOpen}
-          className="w-full flex items-center gap-3 px-3 py-2 min-h-[44px] rounded-lg text-base font-medium text-teal-300 bg-teal-500/10 border border-teal-500/30 hover:bg-teal-500/20 transition-colors duration-[140ms]"
+          className="flex min-h-[44px] w-full items-center gap-3 rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-3 py-2 text-[15px] font-medium text-[var(--text-primary,#F3F4F6)] transition-colors duration-[140ms] hover:bg-[var(--bg-root,#0C0C0C)]"
         >
           <MessageCircle className="w-5 h-5" /> Chat with SHISO
         </button>
         <button
           onClick={onOpenAskMyKitchen}
-          className="w-full flex items-center gap-3 px-3 py-2 min-h-[44px] rounded-lg text-base font-medium text-amber-300 bg-amber-500/10 border border-amber-500/30 hover:bg-amber-500/20 transition-colors duration-[140ms]"
+          className="flex min-h-[44px] w-full items-center gap-3 rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--accent-subtle,rgba(245,158,11,0.12))] px-3 py-2 text-[15px] font-medium text-[var(--text-primary,#F3F4F6)] transition-colors duration-[140ms] hover:bg-[var(--bg-elevated,#1E1E1E)]"
         >
           <Settings className="w-5 h-5" /> Ask My Kitchen
         </button>
@@ -138,25 +162,24 @@ export function SideNav({
           the header strip and the gallery heading report. A note count is
           reported separately, and only when there are notes, so the two are
           never conflated (UD-2A.2). */}
-      <div id="sidenav-vault-status" className="px-3 py-3 border-t border-white/5 text-sm text-gray-500 space-y-1">
-        <div id="sidenav-vault-status-line" className={vaultStatus.isConnected ? 'text-emerald-400' : 'text-amber-400'}>
-          {vaultStatus.isConnected
-            ? `Vault linked · ${recipeCount} ${recipeCount === 1 ? 'recipe' : 'recipes'}${
-                noteCount > 0 ? ` · ${noteCount} ${noteCount === 1 ? 'note' : 'notes'}` : ''
-              }`
-            : `Starter vault · ${recipeCount} sample ${recipeCount === 1 ? 'recipe' : 'recipes'}`}
+      <div id="sidenav-vault-status" className="space-y-1 border-t border-[var(--border-subtle,rgba(255,255,255,0.08))] px-3 py-3 text-sm text-[var(--text-muted,#6B7280)]">
+        <div id="sidenav-vault-status-line" className={`${statusTone} truncate`} title={described.detail}>
+          {statusLine}
         </div>
         {needsReconnect && (
-          <button
-            id="sidenav-reconnect-vault-btn"
-            onClick={onReconnectVault}
-            className="text-amber-300 underline underline-offset-2 hover:text-amber-200 text-left"
-            title={vaultStatus.rememberedVaultName
-              ? `“${vaultStatus.rememberedVaultName}” is remembered — click to grant access and reconnect it.`
-              : 'Your Vault is remembered — click to grant access and reconnect it.'}
-          >
-            Reconnect your Vault
-          </button>
+          <>
+            <p className="text-[11px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">{described.detail}</p>
+            <button
+              id="sidenav-reconnect-vault-btn"
+              onClick={onReconnectVault}
+              className="min-h-[44px] text-left text-[12px] font-semibold text-[var(--accent-text,#F59E0B)] underline underline-offset-2 hover:text-[var(--text-primary,#F3F4F6)]"
+              title={vaultStatus.rememberedVaultName
+                ? `“${vaultStatus.rememberedVaultName}” is remembered — click to grant access and reconnect it.`
+                : 'Your Vault is remembered — click to grant access and reconnect it.'}
+            >
+              Reconnect your Vault
+            </button>
+          </>
         )}
       </div>
     </aside>
