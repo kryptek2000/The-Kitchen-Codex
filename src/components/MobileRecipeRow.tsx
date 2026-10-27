@@ -1,8 +1,9 @@
 import React, { useState, useCallback } from 'react';
-import { Clock, Users, Flame, Heart, Play, CalendarPlus } from 'lucide-react';
+import { CalendarPlus, Clock, Flame, Heart, ImageOff, Play, Users } from 'lucide-react';
 import { ObsidianRecipe } from '../types';
 import { getRecipeImage, LOCAL_RECIPE_IMAGE_PLACEHOLDER } from '../utils/imageHelper';
 import { useVaultImage } from '../hooks/useVaultImage';
+import { visibleRecipeTags } from '../utils/recipePresentation';
 
 interface MobileRecipeRowProps {
   recipe: ObsidianRecipe;
@@ -13,9 +14,9 @@ interface MobileRecipeRowProps {
 }
 
 /**
- * RV-2 mobile photo-and-text row: a compact 112px (104px narrow) photo beside
- * the full title, category, prep/cook and servings. Used beneath the featured
- * recipe on small screens.
+ * Compact Signature Edition shelf row for phones. The photograph keeps a
+ * portrait crop, the Fraunces title wraps rather than truncating, and the
+ * actions remain quiet text/icon controls with 44px targets.
  */
 export function MobileRecipeRow({
   recipe,
@@ -30,17 +31,23 @@ export function MobileRecipeRow({
 
   const defaultImg = getRecipeImage(recipe);
   const reactiveVaultImage = useVaultImage(recipe.image, defaultImg);
-  const imageUrl = imageError ? null : (reactiveVaultImage || defaultImg);
+  const imageUrl = imageError ? null : reactiveVaultImage || defaultImg;
 
   const hasExplicitImage =
     Boolean(recipe.image) ||
-    /!\[\[?[^\]]*\.(?:jpg|jpeg|png|webp|avif|gif|svg)\]\]?/i.test(recipe.rawMarkdown || '');
+    /!\[\[?[^\]]*\.(?:jpg|jpeg|png|webp|avif|gif|svg)\]\]?/i.test(recipe.rawMarkdown || '') ||
+    /!\[[^\]]*\]\([^\)]*\.(?:jpg|jpeg|png|webp|avif|gif|svg)\)/i.test(recipe.rawMarkdown || '');
 
-  const showPhoto = hasExplicitImage && !!imageUrl && imageUrl !== LOCAL_RECIPE_IMAGE_PLACEHOLDER && !imageError;
+  const showPhoto =
+    hasExplicitImage &&
+    !!imageUrl &&
+    imageUrl !== LOCAL_RECIPE_IMAGE_PLACEHOLDER &&
+    !imageError;
+  const { tags, remaining } = visibleRecipeTags(recipe.tags, 2);
 
   const handleToggleFavorite = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation();
+    (event: React.MouseEvent) => {
+      event.stopPropagation();
       onToggleFavorite(recipe.id);
       setAnnouncement(isFavorite ? 'Removed from favorites' : 'Added to favorites');
     },
@@ -51,78 +58,116 @@ export function MobileRecipeRow({
     <article
       id={`recipe-row-${recipe.id}`}
       onClick={() => onSelectRecipe(recipe)}
-      className="group flex gap-4 cursor-pointer"
+      className="group flex cursor-pointer gap-4"
     >
-      <div className="kc-vault-row-photo shrink-0 rounded-xl overflow-hidden bg-[#1b1b1b] relative">
+      <div className="kc-vault-row-photo relative shrink-0 overflow-hidden rounded-sm border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)]">
         {showPhoto ? (
           <img
             src={imageUrl as string}
             alt={recipe.title}
             referrerPolicy="no-referrer"
+            loading="lazy"
             onError={() => setImageError(true)}
-            className="w-full h-full object-cover"
+            className="h-full w-full object-cover"
           />
         ) : (
-          <div className="w-full h-full flex items-center justify-center text-sm text-gray-400 px-2 text-center bg-[var(--bg-elevated,#1E1E1E)]">
-            No photo added.
+          <div className="flex h-full w-full flex-col items-center justify-center gap-1.5 px-2 text-center">
+            <ImageOff
+              className="h-4 w-4 text-[var(--text-secondary,#9CA3AF)]"
+              strokeWidth={1.5}
+              aria-hidden="true"
+            />
+            <span className="text-[11px] leading-tight text-[var(--text-secondary,#9CA3AF)]">
+              No photo added.
+            </span>
           </div>
         )}
         <button
           onClick={handleToggleFavorite}
           aria-pressed={isFavorite}
           aria-label={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
-          className="kc-favorite-control absolute top-1.5 right-1.5 w-11 h-11 flex items-center justify-center rounded-full bg-black/60 border border-white/15 transition-colors duration-[140ms] motion-reduce:transition-none"
+          className="kc-favorite-control kc-photo-control absolute right-1.5 top-1.5 flex h-11 w-11 items-center justify-center rounded-full"
         >
-          <Heart className={`w-5 h-5 ${isFavorite ? 'fill-current' : ''}`} />
+          <Heart className={`h-5 w-5 ${isFavorite ? 'fill-current' : ''}`} />
         </button>
         <span className="sr-only" role="status" aria-live="polite">
           {announcement}
         </span>
       </div>
-      <div className="flex-1 min-w-0 space-y-1.5">
-        <p className="text-sm text-gray-400">
-          {recipe.cuisine} • {recipe.category}
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <p className="kc-eyebrow leading-[1.5] break-words">
+          {recipe.cuisine} · {recipe.category}
         </p>
-        <h3 className="kc-vault-row-title font-serif font-semibold leading-tight break-words">
+        <h3 className="kc-vault-row-title mt-1.5 font-serif font-medium text-[var(--text-primary,#F3F4F6)]">
           <button
             type="button"
             onClick={() => onSelectRecipe(recipe)}
-            className="text-left text-white rounded"
+            className="min-h-[44px] break-words text-left transition-colors duration-[140ms] group-hover:text-[var(--accent-text,#F59E0B)]"
           >
             {recipe.title}
           </button>
         </h3>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-gray-300 pt-0.5">
-          <span className="flex items-center gap-1">
-            <Clock className="w-3.5 h-3.5 text-gray-400" /> {recipe.prepTime || '—'}
-          </span>
-          <span className="flex items-center gap-1">
-            <Flame className="w-3.5 h-3.5 text-amber-400" /> {recipe.cookTime || '—'}
-          </span>
-          <span className="flex items-center gap-1">
-            <Users className="w-3.5 h-3.5 text-gray-400" /> {recipe.servings ? recipe.servings : '—'} serves
-          </span>
-        </div>
-        <div className="pt-1.5 flex items-center gap-2">
+        {tags.length > 0 && (
+          <ul
+            className="mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[10px] font-medium uppercase tracking-[0.1em] text-[var(--text-secondary,#9CA3AF)]"
+            aria-label="Recipe tags"
+          >
+            {tags.map((tag) => (
+              <li key={tag}>#{tag}</li>
+            ))}
+            {remaining > 0 ? <li>+{remaining}</li> : null}
+          </ul>
+        )}
+        <dl className="mt-auto flex flex-wrap items-center gap-x-4 gap-y-1 pt-2 text-[12px] text-[var(--text-secondary,#9CA3AF)]">
+          <div className="flex items-center gap-1.5">
+            <dt className="sr-only">Prep time</dt>
+            <Clock className="h-4 w-4 text-[var(--text-secondary,#9CA3AF)]" strokeWidth={1.75} aria-hidden="true" />
+            <dd>{recipe.prepTime || '—'}</dd>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <dt className="sr-only">Cook time</dt>
+            <Flame className="h-4 w-4 text-[var(--text-secondary,#9CA3AF)]" strokeWidth={1.75} aria-hidden="true" />
+            <dd>{recipe.cookTime || '—'}</dd>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <dt className="sr-only">Servings</dt>
+            <Users className="h-4 w-4 text-[var(--text-secondary,#9CA3AF)]" strokeWidth={1.75} aria-hidden="true" />
+            <dd>{recipe.servings ? recipe.servings : '—'}</dd>
+          </div>
+        </dl>
+
+        <div className="mt-2 flex items-center gap-1 border-t border-[var(--border-subtle,rgba(255,255,255,0.08))] pt-1">
           <button
-            onClick={(e) => {
-              e.stopPropagation();
+            onClick={(event) => {
+              event.stopPropagation();
               onAddToMealPlan(recipe);
             }}
             aria-label="Add to weekly meal plan"
-            className="w-11 h-11 flex items-center justify-center rounded-lg text-gray-400 hover:text-amber-300 hover:bg-white/5 transition-colors duration-[140ms]"
+            className="flex h-11 w-11 items-center justify-center rounded-sm text-[var(--text-secondary,#9CA3AF)] transition-colors duration-[140ms] hover:text-[var(--accent-text,#F59E0B)]"
             title="Add to Weekly Meal Plan"
           >
-            <CalendarPlus className="w-5 h-5" />
+            <CalendarPlus className="h-4 w-4" strokeWidth={1.75} />
           </button>
           <button
-            onClick={(e) => {
-              e.stopPropagation();
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onSelectRecipe(recipe);
+            }}
+            className="min-h-[44px] rounded-sm px-2 text-sm font-medium text-[var(--text-secondary,#9CA3AF)] transition-colors duration-[140ms] hover:text-[var(--text-primary,#F3F4F6)]"
+          >
+            Details
+          </button>
+          <button
+            onClick={(event) => {
+              event.stopPropagation();
               onStartCooking(recipe);
             }}
-            className="min-h-[44px] text-sm px-4 rounded-lg bg-amber-500 hover:bg-amber-400 text-black font-semibold transition-colors duration-[140ms]"
+            className="ml-auto inline-flex min-h-[44px] items-center gap-1.5 px-1 text-sm font-semibold text-[var(--accent-text,#F59E0B)] transition-colors duration-[140ms] hover:text-[var(--text-primary,#F3F4F6)]"
+            title="Open Cooking Mode"
           >
-            <Play className="w-4 h-4 fill-current inline mr-1.5" />
+            <Play className="h-4 w-4 fill-current" aria-hidden="true" />
             Cook
           </button>
         </div>

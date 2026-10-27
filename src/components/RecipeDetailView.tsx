@@ -436,11 +436,11 @@ export function RecipeDetailView({
                       className={`w-3.5 h-3.5 ${i < recipe.rating ? 'fill-amber-400 text-amber-400' : 'text-gray-600'}`}
                     />
                   ))}
-                  <span className="ml-1 text-white font-bold">{recipe.rating}.0</span>
+                  <span className="ml-1 kc-photo-overlay-text font-bold">{recipe.rating}.0</span>
                 </div>
               </div>
 
-              <h1 className="text-2xl sm:text-4xl font-serif font-bold text-white tracking-tight drop-shadow-md">
+              <h1 className="text-2xl sm:text-4xl font-serif font-bold kc-photo-overlay-text tracking-tight drop-shadow-md">
                 {recipe.title}
               </h1>
 
@@ -552,10 +552,10 @@ export function RecipeDetailView({
             >
               {getCalloutIcon(callout.type)}
               <div className="text-xs sm:text-sm">
-                <h4 className="font-bold mb-1 uppercase tracking-wide text-[11px]">
+                <h4 className="font-bold mb-1 uppercase tracking-wide text-[11px] text-[var(--text-primary,#F3F4F6)]">
                   {callout.title || `${callout.type.toUpperCase()}`}
                 </h4>
-                <p className="leading-relaxed whitespace-pre-wrap">{callout.content}</p>
+                <p className="leading-relaxed whitespace-pre-wrap text-[var(--text-primary,#F3F4F6)]">{callout.content}</p>
               </div>
             </div>
           ))}

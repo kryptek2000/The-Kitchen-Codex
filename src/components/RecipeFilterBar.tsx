@@ -41,7 +41,7 @@ export function RecipeFilterBar({
           <button
             id="reset-filters-btn"
             onClick={onResetFilters}
-            className="flex items-center gap-1 text-xs text-gray-400 hover:text-amber-400 transition-colors"
+            className="flex min-h-[44px] items-center gap-1 text-xs text-gray-400 hover:text-amber-400 transition-colors"
           >
             <RotateCcw className="w-3.5 h-3.5" />
             <span>Reset all filters</span>
@@ -67,7 +67,7 @@ export function RecipeFilterBar({
                       tag: isSelected ? null : tag,
                     }))
                   }
-                  className={`px-2.5 py-1 rounded-md text-xs transition-all font-mono ${
+                  className={`min-h-[44px] px-2.5 py-1 rounded-md text-xs transition-all font-mono ${
                     isSelected
                       ? 'bg-amber-500 text-black font-semibold shadow-xs'
                       : 'bg-white/5 text-gray-300 border border-white/10 hover:border-amber-500/40 hover:bg-white/10'
@@ -96,7 +96,7 @@ export function RecipeFilterBar({
                   cuisine: e.target.value || null,
                 }))
               }
-              className="w-full text-xs bg-[#141414] border border-white/10 rounded-lg p-1.5 text-gray-200 focus:border-amber-500/60 focus:outline-none"
+              className="w-full min-h-[44px] text-xs bg-[#141414] border border-white/10 rounded-lg px-2 py-1.5 text-gray-200 focus:border-amber-500/60 focus:outline-none"
             >
               <option value="" className="bg-[#141414] text-gray-300">All Cuisines</option>
               {availableCuisines.map((c) => (
@@ -121,7 +121,7 @@ export function RecipeFilterBar({
                   category: e.target.value || null,
                 }))
               }
-              className="w-full text-xs bg-[#141414] border border-white/10 rounded-lg p-1.5 text-gray-200 focus:border-amber-500/60 focus:outline-none"
+              className="w-full min-h-[44px] text-xs bg-[#141414] border border-white/10 rounded-lg px-2 py-1.5 text-gray-200 focus:border-amber-500/60 focus:outline-none"
             >
               <option value="" className="bg-[#141414] text-gray-300">All Categories</option>
               {availableCategories.map((cat) => (
@@ -146,7 +146,7 @@ export function RecipeFilterBar({
                   maxCookTime: e.target.value ? parseInt(e.target.value, 10) : null,
                 }))
               }
-              className="w-full text-xs bg-[#141414] border border-white/10 rounded-lg p-1.5 text-gray-200 focus:border-amber-500/60 focus:outline-none"
+              className="w-full min-h-[44px] text-xs bg-[#141414] border border-white/10 rounded-lg px-2 py-1.5 text-gray-200 focus:border-amber-500/60 focus:outline-none"
             >
               <option value="" className="bg-[#141414] text-gray-300">Any Duration</option>
               <option value="15" className="bg-[#141414] text-gray-300">≤ 15 mins (Super Fast)</option>
@@ -170,7 +170,7 @@ export function RecipeFilterBar({
                   difficulty: e.target.value || null,
                 }))
               }
-              className="w-full text-xs bg-[#141414] border border-white/10 rounded-lg p-1.5 text-gray-200 focus:border-amber-500/60 focus:outline-none"
+              className="w-full min-h-[44px] text-xs bg-[#141414] border border-white/10 rounded-lg px-2 py-1.5 text-gray-200 focus:border-amber-500/60 focus:outline-none"
             >
               <option value="" className="bg-[#141414] text-gray-300">All Difficulties</option>
               <option value="Easy" className="bg-[#141414] text-gray-300">Easy</option>
@@ -193,7 +193,7 @@ export function RecipeFilterBar({
                   sortBy: e.target.value as any,
                 }))
               }
-              className="w-full text-xs bg-[#141414] border border-white/10 rounded-lg p-1.5 text-gray-200 focus:border-amber-500/60 focus:outline-none"
+              className="w-full min-h-[44px] text-xs bg-[#141414] border border-white/10 rounded-lg px-2 py-1.5 text-gray-200 focus:border-amber-500/60 focus:outline-none"
             >
               <option value="title" className="bg-[#141414] text-gray-300">Title (A - Z)</option>
               <option value="rating" className="bg-[#141414] text-gray-300">Rating (Highest)</option>
@@ -213,7 +213,7 @@ export function RecipeFilterBar({
                   onlyFavorites: !prev.onlyFavorites,
                 }))
               }
-              className={`w-full flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg text-xs font-medium border transition-colors ${
+              className={`w-full min-h-[44px] flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg text-xs font-medium border transition-colors ${
                 filters.onlyFavorites
                   ? 'bg-amber-500/10 border-amber-500/30 text-amber-300 font-semibold'
                   : 'bg-[#141414] border-white/10 text-gray-300 hover:bg-white/5'

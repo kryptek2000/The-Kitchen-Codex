@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
+import { AlertTriangle, BookOpen, ChevronRight, FolderOpen, Globe2, Plus, RotateCcw, Search, SearchX, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import {
   ObsidianRecipe,
   VaultSyncStatus,
@@ -143,6 +144,7 @@ import {
 import { VaultHeader } from './components/VaultHeader';
 import { RecipeFilterBar } from './components/RecipeFilterBar';
 import { RecipeCard } from './components/RecipeCard';
+import { FeaturedRecipe } from './components/FeaturedRecipe';
 import { splitFeatured } from './utils/featuredRecipe';
 import { MobileRecipeRow } from './components/MobileRecipeRow';
 import { SideNav } from './components/SideNav';
@@ -763,10 +765,18 @@ export default function App() {
   }, [settingsAdapter]);
 
   // 3. UI Preferences to the SettingsAdapter (localStorage-backed)
-  useEffect(() => {
+  //
+  // The document element is the SINGLE theme scope. The previous composition
+  // also rendered `data-theme` on the application root, which meant a partial
+  // theme application (for example an external screenshot harness setting only
+  // `<html>`) left the root's semantic variables on the old palette while
+  // legacy class remaps switched to the new one. That is exactly how a dark
+  // page and a light-theme heading can end up in the same frame. Applying the
+  // attribute in a layout effect removes that split and prevents a first-paint
+  // flash.
+  useLayoutEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
-    // Keep the browser chrome (theme-color) in sync with the active theme so it
-    // is never stuck on another theme's color. Sourced from the theme config.
+    document.documentElement.style.colorScheme = theme === 'parchment' ? 'light' : 'dark';
     const meta = document.querySelector('meta[name="theme-color"]');
     if (meta) meta.setAttribute('content', themeBackgroundColor(theme));
     if (settingsHydrated) {
@@ -2125,13 +2135,46 @@ export default function App() {
   // search or filter is actually active, so the number is never printed twice.
   const vaultResultIsFiltered = Boolean(searchQuery) || activeFilterCount > 0;
 
+  // Deterministic featured selection is computed once for the spread and the
+  // editorial folio line. No recommendation logic or persisted pin is added.
+  const featuredSelection = useMemo(() => splitFeatured(filteredRecipes), [filteredRecipes]);
+  const featuredPosition = featuredSelection.featured
+    ? filteredRecipes.indexOf(featuredSelection.featured) + 1
+    : 0;
+
+  // The page introduction states the same connection truth as the header and
+  // sidebar. Starter recipes are never introduced as the owner's private Vault.
+  const vaultConnectionState = vaultStatus.connectionState ?? (vaultStatus.isConnected ? 'connected' : 'starter');
+  const vaultNeedsReconnect =
+    vaultConnectionState === 'reauthorization_required' || vaultConnectionState === 'permission_denied';
+  const liveFilesystemVault = vaultStatus.isConnected && vaultStatus.accessType === 'filesystem_api';
+  const vaultStateEyebrow =
+    vaultConnectionState === 'permission_denied'
+      ? 'Vault access denied'
+      : vaultConnectionState === 'reauthorization_required'
+        ? 'Vault awaiting access'
+        : vaultStatus.isConnected
+          ? liveFilesystemVault
+            ? 'Private vault'
+            : 'Imported collection'
+          : 'Starter collection';
+  const vaultIntroduction =
+    vaultConnectionState === 'permission_denied'
+      ? 'The browser refused access to your remembered Vault. Reconnect, or choose the folder again, to restore your own recipes.'
+      : vaultConnectionState === 'reauthorization_required'
+        ? 'Your Vault is remembered, but the browser needs your permission before its recipes can be shown.'
+        : vaultStatus.isConnected
+          ? liveFilesystemVault
+            ? 'Your saved recipes, gathered from the connected Vault.'
+            : 'Recipes loaded from your files for this session.'
+          : "Sample recipes from the Starter Vault. Connect your own folder whenever you're ready.";
+
   const vaultHealthSummary = useMemo(() => {
     return summarizeVaultHealth(recipes);
   }, [recipes]);
 
   return (
     <div
-      data-theme={theme}
       className="relative flex min-h-screen flex-col bg-[var(--bg-root,#0C0C0C)] font-sans text-[var(--text-primary,#F3F4F6)] transition-colors duration-200 selection:bg-amber-500/30 selection:text-amber-200 lg:flex-row"
       onDragOver={(e) => {
         e.preventDefault();
@@ -2182,7 +2225,7 @@ export default function App() {
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-xs flex flex-col items-center justify-center p-6 border-4 border-dashed border-amber-500 pointer-events-none">
           <div className="max-w-md rounded-2xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] p-8 text-center shadow-2xl">
             <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--accent-subtle,rgba(245,158,11,0.12))] text-[var(--accent-text,#F59E0B)] motion-safe:animate-bounce">
-              <span className="text-2xl font-bold">📂</span>
+              <FolderOpen className="h-8 w-8" strokeWidth={1.75} aria-hidden="true" />
             </div>
             <h3 className="mb-1 font-serif text-[20px] font-semibold text-[var(--text-primary,#F3F4F6)]">
               Drop Recipe Files or Folder
@@ -2198,7 +2241,7 @@ export default function App() {
       {vaultError && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[60] w-[calc(100%-2rem)] max-w-xl">
           <div className="flex items-start gap-3 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] border-l-[3px] border-l-[var(--accent-text,#F59E0B)] bg-[var(--bg-surface,#141414)] px-4 py-3 text-[var(--text-primary,#F3F4F6)] shadow-2xl">
-            <span className="text-base">⚠️</span>
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent-text,#F59E0B)]" strokeWidth={1.75} aria-hidden="true" />
             <p className="flex-1 text-[12px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">{vaultError}</p>
             <button
               onClick={clearVaultError}
@@ -2406,126 +2449,240 @@ export default function App() {
           />
           </>
         ) : activeTab === 'grid' ? (
-          /* Recipe Gallery View */
-          <div className="max-w-7xl mx-auto kc-vault-surface py-6 space-y-6">
-            {/* Gallery heading — a single result count. The previous design
-                printed the same number twice ("9 of 9 recipes" under the
-                heading AND "Showing 9 of 9 recipes" in a stats bar); the
-                filtered-result form is used only while a search or filter is
-                actually active. */}
-            <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
-              <div>
-                <h1 className="kc-vault-page-title font-serif font-semibold text-white">
-                  My Recipe Vault
-                </h1>
-                <p className="text-sm text-gray-400 mt-1">
-                  {vaultResultIsFiltered ? (
+          /* Vault page — Signature Edition reading order:
+             state · introduction · actions · search/filters · feature · shelf. */
+          <div id="vault-gallery-page" className="mx-auto w-full max-w-7xl kc-vault-surface pb-16">
+            <section
+              aria-labelledby="vault-page-title"
+              className="border-b border-[var(--border-subtle,rgba(255,255,255,0.08))] pb-6 pt-7 md:pb-7 md:pt-9"
+            >
+              <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+                <div className="max-w-3xl">
+                  <p className="kc-eyebrow flex items-center gap-2">
+                    <span className="h-px w-6 bg-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
+                    {vaultStateEyebrow}
+                  </p>
+                  <h1
+                    id="vault-page-title"
+                    className="kc-vault-page-title mt-3 font-serif font-medium text-[var(--text-primary,#F3F4F6)]"
+                  >
+                    My Recipe Vault
+                  </h1>
+                  <p className="mt-4 max-w-2xl text-[14px] leading-relaxed text-[var(--text-secondary,#9CA3AF)] md:text-[15px]">
+                    {vaultIntroduction}
+                  </p>
+                  {vaultNeedsReconnect && (
                     <>
-                      Showing <strong className="text-white">{filteredRecipes.length}</strong> of {recipes.length} recipes
-                    </>
-                  ) : (
-                    <>
-                      {recipes.length} {recipes.length === 1 ? 'recipe' : 'recipes'}
+                      <button
+                        type="button"
+                        onClick={handleReconnectVault}
+                        className="mt-4 inline-flex min-h-[44px] items-center gap-2 rounded-sm border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--accent-subtle,rgba(245,158,11,0.12))] px-3 text-sm font-semibold text-[var(--text-primary,#F3F4F6)] transition-colors duration-[140ms] hover:bg-amber-500/20"
+                      >
+                        <BookOpen className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
+                        Reconnect Vault
+                      </button>
+                      <div
+                        data-testid="starter-preview-banner"
+                        role="note"
+                        className="mt-5 max-w-2xl border-l-2 border-[var(--accent-text,#F59E0B)] bg-[var(--accent-subtle,rgba(245,158,11,0.12))] px-4 py-3"
+                      >
+                        <p className="text-[13px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
+                          <strong className="text-[var(--text-primary,#F3F4F6)]">Starter Vault preview.</strong>{' '}
+                          These are sample recipes, not the recipes in your remembered Vault. Reconnect to restore your own collection.
+                        </p>
+                      </div>
                     </>
                   )}
-                </p>
+                </div>
+
+                <div className="flex shrink-0 flex-wrap items-center gap-3">
+                  <button
+                    id="create-new-recipe-btn"
+                    type="button"
+                    onClick={() => {
+                      setEditingRecipe(null);
+                      setIsEditorOpen(true);
+                    }}
+                    className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-sm bg-[var(--accent,#F59E0B)] px-5 text-sm font-semibold text-[var(--accent-contrast,#0C0C0C)] transition-colors duration-[140ms] hover:bg-[var(--accent-hover,#D97706)]"
+                  >
+                    <Plus className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
+                    New Recipe Note
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsAskMyKitchenOpen(true)}
+                    className="hidden min-h-[48px] items-center justify-center gap-2 rounded-sm border border-[var(--border-subtle,rgba(255,255,255,0.08))] px-4 text-sm font-medium text-[var(--text-secondary,#9CA3AF)] transition-colors duration-[140ms] hover:border-[var(--accent-text,#F59E0B)] hover:text-[var(--accent-text,#F59E0B)] lg:inline-flex"
+                  >
+                    <Sparkles className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
+                    Ask My Kitchen
+                  </button>
+                </div>
               </div>
-              {searchQuery && (
-                <button
-                  onClick={() => setSearchQuery('')}
-                  className="self-start sm:self-auto text-sm text-amber-400 font-semibold hover:underline"
-                >
-                  Clear search: &quot;{searchQuery}&quot;
-                </button>
-              )}
-            </div>
+            </section>
+
+            <section
+              aria-label="Search and filter recipes"
+              className="border-b border-[var(--border-subtle,rgba(255,255,255,0.08))] py-3.5"
+            >
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div className="relative min-w-0 flex-1 sm:max-w-[600px]">
+                  <Search
+                    className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-secondary,#9CA3AF)]"
+                    strokeWidth={1.75}
+                    aria-hidden="true"
+                  />
+                  <input
+                    id="recipe-search-input"
+                    type="text"
+                    value={searchQuery}
+                    onChange={(event) => setSearchQuery(event.target.value)}
+                    placeholder="Search recipes, tags, ingredients…"
+                    aria-label="Search recipes"
+                    className="h-[52px] w-full rounded-sm border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] pl-10 pr-12 text-[15px] text-[var(--text-primary,#F3F4F6)] placeholder:text-[var(--text-secondary,#9CA3AF)] transition-colors duration-[140ms] focus:border-[var(--accent-text,#F59E0B)]"
+                  />
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchQuery('')}
+                      className="absolute right-0.5 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-sm text-[var(--text-secondary,#9CA3AF)] transition-colors hover:text-[var(--text-primary,#F3F4F6)]"
+                      aria-label="Clear search"
+                    >
+                      <X className="h-4 w-4" strokeWidth={1.75} />
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between gap-3 sm:justify-start">
+                  <button
+                    id="toggle-filters-btn"
+                    type="button"
+                    onClick={() => setIsFilterOpen((prev) => !prev)}
+                    aria-label={activeFilterCount > 0 ? `Filters (${activeFilterCount} active)` : 'Filters'}
+                    aria-expanded={isFilterOpen}
+                    className={`inline-flex min-h-[52px] items-center justify-center gap-2 rounded-sm border px-4 text-sm font-medium transition-colors duration-[140ms] ${
+                      isFilterOpen || activeFilterCount > 0
+                        ? 'border-[var(--accent-text,#F59E0B)] bg-[var(--accent-subtle,rgba(245,158,11,0.12))] text-[var(--text-primary,#F3F4F6)]'
+                        : 'border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] text-[var(--text-secondary,#9CA3AF)] hover:text-[var(--text-primary,#F3F4F6)]'
+                    }`}
+                  >
+                    <SlidersHorizontal className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
+                    Filters
+                    {activeFilterCount > 0 && (
+                      <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-[var(--accent,#F59E0B)] px-1 text-[10px] font-bold text-[var(--accent-contrast,#0C0C0C)]">
+                        {activeFilterCount}
+                      </span>
+                    )}
+                  </button>
+
+                  <p
+                    className="whitespace-nowrap text-[12px] font-medium uppercase tracking-[0.12em] text-[var(--text-secondary,#9CA3AF)]"
+                    aria-live="polite"
+                  >
+                    {vaultResultIsFiltered
+                      ? `Showing ${filteredRecipes.length} of ${recipes.length}`
+                      : `${recipes.length} ${recipes.length === 1 ? 'recipe' : 'recipes'}`}
+                  </p>
+                </div>
+              </div>
+            </section>
 
             {filteredRecipes.length === 0 ? (
-              <div className="bg-[#141414] rounded-2xl border border-dashed border-white/10 p-12 text-center space-y-3">
-                <div className="w-12 h-12 rounded-full bg-amber-500/10 text-amber-400 flex items-center justify-center mx-auto">
-                  <span className="text-xl">🔍</span>
+              <div className="mt-8 border border-dashed border-[var(--border-subtle,rgba(255,255,255,0.08))] px-6 py-16 text-center">
+                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-[var(--accent-subtle,rgba(245,158,11,0.12))] text-[var(--accent-text,#F59E0B)]">
+                  <SearchX className="h-5 w-5" strokeWidth={1.75} aria-hidden="true" />
                 </div>
-                <h3 className="font-serif font-bold text-base text-white">No matching recipes found</h3>
-                <p className="text-sm text-gray-400 max-w-sm mx-auto">
-                  Try adjusting your search terms, clearing active tag filters, or creating/importing new recipe markdown notes.
+                <h2 className="mt-5 font-serif text-3xl font-medium text-[var(--text-primary,#F3F4F6)]">
+                  No matching recipes found
+                </h2>
+                <p className="mx-auto mt-3 max-w-md text-sm leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
+                  Try adjusting your search terms, clearing active tag filters, or creating and importing new recipe notes.
                 </p>
-                <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+                <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
                   <button
+                    type="button"
                     onClick={() => {
                       setSearchQuery('');
                       setFilters(INITIAL_FILTERS);
                     }}
-                    className="px-4 py-2 min-h-[44px] bg-amber-500 hover:bg-amber-400 text-black rounded-xl text-sm font-bold transition-colors cursor-pointer"
+                    className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-sm bg-[var(--accent,#F59E0B)] px-4 text-sm font-semibold text-[var(--accent-contrast,#0C0C0C)] transition-colors hover:bg-[var(--accent-hover,#D97706)]"
                   >
+                    <RotateCcw className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
                     Reset All Filters
                   </button>
                   <button
+                    type="button"
                     onClick={() => setIsGrabberOpen(true)}
-                    className="px-4 py-2 min-h-[44px] bg-sky-500/10 hover:bg-sky-500/20 text-sky-300 border border-sky-500/30 rounded-xl text-sm font-bold transition-colors cursor-pointer"
+                    className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-sm border border-[var(--border-subtle,rgba(255,255,255,0.08))] px-4 text-sm font-medium text-[var(--text-secondary,#9CA3AF)] transition-colors hover:border-[var(--accent-text,#F59E0B)] hover:text-[var(--accent-text,#F59E0B)]"
                   >
-                    🌐 Grab Recipe from Web
+                    <Globe2 className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
+                    Grab Recipe from Web
                   </button>
                 </div>
               </div>
             ) : (
-              <>
-                {/* Featured recipe (deterministic: first eligible favorite, else first stable recipe) */}
-                {(() => {
-                  const { featured, rest } = splitFeatured(filteredRecipes);
-                  if (!featured) return null;
-                  return (
-                    <div id="recipe-gallery">
-                      {isDesktop ? (
-                        <div className="kc-vault-grid">
-                          <RecipeCard
-                            key={`featured-${featured.id}`}
-                            recipe={featured}
-                            featured
-                            onSelectRecipe={(r) => setSelectedRecipe(r)}
-                            onStartCooking={(r) => handleStartCooking(r)}
-                            onToggleFavorite={handleToggleFavorite}
-                            onAddToMealPlan={(r) => handleAddToMealPlan(r)}
-                          />
-                          {rest.map((recipe) => (
-                            <RecipeCard
-                              key={recipe.id}
-                              recipe={recipe}
-                              onSelectRecipe={(r) => setSelectedRecipe(r)}
-                              onStartCooking={(r) => handleStartCooking(r)}
-                              onToggleFavorite={handleToggleFavorite}
-                              onAddToMealPlan={(r) => handleAddToMealPlan(r)}
-                            />
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="space-y-5">
-                          <RecipeCard
-                            key={`mfeatured-${featured.id}`}
-                            recipe={featured}
-                            featured
-                            onSelectRecipe={(r) => setSelectedRecipe(r)}
-                            onStartCooking={(r) => handleStartCooking(r)}
-                            onToggleFavorite={handleToggleFavorite}
-                            onAddToMealPlan={(r) => handleAddToMealPlan(r)}
-                          />
-                          <div className="space-y-5">
-                            {rest.map((recipe) => (
-                              <MobileRecipeRow
-                                key={recipe.id}
-                                recipe={recipe}
-                                onSelectRecipe={(r) => setSelectedRecipe(r)}
-                                onStartCooking={(r) => handleStartCooking(r)}
-                                onToggleFavorite={handleToggleFavorite}
-                                onAddToMealPlan={(r) => handleAddToMealPlan(r)}
-                              />
-                            ))}
-                          </div>
-                        </div>
-                      )}
+              <div className="space-y-12 pt-7 md:space-y-16 md:pt-8">
+                {featuredSelection.featured && (
+                  <FeaturedRecipe
+                    key={`featured-${featuredSelection.featured.id}`}
+                    recipe={featuredSelection.featured}
+                    index={featuredPosition}
+                    total={filteredRecipes.length}
+                    onSelectRecipe={(recipe) => setSelectedRecipe(recipe)}
+                    onStartCooking={(recipe) => handleStartCooking(recipe)}
+                    onToggleFavorite={handleToggleFavorite}
+                    onAddToMealPlan={(recipe) => handleAddToMealPlan(recipe)}
+                  />
+                )}
+
+                {featuredSelection.rest.length > 0 && (
+                  <section aria-labelledby="recipe-shelf-heading">
+                    <div className="flex items-end justify-between gap-4 border-b border-[var(--border-subtle,rgba(255,255,255,0.08))] pb-4">
+                      <div>
+                        <p className="kc-eyebrow">The rest of the collection</p>
+                        <h2
+                          id="recipe-shelf-heading"
+                          className="kc-section-title mt-2 font-serif font-medium text-[var(--text-primary,#F3F4F6)]"
+                        >
+                          On the shelf
+                        </h2>
+                      </div>
+                      <p className="pb-1 text-[12px] font-medium uppercase tracking-[0.12em] text-[var(--text-secondary,#9CA3AF)]">
+                        {featuredSelection.rest.length}{' '}
+                        {featuredSelection.rest.length === 1 ? 'recipe' : 'recipes'}
+                      </p>
                     </div>
-                  );
-                })()}
-              </>
+
+                    {isDesktop ? (
+                      <div className="kc-vault-grid pt-7">
+                        {featuredSelection.rest.map((recipe) => (
+                          <RecipeCard
+                            key={recipe.id}
+                            recipe={recipe}
+                            onSelectRecipe={(item) => setSelectedRecipe(item)}
+                            onStartCooking={(item) => handleStartCooking(item)}
+                            onToggleFavorite={handleToggleFavorite}
+                            onAddToMealPlan={(item) => handleAddToMealPlan(item)}
+                          />
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-[var(--border-subtle,rgba(255,255,255,0.08))]">
+                        {featuredSelection.rest.map((recipe) => (
+                          <div key={recipe.id} className="py-5 first:pt-6">
+                            <MobileRecipeRow
+                              recipe={recipe}
+                              onSelectRecipe={(item) => setSelectedRecipe(item)}
+                              onStartCooking={(item) => handleStartCooking(item)}
+                              onToggleFavorite={handleToggleFavorite}
+                              onAddToMealPlan={(item) => handleAddToMealPlan(item)}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+                )}
+              </div>
             )}
           </div>
         ) : activeTab === 'dataview' ? (
@@ -2639,7 +2796,7 @@ export default function App() {
                 aria-label="Close More menu"
                 className="flex h-11 w-11 items-center justify-center rounded-lg text-[var(--text-secondary,#9CA3AF)] transition-colors hover:bg-[var(--bg-elevated,#1E1E1E)] hover:text-[var(--text-primary,#F3F4F6)]"
               >
-                ✕
+                <X className="h-5 w-5" strokeWidth={1.75} aria-hidden="true" />
               </button>
             </div>
             {[
@@ -2665,7 +2822,7 @@ export default function App() {
                 className="flex min-h-[48px] w-full items-center justify-between rounded-lg px-3 text-left text-[15px] text-[var(--text-primary,#F3F4F6)] transition-colors duration-[140ms] hover:bg-[var(--bg-elevated,#1E1E1E)]"
               >
                 <span>{item.label}</span>
-                <span aria-hidden="true" className="text-[18px] text-[var(--text-muted,#6B7280)]">›</span>
+                <ChevronRight className="h-4 w-4 text-[var(--text-muted,#6B7280)]" strokeWidth={1.75} aria-hidden="true" />
               </button>
             ))}
           </div>
