@@ -163,6 +163,7 @@ export function describeVaultConnection(input: {
 }): { label: string; detail: string; tone: 'connected' | 'starter' | 'attention' } {
   const { state, recipeCount, noteCount, rememberedVaultName } = input;
   const recipes = `${recipeCount} ${recipeCount === 1 ? 'recipe' : 'recipes'}`;
+  const sampleRecipes = `${recipeCount} sample ${recipeCount === 1 ? 'recipe' : 'recipes'}`;
   const notes = noteCount > 0 ? ` · ${noteCount} ${noteCount === 1 ? 'note' : 'notes'}` : '';
   const name = rememberedVaultName ? `“${rememberedVaultName}”` : 'your Vault';
 
@@ -171,20 +172,20 @@ export function describeVaultConnection(input: {
       return { label: `Vault linked · ${recipes}${notes}`, detail: 'Vault connected', tone: 'connected' };
     case 'reauthorization_required':
       return {
-        label: `Reconnect ${name} · ${recipes}`,
-        detail: `Your Vault is remembered but the browser needs permission to reopen ${name}.`,
+        label: `Reconnect ${name} · ${sampleRecipes}`,
+        detail: `Your Vault is remembered but not open. The recipes shown are the Starter Vault preview, not ${name}. Reconnect to restore your own collection.`,
         tone: 'attention',
       };
     case 'permission_denied':
       return {
-        label: `Vault access denied · ${recipes}`,
-        detail: `The browser refused access to ${name}. Reconnect, or pick the folder again.`,
+        label: `Vault access denied · ${sampleRecipes}`,
+        detail: `The browser refused access to ${name}. The recipes shown are the Starter Vault preview, not your Vault. Reconnect, or pick the folder again.`,
         tone: 'attention',
       };
     case 'starter':
     default:
       return {
-        label: `Starter vault · ${recipes}`,
+        label: `Starter vault · ${sampleRecipes}`,
         detail: 'Sample recipes — connect your own Vault to see your recipes.',
         tone: 'starter',
       };

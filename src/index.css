@@ -1,29 +1,72 @@
 @import "tailwindcss";
 
 /* =========================================================================
-   DESIGN TOKENS — Sol RV-2 / UD-1 type scale
+   SELF-HOSTED TYPEFACES
+   -------------------------------------------------------------------------
+   All three families are local so production can load them under the
+   `default-src 'self'` CSP. Latin subsets only; the previous Google Fonts
+   stylesheet also shipped only Latin for this interface language.
+   ========================================================================= */
+@font-face {
+  font-family: 'Fraunces';
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url('/fonts/fraunces-latin-roman.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Fraunces';
+  font-style: italic;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url('/fonts/fraunces-latin-italic.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Plus Jakarta Sans';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('/fonts/plus-jakarta-sans-latin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url('/fonts/jetbrains-mono-latin.woff2') format('woff2');
+}
+
+/* =========================================================================
+   DESIGN TOKENS — Signature Edition type scale
    -------------------------------------------------------------------------
    Tailwind v4 resolves the `font-serif` / `font-sans` / `font-mono`
-   utilities from these theme variables. The editorial serif MUST be declared
-   here rather than as a hand-written `.font-serif` rule inside `@layer base`:
-   Tailwind emits its own `.font-serif` utility in `@layer utilities`, and a
-   layered utility always beats a layered base rule, so a base-layer rule could
-   never take effect (the heading silently fell back to the generic `ui-serif`
-   stack). Declaring the token once in `@theme` makes the utility itself carry
-   Lora, and keeps one source of truth for every component.
+   utilities from these theme variables, keeping one source of truth.
+   Fraunces is the editorial voice; Plus Jakarta Sans remains the functional
+   interface face.
    ========================================================================= */
 @theme {
-  --font-serif: 'Lora', Georgia, Cambria, 'Times New Roman', Times, serif;
+  --font-serif: 'Fraunces', Georgia, Cambria, 'Times New Roman', Times, serif;
   --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 @layer base {
+  html,
+  body,
+  #root {
+    min-height: 100%;
+    background-color: var(--bg-root, #0C0C0C);
+  }
+
   body {
     font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     background-color: var(--bg-root, #0C0C0C);
     color: var(--text-primary, #E5E7EB);
     transition: background-color 0.25s ease, color 0.25s ease;
+  }
+
+  #root {
+    color: var(--text-primary, #E5E7EB);
   }
 
   /* =========================================================================
@@ -41,8 +84,8 @@
      not occupy.
 
      The value must be the header's own measured height, which is
-     content-driven (198px at the desktop rail, 253px in the stacked tablet
-     layout) and therefore cannot be a hard-coded constant. VaultHeader
+     content-driven (46px at the compact desktop rail, 130px in the stacked
+     tablet layout) and therefore cannot be a hard-coded constant. VaultHeader
      publishes it as `--kc-sticky-header-h`; when the header is not sticky the
      published value is 0, so mobile scrolling is unaffected and the compact
      mobile header still scrolls away with the content.
@@ -73,14 +116,16 @@ summary:focus-visible,
 }
 
 /* =========================================================================
-   VAULT RESPONSIVE COMPOSITION — Sol RV-2 approved breakpoints
+   VAULT RESPONSIVE COMPOSITION — Signature Edition
    -------------------------------------------------------------------------
-     ≥1200px     240px rail · 40px gutters · 4 tracks · featured spans 2
-                 24px horizontal / 36px vertical gap · 224px photographs
-     1024–1199px 216px rail · 28px gutters · 3 tracks · no featured span
-     768–1023px  32px gutters · 2 tracks · featured spans both · 272px photo
-     ≤767px      20px gutters (16px below 375) · 1 track · compact rows
-     ========================================================================= */
+     ≥1200px     240px rail · 40px gutters · 4-track supporting shelf
+     1024–1199px 216px rail · 28px gutters · 3-track supporting shelf
+     768–1023px  32px gutters · 2-track shelf · stacked editorial feature
+     ≤767px      20px gutters (16px below 375) · compact photo rows
+
+   The featured recipe is a full-width editorial spread, not a card spanning
+   shelf tracks. The supporting collection has its own, quieter hierarchy.
+   ========================================================================= */
 @layer components {
   /* Content gutters ------------------------------------------------------ */
   .kc-vault-surface {
@@ -116,17 +161,17 @@ summary:focus-visible,
     }
   }
 
-  /* Recipe shelf tracks --------------------------------------------------- */
+  /* Supporting recipe shelf ---------------------------------------------- */
   .kc-vault-grid {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
-    gap: 24px 20px;
+    gap: 36px 20px;
   }
 
   @media (min-width: 768px) {
     .kc-vault-grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 32px 24px;
+      gap: 40px 24px;
     }
   }
 
@@ -139,52 +184,162 @@ summary:focus-visible,
   @media (min-width: 1200px) {
     .kc-vault-grid {
       grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 36px 24px;
+      gap: 44px 24px;
     }
   }
 
-  /* Featured card placement ---------------------------------------------- */
-  .kc-vault-card--featured {
-    grid-column: span 1 / span 1;
+  /* Featured editorial spread -------------------------------------------- */
+  .kc-featured {
+    border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+    background: var(--bg-surface, #141414);
   }
 
-  @media (min-width: 768px) and (max-width: 1023.98px) {
-    .kc-vault-card--featured {
-      grid-column: span 2 / span 2;
-    }
+  .kc-featured__kicker {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+    padding: 12px 16px;
+    color: var(--text-secondary, #9CA3AF);
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.16em;
+    line-height: 1.4;
+    text-transform: uppercase;
   }
 
-  @media (min-width: 1200px) {
-    .kc-vault-card--featured {
-      grid-column: span 2 / span 2;
-    }
-  }
-
-  /* Photography ----------------------------------------------------------- */
-  .kc-vault-photo {
-    height: 224px;
-  }
-
-  .kc-vault-photo--featured {
-    height: 176px;
-  }
-
-  @media (min-width: 768px) and (max-width: 1023.98px) {
-    .kc-vault-photo--featured {
-      height: 272px;
+  @media (min-width: 768px) {
+    .kc-featured__kicker {
+      padding: 13px 24px;
     }
   }
 
   @media (min-width: 1024px) {
-    .kc-vault-photo--featured {
-      height: 224px;
+    .kc-featured__kicker {
+      padding: 14px 32px;
     }
+  }
+
+  .kc-featured__grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  @media (min-width: 1024px) {
+    .kc-featured__grid {
+      grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
+    }
+  }
+
+  .kc-featured__photo {
+    position: relative;
+    min-height: 340px;
+    overflow: hidden;
+    background: var(--bg-elevated, #1E1E1E);
+  }
+
+  .kc-featured__photo img {
+    position: absolute;
+    inset: 0;
+    height: 100%;
+    width: 100%;
+    object-fit: cover;
+  }
+
+  @media (min-width: 500px) {
+    .kc-featured__photo {
+      min-height: 440px;
+    }
+  }
+
+  @media (min-width: 768px) {
+    .kc-featured__photo {
+      min-height: 520px;
+    }
+  }
+
+  @media (min-width: 1024px) {
+    .kc-featured__photo {
+      min-height: 540px;
+    }
+  }
+
+  @media (min-width: 1200px) {
+    .kc-featured__photo {
+      min-height: 560px;
+    }
+  }
+
+  .kc-featured__panel {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 32px;
+    border-top: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+    padding: 28px 20px 24px;
+    container-type: inline-size;
+  }
+
+  @media (min-width: 768px) {
+    .kc-featured__panel {
+      gap: 40px;
+      padding: 40px 32px 32px;
+    }
+  }
+
+  @media (min-width: 1024px) {
+    .kc-featured__panel {
+      border-top: 0;
+      border-left: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+      padding: 40px 32px 32px;
+    }
+  }
+
+  @media (min-width: 1200px) {
+    .kc-featured__panel {
+      padding: 52px 44px 40px;
+    }
+  }
+
+  .kc-featured__title {
+    font-size: clamp(2.15rem, 10cqi, 3.4rem);
+    font-weight: 500;
+    letter-spacing: -0.028em;
+    line-height: 1.02;
+    overflow-wrap: anywhere;
+    text-wrap: balance;
+  }
+
+  @media (max-width: 374.98px) {
+    .kc-featured__title {
+      font-size: 34px;
+    }
+  }
+
+  .kc-eyebrow {
+    color: var(--text-secondary, #9CA3AF);
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.18em;
+    line-height: 1.5;
+    text-transform: uppercase;
+  }
+
+  /* Photography ----------------------------------------------------------- */
+  .kc-vault-photo {
+    aspect-ratio: 4 / 3;
+    width: 100%;
   }
 
   /* Editorial titles ------------------------------------------------------ */
   .kc-vault-title {
-    font-size: 22px;
-    line-height: 1.3;
+    font-size: 23px;
+    line-height: 1.18;
+    letter-spacing: -0.018em;
   }
 
   @media (min-width: 768px) and (max-width: 1023.98px) {
@@ -201,61 +356,44 @@ summary:focus-visible,
 
   @media (max-width: 374.98px) {
     .kc-vault-title {
-      font-size: 21px;
+      font-size: 22px;
     }
   }
 
-  .kc-vault-title--featured {
-    font-size: 27px;
-    line-height: 1.28;
-  }
-
-  @media (min-width: 768px) and (max-width: 1023.98px) {
-    .kc-vault-title--featured {
-      font-size: 30px;
-    }
-  }
-
-  @media (min-width: 1024px) and (max-width: 1199.98px) {
-    .kc-vault-title--featured {
-      font-size: 24px;
-    }
-  }
-
-  @media (min-width: 1200px) {
-    .kc-vault-title--featured {
-      font-size: 30px;
-    }
-  }
-
-  @media (max-width: 374.98px) {
-    .kc-vault-title--featured {
-      font-size: 26px;
-    }
-  }
-
-  /* Page heading ---------------------------------------------------------- */
+  /* Page introduction ----------------------------------------------------- */
   .kc-vault-page-title {
-    font-size: 32px;
-    line-height: 1.2;
-    letter-spacing: -0.02em;
+    font-size: 40px;
+    line-height: 1.02;
+    letter-spacing: -0.035em;
   }
 
   @media (max-width: 374.98px) {
     .kc-vault-page-title {
-      font-size: 30px;
+      font-size: 36px;
     }
   }
 
   @media (min-width: 768px) {
     .kc-vault-page-title {
-      font-size: 40px;
+      font-size: 52px;
     }
   }
 
   @media (min-width: 1024px) {
     .kc-vault-page-title {
-      font-size: 46px;
+      font-size: 56px;
+    }
+  }
+
+  .kc-section-title {
+    font-size: 30px;
+    line-height: 1.05;
+    letter-spacing: -0.025em;
+  }
+
+  @media (min-width: 768px) {
+    .kc-section-title {
+      font-size: 34px;
     }
   }
 
@@ -268,12 +406,14 @@ summary:focus-visible,
   @media (max-width: 374.98px) {
     .kc-vault-row-photo {
       width: 104px;
+      height: 140px;
     }
   }
 
   .kc-vault-row-title {
     font-size: 22px;
-    line-height: 1.28;
+    line-height: 1.18;
+    letter-spacing: -0.018em;
   }
 
   @media (max-width: 374.98px) {
@@ -304,6 +444,20 @@ summary:focus-visible,
 .kc-favorite-control {
   color: var(--text-secondary, #9CA3AF);
   transition: color 140ms ease, background-color 140ms ease;
+}
+
+/* A theme-aware photographic control. The old black/60 scrim made idle dark
+   theme icons hard to read; color-mix keeps the control legible on both white
+   cookbook paper and near-black canvases without introducing a fifth palette. */
+.kc-photo-control {
+  background: color-mix(in srgb, var(--bg-surface, #141414) 88%, transparent);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.16));
+  backdrop-filter: blur(8px);
+}
+
+.kc-photo-control:hover {
+  background: var(--bg-surface, #141414);
+  color: var(--accent-text, #F59E0B);
 }
 
 .kc-favorite-control:hover {
@@ -338,6 +492,9 @@ summary:focus-visible,
   --text-muted: #6B7280;
   --accent: #F59E0B;
   --accent-text: #F59E0B;
+  /* Ink placed on a filled accent surface. Part of the semantic accent role,
+     so primary actions never inherit a hard-coded black/white utility. */
+  --accent-contrast: #0C0C0C;
   --accent-hover: #D97706;
   --accent-subtle: rgba(245, 158, 11, 0.15);
   --border-subtle: rgba(255, 255, 255, 0.08);
@@ -367,6 +524,7 @@ summary:focus-visible,
   --text-muted: #78716C;
   --accent: #C2410C;
   --accent-text: #C2410C;
+  --accent-contrast: #FFFFFF;
   --accent-hover: #9A3412;
   --accent-subtle: rgba(194, 65, 12, 0.12);
   --border-subtle: rgba(40, 30, 20, 0.12);
@@ -490,6 +648,7 @@ summary:focus-visible,
   --text-muted: #6EE7B7;
   --accent: #10B981;
   --accent-text: #34D399;
+  --accent-contrast: #0A120F;
   --accent-hover: #059669;
   --accent-subtle: rgba(16, 185, 129, 0.15);
   --border-subtle: rgba(52, 211, 153, 0.14);
@@ -573,6 +732,7 @@ summary:focus-visible,
   --accent: #B72A3A;
   /* Brighter ember-leaning crimson for accent TEXT (AA on dark surfaces). */
   --accent-text: #D9665A;
+  --accent-contrast: #FFFFFF;
   --accent-hover: #9A2432;
   --accent-subtle: rgba(183, 42, 58, 0.16);
   --border-subtle: rgba(242, 236, 231, 0.09);
@@ -690,6 +850,19 @@ summary:focus-visible,
 
 [data-theme="blood-moon"] .hover\:bg-white\/10:hover {
   background-color: rgba(242, 236, 231, 0.12) !important;
+}
+
+/* =========================================================================
+   PHOTOGRAPHIC OVERLAY TEXT — Recipe Detail hero only
+   -------------------------------------------------------------------------
+   The recipe photograph always has a dark bottom gradient, so overlay text
+   must remain light even when a light theme remaps the ordinary .text-white
+   utility to a dark colour. The selector is intentionally more specific than
+   [data-theme="..."] .text-white and is scoped to this class, so ordinary
+   page content and approved theme palettes are unaffected.
+   ========================================================================= */
+html[data-theme] .kc-photo-overlay-text {
+  color: #FFFFFF !important;
 }
 
 /* =========================================================================

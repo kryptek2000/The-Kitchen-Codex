@@ -1,16 +1,17 @@
-import React, { useState, useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
-  Clock,
-  Users,
-  Flame,
-  Star,
-  Heart,
-  Play,
   CalendarPlus,
+  Clock,
+  Flame,
+  Heart,
+  ImageOff,
+  Play,
+  Users,
 } from 'lucide-react';
 import { ObsidianRecipe } from '../types';
 import { getRecipeImage, LOCAL_RECIPE_IMAGE_PLACEHOLDER } from '../utils/imageHelper';
 import { useVaultImage } from '../hooks/useVaultImage';
+import { visibleRecipeTags } from '../utils/recipePresentation';
 
 interface RecipeCardProps {
   recipe: ObsidianRecipe;
@@ -18,20 +19,15 @@ interface RecipeCardProps {
   onStartCooking: (recipe: ObsidianRecipe) => void;
   onToggleFavorite: (recipeId: string) => void;
   onAddToMealPlan: (recipe: ObsidianRecipe) => void;
-  /** When true, the card spans two tracks (featured). */
-  featured?: boolean;
 }
 
 /**
- * RV-2 editorial recipe card.
+ * Signature Edition shelf card.
  *
- * - Unobscured photography: the photo is a clean image with no text overlays.
- * - Honest no-photo treatment: when a recipe has no explicit image, a neutral
- *   note surface with "No photo added." is shown instead of a stock photo.
- * - Titles wrap naturally (no truncation / fixed title height).
- * - Prep + cook + explicit servings are shown.
- * - Favorites are accessible: 44px target, aria-pressed, live announcement.
- * - Strong keyboard focus: visible outer ring, Enter/Space activates.
+ * Photography and the recipe name lead. Metadata is quiet and consistent, tags
+ * lose their solid pill treatment, and the actions are a restrained text row
+ * rather than competing filled buttons. Every interaction and accessible name
+ * from the previous card is preserved, and every target is at least 44px.
  */
 export function RecipeCard({
   recipe,
@@ -39,7 +35,6 @@ export function RecipeCard({
   onStartCooking,
   onToggleFavorite,
   onAddToMealPlan,
-  featured = false,
 }: RecipeCardProps) {
   const isFavorite = !!recipe.isFavorite;
   const [imageError, setImageError] = useState(false);
@@ -47,185 +42,161 @@ export function RecipeCard({
 
   const defaultImg = getRecipeImage(recipe);
   const reactiveVaultImage = useVaultImage(recipe.image, defaultImg);
-  const imageUrl = imageError ? null : (reactiveVaultImage || defaultImg);
+  const imageUrl = imageError ? null : reactiveVaultImage || defaultImg;
 
   const hasExplicitImage =
     Boolean(recipe.image) ||
     /!\[\[?[^\]]*\.(?:jpg|jpeg|png|webp|avif|gif|svg)\]\]?/i.test(recipe.rawMarkdown || '') ||
     /!\[[^\]]*\]\([^\)]*\.(?:jpg|jpeg|png|webp|avif|gif|svg)\)/i.test(recipe.rawMarkdown || '');
 
-  const showPhoto = hasExplicitImage && !!imageUrl && imageUrl !== LOCAL_RECIPE_IMAGE_PLACEHOLDER && !imageError;
+  const showPhoto =
+    hasExplicitImage &&
+    !!imageUrl &&
+    imageUrl !== LOCAL_RECIPE_IMAGE_PLACEHOLDER &&
+    !imageError;
+  const { tags, remaining } = visibleRecipeTags(recipe.tags, 3);
 
   const handleToggleFavorite = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation();
+    (event: React.MouseEvent) => {
+      event.stopPropagation();
       onToggleFavorite(recipe.id);
       setAnnouncement(isFavorite ? 'Removed from favorites' : 'Added to favorites');
     },
     [isFavorite, onToggleFavorite, recipe.id]
   );
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        onSelectRecipe(recipe);
-      }
-    },
-    [onSelectRecipe, recipe]
-  );
-
-  const difficultyColors = {
-    Easy: 'bg-emerald-950/80 text-emerald-300 border-emerald-700/60',
-    Medium: 'bg-amber-950/80 text-amber-300 border-amber-700/60',
-    Hard: 'bg-rose-950/80 text-rose-300 border-rose-700/60',
-  };
-
   return (
     <article
       id={`recipe-card-${recipe.id}`}
       onClick={() => onSelectRecipe(recipe)}
-      className={`group bg-[#141414] rounded-xl border border-white/5 hover:border-amber-500/40 hover:bg-[#181818] transition-colors duration-[140ms] flex flex-col overflow-hidden cursor-pointer motion-reduce:transition-none ${
-        featured ? 'kc-vault-card--featured' : ''
-      }`}
+      className="group flex cursor-pointer flex-col"
     >
-      <div className="flex-1 flex flex-col">
-        {/* Photo — clean, unobscured */}
-        <div
-          className={`relative w-full overflow-hidden bg-[#0C0C0C] ${
-            featured ? 'kc-vault-photo--featured' : 'kc-vault-photo'
-          }`}
-        >
-          {showPhoto ? (
-            <img
-              src={imageUrl as string}
-              alt={recipe.title}
-              referrerPolicy="no-referrer"
-              onError={() => setImageError(true)}
-              className="w-full h-full object-cover group-hover:scale-[1.018] transition-transform duration-[220ms] motion-reduce:transition-none motion-reduce:transform-none"
+      <div className="kc-vault-photo relative overflow-hidden rounded-sm border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)]">
+        {showPhoto ? (
+          <img
+            src={imageUrl as string}
+            alt={recipe.title}
+            referrerPolicy="no-referrer"
+            loading="lazy"
+            onError={() => setImageError(true)}
+            className="h-full w-full object-cover transition-transform duration-[400ms] ease-out group-hover:scale-[1.025] motion-reduce:transform-none motion-reduce:transition-none"
+          />
+        ) : (
+          <div className="flex h-full w-full flex-col items-center justify-center gap-2 px-4 text-center">
+            <ImageOff
+              className="h-5 w-5 text-[var(--text-secondary,#9CA3AF)]"
+              strokeWidth={1.5}
+              aria-hidden="true"
             />
-          ) : (
-            <div className="w-full h-full flex flex-col items-center justify-center gap-2 bg-[var(--bg-elevated,#1E1E1E)] text-gray-400">
-              <span className="text-sm font-medium">No photo added.</span>
-            </div>
-          )}
-
-          {/* Favorite control overlaid on photo corner (44px target).
-              Colour comes from the active theme's semantic roles — idle heart
-              uses the secondary text colour, the selected heart uses
-              accent-text and fills the glyph. */}
-          <button
-            id={`favorite-btn-${recipe.id}`}
-            onClick={handleToggleFavorite}
-            aria-pressed={isFavorite}
-            aria-label={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
-            className="kc-favorite-control absolute top-2 right-2 w-11 h-11 flex items-center justify-center rounded-full bg-black/60 backdrop-blur-sm hover:bg-black/80 border border-white/15 transition-colors duration-[140ms] motion-reduce:transition-none"
-          >
-            <Heart className={`w-5 h-5 ${isFavorite ? 'fill-current' : ''}`} />
-          </button>
-          <span className="sr-only" role="status" aria-live="polite">
-            {announcement}
-          </span>
-        </div>
-
-        {/* Caption — open editorial surface, no widget panel. The caption
-            stretches so metadata aligns across a shelf row. */}
-        <div className="p-4 sm:p-5 space-y-2 flex-1 flex flex-col">
-          <p className="text-sm text-gray-400">
-            {recipe.cuisine} • {recipe.category}
-          </p>
-
-          <h3
-            className={`font-serif font-semibold leading-tight break-words ${
-              featured ? 'kc-vault-title--featured' : 'kc-vault-title'
-            }`}
-          >
-            <button
-              type="button"
-              onClick={() => onSelectRecipe(recipe)}
-              className="text-left text-white group-hover:text-amber-300 transition-colors duration-[140ms] rounded min-h-[44px]"
-            >
-              {recipe.title}
-            </button>
-          </h3>
-
-          {recipe.tags && recipe.tags.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              {recipe.tags.slice(0, 3).map((tag) => (
-                <span
-                  key={tag}
-                  className="text-sm font-mono px-2 py-0.5 rounded bg-white/5 text-amber-300 border border-white/10"
-                >
-                  #{tag}
-                </span>
-              ))}
-              {recipe.tags.length > 3 && (
-                <span className="text-sm text-gray-400">+{recipe.tags.length - 3}</span>
-              )}
-            </div>
-          )}
-
-          <div className="grid grid-cols-3 gap-3 py-2 text-sm text-gray-400 mt-auto">
-            <div className="flex flex-col">
-              <span className="flex items-center gap-1 text-sm uppercase tracking-wide">
-                <Clock className="w-3.5 h-3.5" /> Prep
-              </span>
-              <span className="font-medium text-gray-200 text-sm mt-0.5">
-                {recipe.prepTime || '—'}
-              </span>
-            </div>
-            <div className="flex flex-col">
-              <span className="flex items-center gap-1 text-sm uppercase tracking-wide">
-                <Flame className="w-3.5 h-3.5 text-amber-400" /> Cook
-              </span>
-              <span className="font-medium text-gray-200 text-sm mt-0.5">
-                {recipe.cookTime || '—'}
-              </span>
-            </div>
-            <div className="flex flex-col">
-              <span className="flex items-center gap-1 text-sm uppercase tracking-wide">
-                <Users className="w-3.5 h-3.5" /> Serves
-              </span>
-              <span className="font-medium text-gray-200 text-sm mt-0.5">
-                {recipe.servings ? recipe.servings : '—'}
-              </span>
-            </div>
+            <span className="text-sm text-[var(--text-secondary,#9CA3AF)]">No photo added.</span>
           </div>
+        )}
 
+        <button
+          id={`favorite-btn-${recipe.id}`}
+          onClick={handleToggleFavorite}
+          aria-pressed={isFavorite}
+          aria-label={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+          className="kc-favorite-control kc-photo-control absolute right-3 top-3 flex h-11 w-11 items-center justify-center rounded-full"
+        >
+          <Heart className={`h-5 w-5 ${isFavorite ? 'fill-current' : ''}`} />
+        </button>
+        <span className="sr-only" role="status" aria-live="polite">
+          {announcement}
+        </span>
+      </div>
+
+      <div className="flex flex-1 flex-col pt-4">
+        <p className="kc-eyebrow leading-[1.5] break-words">
+          {recipe.cuisine} · {recipe.category}
+        </p>
+
+        <h3 className="kc-vault-title mt-2 font-serif font-medium text-[var(--text-primary,#F3F4F6)]">
+          <button
+            type="button"
+            onClick={() => onSelectRecipe(recipe)}
+            className="min-h-[44px] break-words text-left transition-colors duration-[140ms] group-hover:text-[var(--accent-text,#F59E0B)]"
+          >
+            {recipe.title}
+          </button>
+        </h3>
+
+        {tags.length > 0 && (
+          <ul
+            className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-medium uppercase tracking-[0.1em] text-[var(--text-secondary,#9CA3AF)]"
+            aria-label="Recipe tags"
+          >
+            {tags.map((tag) => (
+              <li key={tag}>#{tag}</li>
+            ))}
+            {remaining > 0 ? <li>+{remaining}</li> : null}
+          </ul>
+        )}
+
+        <div className="mt-auto pt-5">
+          <dl className="grid grid-cols-3 gap-2 border-t border-[var(--border-subtle,rgba(255,255,255,0.08))] pt-3 pb-1 text-[var(--text-secondary,#9CA3AF)]">
+            <div>
+              <dt className="flex items-center gap-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-[var(--text-secondary,#9CA3AF)]">
+                <Clock className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" /> Prep
+              </dt>
+              <dd className="mt-1 text-[13px] font-medium text-[var(--text-primary,#F3F4F6)]">
+                {recipe.prepTime || '—'}
+              </dd>
+            </div>
+            <div>
+              <dt className="flex items-center gap-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-[var(--text-secondary,#9CA3AF)]">
+                <Flame className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" /> Cook
+              </dt>
+              <dd className="mt-1 text-[13px] font-medium text-[var(--text-primary,#F3F4F6)]">
+                {recipe.cookTime || '—'}
+              </dd>
+            </div>
+            <div>
+              <dt className="flex items-center gap-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-[var(--text-secondary,#9CA3AF)]">
+                <Users className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" /> Serves
+              </dt>
+              <dd className="mt-1 text-[13px] font-medium text-[var(--text-primary,#F3F4F6)]">
+                {recipe.servings ? recipe.servings : '—'}
+              </dd>
+            </div>
+          </dl>
         </div>
       </div>
 
-      {/* Footer */}
-      <div className="px-4 sm:px-5 py-2.5 border-t border-white/5 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1">
+      <div className="mt-2 flex items-center justify-between gap-2 border-t border-[var(--border-subtle,rgba(255,255,255,0.08))]">
+        <div className="flex items-center">
           <button
             id={`mealplan-btn-${recipe.id}`}
-            onClick={(e) => {
-              e.stopPropagation();
+            onClick={(event) => {
+              event.stopPropagation();
               onAddToMealPlan(recipe);
             }}
-            className="w-11 h-11 flex items-center justify-center rounded-lg text-gray-400 hover:text-amber-300 hover:bg-white/5 transition-colors duration-[140ms]"
+            className="flex h-11 w-11 items-center justify-center rounded-sm text-[var(--text-secondary,#9CA3AF)] transition-colors duration-[140ms] hover:text-[var(--accent-text,#F59E0B)]"
             title="Add to Weekly Meal Plan"
             aria-label="Add to meal plan"
           >
-            <CalendarPlus className="w-5 h-5" />
+            <CalendarPlus className="h-4 w-4" strokeWidth={1.75} />
           </button>
           <button
-            onClick={() => onSelectRecipe(recipe)}
-            className="min-h-[44px] text-sm font-medium text-gray-400 hover:text-gray-100 px-3 rounded hover:bg-white/5 transition-colors duration-[140ms]"
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onSelectRecipe(recipe);
+            }}
+            className="min-h-[44px] rounded-sm px-2 text-sm font-medium text-[var(--text-secondary,#9CA3AF)] transition-colors duration-[140ms] hover:text-[var(--text-primary,#F3F4F6)]"
           >
             Details
           </button>
         </div>
         <button
           id={`start-cooking-btn-${recipe.id}`}
-          onClick={(e) => {
-            e.stopPropagation();
+          onClick={(event) => {
+            event.stopPropagation();
             onStartCooking(recipe);
           }}
-          className="flex items-center gap-1.5 min-h-[44px] px-4 rounded-lg bg-amber-500/90 hover:bg-amber-500 text-black text-sm font-semibold transition-colors duration-[140ms]"
+          className="inline-flex min-h-[44px] items-center gap-1.5 px-1 text-sm font-semibold text-[var(--accent-text,#F59E0B)] transition-colors duration-[140ms] hover:text-[var(--text-primary,#F3F4F6)]"
         >
-          <Play className="w-4 h-4 fill-current" />
+          <Play className="h-4 w-4 fill-current" aria-hidden="true" />
           <span>Cook Mode</span>
         </button>
       </div>

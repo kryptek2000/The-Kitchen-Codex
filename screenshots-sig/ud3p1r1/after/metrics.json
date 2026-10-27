@@ -1,0 +1,891 @@
+{
+  "themes": {
+    "obsidian": {
+      "theme": "obsidian",
+      "documentTheme": "obsidian",
+      "htmlBackground": "rgb(12, 12, 12)",
+      "bodyBackground": "rgb(12, 12, 12)",
+      "appBackground": "rgb(12, 12, 12)",
+      "heading": {
+        "fontFamily": "Fraunces, Georgia, Cambria, \"Times New Roman\", Times, serif",
+        "fontSize": "56px",
+        "color": "rgb(243, 244, 246)"
+      },
+      "hero": {
+        "title": "Artisan Sourdough Boule",
+        "fontFamily": "Fraunces, Georgia, Cambria, \"Times New Roman\", Times, serif",
+        "titleFontSize": "42.5281px",
+        "width": 1120,
+        "height": 605,
+        "photoHeight": 560
+      },
+      "headerHeight": 46,
+      "shelfCardCount": 8,
+      "pairs": {
+        "pageTitle": {
+          "fg": "rgb(243, 244, 246)",
+          "bg": "rgb(12, 12, 12)",
+          "ratio": 17.77
+        },
+        "pageIntro": {
+          "fg": "rgb(156, 163, 175)",
+          "bg": "rgb(12, 12, 12)",
+          "ratio": 7.7
+        },
+        "heroKicker": {
+          "fg": "rgb(156, 163, 175)",
+          "bg": "rgb(20, 20, 20)",
+          "ratio": 7.26
+        },
+        "heroTitle": {
+          "fg": "rgb(243, 244, 246)",
+          "bg": "rgb(20, 20, 20)",
+          "ratio": 16.74
+        },
+        "heroTags": {
+          "fg": "rgb(156, 163, 175)",
+          "bg": "rgb(20, 20, 20)",
+          "ratio": 7.26
+        },
+        "heroMetaLabel": {
+          "fg": "rgb(156, 163, 175)",
+          "bg": "rgb(20, 20, 20)",
+          "ratio": 7.26
+        },
+        "heroMetaValue": {
+          "fg": "rgb(243, 244, 246)",
+          "bg": "rgb(20, 20, 20)",
+          "ratio": 16.74
+        },
+        "shelfTitle": {
+          "fg": "rgb(243, 244, 246)",
+          "bg": "rgb(12, 12, 12)",
+          "ratio": 17.77
+        },
+        "shelfCategory": {
+          "fg": "rgb(156, 163, 175)",
+          "bg": "rgb(12, 12, 12)",
+          "ratio": 7.7
+        },
+        "shelfTags": {
+          "fg": "rgb(156, 163, 175)",
+          "bg": "rgb(12, 12, 12)",
+          "ratio": 7.7
+        },
+        "shelfMetaLabel": {
+          "fg": "rgb(156, 163, 175)",
+          "bg": "rgb(12, 12, 12)",
+          "ratio": 7.7
+        },
+        "primaryButton": {
+          "fg": "rgb(12, 12, 12)",
+          "bg": "rgb(245, 158, 11)",
+          "ratio": 9.11
+        },
+        "secondaryButton": {
+          "fg": "rgb(243, 244, 246)",
+          "bg": "rgb(20, 20, 20)",
+          "ratio": 16.74
+        },
+        "searchText": {
+          "fg": "rgb(243, 244, 246)",
+          "bg": "rgb(20, 20, 20)",
+          "ratio": 16.74
+        },
+        "searchPlaceholder": {
+          "fg": "rgb(156, 163, 175)",
+          "bg": "rgb(20, 20, 20)",
+          "ratio": 7.26
+        },
+        "statusStrip": {
+          "fg": "rgb(156, 163, 175)",
+          "bg": "rgb(12, 12, 12)",
+          "ratio": 7.7
+        },
+        "sidebarNav": {
+          "fg": "rgb(243, 244, 246)",
+          "bg": "rgb(17, 17, 17)",
+          "ratio": 17.16
+        }
+      },
+      "metadataIconSizes": {
+        "hero": [
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "shelf": [
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "sidebar": [
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          }
+        ]
+      },
+      "touchTargetViolations": [],
+      "touchTargetCount": 65,
+      "scrollWidth": 1440,
+      "clientWidth": 1440,
+      "fonts": {
+        "fraunces": true,
+        "jakarta": true,
+        "jetbrains": true
+      },
+      "accentText": "#F59E0B",
+      "accentContrast": "#0C0C0C"
+    },
+    "parchment": {
+      "theme": "parchment",
+      "documentTheme": "parchment",
+      "htmlBackground": "rgb(246, 243, 235)",
+      "bodyBackground": "rgb(246, 243, 235)",
+      "appBackground": "rgb(246, 243, 235)",
+      "heading": {
+        "fontFamily": "Fraunces, Georgia, Cambria, \"Times New Roman\", Times, serif",
+        "fontSize": "56px",
+        "color": "rgb(28, 25, 23)"
+      },
+      "hero": {
+        "title": "Artisan Sourdough Boule",
+        "fontFamily": "Fraunces, Georgia, Cambria, \"Times New Roman\", Times, serif",
+        "titleFontSize": "42.5281px",
+        "width": 1120,
+        "height": 605,
+        "photoHeight": 560
+      },
+      "headerHeight": 46,
+      "shelfCardCount": 8,
+      "pairs": {
+        "pageTitle": {
+          "fg": "rgb(28, 25, 23)",
+          "bg": "rgb(246, 243, 235)",
+          "ratio": 15.77
+        },
+        "pageIntro": {
+          "fg": "rgb(87, 83, 78)",
+          "bg": "rgb(246, 243, 235)",
+          "ratio": 6.88
+        },
+        "heroKicker": {
+          "fg": "rgb(87, 83, 78)",
+          "bg": "rgb(255, 255, 255)",
+          "ratio": 7.63
+        },
+        "heroTitle": {
+          "fg": "rgb(28, 25, 23)",
+          "bg": "rgb(255, 255, 255)",
+          "ratio": 17.49
+        },
+        "heroTags": {
+          "fg": "rgb(87, 83, 78)",
+          "bg": "rgb(255, 255, 255)",
+          "ratio": 7.63
+        },
+        "heroMetaLabel": {
+          "fg": "rgb(87, 83, 78)",
+          "bg": "rgb(255, 255, 255)",
+          "ratio": 7.63
+        },
+        "heroMetaValue": {
+          "fg": "rgb(28, 25, 23)",
+          "bg": "rgb(255, 255, 255)",
+          "ratio": 17.49
+        },
+        "shelfTitle": {
+          "fg": "rgb(28, 25, 23)",
+          "bg": "rgb(246, 243, 235)",
+          "ratio": 15.77
+        },
+        "shelfCategory": {
+          "fg": "rgb(87, 83, 78)",
+          "bg": "rgb(246, 243, 235)",
+          "ratio": 6.88
+        },
+        "shelfTags": {
+          "fg": "rgb(87, 83, 78)",
+          "bg": "rgb(246, 243, 235)",
+          "ratio": 6.88
+        },
+        "shelfMetaLabel": {
+          "fg": "rgb(87, 83, 78)",
+          "bg": "rgb(246, 243, 235)",
+          "ratio": 6.88
+        },
+        "primaryButton": {
+          "fg": "rgb(255, 255, 255)",
+          "bg": "rgb(194, 65, 12)",
+          "ratio": 5.18
+        },
+        "secondaryButton": {
+          "fg": "rgb(28, 25, 23)",
+          "bg": "rgb(255, 255, 255)",
+          "ratio": 17.49
+        },
+        "searchText": {
+          "fg": "rgb(28, 25, 23)",
+          "bg": "rgb(255, 255, 255)",
+          "ratio": 17.49
+        },
+        "searchPlaceholder": {
+          "fg": "rgb(87, 83, 78)",
+          "bg": "rgb(255, 255, 255)",
+          "ratio": 7.63
+        },
+        "statusStrip": {
+          "fg": "rgb(87, 83, 78)",
+          "bg": "rgb(246, 243, 235)",
+          "ratio": 6.88
+        },
+        "sidebarNav": {
+          "fg": "rgb(28, 25, 23)",
+          "bg": "rgb(252, 250, 246)",
+          "ratio": 16.78
+        }
+      },
+      "metadataIconSizes": {
+        "hero": [
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "shelf": [
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "sidebar": [
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          }
+        ]
+      },
+      "touchTargetViolations": [],
+      "touchTargetCount": 65,
+      "scrollWidth": 1440,
+      "clientWidth": 1440,
+      "fonts": {
+        "fraunces": true,
+        "jakarta": true,
+        "jetbrains": true
+      },
+      "accentText": "#C2410C",
+      "accentContrast": "#FFFFFF"
+    },
+    "nordic": {
+      "theme": "nordic",
+      "documentTheme": "nordic",
+      "htmlBackground": "rgb(10, 18, 15)",
+      "bodyBackground": "rgb(10, 18, 15)",
+      "appBackground": "rgb(10, 18, 15)",
+      "heading": {
+        "fontFamily": "Fraunces, Georgia, Cambria, \"Times New Roman\", Times, serif",
+        "fontSize": "56px",
+        "color": "rgb(236, 253, 245)"
+      },
+      "hero": {
+        "title": "Artisan Sourdough Boule",
+        "fontFamily": "Fraunces, Georgia, Cambria, \"Times New Roman\", Times, serif",
+        "titleFontSize": "42.5281px",
+        "width": 1120,
+        "height": 605,
+        "photoHeight": 560
+      },
+      "headerHeight": 46,
+      "shelfCardCount": 8,
+      "pairs": {
+        "pageTitle": {
+          "fg": "rgb(236, 253, 245)",
+          "bg": "rgb(10, 18, 15)",
+          "ratio": 18.02
+        },
+        "pageIntro": {
+          "fg": "rgb(167, 243, 208)",
+          "bg": "rgb(10, 18, 15)",
+          "ratio": 14.8
+        },
+        "heroKicker": {
+          "fg": "rgb(167, 243, 208)",
+          "bg": "rgb(18, 29, 24)",
+          "ratio": 13.48
+        },
+        "heroTitle": {
+          "fg": "rgb(236, 253, 245)",
+          "bg": "rgb(18, 29, 24)",
+          "ratio": 16.41
+        },
+        "heroTags": {
+          "fg": "rgb(167, 243, 208)",
+          "bg": "rgb(18, 29, 24)",
+          "ratio": 13.48
+        },
+        "heroMetaLabel": {
+          "fg": "rgb(167, 243, 208)",
+          "bg": "rgb(18, 29, 24)",
+          "ratio": 13.48
+        },
+        "heroMetaValue": {
+          "fg": "rgb(236, 253, 245)",
+          "bg": "rgb(18, 29, 24)",
+          "ratio": 16.41
+        },
+        "shelfTitle": {
+          "fg": "rgb(236, 253, 245)",
+          "bg": "rgb(10, 18, 15)",
+          "ratio": 18.02
+        },
+        "shelfCategory": {
+          "fg": "rgb(167, 243, 208)",
+          "bg": "rgb(10, 18, 15)",
+          "ratio": 14.8
+        },
+        "shelfTags": {
+          "fg": "rgb(167, 243, 208)",
+          "bg": "rgb(10, 18, 15)",
+          "ratio": 14.8
+        },
+        "shelfMetaLabel": {
+          "fg": "rgb(167, 243, 208)",
+          "bg": "rgb(10, 18, 15)",
+          "ratio": 14.8
+        },
+        "primaryButton": {
+          "fg": "rgb(10, 18, 15)",
+          "bg": "rgb(16, 185, 129)",
+          "ratio": 7.48
+        },
+        "secondaryButton": {
+          "fg": "rgb(236, 253, 245)",
+          "bg": "rgb(18, 29, 24)",
+          "ratio": 16.41
+        },
+        "searchText": {
+          "fg": "rgb(236, 253, 245)",
+          "bg": "rgb(18, 29, 24)",
+          "ratio": 16.41
+        },
+        "searchPlaceholder": {
+          "fg": "rgb(167, 243, 208)",
+          "bg": "rgb(18, 29, 24)",
+          "ratio": 13.48
+        },
+        "statusStrip": {
+          "fg": "rgb(167, 243, 208)",
+          "bg": "rgb(10, 18, 15)",
+          "ratio": 14.8
+        },
+        "sidebarNav": {
+          "fg": "rgb(236, 253, 245)",
+          "bg": "rgb(14, 23, 19)",
+          "ratio": 17.33
+        }
+      },
+      "metadataIconSizes": {
+        "hero": [
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "shelf": [
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "sidebar": [
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          }
+        ]
+      },
+      "touchTargetViolations": [],
+      "touchTargetCount": 65,
+      "scrollWidth": 1440,
+      "clientWidth": 1440,
+      "fonts": {
+        "fraunces": true,
+        "jakarta": true,
+        "jetbrains": true
+      },
+      "accentText": "#34D399",
+      "accentContrast": "#0A120F"
+    },
+    "blood-moon": {
+      "theme": "blood-moon",
+      "documentTheme": "blood-moon",
+      "htmlBackground": "rgb(11, 9, 10)",
+      "bodyBackground": "rgb(11, 9, 10)",
+      "appBackground": "rgb(11, 9, 10)",
+      "heading": {
+        "fontFamily": "Fraunces, Georgia, Cambria, \"Times New Roman\", Times, serif",
+        "fontSize": "56px",
+        "color": "rgb(242, 236, 231)"
+      },
+      "hero": {
+        "title": "Artisan Sourdough Boule",
+        "fontFamily": "Fraunces, Georgia, Cambria, \"Times New Roman\", Times, serif",
+        "titleFontSize": "42.5281px",
+        "width": 1120,
+        "height": 605,
+        "photoHeight": 560
+      },
+      "headerHeight": 46,
+      "shelfCardCount": 8,
+      "pairs": {
+        "pageTitle": {
+          "fg": "rgb(242, 236, 231)",
+          "bg": "rgb(11, 9, 10)",
+          "ratio": 16.95
+        },
+        "pageIntro": {
+          "fg": "rgb(167, 154, 149)",
+          "bg": "rgb(11, 9, 10)",
+          "ratio": 7.28
+        },
+        "heroKicker": {
+          "fg": "rgb(167, 154, 149)",
+          "bg": "rgb(19, 16, 17)",
+          "ratio": 6.94
+        },
+        "heroTitle": {
+          "fg": "rgb(242, 236, 231)",
+          "bg": "rgb(19, 16, 17)",
+          "ratio": 16.15
+        },
+        "heroTags": {
+          "fg": "rgb(167, 154, 149)",
+          "bg": "rgb(19, 16, 17)",
+          "ratio": 6.94
+        },
+        "heroMetaLabel": {
+          "fg": "rgb(167, 154, 149)",
+          "bg": "rgb(19, 16, 17)",
+          "ratio": 6.94
+        },
+        "heroMetaValue": {
+          "fg": "rgb(242, 236, 231)",
+          "bg": "rgb(19, 16, 17)",
+          "ratio": 16.15
+        },
+        "shelfTitle": {
+          "fg": "rgb(242, 236, 231)",
+          "bg": "rgb(11, 9, 10)",
+          "ratio": 16.95
+        },
+        "shelfCategory": {
+          "fg": "rgb(167, 154, 149)",
+          "bg": "rgb(11, 9, 10)",
+          "ratio": 7.28
+        },
+        "shelfTags": {
+          "fg": "rgb(167, 154, 149)",
+          "bg": "rgb(11, 9, 10)",
+          "ratio": 7.28
+        },
+        "shelfMetaLabel": {
+          "fg": "rgb(167, 154, 149)",
+          "bg": "rgb(11, 9, 10)",
+          "ratio": 7.28
+        },
+        "primaryButton": {
+          "fg": "rgb(255, 255, 255)",
+          "bg": "rgb(183, 42, 58)",
+          "ratio": 6.17
+        },
+        "secondaryButton": {
+          "fg": "rgb(242, 236, 231)",
+          "bg": "rgb(19, 16, 17)",
+          "ratio": 16.15
+        },
+        "searchText": {
+          "fg": "rgb(242, 236, 231)",
+          "bg": "rgb(19, 16, 17)",
+          "ratio": 16.15
+        },
+        "searchPlaceholder": {
+          "fg": "rgb(167, 154, 149)",
+          "bg": "rgb(19, 16, 17)",
+          "ratio": 6.94
+        },
+        "statusStrip": {
+          "fg": "rgb(167, 154, 149)",
+          "bg": "rgb(11, 9, 10)",
+          "ratio": 7.28
+        },
+        "sidebarNav": {
+          "fg": "rgb(242, 236, 231)",
+          "bg": "rgb(14, 11, 12)",
+          "ratio": 16.73
+        }
+      },
+      "metadataIconSizes": {
+        "hero": [
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "shelf": [
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "sidebar": [
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          }
+        ]
+      },
+      "touchTargetViolations": [],
+      "touchTargetCount": 65,
+      "scrollWidth": 1440,
+      "clientWidth": 1440,
+      "fonts": {
+        "fraunces": true,
+        "jakarta": true,
+        "jetbrains": true
+      },
+      "accentText": "#D9665A",
+      "accentContrast": "#FFFFFF"
+    },
+    "filtered": {
+      "resultCount": 0,
+      "heroTitle": "Authentic Thai Green Coconut Curry",
+      "summary": "Showing 1 of 9",
+      "scrollWidth": 1440,
+      "clientWidth": 1440
+    },
+    "empty": {
+      "emptyHeading": "No matching recipes found",
+      "resetVisible": true,
+      "scrollWidth": 1440,
+      "clientWidth": 1440
+    },
+    "connection": {
+      "stateLabel": "Imported files",
+      "chip": "Recipes Loaded",
+      "eyebrow": "Imported collection",
+      "intro": "Recipes loaded from your files for this session.",
+      "recipeCount": "11 recipes"
+    },
+    "longTitle": {
+      "heroTitle": "Slow-Roasted Heirloom Tomato and Saffron Risotto with Charred Lemon and Basil",
+      "heroTitleLines": 5,
+      "description": "A slow-built risotto with saffron, roasted heirloom tomatoes, and a bright charred-lemon finish.",
+      "scrollWidth": 1440,
+      "clientWidth": 1440
+    },
+    "missingPhoto": {
+      "heroTitle": "Weeknight Pantry Gnocchi",
+      "fallback": "No photograph saved.This note has no saved image. Its recipe is still complete below.",
+      "imagesInHero": 0
+    },
+    "mobileFixture": {
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "heroTitle": "Weeknight Pantry Gnocchi"
+    }
+  },
+  "responsive": {
+    "360": {
+      "scrollWidth": 360,
+      "clientWidth": 360,
+      "headerHeight": 130,
+      "heroWidth": 328,
+      "heroPhotoHeight": 340,
+      "shelfUsesRows": true
+    },
+    "390": {
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "headerHeight": 130,
+      "heroWidth": 350,
+      "heroPhotoHeight": 340,
+      "shelfUsesRows": true
+    },
+    "768": {
+      "scrollWidth": 768,
+      "clientWidth": 768,
+      "headerHeight": 130,
+      "heroWidth": 704,
+      "heroPhotoHeight": 520,
+      "shelfUsesRows": false
+    },
+    "1024": {
+      "scrollWidth": 1024,
+      "clientWidth": 1024,
+      "headerHeight": 46,
+      "heroWidth": 752,
+      "heroPhotoHeight": 540,
+      "shelfUsesRows": false
+    }
+  }
+}
