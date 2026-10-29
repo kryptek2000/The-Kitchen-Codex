@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useLayoutEffect, useRef } from 'react';
 import {
   ArrowLeft,
   Play,
@@ -160,7 +160,6 @@ export function RecipeDetailView({
   const [ingredientUsage, setIngredientUsage] = useState<{ query: string; display: string } | null>(null);
   const [favoriteAnnouncement, setFavoriteAnnouncement] = useState('');
   const [ratingPending, setRatingPending] = useState(false);
-
   const defaultImg = getRecipeImage(recipe);
   const reactiveVaultImage = useVaultImage(recipe.image, defaultImg);
 
@@ -174,6 +173,17 @@ export function RecipeDetailView({
     hasExplicitImage &&
     !!imageUrl &&
     imageUrl !== LOCAL_RECIPE_IMAGE_PLACEHOLDER;
+
+  const heroImgRef = useRef<HTMLImageElement | null>(null);
+  useLayoutEffect(() => {
+    const el = heroImgRef.current;
+    if (!el) return;
+    if (imageUrl && /^(https?:|data:|blob:)/i.test(imageUrl)) {
+      el.setAttribute('src', imageUrl);
+    } else {
+      el.removeAttribute('src');
+    }
+  }, [imageUrl]);
 
   const description = storedRecipeDescription(recipe);
   const { tags: visibleTags, remaining: remainingTags } = visibleRecipeTags(recipe.tags, 6);
@@ -602,7 +612,7 @@ export function RecipeDetailView({
               {showPhoto ? (
                 <>
                   <img
-                    src={imageUrl}
+                    ref={heroImgRef}
                     alt={recipe.title}
                     referrerPolicy="no-referrer"
                     loading="eager"
