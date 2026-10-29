@@ -21,6 +21,8 @@ import { describeVaultConnection } from '../core/vaultConnection';
 interface SideNavProps {
   activeTab: 'grid' | 'dataview' | 'mealplan' | 'shopping' | 'themes' | 'providers';
   setActiveTab: (tab: 'grid' | 'dataview' | 'mealplan' | 'shopping' | 'themes' | 'providers') => void;
+  vaultView?: 'all' | 'favorites';
+  setVaultView?: (view: 'all' | 'favorites') => void;
   vaultStatus: VaultSyncStatus;
   /** The RECIPE count of the active vault — the same total the header and gallery show. */
   recipeCount: number;
@@ -49,6 +51,8 @@ const navItem = (active: boolean) =>
 export function SideNav({
   activeTab,
   setActiveTab,
+  vaultView = 'all',
+  setVaultView,
   vaultStatus,
   recipeCount,
   noteCount,
@@ -100,10 +104,26 @@ export function SideNav({
 
       <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-3" aria-label="Primary">
         <div className="px-3 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary,#9CA3AF)]">Library</div>
-        <button id="nav-recipe-vault" aria-current={activeTab === 'grid' ? 'page' : undefined} className={navItem(activeTab === 'grid')} onClick={() => setActiveTab('grid')}>
+        <button
+          id="nav-recipe-vault"
+          aria-current={activeTab === 'grid' && vaultView === 'all' ? 'page' : undefined}
+          className={navItem(activeTab === 'grid' && vaultView === 'all')}
+          onClick={() => {
+            setVaultView?.('all');
+            setActiveTab('grid');
+          }}
+        >
           <LayoutGrid className="h-5 w-5 shrink-0" strokeWidth={1.75} aria-hidden="true" /> My Recipe Vault
         </button>
-        <button id="nav-favorites" className={navItem(false)} onClick={onFavorites}>
+        <button
+          id="nav-favorites"
+          aria-current={vaultView === 'favorites' && activeTab === 'grid' ? 'page' : undefined}
+          className={navItem(vaultView === 'favorites' && activeTab === 'grid')}
+          onClick={() => {
+            setVaultView?.('favorites');
+            setActiveTab('grid');
+          }}
+        >
           <Star className="h-5 w-5 shrink-0" strokeWidth={1.75} aria-hidden="true" /> Favorites
         </button>
         <button id="nav-dataview-table" aria-current={activeTab === 'dataview' ? 'page' : undefined} className={navItem(activeTab === 'dataview')} onClick={() => setActiveTab('dataview')}>

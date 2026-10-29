@@ -52,12 +52,14 @@ describe('single semantic theme scope', () => {
     expect(css).toContain("url('/fonts/plus-jakarta-sans-latin.woff2')");
   });
 
-  it('keeps Recipe Detail photographic overlay text above the Parchment text-white remap', () => {
+  it('keeps Recipe Detail editorial hero free of photographic overlay text', () => {
     const detail = fs.readFileSync(path.join(ROOT, 'src/components/RecipeDetailView.tsx'), 'utf8');
-    expect(css).toMatch(/html\[data-theme\]\s+\.kc-photo-overlay-text\s*\{[^}]*color:\s*#FFFFFF\s*!important/s);
-    expect(detail).toContain('kc-photo-overlay-text tracking-tight drop-shadow-md');
-    expect(detail).toContain('kc-photo-overlay-text font-bold');
-    expect(detail).toContain('leading-relaxed whitespace-pre-wrap text-[var(--text-primary,#F3F4F6)]');
-    expect((detail.match(/text-\[var\(--text-primary,#F3F4F6\)\]/g) || []).length).toBeGreaterThanOrEqual(2);
+    expect(css).not.toMatch(/\.kc-photo-overlay-text/);
+    expect(detail).not.toContain('kc-photo-overlay-text');
+    expect(detail).toContain('id="recipe-rating"');
+    expect(detail).toContain('text-3xl font-serif font-bold tracking-tight');
+    expect(detail).toContain('Personal recipe rating');
+    expect(detail).toContain('Personal rating. Not a community average.');
+    expect(css).toMatch(/\[data-theme="parchment"\]/);
   });
 });

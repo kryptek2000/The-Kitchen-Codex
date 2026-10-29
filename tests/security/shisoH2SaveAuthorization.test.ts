@@ -351,7 +351,7 @@ describe('H-2 save authorization — structural pins', () => {
     expect(app).toContain('verifySaveGrant(grant, recipeIdentityOf(current.base))');
     // The refusal is before the canonical write on the refuse path.
     const verifyAt = app.indexOf('verifySaveGrant');
-    const writeAt = app.indexOf('await commitRecipeWrite(current.working)');
+    const writeAt = app.indexOf('await commitRecipeWrite(current.working');
     expect(verifyAt).toBeGreaterThan(-1);
     expect(writeAt).toBeGreaterThan(verifyAt);
   });

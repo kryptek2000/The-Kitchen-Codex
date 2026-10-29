@@ -445,7 +445,24 @@ export function createApp(opts: CreateAppOptions): express.Express {
 
   // Bound total request volume before route authentication and body parsing.
   // Narrower route limiters below remain active as an additional control.
-  app.use(globalRequestRateLimiter);
+  //
+  // In production, every request (including static assets and navigation) is
+  // subject to the global ceiling. In development, the Vite dev middleware
+  // serves a large number of module/asset requests per page load, and applying
+  // the global ceiling there produces false 429s during ordinary refreshes and
+  // testing. Development therefore applies the global ceiling only to API
+  // requests; endpoint-specific limiters below still protect sensitive
+  // operations. Production behavior is unchanged.
+  if (opts.isProduction) {
+    app.use(globalRequestRateLimiter);
+  } else {
+    app.use((req, res, next) => {
+      if (req.path.startsWith('/api')) {
+        return globalRequestRateLimiter(req, res, next);
+      }
+      next();
+    });
+  }
 
   // BYOK-5B session-key routes are registered BEFORE the global JSON parser so
   // their dedicated 8 KiB body ceiling is actually enforced (a second

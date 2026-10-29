@@ -46,10 +46,8 @@ export const WikilinkPreviewModal: React.FC<WikilinkPreviewModalProps> = ({
   const [isCreatingNote, setIsCreatingNote] = useState(false);
   const [createdFeedback, setCreatedFeedback] = useState(false);
 
-  if (!isOpen || !target) return null;
-
   // Clean target (e.g. remove path prefixes or .md extension)
-  const cleanTarget = target.trim().replace(/^Notes\//i, '').replace(/^Recipes\//i, '').replace(/\.md$/i, '');
+  const cleanTarget = (target || '').trim().replace(/^Notes\//i, '').replace(/^Recipes\//i, '').replace(/\.md$/i, '');
   const lowerTarget = cleanTarget.toLowerCase();
 
   // 1. Look for matching Vault Note
@@ -88,6 +86,8 @@ export const WikilinkPreviewModal: React.FC<WikilinkPreviewModalProps> = ({
       return hasWikilink || hasInMarkdown;
     });
   }, [recipes, matchedRecipe, lowerTarget]);
+
+  if (!isOpen || !target) return null;
 
   // Handle Quick Create Note in Vault
   const handleQuickCreateNote = async () => {

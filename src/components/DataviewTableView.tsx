@@ -68,7 +68,7 @@ export function DataviewTableView({
           <span className="text-amber-300">#food/recipes</span>
         </div>
         <span className="text-gray-500 text-[11px]">
-          {recipes.length} notes returned
+          {recipes.length} recipes returned
         </span>
       </div>
 

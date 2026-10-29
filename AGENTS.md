@@ -255,6 +255,20 @@ Learn -> Improve`. **Obsidian remains the canonical source of truth**; The
 Kitchen Codex is the polished interface/automation layer on top of the user's
 own Markdown knowledge base.
 
+### Roadmap status vocabulary
+
+This roadmap distinguishes the following states. Do not collapse them:
+
+- **APPROVED** — product direction accepted by the owner; implementation may not have started.
+- **IMPLEMENTED** — code exists in a working tree or branch.
+- **AUDITED** — independently reviewed against the stated contract.
+- **OWNER-VERIFIED** — the owner has exercised the behavior in the intended environment.
+- **PLANNED** — approved for a future milestone; not started.
+- **BACKLOG** — known work not yet scheduled.
+- **DEFERRED** — intentionally not being pursued now.
+
+Uncommitted work is **never** described as shipped, merged, or on `main`.
+
 ### Phases
 
 1. **Stabilize the Foundation** — automated testing + CI (typecheck/tests/
@@ -298,6 +312,214 @@ own Markdown knowledge base.
 - **Polish:** Recipe Card Studio 3.0, themes/templates, accessibility,
   performance, docs/API cleanup.
 
+### Signature Edition design program
+
+**Status: APPROVED / IMPLEMENTED IN WORKTREE / NOT MERGED.**
+
+The Signature Edition is a luxury digital-cookbook experience built around
+**Botanical Precision**: theme-controlled color palettes, editorial typography,
+and a unified visual language across every application surface.
+
+Core design decisions:
+
+- **Typography:** Fraunces (display/editorial serif) and Plus Jakarta Sans
+  (interface/sans-serif).
+- **Palettes:** theme-controlled, with the existing four themes
+  (`obsidian`, `parchment`, `nordic`, `blood-moon`).
+- **Signature Recipe Vault:** curated, photographic, editorial collection view.
+- **Editorial Recipe Detail:** the approved F1–F5 detail composition.
+- **Unified surfaces:** Vault, Recipe Detail, Cooking Mode, settings, and
+  supporting views share the same design language.
+
+Program status:
+
+- **UD-3P.1 Signature Edition Vault** — IMPLEMENTED and merged at the current
+  baseline (`4fefe02`).
+- **UD-3P.2A Recipe Detail, F1–F5** — IMPLEMENTED and AUDITED in the uncommitted
+  `work/ud3p2a-signature-detail` worktree. Not merged.
+- **F6 Notes Markdown rendering** — IMPLEMENTED in the uncommitted UD-3P.2A
+  worktree; focused implementation tests passed. Independent audit and final
+  integration remain pending. Do not describe F6 as shipped or fully complete.
+- **F7 Interactive Recipe Ratings** — IMPLEMENTED in the uncommitted
+  UD-3P.2A worktree; focused tests passed. Independent audit and owner
+  acceptance remain pending.
+- **GitHub integration** — NOT YET PERFORMED. No commit, push, pull request,
+  merge, or deployment exists for the UD-3P.2A/P1 work.
+- **UD-3P.2B Signature Cooking Mode** — the next major design milestone.
+  PLANNED, not started.
+
+### Favorites persistence program (P1)
+
+**Status: IMPLEMENTED / AUDITED PASS / OWNER-VERIFIED in the UD-3P.2A worktree.
+Not merged.**
+
+The P1 Favorites program repaired connected-Vault favorite persistence end to
+end:
+
+- **Canonical metadata:** `isFavorite` in recipe YAML frontmatter.
+- **Compatibility:** read support for legacy favorite aliases (`favorite`,
+  `favourite`, `starred`, `star`); writes normalize to `isFavorite`.
+- **Parsing/serialization:** Markdown round-trip preserves the flag and
+  unrelated recipe metadata.
+- **Connected Vault persistence:** the heart writes through the authoritative
+  `VaultAdapter` path, not localStorage and not a competing database.
+- **Shared recipe write coordination:** same-recipe snapshot writes are queued
+  per canonical recipe identity.
+- **Execution-time snapshot rebasing:** queued operations apply only their
+  intended field changes onto the latest committed snapshot, so a stale
+  favorite/nutrition/edit snapshot cannot clobber a predecessor's successful
+  changes.
+- **Concurrency tests:** deterministic favorite/nutrition/edit interleavings,
+  failed-write rollback protection, and queue recovery.
+- **Independent audit:** PASS with nonblocking notes; the notes were closed by
+  the P1-R1/P1-R2/P1-R2T2/P1-R3 follow-ups.
+- **Owner verification:** native Linux test-Vault favorite/unfavorite survives
+  refresh and reconnection.
+
+Documented nonblocking limitations:
+
+- External simultaneous file changes made outside the application are not
+  detected; the app does not claim cross-process conflict resolution.
+- OPFS, in-memory adapters, and mocked FSA handles are test evidence only and
+  are not a substitute for native-directory owner acceptance.
+
+**Owner verification is complete.** Native Linux Favorites persistence was
+owner-verified successfully against the owner’s test Vault, including favorites
+surviving refresh/reconnection. This is not an outstanding blocker.
+
+Future regression requirement: any newly reported native Favorites failure must
+be reproduced against the correct worktree/server with a live native directory
+picker before reopening this completed program. Headless, OPFS, and in-memory
+runs are not native acceptance evidence.
+
+### Signature Nine Starter Collection
+
+**Status: APPROVED PRODUCT DIRECTION / PLANNED FUTURE MILESTONE.**
+
+The starter collection is **“The Best of Both Worlds”**: approachable home
+favorites plus impressive culinary showpieces. It is a permanent built-in
+collection of **nine recipes** that users can explore without connecting a
+Vault.
+
+**Approved Option A:**
+
+- The built-in curated collection stays available.
+- Each recipe has an explicit **Save to My Vault** action.
+- No automatic insertion into personal Vaults.
+- No silent resurrection of deleted personal copies.
+- No overwriting customized user recipes.
+- Duplicate detection before saving.
+- Clear visual and identity distinction between built-in and user-owned
+  recipes.
+
+**Proposed culinary lineup — NOT FINAL; specific recipe content and assets
+require owner approval.**
+
+Six existing starter recipes to improve:
+
+1. Creamy Tuscan Garlic Chicken
+2. Authentic Tonkotsu Shoyu Ramen
+3. Artisan Sourdough Boule
+4. Authentic Thai Green Coconut Curry
+5. Classic Roman Carbonara
+6. Molten Dark Chocolate Matcha Lava Cake
+
+Three proposed replacements (placeholder directions, not final recipes):
+
+7. A showpiece seafood main (replace Pan-Seared Lemon Herb Wild Salmon)
+8. A vegetable-forward showpiece side or salad (replace Avocado Green Goddess
+   Quinoa Salad)
+9. A technique-driven grain or risotto showpiece (replace Skillet Cornmeal
+   Porridge)
+
+Quality gates before any recipe or photograph is considered final:
+
+- Culinary accuracy and realistic doneness cues.
+- Realistic prep/cook/total timings.
+- Complete, scaled, unambiguous ingredients.
+- Tested, ordered cooking instructions.
+- Nutrition provenance that is truthful and never fabricated.
+- Correct metadata, tags, servings, and difficulty.
+- Allergen/dietary claims verified, not inferred.
+- Appropriately licensed photographs with attribution and no unlicensed
+  scraped imagery.
+
+### F7 Interactive Recipe Ratings
+
+**Status: IMPLEMENTED IN THE UNCOMMITTED WORKTREE / INDEPENDENT AUDIT PENDING.**
+
+Approved execution order:
+
+1. Complete the independent F6 audit.
+2. Implement and audit F7 interactive, persistent ratings.
+3. Obtain final owner acceptance.
+4. Prepare the UD-3P.2A commit, push, PR, and CI verification.
+5. Merge only with explicit owner authorization.
+
+Required behavior when F7 is built:
+
+- Clickable five-star rating control on Recipe Detail and relevant collection
+  surfaces.
+- Ratings from 1–5.
+- A clear rating action and visible confirmation.
+- Full keyboard and screen-reader support.
+- Connected-Vault persistence through the existing shared recipe write
+  coordination and execution-time rebase path.
+- Correct reload/hydration from Markdown.
+- Consistent rating display across Vault, Recipe Detail, Dataview, and other
+  supported surfaces.
+- Personal ratings only. Never fabricate community averages or present an
+  aggregate as if it were community data.
+
+### Starter Vault behavior — future decisions
+
+**Status: PLANNED; do not implement ahead of approval.**
+
+The starter Vault must eventually support:
+
+- Local persistence of demonstration favorites and ratings.
+- Explicit saving of a starter recipe into the personal Vault.
+- A stable distinction between built-in identity and personal Vault identity.
+- Duplicate detection when saving a built-in recipe.
+- Safe deletion and customization behavior:
+  - deleting a personal copy must not delete or mutate the built-in recipe;
+  - customizing a personal copy must not be overwritten by the built-in
+    collection;
+  - no silent resurrection of a deleted personal copy.
+- A smooth first-time-user experience that clearly explains the difference
+  between exploring the built-in collection and saving a personal copy.
+
+### Current integration blockers
+
+- **UD-3P.2A/P1 work is uncommitted.** It is not on `main` and must not be
+  described as shipped.
+- **GitHub integration not performed.** No commit, push, pull request, merge,
+  or deployment exists for this work.
+- **F6 Notes Markdown** is implemented in the uncommitted worktree, but its
+  independent audit and final integration remain pending.
+
+### Remaining product work and UX/accessibility backlog
+
+Tracked explicitly; none of these are silently complete:
+
+- **F6 Notes Markdown formatting** — IMPLEMENTED in the uncommitted worktree
+  with focused tests passing; independent audit and final integration pending.
+- **Mobile Dataview overflow and count grammar** — BACKLOG.
+- **Photographic hero long-title contrast edge case** — BACKLOG.
+- **Cooking Mode redesign and finished-state contrast** — PLANNED under
+  UD-3P.2B Signature Cooking Mode.
+- **Advanced Nutrition Apply eligibility/revalidation** — BACKLOG; preserve
+  existing eligibility, authorization, and provenance rules.
+- **Phase 5B browser-proof maintenance** — BACKLOG; keep production browser
+  proofs current with UI changes.
+- **SHISO integration and existing safety boundaries** — maintain the existing
+  SHISO grant/apply/save boundaries; no expansion in this roadmap.
+- **Remaining feature/accessibility obligations** from the existing master
+  plan, including mobile/PWA, cooking history, pantry/shopping depth, recipe
+  intelligence, cookbook/card studio, and multi-surface shells.
+- **F7 ratings** — PLANNED, dependent on the completed Favorites write
+  coordination path.
+
 ### Recommended roadmap (milestones)
 
 - **v0.2.6 -> v0.2.7** — consolidation: shared Gemini client, centralized
@@ -322,14 +544,29 @@ own Markdown knowledge base.
   live AI consumers, Gemini SDK isolated to infrastructure, redacted provider
   diagnostics, nutrition non-finite hardening, and legacy answer-path cleanup.
   [SHIPPED — see RELEASE_NOTES_v0.6.0.md]
-- **v0.7 and later** — multi-surface architecture audit, then resume the longer
-  roadmap: intelligent meal planning, smart shopping/pantry, cooking history,
-  Cooking Mode 2.0/voice, recipe intelligence (OCR/PDF/image import), Recipe
-  Card Studio 3.0/cookbook, mobile/PWA; long-term target is one shared Kitchen
-  Codex core powering a standalone desktop shell, an Obsidian plugin shell, a
-  mobile/PWA companion, and optionally a later native wrapper.
-  [FUTURE — reprioritized after the v0.6.0 provider/runtime decoupling; none of
-  these ideas are dropped]
+- **v0.7.0 — Create for Me + Vault Intelligence image recovery** — SHIPPED.
+- **v0.8.0 — session-only BYOK + safe dynamic provider catalog** — SHIPPED.
+- **v0.9.0 — explicit AI recipe images + verified-free generation** — SHIPPED
+  and is the current release.
+- **UD-3P.1 Signature Edition Vault** — IMPLEMENTED and merged at the current
+  baseline (`4fefe02`).
+- **UD-3P.2A Signature Recipe Detail (F1–F5)** — IMPLEMENTED and AUDITED in the
+  uncommitted `work/ud3p2a-signature-detail` worktree. Not merged.
+- **P1 Favorites persistence** — IMPLEMENTED / AUDITED PASS / OWNER-VERIFIED in
+  the same worktree. Not merged.
+- **UD-3P.2B Signature Cooking Mode** — NEXT MAJOR DESIGN MILESTONE. PLANNED;
+  includes the Cooking Mode redesign and finished-state contrast work.
+- **F7 Interactive Recipe Ratings** — IMPLEMENTED in the uncommitted
+  UD-3P.2A worktree; depends on the completed Favorites write-coordination
+  path. Independent audit pending.
+- **Signature Nine Starter Collection** — PLANNED future milestone; approved
+  Option A behavior and proposed lineup above. Not scheduled for implementation.
+- **Longer-term multi-surface roadmap** — intelligent meal planning, smart
+  shopping/pantry, cooking history, recipe intelligence (OCR/PDF/image import),
+  Recipe Card Studio 3.0/cookbook, mobile/PWA; long-term target is one shared
+  Kitchen Codex core powering a standalone desktop shell, an Obsidian plugin
+  shell, a mobile/PWA companion, and optionally a later native wrapper.
+  [FUTURE — none of these ideas are dropped]
 - **v3.0** — the intelligent cooking platform. [LONG-TERM VISION]
 
 Detailed sections for v0.4.0 / v0.4.1 / v0.5.0 follow.
@@ -538,24 +775,32 @@ well — this is the core reason Ask My Kitchen exists:
 - AI is interpretation/reasoning layer, not authoritative storage
 - basic recipe management must continue without AI
 
-### Immediate next steps
+### Immediate next steps (authoritative order)
 
-v0.6.0 provider/runtime decoupling and hardening are complete. The remaining
-roadmap is future/optional and NOT required for v0.6.0:
-
-1. **Multi-surface architecture audit (v0.7 prep)** — plan how the provider
-   abstraction and a shared Kitchen Codex core back more than one surface:
-   a standalone desktop shell, an Obsidian plugin shell, a mobile/PWA companion,
-   and optionally a later native wrapper. Keep this future/roadmap only.
-2. **v0.7 AI product layer** — resume the longer roadmap: intelligent meal
-   planning, smart shopping/pantry, cooking history, Cooking Mode 2.0/voice,
-   recipe intelligence (OCR/PDF/image import), Recipe Card Studio 3.0/cookbook,
-   mobile/PWA.
-3. **Optional follow-up polish** (known non-blocking): web URL dedupe
-   normalization; clear stale Grabber prefill; DOM/component tests for the
-   handoff seam; wire the discovery sourceTitle display; expand the conservative
-   deterministic interpretation cues.
-4. **Independent audit / release.**
+1. **Complete the independent F6 audit** — F6 Notes Markdown is implemented in
+   the uncommitted worktree with focused tests passing; preserve that work and
+   finish the independent audit.
+2. **Complete the independent F7 audit and owner acceptance** — F7 is
+   implemented in the uncommitted worktree with focused tests passing; preserve
+   that work and finish audit/acceptance.
+3. **Obtain final owner acceptance** — accept F6/F7 and the UD-3P.2A/P1
+   program in the owner’s native environment.
+4. **Prepare the UD-3P.2A commit, push, PR, and CI verification** — only after
+   the preceding steps. Nothing in this worktree is on `main` yet.
+5. **Merge only with explicit owner authorization** — no merge, deployment, or
+   release is implied by the roadmap.
+6. **UD-3P.2B Signature Cooking Mode** — next major design milestone after
+   UD-3P.2A integration: Cooking Mode redesign, finished-state contrast,
+   responsive/kitchen-safe presentation.
+7. **Signature Nine Starter Collection** — separate future milestone; finalize
+   owner-approved recipes, assets, quality gates, and Option A save semantics
+   before implementation.
+8. **Starter Vault behavior** — local demonstration persistence, explicit save
+   to personal Vault, built-in/personal identity, duplicate detection, deletion
+   and customization safety, first-time-user experience.
+9. **Backlog closures** — mobile Dataview overflow/count grammar, hero
+   long-title contrast, Advanced Nutrition Apply eligibility/revalidation,
+   Phase 5B browser-proof maintenance, and remaining accessibility obligations.
 
 ### Product rules
 

@@ -245,7 +245,7 @@ export function RecipeEditorModal({
   const [difficulty, setDifficulty] = useState<'Easy' | 'Medium' | 'Hard'>(
     initialRecipe?.difficulty || 'Easy'
   );
-  const [rating, setRating] = useState(initialRecipe?.rating || 5);
+  const [rating, setRating] = useState(initialRecipe?.rating ?? 5);
   // Initialize per-serving nutrition fields from the recipe's nutrition block.
   // If the block has a servings denominator, divide totals by servings to get per-serving.
   // Legacy: if only `calories` (string) is present without nutrition block, treat as per-serving.

@@ -65,7 +65,19 @@ export interface ObsidianRecipe {
   totalTime?: string;
   servings?: number;
   difficulty: 'Easy' | 'Medium' | 'Hard';
-  rating: number; // 1-5
+  rating: number; // 1-5 (0 = unrated/cleared)
+  /**
+   * Whether the rating was explicitly provided by the user or imported from
+   * recipe metadata. Absence means "no explicit rating" (legacy/unrated).
+   * Internal UI/persistence hint; never serialized to YAML.
+   */
+  ratingExplicit?: boolean;
+  /**
+   * Provenance of the recorded rating. `imported` means it came from source
+   * metadata; `personal` means the user chose it. Absence means unrated or
+   * legacy numeric rating.
+   */
+  ratingSource?: 'imported' | 'personal';
   calories?: string | number;
   nutrition?: RecipeNutrition;
   source?: string;

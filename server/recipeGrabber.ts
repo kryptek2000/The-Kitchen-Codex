@@ -22,6 +22,7 @@ export interface GrabbedRecipeResult {
   servings?: number;
   calories?: string | number;
   rating: number;
+  ratingSource?: 'imported' | 'personal';
   source: string;
   sourceUrl?: string;
   image?: string;
@@ -280,11 +281,20 @@ export function parseRecipeFromJsonLd(jsonLdList: any[], url?: string): GrabbedR
     }
   }
 
-  // Rating
-  let rating = 5;
+  // Rating (imported source metadata only; no fabrication when absent)
+  let rating = 0;
+  let ratingSource: 'imported' | undefined;
   if (recipeObj.aggregateRating?.ratingValue) {
     const r = parseFloat(recipeObj.aggregateRating.ratingValue);
-    if (!isNaN(r)) rating = Math.min(5, Math.max(1, Math.round(r * 10) / 10));
+    const best = parseFloat(recipeObj.aggregateRating.bestRating || "5");
+    if (!isNaN(r) && Number.isFinite(best) && best > 0) {
+      const scaled = (r / best) * 5;
+      const normalized = Math.min(5, Math.max(0, Math.round(scaled * 10) / 10));
+      if (normalized > 0) {
+        rating = normalized;
+        ratingSource = 'imported';
+      }
+    }
   }
 
   // Calories
@@ -379,6 +389,7 @@ export function parseRecipeFromJsonLd(jsonLdList: any[], url?: string): GrabbedR
     calories,
     difficulty: "Medium",
     rating,
+    ratingSource,
     source,
     image,
     ingredients,
@@ -399,6 +410,7 @@ export function parseRecipeFromJsonLd(jsonLdList: any[], url?: string): GrabbedR
     servings,
     calories,
     rating,
+    ratingSource,
     source,
     sourceUrl: url,
     image,
@@ -423,7 +435,8 @@ tags:${tagsStr}
 cuisine: "${recipe.cuisine || "General"}"
 category: "${recipe.category || "Main Course"}"
 difficulty: "${recipe.difficulty || "Medium"}"
-rating: ${recipe.rating !== undefined ? recipe.rating : 5}
+rating: ${recipe.rating !== undefined ? recipe.rating : 0}
+${recipe.ratingSource ? `rating_source: ${recipe.ratingSource}` : ''}
 `;
 
   if (recipe.prepTime) {
@@ -588,7 +601,7 @@ function buildAiRecipeResult(
     totalTime: parsed.totalTime || "",
     servings: typeof parsed.servings === "number" && parsed.servings > 0 ? parsed.servings : undefined,
     calories: parsed.calories || "",
-    rating: parsed.rating || 5,
+    rating: parsed.rating || 0,
     source,
     sourceUrl: sourceUrl ?? url,
     image,
@@ -766,7 +779,7 @@ REQUIREMENTS:
       cookTime: "",
       totalTime: "",
       servings: undefined,
-      rating: 5,
+      rating: 0,
       source: siteName || metaTags.siteName || "Imported Recipe",
       sourceUrl: url,
       image: metaTags.image || "",
