@@ -853,19 +853,6 @@ summary:focus-visible,
 }
 
 /* =========================================================================
-   PHOTOGRAPHIC OVERLAY TEXT — Recipe Detail hero only
-   -------------------------------------------------------------------------
-   The recipe photograph always has a dark bottom gradient, so overlay text
-   must remain light even when a light theme remaps the ordinary .text-white
-   utility to a dark colour. The selector is intentionally more specific than
-   [data-theme="..."] .text-white and is scoped to this class, so ordinary
-   page content and approved theme palettes are unaffected.
-   ========================================================================= */
-html[data-theme] .kc-photo-overlay-text {
-  color: #FFFFFF !important;
-}
-
-/* =========================================================================
    BRAND MARK — theme-aware source of truth (see src/components/BrandMark.tsx)
    Body follows the theme foreground; steam follows the theme accent.
    ========================================================================= */

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
-import { AlertTriangle, BookOpen, ChevronRight, FolderOpen, Globe2, Plus, RotateCcw, Search, SearchX, SlidersHorizontal, Sparkles, X } from 'lucide-react';
+import { AlertTriangle, BookOpen, ChevronRight, FolderOpen, Globe2, Plus, RotateCcw, Search, SearchX, SlidersHorizontal, Sparkles, Star, X } from 'lucide-react';
 import {
   ObsidianRecipe,
   VaultSyncStatus,
@@ -53,6 +53,7 @@ import {
   applyAdvancedNutrition,
   ADVANCED_NUTRITION_APPLY_UI_MESSAGE,
 } from './application';
+import { rebaseRecipeOntoLatest, enqueueRecipeWrite as enqueueRecipeWriteHelper, normalizeRecipeWriteKey } from './application/recipeWriteCoordination';
 import { resolveRecipeVaultPath } from './core/vaultPath';
 import {
   createBrowserSettingsAdapter,
@@ -136,6 +137,7 @@ import {
   reconcileActiveRecipe,
   upsertCanonicalRecipe,
   removeCanonicalRecipe,
+  normalizeCanonicalPath,
   deriveVaultSnapshotState,
   createScanGenerationGuard,
   applyAcceptedVaultSnapshot,
@@ -385,6 +387,9 @@ export default function App() {
 
   // Navigation & View State (persisted via SettingsAdapter; hydrated on mount)
   const [activeTab, setActiveTab] = useState<'grid' | 'dataview' | 'mealplan' | 'shopping' | 'themes' | 'providers'>('grid');
+  // Explicit Vault collection view. This is separate from the user's manual
+  // filter state, so Favorites navigation never mutates or erases filters.
+  const [vaultView, setVaultView] = useState<'all' | 'favorites'>('all');
   const [isMoreOpen, setIsMoreOpen] = useState(false);
   const moreDialogRef = useRef<HTMLDialogElement>(null);
   const [isDesktop, setIsDesktop] = useState(() =>
@@ -497,6 +502,7 @@ export default function App() {
     if (!vaultScanGeneration.current.isCurrent(generation)) return false;
     const next = deriveVaultSnapshotState(result, activeRefs.current);
     setRecipes(next.recipes);
+    committedRecipesRef.current = next.recipes;
     setNotes(next.notes);
     setMealPlan(next.mealPlan);
     setShoppingCategories(next.shoppingList);
@@ -900,22 +906,38 @@ export default function App() {
   // save capability uses the very SAME authoritative path as the editor. Any
   // successful canonical write also RESOLVES the unsaved SHISO working copy for
   // that recipe (the written recipe now contains those changes).
+  // Shared per-recipe write coordination. Every full-recipe snapshot write
+  // (normal save, nutrition update, favorite toggle) for the same canonical
+  // recipe is serialized through this chain, so a stale snapshot from one path
+  // cannot overwrite a newer successful write from another path.
+  const recipeWriteChainsRef = useRef<Map<string, Promise<void>>>(new Map());
+  const enqueueRecipeWrite = useCallback((recipe: ObsidianRecipe, task: () => Promise<void>) => {
+    return enqueueRecipeWriteHelper(recipeWriteChainsRef.current, recipe, task);
+  }, []);
+
   const commitRecipeWrite = useCallback(
-    async (savedRecipe: ObsidianRecipe) => {
-      if (vaultAdapter) {
-        await saveRecipeWithVaultAdapter(vaultAdapter, savedRecipe);
-      } else {
-        // Disconnected workflow: preserve the existing download-to-disk fallback.
-        await saveRecipeToVaultFile(savedRecipe, undefined);
-      }
-      setRecipes((prev) => upsertCanonicalRecipe(prev, savedRecipe));
-      setSelectedRecipe((prev) => (prev && sameCanonicalRecipeIdentity(prev, savedRecipe) ? savedRecipe : prev));
-      const working = shisoWorkingRecipeRef.current;
-      if (working !== null && sameCanonicalRecipeIdentity(working.base, savedRecipe)) {
-        updateShisoWorkingRecipe(null);
-      }
+    async (savedRecipe: ObsidianRecipe, baseRecipe?: ObsidianRecipe) => {
+      const base = baseRecipe ?? committedRecipesRef.current.find((r) => sameCanonicalRecipeIdentity(r, savedRecipe)) ?? recipesRef.current.find((r) => sameCanonicalRecipeIdentity(r, savedRecipe));
+      const run = async () => {
+        const latest = committedRecipesRef.current.find((r) => sameCanonicalRecipeIdentity(r, savedRecipe));
+        const toWrite = rebaseRecipeOntoLatest(latest, base, savedRecipe);
+        if (vaultAdapter) {
+          await saveRecipeWithVaultAdapter(vaultAdapter, toWrite);
+        } else {
+          // Disconnected workflow: preserve the existing download-to-disk fallback.
+          await saveRecipeToVaultFile(toWrite, undefined);
+        }
+        committedRecipesRef.current = upsertCanonicalRecipe(committedRecipesRef.current, toWrite);
+        setRecipes((prev) => upsertCanonicalRecipe(prev, toWrite));
+        setSelectedRecipe((prev) => (prev && sameCanonicalRecipeIdentity(prev, toWrite) ? toWrite : prev));
+        const working = shisoWorkingRecipeRef.current;
+        if (working !== null && sameCanonicalRecipeIdentity(working.base, toWrite)) {
+          updateShisoWorkingRecipe(null);
+        }
+      };
+      await enqueueRecipeWrite(savedRecipe, run);
     },
-    [vaultAdapter, updateShisoWorkingRecipe],
+    [vaultAdapter, updateShisoWorkingRecipe, enqueueRecipeWrite],
   );
 
   const handleSaveRecipe = async (savedRecipe: ObsidianRecipe) => {
@@ -923,7 +945,14 @@ export default function App() {
     // only updated AFTER the canonical write succeeds, so a failed write leaves the
     // prior canonical state (and the open editor) intact (defect C).
     try {
-      await commitRecipeWrite(savedRecipe);
+      const saveBase = editingRecipe && sameCanonicalRecipeIdentity(editingRecipe, savedRecipe) ? editingRecipe : undefined;
+      const ratingChanged = saveBase ? saveBase.rating !== savedRecipe.rating : false;
+      const toSave: ObsidianRecipe = {
+        ...savedRecipe,
+        ratingExplicit: ratingChanged ? true : (saveBase?.ratingExplicit ?? savedRecipe.ratingExplicit ?? (savedRecipe.frontmatter?.rating !== undefined)),
+        ratingSource: ratingChanged ? (savedRecipe.rating > 0 ? 'personal' : undefined) : (saveBase?.ratingSource ?? savedRecipe.ratingSource),
+      };
+      await commitRecipeWrite(toSave, saveBase);
     } catch (err) {
       // Surface the failure; do NOT claim persistence succeeded (editor stays open).
       reportVaultError('save', savedRecipe.title || 'recipe', err);
@@ -1057,7 +1086,7 @@ export default function App() {
         };
       }
       try {
-        await commitRecipeWrite(current.working);
+        await commitRecipeWrite(current.working, current.base);
       } catch (err) {
         reportVaultError('save', current.working.title || 'recipe', err);
         return { ok: false, saved: false, reason_code: 'write_failed', message: 'The recipe could not be saved to the vault.' };
@@ -1161,26 +1190,19 @@ export default function App() {
       ...recipe,
       nutrition,
       calories: nutrition.calories !== undefined ? nutrition.calories.toString() : recipe.calories,
+      ratingExplicit: recipe.ratingExplicit,
+      ratingSource: recipe.ratingSource,
     };
     updatedRecipe.rawMarkdown = serializeRecipeToObsidianMarkdown(updatedRecipe);
 
     // Write FIRST then commit state (defect C): a failed canonical write must not
-    // mutate the displayed canonical recipe.
-    if (vaultAdapter) {
-      try {
-        await saveRecipeWithVaultAdapter(vaultAdapter, updatedRecipe);
-      } catch (err) {
-        reportVaultError('save', updatedRecipe.title || 'recipe', err);
-        return;
-      }
-    }
-    setRecipes((prev) => upsertCanonicalRecipe(prev, updatedRecipe));
-    setSelectedRecipe((prev) => (prev && sameCanonicalRecipeIdentity(prev, updatedRecipe) ? updatedRecipe : prev));
-    // H-2: a canonical write of the displayed (working) recipe resolves the
-    // unsaved SHISO working copy for that recipe.
-    const workingAfterNutrition = shisoWorkingRecipeRef.current;
-    if (workingAfterNutrition !== null && sameCanonicalRecipeIdentity(workingAfterNutrition.base, updatedRecipe)) {
-      updateShisoWorkingRecipe(null);
+    // mutate the displayed canonical recipe. Route through commitRecipeWrite so
+    // nutrition edits share the per-recipe write queue with favorite toggles.
+    try {
+      await commitRecipeWrite(updatedRecipe, recipe);
+    } catch (err) {
+      reportVaultError('save', updatedRecipe.title || 'recipe', err);
+      return;
     }
   };
 
@@ -1726,14 +1748,146 @@ export default function App() {
     }
   };
 
+  // Authoritative committed recipe state (updated only after successful writes and
+  // vault loads). Used to rebase queued operations onto the latest committed
+  // snapshot instead of a stale caller-supplied full recipe.
+  const committedRecipesRef = useRef<ObsidianRecipe[]>(getStarterVaultRecipes());
+
+  // Keep a synchronous, mutable mirror of canonical recipe state so favorite
+  // toggles (and their persisted saves) never read a stale closure value.
+  const recipesRef = useRef(recipes);
+  useEffect(() => {
+    recipesRef.current = recipes;
+  }, [recipes]);
+  const selectedRecipeRef = useRef(selectedRecipe);
+  useEffect(() => {
+    selectedRecipeRef.current = selectedRecipe;
+  }, [selectedRecipe]);
+  const favoriteOperationIdRef = useRef<Map<string, number>>(new Map());
+  const ratingOperationIdRef = useRef<Map<string, number>>(new Map());
+
   // Toggle Favorite
+  //
+  // Connected Vault: persist through the authoritative recipe-storage mechanism
+  // (write first, then commit state) so a failed write cannot masquerade as a
+  // saved favorite. Starter/disconnected Vaults remain in-memory only.
   const handleToggleFavorite = (recipeId: string) => {
-    setRecipes((prev) =>
-      prev.map((r) => (r.id === recipeId ? { ...r, isFavorite: !r.isFavorite } : r))
+    const current =
+      recipesRef.current.find((r) => r.id === recipeId) ||
+      (selectedRecipeRef.current && selectedRecipeRef.current.id === recipeId
+        ? selectedRecipeRef.current
+        : undefined);
+    if (!current) return;
+
+    const nextFavorite = !Boolean(current.isFavorite);
+
+    // Operation identity for this toggle, so a stale failed write cannot roll
+    // back a newer optimistic user selection.
+    const operationId = (favoriteOperationIdRef.current.get(recipeId) ?? 0) + 1;
+    favoriteOperationIdRef.current.set(recipeId, operationId);
+
+    // Optimistic synchronous update so rapid toggles observe the latest intent.
+    const optimisticRecipe: ObsidianRecipe = { ...current, isFavorite: nextFavorite };
+    recipesRef.current = recipesRef.current.map((r) =>
+      r.id === recipeId ? optimisticRecipe : r
     );
-    if (selectedRecipe && selectedRecipe.id === recipeId) {
-      setSelectedRecipe((prev) => (prev ? { ...prev, isFavorite: !prev.isFavorite } : null));
+    setRecipes(recipesRef.current);
+    if (selectedRecipeRef.current && selectedRecipeRef.current.id === recipeId) {
+      const optimisticSelected: ObsidianRecipe = { ...selectedRecipeRef.current, isFavorite: nextFavorite };
+      selectedRecipeRef.current = optimisticSelected;
+      setSelectedRecipe(optimisticSelected);
     }
+
+    if (!vaultAdapter) return;
+
+    const persist = async () => {
+      const latest =
+        recipesRef.current.find((r) => r.id === recipeId) ||
+        (selectedRecipeRef.current && selectedRecipeRef.current.id === recipeId
+          ? selectedRecipeRef.current
+          : undefined);
+      if (!latest) return;
+      try {
+        await commitRecipeWrite(latest, current);
+      } catch (err) {
+        reportVaultError('save', latest.title || 'recipe', err);
+        // Roll back ONLY if no newer toggle has superseded this operation.
+        if (favoriteOperationIdRef.current.get(recipeId) === operationId) {
+          const revertedFavorite = current.isFavorite;
+          recipesRef.current = recipesRef.current.map((r) =>
+            r.id === recipeId ? { ...r, isFavorite: revertedFavorite } : r
+          );
+          setRecipes(recipesRef.current);
+          if (selectedRecipeRef.current && selectedRecipeRef.current.id === recipeId) {
+            const revertedSelected: ObsidianRecipe = { ...selectedRecipeRef.current, isFavorite: revertedFavorite };
+            selectedRecipeRef.current = revertedSelected;
+            setSelectedRecipe(revertedSelected);
+          }
+        }
+      }
+    };
+
+    // Fire and forget; commitRecipeWrite serializes the actual write per recipe.
+    void persist();
+  };
+
+
+  // Rate recipe (interactive five-star). Persists through the authoritative
+  // recipe-storage path for connected Vaults; starter/disconnected stay in
+  // memory. Rating 0 represents an unrated/cleared recipe.
+  const handleRateRecipe = async (recipeId: string, rating: number) => {
+    const current =
+      recipesRef.current.find((r) => r.id === recipeId) ||
+      (selectedRecipeRef.current && selectedRecipeRef.current.id === recipeId
+        ? selectedRecipeRef.current
+        : undefined);
+    if (!current) return;
+
+    const nextRating = Math.min(5, Math.max(0, Math.round(rating)));
+
+    const operationId = (ratingOperationIdRef.current.get(recipeId) ?? 0) + 1;
+    ratingOperationIdRef.current.set(recipeId, operationId);
+
+    const optimisticRecipe: ObsidianRecipe = { ...current, rating: nextRating, ratingExplicit: true, ratingSource: nextRating > 0 ? 'personal' : undefined };
+    recipesRef.current = recipesRef.current.map((r) =>
+      r.id === recipeId ? optimisticRecipe : r
+    );
+    setRecipes(recipesRef.current);
+    if (selectedRecipeRef.current && selectedRecipeRef.current.id === recipeId) {
+      const optimisticSelected: ObsidianRecipe = { ...selectedRecipeRef.current, rating: nextRating, ratingExplicit: true, ratingSource: nextRating > 0 ? 'personal' : undefined };
+      selectedRecipeRef.current = optimisticSelected;
+      setSelectedRecipe(optimisticSelected);
+    }
+
+    if (!vaultAdapter) return;
+
+    const persist = async () => {
+      const latest =
+        recipesRef.current.find((r) => r.id === recipeId) ||
+        (selectedRecipeRef.current && selectedRecipeRef.current.id === recipeId
+          ? selectedRecipeRef.current
+          : undefined);
+      if (!latest) return;
+      try {
+        await commitRecipeWrite(latest, current);
+      } catch (err) {
+        reportVaultError('save', latest.title || 'recipe', err);
+        if (ratingOperationIdRef.current.get(recipeId) === operationId) {
+          const revertedRating = current.rating;
+          recipesRef.current = recipesRef.current.map((r) =>
+            r.id === recipeId ? { ...r, rating: revertedRating, ratingSource: current.ratingSource } : r
+          );
+          setRecipes(recipesRef.current);
+          if (selectedRecipeRef.current && selectedRecipeRef.current.id === recipeId) {
+            const revertedSelected: ObsidianRecipe = { ...selectedRecipeRef.current, rating: revertedRating, ratingSource: current.ratingSource };
+            selectedRecipeRef.current = revertedSelected;
+            setSelectedRecipe(revertedSelected);
+          }
+        }
+      }
+    };
+
+    void persist();
   };
 
   // Filter by Wikilink
@@ -2100,6 +2254,11 @@ export default function App() {
       // Favorites
       if (filters.onlyFavorites && !recipe.isFavorite) return false;
 
+      // Navigation-only Favorites view. This is intentionally separate from the
+      // manual "Favorites Only" filter control so neither overwrites the other.
+      // It only narrows the grid/Favorites collection; other destinations such
+      // as Dataview Table remain independent and show the full recipe set.
+      if (vaultView === 'favorites' && activeTab === 'grid' && !recipe.isFavorite) return false;
       // Max Cook Time
       if (filters.maxCookTime) {
         const cookMin = parseInt(recipe.cookTime, 10) || 30;
@@ -2121,7 +2280,7 @@ export default function App() {
       }
       return 0;
     });
-  }, [recipes, searchQuery, filters]);
+  }, [recipes, searchQuery, filters, vaultView, activeTab]);
 
   const activeFilterCount =
     (filters.tag ? 1 : 0) +
@@ -2134,6 +2293,9 @@ export default function App() {
   // The vault result count only switches to the "Showing X of Y" form while a
   // search or filter is actually active, so the number is never printed twice.
   const vaultResultIsFiltered = Boolean(searchQuery) || activeFilterCount > 0;
+
+  const isFavoritesView = vaultView === 'favorites' && activeTab === 'grid';
+  const hasFavoriteRecipes = recipes.some((recipe) => recipe.isFavorite);
 
   // Deterministic featured selection is computed once for the spread and the
   // editorial folio line. No recommendation logic or persisted pin is added.
@@ -2279,8 +2441,10 @@ export default function App() {
         }}
         legacyRecipeCount={vaultHealthSummary.legacyCount + vaultHealthSummary.incompleteCount}
         onShisoOpen={() => shiso.open('global')}
+        vaultView={vaultView}
+        setVaultView={setVaultView}
         onFavorites={() => {
-          setFilters((f) => ({ ...f, onlyFavorites: true }));
+          setVaultView('favorites');
           setActiveTab('grid');
           setSelectedRecipe(null);
         }}
@@ -2424,6 +2588,8 @@ export default function App() {
               handleAddToMealPlan(recipe);
               setSelectedRecipe(null);
             }}
+            onToggleFavorite={handleToggleFavorite}
+            onRateRecipe={handleRateRecipe}
             onAddToShoppingList={handleAddToShoppingList}
             onStartTimer={handleStartTimer}
             onFilterByWikilink={handleFilterByWikilink}
@@ -2587,38 +2753,61 @@ export default function App() {
             </section>
 
             {filteredRecipes.length === 0 ? (
-              <div className="mt-8 border border-dashed border-[var(--border-subtle,rgba(255,255,255,0.08))] px-6 py-16 text-center">
-                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-[var(--accent-subtle,rgba(245,158,11,0.12))] text-[var(--accent-text,#F59E0B)]">
-                  <SearchX className="h-5 w-5" strokeWidth={1.75} aria-hidden="true" />
+              isFavoritesView && !hasFavoriteRecipes ? (
+                <div className="mt-8 border border-dashed border-[var(--border-subtle,rgba(255,255,255,0.08))] px-6 py-16 text-center">
+                  <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-[var(--accent-subtle,rgba(245,158,11,0.12))] text-[var(--accent-text,#F59E0B)]">
+                    <Star className="h-5 w-5" strokeWidth={1.75} aria-hidden="true" />
+                  </div>
+                  <h2 className="mt-5 font-serif text-3xl font-medium text-[var(--text-primary,#F3F4F6)]">
+                    No favorite recipes yet
+                  </h2>
+                  <p className="mx-auto mt-3 max-w-md text-sm leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
+                    Tap the heart on any recipe to save it here. Your full collection and filters remain available.
+                  </p>
+                  <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setVaultView('all')}
+                      className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-sm bg-[var(--accent,#F59E0B)] px-4 text-sm font-semibold text-[var(--accent-contrast,#0C0C0C)] transition-colors hover:bg-[var(--accent-hover,#D97706)]"
+                    >
+                      Browse all recipes
+                    </button>
+                  </div>
                 </div>
-                <h2 className="mt-5 font-serif text-3xl font-medium text-[var(--text-primary,#F3F4F6)]">
-                  No matching recipes found
-                </h2>
-                <p className="mx-auto mt-3 max-w-md text-sm leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
-                  Try adjusting your search terms, clearing active tag filters, or creating and importing new recipe notes.
-                </p>
-                <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSearchQuery('');
-                      setFilters(INITIAL_FILTERS);
-                    }}
-                    className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-sm bg-[var(--accent,#F59E0B)] px-4 text-sm font-semibold text-[var(--accent-contrast,#0C0C0C)] transition-colors hover:bg-[var(--accent-hover,#D97706)]"
-                  >
-                    <RotateCcw className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
-                    Reset All Filters
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setIsGrabberOpen(true)}
-                    className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-sm border border-[var(--border-subtle,rgba(255,255,255,0.08))] px-4 text-sm font-medium text-[var(--text-secondary,#9CA3AF)] transition-colors hover:border-[var(--accent-text,#F59E0B)] hover:text-[var(--accent-text,#F59E0B)]"
-                  >
-                    <Globe2 className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
-                    Grab Recipe from Web
-                  </button>
+              ) : (
+                <div className="mt-8 border border-dashed border-[var(--border-subtle,rgba(255,255,255,0.08))] px-6 py-16 text-center">
+                  <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-[var(--accent-subtle,rgba(245,158,11,0.12))] text-[var(--accent-text,#F59E0B)]">
+                    <SearchX className="h-5 w-5" strokeWidth={1.75} aria-hidden="true" />
+                  </div>
+                  <h2 className="mt-5 font-serif text-3xl font-medium text-[var(--text-primary,#F3F4F6)]">
+                    No matching recipes found
+                  </h2>
+                  <p className="mx-auto mt-3 max-w-md text-sm leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
+                    Try adjusting your search terms, clearing active tag filters, or creating and importing new recipe notes.
+                  </p>
+                  <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSearchQuery('');
+                        setFilters(INITIAL_FILTERS);
+                      }}
+                      className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-sm bg-[var(--accent,#F59E0B)] px-4 text-sm font-semibold text-[var(--accent-contrast,#0C0C0C)] transition-colors hover:bg-[var(--accent-hover,#D97706)]"
+                    >
+                      <RotateCcw className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
+                      Reset All Filters
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsGrabberOpen(true)}
+                      className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-sm border border-[var(--border-subtle,rgba(255,255,255,0.08))] px-4 text-sm font-medium text-[var(--text-secondary,#9CA3AF)] transition-colors hover:border-[var(--accent-text,#F59E0B)] hover:text-[var(--accent-text,#F59E0B)]"
+                    >
+                      <Globe2 className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
+                      Grab Recipe from Web
+                    </button>
+                  </div>
                 </div>
-              </div>
+              )
             ) : (
               <div className="space-y-12 pt-7 md:space-y-16 md:pt-8">
                 {featuredSelection.featured && (
@@ -2761,6 +2950,7 @@ export default function App() {
       <BottomNav
         activeTab={activeTab}
         onVault={() => {
+          setVaultView('all');
           setActiveTab('grid');
           setSelectedRecipe(null);
           // The mobile header scrolls away with the document (the recipe rows
@@ -2801,6 +2991,7 @@ export default function App() {
             </div>
             {[
               { label: 'New Recipe Note', action: () => { setEditingRecipe(null); setIsEditorOpen(true); } },
+              { label: 'Favorites', action: () => { setVaultView('favorites'); setActiveTab('grid'); } },
               { label: 'Create with SHISO', action: () => setIsCreateForMeOpen(true) },
               { label: 'Grab from Web', action: () => setIsGrabberOpen(true) },
               { label: 'Vault Intelligence', action: () => { setVaultIntelligenceRecipeId(null); setIsVaultIntelligenceOpen(true); } },

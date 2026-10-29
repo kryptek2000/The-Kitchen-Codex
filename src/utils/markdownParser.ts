@@ -134,6 +134,20 @@ export function cleanRecipeTitle(raw: any, fileName?: string): string {
 }
 
 /**
+ * Coerces a loosely-typed frontmatter value into a strict boolean favorite flag.
+ * Absence / null / empty / unrecognized values are treated as `false`.
+ */
+function parseBooleanLike(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    return normalized === 'true' || normalized === 'yes' || normalized === '1' || normalized === 'on';
+  }
+  return value !== null && value !== undefined && value !== '';
+}
+
+/**
  * Helper to find field value across multiple potential keys in an object (case-insensitive, ignoring underscores and hyphens)
  */
 function findFlexibleKey(obj: Record<string, any>, candidateKeys: string[]): any {
@@ -663,12 +677,27 @@ export function parseObsidianRecipeMarkdown(
   const rawDifficulty = findFlexibleKey(frontmatter, ['difficulty']) || findFlexibleKey(dataviewFields, ['difficulty']);
   const difficulty = (rawDifficulty || 'Medium') as 'Easy' | 'Medium' | 'Hard';
   const rawRating = findFlexibleKey(frontmatter, ['rating']) ?? findFlexibleKey(dataviewFields, ['rating']);
-  const rating =
-    typeof rawRating === 'number'
-      ? Math.min(5, Math.max(1, rawRating))
-      : typeof rawRating === 'string'
-      ? Math.min(5, Math.max(1, parseFloat(rawRating) || 5))
-      : 5;
+  let rating: number;
+  if (rawRating === undefined || rawRating === null || rawRating === '') {
+    rating = 0;
+  } else if (typeof rawRating === 'number') {
+    rating = rawRating === 0 ? 0 : Math.min(5, Math.max(1, rawRating));
+  } else if (typeof rawRating === 'string') {
+    const trimmed = rawRating.trim();
+    if (trimmed === '0') {
+      rating = 0;
+    } else {
+      const parsed = parseFloat(trimmed);
+      rating = Number.isFinite(parsed) && parsed > 0 ? Math.min(5, Math.max(1, parsed)) : 5;
+    }
+  } else {
+    rating = 0;
+  }
+  const rawFavorite =
+    findFlexibleKey(frontmatter, ['isFavorite', 'favorite', 'favourite', 'starred', 'star']) ??
+    findFlexibleKey(dataviewFields, ['isFavorite', 'favorite', 'favourite', 'starred', 'star']);
+  const isFavorite = parseBooleanLike(rawFavorite);
+
   const source = findFlexibleKey(frontmatter, ['source', 'url']) || findFlexibleKey(dataviewFields, ['source', 'url']);
   const rawImage =
     findFlexibleKey(frontmatter, ['image', 'cover', 'thumbnail', 'photo', 'heroImage', 'banner']) ||
@@ -767,6 +796,17 @@ export function parseObsidianRecipeMarkdown(
 
   const id = filePath || fileName.replace(/\.md$/i, '').toLowerCase().replace(/[^a-z0-9]+/g, '-');
 
+  const ratingExplicit =
+    Object.prototype.hasOwnProperty.call(frontmatter || {}, 'rating') ||
+    Object.prototype.hasOwnProperty.call(dataviewFields || {}, 'rating');
+
+  const rawRatingSource = findFlexibleKey(frontmatter, ['rating_source', 'ratingSource', 'ratingSource']) ??
+    findFlexibleKey(dataviewFields, ['rating_source', 'ratingSource']);
+  const ratingSource =
+    rawRatingSource === 'imported' || rawRatingSource === 'personal'
+      ? rawRatingSource
+      : undefined;
+
   const rawParsedRecipe: ObsidianRecipe = {
     id,
     fileName,
@@ -782,6 +822,7 @@ export function parseObsidianRecipeMarkdown(
     ...(typeof servings === 'number' ? { servings } : {}),
     difficulty,
     rating,
+    isFavorite,
     calories,
     nutrition,
     source,
@@ -817,6 +858,8 @@ export function parseObsidianRecipeMarkdown(
   ) {
     parsed.codexNutrition = decodedAdvanced.value;
   }
+  parsed.ratingExplicit = ratingExplicit;
+  parsed.ratingSource = ratingSource;
   return parsed;
 }
 
@@ -1026,6 +1069,8 @@ export function serializeRecipeToObsidianMarkdown(recipe: Partial<ObsidianRecipe
     try {
       const canonical = obsidianToCanonicalRecipe(recipe as ObsidianRecipe);
       recipeToSerialize = canonicalToObsidianRecipe(canonical, recipe.fileHandle);
+      recipeToSerialize.ratingExplicit = recipe.ratingExplicit;
+      recipeToSerialize.ratingSource = recipe.ratingSource;
     } catch {
       recipeToSerialize = recipe;
     }
@@ -1061,8 +1106,35 @@ export function serializeRecipeToObsidianMarkdown(recipe: Partial<ObsidianRecipe
   if (recipeToSerialize.difficulty && (recipeToSerialize.frontmatter?.difficulty !== undefined || !recipeToSerialize.frontmatter)) {
     frontmatterObj.difficulty = recipeToSerialize.difficulty;
   }
-  if (recipeToSerialize.rating !== undefined && (recipeToSerialize.frontmatter?.rating !== undefined || !recipeToSerialize.frontmatter)) {
-    frontmatterObj.rating = recipeToSerialize.rating;
+  if (recipeToSerialize.rating !== undefined) {
+    // An explicit user/imported rating is always durable, including an explicit
+    // 5 or 0. A non-explicit legacy/default rating is only written when the
+    // source already carried a rating field, so an unrelated save cannot
+    // materialize a fabricated five-star rating.
+    const ratingExplicit =
+      (recipe as any).ratingExplicit === true ||
+      recipeToSerialize.ratingExplicit === true ||
+      recipe.frontmatter?.rating !== undefined ||
+      recipeToSerialize.frontmatter?.rating !== undefined;
+    const shouldWriteRating =
+      ratingExplicit ||
+      recipeToSerialize.rating !== 5 ||
+      !recipeToSerialize.frontmatter;
+    if (shouldWriteRating) {
+      frontmatterObj.rating = recipeToSerialize.rating;
+    }
+  }
+  if (recipe.ratingSource === 'imported' || recipe.ratingSource === 'personal' || recipeToSerialize.ratingSource === 'imported' || recipeToSerialize.ratingSource === 'personal') {
+    const source = recipe.ratingSource || recipeToSerialize.ratingSource;
+    if (source) frontmatterObj.rating_source = source;
+  }
+
+  // Favorite flag: canonical field name is `isFavorite`. Clean any legacy/alias
+  // keys (favorite, favourite, starred, star) so a single authoritative field
+  // survives the write.
+  if (recipeToSerialize.isFavorite !== undefined) {
+    cleanAlternateFrontmatterKeys(frontmatterObj, 'isFavorite', ['isFavorite', 'favorite', 'favourite', 'starred', 'star']);
+    frontmatterObj.isFavorite = Boolean(recipeToSerialize.isFavorite);
   }
 
   // Timings: Persist prep_time, cook_time, total_time when present and clean alternate alias keys to avoid duplicate frontmatter fields
