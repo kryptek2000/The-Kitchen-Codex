@@ -160,6 +160,7 @@ export function RecipeDetailView({
   const [ingredientUsage, setIngredientUsage] = useState<{ query: string; display: string } | null>(null);
   const [favoriteAnnouncement, setFavoriteAnnouncement] = useState('');
   const [ratingPending, setRatingPending] = useState(false);
+  const heroImgRef = useRef<HTMLDivElement | null>(null);
   const defaultImg = getRecipeImage(recipe);
   const reactiveVaultImage = useVaultImage(recipe.image, defaultImg);
 
@@ -174,16 +175,6 @@ export function RecipeDetailView({
     !!imageUrl &&
     imageUrl !== LOCAL_RECIPE_IMAGE_PLACEHOLDER;
 
-  const heroImgRef = useRef<HTMLImageElement | null>(null);
-  useLayoutEffect(() => {
-    const el = heroImgRef.current;
-    if (!el) return;
-    if (imageUrl && /^(https?:|data:|blob:)/i.test(imageUrl)) {
-      el.setAttribute('src', imageUrl);
-    } else {
-      el.removeAttribute('src');
-    }
-  }, [imageUrl]);
 
   const description = storedRecipeDescription(recipe);
   const { tags: visibleTags, remaining: remainingTags } = visibleRecipeTags(recipe.tags, 6);
@@ -611,19 +602,12 @@ export function RecipeDetailView({
             <div className="relative h-64 sm:h-80 md:h-96">
               {showPhoto ? (
                 <>
-                  <img
-                    ref={heroImgRef}
-                    alt={recipe.title}
-                    referrerPolicy="no-referrer"
-                    loading="eager"
-                    fetchPriority="high"
-                    className="h-full w-full object-cover"
-                    onError={(e) => {
-                      const target = e.target as HTMLImageElement;
-                      if (target.src !== DEFAULT_FOOD_IMAGES.default) {
-                        target.src = DEFAULT_FOOD_IMAGES.default;
-                      }
-                    }}
+                  <div
+                    ref={heroImgRef as any}
+                    role="img"
+                    aria-label={recipe.title}
+                    className="h-full w-full bg-cover bg-center"
+                    style={{ backgroundImage: `url(${JSON.stringify(imageUrl)})` }}
                   />
                   <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/40 to-transparent pointer-events-none" />
 
