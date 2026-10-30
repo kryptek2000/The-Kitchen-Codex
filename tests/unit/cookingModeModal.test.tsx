@@ -5,6 +5,8 @@ import React from 'react';
 
 import { CookingModeModal } from '../../src/components/CookingModeModal';
 
+vi.mock('canvas-confetti', () => ({ default: vi.fn() }));
+
 afterEach(() => cleanup());
 
 function makeRecipe(overrides: any = {}): any {
@@ -52,6 +54,29 @@ describe('CookingModeModal', () => {
     expect(screen.getByText('Test Soup')).toBeTruthy();
     expect(screen.getByText('Mix the flour.')).toBeTruthy();
     expect(screen.getByText(/Step 1 of 3/)).toBeTruthy();
+    const progress = screen.getByRole('progressbar', { name: 'Cooking progress' });
+    expect(progress.getAttribute('aria-valuemin')).toBe('1');
+    expect(progress.getAttribute('aria-valuemax')).toBe('3');
+    expect(progress.getAttribute('aria-valuenow')).toBe('1');
+    expect(progress.getAttribute('aria-valuetext')).toBe('Step 1 of 3');
+  });
+
+  it('renders a complete long recipe title in the editorial header', () => {
+    const longTitle = 'Skillet Cornmeal Porridge with Orchard Apples and Brown Butter';
+    render(
+      <CookingModeModal
+        recipe={makeRecipe({ title: longTitle })}
+        servings={4}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    const title = screen.getByRole('heading', { name: longTitle });
+    expect(title).toBeTruthy();
+    expect(title.className).not.toContain('truncate');
   });
 
   it('navigates steps with next/prev', () => {
@@ -68,8 +93,83 @@ describe('CookingModeModal', () => {
     );
     fireEvent.click(screen.getByText('Next Step'));
     expect(screen.getByText('Add the egg and stir.')).toBeTruthy();
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('2');
     fireEvent.click(screen.getByText('Previous'));
     expect(screen.getByText('Mix the flour.')).toBeTruthy();
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('1');
+  });
+
+  it('preserves keyboard navigation outside interactive controls', () => {
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    const root = document.getElementById('fullscreen-cooking-mode')!;
+    root.focus();
+    fireEvent.keyDown(root, { key: 'ArrowRight' });
+    expect(screen.getByText('Add the egg and stir.')).toBeTruthy();
+    fireEvent.keyDown(root, { key: 'ArrowLeft' });
+    expect(screen.getByText('Mix the flour.')).toBeTruthy();
+    fireEvent.keyDown(root, { key: ' ' });
+    expect(screen.getByText('Add the egg and stir.')).toBeTruthy();
+
+    const nextButton = document.getElementById('cooking-next-step-btn')!;
+    nextButton.focus();
+    fireEvent.keyDown(nextButton, { key: 'ArrowRight' });
+    expect(screen.getByText('Add the egg and stir.')).toBeTruthy();
+  });
+
+  it('uses theme tokens and 48px primary navigation targets', () => {
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    const root = document.getElementById('fullscreen-cooking-mode')!;
+    expect(root.className).toContain('bg-[var(--bg-root,#0C0C0C)]');
+    expect(document.getElementById('cooking-prev-step-btn')!.className).toContain('min-h-[48px]');
+    expect(document.getElementById('cooking-next-step-btn')!.className).toContain('min-h-[48px]');
+  });
+
+  it('shows a clean finished state without duplicate footer navigation', () => {
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    const nextButton = document.getElementById('cooking-next-step-btn')!;
+    fireEvent.click(nextButton);
+    fireEvent.click(nextButton);
+    fireEvent.click(nextButton);
+
+    expect(screen.getByText('Bon Appétit! 🎉')).toBeTruthy();
+    expect(screen.getByText('Review Steps Again')).toBeTruthy();
+    expect(screen.getByText('Done Cooking')).toBeTruthy();
+    expect(document.getElementById('cooking-next-step-btn')).toBeNull();
+    expect(document.querySelector('#fullscreen-cooking-mode footer')).toBeNull();
+
+    fireEvent.click(screen.getByText('Review Steps Again'));
+    expect(screen.getByText('Mix the flour.')).toBeTruthy();
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('1');
   });
 
   it('closes via exit button', () => {
@@ -479,5 +579,104 @@ describe('CookingModeModal focus recovery', () => {
     fireEvent.keyDown(window, { key: 'Tab' });
     const root = document.getElementById('fullscreen-cooking-mode')!;
     expect(root.contains(document.activeElement)).toBe(true);
+  });
+});
+
+describe('CookingModeModal Slice 2', () => {
+  it('shows an active timer tray count', () => {
+    const timers = [
+      { id: 't1', recipeTitle: 'Test Soup', label: 'Step 1: 5m', totalSeconds: 300, remainingSeconds: 200, isRunning: true, createdAt: 1 },
+    ];
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        activeTimers={timers as any}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    expect(screen.getByLabelText('Active timers: 1')).toBeTruthy();
+  });
+
+  it('opens the timer tray to reveal active timers', () => {
+    const timers = [
+      { id: 't1', recipeTitle: 'Test Soup', label: 'Step 1: 5m', totalSeconds: 300, remainingSeconds: 200, isRunning: true, createdAt: 1 },
+    ];
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        activeTimers={timers as any}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    fireEvent.click(screen.getByLabelText('Active timers: 1'));
+    expect(screen.getByText('Step 1: 5m')).toBeTruthy();
+  });
+
+  it('opens the ingredient sheet', () => {
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    fireEvent.click(screen.getByLabelText('Toggle ingredients list'));
+    expect(screen.getByText('Ingredients (4 servings)')).toBeTruthy();
+  });
+});
+
+describe('CookingModeModal Slice 2-R1', () => {
+  it('exposes New Custom Timer in the timer tray', () => {
+    const timers = [
+      { id: 't1', recipeTitle: 'Test Soup', label: 'Step 1: 5m', totalSeconds: 300, remainingSeconds: 200, isRunning: true, createdAt: 1 },
+    ];
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        activeTimers={timers as any}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onAddCustomTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    fireEvent.click(screen.getByLabelText('Active timers: 1'));
+    expect(screen.getByText('New Custom Timer')).toBeTruthy();
+  });
+});
+
+describe('CookingModeModal zero-timer tray', () => {
+  it('allows opening the tray and creating a custom timer with zero timers', () => {
+    const onAdd = vi.fn();
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onAddCustomTimer={onAdd}
+        onClose={() => {}}
+      />
+    );
+    fireEvent.click(screen.getByLabelText('Active timers: 0'));
+    expect(screen.getByText('No active timers.')).toBeTruthy();
+    fireEvent.click(screen.getByText('New Custom Timer'));
+    expect(onAdd).toHaveBeenCalled();
   });
 });
