@@ -3020,13 +3020,15 @@ export default function App() {
         </dialog>
       )}
 
-      {/* Floating Active Timers Bar */}
-      <ActiveTimersBar
+      {/* Floating Active Timers Bar — hidden while Cooking Mode is open to avoid a duplicate dock */}
+      {!cookingRecipe && (
+        <ActiveTimersBar
         timers={activeTimers}
         onToggleTimer={handleToggleTimer}
         onDeleteTimer={handleDeleteTimer}
         onAddCustomTimer={handleAddCustomTimer}
-      />
+        />
+      )}
 
       {/* Fullscreen Cooking Mode Modal */}
       {cookingRecipe && (
@@ -3038,6 +3040,7 @@ export default function App() {
             onStartTimer={handleStartTimer}
             onToggleTimer={handleToggleTimer}
             onDeleteTimer={handleDeleteTimer}
+            onAddCustomTimer={handleAddCustomTimer}
             onClose={() => setCookingRecipe(null)}
           />
         </React.Suspense>

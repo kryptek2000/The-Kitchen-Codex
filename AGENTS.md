@@ -314,7 +314,7 @@ Uncommitted work is **never** described as shipped, merged, or on `main`.
 
 ### Signature Edition design program
 
-**Status: APPROVED / IMPLEMENTED IN WORKTREE / NOT MERGED.**
+**Status: APPROVED / UD-3P.1 AND UD-3P.2A MERGED / UD-3P.2B PLANNED.**
 
 The Signature Edition is a luxury digital-cookbook experience built around
 **Botanical Precision**: theme-controlled color palettes, editorial typography,
@@ -335,23 +335,21 @@ Program status:
 
 - **UD-3P.1 Signature Edition Vault** — IMPLEMENTED and merged at the current
   baseline (`4fefe02`).
-- **UD-3P.2A Recipe Detail, F1–F5** — IMPLEMENTED and AUDITED in the uncommitted
-  `work/ud3p2a-signature-detail` worktree. Not merged.
-- **F6 Notes Markdown rendering** — IMPLEMENTED in the uncommitted UD-3P.2A
-  worktree; focused implementation tests passed. Independent audit and final
-  integration remain pending. Do not describe F6 as shipped or fully complete.
-- **F7 Interactive Recipe Ratings** — IMPLEMENTED in the uncommitted
-  UD-3P.2A worktree; focused tests passed. Independent audit and owner
-  acceptance remain pending.
-- **GitHub integration** — NOT YET PERFORMED. No commit, push, pull request,
-  merge, or deployment exists for the UD-3P.2A/P1 work.
+- **UD-3P.2A Recipe Detail, F1–F5** — merged to `main` at `fc9eeaa` (PR #28).
+- **F6 Notes Markdown rendering** — included in the PR #28 merge; focused
+  implementation tests passed. Independent audit remains pending. This does not
+  make a release or deployment claim.
+- **F7 Interactive Recipe Ratings** — included in the PR #28 merge; focused
+  tests passed. Independent audit and owner acceptance remain pending.
+- **GitHub integration** — completed by the PR #28 merge at `fc9eeaa`. This
+  factual correction makes no deployment claim.
 - **UD-3P.2B Signature Cooking Mode** — the next major design milestone.
   PLANNED, not started.
 
 ### Favorites persistence program (P1)
 
-**Status: IMPLEMENTED / AUDITED PASS / OWNER-VERIFIED in the UD-3P.2A worktree.
-Not merged.**
+**Status: IMPLEMENTED / AUDITED PASS / OWNER-VERIFIED; merged to `main` at
+`fc9eeaa` (PR #28).**
 
 The P1 Favorites program repaired connected-Vault favorite persistence end to
 end:
@@ -446,15 +444,13 @@ Quality gates before any recipe or photograph is considered final:
 
 ### F7 Interactive Recipe Ratings
 
-**Status: IMPLEMENTED IN THE UNCOMMITTED WORKTREE / INDEPENDENT AUDIT PENDING.**
+**Status: INCLUDED IN PR #28 MERGE / INDEPENDENT AUDIT PENDING.**
 
-Approved execution order:
+Integration record:
 
-1. Complete the independent F6 audit.
-2. Implement and audit F7 interactive, persistent ratings.
-3. Obtain final owner acceptance.
-4. Prepare the UD-3P.2A commit, push, PR, and CI verification.
-5. Merge only with explicit owner authorization.
+UD-3P.2A/P1 and F7 were merged to `main` in PR #28 at `fc9eeaa`. Independent
+audit and owner-acceptance status remain separately tracked; this correction
+makes no release or deployment claim.
 
 Required behavior when F7 is built:
 
@@ -489,21 +485,18 @@ The starter Vault must eventually support:
 - A smooth first-time-user experience that clearly explains the difference
   between exploring the built-in collection and saving a personal copy.
 
-### Current integration blockers
+### Current integration record
 
-- **UD-3P.2A/P1 work is uncommitted.** It is not on `main` and must not be
-  described as shipped.
-- **GitHub integration not performed.** No commit, push, pull request, merge,
-  or deployment exists for this work.
-- **F6 Notes Markdown** is implemented in the uncommitted worktree, but its
-  independent audit and final integration remain pending.
+- **UD-3P.2A/P1** — merged to `main` at `fc9eeaa` (PR #28).
+- **F6 Notes Markdown** — included in the PR #28 merge; independent audit
+  remains pending. This record makes no release or deployment claim.
 
 ### Remaining product work and UX/accessibility backlog
 
 Tracked explicitly; none of these are silently complete:
 
-- **F6 Notes Markdown formatting** — IMPLEMENTED in the uncommitted worktree
-  with focused tests passing; independent audit and final integration pending.
+- **F6 Notes Markdown formatting** — included in the PR #28 merge with focused
+  tests passing; independent audit remains pending.
 - **Mobile Dataview overflow and count grammar** — BACKLOG.
 - **Photographic hero long-title contrast edge case** — BACKLOG.
 - **Cooking Mode redesign and finished-state contrast** — PLANNED under
@@ -550,15 +543,14 @@ Tracked explicitly; none of these are silently complete:
   and is the current release.
 - **UD-3P.1 Signature Edition Vault** — IMPLEMENTED and merged at the current
   baseline (`4fefe02`).
-- **UD-3P.2A Signature Recipe Detail (F1–F5)** — IMPLEMENTED and AUDITED in the
-  uncommitted `work/ud3p2a-signature-detail` worktree. Not merged.
-- **P1 Favorites persistence** — IMPLEMENTED / AUDITED PASS / OWNER-VERIFIED in
-  the same worktree. Not merged.
+- **UD-3P.2A Signature Recipe Detail (F1–F5)** — merged to `main` at
+  `fc9eeaa` (PR #28).
+- **P1 Favorites persistence** — merged to `main` at `fc9eeaa` (PR #28);
+  existing audit and owner-verification status is retained.
 - **UD-3P.2B Signature Cooking Mode** — NEXT MAJOR DESIGN MILESTONE. PLANNED;
   includes the Cooking Mode redesign and finished-state contrast work.
-- **F7 Interactive Recipe Ratings** — IMPLEMENTED in the uncommitted
-  UD-3P.2A worktree; depends on the completed Favorites write-coordination
-  path. Independent audit pending.
+- **F7 Interactive Recipe Ratings** — included in the PR #28 merge; depends on
+  the completed Favorites write-coordination path. Independent audit pending.
 - **Signature Nine Starter Collection** — PLANNED future milestone; approved
   Option A behavior and proposed lineup above. Not scheduled for implementation.
 - **Longer-term multi-surface roadmap** — intelligent meal planning, smart
@@ -777,30 +769,53 @@ well — this is the core reason Ask My Kitchen exists:
 
 ### Immediate next steps (authoritative order)
 
-1. **Complete the independent F6 audit** — F6 Notes Markdown is implemented in
-   the uncommitted worktree with focused tests passing; preserve that work and
-   finish the independent audit.
-2. **Complete the independent F7 audit and owner acceptance** — F7 is
-   implemented in the uncommitted worktree with focused tests passing; preserve
-   that work and finish audit/acceptance.
-3. **Obtain final owner acceptance** — accept F6/F7 and the UD-3P.2A/P1
-   program in the owner’s native environment.
-4. **Prepare the UD-3P.2A commit, push, PR, and CI verification** — only after
-   the preceding steps. Nothing in this worktree is on `main` yet.
-5. **Merge only with explicit owner authorization** — no merge, deployment, or
-   release is implied by the roadmap.
-6. **UD-3P.2B Signature Cooking Mode** — next major design milestone after
-   UD-3P.2A integration: Cooking Mode redesign, finished-state contrast,
-   responsive/kitchen-safe presentation.
-7. **Signature Nine Starter Collection** — separate future milestone; finalize
+1. **Record UD-3P.2A integration** — merged to `main` in PR #28 at `fc9eeaa`.
+   This record makes no release or deployment claim.
+2. **Complete the independent F6 audit** — F6 Notes Markdown was included in
+   the PR #28 merge with focused tests passing; finish the independent audit.
+3. **Complete the independent F7 audit and owner acceptance** — F7 was included
+   in the PR #28 merge with focused tests passing; finish audit/acceptance.
+4. **UD-3P.2B Signature Cooking Mode** — current Signature milestone: Cooking
+   Mode redesign, finished-state contrast, responsive/kitchen-safe presentation.
+5. **Signature Nine Starter Collection** — separate future milestone; finalize
    owner-approved recipes, assets, quality gates, and Option A save semantics
    before implementation.
-8. **Starter Vault behavior** — local demonstration persistence, explicit save
+6. **Starter Vault behavior** — local demonstration persistence, explicit save
    to personal Vault, built-in/personal identity, duplicate detection, deletion
    and customization safety, first-time-user experience.
-9. **Backlog closures** — mobile Dataview overflow/count grammar, hero
+7. **Backlog closures** — mobile Dataview overflow/count grammar, hero
    long-title contrast, Advanced Nutrition Apply eligibility/revalidation,
    Phase 5B browser-proof maintenance, and remaining accessibility obligations.
+
+### TKC Voice Foundation — PLANNED
+
+**Status: PLANNED / DISCOVERY ONLY. Not implemented.**
+
+The owner has approved pursuing a shared, local-first natural speech architecture
+for both:
+
+1. Cooking Mode — natural, calm recipe narration.
+2. SHISO — a distinctive, recognizable companion voice.
+
+Investigation scope:
+
+- Available browser/system voices.
+- Kokoro neural TTS.
+- Piper local TTS.
+- Browser/WebGPU/WASM feasibility.
+- Linux performance and memory requirements.
+- Model download sizes and caching.
+- Licensing and redistribution requirements.
+- Privacy and offline capabilities.
+- Playback interruption and cancellation.
+- Speech preprocessing for culinary measurements.
+- Optional future cloud speech providers.
+
+Recommended direction: a shared voice-service architecture with separate Cooking
+Mode and SHISO profiles. No neural speech engine is installed or integrated
+without further owner approval.
+
+---
 
 ### Product rules
 
