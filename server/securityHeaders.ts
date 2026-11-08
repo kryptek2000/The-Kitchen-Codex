@@ -44,6 +44,9 @@ export function getCspDirectives(customFrameAncestors?: string) {
     styleSrc: ["'self'", "'unsafe-inline'", "https:"],
     fontSrc: ["'self'", "data:", "https://fonts.gstatic.com"],
     imgSrc: ["'self'", "data:", "blob:", "https:"],
+    // Heart narration is decoded from a same-origin blob URL created by
+    // Cooking Mode. Keep the allowance scoped to media only.
+    mediaSrc: ["'self'", "blob:"],
     connectSrc: ["'self'"],
     objectSrc: ["'none'"],
     baseUri: ["'self'"],

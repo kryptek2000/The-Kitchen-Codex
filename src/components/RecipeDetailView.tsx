@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useLayoutEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useLayoutEffect, useRef } from 'react';
 import {
   ArrowLeft,
   Play,
@@ -36,6 +36,7 @@ import {
 import { ObsidianRecipe, ParsedIngredient, VaultNote, RecipeNutrition } from '../types';
 import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
 import { scaleIngredientText } from '../utils/markdownParser';
+import { prepareVoiceClip, isCookingVoiceFocusActive, subscribeCookingVoiceFocus } from '../application/voiceCache';
 import { downloadMarkdownFile } from '../utils/vaultFileSystem';
 import { getRecipeImage, DEFAULT_FOOD_IMAGES, LOCAL_RECIPE_IMAGE_PLACEHOLDER } from '../utils/imageHelper';
 import { useVaultImage } from '../hooks/useVaultImage';
@@ -160,6 +161,7 @@ export function RecipeDetailView({
   const [ingredientUsage, setIngredientUsage] = useState<{ query: string; display: string } | null>(null);
   const [favoriteAnnouncement, setFavoriteAnnouncement] = useState('');
   const [ratingPending, setRatingPending] = useState(false);
+  const [voiceFocusEpoch, setVoiceFocusEpoch] = useState(0);
   const heroImgRef = useRef<HTMLDivElement | null>(null);
   const defaultImg = getRecipeImage(recipe);
   const reactiveVaultImage = useVaultImage(recipe.image, defaultImg);
@@ -284,6 +286,38 @@ export function RecipeDetailView({
   };
 
   const isFavorite = !!recipe.isFavorite;
+
+  useEffect(() => subscribeCookingVoiceFocus(() => {
+    setVoiceFocusEpoch((epoch) => epoch + 1);
+  }), []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    async function prewarm() {
+      try {
+        if (typeof window === 'undefined') return;
+        if (window.localStorage.getItem('tkc_natural_voice') !== '1') return;
+        // Cooking Mode owns the current/next steps; do not compete with its
+        // foreground narration or keep prewarming obsolete steps behind it.
+        if (isCookingVoiceFocusActive(recipe)) return;
+        const status = await fetch('/api/voice/status').then((r) => r.json()).catch(() => null);
+        if (!status?.enabled) return;
+        const limit = Math.min(recipe.instructions.length, 3);
+        for (let i = 0; i < limit; i++) {
+          if (controller.signal.aborted || isCookingVoiceFocusActive(recipe)) return;
+          await prepareVoiceClip(recipe, i, {
+            signal: controller.signal,
+            purpose: 'detail',
+          });
+          await new Promise((r) => setTimeout(r, 150));
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    prewarm();
+    return () => { controller.abort(); };
+  }, [recipe.id, recipe.instructions, voiceFocusEpoch]);
 
 
   const renderInlineMarkdown = (text: string) => {

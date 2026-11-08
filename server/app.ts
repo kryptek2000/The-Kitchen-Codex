@@ -26,6 +26,7 @@ import {
 } from "./recipeContextOriginReceipt.js";
 import { estimateMassOnServer } from "./nutritionEstimate.js";
 import { recoverRecipeMetadata } from "./metadataRecovery.js";
+import { synthesizeNativeVoice, isNativeVoiceEnabled, getNativeVoiceRuntimeStatus, promoteNativeVoiceRequest, getLastNativeVoiceTiming } from "./voiceNative.js";
 import {
   recipeImportRateLimiter,
   nutritionEstimateRateLimiter,
@@ -475,6 +476,78 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // Health check endpoint
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok", version: RELEASE_VERSION, timestamp: new Date().toISOString() });
+  });
+
+  // Experimental native voice status (disabled by default).
+  app.get("/api/voice/status", (req, res) => {
+    const configured = isNativeVoiceEnabled();
+    if (!configured) {
+      return res.json({
+        enabled: false,
+        configured: false,
+        available: false,
+        reason: "Native voice is disabled.",
+        voices: ["af_bella", "af_heart"],
+      });
+    }
+    const runtime = getNativeVoiceRuntimeStatus();
+    res.json({
+      enabled: runtime.available,
+      configured,
+      available: runtime.available,
+      reason: runtime.reason,
+      voices: ["af_bella", "af_heart"],
+    });
+  });
+
+  // Promote an in-flight preparation to foreground priority without creating
+  // a second inference request. If the speak request has not arrived yet, the
+  // bridge remembers the request id so the subsequent enqueue starts first.
+  app.post("/api/voice/prioritize", requireAiAccessToken, (req, res) => {
+    if (!isNativeVoiceEnabled()) {
+      return res.status(503).json({ error: "Native voice is disabled." });
+    }
+    const requestId = typeof req.body?.requestId === "string" ? req.body.requestId.trim() : "";
+    if (!requestId || requestId.length > 200) {
+      return res.status(400).json({ error: "Invalid requestId" });
+    }
+    res.json(promoteNativeVoiceRequest(requestId));
+  });
+
+  // Experimental native voice synthesis (opt-in, same-origin, bounded).
+  app.post("/api/voice/speak", requireAiAccessToken, async (req, res) => {
+    if (!isNativeVoiceEnabled()) {
+      return res.status(503).json({ error: "Native voice is disabled." });
+    }
+    const { text, voice } = req.body || {};
+    if (typeof text !== "string" || text.length === 0 || text.length > 500) {
+      return res.status(400).json({ error: "Invalid text" });
+    }
+    if (!["af_bella", "af_heart"].includes(voice)) {
+      return res.status(400).json({ error: "Invalid voice" });
+    }
+    try {
+      const requestId = typeof req.get("X-TKC-Voice-Request") === "string" ? req.get("X-TKC-Voice-Request") : undefined;
+      const kind = typeof req.get("X-TKC-Voice-Kind") === "string" ? req.get("X-TKC-Voice-Kind") : undefined;
+      const voiceAbortController = new AbortController();
+      const abortVoice = () => voiceAbortController.abort();
+      req.once("aborted", abortVoice);
+      res.once("close", () => { if (!res.writableEnded) abortVoice(); });
+      try {
+        const buf = await synthesizeNativeVoice(text, voice, { requestId, kind, signal: voiceAbortController.signal });
+        if (process.env.TKC_VOICE_TIMING === "1") {
+          const timing = getLastNativeVoiceTiming();
+          if (timing) res.set("X-TKC-Voice-Timing", JSON.stringify(timing));
+        }
+        res.set("Content-Type", "audio/wav");
+        res.send(buf);
+      } finally {
+        req.removeListener("aborted", abortVoice);
+      }
+    } catch (err) {
+      if ((err as any)?.name === "AbortError") return;
+      res.status(500).json({ error: String((err as any)?.message || err) });
+    }
   });
 
   // Recipe Grabber Web Importer endpoint with rate limiting & input validation

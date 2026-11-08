@@ -18,9 +18,18 @@ import {
 import confetti from 'canvas-confetti';
 import { ObsidianRecipe, ActiveTimer } from '../types';
 import { scaleIngredientText } from '../utils/markdownParser';
+import { normalizeSpeechText } from '../application/speechText';
 import { playTimerChime } from '../utils/audioAlert';
 import { stepTimerKey, findTimerByKey } from '../application/timers';
 import { useVaultImage } from '../hooks/useVaultImage';
+import {
+  getCachedVoiceClip,
+  setCachedVoiceClip,
+  prepareVoiceClip as prepareSharedVoiceClip,
+  promoteVoiceClip,
+  setCookingVoiceFocus,
+  clearCookingVoiceFocus,
+} from '../application/voiceCache';
 import { getRecipeImage } from '../utils/imageHelper';
 
 interface CookingModeModalProps {
@@ -49,6 +58,18 @@ function formatInline(text: string): React.ReactNode {
   });
 }
 
+type PreparedVoiceClip = {
+  blob: Blob;
+  bytes: number;
+  lastUsed: number;
+};
+
+const VOICE_CACHE_MAX_ITEMS = 2;
+const VOICE_CACHE_MAX_BYTES = 2_000_000;
+const VOICE_PREFETCH_DELAY_MS = 1200;
+const VOICE_AUTO_PREPARE_DELAY_MS = 200;
+type VoiceReadiness = 'initializing' | 'unavailable' | 'idle' | 'preparing' | 'ready' | 'speaking' | 'fallback';
+
 export function CookingModeModal({
   recipe,
   servings,
@@ -62,6 +83,24 @@ export function CookingModeModal({
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [showIngredientsDrawer, setShowIngredientsDrawer] = useState(false);
+  const [naturalVoiceEnabled, setNaturalVoiceEnabled] = useState(false);
+  const [naturalVoiceAvailable, setNaturalVoiceAvailable] = useState(false);
+  const [naturalVoicePending, setNaturalVoicePending] = useState(false);
+  const [voiceReadiness, setVoiceReadiness] = useState<VoiceReadiness>('initializing');
+  const nativeAudioRef = useRef<HTMLAudioElement | null>(null);
+  const nativeSpeechIdRef = useRef(0);
+  const nativeAbortControllerRef = useRef<AbortController | null>(null);
+  const nativeAudioUrlRef = useRef<string | null>(null);
+  const voiceCacheRef = useRef<Map<string, PreparedVoiceClip>>(new Map());
+  const voicePreparationRef = useRef<Map<string, { controller: AbortController; promise: Promise<Blob | null> }>>(new Map());
+  const voiceCacheBytesRef = useRef(0);
+  const voiceCacheClockRef = useRef(0);
+  const naturalVoiceEnabledRef = useRef(false);
+  const naturalVoiceAvailableRef = useRef(false);
+  const naturalVoiceExplicitRef = useRef(false);
+  const voicePrefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const voiceAutoPrepareTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const voiceRequestSequenceRef = useRef(0);
   const [showTimerTray, setShowTimerTray] = useState(false);
   const ingredientsTriggerRef = useRef<HTMLButtonElement | null>(null);
   const ingredientSheetRef = useRef<HTMLElement | null>(null);
@@ -144,14 +183,63 @@ export function CookingModeModal({
     const text = `Now reading step ${currentStepIndex + 1}: ${plainStepText}`;
     setStepAnnouncement(text);
     if (window.speechSynthesis) window.speechSynthesis.cancel();
+    // Cooking Mode is now focused on this step. Detail prewarm for other
+    // steps is obsolete and may be cancelled; current/next remain eligible.
+    setCookingVoiceFocus(recipe, currentStepIndex);
+    stopNativeSpeech();
+    const keepKeys = new Set([voiceStepKey(currentStepIndex), voiceStepKey(currentStepIndex + 1)].filter(Boolean));
+    cancelVoicePreparations(keepKeys);
+    pruneVoiceCache(keepKeys);
+    if (voiceAutoPrepareTimerRef.current) {
+      clearTimeout(voiceAutoPrepareTimerRef.current);
+      voiceAutoPrepareTimerRef.current = null;
+    }
+    if (naturalVoiceExplicitRef.current && naturalVoiceEnabledRef.current && naturalVoiceAvailableRef.current) {
+      // Debounce automatic preparation so rapid navigation does not launch a
+      // throwaway inference for every intermediate step. An explicit Speak
+      // action remains immediate and foreground-prioritized.
+      voiceAutoPrepareTimerRef.current = setTimeout(() => {
+        voiceAutoPrepareTimerRef.current = null;
+        void prepareStepVoice(currentStepIndex);
+      }, VOICE_AUTO_PREPARE_DELAY_MS);
+    }
     setIsSpeaking(false);
     return () => {
+      if (voiceAutoPrepareTimerRef.current) {
+        clearTimeout(voiceAutoPrepareTimerRef.current);
+        voiceAutoPrepareTimerRef.current = null;
+      }
       if (window.speechSynthesis) window.speechSynthesis.cancel();
     };
-  }, [currentStepIndex, totalSteps, currentStep.text]);
+  }, [recipe.id, recipe.filePath, recipe.title, currentStepIndex, totalSteps, currentStep.text, naturalVoiceEnabled, naturalVoiceAvailable]);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('tkc_natural_voice') === '1';
+      naturalVoiceEnabledRef.current = stored;
+      // Persisted opt-in is explicit consent for automatic current-step
+      // preparation, without requiring the user to toggle the checkbox again.
+      naturalVoiceExplicitRef.current = stored;
+      setNaturalVoiceEnabled(stored);
+    } catch {}
+    fetch('/api/voice/status')
+      .then((r) => r.json())
+      .then((d) => {
+        const available = Boolean(d?.enabled);
+        naturalVoiceAvailableRef.current = available;
+        setNaturalVoiceAvailable(available);
+        setVoiceReadiness(available ? 'idle' : 'unavailable');
+      })
+      .catch(() => {
+        naturalVoiceAvailableRef.current = false;
+        setNaturalVoiceAvailable(false);
+        setVoiceReadiness('unavailable');
+      });
+  }, []);
 
   useEffect(() => {
     let wakeLock: any = null;
+
     async function requestWakeLock() {
       if (!('wakeLock' in navigator)) {
         setWakeLockStatus('unsupported');
@@ -176,6 +264,10 @@ export function CookingModeModal({
       if (window.speechSynthesis) {
         window.speechSynthesis.cancel();
       }
+      stopNativeSpeech();
+      cancelVoicePreparations();
+      clearVoiceCache();
+      clearCookingVoiceFocus();
     };
   }, []);
 
@@ -246,6 +338,7 @@ export function CookingModeModal({
   }, [currentStepIndex, totalSteps, showIngredientsDrawer]);
 
   const handleNextStep = () => {
+    stopNativeSpeech();
     setCompletedSteps((prev) => ({ ...prev, [currentStepIndex]: true }));
     if (currentStepIndex < totalSteps - 1) {
       setCurrentStepIndex((prev) => prev + 1);
@@ -265,25 +358,242 @@ export function CookingModeModal({
 
   const handlePrevStep = () => {
     if (currentStepIndex > 0) {
+      stopNativeSpeech();
       setCurrentStepIndex((prev) => prev - 1);
       setIsFinished(false);
     }
   };
 
-  const toggleSpeak = () => {
-    if (typeof window === 'undefined' || !window.speechSynthesis) return;
+  const voiceStepKey = (index: number) => {
+    const instruction = recipe.instructions[index];
+    if (!instruction) return '';
+    const recipeIdentity = recipe.id || recipe.filePath || recipe.title;
+    return `${recipeIdentity}::${index}::${normalizeSpeechText(instruction.text)}`;
+  };
 
-    if (isSpeaking) {
-      window.speechSynthesis.cancel();
-      setIsSpeaking(false);
+  const clearVoiceCache = () => {
+    voiceCacheRef.current.clear();
+    voiceCacheBytesRef.current = 0;
+  };
+
+  const pruneVoiceCache = (keepKeys: Set<string>) => {
+    for (const [key, clip] of voiceCacheRef.current) {
+      if (!keepKeys.has(key)) {
+        voiceCacheRef.current.delete(key);
+        voiceCacheBytesRef.current -= clip.bytes;
+      }
+    }
+    while (voiceCacheRef.current.size > VOICE_CACHE_MAX_ITEMS || voiceCacheBytesRef.current > VOICE_CACHE_MAX_BYTES) {
+      const candidate = Array.from(voiceCacheRef.current.entries())
+        .filter(([key]) => !keepKeys.has(key))
+        .sort(([, a], [, b]) => a.lastUsed - b.lastUsed)[0];
+      if (!candidate) break;
+      voiceCacheRef.current.delete(candidate[0]);
+      voiceCacheBytesRef.current -= candidate[1].bytes;
+    }
+  };
+
+  const cacheVoiceClip = (key: string, blob: Blob) => {
+    if (blob.size > VOICE_CACHE_MAX_BYTES) return;
+    const previous = voiceCacheRef.current.get(key);
+    if (previous) voiceCacheBytesRef.current -= previous.bytes;
+    voiceCacheRef.current.set(key, { blob, bytes: blob.size, lastUsed: ++voiceCacheClockRef.current });
+    voiceCacheBytesRef.current += blob.size;
+    pruneVoiceCache(new Set([voiceStepKey(currentStepIndex), voiceStepKey(currentStepIndex + 1)].filter(Boolean)));
+  };
+
+  const cancelVoicePreparations = (keepKeys: Set<string> = new Set()) => {
+    for (const [key, preparation] of voicePreparationRef.current) {
+      if (keepKeys.has(key)) continue;
+      try { preparation.controller.abort(); } catch {}
+      voicePreparationRef.current.delete(key);
+    }
+  };
+
+  const prepareStepVoice = async (index: number, kind: 'prepare' | 'foreground' = 'prepare'): Promise<Blob | null> => {
+    if (!naturalVoiceEnabledRef.current || !naturalVoiceAvailableRef.current) return null;
+    const instruction = recipe.instructions[index];
+    const key = voiceStepKey(index);
+    if (!instruction || !key) return null;
+    const isCurrentStep = index === currentStepIndex;
+    if (isCurrentStep && naturalVoiceExplicitRef.current) setVoiceReadiness('preparing');
+
+    const cached = voiceCacheRef.current.get(key);
+    if (cached) {
+      cached.lastUsed = ++voiceCacheClockRef.current;
+      if (isCurrentStep) setVoiceReadiness('ready');
+      return cached.blob;
+    }
+    const sharedCached = getCachedVoiceClip(recipe, index);
+    if (sharedCached) {
+      cacheVoiceClip(key, sharedCached);
+      if (isCurrentStep) setVoiceReadiness('ready');
+      return sharedCached;
+    }
+    const existing = voicePreparationRef.current.get(key);
+    if (existing) {
+      if (kind === 'foreground') promoteVoiceClip(recipe, index);
+      return existing.promise;
+    }
+
+    const controller = new AbortController();
+    const requestId = `voice-${++voiceRequestSequenceRef.current}`;
+    let promise: Promise<Blob | null>;
+    promise = (async () => {
+      try {
+        const blob = await prepareSharedVoiceClip(recipe, index, {
+          signal: controller.signal,
+          kind,
+          requestId,
+          purpose: 'cooking',
+        });
+        if (controller.signal.aborted || !naturalVoiceEnabledRef.current) return null;
+        if (!blob) {
+          if (isCurrentStep) setVoiceReadiness('fallback');
+          return null;
+        }
+        cacheVoiceClip(key, blob);
+        setCachedVoiceClip(recipe, index, blob);
+        if (isCurrentStep) setVoiceReadiness('ready');
+        return blob;
+      } catch (error) {
+        if ((error as any)?.name !== 'AbortError') {
+          console.warn('Native voice preparation failed:', error);
+          if (isCurrentStep) setVoiceReadiness('fallback');
+        }
+        return null;
+      } finally {
+        if (voicePreparationRef.current.get(key)?.promise === promise) voicePreparationRef.current.delete(key);
+      }
+    })();
+    voicePreparationRef.current.set(key, { controller, promise });
+    return promise;
+  };
+
+  const scheduleNextVoicePrefetch = (index: number) => {
+    if (voicePrefetchTimerRef.current) clearTimeout(voicePrefetchTimerRef.current);
+    if (index >= totalSteps) return;
+    voicePrefetchTimerRef.current = setTimeout(() => {
+      voicePrefetchTimerRef.current = null;
+      if (naturalVoiceEnabledRef.current && naturalVoiceAvailableRef.current && index === currentStepIndex) {
+        void prepareStepVoice(index + 1);
+      }
+    }, VOICE_PREFETCH_DELAY_MS);
+  };
+
+  const stopNativeSpeech = () => {
+    nativeSpeechIdRef.current += 1;
+    if (voicePrefetchTimerRef.current) {
+      clearTimeout(voicePrefetchTimerRef.current);
+      voicePrefetchTimerRef.current = null;
+    }
+    const controller = nativeAbortControllerRef.current;
+    if (controller) {
+      try { controller.abort(); } catch {}
+    }
+    nativeAbortControllerRef.current = null;
+    const el = nativeAudioRef.current;
+    if (el) {
+      try { el.pause(); } catch {}
+      if (nativeAudioUrlRef.current) {
+        try { URL.revokeObjectURL(nativeAudioUrlRef.current); } catch {}
+        nativeAudioUrlRef.current = null;
+      }
+      try { el.removeAttribute('src'); } catch {}
+    }
+    setIsSpeaking(false);
+    setNaturalVoicePending(false);
+    if (naturalVoiceEnabledRef.current && naturalVoiceAvailableRef.current) {
+      const currentKey = voiceStepKey(currentStepIndex);
+      if (voiceCacheRef.current.has(currentKey)) setVoiceReadiness('ready');
+      else if (voicePreparationRef.current.has(currentKey)) setVoiceReadiness('preparing');
+      else setVoiceReadiness('idle');
+    } else if (!naturalVoiceAvailableRef.current) {
+      setVoiceReadiness('unavailable');
     } else {
-      const textToRead = `Step ${currentStepIndex + 1}. ${currentStep.text}`;
-      const utterance = new SpeechSynthesisUtterance(textToRead);
-      utterance.rate = 0.95;
-      utterance.onend = () => setIsSpeaking(false);
-      utterance.onerror = () => setIsSpeaking(false);
-      window.speechSynthesis.speak(utterance);
+      setVoiceReadiness('idle');
+    }
+  };
+
+  const speakSystem = () => {
+    stopNativeSpeech();
+    if (!window.speechSynthesis) return;
+    const utterance = new SpeechSynthesisUtterance(`Step ${currentStepIndex + 1}. ${currentStep.text}`);
+    utterance.rate = 0.95;
+    utterance.onend = () => {
+      setIsSpeaking(false);
+      if (naturalVoiceEnabledRef.current && voiceCacheRef.current.has(voiceStepKey(currentStepIndex))) setVoiceReadiness('ready');
+    };
+    utterance.onerror = () => setIsSpeaking(false);
+    window.speechSynthesis.speak(utterance);
+    setVoiceReadiness(naturalVoiceAvailableRef.current ? 'fallback' : 'unavailable');
+    setIsSpeaking(true);
+  };
+
+  const speakNative = async () => {
+    const requestId = ++nativeSpeechIdRef.current;
+    const controller = new AbortController();
+    nativeAbortControllerRef.current = controller;
+    setNaturalVoicePending(true);
+    try {
+      const key = voiceStepKey(currentStepIndex);
+      const prepared = voiceCacheRef.current.get(key) || (getCachedVoiceClip(recipe, currentStepIndex) ? { blob: getCachedVoiceClip(recipe, currentStepIndex)! } : undefined);
+      const blob = prepared?.blob || await prepareStepVoice(currentStepIndex, 'foreground');
+      if (!blob) throw new Error('Native voice preparation did not return audio.');
+      if (requestId !== nativeSpeechIdRef.current || controller.signal.aborted) return;
+      if (prepared && 'lastUsed' in prepared) prepared.lastUsed = ++voiceCacheClockRef.current;
+      setVoiceReadiness('speaking');
+      const url = URL.createObjectURL(blob);
+      nativeAudioUrlRef.current = url;
+      const el = nativeAudioRef.current || new Audio();
+      nativeAudioRef.current = el;
+      el.src = url;
+      el.onended = () => {
+        if (requestId === nativeSpeechIdRef.current) {
+          setIsSpeaking(false);
+          scheduleNextVoicePrefetch(currentStepIndex);
+        }
+      };
+      await el.play();
+      if (requestId !== nativeSpeechIdRef.current) { stopNativeSpeech(); return; }
       setIsSpeaking(true);
+    } catch (err) {
+      if ((err as any)?.name === 'AbortError') return;
+      console.warn('Native voice failed, falling back to system voice:', err);
+      if (requestId !== nativeSpeechIdRef.current) return;
+      naturalVoiceEnabledRef.current = false;
+      naturalVoiceExplicitRef.current = false;
+      setNaturalVoiceEnabled(false);
+      try { localStorage.setItem('tkc_natural_voice', '0'); } catch {}
+      cancelVoicePreparations();
+      clearVoiceCache();
+      setVoiceReadiness('fallback');
+      if (window.speechSynthesis) {
+        const utterance = new SpeechSynthesisUtterance(`Step ${currentStepIndex + 1}. ${currentStep.text}`);
+        utterance.rate = 0.95;
+        utterance.onend = () => setIsSpeaking(false);
+        utterance.onerror = () => setIsSpeaking(false);
+        window.speechSynthesis.speak(utterance);
+        setIsSpeaking(true);
+      }
+    } finally {
+      if (requestId === nativeSpeechIdRef.current) setNaturalVoicePending(false);
+    }
+  };
+
+  const toggleSpeak = () => {
+    if (isSpeaking) {
+      stopNativeSpeech();
+      if (!naturalVoiceEnabled || !naturalVoiceAvailable || voiceReadiness === 'fallback') {
+        if (window.speechSynthesis) window.speechSynthesis.cancel();
+      }
+      setIsSpeaking(false);
+      return;
+    }
+    if (naturalVoiceEnabled && naturalVoiceAvailable) {
+      void speakNative();
+    } else {
+      speakSystem();
     }
   };
 
@@ -307,6 +617,15 @@ export function CookingModeModal({
   const displayedTotalSteps = Math.max(totalSteps, 1);
   const displayedStepNumber = Math.min(currentStepIndex + 1, displayedTotalSteps);
   const progressPercent = Math.round((displayedStepNumber / displayedTotalSteps) * 100);
+  const voiceReadinessLabel = {
+    initializing: 'Checking Heart…',
+    unavailable: 'Heart unavailable · System voice available',
+    idle: 'Heart ready to prepare',
+    preparing: 'Preparing Heart · System voice available now',
+    ready: 'Heart ready',
+    speaking: 'Heart speaking',
+    fallback: 'System voice for this request',
+  }[voiceReadiness];
 
   return (
     <div
@@ -438,6 +757,32 @@ export function CookingModeModal({
             <List className="w-4 h-4" />
             <span className="hidden sm:inline">Ingredients ({recipe.ingredients.length})</span>
           </button>
+
+          <label className="flex min-h-[44px] items-center gap-2 rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-2.5 py-2 text-xs text-[var(--text-secondary,#9CA3AF)]">
+            <input
+              type="checkbox"
+              checked={naturalVoiceEnabled && naturalVoiceAvailable}
+              disabled={!naturalVoiceAvailable || naturalVoicePending}
+              onChange={(e) => {
+                const next = e.target.checked && naturalVoiceAvailable;
+                naturalVoiceExplicitRef.current = next;
+                naturalVoiceEnabledRef.current = next;
+                setNaturalVoiceEnabled(next);
+                setVoiceReadiness(next ? 'preparing' : (naturalVoiceAvailable ? 'idle' : 'unavailable'));
+                try { localStorage.setItem('tkc_natural_voice', next ? '1' : '0'); } catch {}
+                if (!next) {
+                  stopNativeSpeech();
+                  cancelVoicePreparations();
+                  clearVoiceCache();
+                }
+              }}
+              className="h-4 w-4 accent-amber-500"
+            />
+            <span>Natural Voice — Experimental</span>
+            <span id="natural-voice-readiness" role="status" aria-live="polite" className="hidden max-w-[13rem] text-[10px] leading-tight text-[var(--text-secondary,#9CA3AF)] sm:inline">
+              {voiceReadinessLabel}
+            </span>
+          </label>
 
           <button
             id="speak-step-btn"
