@@ -576,7 +576,7 @@ export default function App() {
     });
     if (outcome.status === 'reconnected') {
       const generation = vaultScanGeneration.current.begin();
-      commitVaultSnapshot(outcome.data, generation);
+      commitVaultSnapshot(outcome.data, generation, outcome.handle);
       return;
     }
     if (outcome.status === 'no-handle' || outcome.status === 'unsupported') {

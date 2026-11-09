@@ -15,6 +15,8 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 
 import {
@@ -116,13 +118,22 @@ describe('Vault restore decision', () => {
 describe('Reconnect flow (user gesture)', () => {
   it('requests permission and loads the Vault when the user grants it', async () => {
     const calls: string[] = [];
+    const handle = { requestPermission: async () => 'granted' };
     const outcome = await reconnectRememberedVault<{ ok: true }>({
-      getHandle: async () => ({ requestPermission: async () => 'granted' }),
+      getHandle: async () => handle,
       requestPermission: async () => { calls.push('request'); return 'granted'; },
       load: async () => { calls.push('load'); return { ok: true }; },
     });
     expect(outcome.status).toBe('reconnected');
     expect(calls).toEqual(['request', 'load']);
+    // The canonical folder handle must survive the reconnect so App can
+    // propagate it into vaultStatus and subsequent filesystem writes.
+    if (outcome.status === 'reconnected') expect(outcome.handle).toBe(handle);
+  });
+
+  it('App propagates the reauthorized handle into the committed Vault snapshot', () => {
+    const appSource = readFileSync(resolve(process.cwd(), 'src', 'App.tsx'), 'utf8');
+    expect(appSource).toContain('commitVaultSnapshot(outcome.data, generation, outcome.handle)');
   });
 
   it('does NOT load the Vault when the user declines', async () => {
