@@ -10,6 +10,7 @@ import {
   Pause,
   RotateCcw,
   List,
+  Heart,
   Sun,
   ChefHat,
   Award,
@@ -641,7 +642,8 @@ export function CookingModeModal({
       aria-labelledby="cooking-recipe-title"
       className="fixed inset-0 z-50 flex flex-col overflow-hidden bg-[var(--bg-root,#0C0C0C)] font-sans text-[var(--text-primary,#F3F4F6)] select-none"
     >
-      <header className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 border-b border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-header,#111111)] px-3 py-3 sm:items-center sm:gap-4 sm:px-6 sm:py-4 lg:px-8">
+      <header className="shrink-0 border-b border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-header,#111111)] px-3 py-3 sm:px-6 sm:py-4 lg:px-8">
+        <div className="grid grid-cols-1 gap-2 sm:gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center lg:gap-4">
         <div className="flex min-w-0 items-start gap-2.5 sm:items-center sm:gap-3">
           <div className="shrink-0">
             {showPhoto && imageUrl ? (
@@ -690,7 +692,7 @@ export function CookingModeModal({
           </div>
         </div>
 
-        <div className="flex shrink-0 items-center gap-1 sm:gap-2">
+        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 lg:flex-nowrap">
           <div className="relative">
             <button
               id="cooking-timer-tray-toggle"
@@ -763,44 +765,68 @@ export function CookingModeModal({
             <span className="hidden sm:inline">Ingredients ({recipe.ingredients.length})</span>
           </button>
 
-          <label className="flex min-h-[44px] items-center gap-2 rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-2.5 py-2 text-xs text-[var(--text-secondary,#9CA3AF)]">
-            <input
-              type="checkbox"
-              checked={naturalVoiceEnabled && naturalVoiceAvailable}
-              disabled={!naturalVoiceAvailable || naturalVoicePending}
-              onChange={(e) => {
-                const next = e.target.checked && naturalVoiceAvailable;
-                naturalVoiceExplicitRef.current = next;
-                naturalVoiceEnabledRef.current = next;
-                setNaturalVoiceEnabled(next);
-                setVoiceReadiness(next ? 'preparing' : (naturalVoiceAvailable ? 'idle' : 'unavailable'));
-                try { localStorage.setItem('tkc_natural_voice', next ? '1' : '0'); } catch {}
-                if (!next) {
-                  stopNativeSpeech();
-                  cancelVoicePreparations();
-                  clearVoiceCache();
-                }
-              }}
-              className="h-4 w-4 accent-amber-500"
-            />
-            <span>Natural Voice — Experimental</span>
-            <span id="natural-voice-readiness" role="status" aria-live="polite" className="hidden max-w-[13rem] text-[10px] leading-tight text-[var(--text-secondary,#9CA3AF)] sm:inline">
-              {voiceReadinessLabel}
+          <div className="flex min-h-[44px] min-w-0 flex-1 basis-full items-center gap-2.5 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] py-1.5 pl-2.5 pr-2.5 sm:basis-auto sm:flex-none">
+            <span aria-hidden="true" className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--accent-subtle,rgba(245,158,11,0.15))] text-[var(--accent-text,#F59E0B)] min-[420px]:flex">
+              <Heart className="h-4 w-4" />
             </span>
-          </label>
+            <span className="flex min-w-0 flex-1 flex-col leading-tight sm:flex-none">
+              <span className="text-xs font-semibold text-[var(--text-primary,#F3F4F6)]">Heart Voice</span>
+              <span className="flex items-center gap-1.5">
+                <span
+                  aria-hidden="true"
+                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                    voiceReadiness === 'ready' || voiceReadiness === 'speaking'
+                      ? 'bg-[var(--accent-text,#F59E0B)]'
+                      : voiceReadiness === 'preparing' || voiceReadiness === 'initializing'
+                        ? 'animate-pulse bg-[var(--accent-text,#F59E0B)]'
+                        : 'bg-[var(--text-secondary,#9CA3AF)]'
+                  }`}
+                />
+                <span id="natural-voice-readiness" role="status" aria-live="polite" className="min-w-0 flex-1 break-words text-[10px] leading-tight text-[var(--text-secondary,#9CA3AF)] sm:max-w-[13rem]">
+                  {voiceReadinessLabel}
+                </span>
+              </span>
+            </span>
+            <label className={`relative ml-1 inline-flex min-h-[44px] min-w-[44px] cursor-pointer items-center justify-center ${(!naturalVoiceAvailable || naturalVoicePending) ? 'cursor-not-allowed' : ''}`}>
+              <input
+                type="checkbox"
+                checked={naturalVoiceEnabled && naturalVoiceAvailable}
+                disabled={!naturalVoiceAvailable || naturalVoicePending}
+                aria-label={naturalVoiceEnabled ? 'Turn Heart Voice off' : 'Turn Heart Voice on'}
+                onChange={(e) => {
+                  const next = e.target.checked && naturalVoiceAvailable;
+                  naturalVoiceExplicitRef.current = next;
+                  naturalVoiceEnabledRef.current = next;
+                  setNaturalVoiceEnabled(next);
+                  setVoiceReadiness(next ? 'preparing' : (naturalVoiceAvailable ? 'idle' : 'unavailable'));
+                  try { localStorage.setItem('tkc_natural_voice', next ? '1' : '0'); } catch {}
+                  if (!next) {
+                    stopNativeSpeech();
+                    cancelVoicePreparations();
+                    clearVoiceCache();
+                  }
+                }}
+                className="peer sr-only"
+              />
+              <span aria-hidden="true" className="relative h-6 w-11 shrink-0 rounded-full border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] transition-colors peer-checked:border-[var(--accent,#F59E0B)] peer-checked:bg-[var(--accent,#F59E0B)] peer-disabled:opacity-50">
+                <span className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-[var(--text-primary,#F3F4F6)] transition-transform ${(naturalVoiceEnabled && naturalVoiceAvailable) ? 'translate-x-5' : ''}`} />
+              </span>
+            </label>
+          </div>
 
           <button
             id="speak-step-btn"
             onClick={toggleSpeak}
             aria-label={isSpeaking ? 'Stop reading step aloud' : 'Read step aloud'}
-            className={`flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border p-2 transition-colors ${
+            className={`flex min-h-[44px] min-w-[44px] items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold transition-colors ${
               isSpeaking
                 ? 'animate-pulse border-[var(--accent,#F59E0B)] bg-[var(--accent,#F59E0B)] text-[var(--accent-contrast,#0C0C0C)]'
-                : 'border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] text-[var(--text-secondary,#9CA3AF)] hover:border-[var(--accent-text,#F59E0B)] hover:text-[var(--accent-text,#F59E0B)]'
+                : 'border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] text-[var(--text-primary,#F3F4F6)] hover:border-[var(--accent-text,#F59E0B)] hover:text-[var(--accent-text,#F59E0B)]'
             }`}
             title={isSpeaking ? 'Stop reading' : 'Read step aloud'}
           >
-            {isSpeaking ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+            {isSpeaking ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+            <span className="hidden sm:inline">{isSpeaking ? 'Stop' : 'Speak'}</span>
           </button>
 
           <button
@@ -812,6 +838,7 @@ export function CookingModeModal({
           >
             <X className="w-4 h-4" />
           </button>
+        </div>
         </div>
       </header>
 
