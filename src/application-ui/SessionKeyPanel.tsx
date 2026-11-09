@@ -319,6 +319,8 @@ export function SessionKeyPanel({
   onStatusChange?: (configured: boolean) => void;
 }) {
   const controllerRef = useRef<SessionKeyController | null>(null);
+  const controllerMountedRef = useRef(false);
+  const controllerDisposalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   if (controllerRef.current === null) {
     controllerRef.current = new SessionKeyController(
       network,
@@ -330,10 +332,27 @@ export function SessionKeyPanel({
   const [state, setState] = useState<SessionKeyState>(controller.getState());
 
   useEffect(() => {
+    controllerMountedRef.current = true;
+    if (controllerDisposalTimerRef.current) {
+      clearTimeout(controllerDisposalTimerRef.current);
+      controllerDisposalTimerRef.current = null;
+    }
     const unsubscribe = controller.subscribe(() => setState(controller.getState()));
     return () => {
+      controllerMountedRef.current = false;
       unsubscribe();
-      controller.dispose();
+      if (controllerDisposalTimerRef.current) {
+        clearTimeout(controllerDisposalTimerRef.current);
+      }
+      // StrictMode replays setup -> cleanup -> setup while preserving the ref.
+      // Defer disposal so the replay can cancel it; only a genuine unmount
+      // actually disposes the controller.
+      controllerDisposalTimerRef.current = setTimeout(() => {
+        controllerDisposalTimerRef.current = null;
+        if (!controllerMountedRef.current) {
+          controller.dispose();
+        }
+      }, 0);
     };
   }, [controller]);
 
