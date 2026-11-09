@@ -1087,3 +1087,33 @@ describe('CookingModeModal shared focus and rapid navigation', () => {
     expect(speakCalls.filter((call) => call.body.text.includes('Stir the new pot.'))).toHaveLength(1);
   });
 });
+
+describe('CookingModeModal responsive header', () => {
+  it('keeps the identity and controls separated below lg with wrapping controls', () => {
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    const header = document.querySelector('header');
+    expect(header).not.toBeNull();
+    const layout = header?.querySelector('div');
+    const layoutClass = layout?.className || '';
+    // Single-column below lg, two-column at lg: identity gets full width on
+    // small screens instead of being squeezed by the action controls.
+    expect(layoutClass).toContain('grid-cols-1');
+    expect(layoutClass).toContain('lg:grid-cols');
+    // Controls wrap rather than overflowing one row; Heart toggle and Speak remain mounted.
+    expect(screen.getByRole('checkbox')).toBeTruthy();
+    expect(screen.getByText('Heart Voice')).toBeTruthy();
+    expect(screen.getByLabelText('Read step aloud')).toBeTruthy();
+    expect(screen.getByLabelText('Exit cooking mode')).toBeTruthy();
+  });
+});
