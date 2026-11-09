@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useLayoutEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useLayoutEffect, useRef } from 'react';
 import {
   ArrowLeft,
   Play,
@@ -35,6 +35,7 @@ import {
 } from 'lucide-react';
 import { ObsidianRecipe, ParsedIngredient, VaultNote, RecipeNutrition } from '../types';
 import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
+import type { VoiceCacheService } from '../application/voiceCache';
 import { scaleIngredientText } from '../utils/markdownParser';
 import { downloadMarkdownFile } from '../utils/vaultFileSystem';
 import { getRecipeImage, DEFAULT_FOOD_IMAGES, LOCAL_RECIPE_IMAGE_PLACEHOLDER } from '../utils/imageHelper';
@@ -88,6 +89,7 @@ interface RecipeDetailViewProps {
   onSaveNoteToVault?: (note: VaultNote) => Promise<boolean | void>;
   onOpenVaultIntelligence?: (recipeId?: string) => void;
   network: NetworkAdapter;
+  voiceService: VoiceCacheService;
   /**
    * Optional injected genuine Advanced Nutrition review session. Production
    * composition does NOT fabricate one; when absent the separate Advanced
@@ -132,6 +134,7 @@ export function RecipeDetailView({
   onSaveNoteToVault,
   onOpenVaultIntelligence,
   network,
+  voiceService,
   advancedNutritionSession = null,
   advancedNutritionBundleStatus,
   onLoadAdvancedNutritionBundle,
@@ -160,6 +163,7 @@ export function RecipeDetailView({
   const [ingredientUsage, setIngredientUsage] = useState<{ query: string; display: string } | null>(null);
   const [favoriteAnnouncement, setFavoriteAnnouncement] = useState('');
   const [ratingPending, setRatingPending] = useState(false);
+  const [voiceFocusEpoch, setVoiceFocusEpoch] = useState(0);
   const heroImgRef = useRef<HTMLDivElement | null>(null);
   const defaultImg = getRecipeImage(recipe);
   const reactiveVaultImage = useVaultImage(recipe.image, defaultImg);
@@ -283,7 +287,45 @@ export function RecipeDetailView({
     }
   };
 
+  useEffect(() => {
+    voiceService.setNetworkAdapter(network);
+  }, [network, voiceService]);
+
   const isFavorite = !!recipe.isFavorite;
+
+  useEffect(() => voiceService.subscribeCookingVoiceFocus(() => {
+    setVoiceFocusEpoch((epoch) => epoch + 1);
+  }), []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    async function prewarm() {
+      try {
+        if (typeof window === 'undefined') return;
+        if (window.localStorage.getItem('tkc_natural_voice') !== '1') return;
+        // Cooking Mode owns the current/next steps; do not compete with its
+        // foreground narration or keep prewarming obsolete steps behind it.
+        if (voiceService.isCookingVoiceFocusActive(recipe)) return;
+        const statusResponse = await network.get<{ enabled?: boolean }>('/api/voice/status', { signal: controller.signal }).catch(() => null);
+        const status = statusResponse?.data;
+        if (!status?.enabled) return;
+        const limit = Math.min(recipe.instructions.length, 3);
+        for (let i = 0; i < limit; i++) {
+          if (controller.signal.aborted || voiceService.isCookingVoiceFocusActive(recipe)) return;
+          await voiceService.prepareVoiceClip(recipe, i, {
+            signal: controller.signal,
+            purpose: 'detail',
+            network,
+          });
+          await new Promise((r) => setTimeout(r, 150));
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    prewarm();
+    return () => { controller.abort(); };
+  }, [recipe.id, recipe.instructions, voiceFocusEpoch]);
 
 
   const renderInlineMarkdown = (text: string) => {

@@ -10,6 +10,7 @@ import React from 'react';
 import { RecipeDetailView } from '../../src/components/RecipeDetailView';
 import type { ObsidianRecipe } from '../../src/types';
 import type { NetworkAdapter } from '../../src/application/adapters/NetworkAdapter';
+import { createVoiceCache } from '../../src/application/voiceCache';
 
 afterEach(() => cleanup());
 
@@ -57,6 +58,7 @@ function renderDetail() {
       onAddToShoppingList={vi.fn()}
       onStartTimer={vi.fn()}
       network={network()}
+      voiceService={createVoiceCache(network())}
     />
   );
 }

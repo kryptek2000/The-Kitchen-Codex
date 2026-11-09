@@ -787,9 +787,25 @@ well — this is the core reason Ask My Kitchen exists:
    long-title contrast, Advanced Nutrition Apply eligibility/revalidation,
    Phase 5B browser-proof maintenance, and remaining accessibility obligations.
 
-### TKC Voice Foundation — PLANNED
+### TKC Voice Foundation — TVF-2E IMPLEMENTED / SHISO PLANNED
 
-**Status: PLANNED / DISCOVERY ONLY. Not implemented.**
+Provisional runtime dependency strategy (TVF-2G-R3):
+
+- Preferred package: `kokoro-js` (Apache-2.0) plus its ONNX runtime dependency.
+- Native runtime: `onnxruntime-node` (MIT) for the local bridge; browser fallback
+  uses `onnxruntime-web` (MIT).
+- Model storage: outside Git and outside user Vaults, in a stable application
+  cache directory (for example `~/.cache/tkc/voice` or the OS equivalent).
+- Model identity: pinned Kokoro-82M v1.0 model version and exact voice IDs
+  (`af_bella`, `af_heart`).
+- Integrity: verify model and voice asset hashes before use.
+- Opt-in: no automatic download or installation without explicit user consent.
+- Missing assets: graceful fallback to browser speech.
+- Size: approximately 80–300 MB per configured model/voice set, plus runtime.
+
+TVF-2E experimental Cooking Mode integration is implemented in an isolated worktree and uses the native Kokoro bridge when explicitly enabled. TVF-2G-R4-F2 corrective work is in the same worktree pending independent audit. Natural Voice is disabled by default and SHISO remains text-only.
+
+**Status: TVF-2E IMPLEMENTED IN AN ISOLATED WORKTREE / SHISO VOICE NOT INTEGRATED.**
 
 The owner has approved pursuing a shared, local-first natural speech architecture
 for both:

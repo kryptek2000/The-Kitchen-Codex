@@ -87,6 +87,11 @@ describe("createSecurityMiddleware", () => {
     const csp = headers.get("content-security-policy") || "";
     expect(csp).toContain("object-src 'none'");
     expect(csp).toContain("default-src 'self'");
+    expect(csp).toContain("media-src 'self' blob:");
+    // Adding blob media must not broaden scripts, objects, or connections.
+    expect(csp).toContain("script-src 'self' 'unsafe-inline'");
+    expect(csp).toContain("connect-src 'self'");
+    expect(csp).not.toContain("media-src *");
   });
 
   it("does not emit a restrictive Content Security Policy in development", async () => {

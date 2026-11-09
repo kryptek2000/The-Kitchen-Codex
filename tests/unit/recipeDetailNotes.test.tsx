@@ -11,6 +11,7 @@ import { RecipeDetailView } from '../../src/components/RecipeDetailView';
 import { getStarterVaultRecipes } from '../../src/data/starterVault';
 import type { ObsidianRecipe } from '../../src/types';
 import type { NetworkAdapter } from '../../src/application/adapters/NetworkAdapter';
+import { createVoiceCache } from '../../src/application/voiceCache';
 
 afterEach(() => cleanup());
 
@@ -54,6 +55,7 @@ function renderNotes(notes: string, extra: Partial<ObsidianRecipe> = {}) {
       onStartTimer={vi.fn()}
       onFilterByWikilink={vi.fn()}
       network={network()}
+      voiceService={createVoiceCache(network())}
     />
   );
 }
@@ -128,6 +130,7 @@ describe('Recipe Detail Notes Markdown', () => {
         onAddToShoppingList={vi.fn()}
         onStartTimer={vi.fn()}
         network={network()}
+      voiceService={createVoiceCache(network())}
       />
     );
     expect(recipe.notes).toBe(notes);

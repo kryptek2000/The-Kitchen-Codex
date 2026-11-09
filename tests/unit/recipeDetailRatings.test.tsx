@@ -6,6 +6,7 @@ import React from 'react';
 import { RecipeDetailView } from '../../src/components/RecipeDetailView';
 import type { ObsidianRecipe } from '../../src/types';
 import type { NetworkAdapter } from '../../src/application/adapters/NetworkAdapter';
+import { createVoiceCache } from '../../src/application/voiceCache';
 
 afterEach(() => cleanup());
 
@@ -70,6 +71,7 @@ function renderHeroDetail(rating = 0, onRateRecipe = vi.fn()) {
       onStartTimer={vi.fn()}
       onRateRecipe={onRateRecipe}
       network={network()}
+      voiceService={createVoiceCache(network())}
     />
   );
 }
@@ -88,6 +90,7 @@ function renderDetail(rating = 0, onRateRecipe = vi.fn()) {
       onStartTimer={vi.fn()}
       onRateRecipe={onRateRecipe}
       network={network()}
+      voiceService={createVoiceCache(network())}
     />
   );
 }

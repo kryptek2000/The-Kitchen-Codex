@@ -291,4 +291,43 @@ export class ObsidianNetworkAdapter implements NetworkAdapter {
       ...(contentType ? { contentType } : {}),
     };
   }
+
+  async postBytes<TBody = unknown>(
+    path: string,
+    body: TBody,
+    options?: NetworkRequestOptions
+  ): Promise<NetworkBinaryResponse> {
+    assertApiPath(path);
+    const url = this.baseUrl ? `${this.baseUrl}${path}` : path;
+    let res: ObsidianResponseLike;
+    try {
+      res = await this.fetchFn(url, {
+        method: 'POST',
+        headers: this.mergedHeaders({ 'Content-Type': 'application/json', ...(options?.headers || {}) }),
+        body: JSON.stringify(body),
+        redirect: 'error',
+        signal: options?.signal,
+      });
+    } catch (err) {
+      if (err instanceof ObsidianNetworkError) throw err;
+      throw new ObsidianNetworkError(0, err instanceof Error ? err.message : 'Network request failed.');
+    }
+    if (!res.ok) return { status: res.status, ok: false };
+    if (typeof res.arrayBuffer !== 'function') return { status: res.status, ok: false };
+    const declared = responseContentLength(res);
+    if (declared !== undefined && declared > MAX_BINARY_RESPONSE_BYTES) {
+      throw new ObsidianNetworkError(502, 'Network response body is too large.');
+    }
+    const contentType = res.headers?.get('content-type') || undefined;
+    const buffer = await res.arrayBuffer();
+    if (buffer.byteLength > MAX_BINARY_RESPONSE_BYTES) {
+      throw new ObsidianNetworkError(502, 'Network response body is too large.');
+    }
+    return {
+      status: res.status,
+      ok: true,
+      bytes: new Uint8Array(buffer),
+      ...(contentType ? { contentType } : {}),
+    };
+  }
 }

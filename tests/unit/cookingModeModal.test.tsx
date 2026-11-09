@@ -1,13 +1,106 @@
 // @vitest-environment jsdom
-import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, screen, cleanup, fireEvent } from '@testing-library/react';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
+import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import React from 'react';
 
 import { CookingModeModal } from '../../src/components/CookingModeModal';
+import { createVoiceCache } from '../../src/application/voiceCache';
+import type { VoiceCacheService } from '../../src/application/voiceCache';
 
 vi.mock('canvas-confetti', () => ({ default: vi.fn() }));
 
-afterEach(() => cleanup());
+function createMockNetworkAdapter(): any {
+  return {
+    request: async (request: any) => {
+      const res = await (globalThis as any).fetch(request.path, {
+        method: request.method,
+        headers: request.headers,
+        body: request.body !== undefined ? JSON.stringify(request.body) : undefined,
+        signal: request.signal,
+      });
+      let data: unknown = undefined;
+      try { data = await res.json(); } catch { data = undefined; }
+      return { status: res.status, ok: res.ok, data };
+    },
+    get: async (path: string, options?: any) => {
+      const res = await (globalThis as any).fetch(path, { method: 'GET', headers: options?.headers, signal: options?.signal });
+      let data: unknown = undefined;
+      try { data = await res.json(); } catch { data = undefined; }
+      return { status: res.status, ok: res.ok, data };
+    },
+    post: async (path: string, body: any, options?: any) => {
+      const res = await (globalThis as any).fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(options?.headers || {}) },
+        body: JSON.stringify(body),
+        signal: options?.signal,
+      });
+      let data: unknown = undefined;
+      try { data = await res.json(); } catch { data = undefined; }
+      return { status: res.status, ok: res.ok, data };
+    },
+    getBytes: async (path: string, options?: any) => {
+      const res = await (globalThis as any).fetch(path, { method: 'GET', headers: options?.headers, signal: options?.signal });
+      const blob = await res.blob();
+      const buffer = await blob.arrayBuffer();
+      return { status: res.status, ok: res.ok, bytes: new Uint8Array(buffer), contentType: res.headers?.get?.('content-type') || undefined };
+    },
+    postBytes: async (path: string, body: any, options?: any) => {
+      const res = await (globalThis as any).fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(options?.headers || {}) },
+        body: JSON.stringify(body),
+        signal: options?.signal,
+      });
+      const blob = await res.blob();
+      const buffer = await blob.arrayBuffer();
+      return { status: res.status, ok: res.ok, bytes: new Uint8Array(buffer), contentType: res.headers?.get?.('content-type') || undefined };
+    },
+  } as any;
+}
+
+let testVoiceService: VoiceCacheService;
+
+beforeEach(() => {
+  testVoiceService = createVoiceCache(createMockNetworkAdapter());
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  window.localStorage?.clear();
+  testVoiceService?.dispose();
+});
+
+function installVoiceTestDoubles(available = true) {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).includes('/api/voice/status')) {
+      return { ok: true, json: async () => ({ enabled: available }) } as Response;
+    }
+    void init;
+    return { ok: true, blob: async () => new Blob(['RIFF-test-audio'], { type: 'audio/wav' }) } as Response;
+  });
+  class TestAudio {
+    src = '';
+    paused = true;
+    onended: (() => void) | null = null;
+    play = vi.fn(async () => { this.paused = false; });
+    pause = vi.fn(() => { this.paused = true; });
+    removeAttribute = vi.fn(() => { this.src = ''; });
+  }
+  const instances: InstanceType<typeof TestAudio>[] = [];
+  const OriginalAudio = TestAudio;
+  class TrackedAudio extends OriginalAudio {
+    constructor() {
+      super();
+      instances.push(this);
+    }
+  }
+  vi.stubGlobal('fetch', fetchMock);
+  vi.stubGlobal('Audio', TrackedAudio);
+  vi.stubGlobal('URL', { ...URL, createObjectURL: vi.fn(() => 'blob:test-audio'), revokeObjectURL: vi.fn() });
+  return { fetchMock, TestAudio: TrackedAudio, instances };
+}
 
 function makeRecipe(overrides: any = {}): any {
   return {
@@ -44,6 +137,7 @@ describe('CookingModeModal', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -67,6 +161,7 @@ describe('CookingModeModal', () => {
       <CookingModeModal
         recipe={makeRecipe({ title: longTitle })}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -84,6 +179,7 @@ describe('CookingModeModal', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -99,11 +195,116 @@ describe('CookingModeModal', () => {
     expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('1');
   });
 
+  it('does not generate native audio until opt-in, then reuses the prepared current step', async () => {
+    const { fetchMock } = installVoiceTestDoubles(true);
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/voice/status', expect.anything()));
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/voice/speak'))).toHaveLength(0);
+    expect(document.getElementById('natural-voice-readiness')?.textContent).toContain('Heart ready to prepare');
+
+    fireEvent.click(screen.getByRole('checkbox'));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/voice/speak'))).toHaveLength(1));
+    await waitFor(() => expect(document.getElementById('natural-voice-readiness')?.textContent).toContain('Heart ready'));
+
+    fireEvent.click(screen.getByLabelText('Read step aloud'));
+    await waitFor(() => expect(screen.getByLabelText('Stop reading step aloud')).toBeTruthy());
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/voice/speak'))).toHaveLength(1);
+  });
+
+  it('invalidates prepared audio on navigation and prepares the new current step', async () => {
+    const { fetchMock } = installVoiceTestDoubles(true);
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/voice/status', expect.anything()));
+    fireEvent.click(screen.getByRole('checkbox'));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/voice/speak'))).toHaveLength(1));
+    fireEvent.click(screen.getByText('Next Step'));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/voice/speak'))).toHaveLength(2));
+
+    const speakBodies = fetchMock.mock.calls
+      .filter(([input]) => String(input).includes('/api/voice/speak'))
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)));
+    expect(speakBodies[0].text).toContain('Mix the flour.');
+    expect(speakBodies[1].text).toContain('Add the egg and stir.');
+  });
+
+  it('prefetches at most the next step after current playback ends', async () => {
+    const { fetchMock, instances } = installVoiceTestDoubles(true);
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/voice/status', expect.anything()));
+    fireEvent.click(screen.getByRole('checkbox'));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/voice/speak'))).toHaveLength(1));
+    fireEvent.click(screen.getByLabelText('Read step aloud'));
+    await waitFor(() => expect(screen.getByLabelText('Stop reading step aloud')).toBeTruthy());
+    instances.at(-1)?.onended?.();
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/voice/speak'))).toHaveLength(2), { timeout: 2500 });
+    const speakBodies = fetchMock.mock.calls
+      .filter(([input]) => String(input).includes('/api/voice/speak'))
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)));
+    expect(speakBodies[1].text).toContain('Add the egg and stir.');
+  });
+
+  it('keeps native generation disabled when the runtime is unavailable', async () => {
+    const { fetchMock } = installVoiceTestDoubles(false);
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    const checkbox = screen.getByRole('checkbox') as HTMLInputElement;
+    await waitFor(() => expect(checkbox.disabled).toBe(true));
+    expect(document.getElementById('natural-voice-readiness')?.textContent).toContain('Heart unavailable');
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/voice/speak'))).toHaveLength(0);
+  });
+
   it('preserves keyboard navigation outside interactive controls', () => {
     render(
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -131,6 +332,7 @@ describe('CookingModeModal', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -149,6 +351,7 @@ describe('CookingModeModal', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -178,6 +381,7 @@ describe('CookingModeModal', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={2}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -198,6 +402,7 @@ describe('CookingModeModal', () => {
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
         onDeleteTimer={() => {}}
+        voiceService={testVoiceService}
         onClose={() => {}}
       />
     );
@@ -212,6 +417,7 @@ describe('CookingModeModal', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={onStart}
         onToggleTimer={() => {}}
@@ -241,6 +447,7 @@ describe('CookingModeModal', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[timer]}
         onStartTimer={() => {}}
         onToggleTimer={onToggle}
@@ -264,6 +471,7 @@ describe('CookingModeModal', () => {
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
         onDeleteTimer={() => {}}
+        voiceService={testVoiceService}
         onClose={() => {}}
       />
     );
@@ -276,6 +484,7 @@ describe('CookingModeModal', () => {
       <CookingModeModal
         recipe={makeRecipe({ instructions: [{ stepNumber: 1, text: longText }] })}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -294,6 +503,7 @@ describe('CookingModeModal correction pass', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -310,6 +520,7 @@ describe('CookingModeModal correction pass', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -327,6 +538,7 @@ describe('CookingModeModal correction pass', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -348,6 +560,7 @@ describe('CookingModeModal correction pass', () => {
       <CookingModeModal
         recipe={makeRecipe({ instructions: [{ stepNumber: 1, text: '**Autolyse** the dough.' }] })}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -368,6 +581,7 @@ describe('CookingModeModal correction pass', () => {
       <CookingModeModal
         recipe={makeRecipe({ instructions: [{ stepNumber: 1, text: payload }] })}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -384,6 +598,7 @@ describe('CookingModeModal correction pass', () => {
       <CookingModeModal
         recipe={makeRecipe({ instructions: [] })}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -412,6 +627,7 @@ describe('CookingModeModal correction pass', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[timer]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -436,6 +652,7 @@ describe('CookingModeModal image compatibility', () => {
       <CookingModeModal
         recipe={makeRecipe({ image: 'https://example.com/bread.jpg' })}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -455,6 +672,7 @@ describe('CookingModeModal image compatibility', () => {
       <CookingModeModal
         recipe={makeRecipe({ image: 'Assets/My Bread.jpg' })}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -474,6 +692,7 @@ describe('CookingModeModal image compatibility', () => {
       <CookingModeModal
         recipe={makeRecipe({ rawMarkdown: '![Bread](Assets/Bread.jpg)' })}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -494,6 +713,7 @@ describe('CookingModeModal image compatibility', () => {
       <CookingModeModal
         recipe={makeRecipe({ image: 'Assets/Async.jpg' })}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -514,6 +734,7 @@ describe('CookingModeModal image compatibility', () => {
       <CookingModeModal
         recipe={makeRecipe({ image: undefined, rawMarkdown: '' })}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -531,6 +752,7 @@ describe('CookingModeModal image compatibility', () => {
       <CookingModeModal
         recipe={makeRecipe({ image: 'javascript:alert(1)' })}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -548,6 +770,7 @@ describe('CookingModeModal image compatibility', () => {
       <CookingModeModal
         recipe={makeRecipe({ image: 'Assets/missing.jpg' })}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -567,6 +790,7 @@ describe('CookingModeModal focus recovery', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -591,6 +815,7 @@ describe('CookingModeModal Slice 2', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={timers as any}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -609,6 +834,7 @@ describe('CookingModeModal Slice 2', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={timers as any}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -625,6 +851,7 @@ describe('CookingModeModal Slice 2', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -646,6 +873,7 @@ describe('CookingModeModal Slice 2-R1', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={timers as any}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -666,6 +894,7 @@ describe('CookingModeModal zero-timer tray', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -678,5 +907,183 @@ describe('CookingModeModal zero-timer tray', () => {
     expect(screen.getByText('No active timers.')).toBeTruthy();
     fireEvent.click(screen.getByText('New Custom Timer'));
     expect(onAdd).toHaveBeenCalled();
+  });
+});
+
+describe('CookingModeModal Natural Voice identity', () => {
+  it('uses Heart when Natural Voice is enabled', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).includes('/api/voice/status')) {
+        return { ok: true, json: async () => ({ enabled: true, available: true, voices: ['af_bella', 'af_heart'] }) };
+      }
+      if (String(url).includes('/api/voice/speak')) {
+        return { ok: true, blob: async () => new Blob(['audio'], { type: 'audio/wav' }) };
+      }
+      return { ok: false, json: async () => ({}) };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    if (!URL.createObjectURL) URL.createObjectURL = () => 'blob:mock';
+    if (!URL.revokeObjectURL) URL.revokeObjectURL = () => {};
+    localStorage.setItem('tkc_natural_voice', '1');
+
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+
+    await new Promise((r) => setTimeout(r, 50));
+    fireEvent.click(screen.getByLabelText('Read step aloud'));
+
+    await new Promise((r) => setTimeout(r, 100));
+    const speakCall = fetchMock.mock.calls.find((c: any) => String(c[0]).includes('/api/voice/speak')) as any;
+    expect(speakCall).toBeTruthy();
+    expect(String((speakCall?.[1] as any)?.body || '')).toContain('af_heart');
+
+    vi.unstubAllGlobals();
+    localStorage.removeItem('tkc_natural_voice');
+  });
+});
+
+describe('CookingModeModal speech normalization', () => {
+  it('sends clean speech text for Markdown instructions', async () => {
+    const recipe = makeRecipe();
+    recipe.instructions[0].text = '**Autolyse**: Mix flour and water.';
+    const { fetchMock } = installVoiceTestDoubles(true);
+    render(
+      <CookingModeModal
+        recipe={recipe}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/voice/status', expect.anything()));
+    fireEvent.click(screen.getByRole('checkbox'));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/voice/speak')).length).toBeGreaterThanOrEqual(1));
+    const speakCall = fetchMock.mock.calls.find((c: any) => String(c[0]).includes('/api/voice/speak')) as any;
+    const body = JSON.parse(String(speakCall?.[1]?.body || '{}'));
+    expect(body.text).toContain('Autolyse');
+    expect(body.text).not.toContain('**');
+  });
+});
+
+describe('CookingModeModal shared focus and rapid navigation', () => {
+  function installAbortTrackingDoubles() {
+    const speakCalls: Array<{ body: any; signal: AbortSignal; aborted: boolean }> = [];
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes('/api/voice/status')) {
+        return Promise.resolve({ ok: true, json: async () => ({ enabled: true, available: true }) } as Response);
+      }
+      if (String(input).includes('/api/voice/prioritize')) {
+        return Promise.resolve({ ok: true, json: async () => ({ found: true }) } as Response);
+      }
+      const entry = {
+        body: JSON.parse(String(init?.body || '{}')),
+        signal: init?.signal as AbortSignal,
+        aborted: false,
+      };
+      speakCalls.push(entry);
+      return new Promise((resolve, reject) => {
+        const onAbort = () => {
+          entry.aborted = true;
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+        };
+        entry.signal?.addEventListener('abort', onAbort, { once: true });
+        setTimeout(() => {
+          entry.signal?.removeEventListener('abort', onAbort);
+          if (!entry.signal?.aborted) {
+            resolve({ ok: true, blob: async () => new Blob(['RIFF-test-audio'], { type: 'audio/wav' }) } as Response);
+          }
+        }, 120);
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('URL', { ...URL, createObjectURL: vi.fn(() => 'blob:test-audio'), revokeObjectURL: vi.fn() });
+    return { fetchMock, speakCalls };
+  }
+
+  it('cancels obsolete current-step preparation during rapid navigation', async () => {
+    window.localStorage.setItem('tkc_natural_voice', '1');
+    const { speakCalls } = installAbortTrackingDoubles();
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    await waitFor(() => expect(speakCalls).toHaveLength(1));
+    expect(speakCalls[0].body.text).toContain('Mix the flour.');
+
+    fireEvent.click(screen.getByText('Next Step'));
+    await waitFor(() => expect(speakCalls).toHaveLength(2));
+    fireEvent.click(screen.getByText('Next Step'));
+    await waitFor(() => expect(speakCalls).toHaveLength(3));
+
+    expect(speakCalls[0].aborted).toBe(true);
+    expect(speakCalls[1].aborted).toBe(true);
+    expect(speakCalls[2].aborted).toBe(false);
+    expect(speakCalls[2].body.text).toContain('Serve hot.');
+    expect(speakCalls.filter((call) => call.body.text.includes('Serve hot.'))).toHaveLength(1);
+  });
+
+  it('cancels the previous recipe preparation and prepares the new recipe once', async () => {
+    window.localStorage.setItem('tkc_natural_voice', '1');
+    const { speakCalls } = installAbortTrackingDoubles();
+    const { rerender } = render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    await waitFor(() => expect(speakCalls).toHaveLength(1));
+    expect(speakCalls[0].body.text).toContain('Mix the flour.');
+
+    const nextRecipe = makeRecipe({
+      id: 'r2',
+      title: 'Second Soup',
+      fileName: 'second.md',
+      filePath: 'second.md',
+      instructions: [{ stepNumber: 1, text: 'Stir the new pot.' }],
+    });
+    rerender(
+      <CookingModeModal
+        recipe={nextRecipe}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    await waitFor(() => expect(speakCalls).toHaveLength(2));
+    expect(speakCalls[0].aborted).toBe(true);
+    expect(speakCalls[1].body.text).toContain('Stir the new pot.');
+    expect(speakCalls.filter((call) => call.body.text.includes('Stir the new pot.'))).toHaveLength(1);
   });
 });

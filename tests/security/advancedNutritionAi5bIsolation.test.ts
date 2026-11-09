@@ -689,13 +689,22 @@ describe('AI-5B — enforcement only', () => {
         'account_id',
         'userid',
         'trial',
-        'promo',
+        'promocode',
+        'promo_code',
+        'promotioncode',
+        'promotion_code',
+        'discountcode',
+        'discount_code',
+        'couponcode',
+        'coupon_code',
         'invoice',
         'jwt',
       ]) {
         expect(body, `${rel} must not implement ${forbidden}`).not.toContain(forbidden);
       }
     }
+    // Heart's foreground narration promotion is not billing/promotional machinery.
+    expect(code('server/app.ts')).toContain('promoteNativeVoiceRequest');
   });
 
   it('adds no product-access status endpoint', () => {

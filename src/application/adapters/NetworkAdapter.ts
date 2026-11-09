@@ -91,4 +91,16 @@ export interface NetworkAdapter {
    * applies) are preserved.
    */
   getBytes?(path: string, options?: NetworkRequestOptions): Promise<NetworkBinaryResponse>;
+
+  /**
+   * OPTIONAL binary POST for app-local byte responses produced from a JSON
+   * request body (e.g. native voice synthesis). Implementations may omit it;
+   * callers must handle its absence. Still restricted to application `/api/`
+   * paths — never an arbitrary URL.
+   */
+  postBytes?<TBody = unknown>(
+    path: string,
+    body: TBody,
+    options?: NetworkRequestOptions
+  ): Promise<NetworkBinaryResponse>;
 }

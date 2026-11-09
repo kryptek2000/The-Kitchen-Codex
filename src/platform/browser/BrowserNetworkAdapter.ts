@@ -312,4 +312,45 @@ export class BrowserNetworkAdapter implements NetworkAdapter {
       ...(contentType ? { contentType } : {}),
     };
   }
+
+  async postBytes<TBody = unknown>(
+    path: string,
+    body: TBody,
+    options?: NetworkRequestOptions
+  ): Promise<NetworkBinaryResponse> {
+    assertApiPath(path);
+    let res: Response;
+    try {
+      res = await this.fetchFn(path, {
+        method: 'POST',
+        headers: this.mergedHeaders({ 'Content-Type': 'application/json', ...(options?.headers || {}) }),
+        body: JSON.stringify(body),
+        redirect: 'error',
+        signal: options?.signal,
+      });
+    } catch (err) {
+      if (err instanceof NetworkRequestError) throw err;
+      throw new NetworkRequestError(
+        0,
+        err instanceof Error ? err.message : 'Network request failed.',
+        undefined
+      );
+    }
+    if (!res.ok) return { status: res.status, ok: false };
+    const declared = responseContentLength(res);
+    if (declared !== undefined && declared > MAX_BINARY_RESPONSE_BYTES) {
+      throw new NetworkRequestError(502, 'Network response body is too large.');
+    }
+    const contentType = res.headers.get('content-type') || undefined;
+    const buffer = await res.arrayBuffer();
+    if (buffer.byteLength > MAX_BINARY_RESPONSE_BYTES) {
+      throw new NetworkRequestError(502, 'Network response body is too large.');
+    }
+    return {
+      status: res.status,
+      ok: true,
+      bytes: new Uint8Array(buffer),
+      ...(contentType ? { contentType } : {}),
+    };
+  }
 }

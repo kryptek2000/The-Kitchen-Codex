@@ -11,6 +11,7 @@ import { calculateBasicNutrition } from '../../src/application/basicNutrition';
 import { RecipeEditorModal } from '../../src/components/RecipeEditorModal';
 import { RecipeNutritionCard } from '../../src/components/RecipeNutritionCard';
 import { RecipeDetailView } from '../../src/components/RecipeDetailView';
+import { createVoiceCache } from '../../src/application/voiceCache';
 import { AdvancedNutritionSavedReport } from '../../src/components/AdvancedNutritionSavedReport';
 import { parseObsidianRecipeMarkdown, serializeRecipeToObsidianMarkdown } from '../../src/utils/markdownParser';
 import { isPartialMachineNutrition } from '../../src/utils/nutrition';
@@ -80,7 +81,7 @@ describe('nutrition production UI integration',()=>{
  },30000);
  it('opens each recipe at the top without jumping during serving changes',()=>{
   const noop=()=>{};
-  const props={network,onBack:noop,onStartCooking:noop,onEditRecipe:noop,onAddToMealPlan:noop,onAddToShoppingList:noop,onStartTimer:noop};
+  const props={network,voiceService:createVoiceCache(network),onBack:noop,onStartCooking:noop,onEditRecipe:noop,onAddToMealPlan:noop,onAddToShoppingList:noop,onStartTimer:noop};
   const r=makeRecipe();const view=render(<RecipeDetailView {...props} recipe={r} />);
   expect(window.scrollTo).toHaveBeenCalledTimes(1);
   fireEvent.click(screen.getByTitle('Increase servings'));
@@ -124,7 +125,7 @@ describe('nutrition production UI integration',()=>{
   expect(onSave.mock.calls[1][0].nutrition.calories).toBe(estimate.totals.calories);
   view.unmount();
   const noop=()=>{};
-  render(<RecipeDetailView recipe={reopened} network={network} onBack={noop} onStartCooking={noop} onEditRecipe={noop} onAddToMealPlan={noop} onAddToShoppingList={noop} onStartTimer={noop} onUpdateNutrition={noop} />);
+  render(<RecipeDetailView recipe={reopened} network={network} voiceService={createVoiceCache(network)} onBack={noop} onStartCooking={noop} onEditRecipe={noop} onAddToMealPlan={noop} onAddToShoppingList={noop} onStartTimer={noop} onUpdateNutrition={noop} />);
   fireEvent.click(screen.getByTitle('Increase servings'));
   fireEvent.click(screen.getByTitle('Increase servings'));
   expect(screen.getByText('Scaled from 6 to 8 servings')).toBeTruthy();
