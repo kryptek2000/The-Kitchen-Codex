@@ -110,6 +110,18 @@ describe("BYOK-5E — cross-provider race protection (preserved)", () => {
     expect(c.getState().status).toBe("loading");
     expect(c.getState().apiKey).toBe("");
   });
+
+  it("unmount: a pending save after dispose() cannot mutate state", async () => {
+    const { network, pending } = makeNetwork();
+    const c = new SessionKeyController(network, PROVIDERS);
+    c.setApiKey(SENTINEL);
+    const save = c.save();
+    c.dispose();
+    settleAt(pending, 0, { providerId: "openrouter", storageScope: "session_only", configured: true, version: "V1" });
+    await save;
+    expect(c.getState().apiKey).toBe("");
+    expect(c.getState().notice).toBeUndefined();
+  });
 });
 
 describe("BYOK-5E — same-provider operation ordering (operation epoch)", () => {
@@ -180,6 +192,22 @@ describe("BYOK-5E — same-provider operation ordering (operation epoch)", () =>
     await s1;
     expect(c.getState().status).toBe("configured");
     expect(c.getState().notice?.text).toContain("saved");
+  });
+
+  it("D1. provider switch while save is pending invalidates the stale save", async () => {
+    const { network, pending } = makeNetwork();
+    const c = new SessionKeyController(network, PROVIDERS);
+    c.setApiKey("key-1");
+    const save = c.save(); // pending[0]
+    c.selectProvider("deepseek"); // pending[1] status for deepseek
+    settleAt(pending, 0, { providerId: "openrouter", storageScope: "session_only", configured: true, version: "V1" });
+    await save;
+    expect(c.getState().selectedProviderId).toBe("deepseek");
+    expect(c.getState().notice).toBeUndefined();
+    expect(c.getState().status).toBe("loading");
+    settleAt(pending, 1, B_EMPTY);
+    await flush();
+    expect(c.getState().status).toBe("not-configured");
   });
 
   it("D2. SAVE #1 -> SAVE #2: a stale save #1 does NOT clear a key typed after #2 started", async () => {

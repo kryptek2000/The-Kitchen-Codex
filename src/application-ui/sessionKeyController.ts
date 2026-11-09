@@ -248,7 +248,14 @@ export class SessionKeyController {
     const providerId = this.state.selectedProviderId;
     if (!providerId) return;
     const epoch = this.beginOperation({ status: 'loading' });
-    const result = await this.readStatus(providerId);
+    let result: StatusRead;
+    try {
+      result = await this.readStatus(providerId);
+    } catch {
+      if (!this.isCurrentOp(epoch, generation, providerId)) return;
+      this.setState({ status: 'error', expiresAt: undefined });
+      return;
+    }
     if (!this.isCurrentOp(epoch, generation, providerId)) return;
     this.version = result.version ? { providerId, version: result.version } : null;
     this.setState(result.patch);
@@ -263,11 +270,31 @@ export class SessionKeyController {
     const epoch = this.beginOperation({ saveState: 'saving' });
     const expectedVersion =
       this.version && this.version.providerId === providerId ? this.version.version : undefined;
-    const res = await saveSessionKey(this.network, providerId, apiKey, expectedVersion);
+    let res: Awaited<ReturnType<typeof saveSessionKey>>;
+    try {
+      res = await saveSessionKey(this.network, providerId, apiKey, expectedVersion);
+    } catch {
+      if (!this.isCurrentOp(epoch, generation, providerId)) return;
+      this.setState({
+        saveState: 'idle',
+        notice: { kind: 'error', text: 'Could not save the session key. Check the connection and try again.' },
+      });
+      return;
+    }
     // STALE completion: never clear a (possibly newer) key or mutate state.
     if (!this.isCurrentOp(epoch, generation, providerId)) return;
     if (res.ok) {
-      const status = await this.readStatus(providerId);
+      let status: StatusRead;
+      try {
+        status = await this.readStatus(providerId);
+      } catch {
+        if (!this.isCurrentOp(epoch, generation, providerId)) return;
+        this.setState({
+          saveState: 'idle',
+          notice: { kind: 'error', text: 'The key was sent, but the session status could not be confirmed. Refresh and try again.' },
+        });
+        return;
+      }
       if (!this.isCurrentOp(epoch, generation, providerId)) return;
       this.version = status.version ? { providerId, version: status.version } : null;
       this.setState({
@@ -279,7 +306,17 @@ export class SessionKeyController {
       return;
     }
     if (res.code === 'VERSION_CONFLICT') {
-      const status = await this.readStatus(providerId);
+      let status: StatusRead;
+      try {
+        status = await this.readStatus(providerId);
+      } catch {
+        if (!this.isCurrentOp(epoch, generation, providerId)) return;
+        this.setState({
+          saveState: 'idle',
+          notice: { kind: 'error', text: 'The session key changed. Refresh the status and try again.' },
+        });
+        return;
+      }
       if (!this.isCurrentOp(epoch, generation, providerId)) return;
       this.version = status.version ? { providerId, version: status.version } : null;
       this.setState({
@@ -302,10 +339,34 @@ export class SessionKeyController {
     const providerId = this.state.selectedProviderId;
     if (!providerId) return;
     const epoch = this.beginOperation({ revokeState: 'revoking' });
-    const res = await revokeSessionKey(this.network, providerId);
+    let res: Awaited<ReturnType<typeof revokeSessionKey>>;
+    try {
+      res = await revokeSessionKey(this.network, providerId);
+    } catch {
+      if (!this.isCurrentOp(epoch, generation, providerId)) return;
+      this.setState({
+        revokeState: 'idle',
+        notice: { kind: 'error', text: 'Could not revoke the session key. Check the connection and try again.' },
+      });
+      return;
+    }
     if (!this.isCurrentOp(epoch, generation, providerId)) return;
     // Revoke always clears the typed key + result, and NEVER switches source.
-    const status = await this.readStatus(providerId);
+    let status: StatusRead;
+    try {
+      status = await this.readStatus(providerId);
+    } catch {
+      if (!this.isCurrentOp(epoch, generation, providerId)) return;
+      this.setState({
+        apiKey: '',
+        testResult: undefined,
+        revokeState: 'idle',
+        notice: res.ok
+          ? { kind: 'error', text: 'The revoke request completed, but the session status could not be confirmed. Refresh and try again.' }
+          : { kind: 'error', text: res.message ?? 'Could not revoke the session key.' },
+      });
+      return;
+    }
     if (!this.isCurrentOp(epoch, generation, providerId)) return;
     this.version = status.version ? { providerId, version: status.version } : null;
     this.setState({
@@ -326,12 +387,27 @@ export class SessionKeyController {
     if (!provider) return;
     const providerId = provider.providerId;
     const epoch = this.beginOperation({ testState: 'testing' });
-    const res = await testProviderConnection(this.network, {
-      providerId,
-      kind: provider.kind,
-      modelId: this.state.selectedModelId || undefined,
-      credentialSource: 'session_only',
-    });
+    let res: ConnectionTestView;
+    try {
+      res = await testProviderConnection(this.network, {
+        providerId,
+        kind: provider.kind,
+        modelId: this.state.selectedModelId || undefined,
+        credentialSource: 'session_only',
+      });
+    } catch {
+      if (!this.isCurrentOp(epoch, generation, providerId)) return;
+      this.setState({
+        testState: 'idle',
+        testResult: {
+          ok: false,
+          providerId,
+          code: 'NETWORK_ERROR',
+          message: 'Connection test could not be completed. Check the connection and try again.',
+        },
+      });
+      return;
+    }
     if (!this.isCurrentOp(epoch, generation, providerId)) return;
     this.setState({ testState: 'idle', testResult: res });
   }
