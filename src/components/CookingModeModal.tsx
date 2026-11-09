@@ -22,20 +22,15 @@ import { normalizeSpeechText } from '../application/speechText';
 import { playTimerChime } from '../utils/audioAlert';
 import { stepTimerKey, findTimerByKey } from '../application/timers';
 import { useVaultImage } from '../hooks/useVaultImage';
-import {
-  getCachedVoiceClip,
-  setCachedVoiceClip,
-  prepareVoiceClip as prepareSharedVoiceClip,
-  promoteVoiceClip,
-  setCookingVoiceFocus,
-  clearCookingVoiceFocus,
-} from '../application/voiceCache';
+import type { VoiceCacheService } from '../application/voiceCache';
 import { getRecipeImage } from '../utils/imageHelper';
 
 interface CookingModeModalProps {
   recipe: ObsidianRecipe;
   servings: number;
   activeTimers: ActiveTimer[];
+  network?: any;
+  voiceService: VoiceCacheService;
   onStartTimer: (recipeTitle: string, minutes: number, label: string, semanticKey?: string) => void;
   onToggleTimer: (id: string) => void;
   onDeleteTimer: (id: string) => void;
@@ -74,12 +69,17 @@ export function CookingModeModal({
   recipe,
   servings,
   activeTimers,
+  network,
+  voiceService,
   onStartTimer,
   onToggleTimer,
   onDeleteTimer,
   onAddCustomTimer,
   onClose,
 }: CookingModeModalProps) {
+  useEffect(() => {
+    if (network) voiceService.setNetworkAdapter(network);
+  }, [network, voiceService]);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [showIngredientsDrawer, setShowIngredientsDrawer] = useState(false);
@@ -185,7 +185,7 @@ export function CookingModeModal({
     if (window.speechSynthesis) window.speechSynthesis.cancel();
     // Cooking Mode is now focused on this step. Detail prewarm for other
     // steps is obsolete and may be cancelled; current/next remain eligible.
-    setCookingVoiceFocus(recipe, currentStepIndex);
+    voiceService.setCookingVoiceFocus(recipe, currentStepIndex);
     stopNativeSpeech();
     const keepKeys = new Set([voiceStepKey(currentStepIndex), voiceStepKey(currentStepIndex + 1)].filter(Boolean));
     cancelVoicePreparations(keepKeys);
@@ -222,9 +222,13 @@ export function CookingModeModal({
       naturalVoiceExplicitRef.current = stored;
       setNaturalVoiceEnabled(stored);
     } catch {}
-    fetch('/api/voice/status')
-      .then((r) => r.json())
-      .then((d) => {
+    const network = voiceService.network;
+    const statusRequest = network
+      ? network.get<{ enabled?: boolean }>('/api/voice/status')
+      : Promise.resolve({ status: 503, ok: false, data: undefined });
+    statusRequest
+      .then((response) => {
+        const d = response.data;
         const available = Boolean(d?.enabled);
         naturalVoiceAvailableRef.current = available;
         setNaturalVoiceAvailable(available);
@@ -266,8 +270,8 @@ export function CookingModeModal({
       }
       stopNativeSpeech();
       cancelVoicePreparations();
-      clearVoiceCache();
-      clearCookingVoiceFocus();
+      voiceService.clearVoiceCache();
+      voiceService.clearCookingVoiceFocus();
     };
   }, []);
 
@@ -424,7 +428,7 @@ export function CookingModeModal({
       if (isCurrentStep) setVoiceReadiness('ready');
       return cached.blob;
     }
-    const sharedCached = getCachedVoiceClip(recipe, index);
+    const sharedCached = voiceService.getCachedVoiceClip(recipe, index);
     if (sharedCached) {
       cacheVoiceClip(key, sharedCached);
       if (isCurrentStep) setVoiceReadiness('ready');
@@ -432,7 +436,7 @@ export function CookingModeModal({
     }
     const existing = voicePreparationRef.current.get(key);
     if (existing) {
-      if (kind === 'foreground') promoteVoiceClip(recipe, index);
+      if (kind === 'foreground') voiceService.promoteVoiceClip(recipe, index, voiceService.network);
       return existing.promise;
     }
 
@@ -441,11 +445,12 @@ export function CookingModeModal({
     let promise: Promise<Blob | null>;
     promise = (async () => {
       try {
-        const blob = await prepareSharedVoiceClip(recipe, index, {
+        const blob = await voiceService.prepareVoiceClip(recipe, index, {
           signal: controller.signal,
           kind,
           requestId,
           purpose: 'cooking',
+          network: voiceService.network,
         });
         if (controller.signal.aborted || !naturalVoiceEnabledRef.current) return null;
         if (!blob) {
@@ -453,7 +458,7 @@ export function CookingModeModal({
           return null;
         }
         cacheVoiceClip(key, blob);
-        setCachedVoiceClip(recipe, index, blob);
+        voiceService.setCachedVoiceClip(recipe, index, blob);
         if (isCurrentStep) setVoiceReadiness('ready');
         return blob;
       } catch (error) {
@@ -537,7 +542,7 @@ export function CookingModeModal({
     setNaturalVoicePending(true);
     try {
       const key = voiceStepKey(currentStepIndex);
-      const prepared = voiceCacheRef.current.get(key) || (getCachedVoiceClip(recipe, currentStepIndex) ? { blob: getCachedVoiceClip(recipe, currentStepIndex)! } : undefined);
+      const prepared = voiceCacheRef.current.get(key) || (voiceService.getCachedVoiceClip(recipe, currentStepIndex) ? { blob: voiceService.getCachedVoiceClip(recipe, currentStepIndex)! } : undefined);
       const blob = prepared?.blob || await prepareStepVoice(currentStepIndex, 'foreground');
       if (!blob) throw new Error('Native voice preparation did not return audio.');
       if (requestId !== nativeSpeechIdRef.current || controller.signal.aborted) return;

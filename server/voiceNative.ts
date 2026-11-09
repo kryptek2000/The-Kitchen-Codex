@@ -264,6 +264,44 @@ function assetIdentity(filePath: string): string | null {
   }
 }
 
+/**
+ * Pure verification primitive. Hashes each listed file with genuine
+ * SHA-256 and compares against the supplied expected digest/size.
+ * Production `verifyNativeVoiceAssets` calls this only with the installed,
+ * validated trusted authority. Tests call it directly with synthetic
+ * expected values computed from small fixtures via `node:crypto`.
+ * It never selects authority and is not a runtime authority entrypoint.
+ */
+export function verifyFilesAgainstExpected(
+  assets: Array<{ name: string; file: string; sha256: string; size?: number }>,
+  onHash?: () => void,
+): { ok: boolean; reason?: string; failedAsset?: string; checked: number } {
+  let checked = 0;
+  for (const asset of assets) {
+    let actual: string;
+    try {
+      checked += 1;
+      if (onHash) onHash();
+      actual = sha256File(asset.file);
+    } catch {
+      return { ok: false, reason: `Voice asset is unreadable: ${asset.name}.`, failedAsset: asset.name, checked };
+    }
+    if (actual !== asset.sha256) {
+      return { ok: false, reason: `Voice asset failed integrity verification: ${asset.name}.`, failedAsset: asset.name, checked };
+    }
+    if (typeof asset.size === 'number') {
+      try {
+        if (fs.statSync(asset.file).size !== asset.size) {
+          return { ok: false, reason: `Voice asset size mismatch: ${asset.name}.`, failedAsset: asset.name, checked };
+        }
+      } catch {
+        return { ok: false, reason: `Voice asset is unreadable: ${asset.name}.`, failedAsset: asset.name, checked };
+      }
+    }
+  }
+  return { ok: true, checked };
+}
+
 function computeAssetFingerprint(paths: ReturnType<typeof getAssetPaths>): string | null {
   const identities = [
     ['model', paths.model],
@@ -296,6 +334,8 @@ function rememberIntegrity(result: Omit<IntegrityResult, 'cached'>): IntegrityRe
 }
 
 export function verifyNativeVoiceAssets(force = false, options: { voicePath?: string } = {}): IntegrityResult {
+  // Production trust root is installed-only. Caller-supplied authority is
+  // not accepted here or in any runtime-status/synthesis entrypoint.
   const trusted = loadTrustedAssets();
   if (!trusted) {
     return rememberIntegrity({
@@ -343,54 +383,22 @@ export function verifyNativeVoiceAssets(force = false, options: { voicePath?: st
   }
 
   const expected: ExpectedAsset[] = [
-    { name: 'model', file: paths.model, sha256: getExpectedHash('model', trusted), size: HEART_MODEL_SIZE },
-    { name: 'voice', file: paths.voice, sha256: getExpectedHash('voice', trusted), size: HEART_VOICE_SIZE },
+    { name: 'model', file: paths.model, sha256: getExpectedHash('model', trusted), size: trusted.HEART_MODEL_SIZE },
+    { name: 'voice', file: paths.voice, sha256: getExpectedHash('voice', trusted), size: trusted.HEART_VOICE_SIZE },
     ...Object.entries(getExpectedMetadata(trusted)).map(([name, asset]) => ({
       ...asset,
       file: path.join(paths.modelRoot, name),
     })),
   ];
 
-  for (const asset of expected) {
-    let actual: string;
-    try {
-      integrityHashCount += 1;
-      actual = sha256File(asset.file);
-    } catch {
-      return rememberIntegrity({
-        ok: false,
-        reason: `Voice asset is unreadable: ${asset.name}.`,
-        fingerprint,
-        checkedAt: Date.now(),
-      });
-    }
-    if (actual !== asset.sha256) {
-      return rememberIntegrity({
-        ok: false,
-        reason: `Voice asset failed integrity verification: ${asset.name}.`,
-        fingerprint,
-        checkedAt: Date.now(),
-      });
-    }
-    if (typeof asset.size === 'number') {
-      try {
-        if (fs.statSync(asset.file).size !== asset.size) {
-          return rememberIntegrity({
-            ok: false,
-            reason: `Voice asset size mismatch: ${asset.name}.`,
-            fingerprint,
-            checkedAt: Date.now(),
-          });
-        }
-      } catch {
-        return rememberIntegrity({
-          ok: false,
-          reason: `Voice asset is unreadable: ${asset.name}.`,
-          fingerprint,
-          checkedAt: Date.now(),
-        });
-      }
-    }
+  const verification = verifyFilesAgainstExpected(expected, () => { integrityHashCount += 1; });
+  if (!verification.ok) {
+    return rememberIntegrity({
+      ok: false,
+      reason: verification.reason || `Voice asset failed integrity verification: ${verification.failedAsset || 'unknown'}.`,
+      fingerprint,
+      checkedAt: Date.now(),
+    });
   }
 
   return rememberIntegrity({
@@ -688,10 +696,11 @@ export function promoteNativeVoiceRequest(requestId?: string) {
 
 export async function synthesizeNativeVoice(text: string, voice: string, meta: { requestId?: string; kind?: string; signal?: AbortSignal } = {}): Promise<Buffer> {
   if (!isNativeVoiceEnabled()) throw new Error('Native voice is disabled.');
-  const integrity = verifyNativeVoiceAssets();
-  if (!integrity.ok) throw new Error(`Native voice runtime is unavailable: ${integrity.reason || 'unverified assets'}`);
   if (!['af_bella', 'af_heart'].includes(voice)) throw new Error('Invalid voice');
   if (typeof text !== 'string' || text.length === 0 || text.length > 500) throw new Error('Invalid text');
+  if (meta.signal?.aborted) throw makeAbortError();
+  const integrity = verifyNativeVoiceAssets();
+  if (!integrity.ok) throw new Error(`Native voice runtime is unavailable: ${integrity.reason || 'unverified assets'}`);
 
   const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   return await new Promise<Buffer>((resolve, reject) => {

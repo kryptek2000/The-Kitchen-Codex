@@ -152,6 +152,7 @@ import { MobileRecipeRow } from './components/MobileRecipeRow';
 import { SideNav } from './components/SideNav';
 import { BottomNav } from './components/BottomNav';
 import { RecipeDetailView } from './components/RecipeDetailView';
+import { createVoiceCache } from './application/voiceCache';
 import type {
   AdvancedNutritionAiResolveHandler,
   AdvancedNutritionAiEstimateHandler,
@@ -277,6 +278,47 @@ export default function App() {
     () => createBrowserNetworkAdapter({ authorizationHeaders: getEndpointAccessHeaders }),
     []
   );
+  const voiceService = useMemo(() => createVoiceCache(networkAdapter), [networkAdapter]);
+  // App-owned voice service lifecycle. The service is created once per App
+  // instance and shared by Recipe Detail (prewarming) and Cooking Mode
+  // (foreground narration). It must survive ordinary rerenders, be
+  // disposed only when the owning App genuinely unmounts, and be replaced
+  // with fresh state on remount.
+  //
+  // StrictMode (src/main.tsx) replays effects in development
+  // (mount -> cleanup -> remount) with the same memoized service still
+  // active. Disposing synchronously in that cleanup would leave the
+  // remounted App holding a disposed service. Cleanup therefore defers
+  // disposal by a macrotask; the remount setup synchronously cancels the
+  // pending timer, so only a genuine unmount (no remount) disposes.
+  // If the owned service is ever replaced (adapter transition), the old
+  // instance is disposed in the new setup where the instances differ.
+  const voiceMountedRef = useRef(false);
+  const voiceDisposalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevVoiceServiceRef = useRef<typeof voiceService | null>(null);
+  useEffect(() => {
+    voiceMountedRef.current = true;
+    if (voiceDisposalTimerRef.current) {
+      clearTimeout(voiceDisposalTimerRef.current);
+      voiceDisposalTimerRef.current = null;
+    }
+    const prev = prevVoiceServiceRef.current;
+    if (prev && prev !== voiceService) {
+      try { prev.dispose(); } catch {}
+    }
+    prevVoiceServiceRef.current = voiceService;
+    return () => {
+      voiceMountedRef.current = false;
+      if (voiceDisposalTimerRef.current) clearTimeout(voiceDisposalTimerRef.current);
+      const serviceToDispose = voiceService;
+      voiceDisposalTimerRef.current = setTimeout(() => {
+        voiceDisposalTimerRef.current = null;
+        if (!voiceMountedRef.current) {
+          try { serviceToDispose.dispose(); } catch {}
+        }
+      }, 0);
+    };
+  }, [voiceService]);
   // The browser shell truthfully exposes NO provider-secret storage (read-only,
   // `supportsWrites() === false`). No provider key is ever persisted client-side.
   const secretAdapter = useMemo(() => createBrowserSecretAdapter(), []);
@@ -2601,6 +2643,7 @@ export default function App() {
               setIsVaultIntelligenceOpen(true);
             }}
             network={networkAdapter}
+            voiceService={voiceService}
             advancedNutritionSession={advancedNutritionBundle.session}
             advancedNutritionBundleStatus={advancedNutritionBundle.status}
             onLoadAdvancedNutritionBundle={handleLoadAdvancedNutritionBundle}
@@ -3036,6 +3079,8 @@ export default function App() {
           <CookingModeModal
             recipe={cookingRecipe.recipe}
             servings={cookingRecipe.servings}
+            network={networkAdapter}
+            voiceService={voiceService}
             activeTimers={activeTimers}
             onStartTimer={handleStartTimer}
             onToggleTimer={handleToggleTimer}

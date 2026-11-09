@@ -4,16 +4,73 @@ import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/re
 import React from 'react';
 
 import { CookingModeModal } from '../../src/components/CookingModeModal';
-import { clearVoiceCache } from '../../src/application/voiceCache';
+import { createVoiceCache } from '../../src/application/voiceCache';
+import type { VoiceCacheService } from '../../src/application/voiceCache';
 
 vi.mock('canvas-confetti', () => ({ default: vi.fn() }));
+
+function createMockNetworkAdapter(): any {
+  return {
+    request: async (request: any) => {
+      const res = await (globalThis as any).fetch(request.path, {
+        method: request.method,
+        headers: request.headers,
+        body: request.body !== undefined ? JSON.stringify(request.body) : undefined,
+        signal: request.signal,
+      });
+      let data: unknown = undefined;
+      try { data = await res.json(); } catch { data = undefined; }
+      return { status: res.status, ok: res.ok, data };
+    },
+    get: async (path: string, options?: any) => {
+      const res = await (globalThis as any).fetch(path, { method: 'GET', headers: options?.headers, signal: options?.signal });
+      let data: unknown = undefined;
+      try { data = await res.json(); } catch { data = undefined; }
+      return { status: res.status, ok: res.ok, data };
+    },
+    post: async (path: string, body: any, options?: any) => {
+      const res = await (globalThis as any).fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(options?.headers || {}) },
+        body: JSON.stringify(body),
+        signal: options?.signal,
+      });
+      let data: unknown = undefined;
+      try { data = await res.json(); } catch { data = undefined; }
+      return { status: res.status, ok: res.ok, data };
+    },
+    getBytes: async (path: string, options?: any) => {
+      const res = await (globalThis as any).fetch(path, { method: 'GET', headers: options?.headers, signal: options?.signal });
+      const blob = await res.blob();
+      const buffer = await blob.arrayBuffer();
+      return { status: res.status, ok: res.ok, bytes: new Uint8Array(buffer), contentType: res.headers?.get?.('content-type') || undefined };
+    },
+    postBytes: async (path: string, body: any, options?: any) => {
+      const res = await (globalThis as any).fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(options?.headers || {}) },
+        body: JSON.stringify(body),
+        signal: options?.signal,
+      });
+      const blob = await res.blob();
+      const buffer = await blob.arrayBuffer();
+      return { status: res.status, ok: res.ok, bytes: new Uint8Array(buffer), contentType: res.headers?.get?.('content-type') || undefined };
+    },
+  } as any;
+}
+
+let testVoiceService: VoiceCacheService;
+
+beforeEach(() => {
+  testVoiceService = createVoiceCache(createMockNetworkAdapter());
+});
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   window.localStorage?.clear();
+  testVoiceService?.dispose();
 });
-beforeEach(() => clearVoiceCache());
 
 function installVoiceTestDoubles(available = true) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -80,6 +137,7 @@ describe('CookingModeModal', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -103,6 +161,7 @@ describe('CookingModeModal', () => {
       <CookingModeModal
         recipe={makeRecipe({ title: longTitle })}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -120,6 +179,7 @@ describe('CookingModeModal', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -141,6 +201,7 @@ describe('CookingModeModal', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -149,7 +210,7 @@ describe('CookingModeModal', () => {
       />
     );
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/voice/status'));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/voice/status', expect.anything()));
     expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/voice/speak'))).toHaveLength(0);
     expect(document.getElementById('natural-voice-readiness')?.textContent).toContain('Heart ready to prepare');
 
@@ -168,6 +229,7 @@ describe('CookingModeModal', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -176,7 +238,7 @@ describe('CookingModeModal', () => {
       />
     );
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/voice/status'));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/voice/status', expect.anything()));
     fireEvent.click(screen.getByRole('checkbox'));
     await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/voice/speak'))).toHaveLength(1));
     fireEvent.click(screen.getByText('Next Step'));
@@ -195,6 +257,7 @@ describe('CookingModeModal', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -203,7 +266,7 @@ describe('CookingModeModal', () => {
       />
     );
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/voice/status'));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/voice/status', expect.anything()));
     fireEvent.click(screen.getByRole('checkbox'));
     await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/voice/speak'))).toHaveLength(1));
     fireEvent.click(screen.getByLabelText('Read step aloud'));
@@ -222,6 +285,7 @@ describe('CookingModeModal', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -240,6 +304,7 @@ describe('CookingModeModal', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -267,6 +332,7 @@ describe('CookingModeModal', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -285,6 +351,7 @@ describe('CookingModeModal', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -314,6 +381,7 @@ describe('CookingModeModal', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={2}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -334,6 +402,7 @@ describe('CookingModeModal', () => {
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
         onDeleteTimer={() => {}}
+        voiceService={testVoiceService}
         onClose={() => {}}
       />
     );
@@ -348,6 +417,7 @@ describe('CookingModeModal', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={onStart}
         onToggleTimer={() => {}}
@@ -377,6 +447,7 @@ describe('CookingModeModal', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[timer]}
         onStartTimer={() => {}}
         onToggleTimer={onToggle}
@@ -400,6 +471,7 @@ describe('CookingModeModal', () => {
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
         onDeleteTimer={() => {}}
+        voiceService={testVoiceService}
         onClose={() => {}}
       />
     );
@@ -412,6 +484,7 @@ describe('CookingModeModal', () => {
       <CookingModeModal
         recipe={makeRecipe({ instructions: [{ stepNumber: 1, text: longText }] })}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -430,6 +503,7 @@ describe('CookingModeModal correction pass', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -446,6 +520,7 @@ describe('CookingModeModal correction pass', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -463,6 +538,7 @@ describe('CookingModeModal correction pass', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -484,6 +560,7 @@ describe('CookingModeModal correction pass', () => {
       <CookingModeModal
         recipe={makeRecipe({ instructions: [{ stepNumber: 1, text: '**Autolyse** the dough.' }] })}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -504,6 +581,7 @@ describe('CookingModeModal correction pass', () => {
       <CookingModeModal
         recipe={makeRecipe({ instructions: [{ stepNumber: 1, text: payload }] })}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -520,6 +598,7 @@ describe('CookingModeModal correction pass', () => {
       <CookingModeModal
         recipe={makeRecipe({ instructions: [] })}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -548,6 +627,7 @@ describe('CookingModeModal correction pass', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[timer]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -572,6 +652,7 @@ describe('CookingModeModal image compatibility', () => {
       <CookingModeModal
         recipe={makeRecipe({ image: 'https://example.com/bread.jpg' })}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -591,6 +672,7 @@ describe('CookingModeModal image compatibility', () => {
       <CookingModeModal
         recipe={makeRecipe({ image: 'Assets/My Bread.jpg' })}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -610,6 +692,7 @@ describe('CookingModeModal image compatibility', () => {
       <CookingModeModal
         recipe={makeRecipe({ rawMarkdown: '![Bread](Assets/Bread.jpg)' })}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -630,6 +713,7 @@ describe('CookingModeModal image compatibility', () => {
       <CookingModeModal
         recipe={makeRecipe({ image: 'Assets/Async.jpg' })}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -650,6 +734,7 @@ describe('CookingModeModal image compatibility', () => {
       <CookingModeModal
         recipe={makeRecipe({ image: undefined, rawMarkdown: '' })}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -667,6 +752,7 @@ describe('CookingModeModal image compatibility', () => {
       <CookingModeModal
         recipe={makeRecipe({ image: 'javascript:alert(1)' })}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -684,6 +770,7 @@ describe('CookingModeModal image compatibility', () => {
       <CookingModeModal
         recipe={makeRecipe({ image: 'Assets/missing.jpg' })}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -703,6 +790,7 @@ describe('CookingModeModal focus recovery', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -727,6 +815,7 @@ describe('CookingModeModal Slice 2', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={timers as any}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -745,6 +834,7 @@ describe('CookingModeModal Slice 2', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={timers as any}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -761,6 +851,7 @@ describe('CookingModeModal Slice 2', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -782,6 +873,7 @@ describe('CookingModeModal Slice 2-R1', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={timers as any}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -802,6 +894,7 @@ describe('CookingModeModal zero-timer tray', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -837,6 +930,7 @@ describe('CookingModeModal Natural Voice identity', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -867,6 +961,7 @@ describe('CookingModeModal speech normalization', () => {
       <CookingModeModal
         recipe={recipe}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -874,7 +969,7 @@ describe('CookingModeModal speech normalization', () => {
         onClose={() => {}}
       />
     );
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/voice/status'));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/voice/status', expect.anything()));
     fireEvent.click(screen.getByRole('checkbox'));
     await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/voice/speak')).length).toBeGreaterThanOrEqual(1));
     const speakCall = fetchMock.mock.calls.find((c: any) => String(c[0]).includes('/api/voice/speak')) as any;
@@ -926,6 +1021,7 @@ describe('CookingModeModal shared focus and rapid navigation', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -955,6 +1051,7 @@ describe('CookingModeModal shared focus and rapid navigation', () => {
       <CookingModeModal
         recipe={makeRecipe()}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
@@ -976,6 +1073,7 @@ describe('CookingModeModal shared focus and rapid navigation', () => {
       <CookingModeModal
         recipe={nextRecipe}
         servings={4}
+        voiceService={testVoiceService}
         activeTimers={[]}
         onStartTimer={() => {}}
         onToggleTimer={() => {}}
