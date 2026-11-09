@@ -66,7 +66,7 @@ export function resolveVaultRestoreAction(
  * reliably in this project's non-strict TypeScript configuration.
  */
 export type VaultReconnectResult<T> =
-  | { status: 'reconnected'; data: T }
+  | { status: 'reconnected'; data: T; handle: any }
   | { status: 'denied' }
   | { status: 'no-handle' }
   | { status: 'unsupported' }
@@ -112,7 +112,7 @@ export async function reconnectRememberedVault<T>(deps: {
 
   try {
     const data = await deps.load(handle);
-    return { status: 'reconnected', data };
+    return { status: 'reconnected', data, handle };
   } catch {
     return { status: 'error' };
   }
