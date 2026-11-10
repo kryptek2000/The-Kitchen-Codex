@@ -44,7 +44,7 @@
  * helpers used by the deterministic ranking and confidence contract.
  */
 
-export const QUERY_PROJECTION_VERSION = 'usda_query_projection_v13';
+export const QUERY_PROJECTION_VERSION = 'usda_query_projection_v14';
 
 /**
  * Optional, bounded Phase 1 metadata that a caller can supply when it already
@@ -177,7 +177,9 @@ const PREPARATION_QUALIFIERS: ReadonlySet<string> = new Set([
   'chilled',
   'chilling',
   'cold',
+  'cool',
   'cooled',
+  'warm',
   'warmed',
   'room',
   'temperature',
@@ -335,6 +337,17 @@ const NOISE_TOKENS: ReadonlySet<string> = new Set([
   'servings',
   'size',
   'count',
+  // Grammatical tails from ordinary recipe prose (`butter, at room
+  // temperature`, `butter, cold is fine`, `butter, until melted`). They never
+  // name a food, so they must not become the required matching anchor.
+  'at',
+  'is',
+  'if',
+  'until',
+  'when',
+  'the',
+  'temp',
+  'desired',
   // Bounded number words (`four loose 4-ounce balls`). Numeric digits are
   // handled separately by `extractNumericQualifiers`.
   'one',
@@ -349,6 +362,21 @@ const NOISE_TOKENS: ReadonlySet<string> = new Set([
   'ten',
   'eleven',
   'twelve',
+]);
+
+/**
+ * Bounded cookware / trailing prose words recognized ONLY when they compose an
+ * otherwise non-identity trailing clause (`butter, for the pan`). They are not
+ * global identity noise because a food name can begin with `pan` (`pan dulce`).
+ */
+const TRAILING_PROSE_TOKENS: ReadonlySet<string> = new Set([
+  'pan',
+  'pot',
+  'skillet',
+  'dish',
+  'tray',
+  'bowl',
+  'greasing',
 ]);
 
 /**
@@ -1629,6 +1657,8 @@ function stripPreparationClauses(text: string): { text: string; notes: string[] 
         SIZE_QUALIFIERS.has(token) ||
         COUNT_NOISE.has(token) ||
         NOISE_TOKENS.has(token) ||
+        REFINEMENT_TOKENS.has(token) ||
+        TRAILING_PROSE_TOKENS.has(token) ||
         NUMERIC_TOKEN.test(token)
     );
     if (allNoise) notes.push(segment);
