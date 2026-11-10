@@ -80,8 +80,8 @@ function reviewWith(
 
 describe('phase 2 projection — versioned contract and determinism', () => {
   it('pins the Phase 2 projection contract version', () => {
-    expect(QUERY_PROJECTION_VERSION).toBe('usda_query_projection_v13');
-    expect(projectQueryText('black beans').version).toBe('usda_query_projection_v13');
+    expect(QUERY_PROJECTION_VERSION).toBe('usda_query_projection_v14');
+    expect(projectQueryText('black beans').version).toBe('usda_query_projection_v14');
     expect(MATCH_CONFIDENCE_VERSION).toBe('usda_match_confidence_v14');
   });
 
@@ -137,6 +137,27 @@ describe('phase 2 projection — closed descriptor roles', () => {
     const salt = projectQueryText('salt to taste');
     expect(salt.core_tokens).toEqual(['salt']);
     expect('qualitative_cue' in salt).toBe(false);
+  });
+
+  it('treats trailing temperature/doneness prose as a note, never food identity', () => {
+    for (const text of [
+      'butter, at room temperature',
+      'butter, at room temp',
+      'butter, cold is fine',
+      'butter, for the pan',
+      'butter, until melted',
+      'butter, if desired',
+    ]) {
+      const projection = projectQueryText(text);
+      expect(projection.core_tokens, text).toEqual(['butter']);
+      expect(projection.primary_identity_tokens, text).toEqual(['butter']);
+      expect(projection.notes.length, text).toBe(1);
+    }
+
+    // A trailing clause with real food identity is still retained.
+    expect(projectQueryText('butter, garlic').core_tokens).toEqual(['butter', 'garlic']);
+    // A food whose name begins with `pan` is not mistaken for cookware prose.
+    expect(projectQueryText('pan dulce').core_tokens).toEqual(['pan', 'dulce']);
   });
 
   it('retains an unknown descriptor as identity evidence', () => {
