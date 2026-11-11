@@ -300,16 +300,21 @@ export async function checkForUpdates(
       const latestCommit = normalizeCommit(release.commit);
       let status: UpdateStatus = "unknown";
       let compareUrl = release.url;
+      let installedIsNewer = false;
 
       if (latestCommit && latestCommit === installedCommit) {
         status = "up-to-date";
       } else if (latestCommit) {
         const cmp = await compareCommits(fetchImpl, installedCommit, latestCommit);
-        if (cmp?.status === "behind") {
+        if (cmp?.status === "ahead") {
           status = "update-available";
           compareUrl = cmp.url || compareUrl;
         } else if (cmp?.status === "identical") {
           status = "up-to-date";
+          compareUrl = cmp.url || compareUrl;
+        } else if (cmp?.status === "behind") {
+          status = "up-to-date";
+          installedIsNewer = true;
           compareUrl = cmp.url || compareUrl;
         } else {
           status = "unknown";
@@ -329,7 +334,9 @@ export async function checkForUpdates(
         status,
         message:
           status === "up-to-date"
-            ? "You are up to date with the latest stable release."
+            ? installedIsNewer
+              ? "Installed build is newer than the latest stable release."
+              : "You are up to date with the latest stable release."
             : status === "update-available"
             ? "A newer stable release is available."
             : "Unable to determine whether the stable release is newer than this build.",
@@ -364,16 +371,21 @@ export async function checkForUpdates(
     const latestCommit = normalizeCommit(dev.sha);
     let status: UpdateStatus = "unknown";
     let compareUrl = dev.url;
+    let installedIsNewer = false;
 
     if (latestCommit === installedCommit) {
       status = "up-to-date";
     } else {
       const cmp = await compareCommits(fetchImpl, installedCommit, latestCommit);
-      if (cmp?.status === "behind") {
+      if (cmp?.status === "ahead") {
         status = "update-available";
         compareUrl = cmp.url || compareUrl;
       } else if (cmp?.status === "identical") {
         status = "up-to-date";
+        compareUrl = cmp.url || compareUrl;
+      } else if (cmp?.status === "behind") {
+        status = "up-to-date";
+        installedIsNewer = true;
         compareUrl = cmp.url || compareUrl;
       } else {
         status = "unknown";
@@ -391,7 +403,9 @@ export async function checkForUpdates(
       status,
       message:
         status === "up-to-date"
-          ? "You are up to date with the latest development build."
+          ? installedIsNewer
+            ? "Installed build is newer than the latest development build on main."
+            : "You are up to date with the latest development build."
           : status === "update-available"
           ? "A newer approved development build is available on main."
           : "Unable to determine whether the development build is newer than this build.",
