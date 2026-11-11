@@ -7,6 +7,7 @@ import {
   ImageOff,
   Play,
   Users,
+  BookMarked,
 } from 'lucide-react';
 import { ObsidianRecipe } from '../types';
 import { getRecipeImage, LOCAL_RECIPE_IMAGE_PLACEHOLDER } from '../utils/imageHelper';
@@ -92,6 +93,14 @@ export function RecipeCard({
           </div>
         )}
 
+        {recipe.isBuiltIn && (
+          <span
+            data-testid="builtin-card-badge"
+            className="absolute left-3 top-3 inline-flex min-h-[28px] items-center gap-1 rounded-full border border-[var(--border-subtle,rgba(255,255,255,0.14))] bg-black/65 px-2.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-[var(--accent-text,#F59E0B)] backdrop-blur-sm"
+          >
+            <BookMarked className="h-3 w-3" aria-hidden="true" /> Built-in
+          </span>
+        )}
         <button
           id={`favorite-btn-${recipe.id}`}
           onClick={handleToggleFavorite}

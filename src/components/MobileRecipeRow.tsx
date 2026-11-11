@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import { CalendarPlus, Clock, Flame, Heart, ImageOff, Play, Users } from 'lucide-react';
+import { BookMarked, CalendarPlus, Clock, Flame, Heart, ImageOff, Play, Users } from 'lucide-react';
 import { ObsidianRecipe } from '../types';
 import { getRecipeImage, LOCAL_RECIPE_IMAGE_PLACEHOLDER } from '../utils/imageHelper';
 import { useVaultImage } from '../hooks/useVaultImage';
@@ -96,8 +96,13 @@ export function MobileRecipeRow({
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <p className="kc-eyebrow leading-[1.5] break-words">
-          {recipe.cuisine} · {recipe.category}
+        <p className="kc-eyebrow flex flex-wrap items-center gap-x-2 gap-y-1 leading-[1.5] break-words">
+          <span>{recipe.cuisine} · {recipe.category}</span>
+          {recipe.isBuiltIn ? (
+            <span data-testid="builtin-row-badge" className="inline-flex items-center gap-1 text-[9px] text-[var(--accent-text,#F59E0B)]">
+              <BookMarked className="h-3 w-3" aria-hidden="true" /> Built-in
+            </span>
+          ) : null}
         </p>
         <h3 className="kc-vault-row-title mt-1.5 font-serif font-medium text-[var(--text-primary,#F3F4F6)]">
           <button

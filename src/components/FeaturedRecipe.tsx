@@ -90,6 +90,11 @@ export function FeaturedRecipe({
     >
       <div className="kc-featured__kicker">
         <span>Featured recipe</span>
+        {recipe.isBuiltIn ? (
+          <span data-testid="builtin-featured-badge" className="inline-flex items-center gap-1">
+            <BookOpen className="h-3.5 w-3.5" aria-hidden="true" /> Built-in Signature
+          </span>
+        ) : null}
         {folio ? <span aria-label={`Featured recipe ${index} of ${total}`}>{folio}</span> : null}
       </div>
 

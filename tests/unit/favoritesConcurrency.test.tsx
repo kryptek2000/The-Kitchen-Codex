@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 import App from '../../src/App';
 
@@ -104,13 +104,38 @@ describe('Favorites deterministic concurrency', () => {
 
     await connect(root);
 
+    // Combined view keeps the two ownership counts distinguishable.
+    expect(document.getElementById('vault-collection-label')?.getAttribute('aria-label')).toBe('My Recipe Vault');
+    expect(document.getElementById('vault-recipe-count')?.textContent).toBe('9 built-in · 1 saved');
+    expect(document.getElementById('sidenav-vault-status-line')?.textContent).toContain('1 recipe');
+    expect(document.getElementById('sidenav-vault-status-line')?.textContent).toContain('9 built-in');
+    expect(document.querySelectorAll('[data-testid="builtin-card-badge"]').length).toBeGreaterThan(0);
+
+    // Personal view reports the one saved recipe only, never the built-ins.
+    fireEvent.click(document.getElementById('nav-personal-recipes')!);
+    await waitFor(() => {
+      expect(document.getElementById('vault-collection-label')?.getAttribute('aria-label')).toBe('My Saved Recipes');
+      expect(document.getElementById('vault-recipe-count')?.textContent).toBe('1 saved recipe');
+    });
+    expect(document.getElementById('obsidian-vault-header')?.textContent).not.toContain('Signature Collection');
+    fireEvent.click(document.getElementById('nav-recipe-vault')!);
+    await waitFor(() => {
+      expect(document.getElementById('vault-collection-label')?.getAttribute('aria-label')).toBe('My Recipe Vault');
+    });
+
+    const personalCard = () => {
+      const card = document.getElementById('recipe-card-Recipes/Carbonara.md');
+      expect(card).toBeTruthy();
+      return card as HTMLElement;
+    };
+
     // Toggle ON (write held)
-    fireEvent.click(screen.getByRole('button', { name: /Add to favorites/i }));
+    fireEvent.click(within(personalCard()).getByRole('button', { name: /Add to favorites/i }));
     await new Promise((r) => setTimeout(r, 500));
 
-    // Toggle OFF while first write is still in flight
-    const removeBtn = screen.queryByRole('button', { name: /Remove from favorites/i });
-    if (removeBtn) fireEvent.click(removeBtn);
+    // Favoriting promotes the personal recipe to the featured spread, so the
+    // Remove control is the single global favorite control at this point.
+    fireEvent.click(screen.getByRole('button', { name: /Remove from favorites/i }));
 
     // Release first write
     releaseFirst();
@@ -118,9 +143,35 @@ describe('Favorites deterministic concurrency', () => {
       expect(file.content).toContain('isFavorite: false');
     }, { timeout: 10000 });
 
-    // UI converges to unfavorited
+    // UI converges to unfavorited and the personal card returns to the shelf.
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Add to favorites/i })).toBeTruthy();
+      expect(document.getElementById('recipe-card-Recipes/Carbonara.md')).toBeTruthy();
     });
+  }, 30000);
+
+  it('returns to the built-in view after disconnecting without stale personal labels', async () => {
+    const root = new MockDir();
+    const recipesDir = new MockDir();
+    recipesDir.name = 'Recipes';
+    root.children.set('Recipes', recipesDir);
+    const file = new MockFile('Carbonara.md');
+    file.content = '---\ntitle: "Carbonara"\nsource: "https://example.com/carbonara"\nservings: 4\ningredients: []\n---\n# Carbonara\n';
+    recipesDir.children.set('Carbonara.md', file);
+
+    await connect(root);
+    expect(document.getElementById('vault-collection-label')?.getAttribute('aria-label')).toBe('My Recipe Vault');
+    expect(document.getElementById('vault-recipe-count')?.textContent).toBe('9 built-in · 1 saved');
+
+    fireEvent.click(document.getElementById('vault-linked-chip')!);
+    await screen.findByRole('dialog', { name: /Connect or manage your recipes/i });
+    fireEvent.click(screen.getByRole('tab', { name: /Vault Stats/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Use Signature Collection/i }));
+
+    await waitFor(() => {
+      expect(document.getElementById('vault-collection-label')?.getAttribute('aria-label')).toBe('Signature Collection');
+      expect(document.getElementById('vault-recipe-count')?.textContent).toBe('9 built-in recipes');
+    });
+    expect(document.getElementById('recipe-card-Recipes/Carbonara.md')).toBeNull();
+    expect(document.getElementById('obsidian-vault-header')?.textContent).not.toContain('saved');
   }, 30000);
 });

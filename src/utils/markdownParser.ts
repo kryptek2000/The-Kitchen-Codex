@@ -807,6 +807,24 @@ export function parseObsidianRecipeMarkdown(
       ? rawRatingSource
       : undefined;
 
+  // Signature Starter provenance. A saved personal copy keeps `starter_id` so
+  // duplicate detection and future collection updates never mistake it for the
+  // built-in original or overwrite the user's customized copy.
+  const rawStarterId = findFlexibleKey(frontmatter, ['starter_id', 'starterId']);
+  const starterId =
+    typeof rawStarterId === 'string' && rawStarterId.trim() ? rawStarterId.trim().slice(0, 120) : undefined;
+  const rawStarterVersion = findFlexibleKey(frontmatter, ['starter_version', 'starterVersion']);
+  const starterVersionNumber =
+    typeof rawStarterVersion === 'number'
+      ? rawStarterVersion
+      : typeof rawStarterVersion === 'string'
+        ? Number.parseInt(rawStarterVersion, 10)
+        : undefined;
+  const starterVersion =
+    typeof starterVersionNumber === 'number' && Number.isFinite(starterVersionNumber) && starterVersionNumber > 0
+      ? Math.trunc(starterVersionNumber)
+      : undefined;
+
   const rawParsedRecipe: ObsidianRecipe = {
     id,
     fileName,
@@ -860,6 +878,8 @@ export function parseObsidianRecipeMarkdown(
   }
   parsed.ratingExplicit = ratingExplicit;
   parsed.ratingSource = ratingSource;
+  if (starterId) parsed.starterId = starterId;
+  if (starterVersion) parsed.starterVersion = starterVersion;
   return parsed;
 }
 
