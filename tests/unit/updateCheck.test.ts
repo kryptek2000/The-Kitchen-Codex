@@ -64,7 +64,7 @@ describe("update check", () => {
         return jsonResponse({ object: { sha: NEWER_COMMIT, type: "commit" } });
       }
       if (url.includes("/compare/")) {
-        return jsonResponse({ status: "behind", html_url: "https://example/compare" });
+        return jsonResponse({ status: "ahead", html_url: "https://example/compare" });
       }
       return jsonResponse({}, false, 404);
     });
@@ -133,7 +133,7 @@ describe("update check", () => {
         return jsonResponse({ sha: NEWER_COMMIT, html_url: "https://example/commit", commit: { committer: { date: "2026-01-02T00:00:00Z" } } });
       }
       if (url.includes("/compare/")) {
-        return jsonResponse({ status: "behind", html_url: "https://example/compare" });
+        return jsonResponse({ status: "ahead", html_url: "https://example/compare" });
       }
       return jsonResponse({}, false, 404);
     });
@@ -374,4 +374,59 @@ describe("stable release metadata strict validation", () => {
     const release = await mod.fetchLatestStableRelease(fetchImpl as any);
     expect(release).toBeNull();
   });
+});
+
+describe("update check ancestry outcomes", () => {
+  function stableFetch(compareStatus: string) {
+    return makeFetch((url) => {
+      if (url.includes("/releases/latest")) {
+        return jsonResponse({ tag_name: "v0.9.1", html_url: "https://example/release", draft: false, prerelease: false });
+      }
+      if (url.includes("/git/ref/tags/")) {
+        return jsonResponse({ object: { sha: NEWER_COMMIT, type: "commit" } });
+      }
+      if (url.includes("/compare/")) {
+        return jsonResponse({ status: compareStatus, html_url: "https://example/compare" });
+      }
+      return jsonResponse({}, false, 404);
+    });
+  }
+
+  function devFetch(compareStatus: string) {
+    return makeFetch((url) => {
+      if (url.includes("/commits/main")) {
+        return jsonResponse({ sha: NEWER_COMMIT, html_url: "https://example/commit", commit: { committer: { date: "2026-01-02T00:00:00Z" } } });
+      }
+      if (url.includes("/compare/")) {
+        return jsonResponse({ status: compareStatus, html_url: "https://example/compare" });
+      }
+      return jsonResponse({}, false, 404);
+    });
+  }
+
+  for (const status of ["ahead", "behind", "identical", "diverged"]) {
+    it(`stable channel maps ${status} correctly`, async () => {
+      const result = await checkForUpdates(
+        { version: "v0.9.0", commit: INSTALLED_COMMIT },
+        "stable",
+        stableFetch(status) as any
+      );
+      if (status === "ahead") expect(result.status).toBe("update-available");
+      else if (status === "identical") expect(result.status).toBe("up-to-date");
+      else if (status === "behind") expect(result.status).toBe("up-to-date");
+      else expect(result.status).toBe("unknown");
+    });
+
+    it(`development channel maps ${status} correctly`, async () => {
+      const result = await checkForUpdates(
+        { version: "v0.9.0", commit: INSTALLED_COMMIT },
+        "development",
+        devFetch(status) as any
+      );
+      if (status === "ahead") expect(result.status).toBe("update-available");
+      else if (status === "identical") expect(result.status).toBe("up-to-date");
+      else if (status === "behind") expect(result.status).toBe("up-to-date");
+      else expect(result.status).toBe("unknown");
+    });
+  }
 });
