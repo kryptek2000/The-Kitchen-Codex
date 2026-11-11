@@ -138,6 +138,9 @@ import { requireAiAccessToken } from "./aiEndpointAuth.js";
 import { registerSessionKeyRoutes } from "./ai/sessionKeyRoutes.js";
 import { createApiErrorHandler } from "./errorHandler.js";
 import { RELEASE_VERSION } from "../src/appVersion.js";
+import { BUILD_COMMIT, BUILD_TIME } from "./buildInfo.js";
+import { checkForUpdates, createUpdateCheckController } from "./updateCheck.js";
+import { updateCheckRateLimiter } from "./rateLimiter.js";
 
 export interface CreateAppOptions {
   isProduction: boolean;
@@ -395,6 +398,9 @@ function cancellationFor(req: express.Request): RouteCancellation {
  */
 export function createApp(opts: CreateAppOptions): express.Express {
   const app = express();
+  const updateCheckController = createUpdateCheckController({
+    installed: { version: RELEASE_VERSION, commit: BUILD_COMMIT, buildTime: BUILD_TIME },
+  });
 
   // AI-4E ORIGIN RECEIPT AUTHORITY — ONE instance for THIS application instance.
   //
@@ -475,7 +481,25 @@ export function createApp(opts: CreateAppOptions): express.Express {
 
   // Health check endpoint
   app.get("/api/health", (req, res) => {
-    res.json({ status: "ok", version: RELEASE_VERSION, timestamp: new Date().toISOString() });
+    res.json({
+      status: "ok",
+      version: RELEASE_VERSION,
+      buildCommit: BUILD_COMMIT,
+      buildTime: BUILD_TIME,
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  // Read-only update check. Never installs, pulls, rebuilds, or restarts.
+  app.get("/api/update-check", updateCheckRateLimiter, async (req, res) => {
+    const channelRaw = String(req.query?.channel || "stable").toLowerCase();
+    if (channelRaw !== "stable" && channelRaw !== "development") {
+      res.status(400).json({ error: "Invalid update channel" });
+      return;
+    }
+    const channel = channelRaw === "development" ? "development" : "stable";
+    const result = await updateCheckController.check(channel);
+    res.json(result);
   });
 
   // Experimental native voice status (disabled by default).
