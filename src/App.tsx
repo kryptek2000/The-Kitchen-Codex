@@ -170,6 +170,7 @@ import { ConnectVaultModal } from './components/ConnectVaultModal';
 import { RecipeGrabberModal } from './components/RecipeGrabberModal';
 import { VaultIntelligenceModal } from './components/VaultIntelligenceModal';
 import { AskMyKitchenModal } from './components/AskMyKitchenModal';
+import { AboutUpdatesModal } from './components/AboutUpdatesModal';
 import { summarizeVaultHealth } from './utils/vaultIntelligence';
 
 // Cooking Mode and the Recipe Editor are modal-heavy views only opened on
@@ -484,6 +485,7 @@ export default function App() {
 
   // Modals
   const [isConnectVaultOpen, setIsConnectVaultOpen] = useState(false);
+  const [isAboutUpdatesOpen, setIsAboutUpdatesOpen] = useState(false);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isCreateForMeOpen, setIsCreateForMeOpen] = useState(false);
   const [isGrabberOpen, setIsGrabberOpen] = useState(false);
@@ -2975,9 +2977,14 @@ export default function App() {
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-2 kc-vault-surface py-4 pb-[92px] text-sm text-[var(--text-secondary,#9CA3AF)] sm:flex-row lg:pb-4">
           <div className="flex items-center gap-2">
             <span className="font-medium text-[var(--text-primary,#F3F4F6)]">My Recipe Vault</span>
-            <span className="font-mono text-xs px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-medium">
+            <button
+              type="button"
+              onClick={() => setIsAboutUpdatesOpen(true)}
+              className="font-mono text-xs px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-medium hover:bg-amber-500/20"
+              aria-label="About and updates"
+            >
               {APP_VERSION}
-            </span>
+            </button>
           </div>
           <div className="flex items-center gap-4 text-sm">
             <span>Obsidian Compatible</span>
@@ -3126,6 +3133,13 @@ export default function App() {
         setNotes={setNotes}
         onOpenWebGrabber={() => setIsGrabberOpen(true)}
         onDirectVaultConnected={handleDirectVaultConnected}
+      />
+
+      {/* About & Updates Modal */}
+      <AboutUpdatesModal
+        isOpen={isAboutUpdatesOpen}
+        onClose={() => setIsAboutUpdatesOpen(false)}
+        network={networkAdapter}
       />
 
       {/* Web Recipe Grabber Modal */}

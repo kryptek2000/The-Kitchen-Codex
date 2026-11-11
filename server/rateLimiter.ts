@@ -7,6 +7,7 @@ interface RateLimitEntry {
 }
 
 const clientIpStore = new Map<string, RateLimitEntry>();
+const updateCheckClientStore = new Map<string, RateLimitEntry>();
 
 /**
  * Test seam: clears every rate-limit window. Never call from production code.
@@ -14,6 +15,7 @@ const clientIpStore = new Map<string, RateLimitEntry>();
  */
 export function resetRateLimitersForTests(): void {
   clientIpStore.clear();
+  updateCheckClientStore.clear();
   void shisoConversationStore.resetAll();
   void globalRequestStore.resetAll();
 }
@@ -1004,3 +1006,64 @@ export const recipeVerifyRateLimiter = sessionKeyRateLimiter(
   "recipeverify",
   "Too many recipe verification requests. Please wait a moment before trying again."
 );
+
+/**
+ * Express middleware for rate limiting on the read-only update-check endpoint.
+ * Configurable via `UPDATE_CHECK_RATE_LIMIT` (default 20 requests per minute).
+ */
+const UPDATE_CHECK_MAX_CLIENTS = 5000;
+
+export function updateCheckRateLimiter(req: Request, res: Response, next: NextFunction) {
+  const parsedLimit = parseInt(process.env.UPDATE_CHECK_RATE_LIMIT || "20", 10);
+  const maxRequestsPerWindow = isNaN(parsedLimit) || parsedLimit <= 0 ? 20 : parsedLimit;
+  const windowMs = 60 * 1000;
+
+  const clientIp = getClientIp(req);
+  const now = Date.now();
+
+  // Expire stale entries before enforcing capacity.
+  for (const [key, entry] of updateCheckClientStore.entries()) {
+    if (entry.resetTime <= now) updateCheckClientStore.delete(key);
+  }
+
+  let entry = updateCheckClientStore.get(clientIp);
+
+  if (!entry || entry.resetTime <= now) {
+    if (updateCheckClientStore.size >= UPDATE_CHECK_MAX_CLIENTS) {
+      // Fail closed for new clients when the bounded store is full, preventing
+      // unbounded growth and bypass through eviction.
+      res.setHeader("RateLimit-Limit", maxRequestsPerWindow);
+      res.setHeader("RateLimit-Remaining", 0);
+      res.setHeader("RateLimit-Reset", 60);
+      res.setHeader("Retry-After", 60);
+      return res.status(429).json({
+        error: "Too many update check clients. Please try again later.",
+        retryAfterSeconds: 60,
+      });
+    }
+    entry = {
+      count: 1,
+      resetTime: now + windowMs,
+    };
+    updateCheckClientStore.set(clientIp, entry);
+  } else {
+    entry.count += 1;
+  }
+
+  const remaining = Math.max(0, maxRequestsPerWindow - entry.count);
+  const resetSeconds = Math.ceil((entry.resetTime - now) / 1000);
+
+  res.setHeader("RateLimit-Limit", maxRequestsPerWindow);
+  res.setHeader("RateLimit-Remaining", remaining);
+  res.setHeader("RateLimit-Reset", resetSeconds);
+
+  if (entry.count > maxRequestsPerWindow) {
+    res.setHeader("Retry-After", resetSeconds);
+    return res.status(429).json({
+      error: "Too many update check requests from your IP. Please try again in a minute.",
+      retryAfterSeconds: resetSeconds,
+    });
+  }
+
+  next();
+}

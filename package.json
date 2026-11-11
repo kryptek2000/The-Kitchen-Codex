@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --define:process.env.NODE_ENV='\"production\"' --outfile=dist/server.cjs && node -e \"const fs=require('fs');fs.cpSync('server/voice','dist/voice',{recursive:true})\"",
+    "build": "VITE_TKC_BUILD_COMMIT=$(git rev-parse HEAD) VITE_TKC_BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) vite build && TKC_BUILD_COMMIT=$(git rev-parse HEAD) TKC_BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --define:process.env.NODE_ENV='\"production\"' --define:process.env.TKC_BUILD_COMMIT='\"'$(git rev-parse HEAD)'\"' --define:process.env.TKC_BUILD_TIME='\"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'\"' --outfile=dist/server.cjs && node -e \"const fs=require('fs');fs.cpSync('server/voice','dist/voice',{recursive:true})\"",
     "build:plugin": "node plugin/build.mjs",
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.js",
