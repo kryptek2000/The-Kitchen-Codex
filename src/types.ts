@@ -100,6 +100,17 @@ export interface ObsidianRecipe {
   lastModified?: string;
   fileHandle?: any; // Native FileSystemFileHandle if connected
   isFavorite?: boolean;
+  /**
+   * True only for an application-owned Signature Nine recipe. Built-ins are
+   * virtual (never Vault files), read-only, and never counted as personal.
+   */
+  isBuiltIn?: boolean;
+  /** Stable collection identity for a built-in recipe, or a saved copy's origin. */
+  builtInId?: string;
+  /** Durable provenance read from `starter_id` on a saved personal copy. */
+  starterId?: string;
+  /** Signature collection version at the time this recipe was authored/copied. */
+  starterVersion?: number;
 }
 
 export interface VaultNote {

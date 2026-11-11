@@ -35,8 +35,14 @@ interface ConnectVaultModalProps {
   setRecipes: React.Dispatch<React.SetStateAction<ObsidianRecipe[]>>;
   setMealPlan?: React.Dispatch<React.SetStateAction<MealPlanDay[]>>;
   setShoppingCategories?: React.Dispatch<React.SetStateAction<ShoppingCategoryGroup[]>>;
-  /** Used to clear the previous Vault's notes when the starter Vault is restored. */
+  /** Used to clear the previous Vault's notes when the collection is reset. */
   setNotes?: React.Dispatch<React.SetStateAction<VaultNote[]>>;
+  /**
+   * Explicit return to the built-in collection. The built-ins are always
+   * present; this only clears the in-memory personal session and disconnects,
+   * after confirmation from the user.
+   */
+  onRestoreStarterCollection?: () => void;
   onOpenWebGrabber?: () => void;
   /**
    * Receives the authoritative handle from the picker and performs the
@@ -56,6 +62,7 @@ export function ConnectVaultModal({
   setMealPlan,
   setShoppingCategories,
   setNotes,
+  onRestoreStarterCollection,
   onOpenWebGrabber,
   onDirectVaultConnected,
 }: ConnectVaultModalProps) {
@@ -316,21 +323,23 @@ export function ConnectVaultModal({
     }
   };
 
-  // Reset to Starter Library
+  // Explicit return to the built-in Signature Collection. This never deletes
+  // Vault files; it only clears the in-memory personal session and disconnects.
   const handleRestoreStarterVault = () => {
-    const starters = getStarterVaultRecipes();
-    setRecipes(starters);
-    // The starter Vault carries no notes: clearing them keeps the note count
-    // truthful after a Vault switch (UD-2A.2).
-    setNotes?.([]);
-    setVaultStatus({
-      isConnected: false,
-      vaultPath: DEFAULT_VAULT_PATH,
-      accessType: 'starter_vault',
-    });
+    if (onRestoreStarterCollection) {
+      onRestoreStarterCollection();
+    } else {
+      setRecipes([]);
+      setNotes?.([]);
+      setVaultStatus({
+        isConnected: false,
+        vaultPath: DEFAULT_VAULT_PATH,
+        accessType: 'starter_vault',
+      });
+    }
     setStatusMessage({
       type: 'success',
-      text: `Vault reset to the ${starters.length} curated gourmet starter recipes!`,
+      text: `Returned to the ${getStarterVaultRecipes().length} built-in Signature Collection recipes. No Vault files were changed.`,
     });
   };
 
@@ -762,17 +771,18 @@ export function ConnectVaultModal({
                 <button
                   type="button"
                   onClick={handleRestoreStarterVault}
-                  title={`Reload the ${getStarterVaultRecipes().length} curated starter recipes`}
+                  title={`Return to the ${getStarterVaultRecipes().length} built-in Signature Collection recipes`}
                   className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-3 text-[12px] font-semibold text-[var(--text-primary,#F3F4F6)] transition-colors hover:bg-[var(--bg-root,#0C0C0C)]"
                 >
                   <RotateCcw className="h-3.5 w-3.5 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
-                  <span>Use starter library</span>
+                  <span>Use Signature Collection</span>
                 </button>
               </div>
 
               <p className="text-[11px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
-                “Use starter library” replaces the recipes loaded in this app with the curated
-                starter set. It does not delete or change files in your folder.
+                “Use Signature Collection” returns to the permanent built-in nine and clears
+                the personal recipes loaded in this session. It does not delete or change files
+                in your folder.
               </p>
             </div>
           )}

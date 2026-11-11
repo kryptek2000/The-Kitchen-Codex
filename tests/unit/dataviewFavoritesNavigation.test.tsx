@@ -75,7 +75,7 @@ describe('Dataview / Favorites cross-view navigation', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Favorites$/i }));
     await waitFor(() => expect(screen.getByText('No favorite recipes yet')).toBeTruthy());
 
-    fireEvent.click(screen.getByRole('button', { name: /My Recipe Vault/i }));
+    fireEvent.click(document.getElementById('nav-recipe-vault')!);
     await waitFor(() => expect(screen.getByText('Artisan Sourdough Boule')).toBeTruthy());
     expect(document.getElementById('nav-recipe-vault')?.getAttribute('aria-current')).toBe('page');
   });
@@ -98,12 +98,12 @@ describe('Dataview / Favorites cross-view navigation', () => {
 
     const search = screen.getByRole('textbox', { name: /search recipes/i }) as HTMLInputElement;
     fireEvent.change(search, { target: { value: 'curry' } });
-    await waitFor(() => expect(screen.getByText('Authentic Thai Green Coconut Curry')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('Thai Green Coconut Curry')).toBeTruthy());
 
     fireEvent.click(screen.getByRole('button', { name: /Dataview Table/i }));
     await waitFor(() => expect(dataviewRowCount()).toBe(1));
 
-    fireEvent.click(screen.getByRole('button', { name: /My Recipe Vault/i }));
+    fireEvent.click(document.getElementById('nav-recipe-vault')!);
     await waitFor(() => expect(search.value).toBe('curry'));
   });
 

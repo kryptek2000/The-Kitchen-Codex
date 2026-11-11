@@ -62,7 +62,7 @@ function renderNotes(notes: string, extra: Partial<ObsidianRecipe> = {}) {
 
 describe('Recipe Detail Notes Markdown', () => {
   it('renders the Thai Green Coconut Curry Vegetarian/Vegan bullet without raw markers', () => {
-    const thai = getStarterVaultRecipes().find((r) => r.title === 'Authentic Thai Green Coconut Curry');
+    const thai = getStarterVaultRecipes().find((r) => r.title === 'Thai Green Coconut Curry');
     expect(thai).toBeTruthy();
     renderNotes(thai!.notes || '');
     const strong = screen.getByText('Vegetarian/Vegan');

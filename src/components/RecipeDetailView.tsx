@@ -32,8 +32,11 @@ import {
   MessageCircle,
   Heart,
   ImageOff,
+  BookMarked,
+  Save,
 } from 'lucide-react';
 import { ObsidianRecipe, ParsedIngredient, VaultNote, RecipeNutrition } from '../types';
+import type { StarterSaveResult } from '../application/starterCollection';
 import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
 import type { VoiceCacheService } from '../application/voiceCache';
 import { scaleIngredientText } from '../utils/markdownParser';
@@ -84,6 +87,10 @@ interface RecipeDetailViewProps {
   onStartTimer: (recipeTitle: string, minutes: number, label: string, semanticKey?: string) => void;
   onFilterByWikilink?: (wikilink: string) => void;
   onDeleteRecipe?: (recipe: ObsidianRecipe) => void;
+  /** Explicit copy of a built-in Signature recipe into the personal Vault. */
+  onSaveToVault?: (recipe: ObsidianRecipe) => void | Promise<void>;
+  starterSaveState?: StarterSaveResult | null;
+  starterSavePending?: boolean;
   onUpdateNutrition?: (recipe: ObsidianRecipe, nutrition: RecipeNutrition) => Promise<boolean | void> | void;
   onSelectRecipe?: (recipe: ObsidianRecipe) => void;
   onSaveNoteToVault?: (note: VaultNote) => Promise<boolean | void>;
@@ -129,6 +136,9 @@ export function RecipeDetailView({
   onStartTimer,
   onFilterByWikilink,
   onDeleteRecipe,
+  onSaveToVault,
+  starterSaveState,
+  starterSavePending = false,
   onUpdateNutrition,
   onSelectRecipe,
   onSaveNoteToVault,
@@ -144,6 +154,8 @@ export function RecipeDetailView({
   onEstimateMassesWithAi,
   onReviewRecipeContextWithAi,
 }: RecipeDetailViewProps) {
+  const builtIn = recipe.isBuiltIn === true;
+
   React.useLayoutEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
     setCurrentServings(recipe.servings || 4);
@@ -530,31 +542,52 @@ export function RecipeDetailView({
             </button>
           )}
 
-          {/* Edit in Markdown */}
-          <button
-            id="edit-recipe-btn"
-            onClick={() => onEditRecipe(recipe)}
-            className="inline-flex min-h-[44px] items-center gap-1 rounded-sm border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-3 py-1.5 text-xs font-medium text-[var(--text-primary,#F3F4F6)] transition-colors duration-[140ms] hover:bg-[var(--bg-elevated,#1E1E1E)]"
-          >
-            <Edit3 className="w-3.5 h-3.5" />
-            <span>Edit</span>
-          </button>
+          {builtIn ? (
+            <>
+              {/* Explicit Option-A copy action; the built-in original stays read-only. */}
+              {onSaveToVault && (
+                <button
+                  id="save-starter-to-vault-btn"
+                  data-testid="save-starter-to-vault-btn"
+                  onClick={() => onSaveToVault(recipe)}
+                  disabled={starterSavePending}
+                  className="inline-flex min-h-[44px] items-center gap-1 rounded-sm bg-[var(--accent,#F59E0B)] px-3 py-1.5 text-xs font-semibold text-[var(--accent-contrast,#0C0C0C)] transition-colors duration-[140ms] hover:bg-[var(--accent-hover,#D97706)] disabled:cursor-not-allowed disabled:opacity-60"
+                  title="Save an editable copy to My Vault"
+                >
+                  <Save className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>{starterSavePending ? 'Saving…' : 'Save to My Vault'}</span>
+                </button>
+              )}
+            </>
+          ) : (
+            <>
+              {/* Edit in Markdown */}
+              <button
+                id="edit-recipe-btn"
+                onClick={() => onEditRecipe(recipe)}
+                className="inline-flex min-h-[44px] items-center gap-1 rounded-sm border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-3 py-1.5 text-xs font-medium text-[var(--text-primary,#F3F4F6)] transition-colors duration-[140ms] hover:bg-[var(--bg-elevated,#1E1E1E)]"
+              >
+                <Edit3 className="w-3.5 h-3.5" />
+                <span>Edit</span>
+              </button>
 
-          {/* Delete Note */}
-          {onDeleteRecipe && (
-            <button
-              id="delete-recipe-btn"
-              onClick={() => {
-                if (window.confirm(`Are you sure you want to delete "${recipe.title}" (${recipe.fileName}) from the vault?`)) {
-                  onDeleteRecipe(recipe);
-                }
-              }}
-              className="inline-flex min-h-[44px] items-center gap-1 rounded-sm border border-rose-500/20 bg-rose-500/10 px-2.5 py-1.5 text-xs font-medium text-[var(--text-primary,#F3F4F6)] transition-colors duration-[140ms] hover:bg-rose-500/20"
-              title="Delete recipe note from vault"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Delete</span>
-            </button>
+              {/* Delete Note */}
+              {onDeleteRecipe && (
+                <button
+                  id="delete-recipe-btn"
+                  onClick={() => {
+                    if (window.confirm(`Are you sure you want to delete "${recipe.title}" (${recipe.fileName}) from the vault?`)) {
+                      onDeleteRecipe(recipe);
+                    }
+                  }}
+                  className="inline-flex min-h-[44px] items-center gap-1 rounded-sm border border-rose-500/20 bg-rose-500/10 px-2.5 py-1.5 text-xs font-medium text-[var(--text-primary,#F3F4F6)] transition-colors duration-[140ms] hover:bg-rose-500/20"
+                  title="Delete recipe note from vault"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Delete</span>
+                </button>
+              )}
+            </>
           )}
 
           {/* Export .md file */}
@@ -689,9 +722,44 @@ export function RecipeDetailView({
 
           {/* Editorial title, compact rating, subtle metadata, and tags */}
           <div className="space-y-4">
-            <h1 className="text-3xl font-serif font-bold tracking-tight text-[var(--text-primary,#F3F4F6)] sm:text-5xl break-words">
-              {recipe.title}
-            </h1>
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-3xl font-serif font-bold tracking-tight text-[var(--text-primary,#F3F4F6)] sm:text-5xl break-words">
+                {recipe.title}
+              </h1>
+              {builtIn && (
+                <span
+                  data-testid="builtin-recipe-badge"
+                  className="inline-flex min-h-[28px] items-center gap-1 rounded-full border border-[var(--border-subtle,rgba(255,255,255,0.12))] bg-[var(--bg-elevated,#1E1E1E)] px-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--accent-text,#F59E0B)]"
+                >
+                  <BookMarked className="h-3.5 w-3.5" aria-hidden="true" />
+                  Built-in Signature Recipe
+                </span>
+              )}
+            </div>
+
+            {builtIn && (
+              <div
+                data-testid="builtin-recipe-notice"
+                className="rounded-xl border-l-[3px] border-l-[var(--accent-text,#F59E0B)] bg-[var(--bg-elevated,#1E1E1E)] px-3 py-2 text-[11px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]"
+              >
+                This original is application-owned and read-only. Save a copy to My Vault to edit it,
+                keep ratings or nutrition, and make it part of your personal recipe count.
+              </div>
+            )}
+
+            {starterSaveState && (
+              <div
+                data-testid="starter-save-status"
+                role={starterSaveState.status === 'saved' || starterSaveState.status === 'already_saved' ? 'status' : 'alert'}
+                className={`rounded-xl border-l-[3px] px-3 py-2 text-[11px] leading-relaxed ${
+                  starterSaveState.status === 'saved' || starterSaveState.status === 'already_saved'
+                    ? 'border-l-emerald-400 bg-emerald-500/10 text-[var(--text-primary,#F3F4F6)]'
+                    : 'border-l-amber-400 bg-amber-500/10 text-[var(--text-primary,#F3F4F6)]'
+                }`}
+              >
+                {starterSaveState.message}
+              </div>
+            )}
 
             <div id="recipe-rating" className="flex flex-wrap items-center gap-3">
               <div
@@ -1013,7 +1081,8 @@ export function RecipeDetailView({
                 presentation={nutritionPresentation}
                 servings={currentServings}
                 network={network}
-                onUpdateNutrition={onUpdateNutrition ? (nut) => onUpdateNutrition(recipe, nut) : undefined}
+                readOnly={builtIn}
+                onUpdateNutrition={!builtIn && onUpdateNutrition ? (nut) => onUpdateNutrition(recipe, nut) : undefined}
                 advancedNutritionSession={advancedNutritionSession}
                 advancedNutritionBundleStatus={advancedNutritionBundleStatus}
                 onLoadAdvancedNutritionBundle={onLoadAdvancedNutritionBundle}

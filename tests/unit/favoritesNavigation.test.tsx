@@ -62,10 +62,10 @@ describe('Favorites navigation', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Favorites$/i }));
     await waitFor(() => expect(recipeCount()).toBe(1));
 
-    fireEvent.click(screen.getByRole('button', { name: /My Recipe Vault/i }));
+    fireEvent.click(document.getElementById('nav-recipe-vault')!);
     await waitFor(() => expect(recipeCount()).toBe(9));
     expect(screen.getByText('Artisan Sourdough Boule')).toBeTruthy();
-    expect(screen.getByText('Skillet Cornmeal Porridge')).toBeTruthy();
+    expect(screen.getByText('Smoky Chicken Tinga Tacos')).toBeTruthy();
     expect(document.getElementById('nav-recipe-vault')?.getAttribute('aria-current')).toBe('page');
   });
 
@@ -75,14 +75,14 @@ describe('Favorites navigation', () => {
 
     const search = screen.getByRole('textbox', { name: /search recipes/i }) as HTMLInputElement;
     fireEvent.change(search, { target: { value: 'curry' } });
-    await waitFor(() => expect(screen.getByText('Authentic Thai Green Coconut Curry')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('Thai Green Coconut Curry')).toBeTruthy());
 
     fireEvent.click(screen.getByRole('button', { name: /^Favorites$/i }));
     await waitFor(() => expect(search.value).toBe('curry'));
 
-    fireEvent.click(screen.getByRole('button', { name: /My Recipe Vault/i }));
+    fireEvent.click(document.getElementById('nav-recipe-vault')!);
     await waitFor(() => expect(search.value).toBe('curry'));
-    expect(screen.getByText('Authentic Thai Green Coconut Curry')).toBeTruthy();
+    expect(screen.getByText('Thai Green Coconut Curry')).toBeTruthy();
   });
 
   it('shows a Favorites-specific empty state when nothing is favorited', async () => {
@@ -120,8 +120,8 @@ describe('Favorites navigation', () => {
     fireEvent.click(favoritesOnly);
     await waitFor(() => expect(favoritesOnly.className).toContain('bg-amber-500/10'));
 
-    fireEvent.click(screen.getByRole('button', { name: /My Recipe Vault/i }));
-    await waitFor(() => expect(screen.getByRole('button', { name: /My Recipe Vault/i }).getAttribute('aria-current')).toBe('page'));
+    fireEvent.click(document.getElementById('nav-recipe-vault')!);
+    await waitFor(() => expect(document.getElementById('nav-recipe-vault')?.getAttribute('aria-current')).toBe('page'));
     expect(favoritesOnly.className).toContain('bg-amber-500/10');
     expect(screen.getByText('Classic Roman Carbonara')).toBeTruthy();
   });

@@ -11,10 +11,21 @@ import {
 import { VaultSyncStatus } from '../types';
 import { KitchenCodexMark } from './BrandMark';
 
+export type VaultCollectionView = 'all' | 'favorites' | 'starter' | 'personal';
+
 interface VaultHeaderProps {
   vaultStatus: VaultSyncStatus;
   activeTab: 'grid' | 'dataview' | 'mealplan' | 'shopping' | 'themes' | 'providers';
   setActiveTab: (tab: 'grid' | 'dataview' | 'mealplan' | 'shopping' | 'themes' | 'providers') => void;
+  /**
+   * The active collection view. When supplied, the header states the active
+   * collection and its own count instead of inferring a starter/personal label
+   * from connection state alone. This is the fix for the contradictory header
+   * shown on My Saved Recipes.
+   */
+  vaultView?: VaultCollectionView;
+  /** Total favorites in the combined collection (built-in + personal). */
+  favoriteCount?: number;
   /**
    * Search/filter state still travels through this component's public contract
    * for compatibility. The daily-use command bar now lives in the Vault page
@@ -34,8 +45,10 @@ interface VaultHeaderProps {
   onOpenCreateForMe: () => void;
   legacyRecipeCount?: number;
   onRefreshVault: () => void;
-  /** The RECIPE count of the active vault, derived from canonical state. */
+  /** The PERSONAL recipe count of the active vault, derived from canonical state. */
   recipeCount: number;
+  /** The permanent built-in Signature Nine count, never added to personal counts. */
+  starterCount?: number;
   /** Non-recipe notes. Reported separately, never as recipes. */
   noteCount: number;
   /** Re-authorises a remembered Vault. Invoked from a user gesture. */
@@ -52,21 +65,22 @@ interface VaultHeaderProps {
  */
 export function VaultHeader({
   vaultStatus,
+  activeTab,
+  vaultView,
+  favoriteCount,
   onOpenConnectVaultModal,
   onOpenAskMyKitchen,
   onRefreshVault,
   recipeCount,
+  starterCount,
   onReconnectVault,
 }: VaultHeaderProps) {
   const fullPath = vaultStatus.vaultPath || '';
   const pathSegments = fullPath.split(/[\\/]/).filter(Boolean);
   const pathLabel = pathSegments.length ? pathSegments[pathSegments.length - 1] : fullPath;
-  const recipeNoun = recipeCount === 1 ? 'recipe' : 'recipes';
-
   const connectionState = vaultStatus.connectionState ?? (vaultStatus.isConnected ? 'connected' : 'starter');
   const needsReconnect = connectionState === 'reauthorization_required' || connectionState === 'permission_denied';
   const isLiveVault = vaultStatus.isConnected && vaultStatus.accessType === 'filesystem_api';
-
   // A starter collection is never labelled with a folder path that could be
   // mistaken for the owner's private Vault. Remembered Vaults are named
   // explicitly so recovery is unambiguous. Files imported for this session are
@@ -78,6 +92,51 @@ export function VaultHeader({
         ? pathLabel || 'Vault'
         : 'Imported files'
       : 'Starter Vault';
+
+  // The active collection is the truthful label on a Library page. Connection
+  // state remains the separate chip on the right; it must not overwrite the
+  // collection label (the original defect showed “Signature Collection” while
+  // the active page was My Saved Recipes).
+  const viewAware = vaultView !== undefined && activeTab === 'grid';
+  const builtInCount = starterCount ?? 0;
+  const personalNoun = recipeCount === 1 ? 'recipe' : 'recipes';
+  const starterNoun = builtInCount === 1 ? 'recipe' : 'recipes';
+  const favoriteTotal = favoriteCount ?? 0;
+  let collectionLabel = stateLabel;
+  let collectionShortLabel = stateLabel;
+  let collectionCount = needsReconnect
+    ? `${recipeCount} sample ${recipeCount === 1 ? 'recipe' : 'recipes'}`
+    : `${recipeCount} ${personalNoun}`;
+
+  if (viewAware) {
+    switch (vaultView) {
+      case 'starter':
+        collectionLabel = 'Signature Collection';
+        collectionShortLabel = 'Signature';
+        collectionCount = `${builtInCount} built-in ${starterNoun}`;
+        break;
+      case 'personal':
+        collectionLabel = 'My Saved Recipes';
+        collectionShortLabel = 'Saved';
+        collectionCount = needsReconnect
+          ? 'Reconnect to view saved recipes'
+          : `${recipeCount} saved ${personalNoun}`;
+        break;
+      case 'favorites':
+        collectionLabel = 'Favorites';
+        collectionShortLabel = 'Favorites';
+        collectionCount = `${favoriteTotal} ${favoriteTotal === 1 ? 'favorite' : 'favorites'}`;
+        break;
+      case 'all':
+      default:
+        collectionLabel = 'My Recipe Vault';
+        collectionShortLabel = 'Vault';
+        collectionCount = needsReconnect
+          ? `${builtInCount} built-in · saved recipes need reconnect`
+          : `${builtInCount} built-in · ${recipeCount} saved`;
+        break;
+    }
+  }
 
   // STICKY HEADER GEOMETRY — unchanged contract (UD-2A.1B R-1).
   // The header is static below 768px and sticky from 768px up. Its measured
@@ -130,11 +189,20 @@ export function VaultHeader({
             strokeWidth={1.75}
             aria-hidden="true"
           />
-          <span className="min-w-0 truncate text-[12px] font-medium tracking-[0.01em] text-[var(--text-secondary,#9CA3AF)]">
-            {connectionState === 'starter' ? (
+          <span
+            id="vault-collection-label"
+            aria-label={viewAware ? collectionLabel : undefined}
+            className="min-w-0 truncate text-[12px] font-medium tracking-[0.01em] text-[var(--text-secondary,#9CA3AF)]"
+          >
+            {viewAware ? (
               <>
-                <span className="sm:hidden">Starter</span>
-                <span className="hidden sm:inline">Starter Vault</span>
+                <span className="sm:hidden">{collectionShortLabel}</span>
+                <span className="hidden sm:inline">{collectionLabel}</span>
+              </>
+            ) : connectionState === 'starter' ? (
+              <>
+                <span className="sm:hidden">{starterCount !== undefined ? 'Signature' : 'Starter'}</span>
+                <span className="hidden sm:inline">{starterCount !== undefined ? 'Signature Collection' : 'Starter Vault'}</span>
               </>
             ) : (
               stateLabel
@@ -145,8 +213,7 @@ export function VaultHeader({
             id="vault-recipe-count"
             className="shrink-0 whitespace-nowrap text-[12px] font-medium text-[var(--text-secondary,#9CA3AF)]"
           >
-            {recipeCount}
-            {needsReconnect ? ' sample' : ''} {recipeNoun}
+            {collectionCount}
           </span>
         </button>
 

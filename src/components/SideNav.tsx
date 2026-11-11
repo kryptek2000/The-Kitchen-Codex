@@ -1,6 +1,8 @@
 import React from 'react';
 import {
   LayoutGrid,
+  Library,
+  BookOpen,
   Table2,
   CalendarDays,
   ShoppingCart,
@@ -21,11 +23,13 @@ import { describeVaultConnection } from '../core/vaultConnection';
 interface SideNavProps {
   activeTab: 'grid' | 'dataview' | 'mealplan' | 'shopping' | 'themes' | 'providers';
   setActiveTab: (tab: 'grid' | 'dataview' | 'mealplan' | 'shopping' | 'themes' | 'providers') => void;
-  vaultView?: 'all' | 'favorites';
-  setVaultView?: (view: 'all' | 'favorites') => void;
+  vaultView?: 'all' | 'favorites' | 'starter' | 'personal';
+  setVaultView?: (view: 'all' | 'favorites' | 'starter' | 'personal') => void;
   vaultStatus: VaultSyncStatus;
-  /** The RECIPE count of the active vault — the same total the header and gallery show. */
+  /** The PERSONAL recipe count of the active Vault — never includes built-ins. */
   recipeCount: number;
+  /** The permanent built-in Signature Nine count, kept distinct from personal. */
+  starterCount?: number;
   /** The count of non-recipe vault notes. Labelled as notes, never as recipes. */
   noteCount: number;
   /** Re-authorises a remembered Vault. Invoked from a user gesture. */
@@ -55,6 +59,7 @@ export function SideNav({
   setVaultView,
   vaultStatus,
   recipeCount,
+  starterCount,
   noteCount,
   onReconnectVault,
   onOpenConnectVaultModal,
@@ -75,17 +80,22 @@ export function SideNav({
   const isLiveVault = vaultStatus.isConnected && vaultStatus.accessType === 'filesystem_api';
   const described = describeVaultConnection({
     state: connectionState,
-    recipeCount,
+    recipeCount: needsReconnect ? (starterCount ?? recipeCount) : recipeCount,
     noteCount,
     rememberedVaultName: vaultStatus.rememberedVaultName,
   });
+  const builtInSuffix = starterCount !== undefined && starterCount > 0
+    ? ` · ${starterCount} built-in`
+    : '';
   const statusLine = needsReconnect
     ? described.label
     : vaultStatus.isConnected
-      ? `${isLiveVault ? 'Vault linked' : 'Recipes loaded'} · ${recipeCount} ${recipeCount === 1 ? 'recipe' : 'recipes'}${
+      ? `${isLiveVault ? 'Vault linked' : 'Recipes loaded'} · ${recipeCount} ${recipeCount === 1 ? 'recipe' : 'recipes'}${builtInSuffix}${
           noteCount > 0 ? ` · ${noteCount} ${noteCount === 1 ? 'note' : 'notes'}` : ''
         }`
-      : `Starter vault · ${recipeCount} sample ${recipeCount === 1 ? 'recipe' : 'recipes'}`;
+      : starterCount !== undefined
+        ? `Signature Collection · ${starterCount} built-in ${starterCount === 1 ? 'recipe' : 'recipes'}`
+        : `Starter vault · ${recipeCount} sample ${recipeCount === 1 ? 'recipe' : 'recipes'}`;
   const statusTone = needsReconnect
     ? 'text-[var(--text-primary,#F3F4F6)]'
     : vaultStatus.isConnected
@@ -114,6 +124,28 @@ export function SideNav({
           }}
         >
           <LayoutGrid className="h-5 w-5 shrink-0" strokeWidth={1.75} aria-hidden="true" /> My Recipe Vault
+        </button>
+        <button
+          id="nav-signature-collection"
+          aria-current={activeTab === 'grid' && vaultView === 'starter' ? 'page' : undefined}
+          className={navItem(activeTab === 'grid' && vaultView === 'starter')}
+          onClick={() => {
+            setVaultView?.('starter');
+            setActiveTab('grid');
+          }}
+        >
+          <Library className="h-5 w-5 shrink-0" strokeWidth={1.75} aria-hidden="true" /> Signature Collection
+        </button>
+        <button
+          id="nav-personal-recipes"
+          aria-current={activeTab === 'grid' && vaultView === 'personal' ? 'page' : undefined}
+          className={navItem(activeTab === 'grid' && vaultView === 'personal')}
+          onClick={() => {
+            setVaultView?.('personal');
+            setActiveTab('grid');
+          }}
+        >
+          <BookOpen className="h-5 w-5 shrink-0" strokeWidth={1.75} aria-hidden="true" /> My Saved Recipes
         </button>
         <button
           id="nav-favorites"

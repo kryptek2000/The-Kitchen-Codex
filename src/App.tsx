@@ -15,7 +15,16 @@ import {
   RecipeNutrition,
   ParsedIngredient,
 } from './types';
-import { DEFAULT_VAULT_PATH, getStarterVaultRecipes, getStarterVaultNotes, STARTER_MEAL_PLAN, STARTER_SHOPPING_CATEGORIES } from './data/starterVault';
+import {
+  DEFAULT_VAULT_PATH,
+  getStarterVaultRecipes,
+  getStarterVaultNotes,
+  getSignatureStarterCount,
+  isBuiltInRecipe,
+  STARTER_MEAL_PLAN,
+  STARTER_SHOPPING_CATEGORIES,
+} from './data/starterVault';
+import { saveStarterRecipeToVault, type StarterSaveResult } from './application/starterCollection';
 import {
   connectionStateForRestoreAction,
   reconnectRememberedVault,
@@ -246,10 +255,24 @@ async function loadVaultFromHandle(handle: any): Promise<LoadedVaultData> {
 }
 
 export default function App() {
-  // 1. Vault Recipes State (Canonical Source: In-Memory working state hydrated from Obsidian vault files)
-  const [recipes, setRecipes] = useState<ObsidianRecipe[]>(() => {
-    return getStarterVaultRecipes();
-  });
+  // 1. Two distinct collections:
+  //    - the permanent, application-owned Signature Nine (never Vault files);
+  //    - the user's personal recipes, hydrated from the connected Vault.
+  //    Display code receives their combined view, but every write path receives
+  //    ONLY `personalRecipes` and every built-in is guarded as read-only.
+  const starterRecipes = useMemo(() => getStarterVaultRecipes(), []);
+  const [personalRecipes, setPersonalRecipes] = useState<ObsidianRecipe[]>([]);
+  // In-memory only demo personalization for built-ins (favorites/ratings). It is
+  // never written to a Vault, never counted as a personal recipe, and is reset on
+  // reload. A saved copy is the durable personalization path.
+  const [starterOverrides, setStarterOverrides] = useState<Record<string, Partial<ObsidianRecipe>>>({});
+  const recipes = useMemo<ObsidianRecipe[]>(() => {
+    const starters = starterRecipes.map((recipe) => {
+      const override = recipe.builtInId ? starterOverrides[recipe.builtInId] : undefined;
+      return override ? { ...recipe, ...override } : recipe;
+    });
+    return [...starters, ...personalRecipes];
+  }, [starterRecipes, starterOverrides, personalRecipes]);
 
   // Vault Notes State (Non-recipe notes in the Obsidian vault, like ingredients, techniques, wine guides)
   const [notes, setNotes] = useState<VaultNote[]>(() => {
@@ -432,7 +455,11 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'grid' | 'dataview' | 'mealplan' | 'shopping' | 'themes' | 'providers'>('grid');
   // Explicit Vault collection view. This is separate from the user's manual
   // filter state, so Favorites navigation never mutates or erases filters.
-  const [vaultView, setVaultView] = useState<'all' | 'favorites'>('all');
+  // `starter` and `personal` are the two ownership-distinct collections.
+  const [vaultView, setVaultView] = useState<'all' | 'favorites' | 'starter' | 'personal'>('all');
+  // Explicit Save-to-Vault feedback for the selected built-in recipe.
+  const [starterSaveState, setStarterSaveState] = useState<StarterSaveResult | null>(null);
+  const [starterSavePending, setStarterSavePending] = useState(false);
   const [isMoreOpen, setIsMoreOpen] = useState(false);
   const moreDialogRef = useRef<HTMLDialogElement>(null);
   const [isDesktop, setIsDesktop] = useState(() =>
@@ -468,6 +495,9 @@ export default function App() {
 
   const [selectedRecipe, setSelectedRecipe] = useState<ObsidianRecipe | null>(null);
   const [cookingRecipe, setCookingRecipe] = useState<{ recipe: ObsidianRecipe; servings: number } | null>(null);
+  useEffect(() => {
+    setStarterSaveState(null);
+  }, [selectedRecipe?.id]);
 
   // Stable recipe-detail route restoration. The canonical recipe id from the
   // browser fragment is resolved once the recipe collection is loaded, so a hard
@@ -545,7 +575,9 @@ export default function App() {
   const commitVaultSnapshot = useCallback((result: LoadedVaultData, generation: number, folderHandle?: any) => {
     if (!vaultScanGeneration.current.isCurrent(generation)) return false;
     const next = deriveVaultSnapshotState(result, activeRefs.current);
-    setRecipes(next.recipes);
+    setPersonalRecipes(next.recipes);
+    personalRecipesRef.current = next.recipes;
+    recipesRef.current = [...starterRecipes, ...next.recipes];
     committedRecipesRef.current = next.recipes;
     setNotes(next.notes);
     setMealPlan(next.mealPlan);
@@ -563,7 +595,7 @@ export default function App() {
     }));
     setVaultHydrated(true);
     return true;
-  }, []);
+  }, [starterRecipes]);
 
   // Re-authorise a REMEMBERED Vault and reconnect it. The browser only allows
   // `requestPermission()` from a user gesture, so this is invoked directly
@@ -594,7 +626,8 @@ export default function App() {
   // In-memory canonical state update AFTER a successful image save (the vault
   // write itself already happened inside the save flow — never re-written here).
   const handleRecipeImageSaved = useCallback((recipeId: string, imagePath: string) => {
-    setRecipes((prev) =>
+    if (isBuiltInRecipe(recipesRef.current.find((r) => r.id === recipeId))) return;
+    setPersonalRecipes((prev) =>
       prev.map((r) => (r.id === recipeId ? { ...r, image: imagePath } : r))
     );
     setSelectedRecipe((prev) => (prev && prev.id === recipeId ? { ...prev, image: imagePath } : prev));
@@ -922,7 +955,7 @@ export default function App() {
     try {
       const parsed = await parseUploadedFileList(e.target.files);
       if (parsed.recipes.length > 0) {
-        setRecipes(parsed.recipes);
+        setPersonalRecipes(parsed.recipes);
       }
       // A NEW vault replaces the note set outright (UD-2A.2). Leaving the
       // previous vault's notes in place would make the note count describe a
@@ -961,6 +994,9 @@ export default function App() {
 
   const commitRecipeWrite = useCallback(
     async (savedRecipe: ObsidianRecipe, baseRecipe?: ObsidianRecipe) => {
+      if (isBuiltInRecipe(savedRecipe) || isBuiltInRecipe(baseRecipe)) {
+        throw new Error('Signature Collection originals are read-only. Save this recipe to My Vault first.');
+      }
       const base = baseRecipe ?? committedRecipesRef.current.find((r) => sameCanonicalRecipeIdentity(r, savedRecipe)) ?? recipesRef.current.find((r) => sameCanonicalRecipeIdentity(r, savedRecipe));
       const run = async () => {
         const latest = committedRecipesRef.current.find((r) => sameCanonicalRecipeIdentity(r, savedRecipe));
@@ -972,7 +1008,7 @@ export default function App() {
           await saveRecipeToVaultFile(toWrite, undefined);
         }
         committedRecipesRef.current = upsertCanonicalRecipe(committedRecipesRef.current, toWrite);
-        setRecipes((prev) => upsertCanonicalRecipe(prev, toWrite));
+        setPersonalRecipes((prev) => upsertCanonicalRecipe(prev, toWrite));
         setSelectedRecipe((prev) => (prev && sameCanonicalRecipeIdentity(prev, toWrite) ? toWrite : prev));
         const working = shisoWorkingRecipeRef.current;
         if (working !== null && sameCanonicalRecipeIdentity(working.base, toWrite)) {
@@ -985,6 +1021,9 @@ export default function App() {
   );
 
   const handleSaveRecipe = async (savedRecipe: ObsidianRecipe) => {
+    if (isBuiltInRecipe(savedRecipe)) {
+      throw new Error('Signature Collection originals are read-only. Use Save to My Vault, then edit the saved copy.');
+    }
     // Write FIRST: Obsidian Markdown is the canonical source of truth. React state is
     // only updated AFTER the canonical write succeeds, so a failed write leaves the
     // prior canonical state (and the open editor) intact (defect C).
@@ -1004,6 +1043,36 @@ export default function App() {
     }
     setIsEditorOpen(false);
     setEditingRecipe(null);
+  };
+
+  /**
+   * Explicit, single-recipe copy of a built-in Signature recipe into the
+   * connected personal Vault. No background/bulk copy and no overwrite.
+   */
+  const handleSaveStarterToVault = async (builtIn: ObsidianRecipe) => {
+    if (!isBuiltInRecipe(builtIn) || starterSavePending) return;
+    setStarterSavePending(true);
+    try {
+      const result = await saveStarterRecipeToVault({
+        vault: vaultAdapter,
+        builtIn,
+        personalRecipes: personalRecipesRef.current,
+      });
+      setStarterSaveState(result);
+      if (result.status === 'saved' && result.recipe) {
+        const next = upsertCanonicalRecipe(personalRecipesRef.current, result.recipe);
+        personalRecipesRef.current = next;
+        setPersonalRecipes(next);
+        committedRecipesRef.current = upsertCanonicalRecipe(committedRecipesRef.current, result.recipe);
+      }
+    } catch {
+      setStarterSaveState({
+        status: 'error',
+        message: 'The recipe could not be saved to My Vault. The built-in original is unchanged.',
+      });
+    } finally {
+      setStarterSavePending(false);
+    }
   };
 
   /**
@@ -1224,12 +1293,13 @@ export default function App() {
     }
     // Insert/update by canonical vault-path identity (never basename), so a root
     // `Dish.md` can never replace `B/Dish.md` on a basename match.
-    setRecipes((prev) => upsertCanonicalRecipe(prev, recipe));
+    setPersonalRecipes((prev) => upsertCanonicalRecipe(prev, recipe));
     setIsCreateForMeOpen(false);
   };
 
   // Update Nutrition on a recipe and save to Obsidian Markdown frontmatter
   const handleUpdateNutrition = async (recipe: ObsidianRecipe, nutrition: RecipeNutrition) => {
+    if (isBuiltInRecipe(recipe)) return;
     const updatedRecipe: ObsidianRecipe = {
       ...recipe,
       nutrition,
@@ -1256,6 +1326,12 @@ export default function App() {
   const handleApplyAdvancedNutrition: AdvancedNutritionApplyHandler = async (
     args: AdvancedNutritionApplyHandlerArgs
   ): Promise<AdvancedNutritionApplyUiResult> => {
+    if (isBuiltInRecipe(args.recipe)) {
+      return {
+        ok: false,
+        message: 'Signature Collection originals are read-only. Save this recipe to My Vault before applying nutrition changes.',
+      };
+    }
     const result = await applyAdvancedNutrition({
       session: args.session,
       recipe: args.recipe,
@@ -1729,6 +1805,7 @@ export default function App() {
 
   // Delete Recipe
   const handleDeleteRecipe = async (recipeToDelete: ObsidianRecipe) => {
+    if (isBuiltInRecipe(recipeToDelete)) return;
     // Write FIRST: only remove from state after the vault delete succeeds (defect C).
     if (vaultAdapter) {
       try {
@@ -1740,7 +1817,7 @@ export default function App() {
       }
     }
     // Remove by canonical vault-path identity, never basename (defect B).
-    setRecipes((prev) => removeCanonicalRecipe(prev, recipeToDelete));
+    setPersonalRecipes((prev) => removeCanonicalRecipe(prev, recipeToDelete));
     setSelectedRecipe((prev) => (prev && sameCanonicalRecipeIdentity(prev, recipeToDelete) ? null : prev));
     setCookingRecipe((prev) => (prev && sameCanonicalRecipeIdentity(prev.recipe, recipeToDelete) ? null : prev));
   };
@@ -1792,14 +1869,21 @@ export default function App() {
     }
   };
 
-  // Authoritative committed recipe state (updated only after successful writes and
-  // vault loads). Used to rebase queued operations onto the latest committed
-  // snapshot instead of a stale caller-supplied full recipe.
-  const committedRecipesRef = useRef<ObsidianRecipe[]>(getStarterVaultRecipes());
+  // Authoritative committed PERSONAL recipe state (updated only after successful
+  // writes and vault loads). Built-ins are intentionally absent: no write path may
+  // ever rebase or persist a built-in original.
+  const committedRecipesRef = useRef<ObsidianRecipe[]>([]);
 
-  // Keep a synchronous, mutable mirror of canonical recipe state so favorite
-  // toggles (and their persisted saves) never read a stale closure value.
+  // Keep synchronous mirrors so toggles never read a stale closure.
   const recipesRef = useRef(recipes);
+  const personalRecipesRef = useRef<ObsidianRecipe[]>(personalRecipes);
+  const starterOverridesRef = useRef<Record<string, Partial<ObsidianRecipe>>>({});
+  useEffect(() => {
+    personalRecipesRef.current = personalRecipes;
+  }, [personalRecipes]);
+  useEffect(() => {
+    starterOverridesRef.current = starterOverrides;
+  }, [starterOverrides]);
   useEffect(() => {
     recipesRef.current = recipes;
   }, [recipes]);
@@ -1810,11 +1894,36 @@ export default function App() {
   const favoriteOperationIdRef = useRef<Map<string, number>>(new Map());
   const ratingOperationIdRef = useRef<Map<string, number>>(new Map());
 
+  const updatePersonalRecipes = useCallback((updater: (current: ObsidianRecipe[]) => ObsidianRecipe[]) => {
+    const next = updater(personalRecipesRef.current);
+    personalRecipesRef.current = next;
+    setPersonalRecipes(next);
+    recipesRef.current = [
+      ...starterRecipes.map((recipe) => {
+        const override = recipe.builtInId ? starterOverridesRef.current[recipe.builtInId] : undefined;
+        return override ? { ...recipe, ...override } : recipe;
+      }),
+      ...next,
+    ];
+  }, [starterRecipes]);
+
+  const updateStarterOverride = useCallback((builtInId: string, patch: Partial<ObsidianRecipe>) => {
+    const next = {
+      ...starterOverridesRef.current,
+      [builtInId]: { ...(starterOverridesRef.current[builtInId] || {}), ...patch },
+    };
+    starterOverridesRef.current = next;
+    recipesRef.current = recipesRef.current.map((recipe) =>
+      recipe.isBuiltIn && recipe.builtInId === builtInId ? { ...recipe, ...patch } : recipe
+    );
+    setStarterOverrides(next);
+  }, []);
+
   // Toggle Favorite
   //
-  // Connected Vault: persist through the authoritative recipe-storage mechanism
-  // (write first, then commit state) so a failed write cannot masquerade as a
-  // saved favorite. Starter/disconnected Vaults remain in-memory only.
+  // Personal recipes persist through the authoritative recipe-storage mechanism
+  // (write first, then commit state). Built-in favorites are in-memory demo state
+  // only: they never write to the Vault and are never counted as personal.
   const handleToggleFavorite = (recipeId: string) => {
     const current =
       recipesRef.current.find((r) => r.id === recipeId) ||
@@ -1825,17 +1934,27 @@ export default function App() {
 
     const nextFavorite = !Boolean(current.isFavorite);
 
+    if (isBuiltInRecipe(current)) {
+      if (!current.builtInId) return;
+      updateStarterOverride(current.builtInId, { isFavorite: nextFavorite });
+      if (selectedRecipeRef.current && selectedRecipeRef.current.id === recipeId) {
+        const optimisticSelected = { ...selectedRecipeRef.current, isFavorite: nextFavorite };
+        selectedRecipeRef.current = optimisticSelected;
+        setSelectedRecipe(optimisticSelected);
+      }
+      return;
+    }
+
     // Operation identity for this toggle, so a stale failed write cannot roll
     // back a newer optimistic user selection.
     const operationId = (favoriteOperationIdRef.current.get(recipeId) ?? 0) + 1;
     favoriteOperationIdRef.current.set(recipeId, operationId);
 
-    // Optimistic synchronous update so rapid toggles observe the latest intent.
     const optimisticRecipe: ObsidianRecipe = { ...current, isFavorite: nextFavorite };
     recipesRef.current = recipesRef.current.map((r) =>
       r.id === recipeId ? optimisticRecipe : r
     );
-    setRecipes(recipesRef.current);
+    updatePersonalRecipes((prev) => prev.map((r) => (r.id === recipeId ? optimisticRecipe : r)));
     if (selectedRecipeRef.current && selectedRecipeRef.current.id === recipeId) {
       const optimisticSelected: ObsidianRecipe = { ...selectedRecipeRef.current, isFavorite: nextFavorite };
       selectedRecipeRef.current = optimisticSelected;
@@ -1845,11 +1964,7 @@ export default function App() {
     if (!vaultAdapter) return;
 
     const persist = async () => {
-      const latest =
-        recipesRef.current.find((r) => r.id === recipeId) ||
-        (selectedRecipeRef.current && selectedRecipeRef.current.id === recipeId
-          ? selectedRecipeRef.current
-          : undefined);
+      const latest = personalRecipesRef.current.find((r) => r.id === recipeId);
       if (!latest) return;
       try {
         await commitRecipeWrite(latest, current);
@@ -1861,7 +1976,9 @@ export default function App() {
           recipesRef.current = recipesRef.current.map((r) =>
             r.id === recipeId ? { ...r, isFavorite: revertedFavorite } : r
           );
-          setRecipes(recipesRef.current);
+          updatePersonalRecipes((prev) =>
+            prev.map((r) => (r.id === recipeId ? { ...r, isFavorite: revertedFavorite } : r))
+          );
           if (selectedRecipeRef.current && selectedRecipeRef.current.id === recipeId) {
             const revertedSelected: ObsidianRecipe = { ...selectedRecipeRef.current, isFavorite: revertedFavorite };
             selectedRecipeRef.current = revertedSelected;
@@ -1876,9 +1993,9 @@ export default function App() {
   };
 
 
-  // Rate recipe (interactive five-star). Persists through the authoritative
-  // recipe-storage path for connected Vaults; starter/disconnected stay in
-  // memory. Rating 0 represents an unrated/cleared recipe.
+  // Rate recipe (interactive five-star). Personal recipes persist through the
+  // authoritative recipe-storage path; built-in ratings are in-memory only and
+  // never touch the Vault. Rating 0 represents an unrated/cleared recipe.
   const handleRateRecipe = async (recipeId: string, rating: number) => {
     const current =
       recipesRef.current.find((r) => r.id === recipeId) ||
@@ -1888,17 +2005,33 @@ export default function App() {
     if (!current) return;
 
     const nextRating = Math.min(5, Math.max(0, Math.round(rating)));
+    const ratingPatch = {
+      rating: nextRating,
+      ratingExplicit: true,
+      ratingSource: nextRating > 0 ? 'personal' as const : undefined,
+    };
+
+    if (isBuiltInRecipe(current)) {
+      if (!current.builtInId) return;
+      updateStarterOverride(current.builtInId, ratingPatch);
+      if (selectedRecipeRef.current && selectedRecipeRef.current.id === recipeId) {
+        const optimisticSelected = { ...selectedRecipeRef.current, ...ratingPatch };
+        selectedRecipeRef.current = optimisticSelected;
+        setSelectedRecipe(optimisticSelected);
+      }
+      return;
+    }
 
     const operationId = (ratingOperationIdRef.current.get(recipeId) ?? 0) + 1;
     ratingOperationIdRef.current.set(recipeId, operationId);
 
-    const optimisticRecipe: ObsidianRecipe = { ...current, rating: nextRating, ratingExplicit: true, ratingSource: nextRating > 0 ? 'personal' : undefined };
+    const optimisticRecipe: ObsidianRecipe = { ...current, ...ratingPatch };
     recipesRef.current = recipesRef.current.map((r) =>
       r.id === recipeId ? optimisticRecipe : r
     );
-    setRecipes(recipesRef.current);
+    updatePersonalRecipes((prev) => prev.map((r) => (r.id === recipeId ? optimisticRecipe : r)));
     if (selectedRecipeRef.current && selectedRecipeRef.current.id === recipeId) {
-      const optimisticSelected: ObsidianRecipe = { ...selectedRecipeRef.current, rating: nextRating, ratingExplicit: true, ratingSource: nextRating > 0 ? 'personal' : undefined };
+      const optimisticSelected: ObsidianRecipe = { ...selectedRecipeRef.current, ...ratingPatch };
       selectedRecipeRef.current = optimisticSelected;
       setSelectedRecipe(optimisticSelected);
     }
@@ -1906,11 +2039,7 @@ export default function App() {
     if (!vaultAdapter) return;
 
     const persist = async () => {
-      const latest =
-        recipesRef.current.find((r) => r.id === recipeId) ||
-        (selectedRecipeRef.current && selectedRecipeRef.current.id === recipeId
-          ? selectedRecipeRef.current
-          : undefined);
+      const latest = personalRecipesRef.current.find((r) => r.id === recipeId);
       if (!latest) return;
       try {
         await commitRecipeWrite(latest, current);
@@ -1921,7 +2050,9 @@ export default function App() {
           recipesRef.current = recipesRef.current.map((r) =>
             r.id === recipeId ? { ...r, rating: revertedRating, ratingSource: current.ratingSource } : r
           );
-          setRecipes(recipesRef.current);
+          updatePersonalRecipes((prev) =>
+            prev.map((r) => (r.id === recipeId ? { ...r, rating: revertedRating, ratingSource: current.ratingSource } : r))
+          );
           if (selectedRecipeRef.current && selectedRecipeRef.current.id === recipeId) {
             const revertedSelected: ObsidianRecipe = { ...selectedRecipeRef.current, rating: revertedRating, ratingSource: current.ratingSource };
             selectedRecipeRef.current = revertedSelected;
@@ -2298,11 +2429,11 @@ export default function App() {
       // Favorites
       if (filters.onlyFavorites && !recipe.isFavorite) return false;
 
-      // Navigation-only Favorites view. This is intentionally separate from the
-      // manual "Favorites Only" filter control so neither overwrites the other.
-      // It only narrows the grid/Favorites collection; other destinations such
-      // as Dataview Table remain independent and show the full recipe set.
+      // Navigation-only ownership views. These are separate from the manual
+      // filter controls, so navigating never erases the user's filters.
       if (vaultView === 'favorites' && activeTab === 'grid' && !recipe.isFavorite) return false;
+      if (vaultView === 'starter' && !recipe.isBuiltIn) return false;
+      if (vaultView === 'personal' && recipe.isBuiltIn) return false;
       // Max Cook Time
       if (filters.maxCookTime) {
         const cookMin = parseInt(recipe.cookTime, 10) || 30;
@@ -2339,7 +2470,27 @@ export default function App() {
   const vaultResultIsFiltered = Boolean(searchQuery) || activeFilterCount > 0;
 
   const isFavoritesView = vaultView === 'favorites' && activeTab === 'grid';
+  const isStarterView = vaultView === 'starter' && activeTab === 'grid';
+  const isPersonalView = vaultView === 'personal' && activeTab === 'grid';
   const hasFavoriteRecipes = recipes.some((recipe) => recipe.isFavorite);
+  const favoriteRecipeCount = useMemo(
+    () => recipes.filter((recipe) => recipe.isFavorite).length,
+    [recipes]
+  );
+  const collectionRecipeTotal = isFavoritesView
+    ? favoriteRecipeCount
+    : isStarterView
+      ? starterRecipes.length
+      : isPersonalView
+        ? personalRecipes.length
+        : recipes.length;
+  const collectionCountLabel = isFavoritesView
+    ? `${collectionRecipeTotal} ${collectionRecipeTotal === 1 ? 'favorite' : 'favorites'}`
+    : isStarterView
+      ? `${collectionRecipeTotal} built-in ${collectionRecipeTotal === 1 ? 'recipe' : 'recipes'}`
+      : isPersonalView
+        ? `${collectionRecipeTotal} saved ${collectionRecipeTotal === 1 ? 'recipe' : 'recipes'}`
+        : `${collectionRecipeTotal} ${collectionRecipeTotal === 1 ? 'recipe' : 'recipes'}`;
 
   // Deterministic featured selection is computed once for the spread and the
   // editorial folio line. No recommendation logic or persisted pin is added.
@@ -2355,29 +2506,51 @@ export default function App() {
     vaultConnectionState === 'reauthorization_required' || vaultConnectionState === 'permission_denied';
   const liveFilesystemVault = vaultStatus.isConnected && vaultStatus.accessType === 'filesystem_api';
   const vaultStateEyebrow =
-    vaultConnectionState === 'permission_denied'
-      ? 'Vault access denied'
-      : vaultConnectionState === 'reauthorization_required'
-        ? 'Vault awaiting access'
-        : vaultStatus.isConnected
-          ? liveFilesystemVault
-            ? 'Private vault'
-            : 'Imported collection'
-          : 'Starter collection';
+    isFavoritesView
+      ? 'Favorites'
+      : isStarterView
+        ? 'The Signature Nine'
+        : isPersonalView
+          ? 'My saved recipes'
+          : vaultConnectionState === 'permission_denied'
+            ? 'Vault access denied'
+            : vaultConnectionState === 'reauthorization_required'
+              ? 'Vault awaiting access'
+              : vaultStatus.isConnected
+                ? liveFilesystemVault
+                  ? 'Private vault'
+                  : 'Imported collection'
+                : 'Starter collection';
   const vaultIntroduction =
-    vaultConnectionState === 'permission_denied'
-      ? 'The browser refused access to your remembered Vault. Reconnect, or choose the folder again, to restore your own recipes.'
-      : vaultConnectionState === 'reauthorization_required'
-        ? 'Your Vault is remembered, but the browser needs your permission before its recipes can be shown.'
-        : vaultStatus.isConnected
-          ? liveFilesystemVault
-            ? 'Your saved recipes, gathered from the connected Vault.'
-            : 'Recipes loaded from your files for this session.'
-          : "Sample recipes from the Starter Vault. Connect your own folder whenever you're ready.";
+    isFavoritesView
+      ? 'The recipes you have marked as favorites across the Signature Collection and your personal Vault.'
+      : isStarterView
+        ? 'Nine complete, application-owned recipes. Browse and cook them without connecting a Vault. Save any one of them to My Vault when you want an editable personal copy.'
+        : isPersonalView
+          ? vaultStatus.isConnected
+            ? 'The editable recipes saved in your connected Vault. Signature Collection originals stay separate and are never counted here.'
+            : 'Connect a writable Vault, or save a recipe from the Signature Collection, to build your personal recipe library.'
+          : vaultConnectionState === 'permission_denied'
+            ? 'The browser refused access to your remembered Vault. Reconnect, or choose the folder again, to restore your own recipes.'
+            : vaultConnectionState === 'reauthorization_required'
+              ? 'Your Vault is remembered, but the browser needs your permission before its recipes can be shown.'
+              : vaultStatus.isConnected
+                ? liveFilesystemVault
+                  ? 'Your saved recipes, gathered from the connected Vault, alongside the permanent Signature Collection.'
+                  : 'Recipes loaded from your files for this session, alongside the permanent Signature Collection.'
+                : 'Explore the permanent Signature Collection, then connect your own Vault whenever you are ready.';
+  const vaultPageTitle =
+    isFavoritesView
+      ? 'Favorites'
+      : isStarterView
+        ? 'Signature Collection'
+        : isPersonalView
+          ? 'My Saved Recipes'
+          : 'My Recipe Vault';
 
   const vaultHealthSummary = useMemo(() => {
-    return summarizeVaultHealth(recipes);
-  }, [recipes]);
+    return summarizeVaultHealth(personalRecipes);
+  }, [personalRecipes]);
 
   return (
     <div
@@ -2398,7 +2571,7 @@ export default function App() {
         try {
           const result = await parseDroppedFilesAndFolders(e.dataTransfer);
           if (result.recipes.length > 0) {
-            setRecipes((prev) => {
+            setPersonalRecipes((prev) => {
               const map = new Map(prev.map((r) => [r.id, r]));
               result.recipes.forEach((r) => map.set(r.id, r));
               return Array.from(map.values());
@@ -2468,7 +2641,8 @@ export default function App() {
           setIsMoreOpen(false);
         }}
         vaultStatus={vaultStatus}
-        recipeCount={recipes.length}
+        recipeCount={personalRecipes.length}
+        starterCount={getSignatureStarterCount()}
         noteCount={notes.length}
         onReconnectVault={handleReconnectVault}
         onOpenConnectVaultModal={() => setIsConnectVaultOpen(true)}
@@ -2499,6 +2673,8 @@ export default function App() {
       <VaultHeader
         vaultStatus={vaultStatus}
         activeTab={activeTab}
+        vaultView={vaultView}
+        favoriteCount={favoriteRecipeCount}
         setActiveTab={(tab) => {
           setActiveTab(tab);
           setSelectedRecipe(null);
@@ -2509,7 +2685,8 @@ export default function App() {
         setIsFilterOpen={setIsFilterOpen}
         activeFilterCount={activeFilterCount}
         onOpenConnectVaultModal={() => setIsConnectVaultOpen(true)}
-        recipeCount={recipes.length}
+        recipeCount={personalRecipes.length}
+        starterCount={getSignatureStarterCount()}
         noteCount={notes.length}
         onReconnectVault={handleReconnectVault}
         onOpenNewRecipeModal={() => {
@@ -2534,7 +2711,9 @@ export default function App() {
               console.warn('Re-scan failed:', err);
             }
           } else {
-            setRecipes(getStarterVaultRecipes());
+            // The Signature Nine is permanent and cannot be "refreshed away".
+            // Reset only the in-memory demo personalization and demo plan data.
+            setStarterOverrides({});
             setMealPlan(STARTER_MEAL_PLAN);
             setShoppingCategories(STARTER_SHOPPING_CATEGORIES);
             setVaultHydrated(true);
@@ -2627,6 +2806,9 @@ export default function App() {
               setEditingRecipe(recipe);
               setIsEditorOpen(true);
             }}
+            onSaveToVault={handleSaveStarterToVault}
+            starterSaveState={starterSaveState}
+            starterSavePending={starterSavePending}
             onDeleteRecipe={handleDeleteRecipe}
             onAddToMealPlan={(recipe) => {
               handleAddToMealPlan(recipe);
@@ -2677,7 +2859,7 @@ export default function App() {
                     id="vault-page-title"
                     className="kc-vault-page-title mt-3 font-serif font-medium text-[var(--text-primary,#F3F4F6)]"
                   >
-                    My Recipe Vault
+                    {vaultPageTitle}
                   </h1>
                   <p className="mt-4 max-w-2xl text-[14px] leading-relaxed text-[var(--text-secondary,#9CA3AF)] md:text-[15px]">
                     {vaultIntroduction}
@@ -2790,15 +2972,43 @@ export default function App() {
                     aria-live="polite"
                   >
                     {vaultResultIsFiltered
-                      ? `Showing ${filteredRecipes.length} of ${recipes.length}`
-                      : `${recipes.length} ${recipes.length === 1 ? 'recipe' : 'recipes'}`}
+                      ? `Showing ${filteredRecipes.length} of ${collectionRecipeTotal}`
+                      : collectionCountLabel}
                   </p>
                 </div>
               </div>
             </section>
 
             {filteredRecipes.length === 0 ? (
-              isFavoritesView && !hasFavoriteRecipes ? (
+              isPersonalView && personalRecipes.length === 0 ? (
+                <div className="mt-8 border border-dashed border-[var(--border-subtle,rgba(255,255,255,0.08))] px-6 py-16 text-center">
+                  <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-[var(--accent-subtle,rgba(245,158,11,0.12))] text-[var(--accent-text,#F59E0B)]">
+                    <BookOpen className="h-5 w-5" strokeWidth={1.75} aria-hidden="true" />
+                  </div>
+                  <h2 className="mt-5 font-serif text-3xl font-medium text-[var(--text-primary,#F3F4F6)]">
+                    No saved recipes yet
+                  </h2>
+                  <p className="mx-auto mt-3 max-w-md text-sm leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
+                    The Signature Collection is always available. Save a built-in recipe to My Vault, or connect a writable Vault, to start your personal library.
+                  </p>
+                  <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setVaultView('starter')}
+                      className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-sm bg-[var(--accent,#F59E0B)] px-4 text-sm font-semibold text-[var(--accent-contrast,#0C0C0C)] transition-colors hover:bg-[var(--accent-hover,#D97706)]"
+                    >
+                      Browse Signature Collection
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsConnectVaultOpen(true)}
+                      className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-sm border border-[var(--border-subtle,rgba(255,255,255,0.08))] px-4 text-sm font-medium text-[var(--text-secondary,#9CA3AF)] transition-colors hover:border-[var(--accent-text,#F59E0B)] hover:text-[var(--accent-text,#F59E0B)]"
+                    >
+                      Connect a Vault
+                    </button>
+                  </div>
+                </div>
+              ) : isFavoritesView && !hasFavoriteRecipes ? (
                 <div className="mt-8 border border-dashed border-[var(--border-subtle,rgba(255,255,255,0.08))] px-6 py-16 text-center">
                   <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-[var(--accent-subtle,rgba(245,158,11,0.12))] text-[var(--accent-text,#F59E0B)]">
                     <Star className="h-5 w-5" strokeWidth={1.75} aria-hidden="true" />
@@ -3041,6 +3251,8 @@ export default function App() {
             </div>
             {[
               { label: 'New Recipe Note', action: () => { setEditingRecipe(null); setIsEditorOpen(true); } },
+              { label: 'Signature Collection', action: () => { setVaultView('starter'); setActiveTab('grid'); } },
+              { label: 'My Saved Recipes', action: () => { setVaultView('personal'); setActiveTab('grid'); } },
               { label: 'Favorites', action: () => { setVaultView('favorites'); setActiveTab('grid'); } },
               { label: 'Create with SHISO', action: () => setIsCreateForMeOpen(true) },
               { label: 'Grab from Web', action: () => setIsGrabberOpen(true) },
@@ -3126,11 +3338,30 @@ export default function App() {
         onClose={() => setIsConnectVaultOpen(false)}
         vaultStatus={vaultStatus}
         setVaultStatus={setVaultStatus}
-        recipes={recipes}
-        setRecipes={setRecipes}
+        recipes={personalRecipes}
+        setRecipes={setPersonalRecipes}
         setMealPlan={setMealPlan}
         setShoppingCategories={setShoppingCategories}
         setNotes={setNotes}
+        onRestoreStarterCollection={() => {
+          setPersonalRecipes([]);
+          setNotes([]);
+          setStarterOverrides({});
+          setMealPlan(STARTER_MEAL_PLAN);
+          setShoppingCategories(STARTER_SHOPPING_CATEGORIES);
+          setSelectedRecipe(null);
+          setCookingRecipe(null);
+          setEditingRecipe(null);
+          setVaultStatus({
+            isConnected: false,
+            vaultPath: DEFAULT_VAULT_PATH,
+            accessType: 'starter_vault',
+            connectionState: 'starter',
+          });
+          setVaultHydrated(true);
+          setVaultView('starter');
+          setActiveTab('grid');
+        }}
         onOpenWebGrabber={() => setIsGrabberOpen(true)}
         onDirectVaultConnected={handleDirectVaultConnected}
       />

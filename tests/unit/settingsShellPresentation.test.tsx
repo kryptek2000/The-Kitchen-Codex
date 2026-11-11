@@ -125,7 +125,7 @@ describe('UD-2D.4 — Vault connection presentation', () => {
     fireEvent.click(screen.getByRole('tab', { name: /Vault Stats/i }));
     expect(document.getElementById('vault-panel-manage')).toBeTruthy();
     expect(screen.getByText('Recipes currently loaded')).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Use starter library/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Use Signature Collection/i })).toBeTruthy();
     expect(screen.getByRole('button', { name: /Export Markdown/i })).toBeTruthy();
   });
 

@@ -21,6 +21,8 @@ interface RecipeNutritionSectionProps {
   presentation: NutritionPresentation;
   servings?: number;
   network: NetworkAdapter;
+  /** Built-in Signature originals are read-only; no calculation or save action. */
+  readOnly?: boolean;
   onUpdateNutrition?: (nutrition: RecipeNutrition) => Promise<boolean | void> | void;
   advancedNutritionSession?: AdvancedNutritionSession | null;
   advancedNutritionBundleStatus?: AdvancedNutritionBundleUiStatus;
@@ -63,6 +65,7 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
   presentation,
   servings,
   network,
+  readOnly = false,
   onUpdateNutrition,
   advancedNutritionSession,
   advancedNutritionBundleStatus,
@@ -73,6 +76,26 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
   onEstimateMassesWithAi,
   onReviewRecipeContextWithAi,
 }) => {
+  if (readOnly) {
+    return (
+      <section id="recipe-nutrition-section" aria-label="Nutrition" className="space-y-3">
+        <div className="flex items-center gap-3">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary,#9CA3AF)]">
+            Nutrition
+          </span>
+          <span aria-hidden="true" className="h-px flex-1 bg-[var(--color-rule,var(--border-subtle,rgba(255,255,255,0.08)))]" />
+        </div>
+        <p
+          data-testid="builtin-nutrition-readonly"
+          className="rounded-xl border-l-[3px] border-l-[var(--accent-text,#F59E0B)] bg-[var(--bg-elevated,#1E1E1E)] px-3 py-2 text-[11px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]"
+        >
+          Nutrition calculation and editing are available in your saved personal copy. Save this
+          built-in recipe to My Vault first.
+        </p>
+      </section>
+    );
+  }
+
   const advancedPreferred = presentation.advanced_preferred;
   // Compact normal values derived from the saved Advanced block (single
   // authority). Undefined when no recognized Advanced result exists, in which
