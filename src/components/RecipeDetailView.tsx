@@ -43,6 +43,7 @@ import { scaleIngredientText } from '../utils/markdownParser';
 import { downloadMarkdownFile } from '../utils/vaultFileSystem';
 import { getRecipeImage, DEFAULT_FOOD_IMAGES, LOCAL_RECIPE_IMAGE_PLACEHOLDER } from '../utils/imageHelper';
 import { useVaultImage } from '../hooks/useVaultImage';
+import { useVaultAssetScope } from '../hooks/VaultAssetScopeContext';
 import { assessRecipeHealth } from '../utils/vaultIntelligence';
 import { buildRecipeRelationshipIndex, recipeIdentity } from '../utils/recipeRelationships';
 import { storedRecipeDescription, visibleRecipeTags } from '../utils/recipePresentation';
@@ -177,7 +178,8 @@ export function RecipeDetailView({
   const [ratingPending, setRatingPending] = useState(false);
   const [voiceFocusEpoch, setVoiceFocusEpoch] = useState(0);
   const heroImgRef = useRef<HTMLDivElement | null>(null);
-  const defaultImg = getRecipeImage(recipe);
+  const assetScope = useVaultAssetScope();
+  const defaultImg = getRecipeImage(recipe, assetScope);
   const reactiveVaultImage = useVaultImage(recipe.image, defaultImg);
 
   const hasExplicitImage =

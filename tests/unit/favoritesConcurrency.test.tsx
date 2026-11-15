@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 import App from '../../src/App';
 
@@ -13,8 +13,9 @@ afterEach(() => {
 
 class MockDir {
   kind = 'directory' as const;
-  children = new Map();
+  children = new Map<string, MockDir | MockFile>();
   name = 'Vault';
+  permission: 'granted' | 'denied' | 'prompt' = 'granted';
   async *values() { for (const c of this.children.values()) yield c; }
   async getFileHandle(n: string, o?: any) {
     if (!this.children.has(n)) {
@@ -40,8 +41,8 @@ class MockDir {
     return this.children.get(n);
   }
   async removeEntry(n: string) { this.children.delete(n); }
-  async requestPermission() { return 'granted'; }
-  async queryPermission() { return 'granted'; }
+  async requestPermission() { return this.permission; }
+  async queryPermission() { return this.permission; }
 }
 
 class MockFile {
@@ -59,6 +60,17 @@ class MockFile {
   }
 }
 
+function makeRootWithOneRecipe() {
+  const root = new MockDir();
+  const recipesDir = new MockDir();
+  recipesDir.name = 'Recipes';
+  root.children.set('Recipes', recipesDir);
+  const file = new MockFile('Carbonara.md');
+  file.content = '---\ntitle: "Carbonara"\ncuisine: "Italian"\ncategory: "Dinner"\nrating: 4\ndifficulty: Medium\nservings: 4\n---\n# Carbonara\nClassic.\n';
+  recipesDir.children.set('Carbonara.md', file);
+  return { root, file };
+}
+
 async function connect(root: MockDir) {
   (window as any).showDirectoryPicker = async () => root;
   render(<App />);
@@ -73,17 +85,112 @@ async function connect(root: MockDir) {
   }, { timeout: 10000 });
 }
 
-describe('Favorites deterministic concurrency', () => {
-  it('queues overlapping favorite toggles and persists final intent', async () => {
-    const root = new MockDir();
-    const recipesDir = new MockDir();
-    recipesDir.name = 'Recipes';
-    root.children.set('Recipes', recipesDir);
-    const file = new MockFile('Carbonara.md');
-    file.content = '---\ntitle: "Carbonara"\ncuisine: "Italian"\ncategory: "Dinner"\nrating: 4\ndifficulty: Medium\nservings: 4\n---\n# Carbonara\nClassic.\n';
-    recipesDir.children.set('Carbonara.md', file);
+function closeVaultDialog() {
+  fireEvent.click(screen.getByRole('button', { name: 'Close Vault settings' }));
+}
 
-    // Gate the first write so the second toggle queues behind it.
+describe('One Vault after connection', () => {
+  it('shows only personal recipes, no permanent Signature navigation, and a zero-write decline', async () => {
+    const { root } = makeRootWithOneRecipe();
+    await connect(root);
+
+    const offer = screen.getByTestId('signature-import-offer');
+    expect(offer).toBeTruthy();
+    expect(within(offer).getByText('Would you like to add the Signature Nine?')).toBeTruthy();
+    expect(offer.textContent).toContain("won't overwrite your existing recipes");
+    expect(document.getElementById('vault-collection-label')?.getAttribute('aria-label')).toBe('My Recipe Vault');
+    expect(document.getElementById('vault-recipe-count')?.textContent).toBe('1 recipe');
+    expect(document.getElementById('sidenav-vault-status-line')?.textContent).toBe('Vault linked · 1 recipe');
+    expect(document.querySelectorAll('[data-testid="builtin-card-badge"]').length).toBe(0);
+    expect(document.getElementById('featured-recipe')?.textContent).toContain('Carbonara');
+    expect(document.getElementById('nav-signature-collection')).toBeNull();
+    expect(document.getElementById('nav-personal-recipes')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Not Now' }));
+    expect(root.children.has('Signature Collection')).toBe(false);
+    closeVaultDialog();
+    expect(document.getElementById('vault-recipe-count')?.textContent).toBe('1 recipe');
+    expect(document.querySelector('[data-testid="builtin-card-badge"]')).toBeNull();
+  }, 30000);
+
+  it('imports the Signature Nine only after explicit Add and opens verified copies as personal recipes', async () => {
+    const { root } = makeRootWithOneRecipe();
+    await connect(root);
+
+    fireEvent.click(screen.getByTestId('add-signature-nine'));
+    await waitFor(() => {
+      const offer = screen.getByTestId('signature-import-offer');
+      expect(within(offer).getByText(/recipes added/i)).toBeTruthy();
+    }, { timeout: 20000 });
+
+    const signatureDir = root.children.get('Signature Collection') as MockDir | undefined;
+    expect(signatureDir).toBeTruthy();
+    expect(signatureDir!.children.size).toBe(9);
+    expect(document.getElementById('vault-recipe-count')?.textContent).toBe('10 recipes');
+    expect(document.querySelectorAll('[data-testid="builtin-card-badge"]').length).toBe(0);
+
+    closeVaultDialog();
+    await waitFor(() => expect(document.getElementById('vault-recipe-count')?.textContent).toBe('10 recipes'));
+
+    const importedTitle = screen.getByRole('button', { name: 'Artisan Sourdough Boule' });
+    expect(importedTitle).toBeTruthy();
+    fireEvent.click(importedTitle);
+    await waitFor(() => expect(document.getElementById('recipe-detail-view')).toBeTruthy());
+    expect(screen.queryByTestId('builtin-recipe-badge')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeTruthy();
+    expect(screen.queryByTestId('builtin-nutrition-readonly')).toBeNull();
+    expect(document.getElementById('calculate-basic-nutrition-btn') || document.getElementById('calculate-basic-nutrition-empty-btn')).toBeTruthy();
+  }, 45000);
+
+  it('rechecks read/write permission at click time and refuses a revoked grant', async () => {
+    const { root } = makeRootWithOneRecipe();
+    await connect(root);
+
+    const offer = screen.getByTestId('signature-import-offer');
+    expect(within(offer).getByTestId('add-signature-nine')).toBeTruthy();
+
+    root.permission = 'denied';
+    fireEvent.click(within(offer).getByTestId('add-signature-nine'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('vault-notice').textContent).toMatch(/write access to this Vault is denied/i);
+    });
+    expect(root.children.has('Signature Collection')).toBe(false);
+    await waitFor(() => {
+      const refreshed = screen.getByTestId('signature-import-offer');
+      expect(within(refreshed).queryByTestId('add-signature-nine')).toBeNull();
+      expect(refreshed.textContent).toMatch(/write access to this Vault is denied/i);
+    });
+  }, 45000);
+
+  it('recovers the Add 9 action after permission is granted again', async () => {
+    const { root } = makeRootWithOneRecipe();
+    await connect(root);
+
+    root.permission = 'denied';
+    const offer = screen.getByTestId('signature-import-offer');
+    fireEvent.click(within(offer).getByTestId('add-signature-nine'));
+    await waitFor(() => expect(screen.getByTestId('vault-notice').textContent).toMatch(/denied/i));
+
+    root.permission = 'granted';
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await waitFor(() => {
+      expect(within(screen.getByTestId('signature-import-offer')).getByTestId('add-signature-nine')).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByTestId('add-signature-nine'));
+    await waitFor(() => {
+      const refreshed = screen.getByTestId('signature-import-offer');
+      expect(refreshed.textContent).toMatch(/recipes added/i);
+    }, { timeout: 20000 });
+    expect(root.children.has('Signature Collection')).toBe(true);
+  }, 45000);
+
+  it('queues overlapping favorite toggles and persists final intent', async () => {
+    const { root, file } = makeRootWithOneRecipe();
     let releaseFirst: () => void = () => {};
     let gated = true;
     const originalCreateWritable = file.createWritable.bind(file);
@@ -103,75 +210,20 @@ describe('Favorites deterministic concurrency', () => {
     };
 
     await connect(root);
+    fireEvent.click(screen.getByRole('button', { name: 'Not Now' }));
+    closeVaultDialog();
 
-    // Combined view keeps the two ownership counts distinguishable.
-    expect(document.getElementById('vault-collection-label')?.getAttribute('aria-label')).toBe('My Recipe Vault');
-    expect(document.getElementById('vault-recipe-count')?.textContent).toBe('9 built-in · 1 saved');
-    expect(document.getElementById('sidenav-vault-status-line')?.textContent).toContain('1 recipe');
-    expect(document.getElementById('sidenav-vault-status-line')?.textContent).toContain('9 built-in');
-    expect(document.querySelectorAll('[data-testid="builtin-card-badge"]').length).toBeGreaterThan(0);
-
-    // Personal view reports the one saved recipe only, never the built-ins.
-    fireEvent.click(document.getElementById('nav-personal-recipes')!);
-    await waitFor(() => {
-      expect(document.getElementById('vault-collection-label')?.getAttribute('aria-label')).toBe('My Saved Recipes');
-      expect(document.getElementById('vault-recipe-count')?.textContent).toBe('1 saved recipe');
-    });
-    expect(document.getElementById('obsidian-vault-header')?.textContent).not.toContain('Signature Collection');
-    fireEvent.click(document.getElementById('nav-recipe-vault')!);
-    await waitFor(() => {
-      expect(document.getElementById('vault-collection-label')?.getAttribute('aria-label')).toBe('My Recipe Vault');
-    });
-
-    const personalCard = () => {
-      const card = document.getElementById('recipe-card-Recipes/Carbonara.md');
-      expect(card).toBeTruthy();
-      return card as HTMLElement;
-    };
-
-    // Toggle ON (write held)
-    fireEvent.click(within(personalCard()).getByRole('button', { name: /Add to favorites/i }));
+    const personalCard = document.getElementById('featured-recipe');
+    expect(personalCard).toBeTruthy();
+    fireEvent.click(within(personalCard as HTMLElement).getByRole('button', { name: /Add to favorites/i }));
     await new Promise((r) => setTimeout(r, 500));
 
-    // Favoriting promotes the personal recipe to the featured spread, so the
-    // Remove control is the single global favorite control at this point.
     fireEvent.click(screen.getByRole('button', { name: /Remove from favorites/i }));
-
-    // Release first write
     releaseFirst();
-    await waitFor(() => {
-      expect(file.content).toContain('isFavorite: false');
-    }, { timeout: 10000 });
+    await waitFor(() => expect(file.content).toContain('isFavorite: false'), { timeout: 10000 });
 
-    // UI converges to unfavorited and the personal card returns to the shelf.
     await waitFor(() => {
-      expect(document.getElementById('recipe-card-Recipes/Carbonara.md')).toBeTruthy();
+      expect(document.getElementById('featured-recipe')).toBeTruthy();
     });
-  }, 30000);
-
-  it('returns to the built-in view after disconnecting without stale personal labels', async () => {
-    const root = new MockDir();
-    const recipesDir = new MockDir();
-    recipesDir.name = 'Recipes';
-    root.children.set('Recipes', recipesDir);
-    const file = new MockFile('Carbonara.md');
-    file.content = '---\ntitle: "Carbonara"\nsource: "https://example.com/carbonara"\nservings: 4\ningredients: []\n---\n# Carbonara\n';
-    recipesDir.children.set('Carbonara.md', file);
-
-    await connect(root);
-    expect(document.getElementById('vault-collection-label')?.getAttribute('aria-label')).toBe('My Recipe Vault');
-    expect(document.getElementById('vault-recipe-count')?.textContent).toBe('9 built-in · 1 saved');
-
-    fireEvent.click(document.getElementById('vault-linked-chip')!);
-    await screen.findByRole('dialog', { name: /Connect or manage your recipes/i });
-    fireEvent.click(screen.getByRole('tab', { name: /Vault Stats/i }));
-    fireEvent.click(await screen.findByRole('button', { name: /Use Signature Collection/i }));
-
-    await waitFor(() => {
-      expect(document.getElementById('vault-collection-label')?.getAttribute('aria-label')).toBe('Signature Collection');
-      expect(document.getElementById('vault-recipe-count')?.textContent).toBe('9 built-in recipes');
-    });
-    expect(document.getElementById('recipe-card-Recipes/Carbonara.md')).toBeNull();
-    expect(document.getElementById('obsidian-vault-header')?.textContent).not.toContain('saved');
   }, 30000);
 });

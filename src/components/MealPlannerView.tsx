@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { ObsidianRecipe, MealPlanDay } from '../types';
 import { getRecipeImage } from '../utils/imageHelper';
+import { useVaultAssetScope } from '../hooks/VaultAssetScopeContext';
 
 interface MealPlannerViewProps {
   recipes: ObsidianRecipe[];
@@ -36,6 +37,7 @@ export function MealPlannerView({
   onRemoveSlotRecipe,
   onResetMealPlan,
 }: MealPlannerViewProps) {
+  const assetScope = useVaultAssetScope();
   const [selectingSlot, setSelectingSlot] = useState<{ dayIndex: number; mealType: 'breakfast' | 'lunch' | 'dinner' } | null>(null);
   const [modalSearchQuery, setModalSearchQuery] = useState('');
 
@@ -345,7 +347,7 @@ export function MealPlannerView({
                 </div>
               ) : (
                 filteredModalRecipes.map((recipe) => {
-                  const thumb = getRecipeImage(recipe);
+                  const thumb = getRecipeImage(recipe, assetScope);
                   return (
                     <div
                       key={recipe.id}

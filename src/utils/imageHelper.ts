@@ -1,4 +1,6 @@
 import { syncResolveVaultAssetUrl, cleanImageReference, isImageFile } from './vaultAssets';
+import type { VaultAssetScope } from './vaultAssets';
+import { isBlobReference } from './assetProvenance';
 
 /**
  * The Kitchen Codex — Recipe image display helper (Phase 1).
@@ -48,30 +50,23 @@ export function getRecipeImage(recipe: {
   cuisine?: string;
   tags?: string[];
   rawMarkdown?: string;
-}): string {
+}, assetScope?: VaultAssetScope | null): string {
   // 1. Direct explicit image or vault asset path
   if (recipe.image && typeof recipe.image === 'string') {
     const clean = cleanImageReference(recipe.image);
     if (clean && clean !== 'undefined' && clean !== 'null') {
-      // If it's already an absolute URL or Blob URL, use directly
-      if (
-        clean.startsWith('http://') ||
-        clean.startsWith('https://') ||
-        clean.startsWith('data:') ||
-        clean.startsWith('blob:')
-      ) {
-        return clean;
-      }
+      // Remote/data references are session-independent. Blob URLs are accepted
+      // ONLY when the active scope owns them or they are a live temporary
+      // preview; unknown/foreign blobs must never be returned as current.
+      const resolvedDirect = syncResolveVaultAssetUrl(clean, assetScope);
+      if (resolvedDirect) return resolvedDirect;
+      if (isBlobReference(clean)) return LOCAL_RECIPE_IMAGE_PLACEHOLDER;
 
-      // Check if it resolves in the local Obsidian vault asset cache (e.g. Assets/Breakfast Burritos.jpg)
-      const vaultBlobUrl = syncResolveVaultAssetUrl(clean);
-      if (vaultBlobUrl) {
-        return vaultBlobUrl;
-      }
-
-      // If it has an image extension or is in Assets folder, return the cleaned reference
+      // Without a scope, preserve legacy/test display behavior. With an active
+      // scope, an unresolved Vault path is truthfully missing: show the local
+      // placeholder rather than a path that could be mistaken for another Vault.
       if (isImageFile(clean) || clean.toLowerCase().startsWith('assets/')) {
-        return clean;
+        return assetScope ? LOCAL_RECIPE_IMAGE_PLACEHOLDER : clean;
       }
     }
   }
@@ -82,7 +77,7 @@ export function getRecipeImage(recipe: {
     const wikilinkImgMatch = recipe.rawMarkdown.match(/!\[\[([^\]]+\.(?:jpg|jpeg|png|webp|avif|gif|svg))\]\]/i);
     if (wikilinkImgMatch && wikilinkImgMatch[1]) {
       const targetRef = cleanImageReference(wikilinkImgMatch[1]);
-      const resolved = syncResolveVaultAssetUrl(targetRef);
+      const resolved = syncResolveVaultAssetUrl(targetRef, assetScope);
       if (resolved) return resolved;
     }
 
@@ -93,7 +88,7 @@ export function getRecipeImage(recipe: {
       if (src.startsWith('http://') || src.startsWith('https://')) {
         return src;
       }
-      const resolved = syncResolveVaultAssetUrl(src);
+      const resolved = syncResolveVaultAssetUrl(src, assetScope);
       if (resolved) return resolved;
     }
 
@@ -104,7 +99,7 @@ export function getRecipeImage(recipe: {
       if (src.startsWith('http://') || src.startsWith('https://')) {
         return src;
       }
-      const resolved = syncResolveVaultAssetUrl(src);
+      const resolved = syncResolveVaultAssetUrl(src, assetScope);
       if (resolved) return resolved;
     }
   }

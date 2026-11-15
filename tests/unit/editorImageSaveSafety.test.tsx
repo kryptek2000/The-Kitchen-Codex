@@ -6,6 +6,9 @@ import { hydrateAiSelections } from '../../src/application/aiSelection';
 import type { NetworkAdapter } from '../../src/application/adapters/NetworkAdapter';
 import type { AssetAdapter } from '../../src/application/adapters/AssetAdapter';
 import type { ObsidianRecipe } from '../../src/types';
+import { VaultAssetScopeProvider } from '../../src/hooks/VaultAssetScopeContext';
+import { createVaultAssetScope } from '../../src/utils/vaultAssets';
+import { isTemporaryPreviewUrl } from '../../src/utils/assetProvenance';
 
 /**
  * B1/B2/B3/I1/I2 — Recipe Editor image Save-transaction safety (mounted).
@@ -128,6 +131,79 @@ async function acceptRepresentative(): Promise<void> {
   fireEvent.click(screen.getByTestId('use-representative-image'));
   await waitFor(() => expect(screen.queryByText('Choose a Representative Recipe Image')).toBeNull());
 }
+
+describe('R3 — session-bound composite Asset + recipe saves', () => {
+  it('performs the deferred Asset write and recipe save through the supplied session runner', async () => {
+    const { network } = makeNetwork();
+    const { asset } = makeAssetStore();
+    const runner = vi.fn(async (operation: any) => operation({ asset }));
+    const onSave = vi.fn(async (_recipe: ObsidianRecipe) => {});
+    render(
+      <RecipeEditorModal
+        initialRecipe={makeRecipe()}
+        network={network}
+        runSessionAsset={runner}
+        onSave={onSave}
+        onClose={() => {}}
+      />
+    );
+    await acceptRepresentative();
+    fireEvent.click(screen.getByText('Save Obsidian Note'));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(runner).toHaveBeenCalledTimes(1);
+    expect(asset.write).toHaveBeenCalledTimes(1);
+    const saved = onSave.mock.calls[0][0] as ObsidianRecipe;
+    expect(saved.image).toBe((asset.write as ReturnType<typeof vi.fn>).mock.calls[0][0]);
+  });
+
+  it('rolls back a transaction-owned Asset through the SAME session deps when recipe save is superseded', async () => {
+    const { network } = makeNetwork();
+    const { asset, files, deleted } = makeAssetStore();
+    const runner = vi.fn(async (operation: any) => operation({ asset }));
+    const onSave = vi.fn(async () => {
+      const error = new Error('The active Vault changed before this operation could complete.');
+      Object.defineProperty(error, 'name', { value: 'VaultSessionSupersededError' });
+      throw error;
+    });
+    render(
+      <RecipeEditorModal
+        initialRecipe={makeRecipe()}
+        network={network}
+        runSessionAsset={runner}
+        onSave={onSave}
+        onClose={() => {}}
+      />
+    );
+    await acceptRepresentative();
+    fireEvent.click(screen.getByText('Save Obsidian Note'));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(deleted).toHaveLength(1));
+    expect(files.has(deleted[0])).toBe(false);
+    expect(await screen.findByText(/Vault changed before this recipe was saved/i)).toBeTruthy();
+    expect(runner).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs an immediate remote image-to-Assets write through the same session runner', async () => {
+    const { network } = makeNetwork();
+    const { asset } = makeAssetStore();
+    const runner = vi.fn(async (operation: any) => operation({
+      asset,
+      downloadRemoteImage: { downloadRemoteImage: async () => ({ bytes: PNG_BYTES, contentType: 'image/png' }) },
+    }));
+    render(
+      <RecipeEditorModal
+        initialRecipe={makeRecipe({ image: 'https://example.com/food.jpg', rawMarkdown: '---\ntitle: Blue Cheese Smashburgers\nimage: https://example.com/food.jpg\n---\n# Blue Cheese Smashburgers' })}
+        network={network}
+        runSessionAsset={runner}
+        onSave={vi.fn()}
+        onClose={() => {}}
+      />
+    );
+    fireEvent.click(screen.getByText('Save to Assets/'));
+    await waitFor(() => expect(asset.write).toHaveBeenCalledTimes(1));
+    expect(runner).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('B1 — collision-safe Asset creation + transaction-owned rollback', () => {
   it('a colliding existing Asset is never overwritten: the save uses a suffixed path', async () => {
@@ -331,5 +407,39 @@ describe('I2 — close/reopen and unmount drop stale completions without URL lea
     const revoked = (URL.revokeObjectURL as unknown as ReturnType<typeof vi.fn>).mock.calls.length;
     expect(revoked).toBeGreaterThanOrEqual(createdAfter - createdBefore > 0 ? 1 : 0);
     expect(asset.write).not.toHaveBeenCalled();
+  });
+});
+
+describe('R6 — failed Save rollback unregisters the new scope asset and keeps a live preview', () => {
+  it('removes the scope entry and revokes only the transaction-owned asset URL', async () => {
+    const { network } = makeNetwork();
+    const { asset, deleted } = makeAssetStore();
+    const scope = createVaultAssetScope(77, { active: true });
+    const onSave = vi.fn(async () => {
+      throw new Error('vault write failed');
+    });
+    render(
+      <VaultAssetScopeProvider scope={scope}>
+        <RecipeEditorModal
+          initialRecipe={makeRecipe()}
+          imageService={{ asset, assetScope: scope } as any}
+          network={network}
+          onSave={onSave}
+          onClose={() => {}}
+        />
+      </VaultAssetScopeProvider>
+    );
+    await acceptRepresentative();
+    const previewSrc = (screen.getByAltText('Preview') as HTMLImageElement).src;
+    expect(previewSrc).toMatch(/^blob:/);
+    fireEvent.click(screen.getByText('Save Obsidian Note'));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByText(/vault write failed/i)).toBeTruthy());
+    expect(deleted).toHaveLength(1);
+    expect(scope.get(deleted[0])).toBeUndefined();
+    const restoredSrc = (screen.getByAltText('Preview') as HTMLImageElement).src;
+    expect(restoredSrc).toBe(previewSrc);
+    expect(isTemporaryPreviewUrl(restoredSrc)).toBe(true);
+    scope.deactivate();
   });
 });

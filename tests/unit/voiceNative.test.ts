@@ -166,14 +166,20 @@ afterEach(() => {
 });
 
 describe('native voice bridge', () => {
-  it('is disabled by default', async () => {
+  it('is enabled by default, with runtime asset verification still required', async () => {
     delete process.env.TKC_NATIVE_VOICE_ENABLED;
+    const voice = await loadModule();
+    expect(voice.isNativeVoiceEnabled()).toBe(true);
+  });
+
+  it('supports an explicit operator opt-out', async () => {
+    process.env.TKC_NATIVE_VOICE_ENABLED = '0';
     const voice = await loadModule();
     expect(voice.isNativeVoiceEnabled()).toBe(false);
   });
 
-  it('rejects synthesis when disabled', async () => {
-    delete process.env.TKC_NATIVE_VOICE_ENABLED;
+  it('rejects synthesis when explicitly disabled', async () => {
+    process.env.TKC_NATIVE_VOICE_ENABLED = '0';
     const voice = await loadModule();
     await expect(voice.synthesizeNativeVoice('Hello', 'af_heart')).rejects.toThrow(/disabled/i);
   });
@@ -366,14 +372,34 @@ module.exports = { StyleTextToSpeech2Model, AutoTokenizer, env };
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let stdout = '';
-    child.stdout.on('data', (chunk) => { stdout += String(chunk); });
-    child.stdin.write(JSON.stringify({ id: 'child-1', text: 'Hello', voice: 'af_heart' }) + '\n');
+    // Attach the response listener BEFORE writing stdin, and use one listener
+    // that checks the already-buffered output. The previous fixture attached a
+    // second listener after the write, so a complete one-chunk response could
+    // arrive before the listener ran and the test would wait until timeout.
     await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('child timeout')), 8000);
-      child.stdout.on('data', () => {
-        if (stdout.includes('\n')) { clearTimeout(timer); resolve(); }
+      let settled = false;
+      const finish = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (error) reject(error);
+        else resolve();
+      };
+      const timer = setTimeout(() => finish(new Error('child timeout')), 8000);
+      const onData = (chunk: Buffer | string) => {
+        stdout += String(chunk);
+        if (stdout.includes('\n')) finish();
+      };
+      child.stdout.on('data', onData);
+      child.on('error', (error) => finish(error instanceof Error ? error : new Error(String(error))));
+      child.on('exit', (code) => {
+        if (!stdout.includes('\n')) {
+          finish(new Error(`child exited (${code ?? 'unknown'}) before writing a complete response`));
+        }
       });
-      child.on('error', reject);
+      child.stdin.write(JSON.stringify({ id: 'child-1', text: 'Hello', voice: 'af_heart' }) + '\n');
+      // The response may already have arrived while the listener was attached.
+      if (stdout.includes('\n')) finish();
     });
     child.kill('SIGKILL');
     const calls = fs.existsSync(childLog)

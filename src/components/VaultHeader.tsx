@@ -11,7 +11,7 @@ import {
 import { VaultSyncStatus } from '../types';
 import { KitchenCodexMark } from './BrandMark';
 
-export type VaultCollectionView = 'all' | 'favorites' | 'starter' | 'personal';
+export type VaultCollectionView = 'all' | 'favorites';
 
 interface VaultHeaderProps {
   vaultStatus: VaultSyncStatus;
@@ -45,10 +45,8 @@ interface VaultHeaderProps {
   onOpenCreateForMe: () => void;
   legacyRecipeCount?: number;
   onRefreshVault: () => void;
-  /** The PERSONAL recipe count of the active vault, derived from canonical state. */
+  /** The recipe count of the single active Recipe Vault. */
   recipeCount: number;
-  /** The permanent built-in Signature Nine count, never added to personal counts. */
-  starterCount?: number;
   /** Non-recipe notes. Reported separately, never as recipes. */
   noteCount: number;
   /** Re-authorises a remembered Vault. Invoked from a user gesture. */
@@ -72,7 +70,6 @@ export function VaultHeader({
   onOpenAskMyKitchen,
   onRefreshVault,
   recipeCount,
-  starterCount,
   onReconnectVault,
 }: VaultHeaderProps) {
   const fullPath = vaultStatus.vaultPath || '';
@@ -98,45 +95,15 @@ export function VaultHeader({
   // collection label (the original defect showed “Signature Collection” while
   // the active page was My Saved Recipes).
   const viewAware = vaultView !== undefined && activeTab === 'grid';
-  const builtInCount = starterCount ?? 0;
-  const personalNoun = recipeCount === 1 ? 'recipe' : 'recipes';
-  const starterNoun = builtInCount === 1 ? 'recipe' : 'recipes';
+  const recipeNoun = recipeCount === 1 ? 'recipe' : 'recipes';
   const favoriteTotal = favoriteCount ?? 0;
-  let collectionLabel = stateLabel;
-  let collectionShortLabel = stateLabel;
-  let collectionCount = needsReconnect
-    ? `${recipeCount} sample ${recipeCount === 1 ? 'recipe' : 'recipes'}`
-    : `${recipeCount} ${personalNoun}`;
-
-  if (viewAware) {
-    switch (vaultView) {
-      case 'starter':
-        collectionLabel = 'Signature Collection';
-        collectionShortLabel = 'Signature';
-        collectionCount = `${builtInCount} built-in ${starterNoun}`;
-        break;
-      case 'personal':
-        collectionLabel = 'My Saved Recipes';
-        collectionShortLabel = 'Saved';
-        collectionCount = needsReconnect
-          ? 'Reconnect to view saved recipes'
-          : `${recipeCount} saved ${personalNoun}`;
-        break;
-      case 'favorites':
-        collectionLabel = 'Favorites';
-        collectionShortLabel = 'Favorites';
-        collectionCount = `${favoriteTotal} ${favoriteTotal === 1 ? 'favorite' : 'favorites'}`;
-        break;
-      case 'all':
-      default:
-        collectionLabel = 'My Recipe Vault';
-        collectionShortLabel = 'Vault';
-        collectionCount = needsReconnect
-          ? `${builtInCount} built-in · saved recipes need reconnect`
-          : `${builtInCount} built-in · ${recipeCount} saved`;
-        break;
-    }
-  }
+  const isFavorites = viewAware && vaultView === 'favorites';
+  const collectionLabel = isFavorites ? 'Favorites' : 'My Recipe Vault';
+  const collectionShortLabel = isFavorites ? 'Favorites' : 'Vault';
+  const collectionCount = isFavorites
+    ? `${favoriteTotal} ${favoriteTotal === 1 ? 'favorite' : 'favorites'}`
+    : `${recipeCount} ${recipeNoun}`;
+  const fallbackLabel = stateLabel === 'Starter Vault' ? 'My Recipe Vault' : stateLabel;
 
   // STICKY HEADER GEOMETRY — unchanged contract (UD-2A.1B R-1).
   // The header is static below 768px and sticky from 768px up. Its measured
@@ -199,13 +166,8 @@ export function VaultHeader({
                 <span className="sm:hidden">{collectionShortLabel}</span>
                 <span className="hidden sm:inline">{collectionLabel}</span>
               </>
-            ) : connectionState === 'starter' ? (
-              <>
-                <span className="sm:hidden">{starterCount !== undefined ? 'Signature' : 'Starter'}</span>
-                <span className="hidden sm:inline">{starterCount !== undefined ? 'Signature Collection' : 'Starter Vault'}</span>
-              </>
             ) : (
-              stateLabel
+              fallbackLabel
             )}
           </span>
           <span className="hidden text-[var(--text-secondary,#9CA3AF)] sm:inline" aria-hidden="true">•</span>

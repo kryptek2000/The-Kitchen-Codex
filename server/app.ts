@@ -434,6 +434,24 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // policy, and a production-only Content Security Policy).
   app.use(createSecurityMiddleware(opts.isProduction));
 
+  // Desktop-only loopback session boundary. The Electron main process sets an
+  // HttpOnly SameSite=Strict cookie in the application session; unrelated local
+  // processes that merely discover the loopback port do not possess it. Health
+  // remains available for supervised startup.
+  const desktopSessionToken = String(process.env.TKC_DESKTOP_SESSION_TOKEN || '').trim();
+  if (desktopSessionToken) {
+    app.use('/api', (req, res, next) => {
+      if (req.path === '/health') return next();
+      const cookie = String(req.headers.cookie || '');
+      const match = cookie.split(';').map((part) => part.trim()).find((part) => part.startsWith('tkc_desktop_session='));
+      const supplied = match ? decodeURIComponent(match.slice('tkc_desktop_session='.length)) : '';
+      if (!supplied || supplied !== desktopSessionToken) {
+        return res.status(403).json({ error: 'Desktop session required.' });
+      }
+      next();
+    });
+  }
+
   // Trust proxy configuration.
   //
   // X-Forwarded-For is client-supplied and must NOT be trusted by default, or a

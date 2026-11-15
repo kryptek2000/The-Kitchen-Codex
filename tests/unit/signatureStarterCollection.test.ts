@@ -12,10 +12,12 @@ import {
 import {
   buildSavedStarterCopy,
   findSavedStarterCopy,
+  importSignatureStarterCollection,
   saveStarterRecipeToVault,
   starterRecipeSavePath,
 } from '../../src/application/starterCollection';
 import type { VaultAdapter } from '../../src/application/adapters/VaultAdapter';
+import type { ObsidianRecipe } from '../../src/types';
 import { parseObsidianRecipeMarkdown } from '../../src/utils/markdownParser';
 
 const EXPECTED_TITLES = [
@@ -56,6 +58,20 @@ class MemoryVault implements VaultAdapter {
 
 function starters() {
   return getStarterVaultRecipes();
+}
+
+function assertReconciled(summary: Awaited<ReturnType<typeof importSignatureStarterCollection>>) {
+  const counts = { added: 0, already_present: 0, path_conflict: 0, permission_required: 0, verification_failed: 0, cancelled: 0, failed: 0 };
+  for (const entry of summary.entries) counts[entry.status] += 1;
+  expect(summary.added).toBe(counts.added);
+  expect(summary.alreadyPresent).toBe(counts.already_present);
+  expect(summary.pathConflicts).toBe(counts.path_conflict);
+  expect(summary.permissionRequired).toBe(counts.permission_required);
+  expect(summary.verificationFailed).toBe(counts.verification_failed);
+  expect(summary.cancelled).toBe(counts.cancelled);
+  expect(summary.failed).toBe(counts.failed);
+  expect(summary.added + summary.alreadyPresent + summary.pathConflicts + summary.permissionRequired + summary.verificationFailed + summary.cancelled + summary.failed).toBe(summary.total);
+  expect(summary.total).toBe(summary.entries.length);
 }
 
 function starter(title: string) {
@@ -167,6 +183,251 @@ describe('Save to My Vault — explicit copy and duplicate protection', () => {
     const result = await saveStarterRecipeToVault({ vault: null, builtIn, personalRecipes: [] });
     expect(result.status).toBe('unavailable');
     expect(result.message).toMatch(/connect a writable vault/i);
+  });
+});
+
+describe('Optional Signature Nine bulk import — verified and non-destructive', () => {
+  it('imports all nine with readback verification and reports the exact summary', async () => {
+    const vault = new MemoryVault();
+    const builtIns = starters();
+    const summary = await importSignatureStarterCollection({ vault, builtIns, personalRecipes: [] });
+
+    expect(summary.total).toBe(9);
+    expect(summary.added).toBe(9);
+    expect(summary.alreadyPresent).toBe(0);
+    expect(summary.pathConflicts).toBe(0);
+    expect(summary.verificationFailed).toBe(0);
+    expect(summary.failed).toBe(0);
+    expect(summary.recipes).toHaveLength(9);
+    expect(vault.writes).toBe(9);
+    expect(summary.message).toContain('9 recipes added');
+    for (const builtIn of builtIns) {
+      const path = starterRecipeSavePath(builtIn);
+      expect(vault.files.has(path), path).toBe(true);
+      const persisted = parseObsidianRecipeMarkdown(vault.files.get(path)!, builtIn.fileName, path);
+      expect(persisted.starterId).toBe(builtIn.builtInId);
+      expect(persisted.title).toBe(builtIn.title);
+    }
+  });
+
+  it('is idempotent on retry and adds no duplicate files or writes', async () => {
+    const vault = new MemoryVault();
+    const builtIns = starters();
+    const first = await importSignatureStarterCollection({ vault, builtIns, personalRecipes: [] });
+    const writesAfterFirst = vault.writes;
+    const second = await importSignatureStarterCollection({
+      vault,
+      builtIns,
+      personalRecipes: first.recipes as ObsidianRecipe[],
+    });
+    expect(second.added).toBe(0);
+    expect(second.alreadyPresent).toBe(9);
+    expect(vault.writes).toBe(writesAfterFirst);
+    expect(second.message).toContain('0 recipes added');
+    expect(second.message).toContain('9 already in your Vault');
+  });
+
+  it('reports a path conflict independently without overwriting the unrelated file', async () => {
+    const vault = new MemoryVault();
+    const builtIns = starters();
+    const conflict = builtIns[2];
+    const conflictPath = starterRecipeSavePath(conflict);
+    vault.files.set(conflictPath, '# Someone else\n');
+
+    const summary = await importSignatureStarterCollection({ vault, builtIns, personalRecipes: [] });
+    expect(summary.added).toBe(8);
+    expect(summary.pathConflicts).toBe(1);
+    expect(vault.files.get(conflictPath)).toBe('# Someone else\n');
+    expect(summary.recipes).toHaveLength(8);
+  });
+
+  it('reports a readback verification failure separately from write success', async () => {
+    class CorruptAfterWriteVault extends MemoryVault {
+      override async writeText(path: string, content: string) {
+        this.writes += 1;
+        // Persist a different, valid-looking recipe so identity verification fails.
+        this.files.set(path, '---\ntitle: Wrong recipe\nstarter_id: wrong\n---\n# Wrong\n');
+      }
+    }
+    const vault = new CorruptAfterWriteVault();
+    const summary = await importSignatureStarterCollection({ vault, builtIns: [starters()[0]], personalRecipes: [] });
+    expect(summary.added).toBe(0);
+    expect(summary.verificationFailed).toBe(1);
+    expect(summary.recipes).toHaveLength(0);
+    expect(vault.writes).toBe(1);
+  });
+
+  it('reports permission failure independently and still imports the rest', async () => {
+    class PermissionFailOnceVault extends MemoryVault {
+      private failed = false;
+      override async writeText(path: string, content: string) {
+        if (!this.failed) {
+          this.failed = true;
+          const error = new Error('permission');
+          error.name = 'NotAllowedError';
+          throw error;
+        }
+        this.writes += 1;
+        this.files.set(path, content);
+      }
+    }
+    const vault = new PermissionFailOnceVault();
+    const summary = await importSignatureStarterCollection({ vault, builtIns: starters(), personalRecipes: [] });
+    expect(summary.added).toBe(8);
+    expect(summary.permissionRequired).toBe(1);
+    expect(summary.recipes).toHaveLength(8);
+  });
+});
+
+describe('Import summary accounting reconciles with per-recipe entries', () => {
+  it('reports every null-adapter entry as permission-required, not failed', async () => {
+    const summary = await importSignatureStarterCollection({
+      vault: null,
+      builtIns: starters(),
+      personalRecipes: [],
+    });
+    expect(summary.total).toBe(9);
+    expect(summary.permissionRequired).toBe(9);
+    expect(summary.failed).toBe(0);
+    expect(summary.entries.every((entry) => entry.status === 'permission_required')).toBe(true);
+    expect(summary.recipes).toHaveLength(0);
+    expect(summary.message).toMatch(/writable Vault connection is required/i);
+    assertReconciled(summary);
+  });
+
+  it('reconciles a mixed partial result', async () => {
+    class MixedVault extends MemoryVault {
+      private writeAttempts = 0;
+      override async writeText(path: string, content: string) {
+        this.writeAttempts += 1;
+        if (this.writeAttempts === 2) {
+          const error = new Error('permission');
+          error.name = 'NotAllowedError';
+          throw error;
+        }
+        if (this.writeAttempts === 3) {
+          // Persist a wrong identity so readback verification fails.
+          this.files.set(path, '---\ntitle: Wrong recipe\nstarter_id: wrong\n---\n# Wrong\n');
+          return;
+        }
+        this.files.set(path, content);
+      }
+    }
+    const vault = new MixedVault();
+    const builtIns = starters();
+    vault.files.set(starterRecipeSavePath(builtIns[0]), '__different__');
+    const summary = await importSignatureStarterCollection({
+      vault,
+      builtIns,
+      personalRecipes: [],
+    });
+    expect(summary.pathConflicts).toBe(1);
+    expect(summary.permissionRequired).toBe(1);
+    expect(summary.verificationFailed).toBe(1);
+    expect(summary.failed).toBe(0);
+    assertReconciled(summary);
+  });
+});
+
+describe('Session-bound import cancellation', () => {
+  it('stops before the next write when the session is invalidated, preserving partial verified results', async () => {
+    const vault = new MemoryVault();
+    let current = true;
+    let executed = 0;
+    const summary = await importSignatureStarterCollection({
+      vault,
+      builtIns: starters(),
+      personalRecipes: [],
+      isCurrent: () => current,
+      getCancelReason: () => 'The active Vault changed before the next recipe could be written.',
+      runWrite: async (operation) => {
+        if (!current) return { executed: false };
+        const value = await operation();
+        executed += 1;
+        if (executed === 3) current = false;
+        return { executed: true, value };
+      },
+    });
+
+    expect(summary.added).toBe(3);
+    expect(summary.cancelled).toBe(6);
+    expect(vault.writes).toBe(3);
+    expect(vault.files.size).toBe(3);
+    expect(summary.recipes).toHaveLength(3);
+    expect(summary.cancelReason).toMatch(/active Vault changed/i);
+    assertReconciled(summary);
+  });
+
+  it('cancels every recipe without a write when the session is already stale', async () => {
+    const vault = new MemoryVault();
+    const summary = await importSignatureStarterCollection({
+      vault,
+      builtIns: starters(),
+      personalRecipes: [],
+      isCurrent: () => false,
+      getCancelReason: () => 'The active Vault changed.',
+    });
+    expect(summary.added).toBe(0);
+    expect(summary.cancelled).toBe(9);
+    expect(vault.writes).toBe(0);
+    expect(vault.files.size).toBe(0);
+    expect(summary.recipes).toHaveLength(0);
+    assertReconciled(summary);
+  });
+
+  it('stops remaining recipes when write permission is revoked mid-import', async () => {
+    const vault = new MemoryVault();
+    let current = true;
+    let granted = true;
+    let executed = 0;
+    const summary = await importSignatureStarterCollection({
+      vault,
+      builtIns: starters(),
+      personalRecipes: [],
+      isCurrent: () => current,
+      getCancelReason: () => 'Write permission is no longer granted. Remaining recipes were not written.',
+      runWrite: async (operation) => {
+        if (!current || !granted) return { executed: false };
+        const value = await operation();
+        executed += 1;
+        if (executed === 2) granted = false;
+        return { executed: true, value };
+      },
+    });
+    expect(summary.added).toBe(2);
+    expect(summary.cancelled).toBe(7);
+    expect(vault.writes).toBe(2);
+    expect(summary.cancelReason).toMatch(/permission/i);
+    assertReconciled(summary);
+  });
+
+  it('refuses a single save before any write when the session is stale', async () => {
+    const vault = new MemoryVault();
+    const builtIn = starters()[0];
+    const result = await saveStarterRecipeToVault({
+      vault,
+      builtIn,
+      personalRecipes: [],
+      isCurrent: () => false,
+    });
+    expect(result.status).toBe('cancelled');
+    expect(vault.writes).toBe(0);
+    expect(vault.files.size).toBe(0);
+  });
+
+  it('refuses a single save that loses the write barrier inside the path lock', async () => {
+    const vault = new MemoryVault();
+    const builtIn = starters()[0];
+    const result = await saveStarterRecipeToVault({
+      vault,
+      builtIn,
+      personalRecipes: [],
+      isCurrent: () => true,
+      runWrite: async () => ({ executed: false }),
+    });
+    expect(result.status).toBe('cancelled');
+    expect(vault.writes).toBe(0);
+    expect(vault.files.size).toBe(0);
   });
 });
 

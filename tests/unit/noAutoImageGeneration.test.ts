@@ -29,20 +29,25 @@ function recordingAsset(): { asset: AssetAdapter; writes: string[]; reads: strin
   const writes: string[] = [];
   const reads: string[] = [];
   const existsCalls: string[] = [];
+  const files = new Map<string, Uint8Array>();
   const asset: AssetAdapter = {
     read: async (p: string) => {
       reads.push(p);
-      throw Object.defineProperty(new Error(`ENOENT: ${p}`), "name", { value: "NotFoundError" });
+      const bytes = files.get(p);
+      if (!bytes) throw Object.defineProperty(new Error(`ENOENT: ${p}`), "name", { value: "NotFoundError" });
+      return bytes;
     },
-    write: async (p: string) => {
+    write: async (p: string, data: Uint8Array) => {
       writes.push(p);
+      files.set(p, new Uint8Array(data));
     },
     exists: async (p: string) => {
       existsCalls.push(p);
-      return false;
+      return files.has(p);
     },
     delete: async (p: string) => {
       writes.push(`delete:${p}`);
+      files.delete(p);
     },
   };
   return { asset, writes, reads, existsCalls };

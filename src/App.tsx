@@ -18,18 +18,36 @@ import {
 import {
   DEFAULT_VAULT_PATH,
   getStarterVaultRecipes,
-  getStarterVaultNotes,
-  getSignatureStarterCount,
   isBuiltInRecipe,
   STARTER_MEAL_PLAN,
   STARTER_SHOPPING_CATEGORIES,
 } from './data/starterVault';
-import { saveStarterRecipeToVault, type StarterSaveResult } from './application/starterCollection';
+import {
+  buildSavedStarterCopy,
+  importSignatureStarterCollection,
+  saveStarterRecipeToVault,
+  type SignatureImportSummary,
+  type StarterSaveResult,
+} from './application/starterCollection';
 import {
   connectionStateForRestoreAction,
+  queryVaultWritePermission,
   reconnectRememberedVault,
   resolveVaultRestoreAction,
+  type VaultWritePermission,
 } from './core/vaultConnection';
+import {
+  createVaultSessionAuthority,
+  type VaultCollectionIntent,
+  type VaultSession,
+  type VaultSessionKind,
+  type VaultTransition,
+} from './core/vaultSession';
+import type { VaultAdapter } from './application/adapters/VaultAdapter';
+import { createVaultAssetScope, type SessionAssetRunner, type VaultAssetScope, type VaultCollectionImportStart } from './utils/vaultAssets';
+import { validateRecipeAssetReferences } from './utils/assetReferences';
+import { createSessionAssetRunner } from './utils/sessionAssets';
+import { VaultAssetScopeProvider } from './hooks/VaultAssetScopeContext';
 import { getRecipeImage } from './utils/imageHelper';
 import { cleanRecipeTitle, parseObsidianRecipeMarkdown, serializeRecipeToObsidianMarkdown } from './utils/markdownParser';
 import {
@@ -77,6 +95,18 @@ import {
   fetchGeneratedPreviewBytes,
   type RecipeImageRecoverySupport,
 } from './application/recipeImageRecovery';
+import {
+  beginDesktopInitialization,
+  completeDesktopInitialization,
+  createDesktopDirectoryHandle,
+  ensureDesktopManagedVault,
+  getDesktopVaultInfo,
+  isDesktopDirectoryHandle,
+  isDesktopRuntime,
+  openDesktopVaultFolder,
+  seedStarterCopies,
+  setDesktopActiveVault,
+} from './platform/desktop';
 import { saveGeneratedRecipeImageToVault, hashCanonicalMarkdown, type GeneratedImageSaveResult } from './application/recipeImageSave';
 import { hydrateAiSelections } from './application/aiSelection';
 import {
@@ -148,8 +178,6 @@ import {
   removeCanonicalRecipe,
   normalizeCanonicalPath,
   deriveVaultSnapshotState,
-  createScanGenerationGuard,
-  applyAcceptedVaultSnapshot,
 } from './core/recipeIdentity';
 
 import { VaultHeader } from './components/VaultHeader';
@@ -221,6 +249,51 @@ interface LoadedVaultData {
 }
 
 /**
+ * Last accepted session kind. The read-only import is not durable across a
+ * reload, but it must NOT be silently replaced by the old persisted FSA handle
+ * when the app restarts. This marker is the persistent half of that rule; the
+ * in-memory session authority is the live half.
+ */
+const LAST_VAULT_KIND_KEY = 'tkc_last_vault_session_kind';
+type LastVaultKind = 'filesystem' | 'uploaded' | 'starter';
+
+function readLastVaultKind(): LastVaultKind | null {
+  try {
+    const value = window.localStorage.getItem(LAST_VAULT_KIND_KEY);
+    return value === 'filesystem' || value === 'uploaded' || value === 'starter' ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeLastVaultKind(kind: LastVaultKind): boolean {
+  try {
+    window.localStorage.setItem(LAST_VAULT_KIND_KEY, kind);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export interface ImportedCollectionSnapshot {
+  recipes: ObsidianRecipe[];
+  notes: VaultNote[];
+  mealPlan: MealPlanDay[];
+  shoppingList: ShoppingCategoryGroup[];
+  folderName: string;
+}
+
+function isVaultSessionSuperseded(error: unknown): boolean {
+  return Boolean(error) && (error as { name?: unknown }).name === 'VaultSessionSupersededError';
+}
+
+function vaultSessionSupersededError(): Error {
+  const error = new Error('The active Vault changed before this operation could complete.');
+  Object.defineProperty(error, 'name', { value: 'VaultSessionSupersededError' });
+  return error;
+}
+
+/**
  * SHISO H-2 — the UNSAVED working copy of the selected recipe.
  *
  * `base` is the canonical recipe the working copy derives from (identity
@@ -238,10 +311,10 @@ type ShisoWorkingRecipeState = ShisoWorkingRecipeCore<ObsidianRecipe, ParsedIngr
  * from the adapter; images/assets stay on the legacy `scanVaultAssetsFromHandle`
  * path. Exactly ONE Markdown scan per load (no `scanVaultDirectory` double scan).
  */
-async function loadVaultFromHandle(handle: any): Promise<LoadedVaultData> {
+async function loadVaultFromHandle(handle: any, assetScope: VaultAssetScope): Promise<LoadedVaultData> {
   const vault = createBrowserVaultAdapter(handle);
   const scan = await loadVaultContent(vault, () =>
-    scanVaultAssetsFromHandle(handle).catch((err) =>
+    scanVaultAssetsFromHandle(handle, assetScope).catch((err) =>
       console.warn('Background vault asset scan failed:', err)
     )
   );
@@ -255,24 +328,27 @@ async function loadVaultFromHandle(handle: any): Promise<LoadedVaultData> {
 }
 
 export default function App() {
-  // 1. Two distinct collections:
-  //    - the permanent, application-owned Signature Nine (never Vault files);
-  //    - the user's personal recipes, hydrated from the connected Vault.
-  //    Display code receives their combined view, but every write path receives
-  //    ONLY `personalRecipes` and every built-in is guarded as read-only.
+  // ONE Recipe Vault. Brand-new users see the nine application-owned starter
+  // recipes as a read-only cookbook. Once a personal Vault is connected or
+  // imported, the Vault view contains ONLY the user's personal recipes; starter
+  // templates are hidden until the user explicitly imports them.
   const starterRecipes = useMemo(() => getStarterVaultRecipes(), []);
   const [personalRecipes, setPersonalRecipes] = useState<ObsidianRecipe[]>([]);
-  // In-memory only demo personalization for built-ins (favorites/ratings). It is
-  // never written to a Vault, never counted as a personal recipe, and is reset on
-  // reload. A saved copy is the durable personalization path.
+  const [hasPersonalVaultCollection, setHasPersonalVaultCollection] = useState(false);
+  useEffect(() => {
+    // Any actual personal recipe (created, imported, or saved) takes over the
+    // one Vault view from the first-run starter cookbook.
+    if (personalRecipes.length > 0) setHasPersonalVaultCollection(true);
+  }, [personalRecipes.length]);
+  // In-memory only personalization for the first-run starter cookbook.
   const [starterOverrides, setStarterOverrides] = useState<Record<string, Partial<ObsidianRecipe>>>({});
   const recipes = useMemo<ObsidianRecipe[]>(() => {
-    const starters = starterRecipes.map((recipe) => {
+    if (hasPersonalVaultCollection) return personalRecipes;
+    return starterRecipes.map((recipe) => {
       const override = recipe.builtInId ? starterOverrides[recipe.builtInId] : undefined;
       return override ? { ...recipe, ...override } : recipe;
     });
-    return [...starters, ...personalRecipes];
-  }, [starterRecipes, starterOverrides, personalRecipes]);
+  }, [hasPersonalVaultCollection, personalRecipes, starterRecipes, starterOverrides]);
 
   // Vault Notes State (Non-recipe notes in the Obsidian vault, like ingredients, techniques, wine guides)
   const [notes, setNotes] = useState<VaultNote[]>(() => {
@@ -358,6 +434,156 @@ export default function App() {
   }, [vaultStatus.folderHandle, settingsAdapter, networkAdapter, secretAdapter]);
   const vaultAdapter = vaultServices?.adapters.vault ?? null;
 
+  // ONE live Vault authority. Every scan, write, import, autosave, and handle
+  // persistence belongs to the session recorded here. `activeVaultRef` pairs
+  // that session with the authorized adapter/handle, so a stale render closure
+  // can never write through an adapter that belongs to a different session.
+  const vaultAuthority = useMemo(() => createVaultSessionAuthority(), []);
+  const initialAssetScope = useMemo(() => createVaultAssetScope(null, { active: true }), []);
+  const [activeAssetScope, setActiveAssetScope] = useState<VaultAssetScope>(initialAssetScope);
+  const pendingImportScopesRef = useRef<Map<number, VaultAssetScope>>(new Map());
+  const desktopVaultPreparationRef = useRef<Promise<void> | null>(null);
+  const vaultSessionRef = useRef<VaultSession>(vaultAuthority.current());
+  const activeVaultRef = useRef<{
+    session: VaultSession;
+    adapter: VaultAdapter | null;
+    handle: any;
+    assetScope: VaultAssetScope;
+  }>({
+    session: vaultSessionRef.current,
+    adapter: null,
+    handle: null,
+    assetScope: initialAssetScope,
+  });
+  const vaultHydratedRef = useRef(true);
+  const lastImageSaveSessionRef = useRef<VaultSession | null>(null);
+  const lastImageSaveRevisionRef = useRef<number | null>(null);
+  const appUnmountedRef = useRef(false);
+  const shutdownTransitionRef = useRef<VaultTransition | null>(null);
+  const assetScopeDisposalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    appUnmountedRef.current = false;
+    if (assetScopeDisposalTimerRef.current) {
+      clearTimeout(assetScopeDisposalTimerRef.current);
+      assetScopeDisposalTimerRef.current = null;
+    }
+    // StrictMode replays effects: a preceding fake cleanup must not leave the
+    // real remounted app with a permanently blocked write barrier.
+    if (shutdownTransitionRef.current) {
+      vaultAuthority.cancelTransition(shutdownTransitionRef.current);
+      shutdownTransitionRef.current = null;
+    }
+    return () => {
+      appUnmountedRef.current = true;
+      // Block every not-yet-started write. Already-started writes retain their
+      // lease and are allowed to settle; nothing new may begin.
+      shutdownTransitionRef.current = vaultAuthority.beginShutdownTransition('uploaded');
+      const activeScope = activeVaultRef.current.assetScope;
+      const pendingScopes = [...pendingImportScopesRef.current.values()];
+      pendingImportScopesRef.current.clear();
+      // Defer disposal so a StrictMode remount can cancel it.
+      assetScopeDisposalTimerRef.current = setTimeout(() => {
+        assetScopeDisposalTimerRef.current = null;
+        activeScope.deactivate();
+        for (const scope of pendingScopes) scope.deactivate();
+      }, 0);
+    };
+  }, [vaultAuthority]);
+
+  const activateAssetScope = useCallback((
+    scope: VaultAssetScope,
+    session: VaultSession,
+    adapter: VaultAdapter | null,
+    handle: any
+  ) => {
+    const previous = activeVaultRef.current.assetScope;
+    scope.activate(session.id);
+    vaultSessionRef.current = session;
+    activeVaultRef.current = { session, adapter, handle, assetScope: scope };
+    if (previous !== scope) previous.deactivate();
+    setActiveAssetScope(scope);
+    return scope;
+  }, []);
+  // Exact state that was hydrated from the active Vault. The autosave effects
+  // skip an unchanged hydration, so connecting does not rewrite files merely to
+  // update their generated date. A real user change still persists normally.
+  const hydratedMealPlanRef = useRef<MealPlanDay[] | null>(null);
+  const hydratedShoppingRef = useRef<ShoppingCategoryGroup[] | null>(null);
+
+  // Keep the active ref's adapter in lockstep with the rendered composition
+  // ONLY when the exact same session/handle is current. A stale render can
+  // never donate its adapter to a newer session.
+  useLayoutEffect(() => {
+    const active = activeVaultRef.current;
+    if (
+      active.session.kind === 'filesystem' &&
+      active.handle === vaultStatus.folderHandle &&
+      vaultAdapter
+    ) {
+      activeVaultRef.current = { ...active, adapter: vaultAdapter };
+    }
+  }, [vaultAdapter, vaultStatus.folderHandle]);
+
+  // Current browser permission for the ACTIVE File System Access handle. This
+  // is deliberately separate from adapter existence: a handle can exist while
+  // read/write permission is 'prompt', 'denied', or no longer queryable. Only
+  // a fresh 'granted' result may unlock a bulk write.
+  const [vaultWritePermission, setVaultWritePermission] = useState<VaultWritePermission>('unknown');
+  const checkVaultWritePermission = useCallback(async (
+    session: VaultSession,
+    handle: any
+  ): Promise<VaultWritePermission> => {
+    if (!vaultAuthority.isCurrent(session) || activeVaultRef.current.handle !== handle) {
+      return 'unknown';
+    }
+    const permission = await queryVaultWritePermission(handle);
+    if (!vaultAuthority.isCurrent(session) || activeVaultRef.current.handle !== handle) {
+      return 'unknown';
+    }
+    return permission;
+  }, [vaultAuthority]);
+  const refreshVaultWritePermission = useCallback(async (handle: any = activeVaultRef.current.handle) => {
+    const session = activeVaultRef.current.session;
+    const permission = await checkVaultWritePermission(session, handle);
+    if (vaultAuthority.isCurrent(session) && activeVaultRef.current.handle === handle) {
+      setVaultWritePermission(permission);
+    }
+    return permission;
+  }, [checkVaultWritePermission, vaultAuthority]);
+
+  useEffect(() => {
+    void refreshVaultWritePermission();
+  }, [refreshVaultWritePermission, vaultStatus.folderHandle]);
+
+  // Recheck when the window regains focus. This is a non-prompting query, so
+  // it is safe outside a user gesture.
+  useEffect(() => {
+    const onFocus = () => {
+      void refreshVaultWritePermission();
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [refreshVaultWritePermission]);
+
+  /**
+   * Composite Asset + recipe operation bound to ONE originating session. The
+   * lease covers both the binary Asset write and any recipe save performed
+   * inside the callback. A transition either prevents the operation from
+   * starting or waits for it to settle; a stale operation can never resolve an
+   * asset in A and a recipe in B.
+   */
+  const runSessionAssetOperation = useMemo<SessionAssetRunner>(() => createSessionAssetRunner({
+    authority: vaultAuthority,
+    getActive: () => activeVaultRef.current,
+    createDeps: (handle, assetScope) => ({
+      asset: createBrowserAssetAdapter(handle),
+      folderHandle: handle,
+      downloadRemoteImage: browserRemoteImageDownloader,
+      assetScope,
+    }),
+    isUnavailable: () => appUnmountedRef.current,
+  }), [vaultAuthority]);
+
   // Phase 4.5B: ONE in-memory Advanced Nutrition bundle load for the page. It is
   // lazy — nothing is fetched, decoded, or installed at startup. The first
   // explicit "Open Advanced Nutrition" action begins authentication; the
@@ -425,13 +651,33 @@ export default function App() {
             };
           },
         };
-        return saveGeneratedRecipeImageToVault(
-          { vault, asset, previewSource },
-          { recipePath, recipeTitle, token, activeVaultSessionId, approved: true }
-        );
+        const active = activeVaultRef.current;
+        if (
+          active.session.kind !== 'filesystem' ||
+          !active.adapter ||
+          active.handle !== folderHandle ||
+          !vaultAuthority.isCurrent(active.session)
+        ) {
+          throw new Error('The active Vault changed before the image could be saved.');
+        }
+        const lease = vaultAuthority.beginWrite(active.session);
+        if (!lease) throw new Error('The active Vault changed before the image could be saved.');
+        lastImageSaveSessionRef.current = active.session;
+        lastImageSaveRevisionRef.current = vaultAuthority.collectionRevision(active.session);
+        try {
+          const result = await saveGeneratedRecipeImageToVault(
+            { vault: active.adapter, asset, assetScope: active.assetScope, previewSource },
+            { recipePath, recipeTitle, token, activeVaultSessionId, approved: true }
+          );
+          // Invalidate stale scans before releasing the write lease.
+          if (vaultAuthority.isCurrent(active.session)) vaultAuthority.markCollectionChanged(active.session);
+          return result;
+        } finally {
+          lease.release();
+        }
       },
     };
-  }, [vaultStatus.folderHandle, vaultStatus.accessType, vaultSessionId, networkAdapter]);
+  }, [vaultStatus.folderHandle, vaultStatus.accessType, vaultSessionId, networkAdapter, vaultAuthority]);
 
   const imageRecoveryUnavailableReason = recipeImageRecoverySupport
     ? undefined
@@ -453,13 +699,19 @@ export default function App() {
 
   // Navigation & View State (persisted via SettingsAdapter; hydrated on mount)
   const [activeTab, setActiveTab] = useState<'grid' | 'dataview' | 'mealplan' | 'shopping' | 'themes' | 'providers'>('grid');
-  // Explicit Vault collection view. This is separate from the user's manual
-  // filter state, so Favorites navigation never mutates or erases filters.
-  // `starter` and `personal` are the two ownership-distinct collections.
-  const [vaultView, setVaultView] = useState<'all' | 'favorites' | 'starter' | 'personal'>('all');
+  // ONE Recipe Vault: the only collection views are all / favorites.
+  const [vaultView, setVaultView] = useState<'all' | 'favorites'>('all');
   // Explicit Save-to-Vault feedback for the selected built-in recipe.
   const [starterSaveState, setStarterSaveState] = useState<StarterSaveResult | null>(null);
   const [starterSavePending, setStarterSavePending] = useState(false);
+  const [signaturePromptOpen, setSignaturePromptOpen] = useState(false);
+  const [signatureImportState, setSignatureImportState] = useState<{
+    status: 'idle' | 'running' | 'done';
+    completed: number;
+    total: number;
+    summary: SignatureImportSummary | null;
+  }>({ status: 'idle', completed: 0, total: 0, summary: null });
+  const [vaultNotice, setVaultNotice] = useState<{ tone: 'success' | 'error' | 'info'; message: string } | null>(null);
   const [isMoreOpen, setIsMoreOpen] = useState(false);
   const moreDialogRef = useRef<HTMLDialogElement>(null);
   const [isDesktop, setIsDesktop] = useState(() =>
@@ -526,6 +778,13 @@ export default function App() {
   const [isWindowDragging, setIsWindowDragging] = useState(false);
   const [grabberInitialUrl, setGrabberInitialUrl] = useState('');
 
+  // Recheck the CURRENT handle permission whenever the Vault modal opens. This
+  // covers a permission change made in browser UI while the app stayed open.
+  useEffect(() => {
+    if (!isConnectVaultOpen) return;
+    void refreshVaultWritePermission();
+  }, [isConnectVaultOpen, refreshVaultWritePermission]);
+
   // SHISO H-2 — the UNSAVED working copy produced by authorized chat edits.
   // Memory-only: never persisted here, cleared on Save/Discard (or any
   // successful canonical write of the same recipe). A ref mirrors the state so
@@ -550,15 +809,15 @@ export default function App() {
   const [mealPlan, setMealPlan] = useState<MealPlanDay[]>(STARTER_MEAL_PLAN);
   const [shoppingCategories, setShoppingCategories] = useState<ShoppingCategoryGroup[]>(STARTER_SHOPPING_CATEGORIES);
 
-  // Canonical vault integrity (Phase 2A prerequisite).
-  //  - `vaultScanGeneration` is a monotonic counter: each canonical scan snapshot
-  //    is tagged with the generation active when it STARTED; a scan only applies its
-  //    result if its generation is STILL current, so a slow old scan can never
-  //    overwrite a newer vault connection/scan (defect E).
-  //  - `vaultHydrated` gates the meal-plan/shopping autosave effects so they never
-  //    write the PREVIOUS vault's state into a newly connected vault (defect F).
-  const vaultScanGeneration = useRef(createScanGenerationGuard());
+  // Canonical vault integrity (R2). `vaultAuthority` is the ONE identity
+  // source for scans, writes, imports, autosaves, and handle persistence.
+  // `vaultHydrated` remains the autosave hydration gate, mirrored in a ref so a
+  // transition can disable it synchronously before React re-renders.
   const [vaultHydrated, setVaultHydrated] = useState(true);
+  const setVaultHydratedState = useCallback((hydrated: boolean) => {
+    vaultHydratedRef.current = hydrated;
+    setVaultHydrated(hydrated);
+  }, []);
   // Tracks the CURRENT active canonical references so a snapshot commit reconciles
   // them against the latest committed state (avoids closing over stale values).
   const activeRefs = useRef({ selectedRecipe: null as ObsidianRecipe | null, cookingRecipe: null as { recipe: ObsidianRecipe; servings: number } | null, editingRecipe: null as ObsidianRecipe | null });
@@ -566,72 +825,456 @@ export default function App() {
     activeRefs.current = { selectedRecipe, cookingRecipe, editingRecipe };
   }, [selectedRecipe, cookingRecipe, editingRecipe]);
 
-  // Applies a SUCCESSFUL canonical vault snapshot. It is authoritative: a successful
-  // empty scan replaces recipes/notes with [] (defect A), absence of Meal Plan.md /
-  // Shopping List.md means empty state (defect F/V), and active canonical references
-  // (selected/cooking/editing) are reconciled against the fresh snapshot (defect D).
-  // A stale (older-generation) result is ignored (defect E). Returns true only when
-  // the snapshot was actually accepted as the current generation.
-  const commitVaultSnapshot = useCallback((result: LoadedVaultData, generation: number, folderHandle?: any) => {
-    if (!vaultScanGeneration.current.isCurrent(generation)) return false;
+  const resetSessionScopedUi = useCallback((showSignaturePrompt: boolean, preserveRoute = false, preserveEditor = false) => {
+    const preservedEditingRecipe = preserveEditor ? activeRefs.current.editingRecipe : null;
+    setStarterSaveState(null);
+    setStarterSavePending(false);
+    setVaultNotice(null);
+    setSignatureImportState({ status: 'idle', completed: 0, total: 0, summary: null });
+    setSignaturePromptOpen(showSignaturePrompt);
+    setVaultView('all');
+    if (!preserveRoute) setRouteRecipeId(null);
+    if (!preserveEditor) {
+      setIsEditorOpen(false);
+      setEditingRecipe(null);
+    }
+    setSelectedRecipe(null);
+    setCookingRecipe(null);
+    setIsGrabberOpen(false);
+    setIsVaultIntelligenceOpen(false);
+    setVaultIntelligenceRecipeId(null);
+    activeRefs.current = {
+      selectedRecipe: null,
+      cookingRecipe: null,
+      editingRecipe: preservedEditingRecipe,
+    };
+    if (preservedEditingRecipe) setEditingRecipe(preservedEditingRecipe);
+    updateShisoWorkingRecipe(null);
+  }, [updateShisoWorkingRecipe]);
+
+  // Applies a SUCCESSFUL canonical FSA snapshot. The caller must have installed
+  // the matching session (inside `commitTransition`) before this runs.
+  const commitVaultSnapshot = useCallback((result: LoadedVaultData, session: VaultSession, folderHandle: any) => {
+    if (!vaultAuthority.isCurrent(session)) return false;
     const next = deriveVaultSnapshotState(result, activeRefs.current);
     setPersonalRecipes(next.recipes);
+    setHasPersonalVaultCollection(true);
     personalRecipesRef.current = next.recipes;
-    recipesRef.current = [...starterRecipes, ...next.recipes];
+    recipesRef.current = next.recipes;
     committedRecipesRef.current = next.recipes;
     setNotes(next.notes);
     setMealPlan(next.mealPlan);
     setShoppingCategories(next.shoppingList);
+    hydratedMealPlanRef.current = next.mealPlan;
+    hydratedShoppingRef.current = next.shoppingList;
     setSelectedRecipe(next.selectedRecipe);
     setCookingRecipe(next.cookingRecipe);
     setEditingRecipe(next.editingRecipe);
-    setVaultStatus((s) => ({
-      ...s,
+    setVaultStatus({
       isConnected: true,
       accessType: 'filesystem_api',
       connectionState: 'connected',
-      vaultPath: result.folderName ? `Vault / ${result.folderName}` : s.vaultPath,
-      folderHandle: folderHandle ?? s.folderHandle,
-    }));
-    setVaultHydrated(true);
+      vaultPath: (folderHandle as any)?.isDesktopVault && typeof (folderHandle as any)?.root === 'string'
+        ? (folderHandle as any).root
+        : result.folderName
+          ? `Vault / ${result.folderName}`
+          : 'My Recipe Vault',
+      folderHandle,
+      rememberedVaultName: undefined,
+    });
+    setVaultHydratedState(true);
+    vaultAuthority.markCollectionChanged(session);
     return true;
-  }, [starterRecipes]);
+  }, [vaultAuthority, setVaultHydratedState]);
+
+  const applyUploadedCollection = useCallback((snapshot: ImportedCollectionSnapshot) => {
+    setPersonalRecipes(snapshot.recipes);
+    setHasPersonalVaultCollection(true);
+    personalRecipesRef.current = snapshot.recipes;
+    recipesRef.current = snapshot.recipes;
+    committedRecipesRef.current = snapshot.recipes;
+    setNotes(snapshot.notes);
+    setMealPlan(snapshot.mealPlan);
+    setShoppingCategories(snapshot.shoppingList);
+    hydratedMealPlanRef.current = snapshot.mealPlan;
+    hydratedShoppingRef.current = snapshot.shoppingList;
+    setVaultStatus({
+      isConnected: true,
+      accessType: 'uploaded_folder',
+      connectionState: 'connected',
+      vaultPath: `Vault / ${snapshot.folderName}`,
+    });
+    setVaultHydratedState(true);
+    resetSessionScopedUi(true);
+  }, [resetSessionScopedUi, setVaultHydratedState]);
+
+  /**
+   * Commits an FSA snapshot through the barrier and persists its handle only
+   * for the winning session. The handle save is epoch- and identity-guarded, so
+   * an older save cannot resurrect a Vault that was replaced by a read-only
+   * import.
+   */
+  const transitionToFilesystemVault = useCallback(async (
+    transition: VaultTransition,
+    handle: any,
+    result: LoadedVaultData,
+    assetScope: VaultAssetScope,
+    options?: { showSignaturePrompt?: boolean; persistHandle?: boolean; preserveEditor?: boolean }
+  ): Promise<{ accepted: boolean; session?: VaultSession; writesSettled: boolean }> => {
+    const adapter = createBrowserVaultAdapter(handle);
+    let adopted = false;
+    let outcome;
+    try {
+      outcome = await vaultAuthority.commitTransition(transition, (session) => {
+        if (!commitVaultSnapshot(result, session, handle)) {
+          throw new Error('Vault snapshot was no longer current.');
+        }
+        resetSessionScopedUi(
+          Boolean(options?.showSignaturePrompt),
+          !options?.showSignaturePrompt,
+          Boolean(options?.preserveEditor)
+        );
+        setVaultWritePermission('unknown');
+        activateAssetScope(assetScope, session, adapter, handle);
+        adopted = true;
+      });
+    } catch (error) {
+      if (!adopted) assetScope.deactivate();
+      throw error;
+    }
+    if (!outcome.accepted || !outcome.session) {
+      if (!adopted) assetScope.deactivate();
+      // A newer intent may have invalidated this transition without beginning
+      // its own transition yet (e.g. a folder parse that later fails). Restore
+      // the previous session's autosave gate when no transition owns it.
+      if (!vaultAuthority.writesBlocked()) setVaultHydratedState(true);
+      return { accepted: false, writesSettled: outcome.writesSettled };
+    }
+
+    const session = outcome.session;
+    void refreshVaultWritePermission(handle);
+
+    if (isDesktopDirectoryHandle(handle)) {
+      // Persist restart authority only while this accepted session still owns
+      // the transition. A newer selection must never inherit or overwrite it.
+      if (vaultAuthority.isCurrent(session) && !vaultAuthority.writesBlocked()) {
+        try {
+          await setDesktopActiveVault(handle.root);
+          writeLastVaultKind('filesystem');
+        } catch (error) {
+          if (vaultAuthority.isCurrent(session) && !vaultAuthority.writesBlocked()) {
+            setVaultNotice({
+              tone: 'error',
+              message:
+                'The Vault is open, but the desktop app could not save it as the remembered Vault. The previously remembered Vault will be used next launch.',
+            });
+          }
+          console.warn('Could not remember native desktop Vault path:', error);
+        }
+      }
+    } else if (options?.persistHandle === false) {
+      if (!writeLastVaultKind('filesystem') && vaultAuthority.isCurrent(session) && !vaultAuthority.writesBlocked()) {
+        setVaultNotice({
+          tone: 'info',
+          message: 'Connected to this Vault, but the browser could not record the active session. A reload may return to the starter cookbook.',
+        });
+      }
+    } else {
+      const saved = await saveDirectoryHandleToIDB(handle, {
+        shouldPersist: () => vaultAuthority.isCurrent(session) && activeVaultRef.current.handle === handle,
+      });
+      if (saved && !writeLastVaultKind('filesystem') && vaultAuthority.isCurrent(session) && !vaultAuthority.writesBlocked()) {
+        setVaultNotice({
+          tone: 'info',
+          message: 'Connected to this Vault, but the browser could not record the active session. A reload may return to the starter cookbook.',
+        });
+      }
+      if (!saved && vaultAuthority.isCurrent(session) && !vaultAuthority.writesBlocked()) {
+        // Never leave the previous handle as the silent startup authority.
+        const cleared = await clearDirectoryHandleFromIDB();
+        if (vaultAuthority.isCurrent(session)) {
+          writeLastVaultKind(cleared ? 'starter' : 'uploaded');
+          setVaultNotice({
+            tone: 'error',
+            message: cleared
+              ? 'Connected to this Vault for this session, but the browser could not remember it for the next launch. The previous Vault was forgotten.'
+              : 'Connected to this Vault for this session, but the browser could not update its remembered Vault. A previous Vault may still ask to reconnect after a reload; it will not replace this session automatically.',
+          });
+        }
+      }
+    }
+    if (!outcome.writesSettled && vaultAuthority.isCurrent(session) && !vaultAuthority.writesBlocked()) {
+      setVaultNotice({
+        tone: 'info',
+        message: 'The previous Vault operation is still finishing. Its result will not be merged into this Vault.',
+      });
+    }
+    return { accepted: true, session, writesSettled: outcome.writesSettled };
+  }, [activateAssetScope, commitVaultSnapshot, refreshVaultWritePermission, resetSessionScopedUi, vaultAuthority]);
+
+  /**
+   * Desktop zero-setup preparation. The managed native Vault is created only
+   * when a user actually saves (or explicitly authorizes a write), never during
+   * application launch. Starter copies are seeded idempotently under a durable
+   * initialization marker; an existing non-empty Vault is never seeded.
+   */
+  const ensureDesktopVaultForSave = useCallback(async (): Promise<void> => {
+    if (!isDesktopRuntime()) return;
+    const active = activeVaultRef.current;
+
+    // A restarted, interrupted initialization can be connected but incomplete.
+    if (active.session.kind === 'filesystem' && active.adapter && isDesktopDirectoryHandle(active.handle)) {
+      try {
+        const info = await getDesktopVaultInfo();
+        if (info?.isManaged && info.exists && !info.initialized && info.path === active.handle.root) {
+          const claim = await beginDesktopInitialization(info.path);
+          if (claim.action === 'claimed' || claim.action === 'resume') {
+            await seedStarterCopies(
+              active.handle,
+              starterRecipes.map((recipe) => buildSavedStarterCopy(recipe))
+            );
+            await completeDesktopInitialization(info.path);
+            const refreshed = await loadVaultFromHandle(active.handle, active.assetScope);
+            if (vaultAuthority.isCurrent(active.session)) {
+              const draft = activeRefs.current.editingRecipe;
+              commitVaultSnapshot(refreshed, active.session, active.handle);
+              if (draft) {
+                activeRefs.current.editingRecipe = draft;
+                setEditingRecipe(draft);
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.warn('Desktop Vault starter resume failed:', error);
+        throw error;
+      }
+      return;
+    }
+
+    if (desktopVaultPreparationRef.current) return desktopVaultPreparationRef.current;
+
+    const preparation = (async () => {
+      const info = await ensureDesktopManagedVault();
+      if (!info?.path) throw new Error('The desktop app could not create a local Recipe Vault.');
+      const handle = createDesktopDirectoryHandle(info.path);
+      const claim = await beginDesktopInitialization(info.path);
+      if (claim.action === 'claimed' || claim.action === 'resume') {
+        await seedStarterCopies(handle, starterRecipes.map((recipe) => buildSavedStarterCopy(recipe)));
+        await completeDesktopInitialization(info.path);
+      }
+      const transition = vaultAuthority.beginTransition('filesystem');
+      if (!transition) throw new Error('A Vault change is already in progress. Please try again.');
+      const assetScope = createVaultAssetScope(null, { active: false });
+      try {
+        const result = await loadVaultFromHandle(handle, assetScope);
+        if (!vaultAuthority.isTransitionCurrent(transition)) {
+          assetScope.deactivate();
+          throw new Error('A newer Vault action replaced this save. Nothing was written.');
+        }
+        const outcome = await transitionToFilesystemVault(transition, handle, result, assetScope, {
+          showSignaturePrompt: false,
+          persistHandle: false,
+          preserveEditor: true,
+        });
+        if (!outcome.accepted) throw new Error('The desktop Recipe Vault could not be activated. Your draft was kept.');
+      } catch (error) {
+        assetScope.deactivate();
+        if (vaultAuthority.isTransitionCurrent(transition)) vaultAuthority.cancelTransition(transition);
+        if (!vaultAuthority.writesBlocked()) setVaultHydratedState(true);
+        throw error;
+      }
+    })();
+
+    desktopVaultPreparationRef.current = preparation;
+    try {
+      await preparation;
+    } finally {
+      desktopVaultPreparationRef.current = null;
+    }
+  }, [
+    commitVaultSnapshot,
+    setVaultHydratedState,
+    starterRecipes,
+    transitionToFilesystemVault,
+    vaultAuthority,
+  ]);
+
+  /**
+   * The single read-only collection transition. Reads/writes for the previous
+   * Vault are blocked immediately; already-started writes are allowed to settle
+   * before the new collection is applied.
+   */
+  const transitionToUploadedCollection = useCallback(async (
+    snapshot: ImportedCollectionSnapshot,
+    intent?: VaultCollectionIntent,
+    explicitAssetScope?: VaultAssetScope
+  ): Promise<boolean> => {
+    let assetScope = explicitAssetScope;
+    if (intent) {
+      if (!assetScope) {
+        assetScope = pendingImportScopesRef.current.get(intent.id);
+      }
+      // The intent is consumed even when its scope was passed explicitly. A
+      // stale map entry would otherwise be mistaken for a provisional scope
+      // and deactivated by a later import (possibly after it became active).
+      pendingImportScopesRef.current.delete(intent.id);
+    }
+    if (!assetScope) assetScope = createVaultAssetScope(null, { active: false });
+    // The intent was registered before the first parse await. A newer import
+    // invalidates it; an older parse therefore cannot replace the newer one.
+    const transition = intent
+      ? vaultAuthority.beginCollectionTransition(intent, 'uploaded')
+      : vaultAuthority.beginTransition('uploaded');
+    if (!transition) {
+      assetScope.deactivate();
+      return false;
+    }
+    const hadActiveWrites = vaultAuthority.activeWriteCount() > 0;
+    setVaultHydratedState(false);
+    if (hadActiveWrites) {
+      setVaultNotice({ tone: 'info', message: 'Finishing the current Vault operation before switching…' });
+    }
+    let adopted = false;
+    let outcome;
+    try {
+      outcome = await vaultAuthority.commitTransition(transition, (session) => {
+        applyUploadedCollection(snapshot);
+        setVaultWritePermission('unknown');
+        activateAssetScope(assetScope, session, null, null);
+        adopted = true;
+      });
+    } catch (error) {
+      if (!adopted) assetScope.deactivate();
+      if (vaultAuthority.isTransitionCurrent(transition)) vaultAuthority.cancelTransition(transition);
+      if (!vaultAuthority.writesBlocked()) setVaultHydratedState(true);
+      throw error;
+    }
+    if (!outcome.accepted || !outcome.session) {
+      if (!adopted) assetScope.deactivate();
+      if (!vaultAuthority.writesBlocked()) setVaultHydratedState(true);
+      return false;
+    }
+
+    const session = outcome.session;
+    const markerWritten = writeLastVaultKind('uploaded');
+    const handleCleared = await clearDirectoryHandleFromIDB();
+    if (vaultAuthority.isCurrent(session) && !vaultAuthority.writesBlocked()) {
+      if (!markerWritten || !handleCleared) {
+        setVaultNotice({
+          tone: 'error',
+          message: markerWritten && !handleCleared
+            ? 'The imported collection is active, but the browser could not forget the previous Vault handle. Reloads are marked as an imported session and will not auto-reconnect that Vault.'
+            : 'The imported collection is active, but the browser could not record that the previous Vault was replaced. Do not reload until you have re-imported these files.',
+        });
+      }
+      if (!outcome.writesSettled) {
+        setVaultNotice({
+          tone: 'info',
+          message: 'The previous Vault operation is still finishing. Its result will not be merged into this imported collection.',
+        });
+      }
+    }
+    return true;
+  }, [activateAssetScope, applyUploadedCollection, setVaultHydratedState, vaultAuthority]);
+
+  /**
+   * Starts a folder-import intent and its destination asset scope BEFORE the
+   * first parse await. The scope is provisional: registrations are captured but
+   * invisible until the transition commits. A newer intent deactivates older
+   * provisional scopes and revokes their owned URLs.
+   */
+  const beginCollectionImportWithScope = useCallback((): VaultCollectionImportStart => {
+    const activeScope = activeVaultRef.current.assetScope;
+    for (const [id, scope] of [...pendingImportScopesRef.current]) {
+      // Only provisional scopes belong in this map. Never deactivate the
+      // currently authoritative collection's scope, even if a stale entry
+      // somehow survived.
+      pendingImportScopesRef.current.delete(id);
+      if (scope === activeScope) continue;
+      scope.deactivate();
+    }
+    const intent = vaultAuthority.beginCollectionIntent();
+    const assetScope = createVaultAssetScope(null, { active: false });
+    pendingImportScopesRef.current.set(intent.id, assetScope);
+    return { intent, assetScope };
+  }, [vaultAuthority]);
 
   // Re-authorise a REMEMBERED Vault and reconnect it. The browser only allows
-  // `requestPermission()` from a user gesture, so this is invoked directly
-  // from the "Reconnect Vault" button. It never writes to the Vault and never
-  // clears the remembered handle: if the user declines, the Vault stays
-  // remembered and the starter Vault is never presented as their data.
+  // `requestPermission()` from a user gesture, so this is invoked directly from
+  // the "Reconnect Vault" button. It never clears a valid handle on failure.
   const handleReconnectVault = useCallback(async () => {
+    const transition = vaultAuthority.beginTransition('filesystem');
+    const assetScope = createVaultAssetScope(null, { active: false });
+    setVaultHydratedState(false);
     const outcome = await reconnectRememberedVault<LoadedVaultData>({
       getHandle: () => getDirectoryHandleFromIDB(),
       requestPermission: (handle: any) => handle.requestPermission({ mode: 'readwrite' }),
-      load: (handle: any) => loadVaultFromHandle(handle),
+      load: (handle: any) => loadVaultFromHandle(handle, assetScope),
     });
+    if (!vaultAuthority.isTransitionCurrent(transition)) {
+      assetScope.deactivate();
+      return; // superseded by a user transition
+    }
+
     if (outcome.status === 'reconnected') {
-      const generation = vaultScanGeneration.current.begin();
-      commitVaultSnapshot(outcome.data, generation, outcome.handle);
+      try {
+        await transitionToFilesystemVault(transition, outcome.handle, outcome.data, assetScope, {
+          showSignaturePrompt: true,
+          persistHandle: true,
+        });
+      } catch (err) {
+        assetScope.deactivate();
+        if (vaultAuthority.isTransitionCurrent(transition)) vaultAuthority.cancelTransition(transition);
+        if (!vaultAuthority.writesBlocked()) setVaultHydratedState(true);
+        console.warn('Reconnect snapshot was not applied:', err);
+      }
       return;
     }
+
+    assetScope.deactivate();
+    vaultAuthority.cancelTransition(transition);
+    setVaultHydratedState(true);
     if (outcome.status === 'no-handle' || outcome.status === 'unsupported') {
-      // Nothing usable is remembered: fall back to the ordinary connect flow.
-      setVaultStatus((s) => ({ ...s, isConnected: false, connectionState: 'starter' }));
+      // Preserve any valid active session; only the starter shell falls back.
+      if (vaultAuthority.current().kind === 'starter') {
+        setVaultStatus((s) => ({ ...s, isConnected: false, connectionState: 'starter' }));
+      }
       return;
     }
     // 'denied' and 'error': the Vault stays remembered, but the browser will
     // not re-authorise it — say so plainly instead of showing sample data.
-    setVaultStatus((s) => ({ ...s, isConnected: false, connectionState: 'permission_denied' }));
-  }, [commitVaultSnapshot]);
+    if (vaultAuthority.current().kind === 'starter') {
+      setVaultStatus((s) => ({ ...s, isConnected: false, connectionState: 'permission_denied' }));
+    }
+  }, [setVaultHydratedState, transitionToFilesystemVault, vaultAuthority]);
 
   // In-memory canonical state update AFTER a successful image save (the vault
   // write itself already happened inside the save flow — never re-written here).
   const handleRecipeImageSaved = useCallback((recipeId: string, imagePath: string) => {
+    const saveSession = lastImageSaveSessionRef.current;
+    if (!saveSession || !vaultAuthority.isCurrent(saveSession) || vaultAuthority.writesBlocked()) return;
     if (isBuiltInRecipe(recipesRef.current.find((r) => r.id === recipeId))) return;
+    const startRevision = lastImageSaveRevisionRef.current;
+    const currentRevision = vaultAuthority.collectionRevision(saveSession);
+    // Recovery has committed both the asset and canonical Markdown. Advance the
+    // collection revision so a scan that captured the pre-recovery snapshot
+    // cannot commit over this result.
+    vaultAuthority.markCollectionChanged(saveSession);
+    if (startRevision !== null && currentRevision !== null && currentRevision !== startRevision) {
+      // A newer collection mutation intervened. Do not publish a stale recipe
+      // projection; the next authoritative scan will read the committed files.
+      setVaultNotice({
+        tone: 'info',
+        message: 'The image was saved, but the Vault state changed during the operation. Refresh to view the latest state.',
+      });
+      return;
+    }
     setPersonalRecipes((prev) =>
       prev.map((r) => (r.id === recipeId ? { ...r, image: imagePath } : r))
     );
     setSelectedRecipe((prev) => (prev && prev.id === recipeId ? { ...prev, image: imagePath } : prev));
-  }, []);
+  }, [vaultAuthority]);
 
   // Update document title with version
   useEffect(() => {
@@ -650,17 +1293,87 @@ export default function App() {
     let isMounted = true;
     async function restoreVaultConnection() {
       try {
+        if (isDesktopRuntime()) {
+          const restoreSession = vaultAuthority.current();
+          const desktopLastKind = readLastVaultKind();
+          if (desktopLastKind === 'uploaded' || desktopLastKind === 'starter') return;
+          const info = await getDesktopVaultInfo();
+          if (!isMounted || !vaultAuthority.isCurrent(restoreSession) || restoreSession.kind !== 'starter') {
+            return;
+          }
+          // A managed Vault with no completed marker and no recipe files is an
+          // interrupted/never-started first save. Stay on the read-only starter
+          // cookbook until the user's first write resumes initialization.
+          const shouldReconnect = !!info?.exists && !!info.path && (
+            !info.isManaged || info.initialized === true || info.hasMarkdown === true
+          );
+          if (!shouldReconnect) return;
+          const handle = createDesktopDirectoryHandle(info.path);
+          const transition = vaultAuthority.beginAutomaticTransition('filesystem');
+          if (!transition) return;
+          const assetScope = createVaultAssetScope(null, { active: false });
+          setVaultHydratedState(false);
+          try {
+            const result = await loadVaultFromHandle(handle, assetScope);
+            if (!isMounted || !vaultAuthority.isTransitionCurrent(transition)) {
+              assetScope.deactivate();
+              return;
+            }
+            await transitionToFilesystemVault(transition, handle, result, assetScope, {
+              showSignaturePrompt: false,
+              persistHandle: false,
+            });
+          } catch (error) {
+            assetScope.deactivate();
+            if (vaultAuthority.isTransitionCurrent(transition)) vaultAuthority.cancelTransition(transition);
+            if (!vaultAuthority.writesBlocked()) setVaultHydratedState(true);
+            console.warn('Desktop Vault restore failed:', error);
+          }
+          return;
+        }
+
+        // A read-only import is not durable across a reload, but it must not be
+        // silently replaced by the previous writable handle either. The marker
+        // is the persistent half of that authority.
+        const lastKind = readLastVaultKind();
+        if (lastKind === 'uploaded' || lastKind === 'starter') {
+          await clearDirectoryHandleFromIDB();
+          return;
+        }
+
+        const restoreSession = vaultAuthority.current();
         const handle = await getDirectoryHandleFromIDB();
+        if (!isMounted || !vaultAuthority.isCurrent(restoreSession) || restoreSession.kind !== 'starter') {
+          return;
+        }
         const permission = handle && typeof handle.queryPermission === 'function'
           ? await handle.queryPermission({ mode: 'readwrite' })
           : null;
-        if (!isMounted) return;
+        if (!isMounted || !vaultAuthority.isCurrent(restoreSession)) return;
         const action = resolveVaultRestoreAction(!!handle, permission);
         if (action.kind === 'reconnect') {
-          const generation = vaultScanGeneration.current.begin();
-          const result = await loadVaultFromHandle(handle);
-          if (isMounted) {
-            commitVaultSnapshot(result, generation, handle);
+          // Automatic reconnect may only begin when no user intent exists. If
+          // the user picks B while this check/handle read was pending, this
+          // returns null and A never becomes authoritative.
+          const transition = vaultAuthority.beginAutomaticTransition('filesystem');
+          if (!transition) return;
+          const assetScope = createVaultAssetScope(null, { active: false });
+          setVaultHydratedState(false);
+          try {
+            const result = await loadVaultFromHandle(handle, assetScope);
+            if (!isMounted || !vaultAuthority.isTransitionCurrent(transition)) {
+              assetScope.deactivate();
+              return;
+            }
+            await transitionToFilesystemVault(transition, handle, result, assetScope, {
+              showSignaturePrompt: false,
+              persistHandle: false,
+            });
+          } catch (err) {
+            assetScope.deactivate();
+            if (vaultAuthority.isTransitionCurrent(transition)) vaultAuthority.cancelTransition(transition);
+            if (!vaultAuthority.writesBlocked()) setVaultHydratedState(true);
+            console.warn('Automatic Vault snapshot was not applied:', err);
           }
           return;
         }
@@ -669,6 +1382,7 @@ export default function App() {
         // without a user gesture. Remember it and surface an explicit
         // "Reconnect Vault" action — never silently present the starter Vault
         // as though it were the user's connected Vault.
+        if (!vaultAuthority.isCurrent(restoreSession)) return;
         setVaultStatus((s) => ({
           ...s,
           isConnected: false,
@@ -687,7 +1401,7 @@ export default function App() {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [setVaultHydratedState, transitionToFilesystemVault, vaultAuthority]);
 
   // Stable recipe-detail route restoration. On mount the fragment is the
   // authority: once the recipe collection contains the routed id, the same
@@ -752,15 +1466,28 @@ export default function App() {
     }
   }, []);
 
-  // 2. Background Re-Sync on Window Focus: Live updates from Obsidian desktop
+  // 2. Background Re-Sync on Window Focus: Live updates from Obsidian desktop.
+  // The scan token is bound to BOTH the session identity and its collection
+  // revision, so a scan that started before a write or transition cannot commit.
   useEffect(() => {
     const handleWindowFocus = async () => {
-      if (vaultStatus.isConnected && vaultStatus.folderHandle && vaultStatus.accessType === 'filesystem_api') {
-        try {
-          const generation = vaultScanGeneration.current.begin();
-          const result = await loadVaultFromHandle(vaultStatus.folderHandle);
-          commitVaultSnapshot(result, generation, vaultStatus.folderHandle);
-        } catch (err) {
+      const active = activeVaultRef.current;
+      if (active.session.kind !== 'filesystem' || !active.handle) return;
+      const scan = vaultAuthority.beginScan(active.session);
+      if (!scan) return;
+      try {
+        const result = await loadVaultFromHandle(active.handle, active.assetScope);
+        if (
+          appUnmountedRef.current ||
+          !vaultAuthority.isScanCurrent(scan) ||
+          !vaultAuthority.isCurrent(active.session) ||
+          activeVaultRef.current.handle !== active.handle
+        ) {
+          return;
+        }
+        commitVaultSnapshot(result, active.session, active.handle);
+      } catch (err) {
+        if (vaultAuthority.isScanCurrent(scan)) {
           console.warn('Background vault scan on focus failed:', err);
         }
       }
@@ -768,7 +1495,7 @@ export default function App() {
 
     window.addEventListener('focus', handleWindowFocus);
     return () => window.removeEventListener('focus', handleWindowFocus);
-  }, [vaultStatus]);
+  }, [commitVaultSnapshot, vaultAuthority]);
 
   // Hydrate persisted UI preferences from the SettingsAdapter once after mount.
   // The adapter is async, so stored values are applied asynchronously. To avoid
@@ -880,24 +1607,67 @@ export default function App() {
   }, [activeTimers, settingsAdapter, settingsHydrated]);
 
   // 4. Auto-save Meal Plan note to the vault through the adapter if connected.
-  //    Gated on `vaultHydrated` so a newly connected vault only receives its OWN
-  //    (already-scanned) plan, never the previous vault's plan (defect F).
+  //    The write holds a session lease, so a transition either prevents it from
+  //    starting or waits for it to settle. A stale completion never reports into
+  //    a newer session.
   useEffect(() => {
-    if (vaultAdapter && vaultHydrated) {
-      saveMealPlanWithVaultAdapter(vaultAdapter, mealPlan).catch((e) =>
-        reportVaultError('save', 'Meal Plan', e)
-      );
-    }
-  }, [mealPlan, vaultAdapter, vaultHydrated]);
+    if (!vaultHydratedRef.current) return undefined;
+    const active = activeVaultRef.current;
+    if (active.session.kind !== 'filesystem' || !active.adapter) return undefined;
+    const { session, adapter } = active;
+    let cancelled = false;
+    const run = async () => {
+      if (!vaultHydratedRef.current || !vaultAuthority.isCurrent(session) || vaultAuthority.writesBlocked()) return;
+      if (hydratedMealPlanRef.current !== null && JSON.stringify(hydratedMealPlanRef.current) === JSON.stringify(mealPlan)) return;
+      const lease = vaultAuthority.beginWrite(session);
+      if (!lease) return;
+      try {
+        await saveMealPlanWithVaultAdapter(adapter, mealPlan);
+        if (vaultAuthority.isCurrent(session)) {
+          hydratedMealPlanRef.current = mealPlan;
+          vaultAuthority.markCollectionChanged(session);
+        }
+      } catch (e) {
+        if (!cancelled && vaultAuthority.isCurrent(session) && !vaultAuthority.writesBlocked()) {
+          reportVaultError('save', 'Meal Plan', e);
+        }
+      } finally {
+        lease.release();
+      }
+    };
+    void run();
+    return () => { cancelled = true; };
+  }, [mealPlan, vaultAdapter, vaultHydrated, vaultAuthority]);
 
   // 5. Auto-save Shopping List note to the vault through the adapter if connected.
   useEffect(() => {
-    if (vaultAdapter && vaultHydrated) {
-      saveShoppingListWithVaultAdapter(vaultAdapter, shoppingCategories).catch((e) =>
-        reportVaultError('save', 'Shopping List', e)
-      );
-    }
-  }, [shoppingCategories, vaultAdapter, vaultHydrated]);
+    if (!vaultHydratedRef.current) return undefined;
+    const active = activeVaultRef.current;
+    if (active.session.kind !== 'filesystem' || !active.adapter) return undefined;
+    const { session, adapter } = active;
+    let cancelled = false;
+    const run = async () => {
+      if (!vaultHydratedRef.current || !vaultAuthority.isCurrent(session) || vaultAuthority.writesBlocked()) return;
+      if (hydratedShoppingRef.current !== null && JSON.stringify(hydratedShoppingRef.current) === JSON.stringify(shoppingCategories)) return;
+      const lease = vaultAuthority.beginWrite(session);
+      if (!lease) return;
+      try {
+        await saveShoppingListWithVaultAdapter(adapter, shoppingCategories);
+        if (vaultAuthority.isCurrent(session)) {
+          hydratedShoppingRef.current = shoppingCategories;
+          vaultAuthority.markCollectionChanged(session);
+        }
+      } catch (e) {
+        if (!cancelled && vaultAuthority.isCurrent(session) && !vaultAuthority.writesBlocked()) {
+          reportVaultError('save', 'Shopping List', e);
+        }
+      } finally {
+        lease.release();
+      }
+    };
+    void run();
+    return () => { cancelled = true; };
+  }, [shoppingCategories, vaultAdapter, vaultHydrated, vaultAuthority]);
 
   // Timers Background Interval Engine — refreshes display state once per second.
   // The authoritative clock is `endsAt`; reconciliation (not blind decrement)
@@ -917,24 +1687,46 @@ export default function App() {
     return () => clearInterval(timerInterval);
   }, []);
 
-  // Connect local folder via File System Access API
-  const handleDirectVaultConnected = async (folderHandle: any): Promise<{ recipeCount: number; noteCount: number }> => {
-    // Invalidate prior in-flight scans and gate autosave (defect E + F): old-vault
-    // meal-plan/shopping state must not be written into the newly connected vault.
-    const generation = vaultScanGeneration.current.begin();
-    setVaultHydrated(false);
-    const result = await loadVaultFromHandle(folderHandle);
-    // Persist the handle as the active vault ONLY after it was successfully scanned
-    // and accepted as the current-generation canonical snapshot; a stale/superseded
-    // (or failed) scan is never persisted. saveDirectoryHandleToIDB is best-effort
-    // (IDB failures log a warning and do not fail the connection).
-    await applyAcceptedVaultSnapshot(
-      vaultScanGeneration.current,
-      generation,
-      () => commitVaultSnapshot(result, generation, folderHandle),
-      () => saveDirectoryHandleToIDB(folderHandle)
-    );
-    return { recipeCount: result.recipes.length, noteCount: result.notes.length };
+  // Connect local folder via File System Access API.
+  // The transition starts BEFORE the scan so no new write can begin against the
+  // previous Vault. A slow scan that loses to a newer transition never commits
+  // and never persists its handle.
+  const handleDirectVaultConnected = async (
+    folderHandle: any
+  ): Promise<{ recipeCount: number; noteCount: number; accepted: boolean; message?: string }> => {
+    const transition = vaultAuthority.beginTransition('filesystem');
+    const assetScope = createVaultAssetScope(null, { active: false });
+    setVaultHydratedState(false);
+    try {
+      const result = await loadVaultFromHandle(folderHandle, assetScope);
+      if (!vaultAuthority.isTransitionCurrent(transition)) {
+        assetScope.deactivate();
+        return {
+          recipeCount: 0,
+          noteCount: 0,
+          accepted: false,
+          message: 'A newer Vault selection replaced this connection. The active collection was not changed.',
+        };
+      }
+      const outcome = await transitionToFilesystemVault(transition, folderHandle, result, assetScope, {
+        showSignaturePrompt: true,
+        persistHandle: true,
+      });
+      if (!outcome.accepted) {
+        return {
+          recipeCount: 0,
+          noteCount: 0,
+          accepted: false,
+          message: 'A newer Vault selection replaced this connection. The active collection was not changed.',
+        };
+      }
+      return { recipeCount: result.recipes.length, noteCount: result.notes.length, accepted: true };
+    } catch (error) {
+      assetScope.deactivate();
+      if (vaultAuthority.isTransitionCurrent(transition)) vaultAuthority.cancelTransition(transition);
+      if (!vaultAuthority.writesBlocked()) setVaultHydratedState(true);
+      throw error;
+    }
   };
 
   // Legacy dead-code connect entrypoint, kept consistent with the adapter flow.
@@ -949,30 +1741,37 @@ export default function App() {
     }
   };
 
-  // Upload folder fallback
+  // Upload folder fallback. A folder selection is a complete read-only
+  // collection import and goes through the same session transition barrier.
   const handleUploadFolder = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || e.target.files.length === 0) return;
+    const files = e.target.files;
+    if (!files) return;
+    // Identity + provisional destination scope BEFORE the first await: a slower
+    // older parse can never replace a newer accepted folder.
+    const { intent, assetScope } = beginCollectionImportWithScope();
     try {
-      const parsed = await parseUploadedFileList(e.target.files);
-      if (parsed.recipes.length > 0) {
-        setPersonalRecipes(parsed.recipes);
+      if (files.length === 0) {
+        await transitionToUploadedCollection({
+          recipes: [],
+          notes: [],
+          mealPlan: [],
+          shoppingList: [],
+          folderName: 'Empty folder',
+        }, intent, assetScope);
+        return;
       }
-      // A NEW vault replaces the note set outright (UD-2A.2). Leaving the
-      // previous vault's notes in place would make the note count describe a
-      // Vault the user is no longer connected to.
-      setNotes(parsed.notes || []);
-      if (parsed.mealPlan) setMealPlan(parsed.mealPlan);
-      if (parsed.shoppingList) setShoppingCategories(parsed.shoppingList);
-
-      if (parsed.recipes.length > 0 || parsed.mealPlan || parsed.shoppingList || (parsed.notes && parsed.notes.length > 0)) {
-        setVaultStatus((prev) => ({
-          ...prev,
-          isConnected: true,
-          accessType: 'uploaded_folder',
-          connectionState: 'connected',
-        }));
-      }
+      const parsed = await parseUploadedFileList(files, assetScope);
+      const folderName = files[0]?.webkitRelativePath?.split('/')[0] || 'Selected folder';
+      await transitionToUploadedCollection({
+        recipes: parsed.recipes,
+        notes: parsed.notes || [],
+        mealPlan: parsed.mealPlan ?? [],
+        shoppingList: parsed.shoppingList ?? [],
+        folderName,
+      }, intent, assetScope);
     } catch (err) {
+      // Parsing failed before state replacement; the active collection remains.
+      assetScope.deactivate();
       console.error('Failed to import files:', err);
     }
   };
@@ -998,15 +1797,50 @@ export default function App() {
         throw new Error('Signature Collection originals are read-only. Save this recipe to My Vault first.');
       }
       const base = baseRecipe ?? committedRecipesRef.current.find((r) => sameCanonicalRecipeIdentity(r, savedRecipe)) ?? recipesRef.current.find((r) => sameCanonicalRecipeIdentity(r, savedRecipe));
+      // Capture the destination BEFORE queueing. A task that reaches the front
+      // of the per-recipe queue after a transition must never adopt the newer
+      // Vault's adapter/session.
+      const requested = activeVaultRef.current;
+      const requestedSession = requested.session;
+      const requestedAdapter = requested.adapter;
       const run = async () => {
+        if (vaultAuthority.writesBlocked() || !vaultAuthority.isCurrent(requestedSession)) {
+          throw vaultSessionSupersededError();
+        }
+        if (requestedSession.kind === 'filesystem' && !requestedAdapter) {
+          throw vaultSessionSupersededError();
+        }
         const latest = committedRecipesRef.current.find((r) => sameCanonicalRecipeIdentity(r, savedRecipe));
         const toWrite = rebaseRecipeOntoLatest(latest, base, savedRecipe);
-        if (vaultAdapter) {
-          await saveRecipeWithVaultAdapter(vaultAdapter, toWrite);
+        if (requestedAdapter) {
+          const lease = vaultAuthority.beginWrite(requestedSession);
+          if (!lease) throw vaultSessionSupersededError();
+          try {
+            const validation = await validateRecipeAssetReferences(
+              {
+                asset: createBrowserAssetAdapter(requested.handle),
+                folderHandle: requested.handle,
+                assetScope: requested.assetScope,
+              },
+              toWrite
+            );
+            if (!validation.ok) {
+              throw new Error(validation.reason || 'The active Vault could not verify this recipe image reference.');
+            }
+            await saveRecipeWithVaultAdapter(requestedAdapter, toWrite);
+          } finally {
+            lease.release();
+          }
+          if (!vaultAuthority.isCurrent(requestedSession)) return;
+          vaultAuthority.markCollectionChanged(requestedSession);
         } else {
           // Disconnected workflow: preserve the existing download-to-disk fallback.
           await saveRecipeToVaultFile(toWrite, undefined);
         }
+        // A pending transition keeps the OLD session authoritative until it
+        // commits. Updating the old state here is safe: a later commit replaces
+        // it, while a failed/cancelled transition preserves the verified write.
+        if (!vaultAuthority.isCurrent(requestedSession)) return;
         committedRecipesRef.current = upsertCanonicalRecipe(committedRecipesRef.current, toWrite);
         setPersonalRecipes((prev) => upsertCanonicalRecipe(prev, toWrite));
         setSelectedRecipe((prev) => (prev && sameCanonicalRecipeIdentity(prev, toWrite) ? toWrite : prev));
@@ -1017,13 +1851,14 @@ export default function App() {
       };
       await enqueueRecipeWrite(savedRecipe, run);
     },
-    [vaultAdapter, updateShisoWorkingRecipe, enqueueRecipeWrite],
+    [updateShisoWorkingRecipe, enqueueRecipeWrite, vaultAuthority],
   );
 
   const handleSaveRecipe = async (savedRecipe: ObsidianRecipe) => {
     if (isBuiltInRecipe(savedRecipe)) {
       throw new Error('Signature Collection originals are read-only. Use Save to My Vault, then edit the saved copy.');
     }
+    await ensureDesktopVaultForSave();
     // Write FIRST: Obsidian Markdown is the canonical source of truth. React state is
     // only updated AFTER the canonical write succeeds, so a failed write leaves the
     // prior canonical state (and the open editor) intact (defect C).
@@ -1037,6 +1872,11 @@ export default function App() {
       };
       await commitRecipeWrite(toSave, saveBase);
     } catch (err) {
+      if (isVaultSessionSuperseded(err)) {
+        // The caller (editor/grabber) must know the recipe was NOT saved so it
+        // can keep its draft and roll back any transaction-owned asset.
+        throw err;
+      }
       // Surface the failure; do NOT claim persistence succeeded (editor stays open).
       reportVaultError('save', savedRecipe.title || 'recipe', err);
       throw err;
@@ -1051,28 +1891,251 @@ export default function App() {
    */
   const handleSaveStarterToVault = async (builtIn: ObsidianRecipe) => {
     if (!isBuiltInRecipe(builtIn) || starterSavePending) return;
-    setStarterSavePending(true);
+    if (vaultAuthority.writesBlocked()) {
+      setVaultNotice({ tone: 'info', message: 'A Vault change is in progress. Wait for it to finish before saving this recipe.' });
+      return;
+    }
     try {
+      await ensureDesktopVaultForSave();
+    } catch (error: any) {
+      setVaultNotice({ tone: 'error', message: error?.message || 'The desktop Recipe Vault could not be prepared. No files were changed.' });
+      return;
+    }
+    const active = activeVaultRef.current;
+    const session = active.session;
+    if (session.kind !== 'filesystem' || !active.adapter) {
+      const result: StarterSaveResult = {
+        status: 'unavailable',
+        message: 'Connect a writable Vault before saving this recipe. No files were changed.',
+      };
+      if (vaultAuthority.isCurrent(session) && !vaultAuthority.writesBlocked()) {
+        setStarterSaveState(result);
+        setVaultNotice({ tone: 'info', message: result.message });
+      }
+      return;
+    }
+
+    const permission = await queryVaultWritePermission(active.handle);
+    if (!vaultAuthority.isCurrent(session) || vaultAuthority.writesBlocked()) return;
+    setVaultWritePermission(permission);
+    if (permission !== 'granted') {
+      const result: StarterSaveResult = {
+        status: 'permission_required',
+        message: 'Write access to this Vault is not granted. Reconnect the Vault and allow read/write access before saving. No files were changed.',
+      };
+      setStarterSaveState(result);
+      setVaultNotice({ tone: 'info', message: result.message });
+      return;
+    }
+
+    setStarterSavePending(true);
+    setStarterSaveState(null);
+    setVaultNotice(null);
+    try {
+      const starterAsset = createBrowserAssetAdapter(active.handle);
       const result = await saveStarterRecipeToVault({
-        vault: vaultAdapter,
+        vault: active.adapter,
         builtIn,
         personalRecipes: personalRecipesRef.current,
+        validateRecipe: async (recipe) =>
+          validateRecipeAssetReferences(
+            { asset: starterAsset, folderHandle: active.handle, assetScope: active.assetScope },
+            recipe
+          ),
+        isCurrent: () => !appUnmountedRef.current && vaultAuthority.isCurrent(session) && !vaultAuthority.writesBlocked(),
+        runWrite: async (operation) => {
+          if (appUnmountedRef.current || !vaultAuthority.isCurrent(session) || vaultAuthority.writesBlocked()) {
+            return { executed: false };
+          }
+          const currentPermission = await queryVaultWritePermission(active.handle);
+          if (currentPermission !== 'granted') return { executed: false };
+          if (!vaultAuthority.isCurrent(session) || vaultAuthority.writesBlocked()) {
+            return { executed: false };
+          }
+          const lease = vaultAuthority.beginWrite(session);
+          if (!lease) return { executed: false };
+          try {
+            const value = await operation();
+            if (vaultAuthority.isCurrent(session)) vaultAuthority.markCollectionChanged(session);
+            return { executed: true, value };
+          } finally {
+            lease.release();
+          }
+        },
       });
+      if (appUnmountedRef.current || !vaultAuthority.isCurrent(session)) return;
+
       setStarterSaveState(result);
-      if (result.status === 'saved' && result.recipe) {
-        const next = upsertCanonicalRecipe(personalRecipesRef.current, result.recipe);
+      if ((result.status === 'saved' || result.status === 'already_saved') && result.recipe) {
+        const verified = result.recipe;
+        const next = upsertCanonicalRecipe(personalRecipesRef.current, verified);
         personalRecipesRef.current = next;
+        committedRecipesRef.current = upsertCanonicalRecipe(committedRecipesRef.current, verified);
         setPersonalRecipes(next);
-        committedRecipesRef.current = upsertCanonicalRecipe(committedRecipesRef.current, result.recipe);
+        setHasPersonalVaultCollection(true);
+        vaultAuthority.markCollectionChanged(session);
+        // Open the ACTUAL personal copy so nutrition/edit/favorite/delete are
+        // immediately available instead of leaving the user on the read-only
+        // starter template.
+        setSelectedRecipe(verified);
+        setVaultView('all');
+        setVaultNotice({
+          tone: 'success',
+          message: result.message,
+        });
+      } else {
+        setVaultNotice({
+          tone: result.status === 'unavailable' || result.status === 'permission_required' || result.status === 'cancelled' ? 'info' : 'error',
+          message: result.message,
+        });
       }
-    } catch {
-      setStarterSaveState({
-        status: 'error',
-        message: 'The recipe could not be saved to My Vault. The built-in original is unchanged.',
-      });
+    } catch (error) {
+      if (appUnmountedRef.current || !vaultAuthority.isCurrent(session)) return;
+      const message = isVaultSessionSuperseded(error)
+        ? 'The Vault changed before this save completed. The recipe was not added to the new Vault.'
+        : 'The recipe could not be saved to My Vault. The built-in template is unchanged.';
+      setStarterSaveState({ status: isVaultSessionSuperseded(error) ? 'cancelled' : 'error', message });
+      setVaultNotice({ tone: 'info', message });
     } finally {
-      setStarterSavePending(false);
+      if (vaultAuthority.isCurrent(session)) setStarterSavePending(false);
     }
+  };
+
+  const handleImportSignatureNine = async () => {
+    if (signatureImportState.status === 'running') return;
+    if (vaultAuthority.writesBlocked()) {
+      setVaultNotice({ tone: 'info', message: 'A Vault change is in progress. Wait for it to finish before importing recipes.' });
+      return;
+    }
+    if (isDesktopRuntime() && activeVaultRef.current.session.kind !== 'filesystem') {
+      try {
+        await ensureDesktopVaultForSave();
+      } catch (error: any) {
+        setVaultNotice({ tone: 'error', message: error?.message || 'The desktop Recipe Vault could not be prepared.' });
+        return;
+      }
+    }
+    const active = activeVaultRef.current;
+    const session = active.session;
+    if (session.kind !== 'filesystem' || !active.adapter) {
+      if (vaultAuthority.isCurrent(session) && !vaultAuthority.writesBlocked()) {
+        setVaultNotice({
+          tone: 'info',
+          message: 'A writable Vault connection is required before importing recipes. No files were changed.',
+        });
+      }
+      return;
+    }
+
+    // Recheck the live permission at click time. Rendering state can be stale
+    // if the browser revoked access after the panel was displayed.
+    const permission = await queryVaultWritePermission(active.handle);
+    if (!vaultAuthority.isCurrent(session) || vaultAuthority.writesBlocked() || activeVaultRef.current.handle !== active.handle) {
+      return;
+    }
+    setVaultWritePermission(permission);
+    if (permission !== 'granted') {
+      const message = permission === 'denied'
+        ? 'Write access to this Vault is denied. Reconnect the Vault and allow read/write access before importing recipes. No files were changed.'
+        : permission === 'prompt'
+          ? 'The browser has not granted read/write access to this Vault. Reconnect the Vault and allow access before importing recipes. No files were changed.'
+          : permission === 'unsupported'
+            ? 'Writable access could not be verified for this Vault. Choose a writable Vault folder before importing recipes. No files were changed.'
+            : 'Writable access to this Vault is not available. Reconnect a writable Vault folder before importing recipes. No files were changed.';
+      setVaultNotice({ tone: permission === 'denied' ? 'error' : 'info', message });
+      return;
+    }
+
+    const total = starterRecipes.length;
+    let cancelReason: string | undefined;
+    setSignatureImportState({ status: 'running', completed: 0, total, summary: null });
+    setVaultNotice(null);
+    try {
+      const starterAsset = createBrowserAssetAdapter(active.handle);
+      const summary = await importSignatureStarterCollection({
+        vault: active.adapter,
+        builtIns: starterRecipes,
+        personalRecipes: personalRecipesRef.current,
+        validateRecipe: async (recipe) =>
+          validateRecipeAssetReferences(
+            { asset: starterAsset, folderHandle: active.handle, assetScope: active.assetScope },
+            recipe
+          ),
+        isCurrent: () => !appUnmountedRef.current && vaultAuthority.isCurrent(session),
+        getCancelReason: () => cancelReason,
+        onProgress: (completed, progressTotal) => {
+          if (appUnmountedRef.current || !vaultAuthority.isCurrent(session) || vaultAuthority.writesBlocked()) return;
+          setSignatureImportState((current) => ({ ...current, status: 'running', completed, total: progressTotal }));
+        },
+        runWrite: async (operation) => {
+          if (appUnmountedRef.current || !vaultAuthority.isCurrent(session) || vaultAuthority.writesBlocked()) {
+            cancelReason = 'The active Vault changed before this recipe could be written.';
+            return { executed: false };
+          }
+          const currentPermission = await queryVaultWritePermission(active.handle);
+          if (currentPermission !== 'granted') {
+            cancelReason = 'Write permission is no longer granted. Remaining recipes were not written.';
+            return { executed: false };
+          }
+          if (!vaultAuthority.isCurrent(session) || vaultAuthority.writesBlocked()) {
+            cancelReason = 'The active Vault changed before this recipe could be written.';
+            return { executed: false };
+          }
+          const lease = vaultAuthority.beginWrite(session);
+          if (!lease) {
+            cancelReason = 'The active Vault changed before this recipe could be written.';
+            return { executed: false };
+          }
+          try {
+            const value = await operation();
+            if (vaultAuthority.isCurrent(session)) vaultAuthority.markCollectionChanged(session);
+            return { executed: true, value };
+          } finally {
+            lease.release();
+          }
+        },
+      });
+
+      // A completion from a COMMITTED superseded session must never mutate the
+      // new Vault. A merely pending transition still leaves the old session
+      // authoritative; its verified partial result is safe because a later
+      // commit replaces this state, while a failed/cancelled transition keeps it.
+      if (appUnmountedRef.current || !vaultAuthority.isCurrent(session)) {
+        console.warn('Discarded a Signature import completion from a previous Vault session.');
+        return;
+      }
+
+      if (summary.recipes.length > 0) {
+        let next = personalRecipesRef.current;
+        for (const recipe of summary.recipes) {
+          next = upsertCanonicalRecipe(next, recipe);
+        }
+        personalRecipesRef.current = next;
+        committedRecipesRef.current = next;
+        setPersonalRecipes(next);
+        vaultAuthority.markCollectionChanged(session);
+      }
+      setHasPersonalVaultCollection(true);
+      setSignatureImportState({ status: 'done', completed: total, total, summary });
+      const hasProblems = summary.permissionRequired > 0 || summary.failed > 0 || summary.verificationFailed > 0 || summary.pathConflicts > 0;
+      const stopped = summary.cancelled > 0;
+      setVaultNotice({
+        tone: stopped ? (summary.added > 0 ? 'info' : 'error') : summary.added > 0 && !hasProblems ? 'success' : hasProblems ? 'error' : 'info',
+        message: summary.cancelReason ? `${summary.message} ${summary.cancelReason}` : summary.message,
+      });
+    } catch (error) {
+      if (appUnmountedRef.current || !vaultAuthority.isCurrent(session)) return;
+      const message = isVaultSessionSuperseded(error)
+        ? 'The Vault changed before this import completed. Any files already written remain in the previous Vault and were not merged into the new one.'
+        : 'The Signature Nine import stopped unexpectedly. Any files already written remain; the active collection was not updated.';
+      setSignatureImportState({ status: 'done', completed: 0, total, summary: null });
+      setVaultNotice({ tone: 'error', message });
+    }
+  };
+
+  const dismissSignatureImport = () => {
+    setSignaturePromptOpen(false);
+    setSignatureImportState({ status: 'idle', completed: 0, total: 0, summary: null });
   };
 
   /**
@@ -1201,12 +2264,12 @@ export default function App() {
       try {
         await commitRecipeWrite(current.working, current.base);
       } catch (err) {
+        if (isVaultSessionSuperseded(err)) {
+          return { ok: false, saved: false, reason_code: 'write_failed', message: 'The Vault changed before this save completed. Nothing was written to the new Vault.' };
+        }
         reportVaultError('save', current.working.title || 'recipe', err);
         return { ok: false, saved: false, reason_code: 'write_failed', message: 'The recipe could not be saved to the vault.' };
       }
-      // A canonical write happened: invalidate any vault scan that STARTED before
-      // it so a stale scan can never overwrite the just-saved recipe.
-      vaultScanGeneration.current.begin();
       updateShisoWorkingRecipe(null);
       return {
         ok: true,
@@ -1276,9 +2339,32 @@ export default function App() {
   // overwritten: on a collision this throws GeneratedRecipePathCollisionError
   // before any write, so the modal keeps the draft open with a bounded message.
   const handleSaveGeneratedRecipe = async (recipe: ObsidianRecipe) => {
+    await ensureDesktopVaultForSave();
+    const active = activeVaultRef.current;
+    const session = active.session;
+    if (vaultAuthority.writesBlocked() || !vaultAuthority.isCurrent(session)) {
+      throw vaultSessionSupersededError();
+    }
     try {
-      if (vaultAdapter) {
-        await saveGeneratedRecipeToVault(vaultAdapter, recipe);
+      if (active.adapter) {
+        const lease = vaultAuthority.beginWrite(session);
+        if (!lease) throw vaultSessionSupersededError();
+        try {
+          const validation = await validateRecipeAssetReferences(
+            {
+              asset: createBrowserAssetAdapter(active.handle),
+              folderHandle: active.handle,
+              assetScope: active.assetScope,
+            },
+            recipe
+          );
+          if (!validation.ok) {
+            throw new Error(validation.reason || 'The active Vault could not verify this recipe image reference.');
+          }
+          await saveGeneratedRecipeToVault(active.adapter, recipe);
+        } finally {
+          lease.release();
+        }
       } else {
         // Disconnected: no vault exists()-check support; preserve the download-to-disk
         // fallback for this generated draft (out of collision-safety scope).
@@ -1288,9 +2374,12 @@ export default function App() {
       if (err instanceof GeneratedRecipePathCollisionError) {
         throw err; // let the modal surface the collision message and keep edits
       }
+      if (isVaultSessionSuperseded(err)) throw err;
       reportVaultError('save', recipe.title || 'recipe', err);
       throw err;
     }
+    if (!vaultAuthority.isCurrent(session)) return;
+    if (active.adapter) vaultAuthority.markCollectionChanged(session);
     // Insert/update by canonical vault-path identity (never basename), so a root
     // `Dish.md` can never replace `B/Dish.md` on a basename match.
     setPersonalRecipes((prev) => upsertCanonicalRecipe(prev, recipe));
@@ -1307,7 +2396,8 @@ export default function App() {
       ratingExplicit: recipe.ratingExplicit,
       ratingSource: recipe.ratingSource,
     };
-    updatedRecipe.rawMarkdown = serializeRecipeToObsidianMarkdown(updatedRecipe);
+    // Keep the existing raw body; the preserving canonical serializer patches
+    // only the nutrition/frontmatter fields that changed.
 
     // Write FIRST then commit state (defect C): a failed canonical write must not
     // mutate the displayed canonical recipe. Route through commitRecipeWrite so
@@ -1315,7 +2405,7 @@ export default function App() {
     try {
       await commitRecipeWrite(updatedRecipe, recipe);
     } catch (err) {
-      reportVaultError('save', updatedRecipe.title || 'recipe', err);
+      if (!isVaultSessionSuperseded(err)) reportVaultError('save', updatedRecipe.title || 'recipe', err);
       return;
     }
   };
@@ -1774,6 +2864,10 @@ export default function App() {
 
   // Save or Create a Vault Note (e.g. ingredient or technique created from wikilink modal)
   const handleSaveNoteToVault = async (note: VaultNote) => {
+    const active = activeVaultRef.current;
+    const session = active.session;
+    if (vaultAuthority.writesBlocked() || !vaultAuthority.isCurrent(session)) return;
+
     setNotes((prev) => {
       const idx = prev.findIndex((n) => n.id === note.id || n.fileName.toLowerCase() === note.fileName.toLowerCase());
       if (idx >= 0) {
@@ -1784,21 +2878,28 @@ export default function App() {
       return [note, ...prev];
     });
 
-    if (vaultStatus.folderHandle) {
+    if (active.handle) {
+      const lease = vaultAuthority.beginWrite(session);
+      if (!lease) return;
       try {
         const fileName = note.fileName.endsWith('.md') ? note.fileName : `${note.fileName}.md`;
-        let targetDir = vaultStatus.folderHandle;
+        let targetDir = active.handle;
         try {
-          targetDir = await vaultStatus.folderHandle.getDirectoryHandle('Notes', { create: true });
-        } catch (e) {
-          targetDir = vaultStatus.folderHandle;
+          targetDir = await active.handle.getDirectoryHandle('Notes', { create: true });
+        } catch {
+          targetDir = active.handle;
         }
         const fileHandle = await targetDir.getFileHandle(fileName, { create: true });
         const writable = await fileHandle.createWritable();
         await writable.write(note.rawMarkdown);
         await writable.close();
+        if (vaultAuthority.isCurrent(session)) vaultAuthority.markCollectionChanged(session);
       } catch (err) {
-        console.warn('Could not write note to vault filesystem:', err);
+        if (vaultAuthority.isCurrent(session) && !vaultAuthority.writesBlocked()) {
+          console.warn('Could not write note to vault filesystem:', err);
+        }
+      } finally {
+        lease.release();
       }
     }
   };
@@ -1806,16 +2907,27 @@ export default function App() {
   // Delete Recipe
   const handleDeleteRecipe = async (recipeToDelete: ObsidianRecipe) => {
     if (isBuiltInRecipe(recipeToDelete)) return;
+    const active = activeVaultRef.current;
+    const session = active.session;
+    if (vaultAuthority.writesBlocked() || !vaultAuthority.isCurrent(session)) return;
     // Write FIRST: only remove from state after the vault delete succeeds (defect C).
-    if (vaultAdapter) {
+    if (active.adapter) {
+      const lease = vaultAuthority.beginWrite(session);
+      if (!lease) return;
       try {
-        await deleteRecipeWithVaultAdapter(vaultAdapter, recipeToDelete);
+        await deleteRecipeWithVaultAdapter(active.adapter, recipeToDelete);
       } catch (err) {
-        // The disk delete failed: do NOT claim it was deleted. Keep prior state.
-        reportVaultError('delete', recipeToDelete.title || 'recipe', err);
+        if (vaultAuthority.isCurrent(session)) {
+          // The disk delete failed: do NOT claim it was deleted. Keep prior state.
+          reportVaultError('delete', recipeToDelete.title || 'recipe', err);
+        }
         return;
+      } finally {
+        lease.release();
       }
     }
+    if (!vaultAuthority.isCurrent(session)) return;
+    if (active.adapter) vaultAuthority.markCollectionChanged(session);
     // Remove by canonical vault-path identity, never basename (defect B).
     setPersonalRecipes((prev) => removeCanonicalRecipe(prev, recipeToDelete));
     setSelectedRecipe((prev) => (prev && sameCanonicalRecipeIdentity(prev, recipeToDelete) ? null : prev));
@@ -1898,14 +3010,15 @@ export default function App() {
     const next = updater(personalRecipesRef.current);
     personalRecipesRef.current = next;
     setPersonalRecipes(next);
-    recipesRef.current = [
-      ...starterRecipes.map((recipe) => {
+    if (hasPersonalVaultCollection) {
+      recipesRef.current = next;
+    } else {
+      recipesRef.current = starterRecipes.map((recipe) => {
         const override = recipe.builtInId ? starterOverridesRef.current[recipe.builtInId] : undefined;
         return override ? { ...recipe, ...override } : recipe;
-      }),
-      ...next,
-    ];
-  }, [starterRecipes]);
+      });
+    }
+  }, [hasPersonalVaultCollection, starterRecipes]);
 
   const updateStarterOverride = useCallback((builtInId: string, patch: Partial<ObsidianRecipe>) => {
     const next = {
@@ -1945,6 +3058,9 @@ export default function App() {
       return;
     }
 
+    const sessionAtRequest = activeVaultRef.current.session;
+    if (vaultAuthority.writesBlocked() || !vaultAuthority.isCurrent(sessionAtRequest)) return;
+
     // Operation identity for this toggle, so a stale failed write cannot roll
     // back a newer optimistic user selection.
     const operationId = (favoriteOperationIdRef.current.get(recipeId) ?? 0) + 1;
@@ -1964,11 +3080,13 @@ export default function App() {
     if (!vaultAdapter) return;
 
     const persist = async () => {
+      if (vaultAuthority.writesBlocked() || !vaultAuthority.isCurrent(sessionAtRequest)) return;
       const latest = personalRecipesRef.current.find((r) => r.id === recipeId);
       if (!latest) return;
       try {
         await commitRecipeWrite(latest, current);
       } catch (err) {
+        if (isVaultSessionSuperseded(err)) return;
         reportVaultError('save', latest.title || 'recipe', err);
         // Roll back ONLY if no newer toggle has superseded this operation.
         if (favoriteOperationIdRef.current.get(recipeId) === operationId) {
@@ -2022,6 +3140,9 @@ export default function App() {
       return;
     }
 
+    const sessionAtRequest = activeVaultRef.current.session;
+    if (vaultAuthority.writesBlocked() || !vaultAuthority.isCurrent(sessionAtRequest)) return;
+
     const operationId = (ratingOperationIdRef.current.get(recipeId) ?? 0) + 1;
     ratingOperationIdRef.current.set(recipeId, operationId);
 
@@ -2039,11 +3160,13 @@ export default function App() {
     if (!vaultAdapter) return;
 
     const persist = async () => {
+      if (vaultAuthority.writesBlocked() || !vaultAuthority.isCurrent(sessionAtRequest)) return;
       const latest = personalRecipesRef.current.find((r) => r.id === recipeId);
       if (!latest) return;
       try {
         await commitRecipeWrite(latest, current);
       } catch (err) {
+        if (isVaultSessionSuperseded(err)) return;
         reportVaultError('save', latest.title || 'recipe', err);
         if (ratingOperationIdRef.current.get(recipeId) === operationId) {
           const revertedRating = current.rating;
@@ -2429,11 +3552,9 @@ export default function App() {
       // Favorites
       if (filters.onlyFavorites && !recipe.isFavorite) return false;
 
-      // Navigation-only ownership views. These are separate from the manual
-      // filter controls, so navigating never erases the user's filters.
+      // Navigation-only Favorites view. This is separate from the manual filter
+      // controls, so navigating never erases the user's filters.
       if (vaultView === 'favorites' && activeTab === 'grid' && !recipe.isFavorite) return false;
-      if (vaultView === 'starter' && !recipe.isBuiltIn) return false;
-      if (vaultView === 'personal' && recipe.isBuiltIn) return false;
       // Max Cook Time
       if (filters.maxCookTime) {
         const cookMin = parseInt(recipe.cookTime, 10) || 30;
@@ -2470,27 +3591,15 @@ export default function App() {
   const vaultResultIsFiltered = Boolean(searchQuery) || activeFilterCount > 0;
 
   const isFavoritesView = vaultView === 'favorites' && activeTab === 'grid';
-  const isStarterView = vaultView === 'starter' && activeTab === 'grid';
-  const isPersonalView = vaultView === 'personal' && activeTab === 'grid';
   const hasFavoriteRecipes = recipes.some((recipe) => recipe.isFavorite);
   const favoriteRecipeCount = useMemo(
     () => recipes.filter((recipe) => recipe.isFavorite).length,
     [recipes]
   );
-  const collectionRecipeTotal = isFavoritesView
-    ? favoriteRecipeCount
-    : isStarterView
-      ? starterRecipes.length
-      : isPersonalView
-        ? personalRecipes.length
-        : recipes.length;
+  const collectionRecipeTotal = isFavoritesView ? favoriteRecipeCount : recipes.length;
   const collectionCountLabel = isFavoritesView
     ? `${collectionRecipeTotal} ${collectionRecipeTotal === 1 ? 'favorite' : 'favorites'}`
-    : isStarterView
-      ? `${collectionRecipeTotal} built-in ${collectionRecipeTotal === 1 ? 'recipe' : 'recipes'}`
-      : isPersonalView
-        ? `${collectionRecipeTotal} saved ${collectionRecipeTotal === 1 ? 'recipe' : 'recipes'}`
-        : `${collectionRecipeTotal} ${collectionRecipeTotal === 1 ? 'recipe' : 'recipes'}`;
+    : `${collectionRecipeTotal} ${collectionRecipeTotal === 1 ? 'recipe' : 'recipes'}`;
 
   // Deterministic featured selection is computed once for the spread and the
   // editorial folio line. No recommendation logic or persisted pin is added.
@@ -2508,51 +3617,39 @@ export default function App() {
   const vaultStateEyebrow =
     isFavoritesView
       ? 'Favorites'
-      : isStarterView
-        ? 'The Signature Nine'
-        : isPersonalView
-          ? 'My saved recipes'
-          : vaultConnectionState === 'permission_denied'
-            ? 'Vault access denied'
-            : vaultConnectionState === 'reauthorization_required'
-              ? 'Vault awaiting access'
-              : vaultStatus.isConnected
-                ? liveFilesystemVault
-                  ? 'Private vault'
-                  : 'Imported collection'
-                : 'Starter collection';
+      : !hasPersonalVaultCollection
+        ? 'Starter cookbook'
+        : vaultConnectionState === 'permission_denied'
+          ? 'Vault access denied'
+          : vaultConnectionState === 'reauthorization_required'
+            ? 'Vault awaiting access'
+            : vaultStatus.isConnected
+              ? liveFilesystemVault
+                ? 'Private vault'
+                : 'Imported collection'
+              : 'My Recipe Vault';
   const vaultIntroduction =
     isFavoritesView
-      ? 'The recipes you have marked as favorites across the Signature Collection and your personal Vault.'
-      : isStarterView
-        ? 'Nine complete, application-owned recipes. Browse and cook them without connecting a Vault. Save any one of them to My Vault when you want an editable personal copy.'
-        : isPersonalView
-          ? vaultStatus.isConnected
-            ? 'The editable recipes saved in your connected Vault. Signature Collection originals stay separate and are never counted here.'
-            : 'Connect a writable Vault, or save a recipe from the Signature Collection, to build your personal recipe library.'
-          : vaultConnectionState === 'permission_denied'
-            ? 'The browser refused access to your remembered Vault. Reconnect, or choose the folder again, to restore your own recipes.'
-            : vaultConnectionState === 'reauthorization_required'
-              ? 'Your Vault is remembered, but the browser needs your permission before its recipes can be shown.'
-              : vaultStatus.isConnected
-                ? liveFilesystemVault
-                  ? 'Your saved recipes, gathered from the connected Vault, alongside the permanent Signature Collection.'
-                  : 'Recipes loaded from your files for this session, alongside the permanent Signature Collection.'
-                : 'Explore the permanent Signature Collection, then connect your own Vault whenever you are ready.';
-  const vaultPageTitle =
-    isFavoritesView
-      ? 'Favorites'
-      : isStarterView
-        ? 'Signature Collection'
-        : isPersonalView
-          ? 'My Saved Recipes'
-          : 'My Recipe Vault';
+      ? 'The recipes you have marked as favorites.'
+      : !hasPersonalVaultCollection
+        ? 'Nine carefully curated recipes are ready to cook. They are read-only starter templates until you connect a writable Vault and explicitly save or import them.'
+        : vaultConnectionState === 'permission_denied'
+          ? 'The browser refused access to your remembered Vault. Reconnect, or choose the folder again, to restore your own recipes.'
+          : vaultConnectionState === 'reauthorization_required'
+            ? 'Your Vault is remembered, but the browser needs your permission before its recipes can be shown.'
+            : vaultStatus.isConnected
+              ? liveFilesystemVault
+                ? 'Your saved recipes, gathered from your connected Vault.'
+                : 'Recipes loaded into this session. Connect a writable Vault folder to make future changes durable.'
+              : 'My Recipe Vault.';
+  const vaultPageTitle = isFavoritesView ? 'Favorites' : 'My Recipe Vault';
 
   const vaultHealthSummary = useMemo(() => {
     return summarizeVaultHealth(personalRecipes);
   }, [personalRecipes]);
 
   return (
+    <VaultAssetScopeProvider scope={activeAssetScope}>
     <div
       className="relative flex min-h-screen flex-col bg-[var(--bg-root,#0C0C0C)] font-sans text-[var(--text-primary,#F3F4F6)] transition-colors duration-200 selection:bg-amber-500/30 selection:text-amber-200 lg:flex-row"
       onDragOver={(e) => {
@@ -2568,8 +3665,56 @@ export default function App() {
       onDrop={async (e) => {
         e.preventDefault();
         setIsWindowDragging(false);
+        let folderDrop = false;
+        let droppedFolderName = 'Dropped folder';
         try {
-          const result = await parseDroppedFilesAndFolders(e.dataTransfer);
+          const items = Array.from(e.dataTransfer.items || []);
+          for (const item of items) {
+            try {
+              const entry = (item as any).webkitGetAsEntry?.();
+              if (entry?.isDirectory) {
+                folderDrop = true;
+                if (typeof entry.name === 'string' && entry.name) droppedFolderName = entry.name;
+                break;
+              }
+            } catch {
+              // Ignore an item that cannot expose an entry.
+            }
+          }
+        } catch {
+          folderDrop = false;
+        }
+        const importSession = vaultAuthority.current();
+        // Folder drops share the SAME intent + provisional asset scope as the
+        // picker. Additive drops use the active collection scope.
+        const folderStart = folderDrop ? beginCollectionImportWithScope() : null;
+        const additiveAssetScope = folderDrop ? null : activeVaultRef.current.assetScope;
+        try {
+          const result = await parseDroppedFilesAndFolders(
+            e.dataTransfer,
+            folderStart?.assetScope ?? additiveAssetScope ?? undefined
+          );
+
+          if (folderDrop) {
+            // A dropped folder is a complete imported collection and must go
+            // through the same barrier/invalidation as the folder picker.
+            await transitionToUploadedCollection({
+              recipes: result.recipes,
+              notes: result.notes ?? [],
+              mealPlan: result.mealPlan ?? [],
+              shoppingList: result.shoppingList ?? [],
+              folderName: droppedFolderName,
+            }, folderStart?.intent, folderStart?.assetScope);
+            return;
+          }
+
+          // Additive file drops still belong to the collection they were
+          // dropped into. If the active session changed while parsing, discard.
+          if (!vaultAuthority.isCurrent(importSession) || vaultAuthority.writesBlocked()) {
+            return;
+          }
+          const parsedNotes = result.notes ?? [];
+
           if (result.recipes.length > 0) {
             setPersonalRecipes((prev) => {
               const map = new Map(prev.map((r) => [r.id, r]));
@@ -2577,24 +3722,30 @@ export default function App() {
               return Array.from(map.values());
             });
           }
-          if (result.notes && result.notes.length > 0) {
+          if (parsedNotes.length > 0) {
             setNotes((prev) => {
               const map = new Map(prev.map((n) => [n.id, n]));
-              result.notes.forEach((n) => map.set(n.id, n));
+              parsedNotes.forEach((n) => map.set(n.id, n));
               return Array.from(map.values());
             });
           }
           if (result.mealPlan) setMealPlan(result.mealPlan);
           if (result.shoppingList) setShoppingCategories(result.shoppingList);
 
-          if (result.recipes.length > 0 || result.mealPlan || result.shoppingList || (result.notes && result.notes.length > 0)) {
+          if (result.recipes.length > 0 || result.mealPlan || result.shoppingList || parsedNotes.length > 0) {
+            setHasPersonalVaultCollection(true);
+            setVaultNotice(null);
             setVaultStatus((prev) => ({
               ...prev,
               isConnected: true,
+              accessType: 'uploaded_folder',
               connectionState: 'connected',
             }));
+            setSignatureImportState({ status: 'idle', completed: 0, total: 0, summary: null });
+            setSignaturePromptOpen(true);
           }
         } catch (err) {
+          folderStart?.assetScope.deactivate();
           console.warn('Drop error:', err);
         }
       }}
@@ -2641,8 +3792,7 @@ export default function App() {
           setIsMoreOpen(false);
         }}
         vaultStatus={vaultStatus}
-        recipeCount={personalRecipes.length}
-        starterCount={getSignatureStarterCount()}
+        recipeCount={recipes.length}
         noteCount={notes.length}
         onReconnectVault={handleReconnectVault}
         onOpenConnectVaultModal={() => setIsConnectVaultOpen(true)}
@@ -2685,8 +3835,7 @@ export default function App() {
         setIsFilterOpen={setIsFilterOpen}
         activeFilterCount={activeFilterCount}
         onOpenConnectVaultModal={() => setIsConnectVaultOpen(true)}
-        recipeCount={personalRecipes.length}
-        starterCount={getSignatureStarterCount()}
+        recipeCount={recipes.length}
         noteCount={notes.length}
         onReconnectVault={handleReconnectVault}
         onOpenNewRecipeModal={() => {
@@ -2702,21 +3851,49 @@ export default function App() {
         onOpenCreateForMe={() => shiso.open('create')}
         legacyRecipeCount={vaultHealthSummary.legacyCount + vaultHealthSummary.incompleteCount}
         onRefreshVault={async () => {
-          if (vaultStatus.isConnected && vaultStatus.folderHandle) {
+          if (vaultAuthority.writesBlocked()) {
+            setVaultNotice({ tone: 'info', message: 'A Vault change is in progress. Refresh is available once it finishes.' });
+            return;
+          }
+          const active = activeVaultRef.current;
+          if (active.session.kind === 'filesystem' && vaultAuthority.activeWriteCount(active.session) > 0) {
+            setVaultNotice({ tone: 'info', message: 'A Vault operation is in progress. Refresh is available once it finishes.' });
+            return;
+          }
+          if (active.session.kind === 'filesystem' && active.handle) {
+            const scan = vaultAuthority.beginScan(active.session);
+            if (!scan) return;
             try {
-              const generation = vaultScanGeneration.current.begin();
-              const result = await loadVaultFromHandle(vaultStatus.folderHandle);
-              commitVaultSnapshot(result, generation, vaultStatus.folderHandle);
+              const result = await loadVaultFromHandle(active.handle, active.assetScope);
+              if (
+                appUnmountedRef.current ||
+                !vaultAuthority.isScanCurrent(scan) ||
+                !vaultAuthority.isCurrent(active.session) ||
+                activeVaultRef.current.handle !== active.handle
+              ) {
+                return;
+              }
+              commitVaultSnapshot(result, active.session, active.handle);
             } catch (err) {
-              console.warn('Re-scan failed:', err);
+              if (vaultAuthority.isScanCurrent(scan)) {
+                console.warn('Re-scan failed:', err);
+              }
             }
+          } else if (active.session.kind === 'uploaded') {
+            // A read-only upload has no persistent rescan source. Preserve the
+            // imported recipes/notes/plan/shopping list and say so truthfully;
+            // never substitute the Signature starter collection.
+            setVaultNotice({
+              tone: 'info',
+              message: 'This imported collection is read-only and cannot be rescanned from disk. Your recipes, notes, meal plan, and shopping list are unchanged. Re-import the folder to update it.',
+            });
           } else {
-            // The Signature Nine is permanent and cannot be "refreshed away".
-            // Reset only the in-memory demo personalization and demo plan data.
+            // The actual active collection is the starter cookbook. Only then
+            // is resetting the in-memory demo personalization/plan correct.
             setStarterOverrides({});
             setMealPlan(STARTER_MEAL_PLAN);
             setShoppingCategories(STARTER_SHOPPING_CATEGORIES);
-            setVaultHydrated(true);
+            setVaultHydratedState(true);
           }
         }}
       />
@@ -2737,6 +3914,31 @@ export default function App() {
       {/* Main View Router — the bottom navigation is fixed below 1024px, so the
           content column reserves 116px of clearance (Sol: ≥110px). */}
       <main className="flex-1 pb-[116px] lg:pb-0">
+        {vaultNotice && (
+          <div className="mx-auto w-full max-w-5xl px-4 pt-4 sm:px-6">
+            <div
+              data-testid="vault-notice"
+              role={vaultNotice.tone === 'error' ? 'alert' : 'status'}
+              className={`flex items-start justify-between gap-3 rounded-xl border-l-[3px] px-4 py-3 text-[12px] leading-relaxed ${
+                vaultNotice.tone === 'success'
+                  ? 'border-l-emerald-400 bg-emerald-500/10 text-[var(--text-primary,#F3F4F6)]'
+                  : vaultNotice.tone === 'error'
+                    ? 'border-l-amber-500 bg-amber-500/10 text-[var(--text-primary,#F3F4F6)]'
+                    : 'border-l-[var(--accent-text,#F59E0B)] bg-[var(--accent-subtle,rgba(245,158,11,0.12))] text-[var(--text-primary,#F3F4F6)]'
+              }`}
+            >
+              <span>{vaultNotice.message}</span>
+              <button
+                type="button"
+                onClick={() => setVaultNotice(null)}
+                aria-label="Dismiss message"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--text-secondary,#9CA3AF)] hover:text-[var(--text-primary,#F3F4F6)]"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+          </div>
+        )}
         {selectedRecipe && displayRecipe ? (
           <>
             {/* SHISO H-2 — the ONE visible account of unauthorized-not-yet-saved
@@ -2980,31 +4182,48 @@ export default function App() {
             </section>
 
             {filteredRecipes.length === 0 ? (
-              isPersonalView && personalRecipes.length === 0 ? (
+              hasPersonalVaultCollection && personalRecipes.length === 0 ? (
                 <div className="mt-8 border border-dashed border-[var(--border-subtle,rgba(255,255,255,0.08))] px-6 py-16 text-center">
                   <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-[var(--accent-subtle,rgba(245,158,11,0.12))] text-[var(--accent-text,#F59E0B)]">
                     <BookOpen className="h-5 w-5" strokeWidth={1.75} aria-hidden="true" />
                   </div>
                   <h2 className="mt-5 font-serif text-3xl font-medium text-[var(--text-primary,#F3F4F6)]">
-                    No saved recipes yet
+                    No recipes in this Vault yet
                   </h2>
                   <p className="mx-auto mt-3 max-w-md text-sm leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
-                    The Signature Collection is always available. Save a built-in recipe to My Vault, or connect a writable Vault, to start your personal library.
+                    You can create a recipe, import your own notes, or optionally add the nine Signature recipes.
+                    Existing Vault files are never overwritten.
                   </p>
                   <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+                    {vaultAdapter ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSignaturePromptOpen(true);
+                          setIsConnectVaultOpen(true);
+                        }}
+                        className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-sm bg-[var(--accent,#F59E0B)] px-4 text-sm font-semibold text-[var(--accent-contrast,#0C0C0C)] transition-colors hover:bg-[var(--accent-hover,#D97706)]"
+                      >
+                        Add Signature Nine
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setIsConnectVaultOpen(true)}
+                        className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-sm bg-[var(--accent,#F59E0B)] px-4 text-sm font-semibold text-[var(--accent-contrast,#0C0C0C)] transition-colors hover:bg-[var(--accent-hover,#D97706)]"
+                      >
+                        Connect a writable Vault
+                      </button>
+                    )}
                     <button
                       type="button"
-                      onClick={() => setVaultView('starter')}
-                      className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-sm bg-[var(--accent,#F59E0B)] px-4 text-sm font-semibold text-[var(--accent-contrast,#0C0C0C)] transition-colors hover:bg-[var(--accent-hover,#D97706)]"
-                    >
-                      Browse Signature Collection
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setIsConnectVaultOpen(true)}
+                      onClick={() => {
+                        setEditingRecipe(null);
+                        setIsEditorOpen(true);
+                      }}
                       className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-sm border border-[var(--border-subtle,rgba(255,255,255,0.08))] px-4 text-sm font-medium text-[var(--text-secondary,#9CA3AF)] transition-colors hover:border-[var(--accent-text,#F59E0B)] hover:text-[var(--accent-text,#F59E0B)]"
                     >
-                      Connect a Vault
+                      New Recipe Note
                     </button>
                   </div>
                 </div>
@@ -3251,8 +4470,6 @@ export default function App() {
             </div>
             {[
               { label: 'New Recipe Note', action: () => { setEditingRecipe(null); setIsEditorOpen(true); } },
-              { label: 'Signature Collection', action: () => { setVaultView('starter'); setActiveTab('grid'); } },
-              { label: 'My Saved Recipes', action: () => { setVaultView('personal'); setActiveTab('grid'); } },
               { label: 'Favorites', action: () => { setVaultView('favorites'); setActiveTab('grid'); } },
               { label: 'Create with SHISO', action: () => setIsCreateForMeOpen(true) },
               { label: 'Grab from Web', action: () => setIsGrabberOpen(true) },
@@ -3317,6 +4534,8 @@ export default function App() {
             initialRecipe={editingRecipe}
             folderHandle={vaultStatus.folderHandle}
             imageService={imageService}
+            runSessionAsset={runSessionAssetOperation}
+            onBeforeSave={ensureDesktopVaultForSave}
             network={networkAdapter}
             onSave={handleSaveRecipe}
             onOpenAiSettings={() => {
@@ -3343,25 +4562,33 @@ export default function App() {
         setMealPlan={setMealPlan}
         setShoppingCategories={setShoppingCategories}
         setNotes={setNotes}
-        onRestoreStarterCollection={() => {
-          setPersonalRecipes([]);
-          setNotes([]);
-          setStarterOverrides({});
-          setMealPlan(STARTER_MEAL_PLAN);
-          setShoppingCategories(STARTER_SHOPPING_CATEGORIES);
+        signatureImportOffer={signaturePromptOpen}
+        signatureImportWritable={Boolean(vaultAdapter) && vaultWritePermission === 'granted'}
+        signatureImportPermission={vaultWritePermission}
+        signatureImportState={signatureImportState}
+        onImportSignatureNine={() => { void handleImportSignatureNine(); }}
+        onDismissSignatureImport={dismissSignatureImport}
+        onOpenVaultFolder={isDesktopRuntime() && activeVaultRef.current.handle?.isDesktopVault
+          ? () => { void openDesktopVaultFolder(); }
+          : undefined}
+        onImportedCollectionActivated={() => {
+          setHasPersonalVaultCollection(true);
+          setVaultView('all');
           setSelectedRecipe(null);
           setCookingRecipe(null);
           setEditingRecipe(null);
-          setVaultStatus({
-            isConnected: false,
-            vaultPath: DEFAULT_VAULT_PATH,
-            accessType: 'starter_vault',
-            connectionState: 'starter',
-          });
-          setVaultHydrated(true);
-          setVaultView('starter');
-          setActiveTab('grid');
+          setStarterSaveState(null);
+          setStarterSavePending(false);
+          setVaultNotice(null);
+          setSignatureImportState({ status: 'idle', completed: 0, total: 0, summary: null });
+          setSignaturePromptOpen(true);
         }}
+        onReplaceCollection={transitionToUploadedCollection}
+        beginCollectionImport={beginCollectionImportWithScope}
+        captureCollectionSession={() => activeVaultRef.current.session}
+        isCollectionOperationCurrent={(token) =>
+          vaultAuthority.isCurrent(token as VaultSession | null | undefined)
+        }
         onOpenWebGrabber={() => setIsGrabberOpen(true)}
         onDirectVaultConnected={handleDirectVaultConnected}
       />
@@ -3378,6 +4605,7 @@ export default function App() {
         isOpen={isGrabberOpen}
         folderHandle={vaultStatus.folderHandle}
         imageService={imageService}
+        runSessionAsset={runSessionAssetOperation}
         initialUrl={grabberInitialUrl}
         onClose={() => setIsGrabberOpen(false)}
         onSaveRecipe={async (savedRecipe) => {
@@ -3463,5 +4691,6 @@ export default function App() {
         onSaveRecipe={handleSaveGeneratedRecipe}
       />
     </div>
+    </VaultAssetScopeProvider>
   );
 }

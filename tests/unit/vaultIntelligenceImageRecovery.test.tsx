@@ -465,6 +465,27 @@ describe("RecipeImageRecoveryController — flow, liveness, guards, conflicts", 
     expect(calls).toBe(1);
   });
 
+  it("reports a truthful partial success when the asset write succeeded but scope registration failed", async () => {
+    const network = fakeNetwork();
+    const saveImage = vi.fn(async () => ({
+      imagePath: "Assets/Test Soup.png",
+      provider: "gemini-image",
+      model: "m",
+      generatedAt: "t",
+      registration: "failed" as const,
+    }));
+    const support = fakeSupport({ saveImage: saveImage as unknown as RecipeImageRecoverySupport["saveImage"] });
+    const { controller, saved, states } = makeController(support, network);
+    await controller.generate(recipeFixture());
+    await controller.save(recipeFixture());
+    const state = controllerState(states);
+    expect(state.phase).toBe("saved");
+    expect(state.messageKind).toBe("info");
+    expect(state.message).toMatch(/could not be refreshed automatically/i);
+    expect(state.message).toContain("Assets/Test Soup.png");
+    expect(saved).toHaveLength(1);
+  });
+
   it("close during generation DROPS the late result (no state repopulation)", async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => { release = r; });

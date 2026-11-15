@@ -669,7 +669,13 @@ function startChild() {
 }
 
 export function isNativeVoiceEnabled() {
-  return process.env.TKC_NATIVE_VOICE_ENABLED === '1';
+  // Heart is available whenever its verified local assets are present. An
+  // explicit false/0/off remains a supported operator opt-out. Runtime asset
+  // verification still fails closed, so this does not enable downloads or
+  // unverified models.
+  const flag = String(process.env.TKC_NATIVE_VOICE_ENABLED ?? '').trim().toLowerCase();
+  if (flag === '0' || flag === 'false' || flag === 'off' || flag === 'disabled') return false;
+  return true;
 }
 
 export function getLastNativeVoiceTiming() {

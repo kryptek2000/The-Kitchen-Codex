@@ -380,6 +380,10 @@ export function mapRecipeImageRecoveryError(error: unknown): {
         return { message: 'The vault has changed since this image was generated. Please try again.', conflict: 'VAULT_CHANGED' };
       case 'IMAGE_ALREADY_PRESENT':
         return { message: 'This recipe already has a valid image. Remove it first if you want to replace it.', conflict: 'IMAGE_ALREADY_PRESENT' };
+      case 'ASSET_WRITE_UNVERIFIED':
+        return { message: 'The generated image could not be verified in the active Vault. The recipe was not saved.' };
+      case 'ASSET_REFERENCE_INVALID':
+        return { message: 'The recipe contains an image reference that is not valid in the active Vault. The recipe was not saved.' };
       case 'PREVIEW_UNAVAILABLE':
         return { message: 'The image preview has expired. Please generate it again.', conflict: 'PREVIEW_EXPIRED' };
       default:
@@ -671,11 +675,15 @@ export class RecipeImageRecoveryController {
         }),
       (result) => {
         this.session.setBusy(false);
+        const registrationWarning =
+          result.registration === 'failed' || result.registration === 'skipped-inactive';
         this.setState({
           phase: 'saved',
           preview: undefined,
-          message: `Image saved to ${result.imagePath}.`,
-          messageKind: 'success',
+          message: registrationWarning
+            ? `Image saved to ${result.imagePath}, but the active Vault view could not be refreshed automatically. Refresh the Vault to view it.`
+            : `Image saved to ${result.imagePath}.`,
+          messageKind: registrationWarning ? 'info' : 'success',
           conflict: undefined,
         });
         this.deps.onSaved?.(result);

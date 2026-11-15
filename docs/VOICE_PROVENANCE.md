@@ -61,7 +61,9 @@ independent audit.
   upstream reference digest; redistribution rights are governed by the
   repository's Apache-2.0 license and upstream terms.
 - No additional downloads are performed during startup or synthesis. Native
-  voice remains disabled by default (`TKC_NATIVE_VOICE_ENABLED=1` required).
+  voice is available automatically when the verified local assets are present;
+  set `TKC_NATIVE_VOICE_ENABLED=0` to disable it explicitly. A missing or
+  unverified cache still reports unavailable and fails closed.
 - A duplicate model cache remains under `node_modules/@huggingface/transformers/.cache`
   from the previous implementation. It is no longer read by the runtime; safe
   cleanup is reported separately and deferred until after acceptance.

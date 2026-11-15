@@ -15,6 +15,7 @@ import App from '../../src/App';
 
 afterEach(() => {
   cleanup();
+  window.localStorage?.clear();
   window.history.replaceState(null, '', '#/');
 });
 

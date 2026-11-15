@@ -23,10 +23,13 @@ import {
 } from 'lucide-react';
 import { ObsidianRecipe, ParsedIngredient, RecipeStep, ObsidianCallout } from '../types';
 import { serializeRecipeToObsidianMarkdown, parseObsidianRecipeMarkdown } from '../utils/markdownParser';
-import { saveImageToVaultAssets, syncResolveVaultAssetUrl, type SaveImageDeps } from '../utils/vaultAssets';
+import { saveImageToVaultAssetsCollisionSafe, type SaveImageDeps, type SessionAssetRunner } from '../utils/vaultAssets';
+import { validateRecipeAssetReferences } from '../utils/assetReferences';
 import { resolveNewRecipeVaultPath } from '../core/vaultPath';
 import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
 import { buildAiSelectionRequestOptions } from '../application/aiSelection';
+import { useVaultAssetScope } from '../hooks/VaultAssetScopeContext';
+import { getRecipeImage } from '../utils/imageHelper';
 
 interface RecipeGrabberModalProps {
   isOpen: boolean;
@@ -36,6 +39,8 @@ interface RecipeGrabberModalProps {
   folderHandle?: any;
   /** Injected asset save dependencies (asset boundary + binary downloader) from the shell. */
   imageService?: SaveImageDeps;
+  /** Session-bound composite asset+recipe runner supplied by the App shell. */
+  runSessionAsset?: SessionAssetRunner;
   /** Optional pre-filled URL (e.g. a handoff from Ask My Kitchen web discovery). */
   initialUrl?: string;
   network: NetworkAdapter;
@@ -94,9 +99,11 @@ export function RecipeGrabberModal({
   onOpenInEditor,
   folderHandle,
   imageService,
+  runSessionAsset,
   initialUrl,
   network,
 }: RecipeGrabberModalProps) {
+  const assetScope = useVaultAssetScope();
   const [inputMode, setInputMode] = useState<'url' | 'text'>('url');
   const [urlInput, setUrlInput] = useState('');
   const [textInput, setTextInput] = useState('');
@@ -204,7 +211,11 @@ export function RecipeGrabberModal({
     setErrorMsg(null);
   };
 
-  const processImageSave = async (titleToUse: string, imageSrc: string): Promise<string> => {
+  const processImageSave = async (
+    titleToUse: string,
+    imageSrc: string,
+    deps: SaveImageDeps
+  ): Promise<string> => {
     if (!saveImageToAssets || !imageSrc || !imageSrc.trim()) {
       return imageSrc;
     }
@@ -214,7 +225,10 @@ export function RecipeGrabberModal({
     }
     try {
       setLoadingStep('Saving food image to Assets/ folder in Obsidian vault...');
-      const saved = await saveImageToVaultAssets(imageService ?? { folderHandle }, titleToUse, imageSrc);
+      const saved = await saveImageToVaultAssetsCollisionSafe(deps, titleToUse, imageSrc);
+      if (!saved.success || !saved.createdNew) {
+        throw new Error(saved.error || 'Could not save the image to the active Vault.');
+      }
       return saved.relativePath;
     } catch (err) {
       console.warn('Failed to save image to Assets/ folder, falling back to original URL:', err);
@@ -258,17 +272,31 @@ export function RecipeGrabberModal({
     return parsed;
   };
 
+  const sessionErrorMessage = (err: any, fallback: string): string =>
+    err?.name === 'VaultSessionSupersededError'
+      ? 'The Vault changed before this operation completed. The recipe was not added to the new Vault. Any image already written remains in the original Vault.'
+      : err?.message || fallback;
+
   const handleSaveToVault = async () => {
     try {
       setIsLoading(true);
       const cleanTitle = editTitle.trim() || 'Untitled Recipe';
-      const finalImage = await processImageSave(cleanTitle, editImage);
-      const finalRecipe = constructFinalRecipe(finalImage);
-      await onSaveRecipe(finalRecipe);
+      const execute = async (deps: SaveImageDeps) => {
+        const finalImage = await processImageSave(cleanTitle, editImage, deps);
+        const finalRecipe = constructFinalRecipe(finalImage);
+        const validation = await validateRecipeAssetReferences(deps, finalRecipe);
+        if (!validation.ok) throw new Error(validation.reason || 'The active Vault could not verify this recipe image reference.');
+        await onSaveRecipe(finalRecipe);
+      };
+      if (runSessionAsset) {
+        await runSessionAsset(execute);
+      } else {
+        await execute(imageService ?? { folderHandle });
+      }
       handleReset();
       onClose();
     } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to save recipe to vault.');
+      setErrorMsg(sessionErrorMessage(err, 'Failed to save recipe to vault.'));
     } finally {
       setIsLoading(false);
     }
@@ -278,15 +306,20 @@ export function RecipeGrabberModal({
     try {
       setIsLoading(true);
       const cleanTitle = editTitle.trim() || 'Untitled Recipe';
-      const finalImage = await processImageSave(cleanTitle, editImage);
-      const finalRecipe = constructFinalRecipe(finalImage);
-      if (onOpenInEditor) {
-        onOpenInEditor(finalRecipe);
+      const execute = async (deps: SaveImageDeps) => {
+        const finalImage = await processImageSave(cleanTitle, editImage, deps);
+        const finalRecipe = constructFinalRecipe(finalImage);
+        onOpenInEditor?.(finalRecipe);
+      };
+      if (runSessionAsset) {
+        await runSessionAsset(execute);
+      } else {
+        await execute(imageService ?? { folderHandle });
       }
       handleReset();
       onClose();
     } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to open recipe in editor.');
+      setErrorMsg(sessionErrorMessage(err, 'Failed to open recipe in editor.'));
     } finally {
       setIsLoading(false);
     }
@@ -552,6 +585,15 @@ export function RecipeGrabberModal({
                 </button>
               </div>
 
+              {errorMsg && (
+                <div role="alert" className="p-3.5 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-300 text-xs leading-relaxed">
+                  <div className="flex items-start gap-2.5">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>{errorMsg}</span>
+                  </div>
+                </div>
+              )}
+
               {/* Quick Editable Metadata Fields */}
               <div className="bg-[#191919] p-4 rounded-xl border border-white/5 space-y-3">
                 <h3 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
@@ -633,7 +675,7 @@ export function RecipeGrabberModal({
                     <div className="flex items-start gap-3">
                       <div className="w-16 h-16 rounded-lg overflow-hidden bg-black/50 border border-white/10 shrink-0 relative">
                         <img
-                          src={editImage.startsWith('Assets/') || editImage.startsWith('assets/') ? syncResolveVaultAssetUrl(editImage) || editImage : editImage}
+                          src={getRecipeImage({ image: editImage }, assetScope)}
                           alt={editTitle || 'Recipe preview'}
                           referrerPolicy="no-referrer"
                           className="w-full h-full object-cover"

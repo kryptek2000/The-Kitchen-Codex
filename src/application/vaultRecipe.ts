@@ -21,7 +21,7 @@ import type { VaultAdapter } from './adapters/VaultAdapter';
 import type { ObsidianRecipe, VaultNote, MealPlanDay, ShoppingCategoryGroup } from '../types';
 import { classifyVaultMarkdown } from '../core/vaultClassification';
 import { resolveRecipeVaultPath } from '../core/vaultPath';
-import { serializeRecipeToObsidianMarkdown } from '../utils/markdownParser';
+import { serializeRecipePreservingContent } from '../utils/markdownParser';
 
 /** The aggregated result of reading + classifying every vault Markdown file. */
 export interface VaultScanResult {
@@ -70,7 +70,9 @@ export async function saveRecipeWithVaultAdapter(
   recipe: ObsidianRecipe
 ): Promise<void> {
   const path = resolveRecipeVaultPath(recipe);
-  const markdown = serializeRecipeToObsidianMarkdown(recipe);
+  // Preserve owner-authored body content; only supported edited sections and
+  // managed frontmatter fields are updated.
+  const markdown = serializeRecipePreservingContent(recipe);
   await vault.writeText(path, markdown);
 }
 

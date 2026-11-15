@@ -6,7 +6,10 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    setupFiles: ['./tests/rateLimitIsolation.ts'],
+    setupFiles: [
+      './tests/rateLimitIsolation.ts',
+      './tests/localStorageJsdomRepair.ts',
+    ],
     include: ['tests/**/*.{test,spec}.ts?(x)', 'src/**/*.{test,spec}.ts?(x)'],
     exclude: ['node_modules', 'dist', '.git'],
   },

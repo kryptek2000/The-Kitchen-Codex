@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { ObsidianRecipe } from '../types';
 import { getRecipeImage, DEFAULT_FOOD_IMAGES } from '../utils/imageHelper';
+import { useVaultAssetScope } from '../hooks/VaultAssetScopeContext';
 
 interface DataviewTableViewProps {
   recipes: ObsidianRecipe[];
@@ -26,6 +27,7 @@ export function DataviewTableView({
   onSelectRecipe,
   onStartCooking,
 }: DataviewTableViewProps) {
+  const assetScope = useVaultAssetScope();
   const [sortField, setSortField] = useState<SortField>('title');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
 
@@ -159,7 +161,7 @@ export function DataviewTableView({
                     <div className="flex items-center gap-3">
                       <div className="w-11 h-11 rounded-lg overflow-hidden shrink-0 border border-white/10 bg-black">
                         <img
-                          src={getRecipeImage(recipe)}
+                          src={getRecipeImage(recipe, assetScope)}
                           alt={recipe.title}
                           referrerPolicy="no-referrer"
                           className="w-full h-full object-cover"

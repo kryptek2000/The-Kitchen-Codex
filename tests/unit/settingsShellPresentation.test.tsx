@@ -46,7 +46,7 @@ function recipe(id: string): ObsidianRecipe {
   } as unknown as ObsidianRecipe;
 }
 
-function renderVaultModal(status: VaultSyncStatus = vaultStatus()) {
+function renderVaultModal(status: VaultSyncStatus = vaultStatus(), extra: Record<string, unknown> = {}) {
   const setVaultStatus = vi.fn();
   const setRecipes = vi.fn();
   render(
@@ -60,7 +60,11 @@ function renderVaultModal(status: VaultSyncStatus = vaultStatus()) {
       setMealPlan={vi.fn()}
       setShoppingCategories={vi.fn()}
       setNotes={vi.fn()}
+      signatureImportWritable={false}
+      onImportSignatureNine={vi.fn()}
+      onDismissSignatureImport={vi.fn()}
       onDirectVaultConnected={vi.fn()}
+      {...extra}
     />
   );
   return { setVaultStatus, setRecipes };
@@ -125,8 +129,78 @@ describe('UD-2D.4 — Vault connection presentation', () => {
     fireEvent.click(screen.getByRole('tab', { name: /Vault Stats/i }));
     expect(document.getElementById('vault-panel-manage')).toBeTruthy();
     expect(screen.getByText('Recipes currently loaded')).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Use Signature Collection/i })).toBeTruthy();
+    expect(screen.getByText('Signature Nine (optional)')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Connect Writable Vault/i })).toBeTruthy();
     expect(screen.getByRole('button', { name: /Export Markdown/i })).toBeTruthy();
+  });
+
+  it('explains the read-only import boundary and does not offer a false durable save', () => {
+    renderVaultModal(
+      vaultStatus({ isConnected: true, accessType: 'uploaded_folder', connectionState: 'connected' }),
+      { signatureImportOffer: true, signatureImportWritable: false }
+    );
+    const offer = screen.getByTestId('signature-import-offer');
+    expect(offer.textContent).toMatch(/read-only files/i);
+    expect(offer.textContent).toMatch(/writable Vault folder/i);
+    expect(within(offer).queryByTestId('add-signature-nine')).toBeNull();
+    expect(within(offer).getByRole('button', { name: /Connect Writable Vault/i })).toBeTruthy();
+  });
+
+  it('does not offer Add 9 when read/write permission is denied or merely prompted', () => {
+    const { unmount } = render(
+      <ConnectVaultModal
+        isOpen
+        onClose={vi.fn()}
+        vaultStatus={vaultStatus({ isConnected: true, accessType: 'filesystem_api', connectionState: 'connected' })}
+        setVaultStatus={vi.fn()}
+        recipes={[]}
+        setRecipes={vi.fn()}
+        setMealPlan={vi.fn()}
+        setShoppingCategories={vi.fn()}
+        setNotes={vi.fn()}
+        signatureImportOffer
+        signatureImportWritable={false}
+        signatureImportPermission="denied"
+        onImportSignatureNine={vi.fn()}
+        onDismissSignatureImport={vi.fn()}
+        onDirectVaultConnected={vi.fn()}
+      />
+    );
+    let offer = screen.getByTestId('signature-import-offer');
+    expect(within(offer).queryByTestId('add-signature-nine')).toBeNull();
+    expect(offer.textContent).toMatch(/Write access to this Vault is denied/i);
+    unmount();
+
+    render(
+      <ConnectVaultModal
+        isOpen
+        onClose={vi.fn()}
+        vaultStatus={vaultStatus({ isConnected: true, accessType: 'filesystem_api', connectionState: 'connected' })}
+        setVaultStatus={vi.fn()}
+        recipes={[]}
+        setRecipes={vi.fn()}
+        setMealPlan={vi.fn()}
+        setShoppingCategories={vi.fn()}
+        setNotes={vi.fn()}
+        signatureImportOffer
+        signatureImportWritable={false}
+        signatureImportPermission="prompt"
+        onImportSignatureNine={vi.fn()}
+        onDismissSignatureImport={vi.fn()}
+        onDirectVaultConnected={vi.fn()}
+      />
+    );
+    offer = screen.getByTestId('signature-import-offer');
+    expect(within(offer).queryByTestId('add-signature-nine')).toBeNull();
+    expect(offer.textContent).toMatch(/has not granted read\/write access/i);
+  });
+
+  it('does not auto-open the optional import offer on reconnect/settings open', () => {
+    renderVaultModal(
+      vaultStatus({ isConnected: true, accessType: 'filesystem_api', connectionState: 'connected' }),
+      { signatureImportOffer: false, signatureImportWritable: true }
+    );
+    expect(screen.queryByTestId('signature-import-offer')).toBeNull();
   });
 
   it('does not present the starter library as the user’s connected Vault', () => {

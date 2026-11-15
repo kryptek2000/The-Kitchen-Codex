@@ -85,3 +85,35 @@ describe('saveImageToVaultAssets (Phase 4D3D)', () => {
     }
   });
 });
+
+describe('R6 — case-insensitive reference schemes', () => {
+  it('never downloads or writes a case-variant blob URL source', async () => {
+    let writes = 0;
+    const asset = {
+      write: async () => { writes += 1; },
+      exists: async () => false,
+      read: async () => new Uint8Array(),
+      delete: async () => {},
+    } as any;
+    const downloader = { downloadRemoteImage: vi.fn(async () => ({ bytes: mk('PNG'), contentType: 'image/png' })) };
+    for (const source of ['blob:x', 'Blob:x', 'BLOB:x', 'BLOB:http://example.test/a']) {
+      const result = await saveImageToVaultAssets({ asset, downloadRemoteImage: downloader }, 'Pic', source);
+      expect(result.success).toBe(false);
+    }
+    expect(downloader.downloadRemoteImage).not.toHaveBeenCalled();
+    expect(writes).toBe(0);
+  });
+
+  it('accepts uppercase DATA URLs through the existing byte path', async () => {
+    const writes: string[] = [];
+    const asset = {
+      write: async (path: string) => { writes.push(path); },
+      exists: async () => false,
+      read: async () => new Uint8Array(),
+      delete: async () => {},
+    } as any;
+    const result = await saveImageToVaultAssets({ asset }, 'Upper Data', 'DATA:image/png;base64,aGVsbG8=');
+    expect(result.success).toBe(true);
+    expect(writes).toHaveLength(1);
+  });
+});
