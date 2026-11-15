@@ -14,7 +14,7 @@ permissions:
 jobs:
   desktop:
     name: Native Vault, Desktop Tests, Package & Smoke
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
 
     steps:
@@ -43,18 +43,26 @@ jobs:
 
       - name: Install native build prerequisites
         run: |
+          set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y build-essential linux-libc-dev xvfb xauth \
-            libnss3 libgbm1
-          # Ubuntu's t64 transition changes some library package names.
+          # Ubuntu 24.04 uses the t64 names for these Electron runtime
+          # dependencies. Verify a real installable candidate rather than a
+          # virtual package before asking apt to install it.
           for package in \
-            libgtk-3-0 libgtk-3-0t64 \
-            libatk-bridge2.0-0 libatk-bridge2.0-0t64 \
-            libasound2 libasound2t64; do
-            if apt-cache show "$package" >/dev/null 2>&1; then
-              sudo apt-get install -y "$package"
+            libgtk-3-0t64 \
+            libatk-bridge2.0-0t64 \
+            libasound2t64 \
+            libnss3 \
+            libgbm1; do
+            candidate="$(apt-cache policy "$package" | awk '/Candidate:/ {print $2; exit}')"
+            if [ -z "${candidate:-}" ] || [ "$candidate" = "(none)" ]; then
+              echo "::error title=Missing Electron runtime dependency::$package has no installable candidate on ubuntu-24.04."
+              exit 1
             fi
+            echo "$package candidate: $candidate"
           done
+          sudo apt-get install -y build-essential linux-libc-dev xvfb xauth \
+            libnss3 libgbm1 libgtk-3-0t64 libatk-bridge2.0-0t64 libasound2t64
           test -f /usr/include/linux/openat2.h
           g++ --version
 
