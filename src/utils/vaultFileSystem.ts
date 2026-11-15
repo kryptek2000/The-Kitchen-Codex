@@ -5,10 +5,10 @@ import {
   serializeShoppingListToMarkdown,
 } from './markdownParser';
 import {
-  vaultAssets,
   isImageFile,
   saveImageToVaultAssets,
   scanVaultAssetsFromHandle,
+  type VaultAssetScope,
 } from './vaultAssets';
 import { classifyVaultMarkdown } from '../core/vaultClassification';
 import { toVaultRelativePath } from '../core/vaultPath';
@@ -47,19 +47,46 @@ function openIDB(): Promise<IDBDatabase> {
 }
 
 /**
- * Persists the directory handle in IndexedDB
+ * Monotonic epoch for the ONE persisted Vault handle. Every explicit clear
+ * advances it, so an older save that opens IndexedDB after the clear cannot
+ * resurrect the handle it was meant to replace.
  */
-export async function saveDirectoryHandleToIDB(handle: any): Promise<void> {
+let handlePersistenceEpoch = 0;
+let handlePersistenceSequence = 0;
+let latestHandleSaveSequence = 0;
+let latestHandleClearSequence = 0;
+
+/**
+ * Persists the directory handle in IndexedDB.
+ *
+ * Returns true only when the write transaction completed. Sequence checks after
+ * IndexedDB opens ensure an older save/save-clear pair cannot win merely
+ * because its open resolved later. A caller that has superseded this save also
+ * prevents the put.
+ */
+export async function saveDirectoryHandleToIDB(
+  handle: any,
+  options?: { readonly shouldPersist?: () => boolean }
+): Promise<boolean> {
+  const epochAtStart = handlePersistenceEpoch;
+  const saveSequence = ++handlePersistenceSequence;
+  latestHandleSaveSequence = saveSequence;
   try {
     const db = await openIDB();
+    if (epochAtStart !== handlePersistenceEpoch) return false;
+    if (latestHandleClearSequence > saveSequence) return false;
+    if (latestHandleSaveSequence > saveSequence) return false;
+    if (options?.shouldPersist && !options.shouldPersist()) return false;
     const tx = db.transaction(IDB_STORE, 'readwrite');
     tx.objectStore(IDB_STORE).put(handle, IDB_KEY);
-    return new Promise((resolve, reject) => {
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
+    return await new Promise<boolean>((resolve) => {
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+      tx.onabort = () => resolve(false);
     });
   } catch (err) {
     console.warn('Could not save directory handle to IndexedDB:', err);
+    return false;
   }
 }
 
@@ -82,20 +109,37 @@ export async function getDirectoryHandleFromIDB(): Promise<any | null> {
 }
 
 /**
- * Clears directory handle from IndexedDB
+ * Clears the persisted directory handle and invalidates every save that began
+ * before this clear. Returns true only when the delete transaction completed;
+ * callers must not claim the previous authorization was forgotten on false.
  */
-export async function clearDirectoryHandleFromIDB(): Promise<void> {
+export async function clearDirectoryHandleFromIDB(): Promise<boolean> {
+  handlePersistenceEpoch += 1;
+  const clearSequence = ++handlePersistenceSequence;
+  latestHandleClearSequence = clearSequence;
   try {
     const db = await openIDB();
+    // A newer save or clear was requested while IndexedDB was opening. The
+    // newer operation owns the persisted handle; this older clear must not
+    // delete it.
+    if (latestHandleSaveSequence > clearSequence) return false;
+    if (latestHandleClearSequence > clearSequence) return false;
     const tx = db.transaction(IDB_STORE, 'readwrite');
     tx.objectStore(IDB_STORE).delete(IDB_KEY);
-    return new Promise((resolve) => {
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => resolve();
+    return await new Promise<boolean>((resolve) => {
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+      tx.onabort = () => resolve(false);
     });
   } catch (err) {
     console.warn('Could not delete handle from IndexedDB:', err);
+    return false;
   }
+}
+
+/** Test-only: reads the epoch without changing persistence state. */
+export function getVaultHandlePersistenceEpochForTests(): number {
+  return handlePersistenceEpoch;
 }
 
 export interface VaultScanResult {
@@ -110,7 +154,10 @@ export interface VaultScanResult {
 /**
  * Scans an active FileSystemDirectoryHandle on disk for recipes, meal plans, and shopping lists
  */
-export async function scanVaultDirectory(dirHandle: any): Promise<VaultScanResult> {
+export async function scanVaultDirectory(
+  dirHandle: any,
+  assetScope?: VaultAssetScope
+): Promise<VaultScanResult> {
   const recipes: ObsidianRecipe[] = [];
   const notes: VaultNote[] = [];
   let foundMealPlan: MealPlanDay[] | undefined = undefined;
@@ -148,8 +195,7 @@ export async function scanVaultDirectory(dirHandle: any): Promise<VaultScanResul
         } else if (isImageFile(entry.name)) {
           try {
             const file = await entry.getFile();
-            const blobUrl = URL.createObjectURL(file);
-            vaultAssets.registerAsset(entryPath, entry, blobUrl);
+            if (assetScope?.isAccepting()) assetScope.registerAsset(entryPath, file);
           } catch (err) {
             console.warn('Failed to index vault image asset:', entry.name, err);
           }
@@ -326,7 +372,10 @@ export function downloadMarkdownFile(filename: string, content: string) {
 /**
  * Reads uploaded files from <input type="file" webkitdirectory /> or File[]
  */
-export async function parseUploadedFileList(fileList: FileList | File[]): Promise<{
+export async function parseUploadedFileList(
+  fileList: FileList | File[],
+  assetScope?: VaultAssetScope
+): Promise<{
   recipes: ObsidianRecipe[];
   notes?: VaultNote[];
   mealPlan?: MealPlanDay[];
@@ -366,8 +415,7 @@ export async function parseUploadedFileList(fileList: FileList | File[]): Promis
     } else if (isImageFile(file.name)) {
       if (!relativePath) continue;
       try {
-        const blobUrl = URL.createObjectURL(file);
-        vaultAssets.registerAsset(relativePath, file, blobUrl);
+        if (assetScope?.isAccepting()) assetScope.registerAsset(relativePath, file);
       } catch (err) {
         console.warn('Failed to index uploaded image file:', file.name, err);
       }
@@ -379,7 +427,10 @@ export async function parseUploadedFileList(fileList: FileList | File[]): Promis
 /**
  * Parses files and folders from HTML5 drag and drop DataTransfer
  */
-export async function parseDroppedFilesAndFolders(dataTransfer: DataTransfer): Promise<{
+export async function parseDroppedFilesAndFolders(
+  dataTransfer: DataTransfer,
+  assetScope?: VaultAssetScope
+): Promise<{
   recipes: ObsidianRecipe[];
   notes?: VaultNote[];
   mealPlan?: MealPlanDay[];
@@ -431,8 +482,7 @@ export async function parseDroppedFilesAndFolders(dataTransfer: DataTransfer): P
             }
           } else if (isImageFile(file.name)) {
             try {
-              const blobUrl = URL.createObjectURL(file);
-              vaultAssets.registerAsset(filePath, file, blobUrl);
+              if (assetScope?.isAccepting()) assetScope.registerAsset(filePath, file);
             } catch (err) {
               console.warn('Failed to index dropped image file:', file.name, err);
             }
@@ -490,7 +540,7 @@ export async function parseDroppedFilesAndFolders(dataTransfer: DataTransfer): P
       }
     }
   } else if (dataTransfer.files && dataTransfer.files.length > 0) {
-    const res = await parseUploadedFileList(dataTransfer.files);
+    const res = await parseUploadedFileList(dataTransfer.files, assetScope);
     recipes.push(...res.recipes);
     if (res.notes) notes.push(...res.notes);
     if (res.mealPlan) foundMealPlan = res.mealPlan;

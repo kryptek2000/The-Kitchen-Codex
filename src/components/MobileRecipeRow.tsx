@@ -3,6 +3,7 @@ import { BookMarked, CalendarPlus, Clock, Flame, Heart, ImageOff, Play, Users } 
 import { ObsidianRecipe } from '../types';
 import { getRecipeImage, LOCAL_RECIPE_IMAGE_PLACEHOLDER } from '../utils/imageHelper';
 import { useVaultImage } from '../hooks/useVaultImage';
+import { useVaultAssetScope } from '../hooks/VaultAssetScopeContext';
 import { visibleRecipeTags } from '../utils/recipePresentation';
 
 interface MobileRecipeRowProps {
@@ -29,7 +30,8 @@ export function MobileRecipeRow({
   const [imageError, setImageError] = useState(false);
   const [announcement, setAnnouncement] = useState('');
 
-  const defaultImg = getRecipeImage(recipe);
+  const assetScope = useVaultAssetScope();
+  const defaultImg = getRecipeImage(recipe, assetScope);
   const reactiveVaultImage = useVaultImage(recipe.image, defaultImg);
   const imageUrl = imageError ? null : reactiveVaultImage || defaultImg;
 

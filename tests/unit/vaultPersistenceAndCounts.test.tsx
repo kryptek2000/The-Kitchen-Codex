@@ -14,7 +14,7 @@
  * the pure helpers; the platform boundary is injected.
  */
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { render, screen, cleanup, fireEvent } from '@testing-library/react';
@@ -23,6 +23,7 @@ import {
   connectionStateForRestoreAction,
   describeVaultConnection,
   needsReconnectAction,
+  queryVaultWritePermission,
   reconnectRememberedVault,
   resolveVaultRestoreAction,
 } from '../../src/core/vaultConnection';
@@ -115,6 +116,30 @@ describe('Vault restore decision', () => {
   });
 });
 
+describe('Vault write permission query (non-prompting)', () => {
+  it('queries the handle with readwrite mode and reports granted', async () => {
+    const queryPermission = vi.fn(async () => 'granted');
+    await expect(queryVaultWritePermission({ queryPermission })).resolves.toBe('granted');
+    expect(queryPermission).toHaveBeenCalledWith({ mode: 'readwrite' });
+  });
+
+  it('reports denied and prompt without treating them as writable', async () => {
+    await expect(queryVaultWritePermission({ queryPermission: async () => 'denied' })).resolves.toBe('denied');
+    await expect(queryVaultWritePermission({ queryPermission: async () => 'prompt' })).resolves.toBe('prompt');
+  });
+
+  it('never claims authorization when the handle cannot answer or throws', async () => {
+    await expect(queryVaultWritePermission(null)).resolves.toBe('unknown');
+    await expect(queryVaultWritePermission({})).resolves.toBe('unsupported');
+    await expect(queryVaultWritePermission({
+      queryPermission: async () => { throw new Error('not allowed'); },
+    })).resolves.toBe('unknown');
+    await expect(queryVaultWritePermission({
+      queryPermission: async () => 'something-else',
+    })).resolves.toBe('unknown');
+  });
+});
+
 describe('Reconnect flow (user gesture)', () => {
   it('requests permission and loads the Vault when the user grants it', async () => {
     const calls: string[] = [];
@@ -131,9 +156,9 @@ describe('Reconnect flow (user gesture)', () => {
     if (outcome.status === 'reconnected') expect(outcome.handle).toBe(handle);
   });
 
-  it('App propagates the reauthorized handle into the committed Vault snapshot', () => {
+  it('App propagates the reauthorized handle into the session-bound Vault transition', () => {
     const appSource = readFileSync(resolve(process.cwd(), 'src', 'App.tsx'), 'utf8');
-    expect(appSource).toContain('commitVaultSnapshot(outcome.data, generation, outcome.handle)');
+    expect(appSource).toContain('transitionToFilesystemVault(transition, outcome.handle, outcome.data');
   });
 
   it('does NOT load the Vault when the user declines', async () => {
@@ -244,7 +269,7 @@ describe('The starter Vault is never presented as the connected Vault', () => {
 
   it('labels the starter Vault as sample data', () => {
     render(<SideNav {...sideNavProps()} />);
-    expect(document.getElementById('sidenav-vault-status-line')!.textContent).toBe('Starter vault · 9 sample recipes');
+    expect(document.getElementById('sidenav-vault-status-line')!.textContent).toBe('Starter cookbook · 9 recipes');
   });
 
   it('describes the remembered Vault honestly in the status text', () => {

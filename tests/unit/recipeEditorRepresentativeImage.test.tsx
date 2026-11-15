@@ -75,11 +75,12 @@ function makeNetwork(): { network: NetworkAdapter; post: ReturnType<typeof vi.fn
 }
 
 function makeAsset() {
+  const files = new Map<string, Uint8Array>();
   return {
-    write: vi.fn(async () => {}),
-    exists: vi.fn(async () => false),
-    read: vi.fn(async () => new Uint8Array()),
-    delete: vi.fn(async () => {}),
+    write: vi.fn(async (path: string, bytes: Uint8Array) => { files.set(path, bytes.slice()); }),
+    exists: vi.fn(async (path: string) => files.has(path)),
+    read: vi.fn(async (path: string) => files.get(path) ?? new Uint8Array()),
+    delete: vi.fn(async (path: string) => { files.delete(path); }),
   } as unknown as AssetAdapter;
 }
 
@@ -302,10 +303,11 @@ describe('RecipeEditorModal — rollback surfacing, object-URL lifecycle, Escape
 
   it('shows the orphan warning when the delete adapter is unavailable', async () => {
     const { network } = makeNetwork();
+    const files = new Map<string, Uint8Array>();
     const asset = {
-      write: vi.fn(async () => {}),
-      exists: vi.fn(async () => false),
-      read: vi.fn(async () => new Uint8Array()),
+      write: vi.fn(async (path: string, bytes: Uint8Array) => { files.set(path, bytes.slice()); }),
+      exists: vi.fn(async (path: string) => files.has(path)),
+      read: vi.fn(async (path: string) => files.get(path) ?? new Uint8Array()),
     } as unknown as AssetAdapter;
     const onSave = vi.fn(async () => {
       throw new Error('vault write failed');

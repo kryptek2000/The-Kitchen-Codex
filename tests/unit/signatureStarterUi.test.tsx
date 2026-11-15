@@ -61,11 +61,11 @@ describe('Signature built-in ownership UI', () => {
       starterSavePending: true,
       starterSaveState: {
         status: 'saved',
-        message: '“Thai Green Coconut Curry” was saved to My Vault.',
+        message: 'Saved and verified: “Thai Green Coconut Curry” is now in your Vault.',
       },
     });
     expect(screen.getByTestId('save-starter-to-vault-btn').textContent).toContain('Saving');
-    expect(screen.getByTestId('starter-save-status').textContent).toContain('saved to My Vault');
+    expect(screen.getByTestId('starter-save-status').textContent).toContain('Saved and verified');
   });
 
   it('restores ordinary Edit and Delete controls for a saved personal copy', () => {

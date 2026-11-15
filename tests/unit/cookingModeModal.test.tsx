@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-library/react';
 import React from 'react';
 
 import { CookingModeModal } from '../../src/components/CookingModeModal';
@@ -72,7 +72,7 @@ afterEach(() => {
   testVoiceService?.dispose();
 });
 
-function installVoiceTestDoubles(available = true) {
+function installVoiceTestDoubles(available = true, playRejects = false) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     if (String(input).includes('/api/voice/status')) {
       return { ok: true, json: async () => ({ enabled: available }) } as Response;
@@ -84,9 +84,14 @@ function installVoiceTestDoubles(available = true) {
     src = '';
     paused = true;
     onended: (() => void) | null = null;
-    play = vi.fn(async () => { this.paused = false; });
+    onerror: (() => void) | null = null;
+    play = vi.fn(async () => {
+      if (playRejects) throw new Error('audio decode failed');
+      this.paused = false;
+    });
     pause = vi.fn(() => { this.paused = true; });
     removeAttribute = vi.fn(() => { this.src = ''; });
+    load = vi.fn();
   }
   const instances: InstanceType<typeof TestAudio>[] = [];
   const OriginalAudio = TestAudio;
@@ -96,10 +101,19 @@ function installVoiceTestDoubles(available = true) {
       instances.push(this);
     }
   }
+  let urlSequence = 0;
+  const createdObjectUrls: string[] = [];
+  const revokedObjectUrls: string[] = [];
+  const createObjectURL = vi.fn(() => {
+    const url = `blob:test-audio-${++urlSequence}`;
+    createdObjectUrls.push(url);
+    return url;
+  });
+  const revokeObjectURL = vi.fn((url: string) => { revokedObjectUrls.push(url); });
   vi.stubGlobal('fetch', fetchMock);
   vi.stubGlobal('Audio', TrackedAudio);
-  vi.stubGlobal('URL', { ...URL, createObjectURL: vi.fn(() => 'blob:test-audio'), revokeObjectURL: vi.fn() });
-  return { fetchMock, TestAudio: TrackedAudio, instances };
+  vi.stubGlobal('URL', { ...URL, createObjectURL, revokeObjectURL });
+  return { fetchMock, TestAudio: TrackedAudio, instances, createdObjectUrls, revokedObjectUrls, createObjectURL, revokeObjectURL };
 }
 
 function makeRecipe(overrides: any = {}): any {
@@ -642,10 +656,13 @@ describe('CookingModeModal correction pass', () => {
   });
 });
 
-import { vaultAssets } from '../../src/utils/vaultAssets';
+import { createVaultAssetScope } from '../../src/utils/vaultAssets';
+import { VaultAssetScopeProvider } from '../../src/hooks/VaultAssetScopeContext';
 
 describe('CookingModeModal image compatibility', () => {
-  afterEach(() => vaultAssets.clear());
+  let scope: ReturnType<typeof createVaultAssetScope>;
+  beforeEach(() => { scope = createVaultAssetScope(1, { active: true }); });
+  afterEach(() => { scope.deactivate(); });
 
   it('renders a safe remote recipe photograph', async () => {
     render(
@@ -667,8 +684,9 @@ describe('CookingModeModal image compatibility', () => {
   });
 
   it('renders an explicit Vault-relative image reference', async () => {
-    vaultAssets.registerAsset('Assets/My Bread.jpg', new File(['x'], 'My Bread.jpg', { type: 'image/jpeg' }));
+    scope.registerAsset('Assets/My Bread.jpg', new File(['x'], 'My Bread.jpg', { type: 'image/jpeg' }));
     render(
+      <VaultAssetScopeProvider scope={scope}>
       <CookingModeModal
         recipe={makeRecipe({ image: 'Assets/My Bread.jpg' })}
         servings={4}
@@ -679,6 +697,7 @@ describe('CookingModeModal image compatibility', () => {
         onDeleteTimer={() => {}}
         onClose={() => {}}
       />
+      </VaultAssetScopeProvider>
     );
     await new Promise((r) => setTimeout(r, 0));
     const img = document.querySelector('#fullscreen-cooking-mode [role="img"]') as HTMLElement;
@@ -687,8 +706,9 @@ describe('CookingModeModal image compatibility', () => {
   });
 
   it('renders a Markdown image embed when supported', async () => {
-    vaultAssets.registerAsset('Assets/Bread.jpg', new File(['x'], 'Bread.jpg', { type: 'image/jpeg' }));
+    scope.registerAsset('Assets/Bread.jpg', new File(['x'], 'Bread.jpg', { type: 'image/jpeg' }));
     render(
+      <VaultAssetScopeProvider scope={scope}>
       <CookingModeModal
         recipe={makeRecipe({ rawMarkdown: '![Bread](Assets/Bread.jpg)' })}
         servings={4}
@@ -699,6 +719,7 @@ describe('CookingModeModal image compatibility', () => {
         onDeleteTimer={() => {}}
         onClose={() => {}}
       />
+      </VaultAssetScopeProvider>
     );
     await new Promise((r) => setTimeout(r, 0));
     const img = document.querySelector('#fullscreen-cooking-mode [role="img"]') as HTMLElement;
@@ -708,8 +729,9 @@ describe('CookingModeModal image compatibility', () => {
 
   it('renders an asynchronously resolved Vault asset', async () => {
     const handle = { getFile: async () => new File(['x'], 'Async.jpg', { type: 'image/jpeg' }) };
-    vaultAssets.registerAsset('Assets/Async.jpg', handle);
+    scope.registerAsset('Assets/Async.jpg', handle);
     render(
+      <VaultAssetScopeProvider scope={scope}>
       <CookingModeModal
         recipe={makeRecipe({ image: 'Assets/Async.jpg' })}
         servings={4}
@@ -720,6 +742,7 @@ describe('CookingModeModal image compatibility', () => {
         onDeleteTimer={() => {}}
         onClose={() => {}}
       />
+      </VaultAssetScopeProvider>
     );
     // allow async resolution
     await new Promise((r) => setTimeout(r, 50));
@@ -949,6 +972,282 @@ describe('CookingModeModal Natural Voice identity', () => {
 
     vi.unstubAllGlobals();
     localStorage.removeItem('tkc_natural_voice');
+  });
+});
+
+describe('CookingModeModal Heart fallback and observable speech errors', () => {
+  function installSystemSpeech() {
+    let lastUtterance: any = null;
+    const synth = {
+      getVoices: vi.fn(() => [{ lang: 'en-US', name: 'Test Voice' }]),
+      speak: vi.fn((utterance: any) => { lastUtterance = utterance; }),
+      cancel: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    };
+    class TestUtterance {
+      text: string;
+      rate = 1;
+      voice: any = null;
+      onstart: (() => void) | null = null;
+      onend: (() => void) | null = null;
+      onerror: ((event: any) => void) | null = null;
+      constructor(text: string) { this.text = text; }
+    }
+    vi.stubGlobal('speechSynthesis', synth);
+    vi.stubGlobal('SpeechSynthesisUtterance', TestUtterance);
+    return { synth, getLast: () => lastUtterance };
+  }
+
+  function installUnavailableHeartFetch(reason = 'Heart model assets are missing.') {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/api/voice/status')) {
+        return { ok: true, json: async () => ({ enabled: false, available: false, reason }) } as Response;
+      }
+      return { ok: false, json: async () => ({ error: 'unexpected' }) } as Response;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  it('explains the real Heart reason, enables system speech, and does not claim Heart readiness', async () => {
+    const reason = 'Heart model assets are missing.';
+    installUnavailableHeartFetch(reason);
+    const { synth, getLast } = installSystemSpeech();
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+
+    await waitFor(() => expect(screen.getByTestId('voice-status-detail').textContent).toContain(reason));
+    expect(screen.getByText(/Heart unavailable · System voice ready/i)).toBeTruthy();
+    expect((screen.getByRole('checkbox') as HTMLInputElement).disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Read step aloud' }));
+    await waitFor(() => expect(synth.speak).toHaveBeenCalledTimes(1));
+    expect(getLast().text).toContain('Mix the flour.');
+    expect(getLast().voice?.lang).toBe('en-US');
+    act(() => getLast().onstart?.());
+    expect(screen.getByRole('button', { name: 'Stop reading step aloud' })).toBeTruthy();
+    expect(screen.getByText('System voice speaking')).toBeTruthy();
+  });
+
+  it('makes system speech errors observable instead of silently stopping', async () => {
+    installUnavailableHeartFetch();
+    const { synth, getLast } = installSystemSpeech();
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    await waitFor(() => expect(screen.getByText(/System voice ready/i)).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'Read step aloud' }));
+    await waitFor(() => expect(synth.speak).toHaveBeenCalled());
+    act(() => getLast().onerror?.({ error: 'synthesis-failed' }));
+    await waitFor(() => expect(screen.getByTestId('voice-status-detail').textContent).toContain('synthesis-failed'));
+  });
+
+  it('reports that no system voice exists rather than pretending fallback will speak', async () => {
+    installUnavailableHeartFetch();
+    vi.stubGlobal('speechSynthesis', {
+      getVoices: vi.fn(() => []),
+      speak: vi.fn(),
+      cancel: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    });
+    vi.stubGlobal('SpeechSynthesisUtterance', class { constructor(public text: string) {} });
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    await waitFor(() => expect(screen.getByText(/System voice unavailable/i)).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'Read step aloud' }));
+    await waitFor(() => expect(screen.getByTestId('voice-status-detail').textContent).toContain('No system speech voice'));
+  });
+
+  it('falls back to system speech when native synthesis fails, with a visible reason', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/api/voice/status')) {
+        return { ok: true, json: async () => ({ enabled: true, available: true, reason: undefined }) } as Response;
+      }
+      if (String(input).includes('/api/voice/speak')) {
+        return { ok: false, status: 500, json: async () => ({ error: 'synthesis failed' }) } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { synth } = installSystemSpeech();
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    await waitFor(() => expect(screen.getByText('Heart ready to prepare')).toBeTruthy());
+    const checkbox = screen.getByRole('checkbox') as HTMLInputElement;
+    fireEvent.click(checkbox);
+    await waitFor(() => expect(checkbox.checked).toBe(true));
+    fireEvent.click(screen.getByRole('button', { name: 'Read step aloud' }));
+    await waitFor(() => expect(synth.speak).toHaveBeenCalledTimes(1), { timeout: 5000 });
+    await waitFor(() => {
+      expect(screen.getByTestId('voice-status-detail').textContent).toMatch(/Heart playback failed/i);
+    });
+  });
+});
+
+describe('CookingModeModal native audio object URL lifecycle', () => {
+  async function startNativePlayback(playRejects = false) {
+    const doubles = installVoiceTestDoubles(true, playRejects);
+    const view = render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    await waitFor(() => expect(document.getElementById('natural-voice-readiness')?.textContent).toContain('Heart ready to prepare'));
+    fireEvent.click(screen.getByRole('checkbox'));
+    await waitFor(() => expect(
+      doubles.fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/voice/speak'))
+    ).toHaveLength(1));
+    fireEvent.click(screen.getByLabelText('Read step aloud'));
+    if (!playRejects) {
+      await waitFor(() => expect(screen.getByLabelText('Stop reading step aloud')).toBeTruthy());
+    }
+    return { ...doubles, view };
+  }
+
+  it('releases the object URL when playback completes naturally', async () => {
+    const { createdObjectUrls, revokedObjectUrls, instances } = await startNativePlayback();
+    const url = createdObjectUrls.at(-1)!;
+    expect(revokedObjectUrls).not.toContain(url);
+    act(() => instances.at(-1)?.onended?.());
+    await waitFor(() => expect(revokedObjectUrls).toEqual([url]));
+    expect(screen.getByLabelText('Read step aloud')).toBeTruthy();
+  });
+
+  it('releases each URL exactly once across repeated Speak/Stop cycles', async () => {
+    const { createdObjectUrls, revokedObjectUrls } = await startNativePlayback();
+    const firstUrl = createdObjectUrls[0];
+    fireEvent.click(screen.getByLabelText('Stop reading step aloud'));
+    await waitFor(() => expect(revokedObjectUrls).toContain(firstUrl));
+
+    fireEvent.click(screen.getByLabelText('Read step aloud'));
+    await waitFor(() => expect(screen.getByLabelText('Stop reading step aloud')).toBeTruthy());
+    const secondUrl = createdObjectUrls.at(-1)!;
+    expect(secondUrl).not.toBe(firstUrl);
+    fireEvent.click(screen.getByLabelText('Stop reading step aloud'));
+    await waitFor(() => expect(revokedObjectUrls).toContain(secondUrl));
+
+    expect(revokedObjectUrls.filter((url) => url === firstUrl)).toHaveLength(1);
+    expect(revokedObjectUrls.filter((url) => url === secondUrl)).toHaveLength(1);
+  });
+
+  it('releases on step change, Stop, and unmount', async () => {
+    const { createdObjectUrls, revokedObjectUrls, view } = await startNativePlayback();
+    const firstUrl = createdObjectUrls.at(-1)!;
+    fireEvent.click(screen.getByText('Next Step'));
+    await waitFor(() => expect(revokedObjectUrls).toContain(firstUrl));
+
+    fireEvent.click(screen.getByLabelText('Read step aloud'));
+    await waitFor(() => expect(screen.getByLabelText('Stop reading step aloud')).toBeTruthy());
+    const secondUrl = createdObjectUrls.at(-1)!;
+    fireEvent.click(screen.getByLabelText('Stop reading step aloud'));
+    await waitFor(() => expect(revokedObjectUrls).toContain(secondUrl));
+
+    fireEvent.click(screen.getByLabelText('Read step aloud'));
+    await waitFor(() => expect(screen.getByLabelText('Stop reading step aloud')).toBeTruthy());
+    const thirdUrl = createdObjectUrls.at(-1)!;
+    view.unmount();
+    await waitFor(() => expect(revokedObjectUrls).toContain(thirdUrl));
+  });
+
+  it('never lets a stale ended callback revoke a newer playback URL', async () => {
+    const { createdObjectUrls, revokedObjectUrls, instances } = await startNativePlayback();
+    const firstUrl = createdObjectUrls.at(-1)!;
+    const staleEnded = instances.at(-1)?.onended;
+    expect(staleEnded).toBeTruthy();
+
+    fireEvent.click(screen.getByText('Next Step'));
+    await waitFor(() => expect(revokedObjectUrls).toContain(firstUrl));
+
+    fireEvent.click(screen.getByLabelText('Read step aloud'));
+    await waitFor(() => expect(screen.getByLabelText('Stop reading step aloud')).toBeTruthy());
+    const secondUrl = createdObjectUrls.at(-1)!;
+    act(() => staleEnded?.());
+    expect(revokedObjectUrls).not.toContain(secondUrl);
+    expect(screen.getByLabelText('Stop reading step aloud')).toBeTruthy();
+    fireEvent.click(screen.getByLabelText('Stop reading step aloud'));
+  });
+
+  it('releases the URL when playback fails, before system fallback', async () => {
+    const synth = {
+      getVoices: vi.fn(() => [{ lang: 'en-US', name: 'Test Voice' }]),
+      speak: vi.fn(),
+      cancel: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    };
+    class TestUtterance {
+      text: string;
+      rate = 1;
+      voice: any = null;
+      onstart: (() => void) | null = null;
+      onend: (() => void) | null = null;
+      onerror: ((event: any) => void) | null = null;
+      constructor(text: string) { this.text = text; }
+    }
+    vi.stubGlobal('speechSynthesis', synth);
+    vi.stubGlobal('SpeechSynthesisUtterance', TestUtterance);
+
+    const { createdObjectUrls, revokedObjectUrls, fetchMock } = await startNativePlayback(true);
+    await waitFor(() => expect(synth.speak).toHaveBeenCalledTimes(1));
+    const url = createdObjectUrls.at(-1)!;
+    expect(revokedObjectUrls).toContain(url);
+    await waitFor(() => expect(screen.getByTestId('voice-status-detail').textContent).toMatch(/Heart playback failed/i));
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/voice/speak')).length).toBeGreaterThan(0);
+  });
+
+  it('releases on an audio element error during playback', async () => {
+    const { createdObjectUrls, revokedObjectUrls, instances } = await startNativePlayback();
+    const url = createdObjectUrls.at(-1)!;
+    act(() => instances.at(-1)?.onerror?.());
+    await waitFor(() => expect(revokedObjectUrls).toContain(url));
   });
 });
 

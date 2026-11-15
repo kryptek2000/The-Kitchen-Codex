@@ -191,10 +191,25 @@ async function importAcceptanceRecipe(session: BrowserSession): Promise<void> {
     nodeId: query.nodeId,
     files: [ACCEPTANCE_RECIPE_PATH],
   });
-  await session.waitFor(`(${bodyText}).includes(${JSON.stringify(ACCEPTANCE_RECIPE_TITLE)})`, 20000, 'acceptance recipe imported');
-  const imported = await session.evaluate(
-    `!!document.getElementById(${JSON.stringify(`recipe-card-${ACCEPTANCE_RECIPE_TITLE}.md`)})`
+  // The unified Vault may render a one-recipe imported collection as the
+  // featured recipe rather than a shelf card. Both controls share the stable
+  // recipe-id suffix, so the proof accepts either while still requiring the
+  // actual acceptance recipe to be present.
+  const acceptanceId = `${ACCEPTANCE_RECIPE_TITLE}.md`;
+  await session.waitFor(
+    `(() => {
+      const id = ${JSON.stringify(acceptanceId)};
+      return !!document.getElementById('recipe-card-' + id) ||
+        !!document.getElementById('featured-title-' + id);
+    })()`,
+    20000,
+    'acceptance recipe gallery control'
   );
+  const imported = await session.evaluate(`(() => {
+    const id = ${JSON.stringify(acceptanceId)};
+    return !!document.getElementById('recipe-card-' + id) ||
+      !!document.getElementById('featured-title-' + id);
+  })()`);
   check('acceptance recipe appears in the production gallery', imported === true);
 
   await session.evaluate(`(() => {
@@ -210,9 +225,16 @@ async function importAcceptanceRecipe(session: BrowserSession): Promise<void> {
 }
 
 async function openAcceptanceRecipe(session: BrowserSession): Promise<void> {
-  await session.evaluate(
-    `(() => { const c = document.getElementById(${JSON.stringify(`recipe-card-${ACCEPTANCE_RECIPE_TITLE}.md`)}); if (!c) return false; c.click(); return true; })()`
-  );
+  const clicked = await session.evaluate(`(() => {
+    const id = ${JSON.stringify(`${ACCEPTANCE_RECIPE_TITLE}.md`)};
+    const card = document.getElementById('recipe-card-' + id);
+    if (card) { card.click(); return true; }
+    const heading = document.getElementById('featured-title-' + id);
+    const button = heading ? heading.querySelector('button') : null;
+    if (button) { button.click(); return true; }
+    return false;
+  })()`);
+  if (!check('acceptance recipe is selectable from the gallery', clicked === true)) return;
   await session.waitFor(`!!document.getElementById('advanced-nutrition-card')`, 25000, 'advanced nutrition card on recipe detail');
 }
 

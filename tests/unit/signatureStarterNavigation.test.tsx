@@ -16,10 +16,6 @@ function galleryCount() {
   );
 }
 
-function headerText() {
-  return document.getElementById('obsidian-vault-header')?.textContent || '';
-}
-
 function favoriteButtonFor(title: string) {
   const titleButton = screen.getByRole('button', { name: title });
   const card = titleButton.closest('article');
@@ -27,43 +23,26 @@ function favoriteButtonFor(title: string) {
   return within(card as HTMLElement).getByRole('button', { name: /add to favorites/i });
 }
 
-describe('Signature Collection navigation without a Vault', () => {
-  it('shows the permanent built-in nine and a combined, ownership-distinct header', async () => {
+describe('ONE Recipe Vault — first-run starter cookbook', () => {
+  it('shows the nine starter recipes in the only Vault destination', async () => {
     render(<App />);
     await screen.findByText('Artisan Sourdough Boule');
 
     expect(galleryCount()).toBe(9);
     expect(document.getElementById('vault-collection-label')?.getAttribute('aria-label')).toBe('My Recipe Vault');
-    expect(document.getElementById('vault-recipe-count')?.textContent).toBe('9 built-in · 0 saved');
+    expect(document.getElementById('vault-recipe-count')?.textContent).toBe('9 recipes');
+    expect(document.getElementById('vault-page-title')?.textContent).toBe('My Recipe Vault');
     expect(document.querySelectorAll('[data-testid="builtin-card-badge"]').length).toBeGreaterThan(0);
+    expect(document.getElementById('nav-recipe-vault')).toBeTruthy();
+    expect(document.getElementById('nav-favorites')).toBeTruthy();
+    expect(document.getElementById('nav-dataview-table')).toBeTruthy();
+    expect(document.getElementById('nav-signature-collection')).toBeNull();
+    expect(document.getElementById('nav-personal-recipes')).toBeNull();
+    expect(document.body.textContent).not.toContain('Signature Collection');
+    expect(document.body.textContent).not.toContain('My Saved Recipes');
   });
 
-  it('states each active collection without stale or contradictory header text', async () => {
-    render(<App />);
-    await screen.findByText('Artisan Sourdough Boule');
-
-    fireEvent.click(document.getElementById('nav-signature-collection')!);
-    await waitFor(() => expect(document.getElementById('vault-page-title')?.textContent).toBe('Signature Collection'));
-    expect(document.getElementById('vault-collection-label')?.getAttribute('aria-label')).toBe('Signature Collection');
-    expect(document.getElementById('vault-recipe-count')?.textContent).toBe('9 built-in recipes');
-    expect(headerText()).not.toContain('My Saved Recipes');
-
-    fireEvent.click(document.getElementById('nav-personal-recipes')!);
-    await waitFor(() => expect(screen.getByText('No saved recipes yet')).toBeTruthy());
-    expect(document.getElementById('vault-page-title')?.textContent).toBe('My Saved Recipes');
-    expect(document.getElementById('vault-collection-label')?.getAttribute('aria-label')).toBe('My Saved Recipes');
-    expect(document.getElementById('vault-recipe-count')?.textContent).toBe('0 saved recipes');
-    expect(document.body.textContent).not.toContain('9 recipes');
-    expect(headerText()).not.toContain('Signature Collection');
-
-    fireEvent.click(document.getElementById('nav-recipe-vault')!);
-    await waitFor(() => expect(document.getElementById('vault-page-title')?.textContent).toBe('My Recipe Vault'));
-    expect(document.getElementById('vault-collection-label')?.getAttribute('aria-label')).toBe('My Recipe Vault');
-    expect(document.getElementById('vault-recipe-count')?.textContent).toBe('9 built-in · 0 saved');
-    expect(galleryCount()).toBe(9);
-  });
-
-  it('labels Favorites accurately and counts the favorite collection', async () => {
+  it('keeps Favorites as an accurate filter of the one Vault', async () => {
     render(<App />);
     await screen.findByText('Artisan Sourdough Boule');
 
@@ -74,7 +53,6 @@ describe('Signature Collection navigation without a Vault', () => {
     await waitFor(() => expect(document.getElementById('vault-page-title')?.textContent).toBe('Favorites'));
     expect(document.getElementById('vault-collection-label')?.getAttribute('aria-label')).toBe('Favorites');
     expect(document.getElementById('vault-recipe-count')?.textContent).toBe('1 favorite');
-    expect(headerText()).not.toContain('Signature Collection');
     expect(galleryCount()).toBe(1);
   });
 });

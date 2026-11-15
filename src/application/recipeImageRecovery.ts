@@ -58,12 +58,43 @@ export function recipeImagePreviewPath(token: string): string {
   return `/api/recipes/image/preview/${encodeURIComponent(token)}`;
 }
 
-/** Creates a fresh, opaque, path-free vault session id (bounded per the save policy). */
+/**
+ * Creates a fresh, opaque, path-free vault session id (bounded per the save
+ * policy). Security-sensitive identity: only Web Crypto is acceptable.
+ *
+ * Prefer randomUUID(), then getRandomValues(). If neither is available, return
+ * an empty id so image recovery stays disabled. There is deliberately no
+ * Math.random()/timestamp fallback.
+ */
 export function createVaultSessionId(): string {
-  const raw = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-    ? crypto.randomUUID()
-    : `session-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
-  return raw.slice(0, 64);
+  const cryptoApi = typeof globalThis !== 'undefined' ? globalThis.crypto : undefined;
+  if (!cryptoApi) return '';
+
+  if (typeof cryptoApi.randomUUID === 'function') {
+    try {
+      const id = cryptoApi.randomUUID();
+      if (typeof id === 'string' && id.length > 0 && !id.includes('/')) {
+        return id.slice(0, 64);
+      }
+    } catch {
+      // Fall through to getRandomValues when randomUUID is unavailable in this
+      // context (for example, a non-secure browser context).
+    }
+  }
+
+  if (typeof cryptoApi.getRandomValues === 'function') {
+    try {
+      const bytes = new Uint8Array(16);
+      cryptoApi.getRandomValues(bytes);
+      let hex = '';
+      for (const byte of bytes) hex += byte.toString(16).padStart(2, '0');
+      return `session-${hex}`.slice(0, 64);
+    } catch {
+      // Fail closed below.
+    }
+  }
+
+  return '';
 }
 
 /**
@@ -380,6 +411,10 @@ export function mapRecipeImageRecoveryError(error: unknown): {
         return { message: 'The vault has changed since this image was generated. Please try again.', conflict: 'VAULT_CHANGED' };
       case 'IMAGE_ALREADY_PRESENT':
         return { message: 'This recipe already has a valid image. Remove it first if you want to replace it.', conflict: 'IMAGE_ALREADY_PRESENT' };
+      case 'ASSET_WRITE_UNVERIFIED':
+        return { message: 'The generated image could not be verified in the active Vault. The recipe was not saved.' };
+      case 'ASSET_REFERENCE_INVALID':
+        return { message: 'The recipe contains an image reference that is not valid in the active Vault. The recipe was not saved.' };
       case 'PREVIEW_UNAVAILABLE':
         return { message: 'The image preview has expired. Please generate it again.', conflict: 'PREVIEW_EXPIRED' };
       default:
@@ -671,11 +706,15 @@ export class RecipeImageRecoveryController {
         }),
       (result) => {
         this.session.setBusy(false);
+        const registrationWarning =
+          result.registration === 'failed' || result.registration === 'skipped-inactive';
         this.setState({
           phase: 'saved',
           preview: undefined,
-          message: `Image saved to ${result.imagePath}.`,
-          messageKind: 'success',
+          message: registrationWarning
+            ? `Image saved to ${result.imagePath}, but the active Vault view could not be refreshed automatically. Refresh the Vault to view it.`
+            : `Image saved to ${result.imagePath}.`,
+          messageKind: registrationWarning ? 'info' : 'success',
           conflict: undefined,
         });
         this.deps.onSaved?.(result);

@@ -28,6 +28,39 @@ import type { VaultConnectionState } from '../types';
 /** The permission states a File System Access handle can report. */
 export type VaultPermissionStatus = 'granted' | 'denied' | 'prompt';
 
+/**
+ * The verified read/write state of the active Vault. `unsupported` and
+ * `unknown` are deliberately distinct from `granted`: adapter existence alone
+ * never proves that the browser will allow a write.
+ */
+export type VaultWritePermission =
+  | 'granted'
+  | 'denied'
+  | 'prompt'
+  | 'unsupported'
+  | 'unknown';
+
+/**
+ * Reads the CURRENT read/write permission of a File System Access handle.
+ *
+ * This only queries; it never prompts. `queryPermission` is non-mutating and
+ * safe to call from effects. A permission prompt must still be initiated by an
+ * explicit user gesture through `requestPermission` (reconnect/picker).
+ */
+export async function queryVaultWritePermission(handle: any): Promise<VaultWritePermission> {
+  if (!handle) return 'unknown';
+  if (typeof handle.queryPermission !== 'function') return 'unsupported';
+  try {
+    const status = await handle.queryPermission({ mode: 'readwrite' });
+    if (status === 'granted' || status === 'denied' || status === 'prompt') {
+      return status;
+    }
+    return 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
 /** What the application must do about a remembered Vault. */
 export type VaultRestoreAction =
   /** Nothing is remembered — stay on the starter Vault. */

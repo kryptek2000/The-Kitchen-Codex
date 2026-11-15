@@ -12,6 +12,7 @@ import {
 import type { ObsidianRecipe } from '../types';
 import { getRecipeImage, LOCAL_RECIPE_IMAGE_PLACEHOLDER } from '../utils/imageHelper';
 import { useVaultImage } from '../hooks/useVaultImage';
+import { useVaultAssetScope } from '../hooks/VaultAssetScopeContext';
 import { storedRecipeDescription, visibleRecipeTags } from '../utils/recipePresentation';
 
 interface FeaturedRecipeProps {
@@ -47,7 +48,8 @@ export function FeaturedRecipe({
   const [imageError, setImageError] = useState(false);
   const [announcement, setAnnouncement] = useState('');
 
-  const defaultImg = getRecipeImage(recipe);
+  const assetScope = useVaultAssetScope();
+  const defaultImg = getRecipeImage(recipe, assetScope);
   const reactiveVaultImage = useVaultImage(recipe.image, defaultImg);
   const imageUrl = imageError ? null : reactiveVaultImage || defaultImg;
 

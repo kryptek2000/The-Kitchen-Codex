@@ -7,7 +7,6 @@ import {
   CheckCircle2,
   AlertCircle,
   X,
-  RotateCcw,
   Download,
   FolderTree,
   FileCode,
@@ -23,8 +22,13 @@ import {
   downloadMarkdownFile,
 } from '../utils/vaultFileSystem';
 import { parseObsidianRecipeMarkdown } from '../utils/markdownParser';
-import { getStarterVaultRecipes, DEFAULT_VAULT_PATH } from '../data/starterVault';
+import { DEFAULT_VAULT_PATH } from '../data/starterVault';
 import { resolveNewRecipeVaultPath } from '../core/vaultPath';
+import type { VaultWritePermission } from '../core/vaultConnection';
+import type { VaultCollectionIntent } from '../core/vaultSession';
+import type { VaultCollectionImportStart } from '../utils/vaultAssets';
+import type { SignatureImportSummary } from '../application/starterCollection';
+import { useVaultAssetScope } from '../hooks/VaultAssetScopeContext';
 
 interface ConnectVaultModalProps {
   isOpen: boolean;
@@ -35,21 +39,55 @@ interface ConnectVaultModalProps {
   setRecipes: React.Dispatch<React.SetStateAction<ObsidianRecipe[]>>;
   setMealPlan?: React.Dispatch<React.SetStateAction<MealPlanDay[]>>;
   setShoppingCategories?: React.Dispatch<React.SetStateAction<ShoppingCategoryGroup[]>>;
-  /** Used to clear the previous Vault's notes when the collection is reset. */
+  /** Used to clear the previous Vault's notes when a new Vault is loaded. */
   setNotes?: React.Dispatch<React.SetStateAction<VaultNote[]>>;
+  /** True after an explicit connect/import; the optional invite remains dismissible. */
+  signatureImportOffer?: boolean;
+  /** True only when the active adapter has a currently verified read/write grant. */
+  signatureImportWritable?: boolean;
+  /** The live queried permission, used to explain why a write is unavailable. */
+  signatureImportPermission?: VaultWritePermission;
+  signatureImportState?: {
+    status: 'idle' | 'running' | 'done';
+    completed: number;
+    total: number;
+    summary: SignatureImportSummary | null;
+  };
+  onImportSignatureNine?: () => void;
+  onDismissSignatureImport?: () => void;
+  /** Desktop-only: reveal the native Vault directory in the OS file manager. */
+  onOpenVaultFolder?: () => void;
+  /** Called after a folder import was accepted, including an empty folder. */
+  onImportedCollectionActivated?: () => void;
   /**
-   * Explicit return to the built-in collection. The built-ins are always
-   * present; this only clears the in-memory personal session and disconnects,
-   * after confirmation from the user.
+   * Authoritative collection replacement. Production supplies this so the App
+   * can apply the session write barrier; standalone component tests may omit it.
    */
-  onRestoreStarterCollection?: () => void;
+  onReplaceCollection?: (snapshot: {
+    recipes: ObsidianRecipe[];
+    notes: VaultNote[];
+    mealPlan: MealPlanDay[];
+    shoppingList: ShoppingCategoryGroup[];
+    folderName: string;
+  }, intent: VaultCollectionIntent | undefined) => Promise<boolean>;
+  /** Registers the latest folder-import intent before its first await. */
+  beginCollectionImport?: () => VaultCollectionImportStart;
+  /** Captures the active collection session before an additive parse. */
+  captureCollectionSession?: () => unknown;
+  /** Rejects additive results whose originating session is no longer active. */
+  isCollectionOperationCurrent?: (token: unknown) => boolean;
   onOpenWebGrabber?: () => void;
   /**
    * Receives the authoritative handle from the picker and performs the
    * adapter-backed Markdown load + separate asset pass (owned by App.tsx,
    * the bootstrap edge). Returns counts so this modal can report the outcome.
    */
-  onDirectVaultConnected?: (handle: any) => Promise<{ recipeCount: number; noteCount: number }>;
+  onDirectVaultConnected?: (handle: any) => Promise<{
+    recipeCount: number;
+    noteCount: number;
+    accepted?: boolean;
+    message?: string;
+  }>;
 }
 
 export function ConnectVaultModal({
@@ -62,10 +100,22 @@ export function ConnectVaultModal({
   setMealPlan,
   setShoppingCategories,
   setNotes,
-  onRestoreStarterCollection,
+  signatureImportOffer = false,
+  signatureImportWritable = false,
+  signatureImportPermission = 'unknown',
+  signatureImportState = { status: 'idle', completed: 0, total: 0, summary: null },
+  onImportSignatureNine,
+  onDismissSignatureImport,
+  onOpenVaultFolder,
+  onImportedCollectionActivated,
+  onReplaceCollection,
+  beginCollectionImport,
+  captureCollectionSession,
+  isCollectionOperationCurrent,
   onOpenWebGrabber,
   onDirectVaultConnected,
 }: ConnectVaultModalProps) {
+  const activeAssetScope = useVaultAssetScope();
   const [activeTab, setActiveTab] = useState<'upload' | 'direct' | 'paste' | 'manage'>('upload');
   const [dragOver, setDragOver] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
@@ -118,42 +168,103 @@ export function ConnectVaultModal({
     }
   };
 
-  // Handle Folder Picker via standard webkitdirectory (Works in all iframes and browsers)
+  /**
+   * Applies a complete folder collection. Production routes this through the App
+   * session barrier; the direct path exists only for standalone component use.
+   */
+  const replaceCollection = async (snapshot: {
+    recipes: ObsidianRecipe[];
+    notes: VaultNote[];
+    mealPlan: MealPlanDay[];
+    shoppingList: ShoppingCategoryGroup[];
+    folderName: string;
+  }, intent?: VaultCollectionIntent): Promise<boolean> => {
+    if (onReplaceCollection) return onReplaceCollection(snapshot, intent);
+    setRecipes(snapshot.recipes);
+    setNotes?.(snapshot.notes);
+    setMealPlan?.(snapshot.mealPlan);
+    setShoppingCategories?.(snapshot.shoppingList);
+    setVaultStatus({
+      isConnected: true,
+      vaultPath: `Vault / ${snapshot.folderName}`,
+      accessType: 'uploaded_folder',
+      connectionState: 'connected',
+    });
+    onImportedCollectionActivated?.();
+    return true;
+  };
+
+  // Handle Folder Picker via standard webkitdirectory (Works in all iframes and browsers).
+  //
+  // A folder selection is a COMPLETE collection import, not an additive merge.
+  // It must replace every piece of the active imported collection — recipes,
+  // notes, Meal Plan, and Shopping List — even when the folder is empty. An
+  // absent file means the new collection has no such data; retaining the old
+  // collection's data would misdescribe the folder the user just selected.
   const handleFolderUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || e.target.files.length === 0) return;
+    const files = e.target.files;
+    if (!files) return;
+    // Register ordering identity + provisional destination asset scope BEFORE
+    // the first await/parse.
+    const importStart = beginCollectionImport?.();
+    const intent = importStart?.intent;
+    const assetScope = importStart?.assetScope;
     setIsProcessing(true);
     setStatusMessage(null);
     try {
-      const result = await parseUploadedFileList(e.target.files);
-      const parsedRecipes = result.recipes;
-      if (parsedRecipes.length > 0 || result.mealPlan || result.shoppingList) {
-        const folderName = e.target.files[0]?.webkitRelativePath?.split('/')[0] || 'Recipes';
-        if (parsedRecipes.length > 0) setRecipes(parsedRecipes);
-        if (result.mealPlan && setMealPlan) setMealPlan(result.mealPlan);
-        if (result.shoppingList && setShoppingCategories) setShoppingCategories(result.shoppingList);
-
-        setVaultStatus({
-          isConnected: true,
-          vaultPath: folderName ? `Vault / ${folderName}` : 'Recipes',
-          accessType: 'uploaded_folder',
-          connectionState: 'connected',
+      // An empty directory produces an empty FileList. Cancelling the picker
+      // does not dispatch a change event, so a change with zero files is an
+      // accepted empty-folder import.
+      if (files.length === 0) {
+        const accepted = await replaceCollection({
+          recipes: [],
+          notes: [],
+          mealPlan: [],
+          shoppingList: [],
+          folderName: 'Empty folder',
+        }, intent);
+        setStatusMessage(accepted ? {
+          type: 'info',
+          text: 'The selected folder is empty. My Recipe Vault now contains 0 recipes, 0 notes, no Meal Plan.md, and no Shopping List.md. No files were written.',
+        } : {
+          type: 'info',
+          text: 'A newer Vault selection replaced this import. The active collection was not changed.',
         });
-        setStatusMessage({
-          type: 'success',
-          text: `Successfully imported ${parsedRecipes.length} recipe ${
-            parsedRecipes.length === 1 ? 'note' : 'notes'
-          }${result.mealPlan ? ' and Meal Plan.md' : ''}${result.shoppingList ? ' and Shopping List.md' : ''} from "${folderName}"!`,
-        });
-      } else {
-        setStatusMessage({
-          type: 'error',
-          text: 'No Markdown (.md) recipe notes found in the selected folder.',
-        });
+        return;
       }
+
+      const result = await parseUploadedFileList(files, assetScope);
+      const parsedRecipes = result.recipes;
+      const parsedNotes = result.notes ?? [];
+      const folderName = files[0]?.webkitRelativePath?.split('/')[0] || 'Selected folder';
+
+      // Replace the active imported collection outright. The read-only upload
+      // path never writes to disk; this only changes in-memory state.
+      const accepted = await replaceCollection({
+        recipes: parsedRecipes,
+        notes: parsedNotes,
+        mealPlan: result.mealPlan ?? [],
+        shoppingList: result.shoppingList ?? [],
+        folderName,
+      }, intent);
+
+      const recipeLabel = `${parsedRecipes.length} recipe${parsedRecipes.length === 1 ? '' : 's'}`;
+      const noteLabel = `${parsedNotes.length} note${parsedNotes.length === 1 ? '' : 's'}`;
+      const planLabel = result.mealPlan ? 'Meal Plan.md loaded' : 'no Meal Plan.md';
+      const shoppingLabel = result.shoppingList ? 'Shopping List.md loaded' : 'no Shopping List.md';
+      setStatusMessage(accepted ? {
+        type: 'success',
+        text: `Imported ${recipeLabel} and ${noteLabel} from "${folderName}" (${planLabel}, ${shoppingLabel}). This is a read-only session import; no files were written.`,
+      } : {
+        type: 'info',
+        text: 'A newer Vault selection replaced this import. The active collection was not changed.',
+      });
     } catch (err: any) {
+      // Parsing failed before any state replacement: keep the active collection.
+      assetScope?.deactivate();
       setStatusMessage({
         type: 'error',
-        text: err?.message || 'Failed to parse folder files.',
+        text: err?.message || 'Failed to parse folder files. The active collection was not changed.',
       });
     } finally {
       setIsProcessing(false);
@@ -163,10 +274,19 @@ export function ConnectVaultModal({
   // Handle Multiple .md Files Selection
   const handleFilesUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
+    const sessionToken = captureCollectionSession?.();
     setIsProcessing(true);
     setStatusMessage(null);
     try {
-      const result = await parseUploadedFileList(e.target.files);
+      const result = await parseUploadedFileList(e.target.files, activeAssetScope ?? undefined);
+      if (
+        sessionToken !== undefined &&
+        isCollectionOperationCurrent &&
+        !isCollectionOperationCurrent(sessionToken)
+      ) {
+        setStatusMessage({ type: 'info', text: 'A newer Vault selection replaced this import. The active collection was not changed.' });
+        return;
+      }
       const parsedRecipes = result.recipes;
       if (result.mealPlan && setMealPlan) setMealPlan(result.mealPlan);
       if (result.shoppingList && setShoppingCategories) setShoppingCategories(result.shoppingList);
@@ -208,25 +328,96 @@ export function ConnectVaultModal({
     }
   };
 
-  // Handle Drag and Drop of files or entire folders
+  // Handle Drag and Drop of files or entire folders.
+  //
+  // Dropping a FOLDER is a complete collection import and replaces recipes,
+  // notes, Meal Plan, and Shopping List. Dropping individual .md files remains
+  // an additive multi-file import, which is the behavior the panel describes.
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     setDragOver(false);
     setIsProcessing(true);
     setStatusMessage(null);
 
+    let folderDrop = false;
+    let droppedFolderName = 'Dropped folder';
     try {
-      const result = await parseDroppedFilesAndFolders(e.dataTransfer);
+      const items = Array.from(e.dataTransfer.items || []);
+      for (const item of items) {
+        try {
+          const entry = (item as any).webkitGetAsEntry?.();
+          if (entry?.isDirectory) {
+            folderDrop = true;
+            if (typeof entry.name === 'string' && entry.name) droppedFolderName = entry.name;
+            break;
+          }
+        } catch {
+          // Ignore an item that cannot expose an entry.
+        }
+      }
+    } catch {
+      folderDrop = false;
+    }
+
+    // A folder drop is a collection replacement and must register its intent +
+    // provisional asset scope before parsing. Additive file drops use the
+    // active collection scope and are still bound to their starting session.
+    const collectionStart = folderDrop ? beginCollectionImport?.() : undefined;
+    const collectionIntent = collectionStart?.intent;
+    const additiveSession = folderDrop ? undefined : captureCollectionSession?.();
+
+    try {
+      const result = await parseDroppedFilesAndFolders(
+        e.dataTransfer,
+        folderDrop ? collectionStart?.assetScope : (activeAssetScope ?? undefined)
+      );
       const parsedRecipes = result.recipes;
+      const parsedNotes = result.notes ?? [];
+
+      if (folderDrop) {
+        const accepted = await replaceCollection({
+          recipes: parsedRecipes,
+          notes: parsedNotes,
+          mealPlan: result.mealPlan ?? [],
+          shoppingList: result.shoppingList ?? [],
+          folderName: droppedFolderName,
+        }, collectionIntent);
+        setStatusMessage(accepted ? {
+          type: 'success',
+          text: `Imported folder: ${parsedRecipes.length} recipe${parsedRecipes.length === 1 ? '' : 's'}, ${parsedNotes.length} note${parsedNotes.length === 1 ? '' : 's'}, ${result.mealPlan ? 'Meal Plan.md loaded' : 'no Meal Plan.md'}, ${result.shoppingList ? 'Shopping List.md loaded' : 'no Shopping List.md'}. This is a read-only session import; no files were written.`,
+        } : {
+          type: 'info',
+          text: 'A newer Vault selection replaced this import. The active collection was not changed.',
+        });
+        return;
+      }
+
+      if (
+        additiveSession !== undefined &&
+        isCollectionOperationCurrent &&
+        !isCollectionOperationCurrent(additiveSession)
+      ) {
+        setStatusMessage({ type: 'info', text: 'A newer Vault selection replaced this import. The active collection was not changed.' });
+        return;
+      }
+
       if (result.mealPlan && setMealPlan) setMealPlan(result.mealPlan);
       if (result.shoppingList && setShoppingCategories) setShoppingCategories(result.shoppingList);
 
-      if (parsedRecipes.length > 0) {
+      if (parsedRecipes.length > 0 || parsedNotes.length > 0) {
         setRecipes((prev) => {
           const map = new Map(prev.map((r) => [r.id, r]));
           parsedRecipes.forEach((r) => map.set(r.id, r));
           return Array.from(map.values());
         });
+        if (parsedNotes.length > 0) {
+          setNotes?.((prev) => {
+            const map = new Map(prev.map((n) => [n.id, n]));
+            parsedNotes.forEach((n) => map.set(n.id, n));
+            return Array.from(map.values());
+          });
+        }
         setVaultStatus((prev) => ({
           ...prev,
           isConnected: true,
@@ -234,12 +425,12 @@ export function ConnectVaultModal({
         }));
         setStatusMessage({
           type: 'success',
-          text: `Successfully parsed and loaded ${parsedRecipes.length} Markdown recipe note(s)!`,
+          text: `Added ${parsedRecipes.length} recipe${parsedRecipes.length === 1 ? '' : 's'} and ${parsedNotes.length} note${parsedNotes.length === 1 ? '' : 's'} to the current collection.`,
         });
       } else if (result.mealPlan || result.shoppingList) {
         setStatusMessage({
           type: 'success',
-          text: `Imported vault note configuration!`,
+          text: `Updated Meal Plan and Shopping List from Markdown notes!`,
         });
       } else {
         setStatusMessage({
@@ -248,9 +439,10 @@ export function ConnectVaultModal({
         });
       }
     } catch (err: any) {
+      collectionStart?.assetScope.deactivate();
       setStatusMessage({
         type: 'error',
-        text: err?.message || 'Error parsing dropped files.',
+        text: err?.message || 'Error parsing dropped files. The active collection was not changed.',
       });
     } finally {
       setIsProcessing(false);
@@ -268,7 +460,12 @@ export function ConnectVaultModal({
       // performed by the App bootstrap edge (adapter-backed, single Markdown scan).
       const counts = await onDirectVaultConnected?.(folderHandle);
       const label = folderHandle.name || 'My Recipe Vault';
-      if (counts && counts.recipeCount > 0) {
+      if (counts && counts.accepted === false) {
+        setStatusMessage({
+          type: 'info',
+          text: counts.message || 'That connection was superseded by a newer Vault selection. The active collection was not changed.',
+        });
+      } else if (counts && counts.recipeCount > 0) {
         setStatusMessage({
           type: 'success',
           text: `Connected live to vault "${label}" (${counts.recipeCount} notes synced)!`,
@@ -323,24 +520,117 @@ export function ConnectVaultModal({
     }
   };
 
-  // Explicit return to the built-in Signature Collection. This never deletes
-  // Vault files; it only clears the in-memory personal session and disconnects.
-  const handleRestoreStarterVault = () => {
-    if (onRestoreStarterCollection) {
-      onRestoreStarterCollection();
-    } else {
-      setRecipes([]);
-      setNotes?.([]);
-      setVaultStatus({
-        isConnected: false,
-        vaultPath: DEFAULT_VAULT_PATH,
-        accessType: 'starter_vault',
-      });
-    }
-    setStatusMessage({
-      type: 'success',
-      text: `Returned to the ${getStarterVaultRecipes().length} built-in Signature Collection recipes. No Vault files were changed.`,
-    });
+  const renderSignatureImport = (context: 'offer' | 'manage') => {
+    if (!onImportSignatureNine) return null;
+    const summary = signatureImportState.summary;
+    const running = signatureImportState.status === 'running';
+    const done = signatureImportState.status === 'done';
+    const failedEntries = summary?.entries.filter((entry) =>
+      entry.status === 'path_conflict' ||
+      entry.status === 'permission_required' ||
+      entry.status === 'verification_failed' ||
+      entry.status === 'cancelled' ||
+      entry.status === 'failed'
+    ) ?? [];
+    const readOnlySessionImport =
+      vaultStatus.isConnected && vaultStatus.accessType === 'uploaded_folder';
+    const writeUnavailableMessage = readOnlySessionImport
+      ? 'This Vault was loaded as read-only files in this session. Connect a writable Vault folder before durable saving is possible.'
+      : signatureImportPermission === 'denied'
+        ? 'Write access to this Vault is denied. Reconnect the Vault and allow read/write access before importing recipes.'
+        : signatureImportPermission === 'prompt'
+          ? 'The browser has not granted read/write access to this Vault. Reconnect the Vault and allow access before importing recipes.'
+          : signatureImportPermission === 'unsupported'
+            ? 'Writable access could not be verified for this connection. Choose a writable Vault folder before importing recipes.'
+            : signatureImportPermission === 'unknown'
+              ? 'Writable access is not verified. Add 9 Recipes remains unavailable until a writable Vault is connected.'
+              : 'This Vault was loaded as read-only files in this session. Connect a writable Vault folder before durable saving is possible.';
+
+    return (
+      <section
+        data-testid={context === 'offer' ? 'signature-import-offer' : 'signature-import-manage'}
+        className="rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] border-l-[3px] border-l-[var(--accent-text,#F59E0B)] bg-[var(--bg-elevated,#1E1E1E)] p-4"
+      >
+        <h3 className="font-serif text-[18px] text-[var(--text-primary,#F3F4F6)]">
+          {context === 'offer' ? 'Would you like to add the Signature Nine?' : 'Signature Nine (optional)'}
+        </h3>
+        <p className="mt-2 text-[12px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
+          Start with nine carefully curated recipes from The Kitchen Codex. Adding them is optional and won't overwrite your existing recipes.
+        </p>
+
+        {!signatureImportWritable ? (
+          <>
+            <p className="mt-2 rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-3 py-2 text-[11px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
+              {writeUnavailableMessage}
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setActiveTab('direct')}
+                className="min-h-[44px] rounded-lg bg-[var(--accent,#F59E0B)] px-4 text-[12px] font-semibold text-[var(--accent-contrast,#0C0C0C)]"
+              >
+                Connect Writable Vault
+              </button>
+              {onDismissSignatureImport && (
+                <button
+                  type="button"
+                  onClick={onDismissSignatureImport}
+                  className="min-h-[44px] rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] px-4 text-[12px] font-semibold text-[var(--text-secondary,#9CA3AF)]"
+                >
+                  Not Now
+                </button>
+              )}
+            </div>
+          </>
+        ) : running ? (
+          <div role="status" className="mt-3 rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-3 py-2 text-[12px] text-[var(--text-primary,#F3F4F6)]">
+            Adding recipes… {signatureImportState.completed}/{signatureImportState.total}
+          </div>
+        ) : done ? (
+          <div role="status" className="mt-3 space-y-2">
+            <p className="rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-3 py-2 text-[12px] leading-relaxed text-[var(--text-primary,#F3F4F6)]">
+              {summary?.message || 'The Signature Nine import finished.'}
+            </p>
+            {failedEntries.length > 0 && (
+              <ul className="list-disc space-y-0.5 pl-5 text-[11px] text-[var(--text-secondary,#9CA3AF)]">
+                {failedEntries.map((entry) => (
+                  <li key={entry.starterId}>{entry.title}: {entry.message || entry.status}</li>
+                ))}
+              </ul>
+            )}
+            {onDismissSignatureImport && (
+              <button
+                type="button"
+                onClick={onDismissSignatureImport}
+                className="min-h-[44px] rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] px-4 text-[12px] font-semibold text-[var(--text-primary,#F3F4F6)]"
+              >
+                Done
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              data-testid={context === 'offer' ? 'add-signature-nine' : 'add-signature-nine-manage'}
+              onClick={onImportSignatureNine}
+              className="min-h-[44px] rounded-lg bg-[var(--accent,#F59E0B)] px-4 text-[12px] font-semibold text-[var(--accent-contrast,#0C0C0C)]"
+            >
+              Add 9 Recipes
+            </button>
+            {onDismissSignatureImport && (
+              <button
+                type="button"
+                onClick={onDismissSignatureImport}
+                className="min-h-[44px] rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] px-4 text-[12px] font-semibold text-[var(--text-secondary,#9CA3AF)]"
+              >
+                Not Now
+              </button>
+            )}
+          </div>
+        )}
+      </section>
+    );
   };
 
   // Export All Notes
@@ -531,6 +821,8 @@ export function ConnectVaultModal({
         </div>
 
         <div className="max-h-[65vh] flex-1 space-y-4 overflow-y-auto p-4 sm:p-5">
+          {signatureImportOffer && activeTab !== 'manage' && renderSignatureImport('offer')}
+
           {statusMessage && (
             <div
               role={statusMessage.type === 'error' ? 'alert' : 'status'}
@@ -635,7 +927,7 @@ export function ConnectVaultModal({
               <input type="file" ref={filesInputRef} onChange={handleFilesUpload} accept=".md,.markdown,text/markdown" multiple className="hidden" />
 
               <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-3.5 py-3 text-[12px] text-[var(--text-secondary,#9CA3AF)]">
-                <span>This import adds recipes to the library currently loaded here.</span>
+                <span>Choosing a folder replaces the collection loaded here; choosing individual .md files adds them.</span>
                 <span className="font-mono text-[var(--text-primary,#F3F4F6)]">{recipes.length} recipe{recipes.length === 1 ? '' : 's'} loaded</span>
               </div>
             </div>
@@ -759,7 +1051,19 @@ export function ConnectVaultModal({
                 </div>
               </div>
 
+              {renderSignatureImport('manage')}
+
               <div className="flex flex-wrap gap-2 border-t border-[var(--border-subtle,rgba(255,255,255,0.08))] pt-3">
+                {onOpenVaultFolder ? (
+                  <button
+                    type="button"
+                    onClick={onOpenVaultFolder}
+                    className="flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-3 text-[12px] font-semibold text-[var(--text-primary,#F3F4F6)] transition-colors hover:bg-[var(--bg-root,#0C0C0C)]"
+                  >
+                    <FolderOpen className="h-3.5 w-3.5 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
+                    <span>Open Vault Folder</span>
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={handleExportAllMarkdown}
@@ -768,22 +1072,7 @@ export function ConnectVaultModal({
                   <Download className="h-3.5 w-3.5 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
                   <span>Export Markdown</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={handleRestoreStarterVault}
-                  title={`Return to the ${getStarterVaultRecipes().length} built-in Signature Collection recipes`}
-                  className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-3 text-[12px] font-semibold text-[var(--text-primary,#F3F4F6)] transition-colors hover:bg-[var(--bg-root,#0C0C0C)]"
-                >
-                  <RotateCcw className="h-3.5 w-3.5 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
-                  <span>Use Signature Collection</span>
-                </button>
               </div>
-
-              <p className="text-[11px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
-                “Use Signature Collection” returns to the permanent built-in nine and clears
-                the personal recipes loaded in this session. It does not delete or change files
-                in your folder.
-              </p>
             </div>
           )}
         </div>

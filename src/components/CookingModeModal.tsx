@@ -23,6 +23,7 @@ import { normalizeSpeechText } from '../application/speechText';
 import { playTimerChime } from '../utils/audioAlert';
 import { stepTimerKey, findTimerByKey } from '../application/timers';
 import { useVaultImage } from '../hooks/useVaultImage';
+import { useVaultAssetScope } from '../hooks/VaultAssetScopeContext';
 import type { VoiceCacheService } from '../application/voiceCache';
 import { getRecipeImage } from '../utils/imageHelper';
 
@@ -66,6 +67,17 @@ const VOICE_PREFETCH_DELAY_MS = 1200;
 const VOICE_AUTO_PREPARE_DELAY_MS = 200;
 type VoiceReadiness = 'initializing' | 'unavailable' | 'idle' | 'preparing' | 'ready' | 'speaking' | 'fallback';
 
+/**
+ * One native playback owns exactly one object URL. `released` makes cleanup
+ * idempotent, so ended/error/stop/step-change/unmount can all call it without
+ * revoking twice or letting a stale callback touch a newer playback.
+ */
+type NativePlayback = {
+  url: string;
+  audio: HTMLAudioElement;
+  released: boolean;
+};
+
 export function CookingModeModal({
   recipe,
   servings,
@@ -88,10 +100,12 @@ export function CookingModeModal({
   const [naturalVoiceAvailable, setNaturalVoiceAvailable] = useState(false);
   const [naturalVoicePending, setNaturalVoicePending] = useState(false);
   const [voiceReadiness, setVoiceReadiness] = useState<VoiceReadiness>('initializing');
-  const nativeAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [voiceStatusReason, setVoiceStatusReason] = useState<string | null>(null);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [systemVoiceAvailable, setSystemVoiceAvailable] = useState(false);
+  const nativePlaybackRef = useRef<NativePlayback | null>(null);
   const nativeSpeechIdRef = useRef(0);
   const nativeAbortControllerRef = useRef<AbortController | null>(null);
-  const nativeAudioUrlRef = useRef<string | null>(null);
   const voiceCacheRef = useRef<Map<string, PreparedVoiceClip>>(new Map());
   const voicePreparationRef = useRef<Map<string, { controller: AbortController; promise: Promise<Blob | null> }>>(new Map());
   const voiceCacheBytesRef = useRef(0);
@@ -119,7 +133,8 @@ export function CookingModeModal({
   const stepKey = stepTimerKey(recipe.id, stepNumber);
   const stepTimer = stepTimerKey(recipe.id, stepNumber) ? findTimerByKey(activeTimers, stepKey) : undefined;
 
-  const defaultImg = getRecipeImage(recipe);
+  const assetScope = useVaultAssetScope();
+  const defaultImg = getRecipeImage(recipe, assetScope);
   const reactiveVaultImage = useVaultImage(recipe.image, defaultImg);
 
   const rawImage = typeof recipe.image === 'string' ? recipe.image.trim() : '';
@@ -183,6 +198,7 @@ export function CookingModeModal({
     const plainStepText = String(currentStep.text || '').replace(/\*\*/g, '');
     const text = `Now reading step ${currentStepIndex + 1}: ${plainStepText}`;
     setStepAnnouncement(text);
+    setVoiceError(null);
     if (window.speechSynthesis) window.speechSynthesis.cancel();
     // Cooking Mode is now focused on this step. Detail prewarm for other
     // steps is obsolete and may be cancelled; current/next remain eligible.
@@ -212,7 +228,19 @@ export function CookingModeModal({
       }
       if (window.speechSynthesis) window.speechSynthesis.cancel();
     };
-  }, [recipe.id, recipe.filePath, recipe.title, currentStepIndex, totalSteps, currentStep.text, naturalVoiceEnabled, naturalVoiceAvailable]);
+  }, [recipe.id, recipe.filePath, recipe.title, currentStepIndex, totalSteps, currentStep.text]);
+
+  // Enabling Heart prepares the current step without touching speech that is
+  // already playing. Keeping this separate prevents a native-failure disable
+  // from re-running the step effect and cancelling the system-voice fallback.
+  useEffect(() => {
+    if (!naturalVoiceEnabled || !naturalVoiceAvailable) return undefined;
+    if (!naturalVoiceExplicitRef.current) return undefined;
+    const timer = setTimeout(() => {
+      void prepareStepVoice(currentStepIndex);
+    }, VOICE_AUTO_PREPARE_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [naturalVoiceEnabled, naturalVoiceAvailable]);
 
   useEffect(() => {
     try {
@@ -225,21 +253,46 @@ export function CookingModeModal({
     } catch {}
     const network = voiceService.network;
     const statusRequest = network
-      ? network.get<{ enabled?: boolean }>('/api/voice/status')
+      ? network.get<{ enabled?: boolean; available?: boolean; reason?: string }>('/api/voice/status')
       : Promise.resolve({ status: 503, ok: false, data: undefined });
     statusRequest
       .then((response) => {
         const d = response.data;
-        const available = Boolean(d?.enabled);
+        const available = Boolean(d?.enabled ?? d?.available);
+        const reason = available ? null : (d?.reason || 'Heart is not available on this system.');
         naturalVoiceAvailableRef.current = available;
         setNaturalVoiceAvailable(available);
+        setVoiceStatusReason(reason);
         setVoiceReadiness(available ? 'idle' : 'unavailable');
       })
       .catch(() => {
         naturalVoiceAvailableRef.current = false;
         setNaturalVoiceAvailable(false);
+        setVoiceStatusReason('The Heart voice service could not be reached.');
         setVoiceReadiness('unavailable');
       });
+  }, []);
+
+  useEffect(() => {
+    const synth = typeof window !== 'undefined' ? window.speechSynthesis : undefined;
+    if (!synth) {
+      setSystemVoiceAvailable(false);
+      return;
+    }
+    const refresh = () => {
+      try {
+        setSystemVoiceAvailable(synth.getVoices().length > 0);
+      } catch {
+        setSystemVoiceAvailable(false);
+      }
+    };
+    refresh();
+    const listener = () => refresh();
+    if (typeof synth.addEventListener === 'function') {
+      synth.addEventListener('voiceschanged', listener);
+      return () => synth.removeEventListener('voiceschanged', listener);
+    }
+    return undefined;
   }, []);
 
   useEffect(() => {
@@ -455,7 +508,10 @@ export function CookingModeModal({
         });
         if (controller.signal.aborted || !naturalVoiceEnabledRef.current) return null;
         if (!blob) {
-          if (isCurrentStep) setVoiceReadiness('fallback');
+          if (isCurrentStep) {
+            setVoiceReadiness('fallback');
+            setVoiceError('Heart could not prepare audio for this step. Use Speak for system voice.');
+          }
           return null;
         }
         cacheVoiceClip(key, blob);
@@ -465,7 +521,10 @@ export function CookingModeModal({
       } catch (error) {
         if ((error as any)?.name !== 'AbortError') {
           console.warn('Native voice preparation failed:', error);
-          if (isCurrentStep) setVoiceReadiness('fallback');
+          if (isCurrentStep) {
+            setVoiceReadiness('fallback');
+            setVoiceError('Heart preparation failed. Use Speak for system voice.');
+          }
         }
         return null;
       } finally {
@@ -487,6 +546,25 @@ export function CookingModeModal({
     }, VOICE_PREFETCH_DELAY_MS);
   };
 
+  /**
+   * Releases one native playback exactly once. Handlers are cleared first so a
+   * late ended/error event cannot run after cleanup; the element's source is
+   * detached before revoking the URL, and a stale playback can never clear or
+   * revoke the currently active one.
+   */
+  const releaseNativePlayback = (playback: NativePlayback | null = nativePlaybackRef.current) => {
+    if (!playback || playback.released) return;
+    playback.released = true;
+    if (nativePlaybackRef.current === playback) nativePlaybackRef.current = null;
+    const audio = playback.audio;
+    try { audio.onended = null; } catch {}
+    try { audio.onerror = null; } catch {}
+    try { audio.pause(); } catch {}
+    try { audio.removeAttribute('src'); } catch {}
+    try { (audio as any).load?.(); } catch {}
+    try { URL.revokeObjectURL(playback.url); } catch {}
+  };
+
   const stopNativeSpeech = () => {
     nativeSpeechIdRef.current += 1;
     if (voicePrefetchTimerRef.current) {
@@ -498,15 +576,7 @@ export function CookingModeModal({
       try { controller.abort(); } catch {}
     }
     nativeAbortControllerRef.current = null;
-    const el = nativeAudioRef.current;
-    if (el) {
-      try { el.pause(); } catch {}
-      if (nativeAudioUrlRef.current) {
-        try { URL.revokeObjectURL(nativeAudioUrlRef.current); } catch {}
-        nativeAudioUrlRef.current = null;
-      }
-      try { el.removeAttribute('src'); } catch {}
-    }
+    releaseNativePlayback();
     setIsSpeaking(false);
     setNaturalVoicePending(false);
     if (naturalVoiceEnabledRef.current && naturalVoiceAvailableRef.current) {
@@ -521,26 +591,87 @@ export function CookingModeModal({
     }
   };
 
-  const speakSystem = () => {
+  const speakSystem = (reason?: string): boolean => {
     stopNativeSpeech();
-    if (!window.speechSynthesis) return;
+    setVoiceError(null);
+    const synth = typeof window !== 'undefined' ? window.speechSynthesis : undefined;
+    if (!synth) {
+      const message = 'System speech is not available in this browser.';
+      setVoiceError(message);
+      setVoiceReadiness('unavailable');
+      return false;
+    }
+    let voices: SpeechSynthesisVoice[] = [];
+    try {
+      voices = synth.getVoices();
+    } catch {
+      voices = [];
+    }
+    if (voices.length === 0) {
+      const message = 'No system speech voice is installed. Heart Voice is also unavailable.';
+      setVoiceError(message);
+      setVoiceReadiness('unavailable');
+      return false;
+    }
+    const preferred = voices.find((voice) => /^en[-_]/i.test(voice.lang)) || voices[0];
+    try { synth.cancel(); } catch {}
     const utterance = new SpeechSynthesisUtterance(`Step ${currentStepIndex + 1}. ${currentStep.text}`);
     utterance.rate = 0.95;
+    utterance.voice = preferred;
+    utterance.onstart = () => {
+      setIsSpeaking(true);
+      setVoiceReadiness('fallback');
+    };
     utterance.onend = () => {
       setIsSpeaking(false);
-      if (naturalVoiceEnabledRef.current && voiceCacheRef.current.has(voiceStepKey(currentStepIndex))) setVoiceReadiness('ready');
+      setVoiceReadiness(naturalVoiceAvailableRef.current ? 'ready' : 'unavailable');
     };
-    utterance.onerror = () => setIsSpeaking(false);
-    window.speechSynthesis.speak(utterance);
-    setVoiceReadiness(naturalVoiceAvailableRef.current ? 'fallback' : 'unavailable');
-    setIsSpeaking(true);
+    utterance.onerror = (event) => {
+      setIsSpeaking(false);
+      const errorCode = (event as SpeechSynthesisErrorEvent)?.error;
+      setVoiceError(`System speech failed${errorCode ? ` (${errorCode})` : ''}. No audio was played.`);
+      setVoiceReadiness(naturalVoiceAvailableRef.current ? 'fallback' : 'unavailable');
+    };
+    try {
+      synth.speak(utterance);
+    } catch {
+      const message = 'System speech could not start. No audio was played.';
+      setVoiceError(message);
+      setVoiceReadiness('unavailable');
+      return false;
+    }
+    if (reason) {
+      setVoiceStatusReason(reason);
+      setVoiceError(reason);
+    }
+    setVoiceReadiness('fallback');
+    return true;
+  };
+
+  const handleNativePlaybackFailure = (requestId: number) => {
+    if (requestId !== nativeSpeechIdRef.current) return;
+    console.warn('Native voice failed, falling back to system voice.');
+    naturalVoiceEnabledRef.current = false;
+    naturalVoiceExplicitRef.current = false;
+    setNaturalVoiceEnabled(false);
+    setNaturalVoiceAvailable(false);
+    naturalVoiceAvailableRef.current = false;
+    try { localStorage.setItem('tkc_natural_voice', '0'); } catch {}
+    cancelVoicePreparations();
+    clearVoiceCache();
+    setVoiceStatusReason('Heart playback failed. System voice is the fallback.');
+    speakSystem('Heart playback failed. Using system voice for this step.');
   };
 
   const speakNative = async () => {
     const requestId = ++nativeSpeechIdRef.current;
     const controller = new AbortController();
     nativeAbortControllerRef.current = controller;
+    // A new playback replaces any previous one. Releasing it here guarantees
+    // its object URL never survives into the next Speak cycle.
+    releaseNativePlayback();
     setNaturalVoicePending(true);
+    let playback: NativePlayback | null = null;
     try {
       const key = voiceStepKey(currentStepIndex);
       const prepared = voiceCacheRef.current.get(key) || (voiceService.getCachedVoiceClip(recipe, currentStepIndex) ? { blob: voiceService.getCachedVoiceClip(recipe, currentStepIndex)! } : undefined);
@@ -549,45 +680,52 @@ export function CookingModeModal({
       if (requestId !== nativeSpeechIdRef.current || controller.signal.aborted) return;
       if (prepared && 'lastUsed' in prepared) prepared.lastUsed = ++voiceCacheClockRef.current;
       setVoiceReadiness('speaking');
+      const el = new Audio();
       const url = URL.createObjectURL(blob);
-      nativeAudioUrlRef.current = url;
-      const el = nativeAudioRef.current || new Audio();
-      nativeAudioRef.current = el;
+      const currentPlayback: NativePlayback = { url, audio: el, released: false };
+      playback = currentPlayback;
+      nativePlaybackRef.current = currentPlayback;
       el.src = url;
       el.onended = () => {
+        if (currentPlayback.released) return;
+        releaseNativePlayback(currentPlayback);
         if (requestId === nativeSpeechIdRef.current) {
           setIsSpeaking(false);
+          if (naturalVoiceEnabledRef.current && naturalVoiceAvailableRef.current) {
+            setVoiceReadiness('ready');
+          }
           scheduleNextVoicePrefetch(currentStepIndex);
         }
       };
+      el.onerror = () => {
+        if (currentPlayback.released) return;
+        releaseNativePlayback(currentPlayback);
+        handleNativePlaybackFailure(requestId);
+      };
       await el.play();
-      if (requestId !== nativeSpeechIdRef.current) { stopNativeSpeech(); return; }
+      if (requestId !== nativeSpeechIdRef.current || currentPlayback.released) {
+        // A superseded/ended playback must release only its own URL. Calling the
+        // global stop here could cancel a newer playback.
+        releaseNativePlayback(currentPlayback);
+        return;
+      }
       setIsSpeaking(true);
     } catch (err) {
+      // Release the failed attempt before any fallback begins.
+      if (playback) releaseNativePlayback(playback);
       if ((err as any)?.name === 'AbortError') return;
-      console.warn('Native voice failed, falling back to system voice:', err);
       if (requestId !== nativeSpeechIdRef.current) return;
-      naturalVoiceEnabledRef.current = false;
-      naturalVoiceExplicitRef.current = false;
-      setNaturalVoiceEnabled(false);
-      try { localStorage.setItem('tkc_natural_voice', '0'); } catch {}
-      cancelVoicePreparations();
-      clearVoiceCache();
-      setVoiceReadiness('fallback');
-      if (window.speechSynthesis) {
-        const utterance = new SpeechSynthesisUtterance(`Step ${currentStepIndex + 1}. ${currentStep.text}`);
-        utterance.rate = 0.95;
-        utterance.onend = () => setIsSpeaking(false);
-        utterance.onerror = () => setIsSpeaking(false);
-        window.speechSynthesis.speak(utterance);
-        setIsSpeaking(true);
-      }
+      handleNativePlaybackFailure(requestId);
     } finally {
       if (requestId === nativeSpeechIdRef.current) setNaturalVoicePending(false);
     }
   };
 
   const toggleSpeak = () => {
+    if (naturalVoicePending) {
+      stopNativeSpeech();
+      return;
+    }
     if (isSpeaking) {
       stopNativeSpeech();
       if (!naturalVoiceEnabled || !naturalVoiceAvailable || voiceReadiness === 'fallback') {
@@ -623,14 +761,15 @@ export function CookingModeModal({
   const displayedTotalSteps = Math.max(totalSteps, 1);
   const displayedStepNumber = Math.min(currentStepIndex + 1, displayedTotalSteps);
   const progressPercent = Math.round((displayedStepNumber / displayedTotalSteps) * 100);
+  const systemVoiceLabel = systemVoiceAvailable ? 'System voice ready' : 'System voice unavailable';
   const voiceReadinessLabel = {
     initializing: 'Checking Heart…',
-    unavailable: 'Heart unavailable · System voice available',
+    unavailable: `Heart unavailable · ${systemVoiceLabel}`,
     idle: 'Heart ready to prepare',
-    preparing: 'Preparing Heart · System voice available now',
+    preparing: `Preparing Heart…${systemVoiceAvailable ? ' System voice ready now' : ''}`,
     ready: 'Heart ready',
     speaking: 'Heart speaking',
-    fallback: 'System voice for this request',
+    fallback: 'System voice speaking',
   }[voiceReadiness];
 
   return (
@@ -786,6 +925,11 @@ export function CookingModeModal({
                   {voiceReadinessLabel}
                 </span>
               </span>
+              {(voiceError || voiceStatusReason) && (
+                <span data-testid="voice-status-detail" role="alert" className="break-words text-[10px] leading-tight text-[var(--accent-text,#F59E0B)]">
+                  {voiceError || voiceStatusReason}
+                </span>
+              )}
             </span>
             <label className={`relative ml-1 inline-flex min-h-[44px] min-w-[44px] cursor-pointer items-center justify-center ${(!naturalVoiceAvailable || naturalVoicePending) ? 'cursor-not-allowed' : ''}`}>
               <input

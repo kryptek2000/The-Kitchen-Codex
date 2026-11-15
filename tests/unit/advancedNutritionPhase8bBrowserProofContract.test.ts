@@ -444,11 +444,27 @@ describe('M9 — the real browser step removed from CI', () => {
     expect(plugin).toBeGreaterThan(browser);
   });
 
-  it('keeps the plugin build after the full suite so plugin/main.js cannot pollute it', () => {
-    const suite = WORKFLOW.indexOf('run: bun run test\n');
+  it('runs test groups in separate jobs before the isolated plugin quality job', () => {
+    const fast = WORKFLOW.indexOf('fast-core:');
+    const heavy = WORKFLOW.indexOf('heavy-nutrition:');
+    const security = WORKFLOW.indexOf('security:');
+    const quality = WORKFLOW.indexOf('quality:');
     const plugin = WORKFLOW.indexOf('run: bun run build:plugin');
-    expect(suite).toBeGreaterThan(-1);
-    expect(plugin).toBeGreaterThan(suite);
+    expect(fast).toBeGreaterThan(-1);
+    expect(heavy).toBeGreaterThan(-1);
+    expect(security).toBeGreaterThan(-1);
+    expect(quality).toBeGreaterThan(Math.max(fast, heavy, security));
+    expect(plugin).toBeGreaterThan(quality);
+
+    // Test jobs use the coverage-checked plan; the quality job has no test
+    // runner step, so building plugin/main.js cannot pollute test collection.
+    expect(WORKFLOW).toContain('node scripts/ci/test-plan.mjs --check');
+    expect(WORKFLOW).toMatch(/--group fast/);
+    expect(WORKFLOW).toMatch(/--group heavy/);
+    expect(WORKFLOW).toMatch(/--group security/);
+    const qualityBlock = WORKFLOW.slice(quality, plugin);
+    expect(qualityBlock).not.toMatch(/bun x vitest run/);
+    expect(qualityBlock).not.toMatch(/run:\s*bun run test\s*\n/);
   });
 
   it('resolves a browser explicitly and fails the job when none exists', () => {
