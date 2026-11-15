@@ -13,12 +13,20 @@ import vm from 'node:vm';
 const require = createRequire(import.meta.url);
 const security = require('../../desktop/security.cjs') as {
   assertTrustedIpcSender(event: unknown, appOrigin: string, webContents?: unknown): void;
+  contextMenuTemplate(params: unknown): Array<{ role?: string; type?: string; enabled?: boolean }>;
+  installContextMenu(
+    webContents: unknown,
+    appOrigin: string,
+    menuApi: unknown,
+    window?: unknown
+  ): void;
   installNavigationGuards(
     webContents: unknown,
     appOrigin: string,
     onBlocked?: (kind: string, url: string) => void
   ): void;
   isSameOrigin(targetUrl: string, appOrigin: string): boolean;
+  isTrustedContextMenuTarget(params: unknown, appOrigin: string): boolean;
   isTrustedIpcSender(event: unknown, appOrigin: string, webContents?: unknown): boolean;
 };
 
@@ -275,5 +283,85 @@ describe('F1-B2 — argument-free Open Vault Folder bridge', () => {
     const preload = fs.readFileSync(path.join(ROOT, 'desktop/preload.cjs'), 'utf8');
     expect(preload).toContain('window.location.origin');
     expect(preload).toContain('--tkc-app-origin=');
+  });
+});
+
+describe('F1-B2 — native edit context menu', () => {
+  const frame = { url: APP_ORIGIN, parent: null };
+  const editableParams = {
+    frame,
+    frameURL: APP_ORIGIN,
+    pageURL: APP_ORIGIN,
+    isEditable: true,
+    selectionText: '',
+    editFlags: {
+      canUndo: true,
+      canRedo: true,
+      canCut: true,
+      canCopy: true,
+      canPaste: true,
+      canSelectAll: true,
+    },
+  };
+
+  it('includes standard Paste for editable application fields', () => {
+    const template = security.contextMenuTemplate(editableParams);
+    expect(template.some((item) => item.role === 'paste')).toBe(true);
+    expect(template.find((item) => item.role === 'paste')?.enabled).toBe(true);
+    expect(template.some((item) => item.role === 'selectAll')).toBe(true);
+  });
+
+  it('rejects foreign frames, subframes, and destroyed frames', () => {
+    expect(security.isTrustedContextMenuTarget(editableParams, APP_ORIGIN)).toBe(true);
+    expect(
+      security.isTrustedContextMenuTarget(
+        { ...editableParams, frame: { url: 'https://evil.example', parent: null } },
+        APP_ORIGIN
+      )
+    ).toBe(false);
+    expect(
+      security.isTrustedContextMenuTarget(
+        { ...editableParams, frame: { url: APP_ORIGIN, parent: {} } },
+        APP_ORIGIN
+      )
+    ).toBe(false);
+    expect(
+      security.isTrustedContextMenuTarget(
+        { ...editableParams, pageURL: 'https://evil.example' },
+        APP_ORIGIN
+      )
+    ).toBe(false);
+    expect(security.isTrustedContextMenuTarget({ ...editableParams, frame: null }, APP_ORIGIN)).toBe(false);
+  });
+
+  it('installs the menu only for a trusted editable target', () => {
+    const webContents = new EventEmitter() as any;
+    const popup = vi.fn();
+    const menuApi = {
+      buildFromTemplate: vi.fn(() => ({ popup })),
+    };
+    security.installContextMenu(webContents, APP_ORIGIN, menuApi, { id: 'window' });
+
+    webContents.emit('context-menu', {}, editableParams);
+    expect(menuApi.buildFromTemplate).toHaveBeenCalledTimes(1);
+    expect(popup).toHaveBeenCalledTimes(1);
+
+    webContents.emit('context-menu', {}, {
+      ...editableParams,
+      frame: { url: 'https://evil.example', parent: null },
+    });
+    webContents.emit('context-menu', {}, {
+      ...editableParams,
+      isEditable: false,
+      selectionText: '',
+    });
+    expect(menuApi.buildFromTemplate).toHaveBeenCalledTimes(1);
+  });
+
+  it('wires the context menu into the trusted main window', () => {
+    const source = fs.readFileSync(path.join(ROOT, 'desktop/main.cjs'), 'utf8');
+    expect(source).toContain(
+      'installContextMenu(mainWindow.webContents, serverOrigin, Menu, mainWindow)'
+    );
   });
 });

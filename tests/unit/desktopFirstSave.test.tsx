@@ -9,7 +9,7 @@
 
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import App from '../../src/App';
 import {
   installDesktopRuntime,
@@ -355,4 +355,41 @@ describe('Desktop Foundation — first-save native Vault onboarding', () => {
     expect(desktop.files.size).toBe(1);
     expect(statusLine()).toMatch(/1 recipe/i);
   }, 30000);
+
+  it('an empty connected plan shows seven days, adds a recipe without Reset Week, and persists after restart', async () => {
+    const desktop = makeFakeDesktop({ 'Philly Fluff Cake.md': '# Philly Fluff Cake\n' }, true);
+    (window as any).kitchenCodexDesktop = desktop.bridge;
+    const first = render(<App />);
+    await screen.findByText('Philly Fluff Cake');
+    expect(desktop.files.has('Meal Plan.md')).toBe(false);
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Add to meal plan' })[0]);
+
+    await waitFor(
+      () => expect(document.getElementById('meal-plan-day-monday')).toBeTruthy(),
+      { timeout: 15000 }
+    );
+    for (const day of ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']) {
+      expect(document.getElementById(`meal-plan-day-${day.toLowerCase()}`)).toBeTruthy();
+    }
+    const monday = document.getElementById('meal-plan-day-monday')!;
+    expect(within(monday).getByText('Philly Fluff Cake')).toBeTruthy();
+
+    await waitFor(() => expect(desktop.files.has('Meal Plan.md')).toBe(true), { timeout: 15000 });
+    const savedPlan = new TextDecoder().decode(desktop.files.get('Meal Plan.md'));
+    expect(savedPlan).toContain('## Monday');
+    expect(savedPlan).toContain('[[Philly Fluff Cake]]');
+
+    first.unmount();
+    render(<App />);
+    await screen.findByText('Philly Fluff Cake');
+    fireEvent.click(screen.getAllByRole('button', { name: 'Meal Planner' })[0]);
+    await waitFor(
+      () => expect(document.getElementById('meal-plan-day-monday')).toBeTruthy(),
+      { timeout: 15000 }
+    );
+    expect(
+      within(document.getElementById('meal-plan-day-monday')!).getByText('Philly Fluff Cake')
+    ).toBeTruthy();
+  }, 60000);
 });

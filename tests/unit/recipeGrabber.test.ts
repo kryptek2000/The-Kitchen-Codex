@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   extractJsonLd,
   extractMetaTags,
+  extractVisibleTimings,
   formatDuration,
   parseRecipeYield,
   parseRecipeFromJsonLd,
@@ -44,6 +45,28 @@ describe("RecipeGrabber - Extraction & Parsing", () => {
     it("returns clean strings as-is if already formatted", () => {
       expect(formatDuration("25 minutes")).toBe("25 minutes");
       expect(formatDuration("1 hour 15 mins")).toBe("1 hour 15 mins");
+    });
+  });
+
+  describe("extractVisibleTimings", () => {
+    it("extracts only explicitly labelled prep/cook/total times", () => {
+      expect(
+        extractVisibleTimings(
+          "Prep time: 15 minutes; Cook time: 20 minutes; Total time: 35 minutes"
+        )
+      ).toEqual({
+        prepTime: "15 minutes",
+        cookTime: "20 minutes",
+        totalTime: "35 minutes",
+      });
+    });
+
+    it("returns empty fields when no labelled times exist", () => {
+      expect(extractVisibleTimings("Simmer until tender, about 20 minutes.")).toEqual({
+        prepTime: "",
+        cookTime: "",
+        totalTime: "",
+      });
     });
   });
 
@@ -271,6 +294,53 @@ describe("RecipeGrabber - Extraction & Parsing", () => {
       expect(result.servings).toBe(6);
       expect(result.ingredients).toHaveLength(5);
       expect(result.instructions).toHaveLength(3);
+    });
+
+    it("fills explicit visible timings when complete JSON-LD omits them", async () => {
+      const sampleHtml = `
+        <html><head><title>Acceptance Soup</title>
+          <script type="application/ld+json">
+            {
+              "@context": "https://schema.org",
+              "@type": "Recipe",
+              "name": "Acceptance Soup",
+              "recipeYield": "4 servings",
+              "recipeIngredient": ["2 cups broth", "1 cup tomatoes"],
+              "recipeInstructions": ["Simmer for 20 minutes."]
+            }
+          </script>
+        </head><body>
+          <p>Prep time: 15 minutes</p>
+          <p>Cook time: 20 minutes</p>
+          <p>Total time: 35 minutes</p>
+        </body></html>
+      `;
+
+      const result = await grabRecipeFromWeb({ html: sampleHtml });
+      expect(result.prepTime).toBe("15 minutes");
+      expect(result.cookTime).toBe("20 minutes");
+      expect(result.totalTime).toBe("35 minutes");
+      expect(result.rawMarkdown).toContain('prep_time: "15 minutes"');
+    });
+
+    it("keeps JSON-LD timings authoritative over visible text", async () => {
+      const sampleHtml = `
+        <html><head>
+          <script type="application/ld+json">
+            {
+              "@context": "https://schema.org",
+              "@type": "Recipe",
+              "name": "Timed Soup",
+              "prepTime": "PT10M",
+              "recipeIngredient": ["2 cups broth"],
+              "recipeInstructions": ["Simmer."]
+            }
+          </script>
+        </head><body><p>Prep time: 99 minutes</p></body></html>
+      `;
+
+      const result = await grabRecipeFromWeb({ html: sampleHtml });
+      expect(result.prepTime).toBe("10 mins");
     });
   });
 
