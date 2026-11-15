@@ -84,7 +84,12 @@ jobs:
             node node_modules/electron/install.js
           fi
           test -x node_modules/electron/dist/electron
-          node_modules/electron/dist/electron --version
+          test -f node_modules/electron/dist/chrome-sandbox
+          test -f node_modules/electron/dist/resources/default_app.asar
+          test -f node_modules/electron/dist/icudtl.dat
+          EXPECTED_ELECTRON="$(node -p "require('./node_modules/electron/package.json').version")"
+          test "$EXPECTED_ELECTRON" = "40.10.2"
+          echo "Electron package version: $EXPECTED_ELECTRON (binary present; not launched for version verification)"
 
       - name: Build native Vault filesystem helper from committed source
         run: |
@@ -137,6 +142,22 @@ jobs:
             "$TKC_DESKTOP_OUT/TheKitchenCodex-linux-x64" \
             "$RUNNER_TEMP/tkc-desktop-package-manifest.txt"
           du -sh "$TKC_DESKTOP_OUT/TheKitchenCodex-linux-x64"
+
+      - name: Configure packaged Electron sandbox helper
+        run: |
+          set -euo pipefail
+          BUNDLE="$TKC_DESKTOP_OUT/TheKitchenCodex-linux-x64"
+          test -f "$BUNDLE/chrome-sandbox"
+          for helper in \
+            "$BUNDLE/chrome-sandbox" \
+            "$BUNDLE/resources/app/node_modules/electron/dist/chrome-sandbox"; do
+            if [ -f "$helper" ]; then
+              sudo chown root:root "$helper"
+              sudo chmod 4755 "$helper"
+              stat -c '%U:%G %a %n' "$helper"
+              test "$(stat -c '%U:%G %a' "$helper")" = "root:root 4755"
+            fi
+          done
 
       - name: Sandbox-enabled packaged startup smoke
         run: |

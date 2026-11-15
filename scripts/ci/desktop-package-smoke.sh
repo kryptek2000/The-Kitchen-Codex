@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Linux packaged-desktop startup smoke.
 #
-# Attempts a sandbox-enabled launch first. If the CI runner cannot provide the
-# Electron sandbox (a known container/runner limitation), records a warning and
-# retries with --no-sandbox so a broken package still fails the job. The smoke
-# always uses disposable document/profile roots and a non-3040 port.
+# Requires the packaged Electron sandbox. There is intentionally NO unsandboxed
+# retry: a launch that cannot use the sandbox must fail and be reported, not be
+# substituted with --no-sandbox. The workflow configures the ephemeral runner's
+# SUID helper before this script runs. The smoke always uses disposable
+# document/profile roots and a non-3040 port.
 
 set -euo pipefail
 
@@ -22,6 +23,20 @@ fi
 if [ "$PORT" = "3040" ]; then
   echo "::error title=Forbidden Smoke Port::Refusing to use port 3040." >&2
   exit 1
+fi
+
+if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+  HELPER="$BUNDLE/chrome-sandbox"
+  if [ ! -f "$HELPER" ]; then
+    echo "::error title=Missing Sandbox Helper::Packaged chrome-sandbox is absent: $HELPER" >&2
+    exit 1
+  fi
+  HELPER_MODE="$(stat -c '%U:%G %a' "$HELPER")"
+  if [ "$HELPER_MODE" != "root:root 4755" ]; then
+    echo "::error title=Unsafe Sandbox Helper::Expected root:root 4755, got $HELPER_MODE. Refusing unsandboxed launch." >&2
+    exit 1
+  fi
+  echo "Packaged sandbox helper: $HELPER_MODE"
 fi
 
 rm -rf "$WORK"
@@ -60,14 +75,12 @@ cleanup_app() {
 trap cleanup_app EXIT
 
 attempt_startup() {
-  local mode="$1"
-  shift
   : > "$LOG"
   "${XVFB[@]}" env \
     TKC_DESKTOP_DOCUMENTS_ROOT="$WORK/docs" \
     TKC_DESKTOP_PORT="$PORT" \
     "$APP" --disable-gpu --disable-dev-shm-usage \
-    --user-data-dir="$WORK/profile" "$@" >"$LOG" 2>&1 &
+    --user-data-dir="$WORK/profile" >"$LOG" 2>&1 &
   APP_PID=$!
 
   local deadline=$((SECONDS + 45))
@@ -81,7 +94,7 @@ attempt_startup() {
         echo "::error title=Desktop API Auth::Expected unauthenticated /api/voice/status to return 403, got $unauth" >&2
         return 1
       fi
-      printf 'mode=%s\nhealth=200\nunauthenticated_api=%s\n' "$mode" "$unauth" > "$RESULT"
+      printf 'mode=sandbox\nhealth=200\nunauthenticated_api=%s\n' "$unauth" > "$RESULT"
       return 0
     fi
     if ! kill -0 "$APP_PID" 2>/dev/null; then
@@ -93,24 +106,12 @@ attempt_startup() {
 }
 
 echo "Attempting sandbox-enabled packaged startup..."
-if attempt_startup sandbox; then
+if attempt_startup; then
   echo "✓ Sandbox-enabled packaged startup passed."
   exit 0
 fi
 cleanup_app
 
-if grep -qiE 'sandbox|SUID|Operation not permitted|namespace' "$LOG"; then
-  echo "::warning title=Electron Sandbox Unavailable::The runner could not start the packaged app with its sandbox; retrying with --no-sandbox for package diagnosis."
-else
-  echo "Sandbox attempt failed without a recognized sandbox error; retrying with --no-sandbox for diagnosis." >&2
-fi
-
-if attempt_startup no-sandbox --no-sandbox; then
-  echo "✓ Packaged startup passed with the environment fallback (sandbox unavailable on this runner)."
-  exit 0
-fi
-cleanup_app
-
-echo "::error title=Desktop Package Smoke Failed::The packaged application did not reach backend health." >&2
+echo "::error title=Sandboxed Desktop Startup Failed::The packaged application did not reach backend health with Electron's sandbox enabled. Unsandboxed retry is intentionally disabled." >&2
 tail -120 "$LOG" >&2 || true
 exit 1
