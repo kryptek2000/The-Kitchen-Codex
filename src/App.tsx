@@ -200,6 +200,7 @@ import type {
 } from './components/AdvancedNutritionCard';
 import { DataviewTableView } from './components/DataviewTableView';
 import { MealPlannerView } from './components/MealPlannerView';
+import { addRecipeToMealPlan, normalizeMealPlanDays } from './core/mealPlan';
 import { ShoppingListView } from './components/ShoppingListView';
 import { ThemesView, themeBackgroundColor } from './components/ThemesView';
 import { ActiveTimersBar } from './components/ActiveTimersBar';
@@ -806,7 +807,7 @@ export default function App() {
   const [activeTimers, setActiveTimers] = useState<ActiveTimer[]>([]);
 
   // Meal Plan & Shopping List (Canonical Source: Vault Notes `Meal Plan.md` & `Shopping List.md`)
-  const [mealPlan, setMealPlan] = useState<MealPlanDay[]>(STARTER_MEAL_PLAN);
+  const [mealPlan, setMealPlan] = useState<MealPlanDay[]>(() => normalizeMealPlanDays(STARTER_MEAL_PLAN));
   const [shoppingCategories, setShoppingCategories] = useState<ShoppingCategoryGroup[]>(STARTER_SHOPPING_CATEGORIES);
 
   // Canonical vault integrity (R2). `vaultAuthority` is the ONE identity
@@ -894,9 +895,10 @@ export default function App() {
     recipesRef.current = snapshot.recipes;
     committedRecipesRef.current = snapshot.recipes;
     setNotes(snapshot.notes);
-    setMealPlan(snapshot.mealPlan);
+    const normalizedMealPlan = normalizeMealPlanDays(snapshot.mealPlan);
+    setMealPlan(normalizedMealPlan);
     setShoppingCategories(snapshot.shoppingList);
-    hydratedMealPlanRef.current = snapshot.mealPlan;
+    hydratedMealPlanRef.current = normalizedMealPlan;
     hydratedShoppingRef.current = snapshot.shoppingList;
     setVaultStatus({
       isConnected: true,
@@ -3272,7 +3274,7 @@ export default function App() {
     recipe: ObsidianRecipe
   ) => {
     setMealPlan((prev) => {
-      const next = [...prev];
+      const next = normalizeMealPlanDays(prev);
       next[dayIndex] = {
         ...next[dayIndex],
         [mealType]: {
@@ -3292,7 +3294,7 @@ export default function App() {
     mealType: 'breakfast' | 'lunch' | 'dinner'
   ) => {
     setMealPlan((prev) => {
-      const next = [...prev];
+      const next = normalizeMealPlanDays(prev);
       next[dayIndex] = {
         ...next[dayIndex],
         [mealType]: undefined,
@@ -3305,30 +3307,13 @@ export default function App() {
   };
 
   const handleResetMealPlan = () => {
-    const emptyPlan: MealPlanDay[] = [
-      { dayName: 'Monday' },
-      { dayName: 'Tuesday' },
-      { dayName: 'Wednesday' },
-      { dayName: 'Thursday' },
-      { dayName: 'Friday' },
-      { dayName: 'Saturday' },
-      { dayName: 'Sunday' },
-    ];
-    setMealPlan(emptyPlan);
+    setMealPlan(normalizeMealPlanDays([]));
     setShoppingCategories([]);
   };
 
   const handleAddToMealPlan = (r: ObsidianRecipe) => {
     setMealPlan((prev) => {
-      const next = [...prev];
-      const firstEmpty = next.find((d) => !d.dinner?.recipeTitle) || next.find((d) => !d.lunch?.recipeTitle) || next[0];
-      if (!firstEmpty.dinner?.recipeTitle) {
-        firstEmpty.dinner = { recipeId: r.id, recipeTitle: r.title };
-      } else if (!firstEmpty.lunch?.recipeTitle) {
-        firstEmpty.lunch = { recipeId: r.id, recipeTitle: r.title };
-      } else {
-        firstEmpty.breakfast = { recipeId: r.id, recipeTitle: r.title };
-      }
+      const next = addRecipeToMealPlan(prev, r);
       setShoppingCategories((prevShop) =>
         generateShoppingFromMealPlan(next, recipes, prevShop)
       );
@@ -3339,7 +3324,7 @@ export default function App() {
 
   const handleGenerateWeeklyShoppingList = () => {
     setShoppingCategories((prevShop) =>
-      generateShoppingFromMealPlan(mealPlan, recipes, prevShop)
+      generateShoppingFromMealPlan(normalizeMealPlanDays(mealPlan), recipes, prevShop)
     );
     setActiveTab('shopping');
   };
@@ -3729,7 +3714,7 @@ export default function App() {
               return Array.from(map.values());
             });
           }
-          if (result.mealPlan) setMealPlan(result.mealPlan);
+          if (result.mealPlan) setMealPlan(normalizeMealPlanDays(result.mealPlan));
           if (result.shoppingList) setShoppingCategories(result.shoppingList);
 
           if (result.recipes.length > 0 || result.mealPlan || result.shoppingList || parsedNotes.length > 0) {
@@ -3891,7 +3876,7 @@ export default function App() {
             // The actual active collection is the starter cookbook. Only then
             // is resetting the in-memory demo personalization/plan correct.
             setStarterOverrides({});
-            setMealPlan(STARTER_MEAL_PLAN);
+            setMealPlan(normalizeMealPlanDays(STARTER_MEAL_PLAN));
             setShoppingCategories(STARTER_SHOPPING_CATEGORIES);
             setVaultHydratedState(true);
           }

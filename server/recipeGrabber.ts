@@ -247,6 +247,34 @@ function isRecipeType(type: any): boolean {
 }
 
 /**
+ * Extracts only explicitly labelled timing lines from visible page text. Used
+ * as a narrow fallback when valid JSON-LD omits timings. Never guesses.
+ */
+export function extractVisibleTimings(text: string): {
+  prepTime: string;
+  cookTime: string;
+  totalTime: string;
+} {
+  const result = { prepTime: "", cookTime: "", totalTime: "" };
+  if (!text) return result;
+  const normalized = text.replace(/\r?\n/g, " ").replace(/\s+/g, " ");
+  const duration = String.raw`(\d{1,4}(?:\s*[–-]\s*\d{1,4})?\s*(?:minutes?|mins?|hours?|hrs?))`;
+  const patterns: Array<[keyof typeof result, RegExp]> = [
+    ["prepTime", new RegExp(String.raw`\bprep(?:aration)?\s*time\s*[:\-–]?\s*` + duration, "i")],
+    ["cookTime", new RegExp(String.raw`\bcook(?:ing)?\s*time\s*[:\-–]?\s*` + duration, "i")],
+    ["totalTime", new RegExp(String.raw`\btotal\s*time\s*[:\-–]?\s*` + duration, "i")],
+  ];
+  for (const [key, pattern] of patterns) {
+    const match = normalized.match(pattern);
+    if (match?.[1]) {
+      const formatted = formatDuration(match[1]);
+      if (formatted) result[key] = formatted;
+    }
+  }
+  return result;
+}
+
+/**
  * Parser for Schema.org Recipe JSON-LD (supports @graph, arrays, HowToStep, HowToSection)
  * STRICT ZERO-FABRICATION: If times or metadata are absent, leave them empty/undefined.
  */
@@ -614,6 +642,24 @@ function buildAiRecipeResult(
   };
 }
 
+/** Fills only timing fields the structured result left empty, from explicit text labels. */
+function applyVisibleTimingFallback(
+  result: GrabbedRecipeResult,
+  visibleText: string
+): GrabbedRecipeResult {
+  const timings = extractVisibleTimings(visibleText);
+  let changed = false;
+  const next = { ...result };
+  for (const key of ["prepTime", "cookTime", "totalTime"] as const) {
+    if (!next[key] && timings[key]) {
+      next[key] = timings[key];
+      changed = true;
+    }
+  }
+  if (changed) next.rawMarkdown = generateMarkdown(next);
+  return next;
+}
+
 /**
  * Main grabber engine supporting { url, html, rawText } inputs.
  * Priority: JSON-LD -> AI Provider Roles -> Heuristic Text Parsing
@@ -644,6 +690,7 @@ export async function grabRecipeFromWeb(params: {
   // 2. Extract JSON-LD and meta tags if HTML is present
   const jsonLdList = htmlContent ? extractJsonLd(htmlContent) : [];
   const metaTags = htmlContent ? extractMetaTags(htmlContent) : {};
+  const cleanedText = htmlContent ? cleanHtmlToText(htmlContent) : rawText || "";
 
   // Pipeline Priority 1: High-fidelity JSON-LD Schema (zero-cost, zero-latency, deterministic)
   if (jsonLdList.length > 0) {
@@ -654,11 +701,9 @@ export async function grabRecipeFromWeb(params: {
       jsonLdResult.ingredients.length > 0 &&
       jsonLdResult.instructions.length > 0
     ) {
-      return jsonLdResult;
+      return applyVisibleTimingFallback(jsonLdResult, cleanedText);
     }
   }
-
-  const cleanedText = htmlContent ? cleanHtmlToText(htmlContent) : rawText || "";
 
   // Pipeline Priority 2: AI structured extraction across capable provider roles.
   // Candidates are resolved per role and capability-filtered (structuredOutput only)
@@ -713,7 +758,7 @@ REQUIREMENTS:
             })
             .then((parsed) => buildAiRecipeResult(parsed, metaTags, siteName, url)),
       });
-      return result;
+      return applyVisibleTimingFallback(result, cleanedText);
     } catch (err: any) {
       // Total AI-chain failure. Emit sanitized per-attempt diagnostics + terminal
       // (never the raw provider exception / key / prompt / body), then fall through
@@ -731,7 +776,7 @@ REQUIREMENTS:
   // Pipeline Priority 3: Fallback JSON-LD if partial
   if (jsonLdList.length > 0) {
     const fallbackResult = parseRecipeFromJsonLd(jsonLdList, effectiveSourceUrl);
-    if (fallbackResult) return fallbackResult;
+    if (fallbackResult) return applyVisibleTimingFallback(fallbackResult, cleanedText);
   }
 
   // Pipeline Priority 4: Regex & Heuristic Text Fallback
@@ -769,15 +814,16 @@ REQUIREMENTS:
       }
     });
 
+    const visibleTimings = extractVisibleTimings(textToScan);
     const fallback: GrabbedRecipeResult = {
       title,
       description: metaTags.description || "Recipe imported from web source",
       cuisine: "General",
       category: "Main Course",
       difficulty: "Medium",
-      prepTime: "",
-      cookTime: "",
-      totalTime: "",
+      prepTime: visibleTimings.prepTime,
+      cookTime: visibleTimings.cookTime,
+      totalTime: visibleTimings.totalTime,
       servings: undefined,
       rating: 0,
       source: siteName || metaTags.siteName || "Imported Recipe",

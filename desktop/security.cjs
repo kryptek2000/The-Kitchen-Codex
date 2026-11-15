@@ -33,6 +33,66 @@ function isSameOrigin(targetUrl, appOrigin) {
  * URL is the exact application origin. All IPC handlers use this; navigation
  * policy is a second, independent layer.
  */
+/**
+ * True only for an editable/selection context menu in the trust boundary.
+ * Foreign frames, subframes, and destroyed frames never receive a menu.
+ */
+function isTrustedContextMenuTarget(params, appOrigin) {
+  try {
+    if (!params || !params.frame) return false;
+    if (params.frame.parent) return false;
+    if (params.frame.url && !isSameOrigin(params.frame.url, appOrigin)) return false;
+    if (params.frameURL && !isSameOrigin(params.frameURL, appOrigin)) return false;
+    if (params.pageURL && !isSameOrigin(params.pageURL, appOrigin)) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Standard edit menu for editable fields. No privileged Electron actions are
+ * exposed; roles only act on the focused renderer control.
+ */
+function contextMenuTemplate(params) {
+  if (!params || typeof params !== 'object') return [];
+  const flags = params.editFlags || {};
+  const enabled = (key) => flags[key] !== false;
+  if (params.isEditable) {
+    return [
+      { role: 'undo', enabled: enabled('canUndo') },
+      { role: 'redo', enabled: enabled('canRedo') },
+      { type: 'separator' },
+      { role: 'cut', enabled: enabled('canCut') },
+      { role: 'copy', enabled: enabled('canCopy') },
+      { role: 'paste', enabled: enabled('canPaste') },
+      { type: 'separator' },
+      { role: 'selectAll', enabled: enabled('canSelectAll') },
+    ];
+  }
+  if (typeof params.selectionText === 'string' && params.selectionText.trim()) {
+    return [
+      { role: 'copy', enabled: enabled('canCopy') },
+      { type: 'separator' },
+      { role: 'selectAll', enabled: enabled('canSelectAll') },
+    ];
+  }
+  return [];
+}
+
+function installContextMenu(webContents, appOrigin, menuApi, window) {
+  webContents.on('context-menu', (_event, params) => {
+    if (!isTrustedContextMenuTarget(params, appOrigin)) return;
+    const template = contextMenuTemplate(params);
+    if (template.length === 0) return;
+    try {
+      menuApi.buildFromTemplate(template).popup({ window });
+    } catch {
+      // A menu failure must never affect the renderer or navigation policy.
+    }
+  });
+}
+
 function isTrustedIpcSender(event, appOrigin, expectedWebContents) {
   try {
     if (!event || !event.sender) return false;
@@ -112,8 +172,11 @@ function installNavigationGuards(webContents, appOrigin, onBlocked) {
 
 module.exports = {
   assertTrustedIpcSender,
+  contextMenuTemplate,
+  installContextMenu,
   installNavigationGuards,
   isSameOrigin,
+  isTrustedContextMenuTarget,
   isTrustedIpcSender,
   originOf,
 };

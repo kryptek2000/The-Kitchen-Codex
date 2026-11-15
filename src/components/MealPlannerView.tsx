@@ -15,6 +15,7 @@ import {
 import { ObsidianRecipe, MealPlanDay } from '../types';
 import { getRecipeImage } from '../utils/imageHelper';
 import { useVaultAssetScope } from '../hooks/VaultAssetScopeContext';
+import { normalizeMealPlanDays } from '../core/mealPlan';
 
 interface MealPlannerViewProps {
   recipes: ObsidianRecipe[];
@@ -38,6 +39,7 @@ export function MealPlannerView({
   onResetMealPlan,
 }: MealPlannerViewProps) {
   const assetScope = useVaultAssetScope();
+  const days = useMemo(() => normalizeMealPlanDays(mealPlan), [mealPlan]);
   const [selectingSlot, setSelectingSlot] = useState<{ dayIndex: number; mealType: 'breakfast' | 'lunch' | 'dinner' } | null>(null);
   const [modalSearchQuery, setModalSearchQuery] = useState('');
 
@@ -64,7 +66,7 @@ export function MealPlannerView({
     });
   }, [sortedRecipes, modalSearchQuery]);
 
-  const totalPlannedMeals = mealPlan.reduce(
+  const totalPlannedMeals = days.reduce(
     (acc, d) =>
       acc +
       (d.breakfast?.recipeTitle ? 1 : 0) +
@@ -189,7 +191,7 @@ export function MealPlannerView({
 
       {/* 7-day grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 min-[1800px]:grid-cols-7 gap-4">
-        {mealPlan.map((day, dayIndex) => {
+        {days.map((day, dayIndex) => {
           const dayRecipeCount =
             (day.breakfast?.recipeTitle ? 1 : 0) +
             (day.lunch?.recipeTitle ? 1 : 0) +
@@ -281,7 +283,7 @@ export function MealPlannerView({
               <div className="space-y-0.5">
                 <div className="flex items-center gap-2">
                   <h3 id="meal-select-title" className="font-serif font-bold text-sm text-[var(--text-primary,#F3F4F6)]">
-                    Select Recipe for {mealPlan[selectingSlot.dayIndex]?.dayName}
+                    Select Recipe for {days[selectingSlot.dayIndex]?.dayName}
                   </h3>
                   <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-[var(--accent-subtle,rgba(245,158,11,0.15))] text-[var(--accent-text,#F59E0B)] border border-[var(--accent-text,#F59E0B)] capitalize">
                     {selectingSlot.mealType}

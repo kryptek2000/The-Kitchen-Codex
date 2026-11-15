@@ -293,4 +293,47 @@ describe('MealPlannerView', () => {
     const btn = container.querySelector('button[class*="min-h-[44px]"]');
     expect(btn).toBeTruthy();
   });
+
+  it('renders Monday-Sunday for an empty plan instead of requiring Reset Week', () => {
+    render(
+      <MealPlannerView
+        recipes={recipes}
+        mealPlan={[]}
+        onOpenRecipe={() => {}}
+        onGenerateDayShoppingList={() => {}}
+        onGenerateWeeklyShoppingList={() => {}}
+        onSelectSlotRecipe={() => {}}
+        onRemoveSlotRecipe={() => {}}
+        onResetMealPlan={() => {}}
+      />
+    );
+    for (const day of ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']) {
+      expect(screen.getByText(day)).toBeTruthy();
+      expect(document.getElementById(`meal-plan-day-${day.toLowerCase()}`)).toBeTruthy();
+    }
+  });
+
+  it('fills missing days while preserving populated plan content', () => {
+    render(
+      <MealPlannerView
+        recipes={recipes}
+        mealPlan={[
+          {
+            dayName: 'Wednesday',
+            dinner: { recipeId: 'r3', recipeTitle: 'Gamma Pasta' },
+          },
+        ]}
+        onOpenRecipe={() => {}}
+        onGenerateDayShoppingList={() => {}}
+        onGenerateWeeklyShoppingList={() => {}}
+        onSelectSlotRecipe={() => {}}
+        onRemoveSlotRecipe={() => {}}
+        onResetMealPlan={() => {}}
+      />
+    );
+    expect(screen.getByText('Monday')).toBeTruthy();
+    expect(screen.getByText('Sunday')).toBeTruthy();
+    const wednesday = document.getElementById('meal-plan-day-wednesday')!;
+    expect(within(wednesday).getByText('Gamma Pasta')).toBeTruthy();
+  });
 });

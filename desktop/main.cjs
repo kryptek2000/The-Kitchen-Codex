@@ -30,6 +30,7 @@ const {
 } = require('./fsSafety.cjs');
 const {
   assertTrustedIpcSender,
+  installContextMenu,
   installNavigationGuards,
 } = require('./security.cjs');
 const {
@@ -316,6 +317,7 @@ function createWindow() {
   installNavigationGuards(mainWindow.webContents, serverOrigin, (kind, url) => {
     console.warn(`[desktop] blocked ${kind}:`, url);
   });
+  installContextMenu(mainWindow.webContents, serverOrigin, Menu, mainWindow);
 
   mainWindow.loadURL(`${serverOrigin}/`).catch((error) => {
     dialog.showErrorBox('The Kitchen Codex could not open', error?.message || String(error));
