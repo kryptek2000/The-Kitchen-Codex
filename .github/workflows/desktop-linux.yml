@@ -88,7 +88,7 @@ jobs:
           test -f node_modules/electron/dist/resources/default_app.asar
           test -f node_modules/electron/dist/icudtl.dat
           EXPECTED_ELECTRON="$(node -p "require('./node_modules/electron/package.json').version")"
-          test "$EXPECTED_ELECTRON" = "40.10.2"
+          test "$EXPECTED_ELECTRON" = "45.3.2"
           echo "Electron package version: $EXPECTED_ELECTRON (binary present; not launched for version verification)"
 
       - name: Build native Vault filesystem helper from committed source
