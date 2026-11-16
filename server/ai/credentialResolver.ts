@@ -27,6 +27,7 @@ import { getSessionSecret } from "./sessionSecrets.js";
 import { GeminiProvider } from "./geminiProvider.js";
 import { OpenRouterProvider } from "./openRouterProvider.js";
 import { DeepSeekProvider } from "./deepSeekProvider.js";
+import { OpenAIProvider } from "./openAIProvider.js";
 import { GeminiImageProvider } from "./geminiImageProvider.js";
 import { OpenRouterImageProvider } from "./openRouterImageProvider.js";
 import type { AiProvider } from "./types.js";
@@ -98,6 +99,8 @@ export function createCredentialBoundTextProvider(
       return new OpenRouterProvider({ credential });
     case "deepseek":
       return new DeepSeekProvider({ credential });
+    case "openai":
+      return new OpenAIProvider({ credential });
     default:
       return null;
   }
@@ -105,7 +108,12 @@ export function createCredentialBoundTextProvider(
 
 /** True when a session credential can be safely bound to a TEXT provider. */
 export function supportsSessionBoundTextProvider(providerId: string): boolean {
-  return providerId === "gemini" || providerId === "openrouter" || providerId === "deepseek";
+  return (
+    providerId === "gemini" ||
+    providerId === "openrouter" ||
+    providerId === "deepseek" ||
+    providerId === "openai"
+  );
 }
 
 /**

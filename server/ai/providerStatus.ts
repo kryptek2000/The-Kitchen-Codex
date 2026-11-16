@@ -82,7 +82,7 @@ export interface ProviderStatus {
 
 /**
  * Resolves the current provider status list from the authoritative registry, in
- * registry order (Gemini -> OpenRouter -> DeepSeek). Deterministic and network-free.
+ * registry order (Gemini -> OpenRouter -> DeepSeek -> OpenAI). Deterministic and network-free.
  */
 export function getAiProviderStatus(): ProviderStatus[] {
   return getRegisteredProviders().map((registered) => {

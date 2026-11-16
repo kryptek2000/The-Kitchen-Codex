@@ -16,8 +16,9 @@
  *     future Obsidian plaintext BYOK adapter. No current adapter may claim it
  *     unless it actually persists there today.
  *   - Server environment keys (`GEMINI_API_KEY`, `OPENROUTER_API_KEY`,
- *     `DEEPSEEK_API_KEY`) are OPERATOR CONFIGURATION of the running server, NOT
- *     per-user BYOK. They are read-only through this boundary (no mutation).
+ *     `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`) are OPERATOR CONFIGURATION of the
+ *     running server, NOT per-user BYOK. They are read-only through this boundary
+ *     (no mutation).
  *   - Provider keys must NEVER enter shared UI/browser state or be exposed
  *     through a frontend env var (no `VITE_*` key) or localStorage.
  *   - Browser/PWA concrete implementations MUST reject writes
@@ -66,7 +67,8 @@ export type SecretStorageScope =
 export type ProviderSecretId =
   | 'gemini_api_key'
   | 'openrouter_api_key'
-  | 'deepseek_api_key';
+  | 'deepseek_api_key'
+  | 'openai_api_key';
 
 export interface SecretAdapter {
   /** Reads a secret value (or `undefined` when absent). */

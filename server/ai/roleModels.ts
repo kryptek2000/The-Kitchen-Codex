@@ -25,6 +25,7 @@ import { MODEL_CONFIG } from "../modelConfig.js";
 import { OPENROUTER_STRUCTURED_MODEL } from "./openRouterProvider.js";
 import { openRouterConversationTextModelIds, openRouterSelectableTextModelIds } from "./openRouterCatalog.js";
 import { DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL } from "./deepSeekProvider.js";
+import { OPENAI_DEFAULT_MODEL, OPENAI_FALLBACK_MODEL } from "./openAIProvider.js";
 
 /** Gemini role models per operation (unchanged v0.6 behavior). */
 const GEMINI_ROLE_MODELS: Record<AiOperation, string[]> = {
@@ -75,6 +76,26 @@ const DEEPSEEK_ROLE_MODELS: Record<AiOperation, string[]> = {
   createRecipe: [DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL],
 };
 
+/**
+ * OpenAI role models per operation (P1). Terra is the primary structured-recipe
+ * candidate; Luna is the lower-cost selectable alternative. OpenAI is OPT-IN:
+ * the registry excludes it from the implicit server-default chain, so these
+ * models execute only when explicitly selected or operator-pinned.
+ *
+ * `kitchenDiscover` candidates are resolved but capability-filtered out because
+ * TKC does not yet implement a trusted OpenAI web-search adapter (webSearch:false).
+ */
+const OPENAI_ROLE_MODELS: Record<AiOperation, string[]> = {
+  kitchenInterpret: [OPENAI_DEFAULT_MODEL, OPENAI_FALLBACK_MODEL],
+  kitchenRank: [OPENAI_DEFAULT_MODEL, OPENAI_FALLBACK_MODEL],
+  kitchenDiscover: [OPENAI_DEFAULT_MODEL, OPENAI_FALLBACK_MODEL],
+  shisoConversation: [OPENAI_DEFAULT_MODEL, OPENAI_FALLBACK_MODEL],
+  nutrition: [OPENAI_DEFAULT_MODEL, OPENAI_FALLBACK_MODEL],
+  metadataRecovery: [OPENAI_DEFAULT_MODEL, OPENAI_FALLBACK_MODEL],
+  recipeGrabber: [OPENAI_DEFAULT_MODEL, OPENAI_FALLBACK_MODEL],
+  createRecipe: [OPENAI_DEFAULT_MODEL, OPENAI_FALLBACK_MODEL],
+};
+
 function geminiModels(operation: AiOperation): string[] {
   return GEMINI_ROLE_MODELS[operation] ?? [];
 }
@@ -93,6 +114,7 @@ export function roleModelsForProvider(providerId: string, operation: AiOperation
   if (providerId === "gemini") return geminiModels(operation);
   if (providerId === "openrouter") return openRouterModels(operation);
   if (providerId === "deepseek") return deepSeekModels(operation);
+  if (providerId === "openai") return OPENAI_ROLE_MODELS[operation] ?? [];
   return [];
 }
 

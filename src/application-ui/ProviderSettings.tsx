@@ -169,6 +169,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   gemini: 'Google Gemini',
   openrouter: 'OpenRouter',
   deepseek: 'DeepSeek',
+  openai: 'OpenAI',
   'gemini-image': 'Google Gemini Image',
   'openrouter-image': 'OpenRouter Image',
 };
@@ -183,6 +184,8 @@ const MODEL_DISPLAY_NAMES: Record<string, string> = {
   'bytedance-seed/seedream-4.5': 'Seedream 4.5',
   'deepseek-v4-flash': 'DeepSeek V4 Flash',
   'deepseek-v4-pro': 'DeepSeek V4 Pro',
+  'gpt-6.1-terra': 'GPT-6.1 Terra',
+  'gpt-6-luna': 'GPT-6 Luna',
 };
 
 export function friendlyProviderName(providerId: string | undefined, catalogName?: string): string {

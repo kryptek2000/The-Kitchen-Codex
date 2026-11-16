@@ -88,6 +88,7 @@ describe("server secret naming + allowlist (v0.7 1D)", () => {
       gemini_api_key: "GEMINI_API_KEY",
       openrouter_api_key: "OPENROUTER_API_KEY",
       deepseek_api_key: "DEEPSEEK_API_KEY",
+      openai_api_key: "OPENAI_API_KEY",
     });
   });
 
@@ -101,6 +102,7 @@ describe("server secret naming + allowlist (v0.7 1D)", () => {
     expect(providerSecretIdForProvider("gemini")).toBe("gemini_api_key");
     expect(providerSecretIdForProvider("openrouter")).toBe("openrouter_api_key");
     expect(providerSecretIdForProvider("deepseek")).toBe("deepseek_api_key");
+    expect(providerSecretIdForProvider("openai")).toBe("openai_api_key");
     expect(providerSecretIdForProvider("ghost")).toBeUndefined();
   });
 

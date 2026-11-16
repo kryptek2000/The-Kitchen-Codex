@@ -19,7 +19,7 @@ async function freshCatalog(env: Record<string, string>): Promise<{
   registry: Awaited<ReturnType<typeof import("../../server/ai/providerRegistry.js").getRegisteredProviders>>;
 }> {
   vi.resetModules();
-  for (const k of ["GEMINI_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY"]) delete process.env[k];
+  for (const k of ["GEMINI_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY"]) delete process.env[k];
   clearKitchenCodexSelectionEnv();
   Object.assign(process.env, env);
   const catalogMod = await import("../../server/ai/providerCatalog.js");
@@ -33,7 +33,7 @@ function byProviderId<T extends { providerId: string }>(providers: T[]): Record<
 
 afterEach(() => {
   vi.unstubAllEnvs();
-  for (const k of ["GEMINI_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY"]) delete process.env[k];
+  for (const k of ["GEMINI_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY"]) delete process.env[k];
   clearKitchenCodexSelectionEnv();
   vi.resetModules();
 });
@@ -41,7 +41,7 @@ afterEach(() => {
 describe("provider catalog (BYOK-1) — shape and ordering", () => {
   it("lists text providers in registry order then the production image providers", async () => {
     const { catalog } = await freshCatalog({});
-    expect(catalog.textProviders.map((p) => p.providerId)).toEqual(["gemini", "openrouter", "deepseek"]);
+    expect(catalog.textProviders.map((p) => p.providerId)).toEqual(["gemini", "openrouter", "deepseek", "openai"]);
     // Registry order: Gemini image first, OpenRouter Image second (BYOK-3).
     expect(catalog.imageProviders.map((p) => p.providerId)).toEqual(["gemini-image", "openrouter-image"]);
   });
@@ -109,17 +109,19 @@ describe("provider catalog (BYOK-1) — configured/enabled/available mirror the 
     expect(text["gemini"]).toMatchObject({ configured: false, enabled: true, available: false });
     expect(text["openrouter"]).toMatchObject({ configured: false, enabled: false, available: false });
     expect(text["deepseek"]).toMatchObject({ configured: false, enabled: false, available: false });
+    expect(text["openai"]).toMatchObject({ configured: false, enabled: false, available: false, sessionKeySupported: true });
     const image = byProviderId(catalog.imageProviders);
     // Gemini image is enabled-but-unconfigured; OpenRouter image is INERT without a key.
     expect(image["gemini-image"]).toMatchObject({ configured: false, enabled: true, available: false });
     expect(image["openrouter-image"]).toMatchObject({ configured: false, enabled: false, available: false });
   });
 
-  it("all three keys configured => all text + image providers available", async () => {
+  it("all four text keys configured => all text providers available; image providers unaffected", async () => {
     const { catalog } = await freshCatalog({
       GEMINI_API_KEY: SENTINEL,
       OPENROUTER_API_KEY: SENTINEL,
       DEEPSEEK_API_KEY: SENTINEL,
+      OPENAI_API_KEY: SENTINEL,
     });
     for (const p of catalog.textProviders) {
       expect(p).toMatchObject({ configured: true, enabled: true, available: true });
@@ -181,6 +183,35 @@ describe("provider catalog (BYOK-1) — curated model truth", () => {
     }
   });
 
+  it("OpenAI exposes exactly Terra/Luna with strict structured recipe capability and no webSearch", async () => {
+    const { catalog } = await freshCatalog({
+      GEMINI_API_KEY: SENTINEL,
+      OPENAI_API_KEY: SENTINEL,
+    });
+    const openai = byProviderId(catalog.textProviders)["openai"] as ProviderCatalogTextProvider;
+    expect(openai).toMatchObject({
+      name: "OpenAI",
+      configured: true,
+      enabled: true,
+      available: true,
+      selectable: true,
+      sessionKeySupported: true,
+      connectionTest: "network_probe",
+    });
+    expect(openai.models.map((m) => m.id)).toEqual(["gpt-6.1-terra", "gpt-6-luna"]);
+    expect(openai.models.find((m) => m.default)?.id).toBe("gpt-6.1-terra");
+    for (const model of openai.models) {
+      expect(model.capabilities).toEqual({
+        reasoning: true,
+        structuredOutput: true,
+        recipeGeneration: true,
+        webSearch: false,
+      });
+    }
+    expect(openai.models.some((m) => m.id === "gpt-6.1-sol")).toBe(false);
+    expect(openai.models.some((m) => m.id === "gpt-6-astra")).toBe(false);
+  });
+
   it("curated models are structurally unique per provider (no duplicate model rows)", async () => {
     const { catalog } = await freshCatalog({ GEMINI_API_KEY: SENTINEL });
     for (const provider of catalog.textProviders) {
@@ -235,6 +266,7 @@ describe("provider catalog (BYOK-1) — secret-free payload", () => {
       GEMINI_API_KEY: SENTINEL,
       OPENROUTER_API_KEY: SENTINEL,
       DEEPSEEK_API_KEY: SENTINEL,
+      OPENAI_API_KEY: SENTINEL,
     });
     const rows = [...catalog.textProviders, ...catalog.imageProviders];
     for (const row of rows) {
@@ -247,6 +279,7 @@ describe("provider catalog (BYOK-1) — secret-free payload", () => {
     expect(json).not.toContain("GEMINI_API_KEY");
     expect(json).not.toContain("OPENROUTER_API_KEY");
     expect(json).not.toContain("DEEPSEEK_API_KEY");
+    expect(json).not.toContain("OPENAI_API_KEY");
   });
 });
 

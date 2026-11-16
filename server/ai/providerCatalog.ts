@@ -316,6 +316,7 @@ function textSelectionExecutable(selection: ProviderSelectionState): boolean {
   return regs.some(
     (r) =>
       r.enabled !== false &&
+      r.defaultFallback !== false &&
       r.provider.isAvailable() &&
       curatedTextModels(r.provider.id).length > 0
   );

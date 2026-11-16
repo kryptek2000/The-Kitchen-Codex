@@ -231,6 +231,19 @@ export function userTextSelectionMatchesOperation(
 }
 
 /**
+ * The models used when a selection names a provider but not a model.
+ *
+ * Normal providers keep their full curated role chain. Opt-in providers
+ * (`defaultFallback:false`, e.g. OpenAI) use ONLY their primary curated model,
+ * so a provider-only selection never silently substitutes a second model after
+ * a failure. An explicit model selection still honors the chosen model.
+ */
+function modelsForProviderOnly(registered: RegisteredProvider, operation: AiOperation): string[] {
+  const models = roleModelsForProvider(registered.provider.id, operation);
+  return registered.defaultFallback === false ? models.slice(0, 1) : models;
+}
+
+/**
  * Resolves the ORDERED TEXT candidate list honoring effective selection, for
  * `resolveRoleCandidates`. Returns one of:
  *   - server_managed valid: the pinned (provider, model) only.
@@ -280,7 +293,7 @@ export function resolveTextCandidateContext(
     }
     const models = serverSelection.selectedModelId
       ? [serverSelection.selectedModelId]
-      : roleModelsForProvider(registered.provider.id, operation);
+      : modelsForProviderOnly(registered, operation);
     return {
       candidates: models.map((model) =>
         withDynamicSingleAttempt({
@@ -318,7 +331,7 @@ export function resolveTextCandidateContext(
     if (userTextSelectionMatchesOperation(registered, userSel.modelId, operation)) {
       const models = userSel.modelId
         ? [userSel.modelId]
-        : roleModelsForProvider(registered.provider.id, operation);
+        : modelsForProviderOnly(registered, operation);
       return {
         candidates: buildTextCandidates(registered, models, userCredentialSource),
         source: "user_selected",
@@ -342,6 +355,10 @@ export function resolveTextCandidateContext(
   const candidates: AiCandidate[] = [];
   for (const registered of regs) {
     if (registered.enabled === false) continue;
+    // Opt-in providers (e.g. OpenAI) are never part of the implicit server
+    // default chain. They remain executable only through an explicit user
+    // selection or a server-managed pin above.
+    if (registered.defaultFallback === false) continue;
     for (const model of roleModelsForProvider(registered.provider.id, operation)) {
       candidates.push(
         withDynamicSingleAttempt({ provider: registered.provider, model, credentialSource: "server_environment" })
