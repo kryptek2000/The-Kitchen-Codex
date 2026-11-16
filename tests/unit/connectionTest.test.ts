@@ -5,6 +5,7 @@ const ENV_KEYS = [
   "GEMINI_API_KEY",
   "OPENROUTER_API_KEY",
   "DEEPSEEK_API_KEY",
+  "OPENAI_API_KEY",
   "KITCHEN_CODEX_TEXT_PROVIDER",
   "KITCHEN_CODEX_TEXT_MODEL",
   "KITCHEN_CODEX_IMAGE_PROVIDER",
@@ -53,10 +54,15 @@ describe("BYOK-4 — connectionTestKindForProvider", () => {
     expect(connectionTest.connectionTestKindForProvider("gemini", "text")).toBe("unavailable");
     expect(connectionTest.connectionTestKindForProvider("openrouter", "text")).toBe("unavailable");
     expect(connectionTest.connectionTestKindForProvider("deepseek", "text")).toBe("unavailable");
+    expect(connectionTest.connectionTestKindForProvider("openai", "text")).toBe("unavailable");
 
     ({ connectionTest } = await freshModule({ GEMINI_API_KEY: SENTINEL }));
     expect(connectionTest.connectionTestKindForProvider("gemini", "text")).toBe("network_probe");
     expect(connectionTest.connectionTestKindForProvider("openrouter", "text")).toBe("unavailable");
+    expect(connectionTest.connectionTestKindForProvider("openai", "text")).toBe("unavailable");
+
+    ({ connectionTest } = await freshModule({ OPENAI_API_KEY: SENTINEL }));
+    expect(connectionTest.connectionTestKindForProvider("openai", "text")).toBe("network_probe");
   });
 
   it("image providers are credential_check when configured, unavailable otherwise", async () => {
@@ -131,6 +137,90 @@ describe("BYOK-4 — runConnectionTest bounded + fail-closed (no real network)",
     expect(stub.calls).toHaveLength(1);
     expect(stub.calls[0].url).toContain("deepseek");
     expect(JSON.parse(stub.calls[0].body!).max_tokens).toBe(8);
+  });
+
+  it("OpenAI text probe uses the FIXED Responses endpoint with store:false and a tiny output cap", async () => {
+    const { connectionTest } = await freshModule({ OPENAI_API_KEY: SENTINEL });
+    const stub = stubFetch(
+      200,
+      JSON.stringify({
+        status: "completed",
+        output: [
+          {
+            type: "message",
+            content: [{ type: "output_text", text: "ok" }],
+          },
+        ],
+      })
+    );
+    try {
+      const result = await connectionTest.runConnectionTest({ providerId: "openai", kind: "text" });
+      expect(result.ok).toBe(true);
+      if (result.ok === true) {
+        expect(result.providerId).toBe("openai");
+        expect(result.model).toBe("gpt-6.1-terra");
+        expect(result.credentialSource).toBe("server_environment");
+      }
+    } finally {
+      stub.restore();
+    }
+    expect(stub.calls).toHaveLength(1);
+    expect(stub.calls[0].method).toBe("POST");
+    expect(stub.calls[0].url).toBe("https://api.openai.com/v1/responses");
+    const body = JSON.parse(stub.calls[0].body!);
+    expect(body.store).toBe(false);
+    expect(body.service_tier).toBe("default");
+    expect(body.max_output_tokens).toBe(16);
+    expect(body.reasoning).toEqual({ effort: "low" });
+    expect(JSON.stringify(body)).not.toContain(SENTINEL);
+  });
+
+  it("OpenAI probe maps 429 quota/rate errors and never returns the key", async () => {
+    const { connectionTest } = await freshModule({ OPENAI_API_KEY: SENTINEL });
+    const stub = stubFetch(429, JSON.stringify({ error: { code: "credit_balance_exhausted", message: SENTINEL } }));
+    try {
+      const result = await connectionTest.runConnectionTest({ providerId: "openai", kind: "text" });
+      expect(result.ok).toBe(false);
+      if (result.ok === false) {
+        expect(result.code).toBe("QUOTA_EXHAUSTED");
+        expect(JSON.stringify(result)).not.toContain(SENTINEL);
+      }
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it("OpenAI session-only connection test works without an operator key", async () => {
+    const { connectionTest } = await freshModule({});
+    const session = await import("../../server/ai/sessionSecrets.js");
+    session.setSessionSecret("openai", "sk-session-openai");
+    const stub = stubFetch(
+      200,
+      JSON.stringify({
+        status: "completed",
+        output: [
+          {
+            type: "message",
+            content: [{ type: "output_text", text: "ok" }],
+          },
+        ],
+      })
+    );
+    try {
+      const result = await connectionTest.runConnectionTest({
+        providerId: "openai",
+        kind: "text",
+        modelId: "gpt-6-luna",
+        credentialSource: "session_only",
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok === true) {
+        expect(result.credentialSource).toBe("session_only");
+        expect(result.model).toBe("gpt-6-luna");
+      }
+    } finally {
+      stub.restore();
+    }
   });
 
   it("HTTP 200 with an EMPTY/malformed chat body is NOT a success", async () => {

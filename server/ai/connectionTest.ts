@@ -47,7 +47,8 @@
  *   - No API key, masked key, token, raw provider body, prompt, or base64
  *     ever leaves this module. Failures are normalized to bounded code + message.
  *   - Only fixed, allowlisted provider endpoints are reached (no arbitrary URL).
- *   - Time-bounded (MODEL_CONFIG.requestTimeoutMs), NO retries.
+ *   - Time-bounded per probe (shared MODEL_CONFIG.requestTimeoutMs, or the
+ *     provider-specific OpenAI text timeout), NO retries.
  */
 
 import { MODEL_CONFIG } from "../modelConfig.js";
@@ -55,6 +56,7 @@ import { getServerSecretSync } from "../platform/ServerEnvironmentSecretAdapter.
 import { getRegisteredProviders, findRegisteredProvider } from "./providerRegistry.js";
 import { findRegisteredImageProvider } from "./imageProviderRegistry.js";
 import { DEEPSEEK_CHAT_ENDPOINT } from "./deepSeekProvider.js";
+import { OPENAI_RESPONSES_ENDPOINT, OPENAI_TEXT_TIMEOUT_MS } from "./openAIProvider.js";
 import { roleModelsForProvider, selectableTextModels } from "./roleModels.js";
 import { getTextSelection, getImageSelection } from "./providerSelection.js";
 import { isSessionByokSupportedDeployment } from "./sessionByokDeployment.js";
@@ -280,8 +282,10 @@ function classifyHttp(status: number, text: string): ReadyError {
     return new ReadyError("AUTHORIZATION_FAILED", "Provider permission was denied.", diagnostic);
   }
   if (status === 429 || safe.providerCode === "RESOURCE_EXHAUSTED") {
-    const hasRateEvidence = /rate.?limit|too many requests/i.test(text);
-    const quota = /quota|billing/i.test(evidence) || (safe.providerCode === "RESOURCE_EXHAUSTED" && !hasRateEvidence);
+    const hasRateEvidence = /rate.?limit|too many requests|slow.?down/i.test(text);
+    const quota =
+      /quota|billing|credit_balance|spend_limit|usage_limit/i.test(evidence) ||
+      (safe.providerCode === "RESOURCE_EXHAUSTED" && !hasRateEvidence);
     return new ReadyError(quota ? "QUOTA_EXHAUSTED" : "RATE_LIMIT", quota ? "Provider quota exhausted." : "Provider rate limit reached.", diagnostic);
   }
   if (status === 402) return new ReadyError("QUOTA_EXHAUSTED", "Provider quota exhausted.", diagnostic);
@@ -308,6 +312,39 @@ function isChatCompletionSuccess(text: string): boolean {
     const choices = Array.isArray(parsed?.choices) ? parsed.choices : [];
     const content = (choices[0] as { message?: { content?: unknown } } | undefined)?.message?.content;
     return typeof content === "string" && content.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Validates the Responses API success shape used by the OpenAI text probe.
+ * Requires a completed response with at least one assistant output_text part.
+ * Refusals / incomplete / failed responses are NOT a successful probe.
+ */
+function isOpenAIResponseSuccess(text: string): boolean {
+  try {
+    const parsed = JSON.parse(text) as {
+      status?: unknown;
+      output?: unknown;
+    };
+    if (parsed?.status !== "completed") return false;
+    const output = Array.isArray(parsed.output) ? parsed.output : [];
+    for (const item of output) {
+      if (!item || typeof item !== "object") continue;
+      const row = item as Record<string, unknown>;
+      if (row.type !== "message") continue;
+      const content = Array.isArray(row.content) ? row.content : [];
+      for (const part of content) {
+        if (!part || typeof part !== "object") continue;
+        const p = part as Record<string, unknown>;
+        if (p.type === "refusal") return false;
+        if (p.type === "output_text" && typeof p.text === "string" && p.text.trim()) {
+          return true;
+        }
+      }
+    }
+    return false;
   } catch {
     return false;
   }
@@ -461,6 +498,38 @@ async function probeDeepSeekText(model: string, credential?: string): Promise<vo
   }
 }
 
+async function probeOpenAIText(model: string, credential?: string): Promise<void> {
+  const key = credential ?? getServerSecretSync("openai_api_key");
+  if (!key) throw new ReadyError("UNAVAILABLE", "OpenAI is not configured.");
+  const res = await fetch(OPENAI_RESPONSES_ENDPOINT, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${key}`,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      input: TEXT_PROBE_PROMPT,
+      store: false,
+      service_tier: "default",
+      max_output_tokens: 16,
+      reasoning: { effort: "low" },
+    }),
+    redirect: "error",
+    signal: AbortSignal.timeout(OPENAI_TEXT_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    const text = await readErrorText(res);
+    throw classifyHttp(res.status, text);
+  }
+  const { text, truncated } = await readBoundedResponse(res);
+  if (truncated) throw new ReadyError("INVALID_RESPONSE", "OpenAI response exceeded the size limit.");
+  if (!isOpenAIResponseSuccess(text)) {
+    throw new ReadyError("INVALID_RESPONSE", "OpenAI returned an unusable response.");
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Image probes (quota-free credential checks — NO image generation)
 // ---------------------------------------------------------------------------
@@ -515,6 +584,7 @@ function probeText(providerId: string, model: string, credential?: string): Prom
   if (providerId === "gemini") return probeGeminiText(model, credential);
   if (providerId === "openrouter") return probeOpenRouterText(model, credential);
   if (providerId === "deepseek") return probeDeepSeekText(model, credential);
+  if (providerId === "openai") return probeOpenAIText(model, credential);
   return Promise.reject(new ReadyError("PROVIDER_ERROR", "Unknown text provider."));
 }
 

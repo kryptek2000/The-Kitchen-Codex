@@ -24,6 +24,7 @@ import { GeminiProvider } from "./geminiProvider.js";
 import { OpenRouterProvider, OPENROUTER_MODEL_CAPABILITIES } from "./openRouterProvider.js";
 import { openRouterDynamicCapabilities } from "./openRouterCatalog.js";
 import { DeepSeekProvider, DEEPSEEK_MODEL_CAPABILITIES } from "./deepSeekProvider.js";
+import { OpenAIProvider, OPENAI_MODEL_CAPABILITIES } from "./openAIProvider.js";
 import { getServerSecretSync } from "../platform/ServerEnvironmentSecretAdapter.js";
 import type { AiCapabilities, AiProvider } from "./types.js";
 import {
@@ -61,6 +62,13 @@ export interface RegisteredProvider {
   dynamicCapabilities?: (model: string) => Partial<AiCapabilities> | undefined;
   /** When false, the provider is skipped by selection. Defaults to true. */
   enabled?: boolean;
+  /**
+   * When false, the provider is EXCLUDED from the implicit `server_default`
+   * candidate chain, but remains selectable by an explicit user selection or a
+   * server-managed pin. This is the opt-in policy for providers whose automatic
+   * use could create surprising spend (e.g. OpenAI). Defaults to true.
+   */
+  defaultFallback?: boolean;
 }
 
 /** A single (provider, model) execution candidate. */
@@ -115,19 +123,25 @@ function deepSeekConfigured(): boolean {
   return Boolean(getServerSecretSync("deepseek_api_key"));
 }
 
+/** True when an OpenAI key is present (server operator env via allowlisted source). */
+function openAIConfigured(): boolean {
+  return Boolean(getServerSecretSync("openai_api_key"));
+}
+
 /**
  * The built-in registry. Built lazily (no import side effects). Provider ORDER
  * is the selection order: Gemini first (preserves zero-config behavior),
- * OpenRouter second, DeepSeek third. Both OpenRouter and DeepSeek are INERT
- * (descriptor `enabled` false) unless their respective `*_API_KEY` is
- * configured, so existing zero-config Gemini users are untouched and the order
- * stays deterministic (Gemini -> OpenRouter -> DeepSeek).
+ * OpenRouter, DeepSeek, then OpenAI. The first three are INERT unless their
+ * respective `*_API_KEY` is configured. OpenAI is INERT without its key and,
+ * even when configured, is OPT-IN: it is excluded from the implicit
+ * server-default chain and runs only when explicitly selected or operator-pinned.
  */
 export function getRegisteredProviders(): RegisteredProvider[] {
   if (!registry) {
     const gemini = ensureDefault();
     const openRouter = new OpenRouterProvider();
     const deepSeek = new DeepSeekProvider();
+    const openAI = new OpenAIProvider();
     registry = [
       {
         provider: gemini,
@@ -151,6 +165,18 @@ export function getRegisteredProviders(): RegisteredProvider[] {
         modelCapabilities: DEEPSEEK_MODEL_CAPABILITIES,
         // Same rule as OpenRouter: enabled only when its key is configured.
         enabled: deepSeekConfigured(),
+      },
+      {
+        provider: openAI,
+        defaultCapabilities: { ...openAI.capabilities },
+        modelCapabilities: OPENAI_MODEL_CAPABILITIES,
+        // Enabled only when its operator key is configured. It remains
+        // SELECTABLE even without an env key through an exact-provider session
+        // credential (the selector's session_only path).
+        enabled: openAIConfigured(),
+        // OPT-IN: OpenAI is never used by the implicit server-default chain. It
+        // runs only when the user explicitly selects it or an operator pins it.
+        defaultFallback: false,
       },
     ];
   }

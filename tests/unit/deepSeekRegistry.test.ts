@@ -33,7 +33,7 @@ function fakeProvider(id: string, capabilities: AiCapabilities = caps(), availab
 
 async function freshRegistry(env: Record<string, string>): Promise<RegisteredProvider[]> {
   vi.resetModules();
-  for (const k of ["OPENROUTER_API_KEY", "DEEPSEEK_API_KEY", "GEMINI_API_KEY"]) delete process.env[k];
+  for (const k of ["OPENROUTER_API_KEY", "DEEPSEEK_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY"]) delete process.env[k];
   Object.assign(process.env, env);
   const mod = await import("../../server/ai/provider.js");
   return mod.getRegisteredProviders();
@@ -43,12 +43,13 @@ afterEach(() => {
   vi.unstubAllEnvs();
   delete process.env.OPENROUTER_API_KEY;
   delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.OPENAI_API_KEY;
 });
 
 describe("provider registry order — Gemini -> OpenRouter -> DeepSeek (v0.7 1C)", () => {
   it("registers Gemini, OpenRouter, DeepSeek in deterministic order (no keys => Gemini-only executable)", async () => {
     const reg = await freshRegistry({});
-    expect(reg.map((r) => r.provider.id)).toEqual(["gemini", "openrouter", "deepseek"]);
+    expect(reg.map((r) => r.provider.id)).toEqual(["gemini", "openrouter", "deepseek", "openai"]);
     expect(reg.find((r) => r.provider.id === "gemini")?.enabled).toBe(true);
     expect(reg.find((r) => r.provider.id === "openrouter")?.enabled).toBe(false); // no key
     expect(reg.find((r) => r.provider.id === "deepseek")?.enabled).toBe(false); // no key
@@ -68,16 +69,17 @@ describe("provider registry order — Gemini -> OpenRouter -> DeepSeek (v0.7 1C)
 
   it("only DeepSeek configured => Gemini first, OpenRouter disabled, DeepSeek enabled fallback", async () => {
     const reg = await freshRegistry({ DEEPSEEK_API_KEY: "sk-ds-test" });
-    expect(reg.map((r) => r.provider.id)).toEqual(["gemini", "openrouter", "deepseek"]);
+    expect(reg.map((r) => r.provider.id)).toEqual(["gemini", "openrouter", "deepseek", "openai"]);
     expect(reg.find((r) => r.provider.id === "gemini")?.enabled).toBe(true);
     expect(reg.find((r) => r.provider.id === "openrouter")?.enabled).toBe(false);
     expect(reg.find((r) => r.provider.id === "deepseek")?.enabled).toBe(true);
   });
 
-  it("both configured => deterministic 3-provider order (all enabled)", async () => {
+  it("OpenRouter + DeepSeek configured => existing three providers enabled; OpenAI remains inert without its key", async () => {
     const reg = await freshRegistry({ OPENROUTER_API_KEY: "sk-or", DEEPSEEK_API_KEY: "sk-ds" });
-    expect(reg.map((r) => r.provider.id)).toEqual(["gemini", "openrouter", "deepseek"]);
-    expect(reg.every((r) => r.enabled === true)).toBe(true);
+    expect(reg.map((r) => r.provider.id)).toEqual(["gemini", "openrouter", "deepseek", "openai"]);
+    expect(reg.slice(0, 3).every((r) => r.enabled === true)).toBe(true);
+    expect(reg.find((r) => r.provider.id === "openai")?.enabled).toBe(false);
   });
 });
 

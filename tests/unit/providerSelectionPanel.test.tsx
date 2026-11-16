@@ -951,8 +951,11 @@ describe("BYOK-5F — AI Settings UX (friendly, advanced, credentials)", () => {
   it("friendly label helpers never leak internal ids/terminology as labels", () => {
     expect(friendlyProviderName("openrouter")).toBe("OpenRouter");
     expect(friendlyProviderName("openrouter-image")).toBe("OpenRouter Image");
+    expect(friendlyProviderName("openai")).toBe("OpenAI");
     expect(friendlyProviderName("unknown-provider")).toBe("unknown-provider");
     expect(friendlyModelName("openai/gpt-4o-mini")).toBe("GPT-4o Mini");
+    expect(friendlyModelName("gpt-6.1-terra")).toBe("GPT-6.1 Terra");
+    expect(friendlyModelName("gpt-6-luna")).toBe("GPT-6 Luna");
     expect(friendlyModelName("google/gemini-2.5-flash-image")).toBe("Gemini 2.5 Flash Image");
     expect(credentialUsageLabel("session_only")).toBe("Using your temporary API key");
     expect(credentialUsageLabel("server_environment")).toBe("Using server API key");

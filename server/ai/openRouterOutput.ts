@@ -1,5 +1,7 @@
-import type { AiJsonSchema } from './types.js';
 import { APPLICATION_VALIDATED_JSON_PROFILE, type OpenRouterProfile } from '../../src/core/ai/openRouterProfile.js';
+import { validatesAiSchema } from '../../src/core/ai/strictJsonSchema.js';
+
+export { validatesAiSchema };
 
 /** Shared mechanics for explicit probes and runtime. Exclude does not disable reasoning. */
 export const OPENROUTER_PROBE_TOKENS = 512;
@@ -35,29 +37,11 @@ export function completionContent(parsed: unknown): CompletionContent {
   return { ok: true, content: message.content.trim() };
 }
 
-/** Entire operation schema validated before existing semantic sanitizers.
- * Optional null matches the existing strict-schema converter's nullable fields.
- * No coercion, fence stripping, or extra properties.
+/**
+ * Provider-neutral strict-schema validator. Re-exported here for existing
+ * OpenRouter imports; the implementation lives in the shared module so OpenAI
+ * and OpenRouter use the same rules.
  */
-export function validatesAiSchema(value: unknown, schema: AiJsonSchema, depth = 0): boolean {
-  if (depth > 64) return false;
-  switch (schema.type) {
-    case 'string': return typeof value === 'string' && (!schema.enum || schema.enum.includes(value));
-    case 'boolean': return typeof value === 'boolean';
-    case 'number': return typeof value === 'number' && Number.isFinite(value);
-    case 'integer': return typeof value === 'number' && Number.isSafeInteger(value);
-    case 'array': return Array.isArray(value) && value.every(v => validatesAiSchema(v, schema.items, depth + 1));
-    case 'object': {
-      if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-      const row = value as Record<string, unknown>;
-      const required = new Set(schema.required ?? []);
-      if ([...required].some(k => !Object.hasOwn(row, k))) return false;
-      return Object.keys(row).every(k => Object.hasOwn(schema.properties, k) &&
-        ((row[k] === null && !required.has(k)) || validatesAiSchema(row[k], schema.properties[k], depth + 1)));
-    }
-    default: return false;
-  }
-}
 
 export interface StreamResponse {
   body?: { getReader(): { read(): Promise<{ done: boolean; value?: Uint8Array }>; cancel?(): Promise<void>; releaseLock?(): void } } | null;
