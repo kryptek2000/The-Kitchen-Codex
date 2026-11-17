@@ -25,14 +25,16 @@ import { DEFAULT_GEMINI_IMAGE_MODEL } from "../../server/ai/geminiImageProvider.
 import { bootstrapImageSession } from "../helpers/imageSessionTestClient.js";
 
 const generateContentMock = vi.hoisted(() => vi.fn());
+const interactionsCreateMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@google/genai", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@google/genai")>();
   // Partial mock at the SDK boundary: keep every real export (ThinkingLevel,
   // Modality, ...) but route ALL GoogleGenAI construction through a class whose
-  // generateContent is the counted mock, so Gemini invocation is provable.
+  // image transports are counted mocks, so Gemini invocation is provable.
   const GoogleGenAIClass = class {
     models = { generateContent: generateContentMock };
+    interactions = { create: interactionsCreateMock };
   };
   return { ...actual, GoogleGenAI: GoogleGenAIClass };
 });
@@ -131,6 +133,7 @@ describe("route-level image selection: runtime failure NEVER invokes Gemini (BYO
   beforeEach(() => {
     originalFetch = globalThis.fetch;
     generateContentMock.mockClear();
+    interactionsCreateMock.mockClear();
   });
   afterEach(async () => {
     globalThis.fetch = originalFetch;
@@ -214,6 +217,7 @@ describe("route-level image selection: EXPLICIT invalid pins FAIL CLOSED (zero G
   beforeEach(() => {
     originalFetch = globalThis.fetch;
     generateContentMock.mockClear();
+    interactionsCreateMock.mockClear();
   });
   afterEach(async () => {
     globalThis.fetch = originalFetch;
@@ -266,6 +270,7 @@ describe("route-level image selection: UNSET selection preserves the Gemini defa
   beforeEach(() => {
     originalFetch = globalThis.fetch;
     generateContentMock.mockClear();
+    interactionsCreateMock.mockClear();
   });
   afterEach(async () => {
     globalThis.fetch = originalFetch;
@@ -276,8 +281,9 @@ describe("route-level image selection: UNSET selection preserves the Gemini defa
 
   it("unset image selection with a real Gemini key generates via the real Gemini default (no OpenRouter traffic)", async () => {
     const fetchMock = vi.fn() as unknown as typeof fetch;
-    generateContentMock.mockResolvedValueOnce({
-      candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: VALID_PNG_BASE64 } }] } }],
+    interactionsCreateMock.mockResolvedValueOnce({
+      status: "completed",
+      output_image: { data: VALID_PNG_BASE64, mime_type: "image/png" },
     });
     const app = await boot({ GEMINI_API_KEY: KEY }, fetchMock);
     try {
@@ -287,8 +293,9 @@ describe("route-level image selection: UNSET selection preserves the Gemini defa
       expect(body.provider).toBe("gemini-image");
       expect(body.model).toBe(DEFAULT_GEMINI_IMAGE_MODEL);
       expect(body.contentType).toBe("image/png");
-      // Gemini default was genuinely invoked (once)...
-      expect(generateContentMock).toHaveBeenCalledTimes(1);
+      // Gemini default was genuinely invoked (once) through the Interactions API.
+      expect(interactionsCreateMock).toHaveBeenCalledTimes(1);
+      expect(generateContentMock).not.toHaveBeenCalled();
       // ...and OpenRouter was never touched (no surprise cross-provider cost).
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {

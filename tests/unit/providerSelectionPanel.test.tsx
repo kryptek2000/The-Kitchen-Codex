@@ -997,6 +997,10 @@ describe("BYOK-5F — AI Settings UX (friendly, advanced, credentials)", () => {
     expect(friendlyModelName("openai/gpt-4o-mini")).toBe("GPT-4o Mini");
     expect(friendlyModelName("gpt-6.1-terra")).toBe("GPT-6.1 Terra");
     expect(friendlyModelName("gpt-6-luna")).toBe("GPT-6 Luna");
+    expect(friendlyModelName("gemini-nano-banana-2.1")).toBe("Nano Banana 2.1");
+    expect(friendlyModelName("gemini-3.1-flash-image")).toBe("Nano Banana 2");
+    expect(friendlyModelName("gemini-3.1-flash-lite-image")).toBe("Nano Banana 2 Lite");
+    expect(friendlyModelName("gemini-3-pro-image")).toBe("Nano Banana Pro");
     expect(friendlyModelName("google/gemini-2.5-flash-image")).toBe("Gemini 2.5 Flash Image");
     expect(credentialUsageLabel("session_only")).toBe("Using your temporary API key");
     expect(credentialUsageLabel("server_environment")).toBe("Using server API key");
