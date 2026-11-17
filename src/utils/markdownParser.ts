@@ -1446,11 +1446,20 @@ function insertOrReplaceSection(
       const after = body.slice(section.end);
       return before + after;
     }
+    const replacement = normalizedLines(desiredBlock.trimEnd(), newline) + trailing;
+    const suffix = body.slice(section.end).replace(/^\r?\n/, '');
+    // Keep a block boundary before the next custom/unknown section. Without
+    // this, a replacement that ends without a newline can concatenate the next
+    // heading onto the edited text, making that section disappear on re-parse.
+    const separator =
+      suffix && replacement && !replacement.endsWith('\n') && !suffix.startsWith('\n')
+        ? newline + newline
+        : '';
     return (
       body.slice(0, section.start) +
-      normalizedLines(desiredBlock.trimEnd(), newline) +
-      trailing +
-      body.slice(section.end).replace(/^\r?\n/, '')
+      replacement +
+      separator +
+      suffix
     );
   }
   if (!desiredBlock) return body;
