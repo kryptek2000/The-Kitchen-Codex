@@ -20,9 +20,10 @@
  *     `roleModelsForProvider`) — the exact same source connection-test,
  *     user-selection, and server-pin validation use. The catalog does NOT
  *     invent or probe for models.
- *   - Image visibility reflects the PRODUCTION image provider singleton
- *     (`GeminiImageProvider` + `DEFAULT_GEMINI_IMAGE_MODEL`). The
- *     `DeterministicImageProvider` test seam is never catalogued.
+ *   - Image visibility reflects the PRODUCTION image-provider registry
+ *     (`GeminiImageProvider`, `OpenRouterImageProvider`, and `OpenAIImageProvider`)
+ *     with their curated model sets. The `DeterministicImageProvider` test seam is
+ *     never catalogued.
  *   - Deterministic + network-free: no request executes, no remote connection,
  *     no provider introspection. `configured`/`enabled`/`available` mirror the
  *     provider-status semantics (see `server/ai/providerStatus.ts`).

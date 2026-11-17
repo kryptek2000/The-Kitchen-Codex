@@ -54,6 +54,7 @@ export const IMAGE_PRICING_LABELS = {
   zero: "Verified zero price",
   paidOpenRouter: "Paid — OpenRouter pricing applies",
   variableGoogle: "Variable pricing — determined by your Google account",
+  variableOpenAI: "Variable pricing — determined by your OpenAI account",
   variableUnknown: "Variable pricing — determined by your provider account",
 } as const;
 
@@ -149,6 +150,17 @@ export function imagePricingTruth(providerId: string, modelId: string): ImagePri
       costClass: "variable",
       requiresConfirmation: true,
       label: IMAGE_PRICING_LABELS.variableGoogle,
+    };
+  }
+
+  // P2: OpenAI image pricing is determined by the user's OpenAI account/tier.
+  // No server-owned OpenAI price table exists, so the truthful class is variable
+  // (never zero) and every generation requires explicit confirmation.
+  if (providerId === "openai-image") {
+    return {
+      costClass: "variable",
+      requiresConfirmation: true,
+      label: IMAGE_PRICING_LABELS.variableOpenAI,
     };
   }
 

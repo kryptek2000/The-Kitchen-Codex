@@ -253,7 +253,7 @@ describe("BYOK-5B — GET /api/providers/session-key/status", () => {
     expect(json).not.toContain("secret");
     // All allowlisted providers are present; non-configured are false.
     const ids = body.providers.map((p: any) => p.providerId).sort();
-    expect(ids).toEqual(["deepseek", "gemini", "gemini-image", "openai", "openrouter", "openrouter-image"]);
+    expect(ids).toEqual(["deepseek", "gemini", "gemini-image", "openai", "openai-image", "openrouter", "openrouter-image"]);
     expect(body.providers.find((p: any) => p.providerId === "openrouter").configured).toBe(false);
   });
 

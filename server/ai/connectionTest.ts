@@ -57,6 +57,7 @@ import { getRegisteredProviders, findRegisteredProvider } from "./providerRegist
 import { findRegisteredImageProvider } from "./imageProviderRegistry.js";
 import { DEEPSEEK_CHAT_ENDPOINT } from "./deepSeekProvider.js";
 import { OPENAI_RESPONSES_ENDPOINT, OPENAI_TEXT_TIMEOUT_MS } from "./openAIProvider.js";
+import { OPENAI_IMAGE_API_BASE_URL } from "./openAIImageProvider.js";
 import { roleModelsForProvider, selectableTextModels } from "./roleModels.js";
 import { getTextSelection, getImageSelection } from "./providerSelection.js";
 import { isSessionByokSupportedDeployment } from "./sessionByokDeployment.js";
@@ -417,6 +418,16 @@ function isGeminiModelsSuccess(text: string): boolean {
   }
 }
 
+/** Validates the OpenAI `models` list success shape. */
+function isOpenAIModelsSuccess(text: string): boolean {
+  try {
+    const parsed = JSON.parse(text) as { data?: unknown };
+    return Array.isArray(parsed?.data);
+  } catch {
+    return false;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Text probes (real, bounded network calls against the fixed provider endpoint)
 // ---------------------------------------------------------------------------
@@ -576,6 +587,30 @@ async function probeOpenRouterImage(credential?: string): Promise<void> {
   }
 }
 
+/**
+ * P2: OpenAI image credential check. NO image is generated (zero image quota).
+ * The fixed `GET /v1/models` endpoint is an authenticated, quota-free key check;
+ * only the expected `{ data: [...] }` shape is validated and then discarded.
+ */
+async function probeOpenAIImage(credential?: string): Promise<void> {
+  const key = credential ?? getServerSecretSync("openai_api_key");
+  if (!key) throw new ReadyError("UNAVAILABLE", "OpenAI image is not configured.");
+  const res = await fetch(`${OPENAI_IMAGE_API_BASE_URL}/models`, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${key}`, Accept: "application/json" },
+    signal: AbortSignal.timeout(MODEL_CONFIG.requestTimeoutMs),
+  });
+  if (!res.ok) {
+    const text = await readErrorText(res);
+    throw classifyHttp(res.status, text);
+  }
+  const { text, truncated } = await readBoundedResponse(res);
+  if (truncated) throw new ReadyError("INVALID_RESPONSE", "OpenAI response exceeded the size limit.");
+  if (!isOpenAIModelsSuccess(text)) {
+    throw new ReadyError("INVALID_RESPONSE", "OpenAI returned an unusable credential response.");
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Probe dispatch + error normalization
 // ---------------------------------------------------------------------------
@@ -591,6 +626,7 @@ function probeText(providerId: string, model: string, credential?: string): Prom
 function probeImage(providerId: string, credential?: string): Promise<void> {
   if (providerId === "gemini-image") return probeGeminiImage(credential);
   if (providerId === "openrouter-image") return probeOpenRouterImage(credential);
+  if (providerId === "openai-image") return probeOpenAIImage(credential);
   return Promise.reject(new ReadyError("PROVIDER_ERROR", "Unknown image provider."));
 }
 

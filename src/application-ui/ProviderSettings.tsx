@@ -172,6 +172,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   openai: 'OpenAI',
   'gemini-image': 'Google Gemini Image',
   'openrouter-image': 'OpenRouter Image',
+  'openai-image': 'OpenAI Image',
 };
 
 const MODEL_DISPLAY_NAMES: Record<string, string> = {
@@ -186,6 +187,8 @@ const MODEL_DISPLAY_NAMES: Record<string, string> = {
   'deepseek-v4-pro': 'DeepSeek V4 Pro',
   'gpt-6.1-terra': 'GPT-6.1 Terra',
   'gpt-6-luna': 'GPT-6 Luna',
+  'gpt-image-2.6-flare': 'GPT Image 2.6 Flare',
+  'gpt-image-2.6-sunburst': 'GPT Image 2.6 Sunburst',
 };
 
 export function friendlyProviderName(providerId: string | undefined, catalogName?: string): string {
@@ -1049,6 +1052,11 @@ export function SelectionControlCard({
                   lockedModelId={lockedModelId}
                   clearKeySignal={clearKeySignal}
                   onStatusChange={handleSessionStatusChange}
+                  reuseSource={
+                    kind === 'image' && selectedProvider.providerId === 'openai-image'
+                      ? { providerId: 'openai', name: 'Text AI OpenAI' }
+                      : undefined
+                  }
                 />
               )}
             </div>

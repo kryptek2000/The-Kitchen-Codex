@@ -1,10 +1,11 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { DEFAULT_GEMINI_IMAGE_MODEL } from "../../server/ai/geminiImageProvider.js";
 import { OPENROUTER_IMAGE_MODELS, OPENROUTER_IMAGE_DEFAULT_MODEL } from "../../server/ai/openRouterImageProvider.js";
+import { OPENAI_IMAGE_MODELS, OPENAI_IMAGE_DEFAULT_MODEL } from "../../server/ai/openAIImageProvider.js";
 
 type RegistryModule = typeof import("../../server/ai/imageProviderRegistry.js");
 
-const ENV_KEYS = ["OPENROUTER_API_KEY", "GEMINI_API_KEY"] as const;
+const ENV_KEYS = ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"] as const;
 
 async function freshRegistry(env: Record<string, string>): Promise<RegistryModule> {
   vi.resetModules();
@@ -20,10 +21,10 @@ afterEach(() => {
 });
 
 describe("image provider registry (BYOK-2 / BYOK-3)", () => {
-  it("registers Gemini FIRST + OpenRouter Image SECOND (never the deterministic seam)", async () => {
+  it("registers Gemini FIRST + OpenRouter Image SECOND + OpenAI Image THIRD (never the deterministic seam)", async () => {
     const mod = await freshRegistry({});
     const rows = mod.getRegisteredImageProviders();
-    expect(rows.length).toBe(2);
+    expect(rows.length).toBe(3);
     // Order is deterministic: Gemini first preserves zero-config behavior.
     // (Class identity is module-cache-fresh after vi.resetModules; assert by id.)
     expect(rows[0].provider.id).toBe("gemini-image");
@@ -33,10 +34,25 @@ describe("image provider registry (BYOK-2 / BYOK-3)", () => {
     expect(rows[1].provider.id).toBe("openrouter-image");
     expect(rows[1].provider.name).toBe("OpenRouter Image");
     expect(rows[1].enabled).toBe(false);
+    expect(rows[2].provider.id).toBe("openai-image");
+    expect(rows[2].provider.name).toBe("OpenAI Image");
+    expect(rows[2].defaultModel).toBe(OPENAI_IMAGE_DEFAULT_MODEL);
+    expect(rows[2].enabled).toBe(false);
     // Never the deterministic seam in any row.
     for (const row of rows) {
       expect(row.provider.id).not.toBe("deterministic-image");
     }
+  });
+
+  it("OpenAI Image is INERT (enabled:false) unless OPENAI_API_KEY is configured", async () => {
+    let mod = await freshRegistry({ OPENAI_API_KEY: "sk-fake-not-placeholder" });
+    expect(mod.getRegisteredImageProviders().find((r) => r.provider.id === "openai-image")!.enabled).toBe(true);
+
+    mod = await freshRegistry({});
+    expect(mod.getRegisteredImageProviders().find((r) => r.provider.id === "openai-image")!.enabled).toBe(false);
+
+    mod = await freshRegistry({ OPENAI_API_KEY: "" });
+    expect(mod.getRegisteredImageProviders().find((r) => r.provider.id === "openai-image")!.enabled).toBe(false);
   });
 
   it("OpenRouter Image is INERT (enabled:false) unless OPENROUTER_API_KEY is configured", async () => {
@@ -55,6 +71,8 @@ describe("image provider registry (BYOK-2 / BYOK-3)", () => {
     expect(mod.curatedImageModels(mod.findRegisteredImageProvider("openrouter-image"))).toEqual(new Set(OPENROUTER_IMAGE_MODELS));
     expect(OPENROUTER_IMAGE_MODELS[0]).toBe(OPENROUTER_IMAGE_DEFAULT_MODEL);
     expect(mod.curatedImageModels(mod.findRegisteredImageProvider("gemini-image"))).toEqual(new Set([DEFAULT_GEMINI_IMAGE_MODEL]));
+    expect(mod.curatedImageModels(mod.findRegisteredImageProvider("openai-image"))).toEqual(new Set(OPENAI_IMAGE_MODELS));
+    expect(OPENAI_IMAGE_MODELS[0]).toBe(OPENAI_IMAGE_DEFAULT_MODEL);
     expect(mod.curatedImageModels(undefined).size).toBe(0);
   });
 

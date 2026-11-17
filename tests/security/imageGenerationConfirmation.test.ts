@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { ImagePreviewStore } from "../../server/imagePreviewStore.js";
+import { bootstrapImageSession } from "../helpers/imageSessionTestClient.js";
 
 /**
  * Phase 2 — server-enforced per-generation confirmation for paid/variable image
@@ -68,16 +69,27 @@ async function boot(env: Record<string, string>, fetchImpl?: typeof fetch, store
   const server = http.createServer(app);
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const addr = server.address() as AddressInfo;
+  const baseUrl = `http://127.0.0.1:${addr.port}`;
+  const session = await bootstrapImageSession(baseUrl, realFetch);
+  sessionCookies.set(baseUrl, session.cookie);
   return {
-    baseUrl: `http://127.0.0.1:${addr.port}`,
+    baseUrl,
     close: () => new Promise<void>((r) => server.close(() => r())),
   };
+}
+
+/** Server-issued image-session cookie for each booted app instance. */
+const sessionCookies = new Map<string, string>();
+
+function withSession(baseUrl: string, headers: Record<string, string>): Record<string, string> {
+  const cookie = sessionCookies.get(baseUrl);
+  return cookie ? { ...headers, Cookie: cookie } : headers;
 }
 
 async function quote(baseUrl: string, headers: Record<string, string>, body: Record<string, unknown> = {}) {
   const res = await realFetch(`${baseUrl}/api/recipes/image/quote`, {
     method: "POST",
-    headers,
+    headers: withSession(baseUrl, headers),
     body: JSON.stringify(body),
   });
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
@@ -86,7 +98,7 @@ async function quote(baseUrl: string, headers: Record<string, string>, body: Rec
 async function generate(baseUrl: string, headers: Record<string, string>, body: Record<string, unknown>) {
   const res = await realFetch(`${baseUrl}/api/recipes/image/generate`, {
     method: "POST",
-    headers,
+    headers: withSession(baseUrl, headers),
     body: JSON.stringify(body),
   });
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };

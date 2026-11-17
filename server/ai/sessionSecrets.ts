@@ -65,7 +65,9 @@ export type SessionSecretErrorCode =
   | "PROVIDER_NOT_ALLOWED"
   | "INVALID_SECRET"
   | "SECRET_TOO_LONG"
-  | "VERSION_CONFLICT";
+  | "VERSION_CONFLICT"
+  /** The source provider has no live session secret to reuse. */
+  | "SESSION_CREDENTIAL_MISSING";
 
 /**
  * Thrown by the session secret store. The message is a bounded, provider-neutral
@@ -277,6 +279,65 @@ export function getSessionSecretStatus(providerId: string): SessionSecretStatus 
 /** Removes every expired session secret. Returns the number removed. */
 export function clearExpiredSessionSecrets(): number {
   return purgeExpired(Date.now());
+}
+
+/**
+ * P2 — EXPLICIT, PAIR-LIMITED credential reuse.
+ *
+ * A user who already saved an OpenAI key for Text AI should not have to paste the
+ * same key again for Image AI. This copies the live source secret into a SEPARATE
+ * target entry in the same server-memory store. It is:
+ *   - EXPLICIT only (never automatic; no execution path calls it),
+ *   - limited to an exact, reviewed pair allowlist (currently the OpenAI text and
+ *     image ids), so no arbitrary/cross-vendor credential sharing exists,
+ *   - still ISOLATED: each provider keeps its own entry and rotation version, and
+ *     either can be revoked independently,
+ *   - secret-free at the boundary: the value never leaves server memory.
+ */
+export const SESSION_SECRET_REUSE_PAIRS: ReadonlyArray<{ fromProviderId: string; toProviderId: string }> = [
+  { fromProviderId: "openai", toProviderId: "openai-image" },
+  { fromProviderId: "openai-image", toProviderId: "openai" },
+];
+
+/** True only for an EXACT reviewed reuse pair (target must be allowlisted too). */
+export function canReuseSessionSecret(fromProviderId: string, toProviderId: string): boolean {
+  if (!isSessionSecretProviderAllowed(toProviderId)) return false;
+  return SESSION_SECRET_REUSE_PAIRS.some(
+    (pair) => pair.fromProviderId === fromProviderId && pair.toProviderId === toProviderId
+  );
+}
+
+/**
+ * Copies a live session secret between an EXACT reviewed provider pair. The
+ * source and target remain separate entries with separate versions; this never
+ * mutates the source and never returns the secret.
+ */
+export function reuseSessionSecret(
+  fromProviderId: string,
+  toProviderId: string,
+  expectedVersion?: string
+): SessionSecretStatus {
+  if (!isSessionByokSupportedDeployment()) {
+    throw new SessionSecretError(
+      "SESSION_BYOK_UNSUPPORTED",
+      "Session-only BYOK is not supported in this deployment."
+    );
+  }
+  if (!canReuseSessionSecret(fromProviderId, toProviderId)) {
+    throw new SessionSecretError(
+      "PROVIDER_NOT_ALLOWED",
+      "Session secrets cannot be reused between these providers."
+    );
+  }
+  const source = getSessionSecret(fromProviderId);
+  if (!source) {
+    throw new SessionSecretError(
+      "SESSION_CREDENTIAL_MISSING",
+      "No session key is configured for the source provider."
+    );
+  }
+  // Delegates all validation + rotation rules to the ONE store implementation.
+  return setSessionSecret(toProviderId, source, expectedVersion);
 }
 
 /** Test seam: clears the entire in-memory store. Never call in production code. */

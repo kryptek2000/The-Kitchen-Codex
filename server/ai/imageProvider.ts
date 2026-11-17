@@ -49,6 +49,11 @@ export interface ImageGenerateOptions {
    */
   prompt: string;
   temperature?: number;
+  /**
+   * P2: optional caller cancellation. A provider that supports it must stop the
+   * upstream request and fail with `CANCELLED` (never TIMEOUT/PROVIDER_ERROR).
+   */
+  signal?: AbortSignal;
 }
 
 /** A validated generated image (bytes + true container type). */

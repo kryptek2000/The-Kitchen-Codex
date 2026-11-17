@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import http from "http";
 import type { AddressInfo } from "net";
+import { bootstrapImageSession } from "../helpers/imageSessionTestClient.js";
 
 /**
  * BYOK-4 AUDIT CORRECTION — ROUTE-LEVEL selection-header routing.
@@ -36,7 +37,9 @@ async function startApp(env: Record<string, string>) {
   const server = http.createServer(app);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const addr = server.address() as AddressInfo;
-  return { server, baseUrl: `http://127.0.0.1:${addr.port}` };
+  const baseUrl = `http://127.0.0.1:${addr.port}`;
+  const session = await bootstrapImageSession(baseUrl);
+  return { server, baseUrl, cookie: session.cookie };
 }
 
 /**
@@ -259,13 +262,14 @@ describe("BYOK-4 audit — STRICT malformed selection intent fails closed at the
   });
 
   it("IMAGE: a malformed present header yields a bounded IMAGE_SELECTION_INVALID failure with ZERO provider calls", async () => {
-    const { server, baseUrl } = await startApp({ GEMINI_API_KEY: SENTINEL, OPENROUTER_API_KEY: SENTINEL });
+    const { server, baseUrl, cookie } = await startApp({ GEMINI_API_KEY: SENTINEL, OPENROUTER_API_KEY: SENTINEL });
     const stub = stubOpenRouter(async () => new Response("{}", { status: 200 }));
     try {
       const res = await fetch(`${baseUrl}/api/recipes/image/generate`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          Cookie: cookie,
           [IMAGE_HEADER]: JSON.stringify({ mode: "user_selected" }), // missing provider
         },
         body: JSON.stringify({ title: "Hearty Soup" }),
@@ -356,7 +360,7 @@ describe("BYOK-4 audit — STRICT malformed selection intent fails closed at the
   });
 
   it("IMAGE: an empty-object header + a VALID image pin yields IMAGE_SELECTION_INVALID with ZERO calls", async () => {
-    const { server, baseUrl } = await startApp({
+    const { server, baseUrl, cookie } = await startApp({
       GEMINI_API_KEY: SENTINEL,
       OPENROUTER_API_KEY: SENTINEL,
       KITCHEN_CODEX_IMAGE_PROVIDER: "gemini-image",
@@ -365,7 +369,7 @@ describe("BYOK-4 audit — STRICT malformed selection intent fails closed at the
     try {
       const res = await fetch(`${baseUrl}/api/recipes/image/generate`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", [IMAGE_HEADER]: "{}" },
+        headers: { "Content-Type": "application/json", Cookie: cookie, [IMAGE_HEADER]: "{}" },
         body: JSON.stringify({ title: "Hearty Soup" }),
       });
       expect(res.status).toBe(503);
@@ -378,7 +382,7 @@ describe("BYOK-4 audit — STRICT malformed selection intent fails closed at the
   });
 
   it("BYOK-5D: an explicit session_only image intent cannot generate an image (image runtime deferred)", async () => {
-    const { server, baseUrl } = await startApp({
+    const { server, baseUrl, cookie } = await startApp({
       GEMINI_API_KEY: SENTINEL,
       OPENROUTER_API_KEY: SENTINEL,
     });
@@ -388,6 +392,7 @@ describe("BYOK-4 audit — STRICT malformed selection intent fails closed at the
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          Cookie: cookie,
           [IMAGE_HEADER]: JSON.stringify({
             mode: "user_selected",
             providerId: "openrouter-image",
@@ -412,13 +417,14 @@ describe("BYOK-4 audit — IMAGE selection header reaches runtime routing", () =
     // No GEMINI_API_KEY: if the selection were ignored, the safe default
     // (Gemini image) would fail IMAGE_PROVIDER_NOT_CONFIGURED. Instead the
     // selected OpenRouter image provider executes (stubbed 429 -> bounded).
-    const { server, baseUrl } = await startApp({ OPENROUTER_API_KEY: SENTINEL });
+    const { server, baseUrl, cookie } = await startApp({ OPENROUTER_API_KEY: SENTINEL });
     const stub = stubOpenRouter(
       async () =>
         new Response(JSON.stringify({ error: { message: "rate limited" } }), { status: 429 })
     );
     const selectionHeaders = {
       "Content-Type": "application/json",
+      Cookie: cookie,
       [IMAGE_HEADER]: JSON.stringify({
         mode: "user_selected",
         providerId: "openrouter-image",
@@ -455,13 +461,14 @@ describe("BYOK-4 audit — IMAGE selection header reaches runtime routing", () =
   });
 
   it("an INVALID explicit image selection fails closed (no provider executes)", async () => {
-    const { server, baseUrl } = await startApp({ GEMINI_API_KEY: SENTINEL });
+    const { server, baseUrl, cookie } = await startApp({ GEMINI_API_KEY: SENTINEL });
     const stub = stubOpenRouter(async () => new Response("{}", { status: 200 }));
     try {
       const res = await fetch(`${baseUrl}/api/recipes/image/generate`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          Cookie: cookie,
           [IMAGE_HEADER]: JSON.stringify({
             mode: "user_selected",
             providerId: "openrouter-image",

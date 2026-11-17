@@ -196,6 +196,47 @@ describe("BYOK-4 — ProviderSelectionPanel (interactive selection)", () => {
     expect(html).toContain('data-surface-test="image"');
   });
 
+  it("P2: OpenAI Image is selectable in the Image AI card with its two curated models", async () => {
+    const c = catalog({ text: true, image: true });
+    c.imageProviders.push({
+      providerId: "openai-image",
+      name: "OpenAI Image",
+      configured: true,
+      enabled: true,
+      available: true,
+      imageGeneration: true,
+      connectionTest: "credential_check",
+      selectable: true,
+      sessionKeySupported: true,
+      formats: ["image/png"],
+      maxBytes: 4 * 1024 * 1024,
+      models: [
+        { id: "gpt-image-2.6-flare", default: true },
+        { id: "gpt-image-2.6-sunburst", default: false },
+      ],
+    });
+    await saveAiSelection(
+      stubSettings(),
+      "image",
+      "user_selected",
+      "openai-image",
+      "gpt-image-2.6-flare",
+      "server_environment"
+    );
+    const html = render(
+      <ProviderSelectionPanel catalog={c} settings={stubSettings()} network={stubNetwork()} />
+    );
+    const imageCard = html.slice(html.indexOf('data-ai-surface-card="image"'));
+    expect(imageCard).toContain('value="openai-image"');
+    expect(imageCard).toContain("OpenAI Image");
+    expect(imageCard).toContain('data-surface-model-select="image"');
+    expect(imageCard).toContain("GPT Image 2.6 Flare");
+    expect(imageCard).toContain("GPT Image 2.6 Sunburst");
+    // Text selection is untouched by the image surface.
+    const textCard = html.slice(html.indexOf('data-ai-surface-card="text"'), html.indexOf('data-ai-surface-card="image"'));
+    expect(textCard).not.toContain('value="openai-image"');
+  });
+
   it("renders the truthful connection-test kind labels in the read-only catalog cards", () => {
     const html = render(
       <ProviderStatusPanel statuses={[]} catalog={catalog({ text: true, image: true })} onRefresh={() => {}} />
