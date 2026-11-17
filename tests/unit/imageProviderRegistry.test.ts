@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { DEFAULT_GEMINI_IMAGE_MODEL } from "../../server/ai/geminiImageProvider.js";
+import { DEFAULT_GEMINI_IMAGE_MODEL, GEMINI_IMAGE_MODELS } from "../../server/ai/geminiImageProvider.js";
 import { OPENROUTER_IMAGE_MODELS, OPENROUTER_IMAGE_DEFAULT_MODEL } from "../../server/ai/openRouterImageProvider.js";
 import { OPENAI_IMAGE_MODELS, OPENAI_IMAGE_DEFAULT_MODEL } from "../../server/ai/openAIImageProvider.js";
 
@@ -66,11 +66,13 @@ describe("image provider registry (BYOK-2 / BYOK-3)", () => {
     expect(mod.getRegisteredImageProviders().find((r) => r.provider.id === "openrouter-image")!.enabled).toBe(false);
   });
 
-  it("curated image models: OpenRouter exposes its curated list; Gemini falls back to its default", async () => {
+  it("curated image models: OpenRouter exposes its curated list; Gemini exposes all curated Nano Banana models", async () => {
     const mod = await freshRegistry({ OPENROUTER_API_KEY: "sk-or-v1-fake-not-placeholder" });
     expect(mod.curatedImageModels(mod.findRegisteredImageProvider("openrouter-image"))).toEqual(new Set(OPENROUTER_IMAGE_MODELS));
     expect(OPENROUTER_IMAGE_MODELS[0]).toBe(OPENROUTER_IMAGE_DEFAULT_MODEL);
-    expect(mod.curatedImageModels(mod.findRegisteredImageProvider("gemini-image"))).toEqual(new Set([DEFAULT_GEMINI_IMAGE_MODEL]));
+    expect(mod.curatedImageModels(mod.findRegisteredImageProvider("gemini-image"))).toEqual(new Set(GEMINI_IMAGE_MODELS));
+    expect(GEMINI_IMAGE_MODELS[0]).toBe(DEFAULT_GEMINI_IMAGE_MODEL);
+    expect(GEMINI_IMAGE_MODELS).toContain("gemini-2.5-flash-image");
     expect(mod.curatedImageModels(mod.findRegisteredImageProvider("openai-image"))).toEqual(new Set(OPENAI_IMAGE_MODELS));
     expect(OPENAI_IMAGE_MODELS[0]).toBe(OPENAI_IMAGE_DEFAULT_MODEL);
     expect(mod.curatedImageModels(undefined).size).toBe(0);

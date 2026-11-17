@@ -7,23 +7,26 @@
  * ceiling). The key never leaves the server; the provider never logs,
  * returns, or persists the prompt.
  *
- * PROVEN SDK SEMANTICS (verified against the installed @google/genai 2.19.0 —
- * nothing here is guessed):
+ * PROVEN SDK / API SEMANTICS:
  *   - `models.generateImages` (Imagen) is Vertex-only in this SDK: its non-Vertex
  *     branch throws "This method is only supported by the Gemini Enterprise Agent
  *     Platform (previously known as Vertex AI)" (dist/index.cjs). It is therefore
  *     unusable with a Gemini Developer API key (`new GoogleGenAI({ apiKey })`,
  *     exactly how `server/geminiClient.ts` configures the SDK).
- *   - The proven non-Vertex image-generation path is `models.generateContent` with
+ *   - The legacy non-Vertex image-generation path is `models.generateContent` with
  *     `config.responseModalities: [Modality.IMAGE]` (`GenerateContentConfig`
- *     exposes `responseModalities?: Modality[]` and `imageConfig?`; the SDK's own
- *     deprecation notice for `generateImages` directs callers to generateContent
- *     with image models).
- *   - The default model id `gemini-2.5-flash-image` is proven: it is a member of
- *     the SDK's own `Model` type union (dist/genai.d.ts), alongside
- *     `gemini-3-pro-image` and `gemini-3.1-flash-image`.
- *   - Image bytes arrive as `candidates[].content.parts[].inlineData.data`
- *     (base64 string) with `inlineData.mimeType` (SDK `Blob` interface).
+ *     exposes `responseModalities?: Modality[]` and `imageConfig?`). It remains
+ *     the transport for `gemini-2.5-flash-image`.
+ *   - Current Nano Banana models use the official Interactions API. The installed
+ *     `@google/genai` 2.19.0 exposes `client.interactions.create`; the response
+ *     carries `output_image.data` (base64) plus an optional MIME type. TKC sends
+ *     only the documented minimal model + input request and never fetches a
+ *     returned URI.
+ *   - The default model id `gemini-nano-banana-2.1` is documented by Google as the
+ *     current high-efficiency Nano Banana workhorse. The curated set also keeps
+ *     `gemini-3.1-flash-image`, `gemini-3.1-flash-lite-image`,
+ *     `gemini-3-pro-image`, and legacy `gemini-2.5-flash-image`.
+ *   - Legacy image bytes arrive as `candidates[].content.parts[].inlineData.data`.
  *
  * MULTIPLE-CANDIDATE POLICY (deterministic): candidates are scanned in the exact
  * API response order; the FIRST candidate that contains an inline image part
@@ -46,6 +49,7 @@ import {
   MAX_GENERATED_IMAGE_BYTES,
   MAX_GENERATED_IMAGE_BASE64_CHARS,
   countSignificantBase64Chars,
+  sniffGeneratedImageMime,
   type GeneratedImageMime,
 } from "../../src/core/recipeImage.js";
 
@@ -66,10 +70,39 @@ import {
 } from "./imageProvider.js";
 
 /**
- * Default image model. Proven from the installed SDK's `Model` union type —
- * NOT invented. The caller (endpoint wiring) may still override per request.
+ * Default image model. Nano Banana 2.1 is the current high-efficiency Gemini
+ * image workhorse and the model page's recommended primary model.
  */
-export const DEFAULT_GEMINI_IMAGE_MODEL = "gemini-2.5-flash-image";
+export const GEMINI_NANO_BANANA_21_MODEL = "gemini-nano-banana-2.1";
+export const GEMINI_NANO_BANANA_2_MODEL = "gemini-3.1-flash-image";
+export const GEMINI_NANO_BANANA_2_LITE_MODEL = "gemini-3.1-flash-lite-image";
+export const GEMINI_NANO_BANANA_PRO_MODEL = "gemini-3-pro-image";
+export const LEGACY_GEMINI_IMAGE_MODEL = "gemini-2.5-flash-image";
+
+/**
+ * Curated supported image models. The legacy model remains selectable for
+ * existing pinned configurations and accounts that still have access.
+ */
+export const GEMINI_IMAGE_MODELS: readonly string[] = [
+  GEMINI_NANO_BANANA_21_MODEL,
+  GEMINI_NANO_BANANA_2_MODEL,
+  GEMINI_NANO_BANANA_2_LITE_MODEL,
+  GEMINI_NANO_BANANA_PRO_MODEL,
+  LEGACY_GEMINI_IMAGE_MODEL,
+];
+
+export const DEFAULT_GEMINI_IMAGE_MODEL = GEMINI_NANO_BANANA_21_MODEL;
+
+/**
+ * Nano Banana 2.1 and the current Nano Banana family use the Interactions API
+ * (`client.interactions.create`), not legacy `models.generateContent`.
+ */
+export const GEMINI_INTERACTIONS_IMAGE_MODELS: ReadonlySet<string> = new Set([
+  GEMINI_NANO_BANANA_21_MODEL,
+  GEMINI_NANO_BANANA_2_MODEL,
+  GEMINI_NANO_BANANA_2_LITE_MODEL,
+  GEMINI_NANO_BANANA_PRO_MODEL,
+]);
 
 /** Candidate finish-reasons that indicate safety/filtering (Gemini FinishReason enum). */
 const SAFETY_FINISH_REASONS: ReadonlySet<string> = new Set([
@@ -189,6 +222,18 @@ export class GeminiImageProvider implements ImageProvider {
       });
     }
 
+    if (GEMINI_INTERACTIONS_IMAGE_MODELS.has(options.model)) {
+      return this.generateWithInteractions(client, prompt, options);
+    }
+    return this.generateWithGenerateContent(client, prompt, options);
+  }
+
+  /** Legacy Gemini image transport (proven for `gemini-2.5-flash-image`). */
+  private async generateWithGenerateContent(
+    client: GoogleGenAI,
+    prompt: string,
+    options: ImageGenerateOptions
+  ): Promise<GeneratedImage> {
     let response: GenerateContentResponse;
     try {
       response = await client.models.generateContent({
@@ -252,6 +297,109 @@ export class GeminiImageProvider implements ImageProvider {
     return {
       bytes: extracted.bytes,
       contentType: validation.detectedMime ?? (extracted.mimeType as GeneratedImageMime),
+      provider: this.id,
+      model: options.model,
+    };
+  }
+
+  /**
+   * Nano Banana transport. The current official image-generation documentation
+   * uses the Interactions API (`client.interactions.create`) and returns the
+   * generated image as `output_image.data` (base64) with an optional MIME type.
+   *
+   * Requests explicitly set `store: false`: Google documents that Interactions
+   * requests are stored by default, and TKC does not retain server-side
+   * interaction history. A returned URI is NEVER fetched here: image URLs would
+   * be an SSRF surface and are not part of the validated-bytes pipeline.
+   *
+   * A response may produce an image ONLY when its status is exactly `completed`.
+   * All other states fail closed before any base64 extraction or decoding.
+   */
+  private async generateWithInteractions(
+    client: GoogleGenAI,
+    prompt: string,
+    options: ImageGenerateOptions
+  ): Promise<GeneratedImage> {
+    let response: {
+      status?: unknown;
+      output_image?: { data?: unknown; mime_type?: unknown; uri?: unknown };
+      errors?: unknown;
+    };
+    try {
+      response = (await client.interactions.create(
+        {
+          model: options.model,
+          input: prompt,
+          store: false,
+        },
+        {
+          retries: { strategy: "none" },
+        }
+      )) as unknown as {
+        status?: unknown;
+        output_image?: { data?: unknown; mime_type?: unknown; uri?: unknown };
+        errors?: unknown;
+      };
+    } catch (err) {
+      throw normalizeProviderError(err, { providerId: this.id, model: options.model });
+    }
+
+    // STRICT SUCCESS GATE: only an explicitly completed interaction may supply
+    // an image. This check intentionally runs BEFORE output extraction/decode.
+    const status = typeof response?.status === "string" ? response.status : "";
+    if (status !== "completed") {
+      const ctx = { providerId: this.id, model: options.model };
+      if (status === "cancelled") {
+        throw new ProviderOperationError("CANCELLED", "Gemini image interaction was cancelled.", ctx);
+      }
+      if (status === "failed") {
+        throw new ProviderOperationError("PROVIDER_ERROR", "Gemini image interaction failed.", ctx);
+      }
+      if (status === "budget_exceeded") {
+        throw new ProviderOperationError("QUOTA", "Gemini image interaction exceeded its budget.", ctx);
+      }
+      if (status === "incomplete") {
+        throw new ProviderOperationError("INVALID_RESPONSE", "Gemini image interaction was incomplete.", ctx);
+      }
+      // queued / in_progress / requires_action / missing / null / unknown.
+      throw new ProviderOperationError(
+        "INVALID_RESPONSE",
+        "Gemini image interaction did not complete.",
+        ctx
+      );
+    }
+
+    const image = response?.output_image;
+    if (!image || typeof image.data !== "string" || image.data.length === 0) {
+      // Includes URI-only delivery: never fetch an untrusted remote image.
+      throw new ImageNoImageError("Gemini returned no inline image for this recipe.", {
+        providerId: this.id,
+        model: options.model,
+      });
+    }
+
+    // PRE-DECODE GUARD: enforce the shared encoded cap BEFORE Buffer.from().
+    if (countSignificantBase64Chars(image.data) > MAX_GENERATED_IMAGE_BASE64_CHARS) {
+      throw new ImageValidationError(
+        `Gemini image rejected: encoded payload exceeds the pre-decode limit (${MAX_GENERATED_IMAGE_BASE64_CHARS} significant base64 characters).`,
+        { providerId: this.id, model: options.model }
+      );
+    }
+
+    const bytes = new Uint8Array(Buffer.from(image.data, "base64"));
+    const declaredRaw = typeof image.mime_type === "string" ? image.mime_type.trim() : "";
+    const declared = declaredRaw || sniffGeneratedImageMime(bytes) || "";
+    const validation = validateGeneratedImage({ bytes, contentType: declared });
+    if (!validation.valid) {
+      throw new ImageValidationError(`Gemini image rejected: ${validation.error}`, {
+        providerId: this.id,
+        model: options.model,
+      });
+    }
+
+    return {
+      bytes,
+      contentType: validation.detectedMime ?? (declared as GeneratedImageMime),
       provider: this.id,
       model: options.model,
     };

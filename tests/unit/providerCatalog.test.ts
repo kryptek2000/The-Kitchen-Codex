@@ -89,7 +89,11 @@ describe("provider catalog (BYOK-1) — shape and ordering", () => {
     expect(gemini.formats).toEqual(["image/png"]);
     expect(gemini.maxBytes).toBe(4 * 1024 * 1024);
     expect(gemini.models.map((m) => ({ id: m.id, default: m.default }))).toEqual([
-      { id: "gemini-2.5-flash-image", default: true },
+      { id: "gemini-nano-banana-2.1", default: true },
+      { id: "gemini-3.1-flash-image", default: false },
+      { id: "gemini-3.1-flash-lite-image", default: false },
+      { id: "gemini-3-pro-image", default: false },
+      { id: "gemini-2.5-flash-image", default: false },
     ]);
     const openRouter = catalog.imageProviders.find((p) => p.providerId === "openrouter-image")!;
     expect(openRouter.imageGeneration).toBe(true);

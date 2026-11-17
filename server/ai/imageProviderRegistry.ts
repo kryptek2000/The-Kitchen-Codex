@@ -30,7 +30,7 @@
  */
 
 import { getServerSecretSync } from "../platform/ServerEnvironmentSecretAdapter.js";
-import { GeminiImageProvider, DEFAULT_GEMINI_IMAGE_MODEL } from "./geminiImageProvider.js";
+import { GeminiImageProvider, DEFAULT_GEMINI_IMAGE_MODEL, GEMINI_IMAGE_MODELS } from "./geminiImageProvider.js";
 import {
   OpenRouterImageProvider,
   OPENROUTER_IMAGE_MODELS,
@@ -78,6 +78,7 @@ function ensureImageRegistry(): RegisteredImageProvider[] {
       {
         provider: new GeminiImageProvider(),
         defaultModel: DEFAULT_GEMINI_IMAGE_MODEL,
+        models: GEMINI_IMAGE_MODELS,
         enabled: true,
       },
       {

@@ -10,10 +10,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from "vitest";
 
 const generateContentMock = vi.hoisted(() => vi.fn());
+const interactionsCreateMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@google/genai", () => ({
   GoogleGenAI: class {
     models = { generateContent: generateContentMock };
+    interactions = { create: interactionsCreateMock };
   },
   // Mirrors the real enum value proven from the installed SDK.
   Modality: { IMAGE: "IMAGE" },
@@ -22,6 +24,8 @@ vi.mock("@google/genai", () => ({
 import {
   GeminiImageProvider,
   DEFAULT_GEMINI_IMAGE_MODEL,
+  GEMINI_IMAGE_MODELS,
+  LEGACY_GEMINI_IMAGE_MODEL,
   MAX_GEMINI_IMAGE_BASE64_CHARS,
 } from "../../server/ai/geminiImageProvider.js";
 import { ProviderOperationError } from "../../server/ai/providerErrors.js";
@@ -55,6 +59,7 @@ describe("GeminiImageProvider", () => {
 
   afterEach(() => {
     generateContentMock.mockReset();
+    interactionsCreateMock.mockReset();
     vi.restoreAllMocks();
   });
 
@@ -63,11 +68,19 @@ describe("GeminiImageProvider", () => {
     else process.env.GEMINI_API_KEY = originalKey;
   });
 
-  it("exposes a truthful identity and the proven default model", () => {
+  it("exposes a truthful identity and the curated Nano Banana model set", () => {
     const provider = new GeminiImageProvider();
     expect(provider.id).toBe("gemini-image");
     expect(provider.capabilities.imageGeneration).toBe(true);
-    expect(DEFAULT_GEMINI_IMAGE_MODEL).toBe("gemini-2.5-flash-image");
+    expect(DEFAULT_GEMINI_IMAGE_MODEL).toBe("gemini-nano-banana-2.1");
+    expect(GEMINI_IMAGE_MODELS).toEqual([
+      "gemini-nano-banana-2.1",
+      "gemini-3.1-flash-image",
+      "gemini-3.1-flash-lite-image",
+      "gemini-3-pro-image",
+      "gemini-2.5-flash-image",
+    ]);
+    expect(LEGACY_GEMINI_IMAGE_MODEL).toBe("gemini-2.5-flash-image");
   });
 
   it("is unavailable without a real key and unavailable without a placeholder key", () => {
@@ -86,10 +99,10 @@ describe("GeminiImageProvider", () => {
     const provider = new GeminiImageProvider();
     generateContentMock.mockResolvedValueOnce(sdkResponseWithParts([inlineImage("image/png", VALID_PNG_BASE64)]));
 
-    const result = await provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT });
+    const result = await provider.generateImage(SECRET_PROMPT, { model: LEGACY_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT });
 
     expect(result.provider).toBe("gemini-image");
-    expect(result.model).toBe(DEFAULT_GEMINI_IMAGE_MODEL);
+    expect(result.model).toBe(LEGACY_GEMINI_IMAGE_MODEL);
     expect(result.contentType).toBe("image/png");
     expect(result.bytes[0]).toBe(0x89);
     expect(result.bytes[1]).toBe(0x50); // "P" of PNG
@@ -97,9 +110,150 @@ describe("GeminiImageProvider", () => {
     // SDK call shape: proven generateContent + responseModalities IMAGE config.
     expect(generateContentMock).toHaveBeenCalledTimes(1);
     const call = generateContentMock.mock.calls[0][0];
-    expect(call.model).toBe(DEFAULT_GEMINI_IMAGE_MODEL);
+    expect(call.model).toBe(LEGACY_GEMINI_IMAGE_MODEL);
     expect(call.contents).toBe(SECRET_PROMPT);
     expect(call.config.responseModalities).toEqual(["IMAGE"]);
+  });
+
+  it("uses the Interactions API for Nano Banana 2.1 and validates output_image bytes", async () => {
+    const provider = new GeminiImageProvider();
+    interactionsCreateMock.mockResolvedValueOnce({
+      status: "completed",
+      output_image: { data: VALID_PNG_BASE64, mime_type: "image/png" },
+    });
+
+    const result = await provider.generateImage(SECRET_PROMPT, {
+      model: DEFAULT_GEMINI_IMAGE_MODEL,
+      prompt: SECRET_PROMPT,
+    });
+
+    expect(result.provider).toBe("gemini-image");
+    expect(result.model).toBe(DEFAULT_GEMINI_IMAGE_MODEL);
+    expect(result.contentType).toBe("image/png");
+    expect(interactionsCreateMock).toHaveBeenCalledTimes(1);
+    expect(generateContentMock).not.toHaveBeenCalled();
+    const call = interactionsCreateMock.mock.calls[0][0];
+    expect(call.model).toBe(DEFAULT_GEMINI_IMAGE_MODEL);
+    expect(call.input).toBe(SECRET_PROMPT);
+    expect(call.store).toBe(false);
+    expect(interactionsCreateMock.mock.calls[0][1]).toEqual({ retries: { strategy: "none" } });
+    // No unverified optional parameters: the documented minimal request is
+    // model + input. A returned URI is never fetched.
+    expect(call.response_format).toBeUndefined();
+  });
+
+  it("uses the Interactions API for the other Nano Banana family models", async () => {
+    for (const model of [
+      "gemini-3.1-flash-image",
+      "gemini-3.1-flash-lite-image",
+      "gemini-3-pro-image",
+    ]) {
+      interactionsCreateMock.mockReset();
+      interactionsCreateMock.mockResolvedValueOnce({
+        status: "completed",
+        output_image: { data: VALID_PNG_BASE64, mime_type: "image/png" },
+      });
+      const provider = new GeminiImageProvider();
+      const result = await provider.generateImage(SECRET_PROMPT, { model, prompt: SECRET_PROMPT });
+      expect(result.model).toBe(model);
+      expect(interactionsCreateMock).toHaveBeenCalledTimes(1);
+      const call = interactionsCreateMock.mock.calls[0][0];
+      expect(call.model).toBe(model);
+      expect(call.store).toBe(false);
+      expect(interactionsCreateMock.mock.calls[0][1]).toEqual({ retries: { strategy: "none" } });
+      expect(generateContentMock).not.toHaveBeenCalled();
+    }
+  });
+
+  it("Interactions URI-only output and missing output fail closed as NO_IMAGE (never fetched)", async () => {
+    const provider = new GeminiImageProvider();
+    interactionsCreateMock.mockResolvedValueOnce({
+      status: "completed",
+      output_image: { uri: "https://example.invalid/generated.png" },
+    });
+    await expect(
+      provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })
+    ).rejects.toMatchObject({ name: "ImageNoImageError", code: "NO_IMAGE" });
+
+    interactionsCreateMock.mockResolvedValueOnce({ status: "completed" });
+    await expect(
+      provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })
+    ).rejects.toMatchObject({ name: "ImageNoImageError", code: "NO_IMAGE" });
+  });
+
+  it("Interactions output rejects mismatched MIME and oversized encoded payloads", async () => {
+    const provider = new GeminiImageProvider();
+    const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x00, 0x01]);
+    interactionsCreateMock.mockResolvedValueOnce({
+      status: "completed",
+      output_image: { data: jpegBytes.toString("base64"), mime_type: "image/png" },
+    });
+    await expect(
+      provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })
+    ).rejects.toMatchObject({ name: "ImageValidationError", code: "INVALID_RESPONSE" });
+
+    interactionsCreateMock.mockResolvedValueOnce({
+      status: "completed",
+      output_image: { data: "A".repeat(MAX_GEMINI_IMAGE_BASE64_CHARS + 1), mime_type: "image/png" },
+    });
+    await expect(
+      provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })
+    ).rejects.toMatchObject({ name: "ImageValidationError", code: "INVALID_RESPONSE" });
+  });
+
+  it("normalizes Interactions transport failures through the provider taxonomy", async () => {
+    const provider = new GeminiImageProvider();
+    interactionsCreateMock.mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }));
+    await expect(
+      provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })
+    ).rejects.toBeInstanceOf(ProviderOperationError);
+  });
+
+  it("only an explicitly completed interaction can produce an image", async () => {
+    const provider = new GeminiImageProvider();
+    const rejections: Array<{ status: unknown; code: string }> = [
+      { status: "failed", code: "PROVIDER_ERROR" },
+      { status: "cancelled", code: "CANCELLED" },
+      { status: "incomplete", code: "INVALID_RESPONSE" },
+      { status: "budget_exceeded", code: "QUOTA" },
+      { status: "queued", code: "INVALID_RESPONSE" },
+      { status: "in_progress", code: "INVALID_RESPONSE" },
+      { status: "requires_action", code: "INVALID_RESPONSE" },
+      { status: "future_status", code: "INVALID_RESPONSE" },
+      { status: "", code: "INVALID_RESPONSE" },
+      { status: null, code: "INVALID_RESPONSE" },
+      { status: undefined, code: "INVALID_RESPONSE" },
+    ];
+
+    for (const item of rejections) {
+      interactionsCreateMock.mockResolvedValueOnce({
+        status: item.status,
+        output_image: { data: VALID_PNG_BASE64, mime_type: "image/png" },
+      });
+      const err = await provider
+        .generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })
+        .catch((e) => e);
+      expect(err, String(item.status)).toBeInstanceOf(ProviderOperationError);
+      expect(err.name, String(item.status)).toBe("ProviderOperationError");
+      expect(err.code, String(item.status)).toBe(item.code);
+    }
+  });
+
+  it("rejects a non-completed response before decoding its image payload", async () => {
+    const provider = new GeminiImageProvider();
+    interactionsCreateMock.mockResolvedValueOnce({
+      status: "failed",
+      // Deliberately oversized/malformed-looking payload: the status gate must
+      // fire first, not the image validation/decode path.
+      output_image: { data: "A".repeat(MAX_GEMINI_IMAGE_BASE64_CHARS + 1), mime_type: "image/png" },
+    });
+    const err = await provider
+      .generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(ProviderOperationError);
+    expect(err.name).toBe("ProviderOperationError");
+    expect(err.code).toBe("PROVIDER_ERROR");
+    expect(err.message).toContain("failed");
   });
 
   it("chooses a candidate deterministically: first candidate in API order with an image part wins", async () => {
@@ -113,7 +267,7 @@ describe("GeminiImageProvider", () => {
       ],
     });
 
-    const result = await provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT });
+    const result = await provider.generateImage(SECRET_PROMPT, { model: LEGACY_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT });
     expect(result.contentType).toBe("image/png");
     expect(result.bytes.length).toBeGreaterThan(0);
   });
@@ -126,7 +280,7 @@ describe("GeminiImageProvider", () => {
       sdkResponseWithParts([inlineImage("image/png", jpegBytes.toString("base64"))])
     );
 
-    await expect(provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toMatchObject({
+    await expect(provider.generateImage(SECRET_PROMPT, { model: LEGACY_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toMatchObject({
       name: "ImageValidationError",
       code: "INVALID_RESPONSE",
     });
@@ -136,13 +290,13 @@ describe("GeminiImageProvider", () => {
     const provider = new GeminiImageProvider();
     const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>');
     generateContentMock.mockResolvedValueOnce(sdkResponseWithParts([inlineImage("image/svg+xml", svg.toString("base64"))]));
-    await expect(provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toBeInstanceOf(
+    await expect(provider.generateImage(SECRET_PROMPT, { model: LEGACY_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toBeInstanceOf(
       ImageValidationError
     );
 
     const gifBytes = Buffer.from([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00]);
     generateContentMock.mockResolvedValueOnce(sdkResponseWithParts([inlineImage("image/gif", gifBytes.toString("base64"))]));
-    await expect(provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toBeInstanceOf(
+    await expect(provider.generateImage(SECRET_PROMPT, { model: LEGACY_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toBeInstanceOf(
       ImageValidationError
     );
   });
@@ -150,14 +304,14 @@ describe("GeminiImageProvider", () => {
   it("maps a response with NO candidate/image to NO_IMAGE (distinct from a block and from invalid bytes)", async () => {
     const provider = new GeminiImageProvider();
     generateContentMock.mockResolvedValueOnce({ candidates: [] });
-    await expect(provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toMatchObject({
+    await expect(provider.generateImage(SECRET_PROMPT, { model: LEGACY_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toMatchObject({
       name: "ImageNoImageError",
       code: "NO_IMAGE",
       providerId: "gemini-image",
     });
 
     generateContentMock.mockResolvedValueOnce(sdkResponseWithParts([{ text: "no image here" }]));
-    await expect(provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toMatchObject({
+    await expect(provider.generateImage(SECRET_PROMPT, { model: LEGACY_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toMatchObject({
       name: "ImageNoImageError",
       code: "NO_IMAGE",
     });
@@ -169,7 +323,7 @@ describe("GeminiImageProvider", () => {
       promptFeedback: { blockReason: "IMAGE_SAFETY" },
       candidates: [],
     });
-    await expect(provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toMatchObject({
+    await expect(provider.generateImage(SECRET_PROMPT, { model: LEGACY_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toMatchObject({
       name: "ImageBlockedError",
       code: "BLOCKED",
       providerId: "gemini-image",
@@ -184,7 +338,7 @@ describe("GeminiImageProvider", () => {
         { content: { parts: [] }, finishReason: "IMAGE_SAFETY" },
       ],
     });
-    await expect(provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toMatchObject({
+    await expect(provider.generateImage(SECRET_PROMPT, { model: LEGACY_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toMatchObject({
       name: "ImageBlockedError",
       code: "BLOCKED",
     });
@@ -198,7 +352,7 @@ describe("GeminiImageProvider", () => {
         { content: { parts: [{ text: "blocked" }] }, finishReason: "IMAGE_SAFETY" },
       ],
     });
-    const result = await provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT });
+    const result = await provider.generateImage(SECRET_PROMPT, { model: LEGACY_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT });
     expect(result.contentType).toBe("image/png");
   });
 
@@ -206,33 +360,33 @@ describe("GeminiImageProvider", () => {
     const provider = new GeminiImageProvider();
 
     generateContentMock.mockRejectedValueOnce(Object.assign(new Error("API key not valid"), { status: 401 }));
-    await expect(provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toMatchObject({
+    await expect(provider.generateImage(SECRET_PROMPT, { model: LEGACY_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toMatchObject({
       code: "AUTH",
       providerId: "gemini-image",
     });
 
     generateContentMock.mockRejectedValueOnce(Object.assign(new Error("Resource has been exhausted"), { status: 429 }));
-    await expect(provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toMatchObject({
+    await expect(provider.generateImage(SECRET_PROMPT, { model: LEGACY_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toMatchObject({
       code: "RATE_LIMIT",
     });
 
     generateContentMock.mockRejectedValueOnce(new Error("Quota exceeded for this project"));
-    await expect(provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toMatchObject({
+    await expect(provider.generateImage(SECRET_PROMPT, { model: LEGACY_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toMatchObject({
       code: "QUOTA",
     });
 
     generateContentMock.mockRejectedValueOnce(Object.assign(new Error("The operation was aborted"), { name: "AbortError" }));
-    await expect(provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toMatchObject({
+    await expect(provider.generateImage(SECRET_PROMPT, { model: LEGACY_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toMatchObject({
       code: "TIMEOUT",
     });
 
     generateContentMock.mockRejectedValueOnce(Object.assign(new Error("backend error"), { status: 503 }));
-    await expect(provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toMatchObject({
+    await expect(provider.generateImage(SECRET_PROMPT, { model: LEGACY_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toMatchObject({
       code: "UNAVAILABLE",
     });
 
     generateContentMock.mockRejectedValueOnce(new Error("something unexpected"));
-    await expect(provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toBeInstanceOf(
+    await expect(provider.generateImage(SECRET_PROMPT, { model: LEGACY_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toBeInstanceOf(
       ProviderOperationError
     );
   });
@@ -245,7 +399,7 @@ describe("GeminiImageProvider", () => {
       // Provider was constructed while a key existed; availability must reflect
       // the CURRENT key state at call time.
       expect(provider.isAvailable()).toBe(false);
-      await expect(provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toMatchObject({
+      await expect(provider.generateImage(SECRET_PROMPT, { model: LEGACY_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toMatchObject({
         code: "UNAVAILABLE",
       });
     } finally {
@@ -268,7 +422,7 @@ describe("GeminiImageProvider", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     generateContentMock.mockResolvedValueOnce(sdkResponseWithParts([inlineImage("image/png", VALID_PNG_BASE64)]));
 
-    const result = await provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT });
+    const result = await provider.generateImage(SECRET_PROMPT, { model: LEGACY_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT });
 
     expect(JSON.stringify(result)).not.toContain("SUPER_SECRET_IMAGE_PROMPT_SENTINEL");
     for (const spy of [warnSpy, errorSpy, logSpy]) {
@@ -278,7 +432,7 @@ describe("GeminiImageProvider", () => {
     }
     // Error paths likewise: normalization redacts and never echoes the prompt.
     generateContentMock.mockRejectedValueOnce(Object.assign(new Error("boom"), { status: 500 }));
-    await expect(provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toSatisfy(
+    await expect(provider.generateImage(SECRET_PROMPT, { model: LEGACY_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toSatisfy(
       (err: unknown) => err instanceof ProviderOperationError && !String(err.message).includes("SUPER_SECRET")
     );
   });
@@ -292,7 +446,7 @@ describe("GeminiImageProvider", () => {
       promptFeedback: { blockReason: "SAFETY" },
       candidates: [{ content: { parts: [] }, finishReason: "IMAGE_SAFETY" }],
     });
-    await expect(provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toMatchObject({
+    await expect(provider.generateImage(SECRET_PROMPT, { model: LEGACY_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toMatchObject({
       code: "BLOCKED",
     });
     // A diagnostic WAS emitted ...
@@ -339,7 +493,7 @@ describe("GeminiImageProvider", () => {
     expect(encoded.length).toBeLessThanOrEqual(MAX_GEMINI_IMAGE_BASE64_CHARS + 4); // sanity: within encoded envelope
     generateContentMock.mockResolvedValueOnce(sdkResponseWithParts([inlineImage("image/png", encoded)]));
 
-    const result = await provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT });
+    const result = await provider.generateImage(SECRET_PROMPT, { model: LEGACY_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT });
     expect(result.contentType).toBe("image/png");
     expect(result.bytes.length).toBe(4 * 1024 * 1024);
   });
@@ -351,7 +505,7 @@ describe("GeminiImageProvider", () => {
     generateContentMock.mockResolvedValueOnce(sdkResponseWithParts([inlineImage("image/png", oversized)]));
 
     const fromSpy = vi.spyOn(Buffer, "from");
-    await expect(provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toMatchObject({
+    await expect(provider.generateImage(SECRET_PROMPT, { model: LEGACY_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT })).rejects.toMatchObject({
       name: "ImageValidationError",
       code: "INVALID_RESPONSE",
       providerId: "gemini-image",
@@ -361,7 +515,7 @@ describe("GeminiImageProvider", () => {
     expect(decodedCalls).toHaveLength(0);
     // No raw payload fragment leaks into the error.
     try {
-      await provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT });
+      await provider.generateImage(SECRET_PROMPT, { model: LEGACY_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT });
       expect.unreachable("should have thrown");
     } catch (err: any) {
       expect(String(err?.message)).not.toContain("AAAA");
@@ -379,7 +533,7 @@ describe("GeminiImageProvider", () => {
     expect(atCap.replace(/=/g, "").length).toBe(MAX_GEMINI_IMAGE_BASE64_CHARS);
     generateContentMock.mockResolvedValueOnce(sdkResponseWithParts([inlineImage("image/png", atCap)]));
 
-    const result = await provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT });
+    const result = await provider.generateImage(SECRET_PROMPT, { model: LEGACY_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT });
     expect(result.bytes.length).toBe(4 * 1024 * 1024);
   });
 
@@ -389,7 +543,7 @@ describe("GeminiImageProvider", () => {
     const withWhitespace = VALID_PNG_BASE64.split("").reduce((acc, ch, i) => (i % 8 === 0 ? acc + "\n " + ch : acc + ch), "");
     generateContentMock.mockResolvedValueOnce(sdkResponseWithParts([inlineImage("image/png", withWhitespace)]));
 
-    const result = await provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT });
+    const result = await provider.generateImage(SECRET_PROMPT, { model: LEGACY_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT });
     expect(result.contentType).toBe("image/png");
     expect(result.bytes.length).toBeGreaterThan(0);
     expect(result.bytes[0]).toBe(0x89);
@@ -406,7 +560,7 @@ describe("GeminiImageProvider", () => {
       sdkResponseWithParts([inlineImage("image/png", sentinelFragment + "A".repeat(MAX_GEMINI_IMAGE_BASE64_CHARS + 100))])
     );
 
-    const err: any = await provider.generateImage(SECRET_PROMPT, { model: DEFAULT_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT }).catch((e) => e);
+    const err: any = await provider.generateImage(SECRET_PROMPT, { model: LEGACY_GEMINI_IMAGE_MODEL, prompt: SECRET_PROMPT }).catch((e) => e);
     expect(err).toBeInstanceOf(ImageValidationError);
     const errText = String(err?.message ?? "");
     expect(errText).not.toContain("QUJDREVGR0hJ");
