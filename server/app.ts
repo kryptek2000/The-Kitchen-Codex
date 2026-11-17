@@ -97,9 +97,15 @@ import {
   PreviewStoreCapacityError,
   type ImagePreviewReservation,
 } from "./imagePreviewStore.js";
+import { ImageSessionAuthority } from "./imageSessionAuthority.js";
+import {
+  imageSessionIdFor,
+  isImageSessionDeploymentSupported,
+  requireImageSession,
+} from "./imageSession.js";
+import { registerImageSessionRoutes } from "./imageSessionRoutes.js";
 import { getCredentialGeneration } from "./ai/capabilityVerificationStore.js";
 import { buildRepresentativeImageQuery, sanitizeRepresentativeSearchTerms } from "../src/core/representativeImage.js";
-import { createHash, randomBytes as cryptoRandomBytes } from "node:crypto";
 import {
   RepresentativeImageCandidateStore,
   RepresentativeImageSelectionError,
@@ -157,6 +163,12 @@ export interface CreateAppOptions {
    * always constructs its own bounded store.
    */
   imagePreviewStore?: ImagePreviewStore;
+  /**
+   * TEST SEAM ONLY: overrides the in-memory image-session authority so expiry,
+   * revocation, and capacity behavior are exercisable deterministically. The
+   * production app always constructs its own authority.
+   */
+  imageSessionAuthority?: ImageSessionAuthority;
   /**
    * AI-5E SERVER-OWNED PRODUCT-ACCESS AUTHORITY — the ONE production entitlement seam.
    *
@@ -308,6 +320,19 @@ export function mapImageProviderErrorToHttp(error: unknown): {
       return { status: 502, error: "The image provider did not return an image for this recipe. Try generating again.", code: "IMAGE_PROVIDER_NO_IMAGE" };
     case "AUTH":
       return { status: 502, error: "Image generation could not be authorized. Please check the server configuration.", code: "IMAGE_PROVIDER_AUTH" };
+    case "ORG_VERIFICATION_REQUIRED":
+      return {
+        status: 403,
+        error:
+          "Your OpenAI organization must be verified before this image model can be used. Complete organization verification in your OpenAI account settings, then try again.",
+        code: "IMAGE_PROVIDER_ORGANIZATION_UNVERIFIED",
+      };
+    case "UNSUPPORTED_CAPABILITY":
+      return {
+        status: 400,
+        error: "The selected image model is not supported by this provider. Choose a supported model and try again.",
+        code: "IMAGE_PROVIDER_MODEL_UNSUPPORTED",
+      };
     default:
       return undefined;
   }
@@ -401,6 +426,18 @@ export function createApp(opts: CreateAppOptions): express.Express {
   const updateCheckController = createUpdateCheckController({
     installed: { version: RELEASE_VERSION, commit: BUILD_COMMIT, buildTime: BUILD_TIME },
   });
+  // P2-R2: per-client image-session authority. Process-memory only; restart
+  // revokes every session. Hosted/non-loopback deployments fail closed. In
+  // production, image sessions are supported only when the existing global
+  // desktop access gate has a server-held secret; standalone loopback mode is
+  // intentionally disabled because Host/Origin are not authentication.
+  const imageSessionAuthority = opts.imageSessionAuthority ?? new ImageSessionAuthority();
+  const imageSessionDeploymentSupported = isImageSessionDeploymentSupported(process.env, {
+    isProduction: opts.isProduction,
+  });
+  const imageSessionGate = requireImageSession(imageSessionAuthority, {
+    deploymentSupported: imageSessionDeploymentSupported,
+  });
 
   // AI-4E ORIGIN RECEIPT AUTHORITY — ONE instance for THIS application instance.
   //
@@ -493,6 +530,11 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // their dedicated 8 KiB body ceiling is actually enforced (a second
   // `express.json()` after the global 2 MiB parser would be skipped).
   registerSessionKeyRoutes(app);
+  // P2-R1 image-session bootstrap/revoke. No request body is parsed here.
+  registerImageSessionRoutes(app, {
+    authority: imageSessionAuthority,
+    deploymentSupported: imageSessionDeploymentSupported,
+  });
 
   // Middleware for parsing JSON with request size bounds
   app.use(express.json({ limit: "2mb" }));
@@ -2289,19 +2331,17 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // Server-owned representative-image candidate authority (Phase 1): opaque ids,
   // short TTL, bounded count, bound to a SERVER-DERIVED requester identity.
   const representativeImageCandidates = new RepresentativeImageCandidateStore();
-  // Process-random, in-memory salt for requester-id hashing (never persisted).
-  // LIMITATION: requester scope is the trusted client IP (per the configured
-  // proxy policy), so users behind the SAME NAT/proxy-derived IP SHARE a scope.
-  // Appropriate for local-first/single-user use; a shared multi-user deployment
-  // must bind authority to an authenticated user/session instead. See
-  // docs/Representative-Image-Security.md ("Requester scope").
-  const representativeRequesterSalt = cryptoRandomBytes(32);
-  const representativeRequesterId = (req: import("express").Request): string =>
-    createHash("sha256")
-      .update(representativeRequesterSalt)
-      .update(":")
-      .update(getClientIp(req))
-      .digest("hex");
+  // P2-R1: image authority is the SERVER-VERIFIED session id, never the client
+  // IP. Two clients sharing an IP now have independent authorization/preview
+  // scopes. The image-session middleware is applied to every image route below.
+  const imageRequesterId = (req: import("express").Request): string => {
+    const sessionId = imageSessionIdFor(req);
+    if (!sessionId) {
+      // Programming error: an image route was registered without the gate.
+      throw new Error("Image session middleware was not applied to this route.");
+    }
+    return sessionId;
+  };
   // Bounded thumbnail byte cache (strict memory limit; short TTL). Keyed by
   // REQUESTER + candidate so a cache hit can never bypass requester ownership.
   const REPRESENTATIVE_THUMB_CACHE_MAX_ENTRIES = 48;
@@ -2379,7 +2419,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // issues an opaque, single-use confirmation token ONLY for a paid/variable
   // model. Makes ZERO provider inference calls. Gated + rate-limited like the
   // generation route.
-  app.post("/api/recipes/image/quote", requireAiAccessToken, imageGenerateRateLimiter, async (req, res) => {
+  app.post("/api/recipes/image/quote", requireAiAccessToken, imageSessionGate, imageGenerateRateLimiter, async (req, res) => {
     try {
       if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
         return res.status(400).json({ error: "Invalid request payload.", code: "INVALID_REQUEST" });
@@ -2443,7 +2483,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
         // Verified zero price: explicit generation may skip confirmation.
         return res.json(base);
       }
-      const issued = imageGenerationAuthorizations.issue(representativeRequesterId(req), {
+      const issued = imageGenerationAuthorizations.issue(imageRequesterId(req), {
         providerId: imageProvider.id,
         modelId: model,
         credentialSource,
@@ -2487,7 +2527,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // invalid/incapable EXPLICIT user pick ALSO FAILS CLOSED (no provider
   // resolves, ZERO execution) — it never falls back to Gemini or any other
   // provider.
-  app.post("/api/recipes/image/generate", requireAiAccessToken, imageGenerateRateLimiter, async (req, res) => {
+  app.post("/api/recipes/image/generate", routeCancellationMiddleware, requireAiAccessToken, imageSessionGate, imageGenerateRateLimiter, async (req, res) => {
     // Capacity reservation for this in-flight generation. It is released on every
     // path that does not commit it, so a failed/aborted call never leaks capacity.
     let reservation: ImagePreviewReservation | undefined;
@@ -2551,7 +2591,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
       // The reservation is requester-scoped: per-requester and global reservation
       // bounds both apply.
       try {
-        reservation = imagePreviewStore.reserve(MAX_GENERATED_IMAGE_BYTES, representativeRequesterId(req));
+        reservation = imagePreviewStore.reserve(MAX_GENERATED_IMAGE_BYTES, imageRequesterId(req));
       } catch (capacityError: any) {
         if (
           capacityError instanceof PreviewStoreCapacityError ||
@@ -2594,7 +2634,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
         const generateScope = imageVaultScope(validatedRequest.value.vaultSessionId);
         const consumed = imageGenerationAuthorizations.consume(
           rawToken,
-          representativeRequesterId(req),
+          imageRequesterId(req),
           {
             providerId: imageProvider.id,
             modelId: model,
@@ -2621,9 +2661,11 @@ export function createApp(opts: CreateAppOptions): express.Express {
         req.body,
         imageProvider,
         imagePreviewStore,
-        imageModelOverride,
+        // P2: forward the request-disconnect cancellation signal so a departed
+        // client stops the provider call instead of letting it run to timeout.
+        { ...imageModelOverride, signal: cancellationFor(req).controller.signal },
         reservation,
-        representativeRequesterId(req)
+        imageRequesterId(req)
       );
       return res.json(result);
     } catch (error: any) {
@@ -2656,15 +2698,14 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // Streams a transient generated-image preview by opaque token. Multi-read until
   // the token expires; exact safe Content-Type (never caller-supplied MIME);
   // Cache-Control: no-store + nosniff; unknown/expired/foreign-requester tokens
-  // are 404. Records are requester-bound at insert: token possession alone never
-  // crosses requester boundaries (the client-IP/shared-NAT limitation still
-  // applies: co-located requesters share an identity by design).
-  app.get("/api/recipes/image/preview/:token", requireAiAccessToken, imagePreviewRateLimiter, (req, res) => {
+  // are 404. Records are image-SESSION-bound at insert: token possession alone
+  // never crosses session boundaries, even when two clients share one IP.
+  app.get("/api/recipes/image/preview/:token", requireAiAccessToken, imageSessionGate, imagePreviewRateLimiter, (req, res) => {
     const token = String(req.params?.token ?? "");
     if (!token || token.length > 512) {
       return res.status(404).json({ error: "Preview not found." });
     }
-    const record = imagePreviewStore.get(token, representativeRequesterId(req));
+    const record = imagePreviewStore.get(token, imageRequesterId(req));
     if (!record) {
       // Unknown, expired, and foreign-requester tokens are all inaccessible; no
       // state oracle is exposed, so inaccessible previews always return 404.
@@ -2684,12 +2725,12 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // never distinguishes unknown vs removed vs expired vs foreign-requester (no
   // existence oracle). A foreign requester cannot invalidate another requester's
   // record. Gated + rate-limited like the other preview operations.
-  app.delete("/api/recipes/image/preview/:token", requireAiAccessToken, imagePreviewRateLimiter, (req, res) => {
+  app.delete("/api/recipes/image/preview/:token", requireAiAccessToken, imageSessionGate, imagePreviewRateLimiter, (req, res) => {
     const token = String(req.params?.token ?? "");
     if (!token || token.length > 512) {
       return res.status(404).json({ error: "Preview not found." });
     }
-    imagePreviewStore.remove(token, representativeRequesterId(req));
+    imagePreviewStore.remove(token, imageRequesterId(req));
     return res.status(200).json({ ok: true });
   });
 
@@ -2698,7 +2739,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // only approved-license Openverse/Wikimedia candidates are returned. Bounded
   // metadata fetch through the hardened SSRF JSON path; never returns raw
   // upstream errors. Gated + rate-limited; no AI, no generation.
-  app.post("/api/recipes/image/find-representative", requireAiAccessToken, representativeImageSearchRateLimiter, async (req, res) => {
+  app.post("/api/recipes/image/find-representative", requireAiAccessToken, imageSessionGate, representativeImageSearchRateLimiter, async (req, res) => {
     try {
       if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
         return res.status(400).json({ error: "Invalid request payload.", code: "INVALID_REQUEST" });
@@ -2723,7 +2764,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
           code: "IMAGE_QUERY_UNSAFE",
         });
       }
-      const requesterId = representativeRequesterId(req);
+      const requesterId = imageRequesterId(req);
       const found = await searchRepresentativeImages(query);
       const candidates = representativeImageCandidates.insertAll(requesterId, found);
       // The public response contains NO external thumbnail/full-resolution URL.
@@ -2744,10 +2785,11 @@ export function createApp(opts: CreateAppOptions): express.Express {
   app.get(
     "/api/recipes/image/representative-thumbnail/:candidateId",
     requireAiAccessToken,
+    imageSessionGate,
     representativeImageThumbnailRateLimiter,
     async (req, res) => {
       const candidateId = String(req.params?.candidateId ?? "");
-      const requesterId = representativeRequesterId(req);
+      const requesterId = imageRequesterId(req);
       // OWNERSHIP + EXPIRY ARE CHECKED BEFORE ANY CACHE HIT. A cached byte
       // response must never bypass `store.get(candidateId, requesterId)`.
       const owned = representativeImageCandidates.get(candidateId, requesterId);
@@ -2792,7 +2834,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // stored remote URL through the hardened SSRF image path, validates the bytes,
   // CONSUMES the candidate, and stores a short-lived preview token carrying the
   // representative provenance.
-  app.post("/api/recipes/image/select-representative", requireAiAccessToken, representativeImageSelectRateLimiter, async (req, res) => {
+  app.post("/api/recipes/image/select-representative", requireAiAccessToken, imageSessionGate, representativeImageSelectRateLimiter, async (req, res) => {
     try {
       if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
         return res.status(400).json({ error: "Invalid request payload.", code: "INVALID_REQUEST" });
@@ -2800,7 +2842,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
       const candidateId = (req.body as Record<string, unknown>)['candidateId'];
       const selected = await selectRepresentativeImage(candidateId, {
         store: representativeImageCandidates,
-        requesterId: representativeRequesterId(req),
+        requesterId: imageRequesterId(req),
       });
       const metadata = imagePreviewStore.insert({
         bytes: selected.bytes,
@@ -2808,7 +2850,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
         provider: "representative",
         model: selected.provenance.source,
         provenance: selected.provenance,
-      }, representativeRequesterId(req));
+      }, imageRequesterId(req));
       return res.json({
         token: metadata.token,
         contentType: metadata.contentType,

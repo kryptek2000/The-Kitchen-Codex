@@ -310,6 +310,61 @@ describe("BYOK-4 — Gemini probes use a fixed REST path with tiny requests", ()
 // OPENROUTER IMAGE CREDENTIAL: real /api/v1/key semantics (NOT /models)
 // ---------------------------------------------------------------------------
 
+describe("P2 — OpenAI image credential check", () => {
+  it("uses the FIXED /v1/models endpoint (no image generation) and succeeds on { data: [...] }", async () => {
+    const { connectionTest } = await freshModule({ OPENAI_API_KEY: SENTINEL });
+    const stub = stubFetch(200, JSON.stringify({ data: [{ id: "gpt-image-2.6-flare" }] }));
+    try {
+      const result = await connectionTest.runConnectionTest({ providerId: "openai-image", kind: "image" });
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.model).toBe("gpt-image-2.6-flare");
+      // No raw model list / account data is returned.
+      expect(JSON.stringify(result)).not.toContain('"data"');
+    } finally {
+      stub.restore();
+    }
+    expect(stub.calls).toHaveLength(1);
+    expect(stub.calls[0].method).toBe("GET");
+    expect(stub.calls[0].url).toBe("https://api.openai.com/v1/models");
+    expect(stub.calls[0].url).not.toContain("/images/generations");
+  });
+
+  it("a 401 fake key => AUTH failure; malformed bodies => INVALID_RESPONSE", async () => {
+    const { connectionTest } = await freshModule({ OPENAI_API_KEY: SENTINEL });
+    const unauthorized = stubFetch(401, JSON.stringify({ error: { message: "invalid api key" } }));
+    try {
+      const result = await connectionTest.runConnectionTest({ providerId: "openai-image", kind: "image" });
+      expect(result.ok).toBe(false);
+      if (result.ok === false) expect(result.code).toBe("AUTHENTICATION_FAILED");
+    } finally {
+      unauthorized.restore();
+    }
+    for (const body of ["", "not json", "{}", JSON.stringify({ data: null })]) {
+      const stub = stubFetch(200, body);
+      try {
+        const result = await connectionTest.runConnectionTest({ providerId: "openai-image", kind: "image" });
+        expect(result.ok, body).toBe(false);
+        if (result.ok === false) expect(result.code, body).toBe("INVALID_RESPONSE");
+      } finally {
+        stub.restore();
+      }
+    }
+  });
+
+  it("is unavailable without OPENAI_API_KEY and never probes", async () => {
+    const { connectionTest } = await freshModule({});
+    const stub = stubFetch(200, JSON.stringify({ data: [] }));
+    try {
+      const result = await connectionTest.runConnectionTest({ providerId: "openai-image", kind: "image" });
+      expect(result.ok).toBe(false);
+      if (result.ok === false) expect(result.code).toBe("UNAVAILABLE");
+    } finally {
+      stub.restore();
+    }
+    expect(stub.calls).toHaveLength(0);
+  });
+});
+
 describe("BYOK-4 — OpenRouter image credential check", () => {
   it("uses the FIXED /api/v1/key endpoint and succeeds on a valid minimal response", async () => {
     const { connectionTest } = await freshModule({ OPENROUTER_API_KEY: SENTINEL });

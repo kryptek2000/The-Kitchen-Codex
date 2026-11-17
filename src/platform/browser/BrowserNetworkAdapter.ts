@@ -46,6 +46,12 @@ export type FetcherLike = (url: string, init?: RequestInit) => Promise<Response>
 export interface BrowserNetworkAdapterOptions {
   fetchFn?: FetcherLike;
   authorizationHeaders?: () => Record<string, string>;
+  /**
+   * P2-R1: establish a server-verified image session before image API calls.
+   * Enabled by the browser application shell. Unit tests and non-image clients
+   * default to false (no extra request, no behavior change).
+   */
+  imageSessionBootstrap?: boolean;
 }
 
 /** A normalized, minimal request error (no server stack leaked). */
@@ -62,6 +68,9 @@ export class NetworkRequestError extends Error {
 }
 
 const API_PATH = /^\/api\//;
+/** The routes that require the per-client image session. */
+const IMAGE_SESSION_PATH = /^\/api\/recipes\/image\//;
+const IMAGE_SESSION_BOOTSTRAP_PATH = '/api/session/bootstrap';
 
 /** Hard bounds before unrestricted allocation (never render raw error bodies). */
 const MAX_API_PATH_LENGTH = 2048;
@@ -128,14 +137,19 @@ function defaultFetcher(): FetcherLike {
 export class BrowserNetworkAdapter implements NetworkAdapter {
   private readonly fetchFn: FetcherLike;
   private readonly authorizationHeaders: () => Record<string, string>;
+  private readonly imageSessionBootstrap: boolean;
+  /** One lazy bootstrap per adapter instance; reset on 401/session expiry. */
+  private imageSessionReady: Promise<void> | null = null;
 
   constructor(fetchOrOptions: FetcherLike | BrowserNetworkAdapterOptions = {}) {
     if (typeof fetchOrOptions === 'function') {
       this.fetchFn = fetchOrOptions;
       this.authorizationHeaders = () => ({});
+      this.imageSessionBootstrap = false;
     } else {
       this.fetchFn = fetchOrOptions.fetchFn ?? defaultFetcher();
       this.authorizationHeaders = fetchOrOptions.authorizationHeaders ?? (() => ({}));
+      this.imageSessionBootstrap = fetchOrOptions.imageSessionBootstrap === true;
     }
   }
 
@@ -166,6 +180,65 @@ export class BrowserNetworkAdapter implements NetworkAdapter {
       }
     }
     return { ...safe, ...trusted };
+  }
+
+  /** True only for the protected generated/representative image routes. */
+  private needsImageSession(path: string): boolean {
+    return this.imageSessionBootstrap && IMAGE_SESSION_PATH.test(path);
+  }
+
+  /**
+   * P2-R1: server-verified image-session bootstrap. The raw session token is set
+   * by the server as an HttpOnly SameSite=Strict cookie; this client NEVER sees,
+   * stores, or forwards it as a header/URL. One bootstrap per adapter instance is
+   * enough until the server reports the session expired/revoked (401).
+   */
+  private async ensureImageSession(): Promise<void> {
+    if (!this.imageSessionReady) {
+      this.imageSessionReady = (async () => {
+        let res: Response;
+        try {
+          res = await this.fetchFn(IMAGE_SESSION_BOOTSTRAP_PATH, {
+            method: 'POST',
+            headers: this.mergedHeaders({ 'Content-Type': 'application/json' }),
+            body: '{}',
+            credentials: 'same-origin',
+            redirect: 'error',
+          });
+        } catch {
+          throw new NetworkRequestError(0, 'Could not establish an image session.');
+        }
+        if (!res.ok) {
+          throw new NetworkRequestError(
+            res.status,
+            res.status === 403
+              ? 'Image session bootstrap was refused for this origin.'
+              : 'Could not establish an image session.'
+          );
+        }
+      })().catch((err) => {
+        // A failed bootstrap must be retryable by a later user action.
+        this.imageSessionReady = null;
+        throw err;
+      });
+    }
+    await this.imageSessionReady;
+  }
+
+  /**
+   * Fetches an image route with one lazy session bootstrap and at most ONE retry
+   * after a server 401 (expired/revoked session). The retry is safe: middleware
+   * rejects before any provider call. Non-image requests are unchanged.
+   */
+  private async fetchWithImageSession(path: string, init: RequestInit): Promise<Response> {
+    if (!this.needsImageSession(path)) return this.fetchFn(path, init);
+    await this.ensureImageSession();
+    const res = await this.fetchFn(path, init);
+    if (res.status !== 401) return res;
+    // The session may have expired or been revoked mid-flow. Re-bootstrap once.
+    this.imageSessionReady = null;
+    await this.ensureImageSession();
+    return this.fetchFn(path, init);
   }
 
   /**
@@ -228,7 +301,7 @@ export class BrowserNetworkAdapter implements NetworkAdapter {
 
     let res: Response;
     try {
-      res = await this.fetchFn(request.path, init);
+      res = await this.fetchWithImageSession(request.path, init);
     } catch (err) {
       // Transport-level failure (e.g. network down / aborted / redirect
       // rejected). Normalize; no stack, no raw body.
@@ -279,7 +352,7 @@ export class BrowserNetworkAdapter implements NetworkAdapter {
     assertApiPath(path);
     let res: Response;
     try {
-      res = await this.fetchFn(path, {
+      res = await this.fetchWithImageSession(path, {
         method: 'GET',
         // Same endpoint-access authorization as JSON requests. `redirect: 'error'`
         // guarantees the authorization header can never be forwarded off-origin.
@@ -321,7 +394,7 @@ export class BrowserNetworkAdapter implements NetworkAdapter {
     assertApiPath(path);
     let res: Response;
     try {
-      res = await this.fetchFn(path, {
+      res = await this.fetchWithImageSession(path, {
         method: 'POST',
         headers: this.mergedHeaders({ 'Content-Type': 'application/json', ...(options?.headers || {}) }),
         body: JSON.stringify(body),

@@ -724,6 +724,8 @@ describe('licensed representative images — protected selected-preview, free se
     const app = await readFile(join(process.cwd(), 'server/app.ts'), 'utf8');
     const thumbSection = app.slice(app.indexOf('/api/recipes/image/representative-thumbnail'));
     expect(thumbSection).toContain('requireAiAccessToken');
-    expect(thumbSection).toContain('representativeRequesterId');
+    // P2-R1: ownership is the server-verified image SESSION, not the client IP.
+    expect(thumbSection).toContain('imageSessionGate');
+    expect(thumbSection).toContain('imageRequesterId');
   });
 });

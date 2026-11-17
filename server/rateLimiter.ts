@@ -982,6 +982,14 @@ export const sessionKeyStatusRateLimiter = sessionKeyRateLimiter(
   "Too many session key status requests. Please wait a moment before trying again."
 );
 
+/** Image-session bootstrap limiter (default 30/min per client). */
+export const imageSessionBootstrapRateLimiter = sessionKeyRateLimiter(
+  "IMAGE_SESSION_BOOTSTRAP_RATE_LIMIT",
+  30,
+  "imagesessionbootstrap",
+  "Too many image session requests. Please wait a moment before trying again."
+);
+
 /**
  * Explicit OpenRouter capability-verification limiter (v0.8.x). A verification
  * makes a real (free-gated) provider request, so it is tightly bounded to a few

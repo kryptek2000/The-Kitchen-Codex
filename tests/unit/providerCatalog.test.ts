@@ -42,8 +42,13 @@ describe("provider catalog (BYOK-1) — shape and ordering", () => {
   it("lists text providers in registry order then the production image providers", async () => {
     const { catalog } = await freshCatalog({});
     expect(catalog.textProviders.map((p) => p.providerId)).toEqual(["gemini", "openrouter", "deepseek", "openai"]);
-    // Registry order: Gemini image first, OpenRouter Image second (BYOK-3).
-    expect(catalog.imageProviders.map((p) => p.providerId)).toEqual(["gemini-image", "openrouter-image"]);
+    // Registry order: Gemini image first, OpenRouter Image second (BYOK-3),
+    // OpenAI Image third (P2). OpenAI is INERT without OPENAI_API_KEY.
+    expect(catalog.imageProviders.map((p) => p.providerId)).toEqual([
+      "gemini-image",
+      "openrouter-image",
+      "openai-image",
+    ]);
   });
 
   it("exposes strict booleans + truthful storage scope (server_environment; no secret writes)", async () => {
@@ -95,6 +100,16 @@ describe("provider catalog (BYOK-1) — shape and ordering", () => {
       { id: "google/gemini-2.5-flash-image", default: true },
       { id: "bytedance-seed/seedream-4.5", default: false },
     ]);
+    // P2: OpenAI Image exposes exactly its curated set (Flare default).
+    const openAI = catalog.imageProviders.find((p) => p.providerId === "openai-image")!;
+    expect(openAI.imageGeneration).toBe(true);
+    expect(openAI.formats).toEqual(["image/png"]);
+    expect(openAI.maxBytes).toBe(4 * 1024 * 1024);
+    expect(openAI.sessionKeySupported).toBe(true);
+    expect(openAI.models.map((m) => ({ id: m.id, default: m.default }))).toEqual([
+      { id: "gpt-image-2.6-flare", default: true },
+      { id: "gpt-image-2.6-sunburst", default: false },
+    ]);
     // Deterministic: formats stay within the shared generated-image allowlist.
     for (const image of catalog.imageProviders) {
       expect(image.formats.every((f) => ["image/jpeg", "image/png", "image/webp", "image/avif"].includes(f))).toBe(true);
@@ -114,6 +129,8 @@ describe("provider catalog (BYOK-1) — configured/enabled/available mirror the 
     // Gemini image is enabled-but-unconfigured; OpenRouter image is INERT without a key.
     expect(image["gemini-image"]).toMatchObject({ configured: false, enabled: true, available: false });
     expect(image["openrouter-image"]).toMatchObject({ configured: false, enabled: false, available: false });
+    // P2: OpenAI image is INERT (opt-in) without OPENAI_API_KEY.
+    expect(image["openai-image"]).toMatchObject({ configured: false, enabled: false, available: false });
   });
 
   it("all four text keys configured => all text providers available; image providers unaffected", async () => {

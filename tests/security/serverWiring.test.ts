@@ -3,6 +3,7 @@ import http from "http";
 import type { AddressInfo } from "net";
 import { createApp } from "../../server/app.js";
 import { DeterministicImageProvider } from "../../server/ai/imageProvider.js";
+import { bootstrapImageSession } from "../helpers/imageSessionTestClient.js";
 
 describe("Express server wiring", () => {
   let server: http.Server;
@@ -12,6 +13,8 @@ describe("Express server wiring", () => {
   // default (production) app keeps the real Gemini provider.
   let seamServer: http.Server;
   let seamBaseUrl: string;
+  let sessionCookie = "";
+  let seamSessionCookie = "";
 
   beforeAll(async () => {
     // Keep the connection-test limiter from cross-test interference; the
@@ -28,6 +31,8 @@ describe("Express server wiring", () => {
     await new Promise<void>((resolve) => seamServer.listen(0, "127.0.0.1", resolve));
     const seamAddr = seamServer.address() as AddressInfo;
     seamBaseUrl = `http://127.0.0.1:${seamAddr.port}`;
+    sessionCookie = (await bootstrapImageSession(baseUrl)).cookie;
+    seamSessionCookie = (await bootstrapImageSession(seamBaseUrl)).cookie;
   });
 
   afterAll(async () => {
@@ -558,7 +563,7 @@ describe("Express server wiring", () => {
     delete process.env.AI_ENDPOINT_TOKEN;
     const res = await fetch(`${seamBaseUrl}/api/recipes/image/generate`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", Cookie: seamSessionCookie },
       body: JSON.stringify({}),
     });
     expect(res.status).toBe(400);
@@ -574,7 +579,7 @@ describe("Express server wiring", () => {
     try {
       const res = await fetch(`${baseUrl}/api/recipes/image/generate`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Cookie: sessionCookie },
         body: JSON.stringify({ title: "Hearty Soup" }),
       });
       expect(res.status).toBe(503);
@@ -593,7 +598,7 @@ describe("Express server wiring", () => {
     delete process.env.AI_ENDPOINT_TOKEN;
     const res = await fetch(`${seamBaseUrl}/api/recipes/image/generate`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", Cookie: seamSessionCookie },
       body: JSON.stringify({ title: "Hearty Soup", ingredients: ["potato", "leek"], cuisine: "French", recipeContentHash: "a".repeat(64) }),
     });
     expect(res.status).toBe(200);
@@ -616,7 +621,9 @@ describe("Express server wiring", () => {
   it("GET /api/recipes/image/preview/:token streams exact bytes with safe headers", async () => {
     delete process.env.AI_ENDPOINT_TOKEN;
     expect(lastImageToken).toBeTruthy();
-    const res = await fetch(`${seamBaseUrl}/api/recipes/image/preview/${lastImageToken}`);
+    const res = await fetch(`${seamBaseUrl}/api/recipes/image/preview/${lastImageToken}`, {
+      headers: { Cookie: seamSessionCookie },
+    });
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("image/png");
     expect(res.headers.get("cache-control")).toBe("no-store");
@@ -627,16 +634,22 @@ describe("Express server wiring", () => {
     expect(buffer.length).toBe(length);
     // Real PNG container (multi-read allowed).
     expect([...buffer.slice(0, 8)]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-    const second = await fetch(`${seamBaseUrl}/api/recipes/image/preview/${lastImageToken}`);
+    const second = await fetch(`${seamBaseUrl}/api/recipes/image/preview/${lastImageToken}`, {
+      headers: { Cookie: seamSessionCookie },
+    });
     expect(second.status).toBe(200);
   });
 
   it("GET /api/recipes/image/preview rejects unknown tokens and never treats the token as a path", async () => {
     delete process.env.AI_ENDPOINT_TOKEN;
-    const unknown = await fetch(`${baseUrl}/api/recipes/image/preview/${"z".repeat(64)}`);
+    const unknown = await fetch(`${baseUrl}/api/recipes/image/preview/${"z".repeat(64)}`, {
+      headers: { Cookie: sessionCookie },
+    });
     expect(unknown.status).toBe(404);
     // Traversal-shaped tokens are just opaque lookups: no path access.
-    const traversal = await fetch(`${baseUrl}/api/recipes/image/preview/..%2F..%2Fetc%2Fpasswd`);
+    const traversal = await fetch(`${baseUrl}/api/recipes/image/preview/..%2F..%2Fetc%2Fpasswd`, {
+      headers: { Cookie: sessionCookie },
+    });
     expect(traversal.status).toBe(404);
     expect(await traversal.text()).not.toContain("root:");
   });
@@ -657,24 +670,34 @@ describe("Express server wiring", () => {
     delete process.env.AI_ENDPOINT_TOKEN;
     const gen = await fetch(`${seamBaseUrl}/api/recipes/image/generate`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", Cookie: seamSessionCookie },
       body: JSON.stringify({ title: "Hearty Soup" }),
     });
     expect(gen.status).toBe(200);
     const genBody = await gen.json();
     const token = genBody.token as string;
 
-    const first = await fetch(`${seamBaseUrl}/api/recipes/image/preview/${token}`);
+    const first = await fetch(`${seamBaseUrl}/api/recipes/image/preview/${token}`, {
+      headers: { Cookie: seamSessionCookie },
+    });
     expect(first.status).toBe(200);
 
-    const del = await fetch(`${seamBaseUrl}/api/recipes/image/preview/${token}`, { method: "DELETE" });
+    const del = await fetch(`${seamBaseUrl}/api/recipes/image/preview/${token}`, {
+      method: "DELETE",
+      headers: { Cookie: seamSessionCookie },
+    });
     expect(del.status).toBe(200);
 
-    const afterDelete = await fetch(`${seamBaseUrl}/api/recipes/image/preview/${token}`);
+    const afterDelete = await fetch(`${seamBaseUrl}/api/recipes/image/preview/${token}`, {
+      headers: { Cookie: seamSessionCookie },
+    });
     expect(afterDelete.status).toBe(404);
 
     // Unknown/expired tokens: same safe response, no existence oracle.
-    const unknownDel = await fetch(`${seamBaseUrl}/api/recipes/image/preview/${"z".repeat(64)}`, { method: "DELETE" });
+    const unknownDel = await fetch(`${seamBaseUrl}/api/recipes/image/preview/${"z".repeat(64)}`, {
+      method: "DELETE",
+      headers: { Cookie: seamSessionCookie },
+    });
     expect(unknownDel.status).toBe(200);
     expect(await unknownDel.json()).toEqual({ ok: true });
   });

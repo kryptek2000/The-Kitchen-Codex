@@ -34,6 +34,7 @@
 import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
 import {
   fetchSessionKeyStatus,
+  reuseSessionKey,
   revokeSessionKey,
   saveSessionKey,
   testProviderConnection,
@@ -75,6 +76,8 @@ export interface SessionKeyState {
   saveState: 'idle' | 'saving';
   revokeState: 'idle' | 'revoking';
   testState: 'idle' | 'testing';
+  /** P2 explicit cross-surface credential reuse (OpenAI text <-> image). */
+  reuseState: 'idle' | 'reusing';
   testResult?: ConnectionTestView;
   notice?: SessionKeyNotice;
 }
@@ -122,6 +125,7 @@ export class SessionKeyController {
       saveState: 'idle',
       revokeState: 'idle',
       testState: 'idle',
+      reuseState: 'idle',
     };
   }
 
@@ -150,6 +154,7 @@ export class SessionKeyController {
       saveState: 'idle',
       revokeState: 'idle',
       testState: 'idle',
+      reuseState: 'idle',
       testResult: undefined,
       notice: undefined,
       ...patch,
@@ -201,6 +206,7 @@ export class SessionKeyController {
       saveState: 'idle',
       revokeState: 'idle',
       testState: 'idle',
+      reuseState: 'idle',
       testResult: undefined,
       notice: undefined,
     });
@@ -333,6 +339,64 @@ export class SessionKeyController {
     });
   }
 
+  /**
+   * P2: explicitly reuse a live session key from an EXACT related provider (the
+   * OpenAI text/image pair). The server copies within memory; the key never
+   * reaches this client. Never automatic; only a user action calls this.
+   */
+  async reuseFrom(fromProviderId: string): Promise<void> {
+    const generation = this.generation;
+    const providerId = this.state.selectedProviderId;
+    if (!providerId || !fromProviderId || fromProviderId === providerId) return;
+    const epoch = this.beginOperation({ reuseState: 'reusing' });
+    const expectedVersion =
+      this.version && this.version.providerId === providerId ? this.version.version : undefined;
+    let res: Awaited<ReturnType<typeof reuseSessionKey>>;
+    try {
+      res = await reuseSessionKey(this.network, fromProviderId, providerId, expectedVersion);
+    } catch {
+      if (!this.isCurrentOp(epoch, generation, providerId)) return;
+      this.setState({
+        reuseState: 'idle',
+        notice: { kind: 'error', text: 'Could not reuse the session key. Check the connection and try again.' },
+      });
+      return;
+    }
+    if (!this.isCurrentOp(epoch, generation, providerId)) return;
+    if (!res.ok) {
+      const text =
+        res.code === 'SESSION_CREDENTIAL_MISSING'
+          ? 'No session key is saved for Text AI OpenAI yet. Save one there first, or enter a key here.'
+          : res.code === 'VERSION_CONFLICT'
+          ? 'This session key changed. Refresh and try again.'
+          : res.message ?? 'Could not reuse the session key.';
+      this.setState({ reuseState: 'idle', notice: { kind: 'error', text } });
+      return;
+    }
+    let status: StatusRead;
+    try {
+      status = await this.readStatus(providerId);
+    } catch {
+      if (!this.isCurrentOp(epoch, generation, providerId)) return;
+      this.setState({
+        reuseState: 'idle',
+        notice: {
+          kind: 'error',
+          text: 'The key was reused, but the session status could not be confirmed. Refresh and try again.',
+        },
+      });
+      return;
+    }
+    if (!this.isCurrentOp(epoch, generation, providerId)) return;
+    this.version = status.version ? { providerId, version: status.version } : null;
+    this.setState({
+      ...status.patch,
+      apiKey: '',
+      reuseState: 'idle',
+      notice: { kind: 'success', text: 'Session key reused for this provider. It is stored only in server memory.' },
+    });
+  }
+
   /** Revokes the active provider's session key. */
   async revoke(): Promise<void> {
     const generation = this.generation;
@@ -417,7 +481,7 @@ export class SessionKeyController {
     this.disposed = true;
     this.generation += 1;
     this.operationEpoch += 1;
-    this.state = { ...this.state, apiKey: '', testResult: undefined, notice: undefined };
+    this.state = { ...this.state, apiKey: '', testResult: undefined, notice: undefined, reuseState: 'idle' };
     this.listeners.clear();
   }
 }

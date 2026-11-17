@@ -30,6 +30,7 @@ import { DeepSeekProvider } from "./deepSeekProvider.js";
 import { OpenAIProvider } from "./openAIProvider.js";
 import { GeminiImageProvider } from "./geminiImageProvider.js";
 import { OpenRouterImageProvider } from "./openRouterImageProvider.js";
+import { OpenAIImageProvider } from "./openAIImageProvider.js";
 import type { AiProvider } from "./types.js";
 import type { ImageProvider } from "./imageProvider.js";
 
@@ -129,9 +130,10 @@ export function createSessionBoundTextProvider(providerId: string): AiProvider |
 
 /**
  * BYOK-5F: builds a REQUEST-SCOPED IMAGE provider bound to an explicit session
- * credential. Exact image execution IDs only (`gemini-image` / `openrouter-image`);
- * text IDs are rejected. Returns `null` for an unsupported id so the caller fails
- * closed rather than falling back to the environment credential.
+ * credential. Exact image execution IDs only (`gemini-image` /
+ * `openrouter-image` / `openai-image`); text IDs are rejected. Returns `null`
+ * for an unsupported id so the caller fails closed rather than falling back to
+ * the environment credential.
  */
 export function createCredentialBoundImageProvider(
   providerId: string,
@@ -142,6 +144,8 @@ export function createCredentialBoundImageProvider(
       return new GeminiImageProvider({ credential });
     case "openrouter-image":
       return new OpenRouterImageProvider({ credential });
+    case "openai-image":
+      return new OpenAIImageProvider({ credential });
     default:
       return null;
   }
@@ -149,7 +153,7 @@ export function createCredentialBoundImageProvider(
 
 /** True when a session credential can be safely bound to an IMAGE provider. */
 export function supportsSessionBoundImageProvider(providerId: string): boolean {
-  return providerId === "gemini-image" || providerId === "openrouter-image";
+  return providerId === "gemini-image" || providerId === "openrouter-image" || providerId === "openai-image";
 }
 
 /**

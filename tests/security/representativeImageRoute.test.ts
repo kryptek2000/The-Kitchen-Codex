@@ -21,6 +21,7 @@ vi.mock('../../server/representativeImage.js', async (importOriginal) => {
 
 import { createApp } from '../../server/app.js';
 import * as rep from '../../server/representativeImage.js';
+import { bootstrapImageSession } from '../helpers/imageSessionTestClient.js';
 
 const searchMock = rep.searchRepresentativeImages as unknown as ReturnType<typeof vi.fn>;
 const selectMock = rep.selectRepresentativeImage as unknown as ReturnType<typeof vi.fn>;
@@ -45,11 +46,13 @@ const FOUND = [
 
 let server: http.Server;
 let baseUrl: string;
+let sessionA: string;
+let sessionB: string;
 
 async function post(path: string, body: unknown, headers: Record<string, string> = {}) {
   const res = await fetch(`${baseUrl}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...headers },
+    headers: { 'Content-Type': 'application/json', Cookie: sessionA, ...headers },
     body: JSON.stringify(body),
   });
   let json: any;
@@ -61,12 +64,28 @@ async function post(path: string, body: unknown, headers: Record<string, string>
   return { status: res.status, json };
 }
 
+async function get(path: string, headers: Record<string, string> = {}) {
+  const res = await fetch(`${baseUrl}${path}`, {
+    headers: { Cookie: sessionA, ...headers },
+  });
+  let json: any;
+  try {
+    json = await res.json();
+  } catch {
+    json = undefined;
+  }
+  return { status: res.status, json, headers: res.headers };
+}
+
 beforeAll(async () => {
   process.env.TRUST_PROXY = '1';
   const app = createApp({ isProduction: false });
   server = http.createServer(app);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  // Two independent sessions from the SAME loopback IP.
+  sessionA = (await bootstrapImageSession(baseUrl)).cookie;
+  sessionB = (await bootstrapImageSession(baseUrl)).cookie;
 });
 
 afterAll(async () => {
@@ -224,7 +243,7 @@ describe('GET /api/recipes/image/representative-thumbnail/:candidateId', () => {
     const search = await post('/api/recipes/image/find-representative', { title: 'Burger' });
     const id = search.json.candidates[0].id;
     thumbMock.mockResolvedValue({ bytes: PNG, contentType: 'image/png' });
-    const res = await fetch(`${baseUrl}/api/recipes/image/representative-thumbnail/${id}`);
+    const res = await get(`/api/recipes/image/representative-thumbnail/${id}`);
     expect(res.status).toBe(200);
     expect(res.headers.get('x-content-type-options')).toBe('nosniff');
     expect(res.headers.get('cache-control')).toContain('private');
@@ -233,54 +252,50 @@ describe('GET /api/recipes/image/representative-thumbnail/:candidateId', () => {
 
   it('returns an identical 404 for unknown candidates (no existence oracle)', async () => {
     thumbMock.mockRejectedValue(new rep.RepresentativeImageSelectionError('CANDIDATE_NOT_FOUND', 'nope'));
-    const res = await fetch(`${baseUrl}/api/recipes/image/representative-thumbnail/does-not-exist`);
+    const res = await get(`/api/recipes/image/representative-thumbnail/does-not-exist`);
     expect(res.status).toBe(404);
-    const body = await res.json();
-    expect(body.code).toBe('CANDIDATE_NOT_FOUND');
+    expect(res.json.code).toBe('CANDIDATE_NOT_FOUND');
   });
 
-  it('requester A primes the cache; requester B gets not-found and NO cached bytes', async () => {
+  it('same-IP session A primes the cache; session B gets not-found and NO cached bytes', async () => {
     searchMock.mockResolvedValue(FOUND);
-    const xffA = { 'X-Forwarded-For': '10.50.0.1' };
-    const xffB = { 'X-Forwarded-For': '10.50.0.2' };
-    const search = await post('/api/recipes/image/find-representative', { title: 'Burger' }, xffA);
+    const search = await post('/api/recipes/image/find-representative', { title: 'Burger' });
     const id = search.json.candidates[0].id;
     thumbMock.mockResolvedValue({ bytes: PNG, contentType: 'image/png' });
 
     // A primes the cache.
-    const a1 = await fetch(`${baseUrl}/api/recipes/image/representative-thumbnail/${id}`, { headers: xffA });
+    const a1 = await get(`/api/recipes/image/representative-thumbnail/${id}`);
     expect(a1.status).toBe(200);
     expect(thumbMock).toHaveBeenCalledTimes(1);
 
     // A cache hit retains validated MIME/nosniff/cache policy and does NOT fetch again.
-    const a2 = await fetch(`${baseUrl}/api/recipes/image/representative-thumbnail/${id}`, { headers: xffA });
+    const a2 = await get(`/api/recipes/image/representative-thumbnail/${id}`);
     expect(a2.status).toBe(200);
     expect(a2.headers.get('content-type')).toBe('image/png');
     expect(a2.headers.get('x-content-type-options')).toBe('nosniff');
     expect(a2.headers.get('cache-control')).toContain('private');
     expect(thumbMock).toHaveBeenCalledTimes(1);
 
-    // B is a different requester: bounded not-found, no cached bytes, no leak.
-    const b = await fetch(`${baseUrl}/api/recipes/image/representative-thumbnail/${id}`, { headers: xffB });
+    // B is a different SESSION on the same IP: bounded not-found, no cached bytes.
+    const b = await get(`/api/recipes/image/representative-thumbnail/${id}`, { Cookie: sessionB });
     expect(b.status).toBe(404);
-    expect((await b.json()).code).toBe('CANDIDATE_NOT_FOUND');
+    expect(b.json.code).toBe('CANDIDATE_NOT_FOUND');
     expect(thumbMock).toHaveBeenCalledTimes(1);
   });
 
   it('an expired candidate with a cached thumbnail returns not-found', async () => {
     searchMock.mockResolvedValue(FOUND);
-    const xff = { 'X-Forwarded-For': '10.51.0.1' };
-    const search = await post('/api/recipes/image/find-representative', { title: 'Burger' }, xff);
+    const search = await post('/api/recipes/image/find-representative', { title: 'Burger' });
     const id = search.json.candidates[0].id;
     thumbMock.mockResolvedValue({ bytes: PNG, contentType: 'image/png' });
-    expect((await fetch(`${baseUrl}/api/recipes/image/representative-thumbnail/${id}`, { headers: xff })).status).toBe(200);
+    expect((await get(`/api/recipes/image/representative-thumbnail/${id}`)).status).toBe(200);
 
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(Date.now() + 11 * 60 * 1000); // past the 10-minute candidate TTL
     try {
-      const res = await fetch(`${baseUrl}/api/recipes/image/representative-thumbnail/${id}`, { headers: xff });
+      const res = await get(`/api/recipes/image/representative-thumbnail/${id}`);
       expect(res.status).toBe(404);
-      expect((await res.json()).code).toBe('CANDIDATE_NOT_FOUND');
+      expect(res.json.code).toBe('CANDIDATE_NOT_FOUND');
     } finally {
       vi.useRealTimers();
     }

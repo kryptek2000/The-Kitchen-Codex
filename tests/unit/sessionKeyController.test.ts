@@ -268,3 +268,49 @@ describe("BYOK-5F — Session API Key test stays session_only", () => {
     expect(c.getState().testResult?.credentialSource).toBe("session_only");
   });
 });
+
+describe("P2 — explicit OpenAI text/image session-key reuse", () => {
+  const IMAGE_PROVIDERS: SessionKeyProviderOption[] = [
+    { providerId: "openai-image", name: "OpenAI Image", kind: "image", models: [{ id: "gpt-image-2.6-flare", default: true }] },
+  ];
+
+  it("reuseFrom POSTs the exact pair, clears the typed key, and reports success", async () => {
+    const { network, pending } = makeNetwork();
+    const c = new SessionKeyController(network, IMAGE_PROVIDERS, { providerId: "openai-image", modelId: "gpt-image-2.6-flare" });
+    c.setApiKey("typed-but-not-saved");
+    const reuse = c.reuseFrom("openai");
+    const post = pending.find((x) => x.method === "POST" && x.path.endsWith("/session-key/reuse"));
+    expect(post?.body).toEqual({ fromProviderId: "openai", toProviderId: "openai-image" });
+    expect(JSON.stringify(post?.body)).not.toContain("typed-but-not-saved");
+    settleAt(pending, pending.indexOf(post!), {
+      providerId: "openai-image",
+      storageScope: "session_only",
+      configured: true,
+      expiresAt: "EXP",
+      version: "V-IMG",
+    });
+    await flush(); // success triggers a status read
+    settleAt(
+      pending,
+      pending.findIndex((x) => x.method === "GET" && x.path.includes("status")),
+      { providers: [{ providerId: "openai-image", storageScope: "session_only", configured: true, expiresAt: "EXP", version: "V-IMG" }] }
+    );
+    await reuse;
+    expect(c.getState().status).toBe("configured");
+    expect(c.getState().apiKey).toBe("");
+    expect(c.getState().notice?.kind).toBe("success");
+    expect(c.getState().reuseState).toBe("idle");
+  });
+
+  it("a missing source key yields a bounded, actionable error (never a fake success)", async () => {
+    const { network, pending } = makeNetwork();
+    const c = new SessionKeyController(network, IMAGE_PROVIDERS, { providerId: "openai-image" });
+    const reuse = c.reuseFrom("openai");
+    const post = pending.find((x) => x.method === "POST" && x.path.endsWith("/session-key/reuse"));
+    settleAt(pending, pending.indexOf(post!), { code: "SESSION_CREDENTIAL_MISSING", error: "missing" }, 409, false);
+    await reuse;
+    expect(c.getState().status).not.toBe("configured");
+    expect(c.getState().notice?.kind).toBe("error");
+    expect(c.getState().notice?.text).toMatch(/Text AI OpenAI/);
+  });
+});

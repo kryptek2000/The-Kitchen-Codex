@@ -231,15 +231,17 @@ export class RecipeImageProviderClientError extends Error {
 export async function requestGeneratedRecipeImage(
   network: NetworkAdapter,
   body: Record<string, unknown>,
-  confirmationToken?: string
+  confirmationToken?: string,
+  options?: { signal?: AbortSignal }
 ): Promise<GeneratedRecipeImageClientResult> {
   const payload: Record<string, unknown> = confirmationToken
     ? { ...body, confirmationToken }
     : body;
+  const selectionOptions = await buildAiSelectionRequestOptions(undefined, undefined, 'image');
   const res = await network.post<unknown, Record<string, unknown>>(
     GENERATE_RECIPE_IMAGE_PATH,
     payload,
-    await buildAiSelectionRequestOptions(undefined, undefined, 'image')
+    { ...selectionOptions, ...(options?.signal ? { signal: options.signal } : {}) }
   );
   if (!res.ok) {
     const data = (typeof res.data === 'object' && res.data !== null ? res.data : {}) as Record<string, unknown>;
@@ -507,6 +509,12 @@ export interface RecipeImageRecoveryControllerDeps {
 export class RecipeImageRecoveryController {
   private readonly session = createCreateForMeSession();
   private state: RecipeImageRecoveryState = { phase: 'idle' };
+  /**
+   * P2: abort handle for the single in-flight provider generation. Cancel/close
+   * aborts it so the server can stop the upstream provider call; the liveness
+   * epoch still guarantees a late result cannot repopulate UI state.
+   */
+  private generationAbort: AbortController | null = null;
 
   constructor(private readonly deps: RecipeImageRecoveryControllerDeps) {}
 
@@ -638,14 +646,17 @@ export class RecipeImageRecoveryController {
     const confirmationToken = quote?.requiresConfirmation ? quote.confirmationToken : undefined;
     const previousToken = this.state.preview?.token;
     this.setState({ phase: 'generating', message: undefined, conflict: undefined });
+    const abort = new AbortController();
+    this.generationAbort = abort;
     const result = await this.guarded(async () => {
       const contentHash = await support.computeContentHash(recipe);
       const body = buildRecipeImageGenerateRequest(recipe, {
         vaultSessionId: support.vaultSessionId,
         contentHash,
       });
-      return requestGeneratedRecipeImage(this.deps.network, body, confirmationToken);
+      return requestGeneratedRecipeImage(this.deps.network, body, confirmationToken, { signal: abort.signal });
     });
+    if (this.generationAbort === abort) this.generationAbort = null;
     if (result.status === 'dropped') return; // session invalidated: drop
     this.session.setBusy(false);
     if (result.status === 'error') {
@@ -741,6 +752,8 @@ export class RecipeImageRecoveryController {
    */
   async cancel(): Promise<void> {
     const token = this.state.preview?.token;
+    this.generationAbort?.abort();
+    this.generationAbort = null;
     this.session.advance();
     this.resetState();
     if (token) await this.invalidateToken(token);
@@ -749,6 +762,8 @@ export class RecipeImageRecoveryController {
   /** Close: same liveness guarantee as cancel, without needing prior state. */
   close(): void {
     const token = this.state.preview?.token;
+    this.generationAbort?.abort();
+    this.generationAbort = null;
     this.session.advance();
     this.resetState();
     if (token) void this.invalidateToken(token);

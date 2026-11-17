@@ -22,6 +22,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { DEFAULT_GEMINI_IMAGE_MODEL } from "../../server/ai/geminiImageProvider.js";
+import { bootstrapImageSession } from "../helpers/imageSessionTestClient.js";
 
 const generateContentMock = vi.hoisted(() => vi.fn());
 
@@ -66,7 +67,7 @@ let originalFetch: typeof globalThis.fetch;
 async function boot(
   env: Record<string, string>,
   fetchImpl?: typeof fetch
-): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+): Promise<{ baseUrl: string; cookie: string; close: () => Promise<void> }> {
   vi.resetModules(); // fresh registry/selection/geminiClient/module graph for THIS env
   for (const k of ENV_KEYS) delete process.env[k];
   Object.assign(process.env, env);
@@ -76,8 +77,11 @@ async function boot(
   const server = http.createServer(app);
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const addr = server.address() as AddressInfo;
+  const baseUrl = `http://127.0.0.1:${addr.port}`;
+  const session = await bootstrapImageSession(baseUrl, realFetch);
   return {
-    baseUrl: `http://127.0.0.1:${addr.port}`,
+    baseUrl,
+    cookie: session.cookie,
     close: () => new Promise<void>((r) => server.close(() => r())),
   };
 }
@@ -88,12 +92,12 @@ async function boot(
  * the route-level tests whose effective image model is paid/variable.
  */
 async function quoteAndGenerate(
-  app: { baseUrl: string },
+  app: { baseUrl: string; cookie: string },
   body: Record<string, unknown> = REQUEST_BODY
 ): Promise<Response> {
   const quoteRes = await realFetch(`${app.baseUrl}/api/recipes/image/quote`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", Cookie: app.cookie },
     body: JSON.stringify({
       // Canonical quote inputs: the server binds the authorization to these
       // exact fields and recomputes them at generate time.
@@ -108,7 +112,7 @@ async function quoteAndGenerate(
   const quote = (await quoteRes.json()) as { confirmationToken?: string };
   return realFetch(`${app.baseUrl}/api/recipes/image/generate`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", Cookie: app.cookie },
     body: JSON.stringify({
       ...body,
       ...(quote.confirmationToken ? { confirmationToken: quote.confirmationToken } : {}),

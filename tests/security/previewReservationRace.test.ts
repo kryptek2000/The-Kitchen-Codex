@@ -3,6 +3,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { ImagePreviewStore } from "../../server/imagePreviewStore.js";
 import { DeterministicImageProvider } from "../../server/ai/imageProvider.js";
+import { bootstrapImageSession } from "../helpers/imageSessionTestClient.js";
 
 /**
  * B4 — capacity rejection occurs BEFORE provider dispatch (real route,
@@ -26,7 +27,9 @@ async function boot(store: ImagePreviewStore, provider: DeterministicImageProvid
   const server = http.createServer(app);
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const addr = server.address() as AddressInfo;
-  return { baseUrl: `http://127.0.0.1:${addr.port}`, close: () => new Promise<void>((r) => server.close(() => r())) };
+  const baseUrl = `http://127.0.0.1:${addr.port}`;
+  const session = await bootstrapImageSession(baseUrl, realFetch);
+  return { baseUrl, cookie: session.cookie, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
 function countingProvider() {
@@ -55,7 +58,7 @@ describe("B4 — real-route capacity-before-dispatch", () => {
       // Deterministic provider is zero-price: no confirmation token required.
       const first = await realFetch(`${app.baseUrl}/api/recipes/image/generate`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Cookie: app.cookie },
         body: JSON.stringify({ title: "Soup" }),
       });
       expect(first.status).toBe(200);
@@ -63,7 +66,7 @@ describe("B4 — real-route capacity-before-dispatch", () => {
       // Store is now entry-full: the next generation fails BEFORE dispatch.
       const second = await realFetch(`${app.baseUrl}/api/recipes/image/generate`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Cookie: app.cookie },
         body: JSON.stringify({ title: "Soup" }),
       });
       expect(second.status).toBe(503);
@@ -84,7 +87,7 @@ describe("B4 — real-route capacity-before-dispatch", () => {
     try {
       const res = await realFetch(`${app.baseUrl}/api/recipes/image/generate`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Cookie: app.cookie },
         body: JSON.stringify({ title: "Soup" }),
       });
       expect(res.status).toBe(503);

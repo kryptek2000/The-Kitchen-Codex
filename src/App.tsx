@@ -376,7 +376,11 @@ export default function App() {
   // vault adapter is only constructible once a directory handle is connected.
   const settingsAdapter = useMemo(() => createBrowserSettingsAdapter(), []);
   const networkAdapter = useMemo(
-    () => createBrowserNetworkAdapter({ authorizationHeaders: getEndpointAccessHeaders }),
+    () =>
+      createBrowserNetworkAdapter({
+        authorizationHeaders: getEndpointAccessHeaders,
+        imageSessionBootstrap: true,
+      }),
     []
   );
   const voiceService = useMemo(() => createVoiceCache(networkAdapter), [networkAdapter]);
