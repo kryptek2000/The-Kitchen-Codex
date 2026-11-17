@@ -606,6 +606,10 @@ export function RecipeEditorModal({
       servings: !isNaN(parsedServings) && parsedServings > 0 ? parsedServings : undefined,
       difficulty,
       rating,
+      // `isFavorite` is not edited by this modal. Carry it through the
+      // regenerated Markdown so an unrelated visual edit cannot silently turn a
+      // favorite off. Leave it absent for legacy/new recipes without a flag.
+      isFavorite: initialRecipe?.isFavorite,
       // Legacy calories field: store PER-SERVING value (not scaled) for backward compatibility.
       calories: calories.trim() || (parsedCalNum !== undefined ? parsedCalNum.toString() : undefined),
       nutrition: hasNutrition
@@ -1541,6 +1545,15 @@ export function RecipeEditorModal({
       // survive an unrelated structured edit. New recipes use the generated md.
       if (initialRecipe?.rawMarkdown) {
         finalRecipe.rawMarkdown = initialRecipe.rawMarkdown;
+      }
+      if (initialRecipe) {
+        // Preserve the exact pre-edit favorite value (including a legacy absent
+        // value). This field is not edited by the visual form, so the save path
+        // must not reinterpret its omission as an intentional favorite removal.
+        // The write rebase still keeps a newer committed favorite/rating if one
+        // landed while this editor was open. The Raw Markdown tab is intentionally
+        // excluded: an explicit text edit there remains authoritative.
+        finalRecipe.isFavorite = initialRecipe.isFavorite;
       }
     }
 
