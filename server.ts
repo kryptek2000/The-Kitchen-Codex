@@ -1,8 +1,8 @@
-import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { createApp } from "./server/app.js";
+import { installProductionStatic } from "./server/staticAssets.js";
 import { usdaBundleDevAssetMiddleware } from "./server/usdaBundleDevAssets.js";
 import {
   createDeploymentNutritionProductAccessAuthority,
@@ -89,13 +89,10 @@ async function start() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    // Express 5 (path-to-regexp v8) no longer accepts the bare "*" wildcard.
-    // Use an optional splat so the SPA fallback matches the site root (/),
-    // nested client routes, and leaves already-registered /api routes intact.
-    app.get("/{*splat}", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
+    // One guarded static surface: public frontend assets plus the exact approved
+    // Starter image allowlist. Internal bundles, source maps, voice scripts and
+    // unknown asset-like paths never reach express.static.
+    installProductionStatic(app, distPath);
   }
 
   // Bind to HOST: autodetected 0.0.0.0 on Cloud Run/AI Studio, else 127.0.0.1.

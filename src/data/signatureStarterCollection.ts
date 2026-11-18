@@ -16,6 +16,7 @@
  */
 
 import type { MealPlanDay, ShoppingCategoryGroup } from '../types';
+import { STARTER_IMAGE_PATHS } from './starterImageAssets';
 
 export const SIGNATURE_STARTER_COLLECTION_VERSION = 1;
 export const SIGNATURE_STARTER_COLLECTION_SOURCE = 'signature-nine';
@@ -47,9 +48,10 @@ cook_time: 45 mins
 total_time: 18 hrs (including cold retard)
 servings: 8
 difficulty: Hard
-image: "https://images.unsplash.com/photo-1589367920969-ab8e050bbb04?auto=format&fit=crop&w=1200&q=80"
+image: "${STARTER_IMAGE_PATHS['signature-artisan-sourdough-boule']}"
 image_license: Unsplash License
 image_source: Unsplash
+image_source_url: "https://images.unsplash.com/photo-1589367920969-ab8e050bbb04?auto=format&fit=crop&w=1200&q=80"
 starter_id: signature-artisan-sourdough-boule
 starter_version: 1
 starter_collection: signature-nine
@@ -106,9 +108,10 @@ cook_time: 20 mins
 total_time: 35 mins
 servings: 4
 difficulty: Easy
-image: "https://images.unsplash.com/photo-1455619452474-d2be8b1e70cd?auto=format&fit=crop&w=1200&q=80"
+image: "${STARTER_IMAGE_PATHS['signature-thai-green-coconut-curry']}"
 image_license: Unsplash License
 image_source: Unsplash
+image_source_url: "https://images.unsplash.com/photo-1455619452474-d2be8b1e70cd?auto=format&fit=crop&w=1200&q=80"
 starter_id: signature-thai-green-coconut-curry
 starter_version: 1
 starter_collection: signature-nine
@@ -169,9 +172,10 @@ cook_time: 8 hrs
 total_time: 12 hrs (including chashu and egg marinade)
 servings: 4
 difficulty: Hard
-image: "https://images.unsplash.com/photo-1569718212165-3a8278d5f624?auto=format&fit=crop&w=1200&q=80"
+image: "${STARTER_IMAGE_PATHS['signature-tonkotsu-shoyu-ramen']}"
 image_license: Unsplash License
 image_source: Unsplash
+image_source_url: "https://images.unsplash.com/photo-1569718212165-3a8278d5f624?auto=format&fit=crop&w=1200&q=80"
 starter_id: signature-tonkotsu-shoyu-ramen
 starter_version: 1
 starter_collection: signature-nine
@@ -252,9 +256,10 @@ cook_time: 15 mins
 total_time: 25 mins
 servings: 3
 difficulty: Medium
-image: "https://images.unsplash.com/photo-1612874742237-6526221588e3?auto=format&fit=crop&w=1200&q=80"
+image: "${STARTER_IMAGE_PATHS['signature-classic-roman-carbonara']}"
 image_license: Unsplash License
 image_source: Unsplash
+image_source_url: "https://images.unsplash.com/photo-1612874742237-6526221588e3?auto=format&fit=crop&w=1200&q=80"
 starter_id: signature-classic-roman-carbonara
 starter_version: 1
 starter_collection: signature-nine
@@ -310,9 +315,10 @@ cook_time: 12 mins
 total_time: 22 mins
 servings: 4
 difficulty: Easy
-image: "https://images.unsplash.com/photo-1467003909585-2f8a72700288?auto=format&fit=crop&w=1200&q=80"
+image: "${STARTER_IMAGE_PATHS['signature-pan-seared-lemon-herb-salmon']}"
 image_license: Unsplash License
 image_source: Unsplash
+image_source_url: "https://images.unsplash.com/photo-1467003909585-2f8a72700288?auto=format&fit=crop&w=1200&q=80"
 starter_id: signature-pan-seared-lemon-herb-salmon
 starter_version: 1
 starter_collection: signature-nine
@@ -371,9 +377,10 @@ cook_time: 15 mins
 total_time: 35 mins
 servings: 4
 difficulty: Easy
-image: "https://images.unsplash.com/photo-1512621776951-a57141f2eefd?auto=format&fit=crop&w=1200&q=80"
+image: "${STARTER_IMAGE_PATHS['signature-avocado-green-goddess-quinoa-salad']}"
 image_license: Unsplash License
 image_source: Unsplash
+image_source_url: "https://images.unsplash.com/photo-1512621776951-a57141f2eefd?auto=format&fit=crop&w=1200&q=80"
 starter_id: signature-avocado-green-goddess-quinoa-salad
 starter_version: 1
 starter_collection: signature-nine
@@ -441,9 +448,10 @@ cook_time: 20 mins
 total_time: 35 mins
 servings: 4
 difficulty: Medium
-image: "https://images.unsplash.com/photo-1528207776546-365bb710ee93?auto=format&fit=crop&w=1200&q=80"
+image: "${STARTER_IMAGE_PATHS['signature-lemon-ricotta-pancakes-blueberry-compote']}"
 image_license: Unsplash License
 image_source: Unsplash
+image_source_url: "https://images.unsplash.com/photo-1528207776546-365bb710ee93?auto=format&fit=crop&w=1200&q=80"
 starter_id: signature-lemon-ricotta-pancakes-blueberry-compote
 starter_version: 1
 starter_collection: signature-nine
@@ -514,9 +522,10 @@ cook_time: 30 mins
 total_time: 45 mins
 servings: 4
 difficulty: Easy
-image: "https://images.unsplash.com/photo-1551504734-5ee1c4a1479b?auto=format&fit=crop&w=1200&q=80"
+image: "${STARTER_IMAGE_PATHS['signature-smoky-chicken-tinga-tacos']}"
 image_license: Unsplash License
 image_source: Unsplash
+image_source_url: "https://images.unsplash.com/photo-1551504734-5ee1c4a1479b?auto=format&fit=crop&w=1200&q=80"
 starter_id: signature-smoky-chicken-tinga-tacos
 starter_version: 1
 starter_collection: signature-nine
@@ -582,9 +591,10 @@ cook_time: 12 mins
 total_time: 32 mins
 servings: 4
 difficulty: Medium
-image: "https://images.unsplash.com/photo-1606313564200-e75d5e30476c?auto=format&fit=crop&w=1200&q=80"
+image: "${STARTER_IMAGE_PATHS['signature-dark-chocolate-espresso-lava-cakes']}"
 image_license: Unsplash License
 image_source: Unsplash
+image_source_url: "https://images.unsplash.com/photo-1606313564200-e75d5e30476c?auto=format&fit=crop&w=1200&q=80"
 starter_id: signature-dark-chocolate-espresso-lava-cakes
 starter_version: 1
 starter_collection: signature-nine

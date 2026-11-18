@@ -19,6 +19,7 @@
  */
 
 import type { AssetAdapter } from '../application/adapters/AssetAdapter';
+import { isApprovedStarterImagePath, isAppImagesNamespaceRef } from '../data/starterImageAssets';
 
 // ---------------------------------------------------------------------------
 // Image health
@@ -96,6 +97,26 @@ export async function assessRecipeImageHealth(
   // MISSING: absent / undefined / null / blank / whitespace.
   if (isBlank(raw)) {
     return { kind: 'missing', deterministic: true, reason: 'No image is assigned to this recipe.' };
+  }
+
+  // App-owned bundled Starter image: shipped with the application, requires no
+  // Vault scope and no network access.
+  if (isApprovedStarterImagePath(imageRef)) {
+    return {
+      kind: 'valid_local',
+      imageRef,
+      deterministic: true,
+      reason: 'Bundled application image is present and does not require Vault access.',
+    };
+  }
+
+  if (isAppImagesNamespaceRef(imageRef)) {
+    return {
+      kind: 'broken_local',
+      imageRef,
+      deterministic: true,
+      reason: 'The app-image namespace reference is not an approved Starter image.',
+    };
   }
 
   // Remote references: syntax-only classification (zero network I/O).

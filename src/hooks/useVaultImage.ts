@@ -9,7 +9,8 @@ import {
   isRemoteOrDataReference,
   subscribeTemporaryPreviewUrls,
 } from '../utils/assetProvenance';
-import { DEFAULT_FOOD_IMAGES } from '../utils/imageHelper';
+import { DEFAULT_FOOD_IMAGES, resolveBundledStarterImage } from '../utils/imageHelper';
+import { isAppImagesNamespaceRef } from '../data/starterImageAssets';
 import { useVaultAssetScope } from './VaultAssetScopeContext';
 import type { VaultAssetScope } from '../utils/vaultAssets';
 
@@ -26,6 +27,9 @@ function initialDisplayUrl(
   assetScope: VaultAssetScope | null
 ): string {
   if (!imageRef) return fallbackUrl;
+  const bundled = resolveBundledStarterImage(imageRef);
+  if (bundled) return bundled;
+  if (isAppImagesNamespaceRef(imageRef)) return fallbackUrl;
   const clean = cleanImageReference(imageRef);
   if (!clean) return fallbackUrl;
   if (isRemoteOrDataReference(clean)) return clean;
@@ -92,6 +96,9 @@ export function useVaultImage(
     setForCurrent(initialDisplayUrl(imageRef, fallbackUrl, assetScope));
 
     if (!imageRef) return;
+    const bundled = resolveBundledStarterImage(imageRef);
+    if (bundled) return;
+    if (isAppImagesNamespaceRef(imageRef)) return;
     const clean = cleanImageReference(imageRef);
     if (!clean) return;
     if (isRemoteOrDataReference(clean)) return;

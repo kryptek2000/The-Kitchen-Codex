@@ -42,6 +42,7 @@ jobs:
       - name: Install dependencies
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+          ONNXRUNTIME_NODE_INSTALL_CUDA: 'skip'
         run: bun install --frozen-lockfile
 
       - name: Verify complete test-plan coverage
@@ -92,6 +93,7 @@ jobs:
       - name: Install dependencies
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+          ONNXRUNTIME_NODE_INSTALL_CUDA: 'skip'
         run: bun install --frozen-lockfile
 
       - name: Select heavy shard
@@ -140,6 +142,7 @@ jobs:
       - name: Install dependencies
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+          ONNXRUNTIME_NODE_INSTALL_CUDA: 'skip'
         run: bun install --frozen-lockfile
 
       - name: Select security shard
@@ -184,6 +187,7 @@ jobs:
       - name: Install dependencies
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+          ONNXRUNTIME_NODE_INSTALL_CUDA: 'skip'
         run: bun install --frozen-lockfile
 
       - name: Build application

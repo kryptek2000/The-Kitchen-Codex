@@ -76,6 +76,9 @@ jobs:
           echo "N-API headers: $NODE_HEADERS"
 
       - name: Install dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+          ONNXRUNTIME_NODE_INSTALL_CUDA: 'skip'
         run: bun install --frozen-lockfile
 
       - name: Ensure Electron runtime is installed
