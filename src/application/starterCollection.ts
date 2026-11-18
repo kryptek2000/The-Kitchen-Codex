@@ -118,14 +118,21 @@ export function buildSavedStarterCopy(
 ): ObsidianRecipe {
   const starterId = builtIn.builtInId || builtIn.starterId || builtIn.id;
   const fileName = targetPath.split('/').pop() || builtIn.fileName;
+  const sourceImage =
+    builtIn.isBuiltIn && typeof builtIn.frontmatter?.image_source_url === 'string'
+      ? builtIn.frontmatter.image_source_url
+      : undefined;
+  const savedImage = sourceImage || builtIn.image;
   const frontmatter = {
     ...(builtIn.frontmatter || {}),
+    ...(savedImage ? { image: savedImage } : {}),
     starter_id: starterId,
     starter_version: builtIn.starterVersion ?? 1,
     starter_collection: SIGNATURE_STARTER_COLLECTION_SOURCE,
   };
   const copy: ObsidianRecipe = {
     ...builtIn,
+    image: savedImage,
     id: targetPath,
     filePath: targetPath,
     fileName,

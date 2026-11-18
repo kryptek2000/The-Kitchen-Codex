@@ -97,4 +97,25 @@ describe('Signature built-in ownership UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add to favorites' }));
     expect(onToggleFavorite).toHaveBeenCalledWith(builtIn.id);
   });
+
+  it('renders the bundled Starter photograph on the card and detail view', () => {
+    const builtIn = getStarterVaultRecipes()[0];
+    expect(builtIn.image).toMatch(/^\/app-images\/starter\/.+\.jpg$/);
+    const card = render(
+      <RecipeCard
+        recipe={builtIn}
+        onSelectRecipe={vi.fn()}
+        onStartCooking={vi.fn()}
+        onToggleFavorite={vi.fn()}
+        onAddToMealPlan={vi.fn()}
+      />
+    );
+    const cardImage = card.container.querySelector(`img[src="${builtIn.image}"]`);
+    expect(cardImage).toBeTruthy();
+    cleanup();
+
+    detail(builtIn);
+    const hero = screen.getByRole('img', { name: builtIn.title });
+    expect(hero.getAttribute('style')).toContain(builtIn.image as string);
+  });
 });

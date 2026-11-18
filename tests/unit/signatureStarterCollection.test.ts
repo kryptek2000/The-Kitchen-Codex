@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   getSignatureStarterCount,
@@ -104,7 +104,11 @@ describe('Signature Nine collection membership', () => {
       expect(recipe.difficulty, recipe.title).toMatch(/^(Easy|Medium|Hard)$/);
       expect(recipe.category, recipe.title).not.toBe('General');
       expect(recipe.cuisine, recipe.title).not.toBe('General');
-      expect(recipe.image, recipe.title).toMatch(/^https:\/\/images\.unsplash\.com\//);
+      expect(recipe.image, recipe.title).toMatch(/^\/app-images\/starter\/[a-z0-9-]+\.jpg$/);
+      const bundledPath = join(process.cwd(), 'public', recipe.image!.replace(/^\//, ''));
+      expect(existsSync(bundledPath), `${recipe.title} bundled image`).toBe(true);
+      expect(readFileSync(bundledPath).length, `${recipe.title} bundled image bytes`).toBeGreaterThan(1000);
+      expect(recipe.frontmatter?.image_source_url, recipe.title).toMatch(/^https:\/\/images\.unsplash\.com\//);
       expect(recipe.frontmatter?.image_license, recipe.title).toBe('Unsplash License');
       expect(recipe.frontmatter?.starter_collection, recipe.title).toBe('signature-nine');
       expect(recipe.nutrition, recipe.title).toBeUndefined();
@@ -133,7 +137,9 @@ describe('Save to My Vault — explicit copy and duplicate protection', () => {
     expect(result.recipe?.starterId).toBe(builtIn.builtInId);
     expect(result.recipe?.filePath).toBe(starterRecipeSavePath(builtIn));
     expect(result.recipe?.title).toBe(builtIn.title);
-    expect(result.recipe?.image).toBe(builtIn.image);
+    expect(result.recipe?.image).toBe(builtIn.frontmatter?.image_source_url);
+    expect(result.recipe?.rawMarkdown).not.toContain('/app-images/starter/');
+    expect(result.recipe?.rawMarkdown).toContain('image: https://images.unsplash.com/');
     expect(result.recipe?.tags).toEqual(builtIn.tags);
     expect(result.recipe?.ingredients.length).toBe(builtIn.ingredients.length);
     expect(result.recipe?.instructions.length).toBe(builtIn.instructions.length);

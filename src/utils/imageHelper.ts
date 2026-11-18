@@ -1,6 +1,7 @@
 import { syncResolveVaultAssetUrl, cleanImageReference, isImageFile } from './vaultAssets';
 import type { VaultAssetScope } from './vaultAssets';
 import { isBlobReference } from './assetProvenance';
+import { isApprovedStarterImagePath, isAppImagesNamespaceRef } from '../data/starterImageAssets';
 
 /**
  * The Kitchen Codex — Recipe image display helper (Phase 1).
@@ -36,6 +37,24 @@ export const DEFAULT_FOOD_IMAGES: Record<string, string> = {
 };
 
 /**
+ * True only for one exact, canonical app-owned Starter image path. The shared
+ * manifest is the single authority; prefixes, backslashes, encodings, query
+ * strings, fragments and unknown files are never accepted.
+ */
+export function isBundledStarterImageRef(ref?: string): boolean {
+  return isApprovedStarterImagePath(ref);
+}
+
+/**
+ * Resolves an app-owned bundled Starter image to its exact same-origin public
+ * URL. Returns null for every other reference, including Vault-local paths and
+ * remote URLs whose resolution belongs to the existing asset/session boundary.
+ */
+export function resolveBundledStarterImage(ref?: string): string | null {
+  return isApprovedStarterImagePath(ref) ? ref : null;
+}
+
+/**
  * Returns the display image for a recipe.
  *
  * TRUTHFUL BEHAVIOR (Phase 1): only an EXPLICIT recipe image (or a Markdown
@@ -53,6 +72,12 @@ export function getRecipeImage(recipe: {
 }, assetScope?: VaultAssetScope | null): string {
   // 1. Direct explicit image or vault asset path
   if (recipe.image && typeof recipe.image === 'string') {
+    // App-owned Starter images ship with the application and do not depend on
+    // a Vault scope or network access. Only exact manifest paths are accepted.
+    const bundled = resolveBundledStarterImage(recipe.image);
+    if (bundled) return bundled;
+    if (isAppImagesNamespaceRef(recipe.image)) return LOCAL_RECIPE_IMAGE_PLACEHOLDER;
+
     const clean = cleanImageReference(recipe.image);
     if (clean && clean !== 'undefined' && clean !== 'null') {
       // Remote/data references are session-independent. Blob URLs are accepted

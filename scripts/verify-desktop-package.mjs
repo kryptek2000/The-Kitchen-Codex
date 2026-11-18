@@ -46,6 +46,22 @@ fs.accessSync(executable, fs.constants.X_OK);
 requireFile(path.join(appDir, 'dist', 'server.cjs'));
 requireFile(path.join(packagedDesktop, 'native', 'tkc_vault.node'));
 
+// Bundled Starter photography must survive the production build and package.
+const sourceStarterImagesDir = path.join(sourceRoot, 'public', 'app-images', 'starter');
+const packagedStarterImagesDir = path.join(appDir, 'dist', 'app-images', 'starter');
+const starterImages = fs
+  .readdirSync(sourceStarterImagesDir)
+  .filter((name) => /\.(?:jpg|jpeg|png|webp|avif)$/i.test(name))
+  .sort();
+if (starterImages.length === 0) fail('No bundled Starter images found in source public assets.');
+for (const name of starterImages) {
+  const source = requireFile(path.join(sourceStarterImagesDir, name));
+  const packaged = requireFile(path.join(packagedStarterImagesDir, name));
+  if (!fs.readFileSync(source).equals(fs.readFileSync(packaged))) {
+    fail(`Packaged Starter image differs from source: ${name}`);
+  }
+}
+
 const comparedFiles = [
   'main.cjs',
   'preload.cjs',
@@ -108,6 +124,7 @@ const manifest = [
   `fsSafety_sha256=${sha256(path.join(packagedDesktop, 'fsSafety.cjs'))}`,
   `vaultFs_sha256=${sha256(path.join(packagedDesktop, 'vaultFs.cjs'))}`,
   `native_helper_exports=${requiredExports.length}`,
+  `starter_images=${starterImages.length}`,
   'native_self_test=passed',
   `git_sha=${process.env.GITHUB_SHA || 'local'}`,
   `runner_os=${process.env.RUNNER_OS || process.platform}`,
