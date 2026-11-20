@@ -2083,7 +2083,7 @@ onReviewRecipeContextWithAi,
               : result.outcome.candidates.length === 0
                 ? `AI returned usable search wording for ${interpretedCount} ingredient${
                     interpretedCount === 1 ? '' : 's'
-                  }, but no authenticated USDA candidate passed validation. ${remaining}${diagnosticSuffix}`
+                  }. No additional ingredients could be resolved automatically: no authenticated USDA candidate passed validation. ${remaining}${diagnosticSuffix}`
                 : `AI returned usable search wording for ${interpretedCount} ingredient${
                     interpretedCount === 1 ? '' : 's'
                   }. No additional ingredients could be resolved automatically. ${remaining}${diagnosticSuffix}`;
