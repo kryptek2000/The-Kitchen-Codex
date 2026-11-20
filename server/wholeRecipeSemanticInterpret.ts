@@ -82,6 +82,7 @@ import { resolveExecutableTextCandidates } from './ai/effectiveSelection.js';
 import { normalizeProviderError, ProviderOperationError } from './ai/providerErrors.js';
 import type { ProviderDiagnostic, ProviderErrorCode } from './ai/providerErrors.js';
 import { resolveThinkingProviderOptions } from './ai/thinkingPolicy.js';
+import { MODEL_CONFIG } from './modelConfig.js';
 import { logModelAttempt } from './providerDiagnostics.js';
 import type { AiJsonSchema } from './ai/types.js';
 import type { AiCandidate, RegisteredProvider } from './ai/providerRegistry.js';
@@ -713,6 +714,9 @@ export async function interpretWholeRecipeSemantics(
         candidate.provider.generateStructured(prompt, schema, {
           model: candidate.model,
           temperature: 0,
+          // Operation-specific server-owned deadline. Ordinary text operations
+          // retain MODEL_CONFIG.requestTimeoutMs.
+          timeoutMs: MODEL_CONFIG.wholeRecipeSemanticTimeoutMs,
           // Phase 9B-P1: resolved from the EXECUTING candidate (see
           // `server/ai/thinkingPolicy.ts`). The 9B-2C smoke proved the primary
           // Gemini 3.7 Flash candidate rejects a hard-coded `MINIMAL` with HTTP

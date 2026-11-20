@@ -215,7 +215,14 @@ export class OpenRouterProvider implements AiProvider {
     const key = this.requireKey();
     const body = this.buildRequest(prompt, options, schema, execution);
 
-    const timeoutSignal = AbortSignal.timeout(MODEL_CONFIG.requestTimeoutMs);
+    const timeoutMs =
+      typeof options.timeoutMs === "number" &&
+      Number.isFinite(options.timeoutMs) &&
+      options.timeoutMs > 0 &&
+      options.timeoutMs <= 120_000
+        ? options.timeoutMs
+        : MODEL_CONFIG.requestTimeoutMs;
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
     const providerSignal = options.signal ? AbortSignal.any([timeoutSignal, options.signal]) : timeoutSignal;
     let res: OpenRouterFetchResponse;
     try {

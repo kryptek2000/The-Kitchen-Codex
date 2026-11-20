@@ -177,6 +177,14 @@ export class GeminiProvider implements AiProvider {
         ...(options.signal ? { abortSignal: options.signal } : {}),
         responseMimeType: "application/json",
         responseSchema: toGeminiSchema(schema),
+        // Server-owned operation-specific deadline. The SDK merges this with the
+        // client's default httpOptions and applies it to the ACTUAL HTTP attempt.
+        ...(typeof options.timeoutMs === "number" &&
+        Number.isFinite(options.timeoutMs) &&
+        options.timeoutMs > 0 &&
+        options.timeoutMs <= 120_000
+          ? { httpOptions: { timeout: options.timeoutMs } }
+          : {}),
         ...(options.webSearch === true ? { tools: [{ googleSearch: {} }] } : {}),
         ...geminiProviderOptions(options),
       },

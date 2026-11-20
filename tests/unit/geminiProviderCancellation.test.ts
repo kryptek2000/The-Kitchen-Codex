@@ -48,9 +48,10 @@ describe('Gemini caller cancellation', () => {
       markStarted();
       return new Promise(resolve => { resolveRequest = resolve; });
     }) } };
-    const running = new GeminiProvider().generateStructured('return JSON', { type: 'object', properties: {} }, { model: 'gemini-test-model', signal: controller.signal });
+    const running = new GeminiProvider().generateStructured('return JSON', { type: 'object', properties: {} }, { model: 'gemini-test-model', signal: controller.signal, timeoutMs: 45_000 });
     await started;
     expect(request.config.abortSignal).toBe(controller.signal);
+    expect(request.config.httpOptions).toEqual({ timeout: 45_000 });
     controller.abort();
     resolveRequest({ text: '{"late":true}' });
     await expect(running).rejects.toMatchObject({ code: 'CANCELLED' });
