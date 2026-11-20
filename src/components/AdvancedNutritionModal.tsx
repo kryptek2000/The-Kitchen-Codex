@@ -247,6 +247,15 @@ interface AdvancedNutritionModalProps {
   /** Optional AI-assisted USDA resolution (advisory only). */
   ai?: AdvancedNutritionAiUi;
   /**
+   * Visible outcome of the automatic Generate AI pass. Deliberately NOT hidden
+   * inside the secondary manual-AI panel: success, partial coverage, unavailable
+   * AI and timeout/failure must be visible in the primary review experience.
+   */
+  generateAiFeedback?: {
+    readonly kind: 'running' | 'success' | 'partial' | 'unavailable' | 'error';
+    readonly message: string;
+  } | null;
+  /**
    * Optional AI-4D2 explicit recipe-context REVIEW surface. Display + the user's
    * own Accept/Dismiss/Undo actions only. It has no nutrition authority: nothing
    * here changes a match, a portion, a mass, a nutrient, the preview or Apply.
@@ -1030,6 +1039,7 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
   hydratedFromSaved = false,
   apply,
   ai,
+  generateAiFeedback = null,
   recipeContext,
 }) => {
   const shiso = useShiso();
@@ -1261,6 +1271,46 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                 : 'Nothing is changed in your recipe until Apply.'}
             </p>
           </div>
+
+          {/* VISIBLE AUTOMATIC-GENERATE AI FEEDBACK. This is intentionally
+              outside the collapsible manual-AI panel: the user must see whether
+              the Generate-triggered AI pass is running, completed, partially
+              resolved the recipe, was unavailable, or failed/timed out. */}
+          {generateAiFeedback !== null && (
+            <section
+              data-testid="advanced-nutrition-generate-ai-status"
+              role={generateAiFeedback.kind === 'error' ? 'alert' : 'status'}
+              aria-live={generateAiFeedback.kind === 'error' ? 'assertive' : 'polite'}
+              aria-atomic="true"
+              className={
+                generateAiFeedback.kind === 'error'
+                  ? 'rounded-xl border border-amber-500/35 bg-amber-500/10 p-3 space-y-0.5'
+                  : generateAiFeedback.kind === 'success'
+                    ? 'rounded-xl border border-emerald-500/25 bg-emerald-500/10 p-3 space-y-0.5'
+                    : 'rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] p-3 space-y-0.5'
+              }
+            >
+              <p className="text-[13px] font-semibold text-[var(--text-primary,#F3F4F6)]">
+                {generateAiFeedback.kind === 'running'
+                  ? 'AI Advanced Nutrition · interpreting'
+                  : generateAiFeedback.kind === 'error'
+                    ? 'AI Advanced Nutrition · incomplete'
+                    : generateAiFeedback.kind === 'unavailable'
+                      ? 'AI Advanced Nutrition · unavailable'
+                      : generateAiFeedback.kind === 'partial'
+                        ? 'AI Advanced Nutrition · some lines still need review'
+                        : 'AI Advanced Nutrition · complete'}
+              </p>
+              <p className="text-[12px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
+                {generateAiFeedback.message}
+              </p>
+              {generateAiFeedback.kind === 'error' && (
+                <p className="text-[12px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
+                  Deterministic partial nutrition remains available. No provider retry was attempted.
+                </p>
+              )}
+            </section>
+          )}
 
           {/* AI-ASSISTED EXCEPTION RESOLUTION (advisory only; optional and
               SECONDARY). AI suggests food search phrases and bounded amount/count

@@ -693,5 +693,267 @@ describe('Generate — deterministic baseline then ONE AI interpretation pass', 
     expect(handler).not.toHaveBeenCalled();
     // Basic/manual deterministic review remains fully available.
     expect(screen.getByTestId('advanced-nutrition-analyze')).toBeTruthy();
+    // The automatic Generate experience must explain why AI did not run.
+    const feedback = screen.getByTestId('advanced-nutrition-generate-ai-status');
+    expect(feedback.textContent).toMatch(/unavailable/i);
+    expect(feedback.textContent).toMatch(/Deterministic analysis is ready without AI|not available/i);
+  });
+});
+
+describe('Generate — cold start, cancellation, and visible AI outcomes', () => {
+  const AVAILABLE = {
+    available: true,
+    reason: null,
+    refreshing: false,
+    canRetry: false,
+  } as const;
+  const REFRESHING = {
+    available: false,
+    reason: null,
+    refreshing: true,
+    canRetry: true,
+  } as const;
+
+  function emptyHandler() {
+    return vi.fn(async (_args: {
+      readonly rows: ReadonlyArray<Phase4Row>;
+      readonly orchestration?: 'generate';
+    }) => ({
+      ok: true,
+      outcome: EMPTY_FOOD,
+      amounts: EMPTY_AMOUNTS,
+    }));
+  }
+
+  it('preserves ONE Generate AI intent across cold bundle initialization and fires no duplicate', async () => {
+    const handler = emptyHandler();
+    const load = vi.fn();
+    const target = recipe('1 cup berries', 'cold-start');
+    const first = render(
+      <AdvancedNutritionCard
+        recipe={target}
+        session={null}
+        onLoadBundle={load}
+        advancedNutritionAiAvailability={AVAILABLE}
+      />
+    );
+    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
+    expect(load).toHaveBeenCalledTimes(1);
+
+    // The bundle authenticates and the SAME component receives the session.
+    first.rerender(
+      <AdvancedNutritionCard
+        recipe={target}
+        session={session}
+        onLoadBundle={load}
+        onResolveWithAi={handler}
+        advancedNutritionAiAvailability={AVAILABLE}
+      />
+    );
+    await waitFor(() => expect(handler).toHaveBeenCalledTimes(1), { timeout: 5000 });
+    const call = handler.mock.calls[0][0] as { orchestration?: string };
+    expect(call.orchestration).toBe('generate');
+
+    // Re-render and allow effects to settle: the consumed intent must not fire a
+    // second provider request.
+    first.rerender(
+      <AdvancedNutritionCard
+        recipe={target}
+        session={session}
+        onLoadBundle={load}
+        onResolveWithAi={handler}
+        advancedNutritionAiAvailability={AVAILABLE}
+      />
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels the pending Generate AI intent when the user closes during availability refresh', async () => {
+    const handler = emptyHandler();
+    const first = render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup berries', 'close-refresh')}
+        session={session}
+        onResolveWithAi={handler}
+        advancedNutritionAiAvailability={REFRESHING}
+      />
+    );
+    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
+    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await waitFor(() => expect(screen.getByTestId('advanced-nutrition-live-summary')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('advanced-nutrition-close-without-saving'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    // Availability becomes ready only after the user has canceled.
+    first.rerender(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup berries', 'close-refresh')}
+        session={session}
+        onResolveWithAi={handler}
+        advancedNutritionAiAvailability={AVAILABLE}
+      />
+    );
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(handler).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('advanced-nutrition-generate-ai-status')).toBeNull();
+  });
+
+  it('waits for an in-flight availability refresh, then performs exactly one AI pass', async () => {
+    const handler = emptyHandler();
+    const target = recipe('1 cup berries', 'refresh-wait');
+    const first = render(
+      <AdvancedNutritionCard
+        recipe={target}
+        session={session}
+        onResolveWithAi={handler}
+        advancedNutritionAiAvailability={REFRESHING}
+      />
+    );
+    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
+    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await waitFor(() => expect(screen.getByTestId('advanced-nutrition-live-summary')).toBeTruthy());
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(handler).not.toHaveBeenCalled();
+
+    first.rerender(
+      <AdvancedNutritionCard
+        recipe={target}
+        session={session}
+        onResolveWithAi={handler}
+        advancedNutritionAiAvailability={AVAILABLE}
+      />
+    );
+    await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    const feedback = await screen.findByTestId('advanced-nutrition-generate-ai-status');
+    await waitFor(() => expect(feedback.getAttribute('role')).toBe('status'));
+  });
+
+  it('cancels on recipe change before bundle initialization completes', async () => {
+    const handler = emptyHandler();
+    const load = vi.fn();
+    const first = render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup berries', 'recipe-a')}
+        session={null}
+        onLoadBundle={load}
+        advancedNutritionAiAvailability={AVAILABLE}
+      />
+    );
+    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
+    expect(load).toHaveBeenCalledTimes(1);
+
+    // Recipe B replaces A while the bundle is still loading.
+    first.rerender(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup berries', 'recipe-b')}
+        session={session}
+        onLoadBundle={load}
+        onResolveWithAi={handler}
+        advancedNutritionAiAvailability={AVAILABLE}
+      />
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('cancels on unmount while the Generate intent is pending', async () => {
+    const handler = emptyHandler();
+    const load = vi.fn();
+    const first = render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup berries', 'unmount')}
+        session={null}
+        onLoadBundle={load}
+        advancedNutritionAiAvailability={REFRESHING}
+      />
+    );
+    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
+    first.unmount();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('cancels when bundle initialization fails', async () => {
+    const handler = emptyHandler();
+    const target = recipe('1 cup berries', 'bundle-failure');
+    const first = render(
+      <AdvancedNutritionCard
+        recipe={target}
+        session={null}
+        onLoadBundle={vi.fn()}
+        advancedNutritionAiAvailability={AVAILABLE}
+      />
+    );
+    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
+    first.rerender(
+      <AdvancedNutritionCard
+        recipe={target}
+        session={null}
+        onLoadBundle={vi.fn()}
+        bundleStatus="failed"
+        advancedNutritionAiAvailability={AVAILABLE}
+      />
+    );
+    first.rerender(
+      <AdvancedNutritionCard
+        recipe={target}
+        session={session}
+        bundleStatus="failed"
+        onResolveWithAi={handler}
+        advancedNutritionAiAvailability={AVAILABLE}
+      />
+    );
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['503 service failure', 'The selected AI could not complete nutrition interpretation.'],
+    ['504 deadline failure', 'AI assistance failed or timed out. Deterministic partial nutrition remains available.'],
+  ])('shows visible, accessible failure feedback for a %s with no retry', async (_label, failureMessage) => {
+    const handler = vi.fn(async () => ({
+      ok: false,
+      message: failureMessage,
+      outcome: EMPTY_FOOD,
+      amounts: EMPTY_AMOUNTS,
+    }));
+    render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup berries', 'failure')}
+        session={session}
+        onResolveWithAi={handler}
+        advancedNutritionAiAvailability={AVAILABLE}
+      />
+    );
+    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
+    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+
+    const feedback = await screen.findByTestId('advanced-nutrition-generate-ai-status');
+    expect(feedback.getAttribute('role')).toBe('alert');
+    expect(feedback.textContent).toMatch(failureMessage);
+    expect(feedback.textContent).toMatch(/Deterministic partial nutrition remains available/i);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(summaryText()).toMatch(/1 source review/);
+  });
+
+  it('shows visible success/partial feedback without hiding unresolved uncertainty', async () => {
+    const handler = emptyHandler();
+    render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup berries', 'partial-success')}
+        session={session}
+        onResolveWithAi={handler}
+        advancedNutritionAiAvailability={AVAILABLE}
+      />
+    );
+    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
+    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    const feedback = await screen.findByTestId('advanced-nutrition-generate-ai-status');
+    await waitFor(() => expect(feedback.getAttribute('role')).toBe('status'));
+    expect(feedback.textContent).toMatch(/some lines still need review|complete/i);
+    expect(summaryText()).toMatch(/1 source review/);
   });
 });
