@@ -431,6 +431,7 @@ export const WHOLE_RECIPE_SEMANTIC_INSTRUCTIONS: readonly string[] = Object.free
   'Use ordinary cooking knowledge. Ingredients may be separated, combined, recombined, retained, discarded, reserved, divided, transformed, or used as a cooking medium. Work out what actually ends up in the dish and what the recipe means by that line in this context.',
   'Preserve food-defining wording wherever it carries meaning, including in search_phrases.',
   'When the wording genuinely offers a choice, list BOTH readings in alternatives. When the wording is genuinely ambiguous, set ambiguity.ambiguous to true and give short reasons. Never invent a fact to avoid ambiguity, and never silently drop a requested line because it is hard.',
+  'Every target row MUST carry either a usable food identity/search phrase or an explicit non-resolution. If you cannot provide a usable food name or search phrase, set ambiguity.ambiguous to true with a short reason, or provide the explicit alternatives. Never return a target row containing only line_ref and empty/default fields.',
   'The recipe line is AUTHORITY for its own amount: never turn an exact authored quantity into a range, never collapse an authored range into a single scalar, and never invent a quantity for a line that has none.',
   `The amount interpretation kind must be exactly one of: ${AI_ADVANCED_AMOUNT_KINDS.join(', ')}.`,
   `The unit family must be exactly one of: ${AI_ADVANCED_UNIT_FAMILIES.join(', ')}.`,

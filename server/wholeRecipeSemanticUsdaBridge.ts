@@ -35,6 +35,8 @@ import { materializeWholeRecipeInterpretationContext } from './wholeRecipeInterp
 import {
   AI_ADVANCED_CONTRACT_VERSION,
   adaptAiAdvancedInterpretationsForResolution,
+  hasExplicitAiAdvancedNonResolution,
+  hasUsableAiAdvancedSemanticContent,
   sanitizeAiAdvancedInterpretationResponse,
   withholdNonDeterministicAdaptations,
   type AiAdvancedAuthoritativeAmountObservation,
@@ -168,7 +170,46 @@ export function bridgeAuthenticatedSemanticsToAdvisorySuggestions(input: {
   // selects one reading.
   const eligible = withholdNonDeterministicAdaptations({ interpretations, outcome: adapted });
 
-  // --- 5. emit the bounded advisory transport ------------------------------
+  // --- 5. COMPLETE, EXPLICIT PER-TARGET CLASSIFICATION ---------------------
+  // Every accepted canonical interpretation must land in exactly one bounded
+  // bucket: a usable suggestion, a withheld explicit non-resolution, a
+  // source-contradicted quantity, or an inadaptable row. The released adapter
+  // normally does this; this pass guarantees it (and preserves an explicit
+  // ambiguity/alternatives declaration even when the provider supplied no usable
+  // food name or search phrase).
+  const suggestions = [...eligible.suggestions];
+  const withheld = [...eligible.withheld];
+  const contradicted = [...adapted.contradicted];
+  const inadaptable = new Set(adapted.inadaptable);
+  const suggestionRefs = new Set(suggestions.map((entry) => entry.line_ref));
+  const withheldRefs = new Set(withheld.map((entry) => entry.line_ref));
+  const contradictedRefs = new Set(contradicted);
+  for (const interpretation of interpretations) {
+    const ref = interpretation.line_ref;
+    if (
+      suggestionRefs.has(ref) ||
+      withheldRefs.has(ref) ||
+      contradictedRefs.has(ref)
+    ) {
+      continue;
+    }
+    if (hasExplicitAiAdvancedNonResolution(interpretation)) {
+      withheld.push(
+        Object.freeze({
+          line_ref: ref,
+          reason: interpretation.ambiguity.ambiguous === true ? 'ambiguous' : 'alternatives',
+        })
+      );
+      withheldRefs.add(ref);
+      inadaptable.delete(ref);
+      continue;
+    }
+    if (!hasUsableAiAdvancedSemanticContent(interpretation)) {
+      inadaptable.add(ref);
+    }
+  }
+
+  // --- 6. emit the bounded advisory transport ------------------------------
   return Object.freeze({
     ok: true as const,
     authority: 'authenticated_advisory_search_suggestions' as const,
@@ -177,10 +218,10 @@ export function bridgeAuthenticatedSemanticsToAdvisorySuggestions(input: {
     operation_id: consumption.operation_id,
     context_binding: consumption.context_binding,
     request_id: consumption.request_id,
-    suggestions: Object.freeze([...eligible.suggestions]),
-    withheld: Object.freeze([...eligible.withheld]),
-    contradicted: Object.freeze([...adapted.contradicted]),
-    inadaptable: Object.freeze([...adapted.inadaptable]),
+    suggestions: Object.freeze(suggestions),
+    withheld: Object.freeze(withheld),
+    contradicted: Object.freeze(contradicted),
+    inadaptable: Object.freeze([...inadaptable]),
   });
 }
 

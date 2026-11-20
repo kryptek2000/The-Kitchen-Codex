@@ -211,6 +211,24 @@ function mockProvider(): AiProvider {
           ],
         } as never;
       }
+      if (prov.failure === 'empty') {
+        // Structurally valid but semantically empty: only the requested ref.
+        return {
+          contract_version: 'nutrition_ai_advanced_interpretation_v1',
+          interpretations: [{ line_ref: EGG_LINE_REF }],
+        } as never;
+      }
+      if (prov.failure === 'ambiguous-empty') {
+        return {
+          contract_version: 'nutrition_ai_advanced_interpretation_v1',
+          interpretations: [
+            {
+              line_ref: EGG_LINE_REF,
+              ambiguity: { ambiguous: true, reasons: ['yolk or white'] },
+            },
+          ],
+        } as never;
+      }
       if (prov.failure === 'ambiguous') {
         return {
           contract_version: 'nutrition_ai_advanced_interpretation_v1',
@@ -584,6 +602,37 @@ describe('9B-3B — invalid proof yields NO AI-assisted USDA candidate', () => {
 // ---------------------------------------------------------------------------
 // §12 — AMBIGUITY / ALTERNATIVES WITHHOLDING
 // ---------------------------------------------------------------------------
+
+describe('AN-SEM-1 — empty canonical content is explicitly classified', () => {
+  it('a structurally valid but semantically empty interpretation becomes inadaptable, not a suggestion', async () => {
+    prov.failure = 'empty';
+    const envelope = await issue();
+    const bridge = bridgeAuthenticatedSemanticsToAdvisorySuggestions({
+      rawRequest: wholeRecipeRequest(),
+      issuedEnvelope: envelope,
+    });
+    expect(bridge.ok).toBe(true);
+    if (bridge.ok !== true) return;
+    expect(bridge.suggestions).toHaveLength(0);
+    expect(bridge.withheld).toHaveLength(0);
+    expect(bridge.contradicted).toHaveLength(0);
+    expect(bridge.inadaptable).toEqual([EGG_LINE_REF]);
+  }, 60000);
+
+  it('preserves an explicit ambiguity declaration even without a usable food name', async () => {
+    prov.failure = 'ambiguous-empty';
+    const envelope = await issue();
+    const bridge = bridgeAuthenticatedSemanticsToAdvisorySuggestions({
+      rawRequest: wholeRecipeRequest(),
+      issuedEnvelope: envelope,
+    });
+    expect(bridge.ok).toBe(true);
+    if (bridge.ok !== true) return;
+    expect(bridge.suggestions).toHaveLength(0);
+    expect(bridge.inadaptable).toHaveLength(0);
+    expect(bridge.withheld).toEqual([{ line_ref: EGG_LINE_REF, reason: 'ambiguous' }]);
+  }, 60000);
+});
 
 describe('9B-3B — ambiguity remains withheld from USDA discovery', () => {
   it('an ambiguous semantic identity produces NO suggestion', async () => {

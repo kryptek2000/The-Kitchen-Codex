@@ -252,7 +252,7 @@ interface AdvancedNutritionModalProps {
    * AI and timeout/failure must be visible in the primary review experience.
    */
   generateAiFeedback?: {
-    readonly kind: 'running' | 'success' | 'partial' | 'unavailable' | 'error';
+    readonly kind: 'running' | 'success' | 'partial' | 'insufficient' | 'unavailable' | 'error';
     readonly message: string;
   } | null;
   /**
@@ -1299,7 +1299,9 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                       ? 'AI Advanced Nutrition · unavailable'
                       : generateAiFeedback.kind === 'partial'
                         ? 'AI Advanced Nutrition · some lines still need review'
-                        : 'AI Advanced Nutrition · complete'}
+                        : generateAiFeedback.kind === 'insufficient'
+                          ? 'AI Advanced Nutrition · insufficient interpretation'
+                          : 'AI Advanced Nutrition · complete'}
               </p>
               <p className="text-[12px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
                 {generateAiFeedback.message}
