@@ -64,5 +64,20 @@ if (isTopLevelApplicationFrame()) {
       invoke('desktop:writeTextIfUnchanged', root, relative, content, expected),
     mkdir: (root, relative) => invoke('desktop:mkdir', root, relative),
     remove: (root, relative) => invoke('desktop:remove', root, relative),
+
+    // Sign in with ChatGPT plan usage. Tokens remain in the Electron main
+    // process; this bridge exposes only account state and completed text.
+    chatgpt: {
+      status: () => invoke('chatgpt:status'),
+      connect: (options) => invoke('chatgpt:connect', options),
+      cancelConnect: () => invoke('chatgpt:cancelConnect'),
+      reconnect: (accountKey) => invoke('chatgpt:reconnect', accountKey),
+      selectAccount: (accountKey) => invoke('chatgpt:selectAccount', accountKey),
+      disconnect: (accountKey) => invoke('chatgpt:disconnect', accountKey),
+      models: (options) => invoke('chatgpt:models', options),
+      infer: (request) => invoke('chatgpt:infer', request),
+      cancel: (requestId) => invoke('chatgpt:cancel', requestId),
+      manageUsage: () => invoke('chatgpt:manageUsage'),
+    },
   });
 }

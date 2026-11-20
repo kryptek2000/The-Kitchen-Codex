@@ -70,6 +70,15 @@ const comparedFiles = [
   'vaultState.cjs',
   'vaultFs.cjs',
   'native/tkc_vault.node',
+  'chatgpt/config.cjs',
+  'chatgpt/pkce.cjs',
+  'chatgpt/jwt.cjs',
+  'chatgpt/credentialStore.cjs',
+  'chatgpt/errors.cjs',
+  'chatgpt/loopback.cjs',
+  'chatgpt/oauth.cjs',
+  'chatgpt/service.cjs',
+  'chatgpt/safeStorageAdapter.cjs',
 ];
 for (const relative of comparedFiles) {
   const source = requireFile(path.join(sourceRoot, 'desktop', relative));

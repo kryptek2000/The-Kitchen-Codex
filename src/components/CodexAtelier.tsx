@@ -12,17 +12,25 @@ import { ProviderSettings, ProviderStatusPanel, ProviderStatusLoading, ProviderS
 import { fetchProviderStatus } from '../application-ui/providerStatus';
 import { fetchProviderCatalog } from '../application-ui/providerCatalog';
 import LivingLibrary from './LivingLibrary';
+import { ChatGptSubscriptionPanel } from './ChatGptSubscriptionPanel';
+import { getChatGptBridge } from '../platform/desktop/desktopVault';
 import type { ProviderStatusView } from '../application-ui/providerStatus';
 import type { ProviderCatalogView } from '../application-ui/providerCatalog';
 
-type StudioSection = 'overview' | 'providers' | 'library' | 'image';
+type StudioSection = 'overview' | 'providers' | 'library' | 'image' | 'chatgpt';
 
-const SECTIONS: { id: StudioSection; label: string; description: string }[] = [
+const BASE_SECTIONS: { id: StudioSection; label: string; description: string }[] = [
   { id: 'overview', label: 'Overview', description: 'Studio at a glance' },
   { id: 'providers', label: 'Providers', description: 'Text AI selection' },
   { id: 'library', label: 'Living Library', description: 'Model discovery (UD-2C)' },
   { id: 'image', label: 'Image configuration', description: 'Image AI selection' },
 ];
+
+const CHATGPT_SECTION: { id: StudioSection; label: string; description: string } = {
+  id: 'chatgpt',
+  label: 'ChatGPT plan',
+  description: 'Use your ChatGPT subscription',
+};
 
 interface CodexAtelierProps {
   network: NetworkAdapter;
@@ -40,6 +48,26 @@ interface CodexAtelierProps {
  */
 export function CodexAtelier({ network, settings, onTextAiRuntimeChanged }: CodexAtelierProps) {
   const [section, setSection] = useState<StudioSection>('overview');
+  const [chatGptEnabled, setChatGptEnabled] = useState(false);
+
+  useEffect(() => {
+    const bridge = getChatGptBridge();
+    if (!bridge) return;
+    let alive = true;
+    void bridge
+      .status()
+      .then((status) => {
+        if (alive) setChatGptEnabled(Boolean(status?.enabled));
+      })
+      .catch(() => {
+        if (alive) setChatGptEnabled(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const sections = chatGptEnabled ? [...BASE_SECTIONS, CHATGPT_SECTION] : BASE_SECTIONS;
 
   return (
     <section
@@ -68,7 +96,7 @@ export function CodexAtelier({ network, settings, onTextAiRuntimeChanged }: Code
         className="hidden md:block"
       >
         <div className="flex flex-wrap gap-2">
-          {SECTIONS.map((s) => {
+          {sections.map((s) => {
             const active = section === s.id;
             return (
               <button
@@ -104,7 +132,7 @@ export function CodexAtelier({ network, settings, onTextAiRuntimeChanged }: Code
             onChange={(e) => setSection(e.target.value as StudioSection)}
             className="w-full min-h-[48px] bg-[var(--bg-surface,#141414)] border border-[var(--color-control-border,rgba(255,255,255,0.1))] rounded-lg px-3 py-2 text-[13px] text-[var(--text-primary,#F3F4F6)]"
           >
-            {SECTIONS.map((s) => (
+            {sections.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.label} — {s.description}
               </option>
@@ -135,6 +163,7 @@ export function CodexAtelier({ network, settings, onTextAiRuntimeChanged }: Code
             focus="image"
           />
         )}
+        {section === 'chatgpt' && <ChatGptSubscriptionPanel />}
       </div>
     </section>
   );

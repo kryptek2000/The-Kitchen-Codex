@@ -15,7 +15,7 @@
 
 'use strict';
 
-const { app, BrowserWindow, Menu, dialog, ipcMain, session, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, safeStorage, session, shell } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
@@ -38,6 +38,19 @@ const {
   createDesktopVaultState,
   resolveOpenableVault,
 } = require('./vaultState.cjs');
+const { isEnabled: isChatGptSubscriptionEnabled } = require('./chatgpt/config.cjs');
+const { ChatGptCredentialStore } = require('./chatgpt/credentialStore.cjs');
+const { ChatGptOAuthClient } = require('./chatgpt/oauth.cjs');
+const { ChatGptSubscriptionService } = require('./chatgpt/service.cjs');
+const { publicError } = require('./chatgpt/errors.cjs');
+const { createSafeStorageAdapter } = require('./chatgpt/safeStorageAdapter.cjs');
+
+// Electron's Linux auto-detection does not select libsecret under Hyprland.
+// When the experimental integration is explicitly enabled, request the real
+// OS keyring; the credential store still fails closed if it is unavailable.
+if (process.platform === 'linux' && isChatGptSubscriptionEnabled()) {
+  app.commandLine.appendSwitch('password-store', 'gnome-libsecret');
+}
 
 const IS_DEV = !app.isPackaged;
 const APP_ROOT = path.resolve(__dirname, '..');
@@ -57,6 +70,7 @@ let statePath = null;
 let vaultState = null;
 let vaultFs = null;
 let desktopSessionToken = null;
+let chatgptService = null;
 const allowedRoots = new Set();
 const rootIdentities = new Map();
 
@@ -394,6 +408,65 @@ function trustedHandle(channel, handler) {
   });
 }
 
+function chatGptStatus() {
+  return chatgptService
+    ? chatgptService.status()
+    : {
+        enabled: false,
+        secureStorage: false,
+        sessionOnly: true,
+        signInRequiredAfterRestart: true,
+        legacyCredentials: 'none',
+        connected: false,
+        accounts: [],
+        activeAccount: null,
+        models: [],
+        error: null,
+      };
+}
+
+async function chatGptResult(handler) {
+  if (!chatgptService) {
+    return {
+      ok: false,
+      error: {
+        code: 'DISABLED',
+        message: 'The ChatGPT subscription integration is disabled in this build.',
+      },
+    };
+  }
+  try {
+    return { ok: true, value: await handler(chatgptService) };
+  } catch (error) {
+    return { ok: false, error: publicError(error) };
+  }
+}
+
+function initializeChatGptSubscription() {
+  if (!isChatGptSubscriptionEnabled()) return;
+  try {
+    const store = new ChatGptCredentialStore({
+      dir: path.join(app.getPath('userData'), 'chatgpt-subscription'),
+      encryption: createSafeStorageAdapter(safeStorage),
+    });
+    chatgptService = new ChatGptSubscriptionService({
+      enabled: true,
+      store,
+      oauth: new ChatGptOAuthClient(),
+      openExternal: (url) => shell.openExternal(url),
+      logger: (event) => {
+        const code = event && event.code ? ` (${event.code})` : '';
+        const name = event && event.event ? event.event : 'event';
+        console.warn(`[chatgpt] ${name}${code}`);
+      },
+    });
+    chatgptService.init();
+  } catch {
+    chatgptService = null;
+    console.warn('[chatgpt] integration initialization failed');
+  }
+}
+
 function registerIpc() {
   trustedHandle('desktop:getVaultInfo', async () => {
     const state = readState();
@@ -579,6 +652,68 @@ function registerIpc() {
     isPackaged: app.isPackaged,
     userData: app.getPath('userData'),
   }));
+
+  trustedHandle('chatgpt:status', async () => chatGptStatus());
+
+  trustedHandle('chatgpt:connect', async (_event, options) =>
+    chatGptResult((service) =>
+      service.connect({
+        accountKey: typeof options?.accountKey === 'string' ? options.accountKey : undefined,
+        forceConsent: Boolean(options?.forceConsent),
+      })
+    )
+  );
+
+  trustedHandle('chatgpt:cancelConnect', async () =>
+    chatGptResult((service) => ({ cancelled: service.cancelConnect() }))
+  );
+
+  trustedHandle('chatgpt:reconnect', async (_event, accountKey) =>
+    chatGptResult((service) =>
+      service.reconnect(typeof accountKey === 'string' ? accountKey : undefined)
+    )
+  );
+
+  trustedHandle('chatgpt:selectAccount', async (_event, accountKey) =>
+    chatGptResult((service) =>
+      service.selectAccount(typeof accountKey === 'string' ? accountKey : '')
+    )
+  );
+
+  trustedHandle('chatgpt:disconnect', async (_event, accountKey) =>
+    chatGptResult((service) =>
+      service.disconnect(typeof accountKey === 'string' ? accountKey : undefined)
+    )
+  );
+
+  trustedHandle('chatgpt:models', async (_event, options) =>
+    chatGptResult((service) =>
+      service.models(
+        typeof options?.accountKey === 'string' ? options.accountKey : undefined,
+        { force: Boolean(options?.force) }
+      )
+    )
+  );
+
+  trustedHandle('chatgpt:infer', async (_event, request) =>
+    chatGptResult((service) =>
+      service.infer({
+        accountKey: typeof request?.accountKey === 'string' ? request.accountKey : undefined,
+        model: typeof request?.model === 'string' ? request.model : '',
+        input: request?.input,
+        instructions: typeof request?.instructions === 'string' ? request.instructions : undefined,
+        requestId: typeof request?.requestId === 'string' ? request.requestId : undefined,
+      })
+    )
+  );
+
+  trustedHandle('chatgpt:cancel', async (_event, requestId) =>
+    chatGptResult((service) => ({ cancelled: service.cancel(requestId) }))
+  );
+
+  trustedHandle('chatgpt:manageUsage', async () =>
+    chatGptResult((service) => service.manageUsage())
+  );
 }
 
 app.on('second-instance', () => {
@@ -603,6 +738,7 @@ async function boot() {
     app.quit();
     return;
   }
+  initializeChatGptSubscription();
   try {
     await startBackend();
   } catch (error) {
@@ -636,6 +772,11 @@ if (!app.requestSingleInstanceLock()) {
   });
   app.on('before-quit', () => {
     quitting = true;
+    try {
+      chatgptService?.shutdown();
+    } catch {
+      /* best effort */
+    }
     stopBackend();
   });
   app.on('window-all-closed', () => {
