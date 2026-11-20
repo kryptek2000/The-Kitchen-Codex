@@ -6069,6 +6069,13 @@ the existing deterministic amount path is unchanged (it still requires a
 matched food, `needs_amount` status, a selected FDC id, and an authenticated
 compatible portion).
 
+**AN-ARCH-1 cross-reference:** the ONE explicit Generate operation has a
+separate, opt-in `acceptValidatedSemanticMatches` mode described in §65. It
+bypasses this downgrade only when the SAME deterministic confidence contract has
+independently accepted the AI-supplied search phrase and every source-constraint
+veto passes. The default and the manual AI-help action keep the conservative
+rule above unchanged.
+
 ### 42.10 Manual deterministic invariant
 
 Basic manual review and correction remain fully available and are unaffected:
@@ -13239,3 +13246,58 @@ reaches deterministic matching through it. Semantic-origin verification,
 current-context verification, the deterministic matcher handoff and client/UI
 integration all remain **Phase 9B-3**. Phase 9B-2C performs semantic-origin proof
 ISSUANCE and transport only.
+
+---
+
+## 65. AN-ARCH-1 — Generate orchestration (deterministic baseline + AI interpretation)
+
+**Status: implemented; bounded integration, no new nutrition authority.**
+
+The user-facing **Generate Nutrition** action is now the ONE explicit authorization
+for the complete Advanced Nutrition operation. It still runs the existing
+deterministic analyzer first. When that baseline leaves at least one genuinely
+actionable exception, the card hands exactly those rows to the SAME whole-recipe
+AI port the manual "Resolve remaining with AI" control already used. Basic
+Nutrition, an unavailable provider, an in-flight availability refresh, or a
+baseline with no actionable rows performs **no** provider call.
+
+**Orchestration boundary.** `src/components/AdvancedNutritionCard.tsx` binds the
+AI intent to the recipe key and to the baseline run counter at click time. The
+pass fires once, only after that recipe's deterministic analysis has been
+applied, and only while the same editor/session is current. The application
+callback is unchanged in shape: `src/App.tsx` still builds the COMPLETE authored
+recipe (ingredients in authored order, all instructions, exact target refs) and
+`src/application/nutritionAiResolve.ts` still makes at most ONE atomic
+`POST /api/nutrition/resolve-whole-recipe` request. The server still issues and
+verifies its `wsem1` receipt internally; the browser receives advisory search
+wording only.
+
+**Validated semantic acceptance.** The conservative AI-1 rule remains the default:
+an AI agreement may never upgrade a `review_suggested` row into an automatic
+match. The Generate orchestration carries one explicit,
+`acceptValidatedSemanticMatches: true` mode. In that mode a candidate may remain
+automatic only when the SAME deterministic confidence contract independently
+accepts the AI-supplied search phrase and the existing negative-source veto
+passes. Provenance stays `aiAssisted` / `aiAccepted`, never `user_confirmed`
+before Apply. Ambiguous, contradictory, malformed, unknown, or low-confidence
+proposals still produce an offer, an honest unresolved line, or no candidate.
+The manual AI-help action does not set this mode.
+
+**Mass completion after AI identity.** When the deterministic matcher accepts an
+AI-supplied food for a volume line, `resolveFoodsFromAiSuggestions` now reuses the
+SAME deterministic authenticated source-portion selector as the one-click
+analyzer (`selectDeterministicVolumePortionIndex`, moved into
+`phase4/portion.ts`). If exactly one compatible portion proves one mass, the
+candidate carries a bound `PortionChoice`; the card merges it through the existing
+working-state path. The model still supplies no grams. Ambiguous portion weights
+remain a user choice, and count/household/unknown measurements keep their
+existing separate paths.
+
+**Unchanged:** Basic/manual review, authenticated catalog and portion authority,
+AI response sanitization, mid-flight/stale-response guards, offer-first AI mass
+estimates, explicit Apply / Phase 5B persistence, saved-report hydration, and all
+provider/entitlement boundaries. AI-3 estimate offers remain a separate explicit
+user decision because the estimate is a consequential uncertainty, not an
+authenticated value. AI-2C candidate planning remains available as a contract but
+is not wired into the shell; the authenticated whole-recipe path is the production
+consumer.

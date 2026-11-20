@@ -517,7 +517,24 @@ function canonicalRequestableRows(
 export function withholdBelowThresholdAutoAcceptance(input: {
   readonly outcome: AiResolveOutcome;
   readonly issueKinds?: Readonly<Record<string, AiResolutionIssueKind>>;
+  /**
+   * AN-ARCH-1 — explicit Generate orchestration only.
+   *
+   * The ordinary AI-help action keeps the conservative AI-1 rule: an AI
+   * agreement may never upgrade a `review_suggested` row into an automatic one.
+   * The ONE-ACTION Generate flow is different in a bounded, auditable way: the
+   * user asked for the complete Advanced Nutrition operation, and the AI's
+   * search phrase has ALREADY been independently accepted by the SAME
+   * deterministic confidence contract. In that mode the validated candidate may
+   * remain automatic (with `aiAssisted`/`aiAccepted` provenance, never
+   * `user_confirmed`); an invalid, contradictory, ambiguous or low-confidence
+   * proposal is still an offer or is absent entirely.
+   *
+   * Default/false preserves every existing caller and every historical test.
+   */
+  readonly acceptValidatedSemanticMatches?: boolean;
 }): AiResolveOutcome {
+  if (input.acceptValidatedSemanticMatches === true) return input.outcome;
   const kinds = input.issueKinds;
   if (kinds === undefined) return input.outcome;
   let downgraded = false;
@@ -631,6 +648,17 @@ export interface AiResolutionRunArgs extends AiResolutionRequestArgs {
    * would discard the instruction context SHISO reasons over.
    */
   readonly wholeRecipe?: WholeRecipeSemanticSource;
+  /**
+   * AN-ARCH-1 — set ONLY by the explicit Generate orchestration.
+   *
+   * It permits a DETERMINISTICALLY VALIDATED AI semantic match to remain
+   * automatic instead of always being downgraded to a per-row offer for a
+   * `review_suggested` line. It never lets AI author identity, mass or
+   * nutrients: the same catalog, source-constraint veto, confidence contract and
+   * calculator still decide. Default/false preserves the conservative AI-help
+   * behavior and every historical safety pin.
+   */
+  readonly acceptValidatedSemanticMatches?: boolean;
   /** Deterministic parse observations used to reconcile echoed amounts. */
   readonly authoritativeByLineRef?: ReadonlyMap<string, AiAdvancedAuthoritativeAmountObservation>;
 }
@@ -886,7 +914,13 @@ export async function resolveUnresolvedRowsWithAi(
   // AI-1: on the canonical semantic path, an AI-driven automatic acceptance may
   // never upgrade a row the DETERMINISTIC matcher classified `review_suggested`.
   const outcome = canonicalInterpretationPath
-    ? withholdBelowThresholdAutoAcceptance({ outcome: resolvedOutcome, issueKinds })
+    ? withholdBelowThresholdAutoAcceptance({
+        outcome: resolvedOutcome,
+        issueKinds,
+        ...(args.acceptValidatedSemanticMatches === true
+          ? { acceptValidatedSemanticMatches: true }
+          : {}),
+      })
     : resolvedOutcome;
   const amounts =
     amountSuggestions.length > 0 && args.liveRows !== undefined && args.state !== undefined

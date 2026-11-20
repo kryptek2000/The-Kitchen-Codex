@@ -40,9 +40,11 @@ import {
   varietyContradictionCount,
   type IngredientQueryProjection,
 } from '../matching/query';
-import type { MatchChoice, Phase4Row } from './types';
+import type { MatchChoice, Phase4Row, PortionChoice } from './types';
 import type { AdvancedNutritionSession, AdaptedIngredient } from './types';
 import type { AiResolutionSuggestion } from '../aiResolution';
+import { ingredientMeasurement, selectionFromMatchChoice } from './rows';
+import { buildPortionChoice, selectDeterministicVolumePortionIndex } from './portion';
 
 export interface AiResolveCandidate {
   readonly line_ref: string;
@@ -58,6 +60,13 @@ export interface AiResolveCandidate {
   readonly auto: boolean;
   /** Bound manual selection for the ORIGINAL row (no mass; never authoritative). */
   readonly choice: MatchChoice;
+  /**
+   * Deterministically selected authenticated volume portion, present ONLY when
+   * the SAME rule the one-click analyzer uses proves a single compatible mass
+   * for this ingredient's volume. It is a bound working-state choice, never a
+   * model-authored gram value; `undefined` means the user must choose/estimate.
+   */
+  readonly portion?: PortionChoice;
 }
 
 export interface AiResolveOutcome {
@@ -166,6 +175,9 @@ export function resolveFoodsFromAiSuggestions(params: AiResolveParams): AiResolv
       entry.ingredient.original,
     ])
   );
+  const adaptedByRef = new Map(
+    (Array.isArray(params.adapted) ? params.adapted : []).map((entry) => [entry.line_ref, entry])
+  );
   const catalogDigest = session.metadata().catalog_digest;
   const candidates: AiResolveCandidate[] = [];
   const unresolved: string[] = [];
@@ -209,6 +221,56 @@ export function resolveFoodsFromAiSuggestions(params: AiResolveParams): AiResolv
       // review, but it must never receive automatic authority.
       const sourceHasIdentity = row.candidates.length > 0;
       const autoAccepted = sourceHasIdentity && automatic !== undefined;
+      const choice = Object.freeze({
+        kind: 'manual' as const,
+        fdc_id: chosen.fdc_id,
+        review_digest: row.review_digest ?? '',
+        record_digest: candidate.record_digest,
+        catalog_digest: catalogDigest,
+        description: candidate.description,
+        // AI-assisted provenance is DISPLAY-only. `aiAccepted` marks a
+        // deterministic acceptance (automatic authority, NOT user-confirmed);
+        // an offered (below-threshold) candidate omits it so an explicit
+        // "Use this match" becomes a genuine user confirmation.
+        aiAssisted: true,
+        ...(autoAccepted ? { aiAccepted: true } : {}),
+      });
+      // VOLUME MASS COMPLETION. When the AI-supplied identity is accepted by the
+      // deterministic contract, the SAME authenticated source-portion rule the
+      // analyzer uses may prove one mass. This is still deterministic USDA
+      // evidence — no model gram value — and it avoids forcing a second
+      // per-ingredient choice merely because AI (not the analyzer) chose the
+      // food. Count/unknown measurements keep their existing separate paths.
+      let portion: PortionChoice | undefined;
+      if (autoAccepted) {
+        const entry = adaptedByRef.get(suggestion.line_ref);
+        const measurement = entry ? ingredientMeasurement(entry) : undefined;
+        if (
+          entry !== undefined &&
+          measurement !== undefined &&
+          measurement.measurement_kind === 'volume' &&
+          typeof measurement.milliliters === 'number'
+        ) {
+          const portionIndex = selectDeterministicVolumePortionIndex(
+            session,
+            chosen.fdc_id,
+            measurement.milliliters,
+            measurement.raw_unit,
+            row.query
+          );
+          if (portionIndex !== undefined) {
+            const built = buildPortionChoice(session, {
+              lineRef: suggestion.line_ref,
+              ingredient: entry.ingredient,
+              review: row.review,
+              selection: selectionFromMatchChoice(choice, suggestion.line_ref),
+              fdcId: chosen.fdc_id,
+              portionIndex,
+            });
+            if (built.ok) portion = built.choice;
+          }
+        }
+      }
       const bound = Object.freeze({
         line_ref: suggestion.line_ref,
         query,
@@ -216,20 +278,8 @@ export function resolveFoodsFromAiSuggestions(params: AiResolveParams): AiResolv
         description: candidate.description,
         record_digest: candidate.record_digest,
         auto: autoAccepted,
-        choice: Object.freeze({
-          kind: 'manual' as const,
-          fdc_id: chosen.fdc_id,
-          review_digest: row.review_digest ?? '',
-          record_digest: candidate.record_digest,
-          catalog_digest: catalogDigest,
-          description: candidate.description,
-          // AI-assisted provenance is DISPLAY-only. `aiAccepted` marks a
-          // deterministic acceptance (automatic authority, NOT user-confirmed);
-          // an offered (below-threshold) candidate omits it so an explicit
-          // "Use this match" becomes a genuine user confirmation.
-          aiAssisted: true,
-          ...(autoAccepted ? { aiAccepted: true } : {}),
-        }),
+        choice,
+        ...(portion !== undefined ? { portion } : {}),
       });
       if (autoAccepted) {
         found = bound;
