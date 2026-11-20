@@ -62,6 +62,16 @@ export const MODEL_CONFIG = {
    */
   requestTimeoutMs: 25_000,
   /**
+   * Whole-recipe Advanced Nutrition semantic interpretation has a larger,
+   * operation-specific deadline. The model must read the complete bounded recipe
+   * plus instructions and emit one canonical interpretation per target, which
+   * routinely exceeds the ordinary text-request ceiling. This value is
+   * server-owned and is passed to the actual provider request; it is never
+   * derived from recipe data, client headers, or user input. All unrelated text
+   * operations retain `requestTimeoutMs`.
+   */
+  wholeRecipeSemanticTimeoutMs: 45_000,
+  /**
    * Server-owned image-GENERATION timeout (milliseconds). Image generation is
    * routinely slower than a text model response (10-60s for real image models),
    * so it gets its OWN ceiling instead of reusing the 25s TEXT `requestTimeoutMs`
