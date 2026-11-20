@@ -378,6 +378,27 @@ export type AdvancedNutritionAiResolveHandler = (args: {
 }>;
 
 /**
+ * Visible outcome of the automatic Generate AI pass. This is deliberately
+ * separate from the manual AI panel's `aiMessage`: the automatic operation must
+ * report its own completion/failure in the primary Generate experience even
+ * when the secondary review panel is collapsed.
+ */
+export type GenerateAiFeedback =
+  | { readonly kind: 'running'; readonly message: string }
+  | { readonly kind: 'success'; readonly message: string }
+  | { readonly kind: 'partial'; readonly message: string }
+  | { readonly kind: 'unavailable'; readonly message: string }
+  | { readonly kind: 'error'; readonly message: string };
+
+interface AiResolveUiOutcome {
+  readonly ok: boolean;
+  readonly resolvedAutomatically: number;
+  readonly stillNeedReview: number;
+  readonly interpretedCount: number;
+  readonly message: string;
+}
+
+/**
  * The number of advisory suggestions that were actually processed by the local
  * verifiers, derived from the outcome itself. Used as the truthful fallback when
  * the resolver port does not report an explicit count.
@@ -714,6 +735,25 @@ onReviewRecipeContextWithAi,
     readonly baselineRuns: number;
   } | null>(null);
   const generateAiStartedRef = useRef<string | null>(null);
+  /**
+   * The user-visible state of the automatic Generate AI pass. It is distinct
+   * from the manual AI panel because an automatic timeout/failure must be visible
+   * without opening that secondary panel.
+   */
+  const [generateAiFeedback, setGenerateAiFeedback] = useState<GenerateAiFeedback | null>(null);
+
+  /**
+   * Cancels a not-yet-started Generate AI intent and clears its visible status.
+   * It is called only for a genuine cancellation: the user closes the working
+   * editor, the recipe changes, the component unmounts, or bundle
+   * initialization fails. It is NEVER called merely because the editor has not
+   * opened yet during lazy loading.
+   */
+  const cancelGenerateAiIntent = useCallback(() => {
+    setPendingGenerateAi(null);
+    setGenerateAiFeedback(null);
+    generateAiStartedRef.current = null;
+  }, []);
 
   // The saved report renders from this ALREADY-VALIDATED block alone; no USDA
   // session, catalog authentication, or matcher initialization is required.
@@ -746,8 +786,7 @@ onReviewRecipeContextWithAi,
     aiRunningRef.current = false;
     pendingOpenRecipeKey.current = null;
     setPendingGenerateRecipeKey(null);
-    setPendingGenerateAi(null);
-    generateAiStartedRef.current = null;
+    cancelGenerateAiIntent();
     setAiSuggestions({});
     setAiAmountOffers({});
     setAiEstimateOffers({});
@@ -759,6 +798,31 @@ onReviewRecipeContextWithAi,
     setIsSavedReportOpen(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentRecipeKey]);
+
+  /**
+   * BUNDLE-INITIALIZATION FAILURE is a genuine cancellation: no session will
+   * arrive, so no automatic provider call may remain pending.
+   */
+  useEffect(() => {
+    if (bundleStatus === 'failed' || bundleStatus === 'unsupported') {
+      cancelGenerateAiIntent();
+    }
+  }, [bundleStatus, cancelGenerateAiIntent]);
+
+  /**
+   * UNMOUNT is a genuine cancellation. Ref-only cleanup is safe; it invalidates
+   * any in-flight response and prevents a later pending effect from surviving the
+   * component.
+   */
+  useEffect(
+    () => () => {
+      isOpenRef.current = false;
+      aiGeneration.current += 1;
+      aiRequestSeq.current += 1;
+      generateAiStartedRef.current = null;
+    },
+    []
+  );
 
   /**
    * SESSION-AUTHORITY RESET. A different pinned session (bundle authority)
@@ -776,6 +840,7 @@ onReviewRecipeContextWithAi,
     setAiEstimateEvidence({});
     setAiMessage(null);
     setAiRunning(false);
+    setGenerateAiFeedback(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentSessionIdentity]);
 
@@ -1525,6 +1590,7 @@ onReviewRecipeContextWithAi,
     setAiEstimateOffers({});
     setAiEstimateOfferBindings({});
     setAiEstimateEvidence({});
+    setGenerateAiFeedback(null);
     setAiMessage(null);
   };
 
@@ -1543,6 +1609,12 @@ onReviewRecipeContextWithAi,
    * called here: it remains an optional secondary action for rows the
    * deterministic pass cannot resolve. Nothing is written until Apply.
    */
+  /** Genuine user closure: discard any not-yet-started Generate AI intent. */
+  const handleCloseWorkingEditor = useCallback(() => {
+    cancelGenerateAiIntent();
+    setIsOpen(false);
+  }, [cancelGenerateAiIntent]);
+
   const handleGenerate = () => {
     if (savedBlock) {
       setIsSavedReportOpen(true);
@@ -1551,6 +1623,7 @@ onReviewRecipeContextWithAi,
     // Bind the intent to the recipe CURRENT at click time; it is consumed only if
     // that same recipe is still current once the editor is ready.
     generateAiStartedRef.current = null;
+    setGenerateAiFeedback(null);
     setPendingGenerateAi({ recipeKey: currentRecipeKey, baselineRuns: analysisRuns });
     setPendingGenerateRecipeKey(currentRecipeKey);
     openWorkingEditor();
@@ -1699,11 +1772,26 @@ onReviewRecipeContextWithAi,
     async (
       lineRefs?: ReadonlyArray<string>,
       options?: { readonly orchestration?: 'generate' }
-    ) => {
-      if (!session || !adaptation.ok) return;
+    ): Promise<AiResolveUiOutcome> => {
+      if (!session || !adaptation.ok) {
+        return {
+          ok: false,
+          resolvedAutomatically: 0,
+          stillNeedReview: 0,
+          interpretedCount: 0,
+          message: 'Advanced Nutrition cannot analyse this recipe yet.',
+        };
+      }
       if (!onResolveWithAi) {
-        setAiMessage('AI assistance is unavailable. You can continue with USDA search manually.');
-        return;
+        const message = 'AI assistance is unavailable. You can continue with USDA search manually.';
+        setAiMessage(message);
+        return {
+          ok: false,
+          resolvedAutomatically: 0,
+          stillNeedReview: summarizeLiveRows(liveRowsRef.current).actionable,
+          interpretedCount: 0,
+          message,
+        };
       }
       // UNIFIED ACTIONABLE-EXCEPTION ELIGIBILITY: the SAME live projection that
       // renders the ingredient list decides what AI may help with. NEEDS MATCH is
@@ -1714,8 +1802,15 @@ onReviewRecipeContextWithAi,
           ? eligible.filter((row) => lineRefs.includes(row.line_ref))
           : eligible;
       if (targets.length === 0) {
-        setAiMessage('No remaining ingredients need AI assistance.');
-        return;
+        const message = 'No remaining ingredients need AI assistance.';
+        setAiMessage(message);
+        return {
+          ok: true,
+          resolvedAutomatically: 0,
+          stillNeedReview: summarizeLiveRows(liveRowsRef.current).actionable,
+          interpretedCount: 0,
+          message,
+        };
       }
       const issueKinds: Record<string, AiResolutionIssueKind> = {};
       for (const live of liveRowsRef.current) {
@@ -1724,7 +1819,15 @@ onReviewRecipeContextWithAi,
       }
       // SYNCHRONOUS RE-ENTRY GUARD: a rapid double-click must create exactly ONE
       // request (the server rate limiter is only a backstop).
-      if (aiRunningRef.current) return;
+      if (aiRunningRef.current) {
+        return {
+          ok: false,
+          resolvedAutomatically: 0,
+          stillNeedReview: summarizeLiveRows(liveRowsRef.current).actionable,
+          interpretedCount: 0,
+          message: 'AI assistance is already running.',
+        };
+      }
       aiRunningRef.current = true;
       // MID-FLIGHT USER-AUTHORITY SNAPSHOT. For EVERY current row, capture the
       // semantic working choice at the instant the request starts. At apply time
@@ -1778,12 +1881,26 @@ onReviewRecipeContextWithAi,
         // STALE-RESPONSE PROTECTION: a response for a different recipe/session,
         // an older generation, a superseded request, or a closed editor is
         // discarded BEFORE any dispatch/UI mutation.
-        if (!stillCurrent()) return;
+        if (!stillCurrent()) {
+          return {
+            ok: false,
+            resolvedAutomatically: 0,
+            stillNeedReview: summarizeLiveRows(liveRowsRef.current).actionable,
+            interpretedCount: 0,
+            message: 'AI result was discarded because the review changed.',
+          };
+        }
         if (!result.ok) {
-          setAiMessage(
-            result.message ?? 'AI assistance is unavailable. You can continue with USDA search manually.'
-          );
-          return;
+          const message =
+            result.message ?? 'AI assistance is unavailable. You can continue with USDA search manually.';
+          setAiMessage(message);
+          return {
+            ok: false,
+            resolvedAutomatically: 0,
+            stillNeedReview: summarizeLiveRows(liveRowsRef.current).actionable,
+            interpretedCount: 0,
+            message,
+          };
         }
 
         // LOCAL VERIFICATION OUTCOMES ONLY: merge the accepted deterministic
@@ -1882,12 +1999,18 @@ onReviewRecipeContextWithAi,
           // The merged resolutions could NOT be authenticated against the live
           // state, so NOTHING was applied. Never claim success that did not
           // happen.
-          setAiMessage(
+          const message =
             `AI interpreted ${interpretedCount} ingredient${interpretedCount === 1 ? '' : 's'}, ` +
-              'but the authenticated USDA resolutions could not be applied to the review. ' +
-              'No row was changed — continue with USDA search or enter a weight.'
-          );
-          return;
+            'but the authenticated USDA resolutions could not be applied to the review. ' +
+            'No row was changed — continue with USDA search or enter a weight.';
+          setAiMessage(message);
+          return {
+            ok: false,
+            resolvedAutomatically: 0,
+            stillNeedReview: summarizeLiveRows(liveRowsRef.current).actionable,
+            interpretedCount,
+            message,
+          };
         }
 
         // TRUTH COMES FROM THE POST-OPERATION LIVE ROWS. Project the authoritative
@@ -1918,23 +2041,32 @@ onReviewRecipeContextWithAi,
         }
         const stillNeedReview = summarizeLiveRows(afterLiveRows).actionable;
 
-        if (resolvedAutomatically === 0) {
-          setAiMessage(
-            `AI interpreted ${interpretedCount} ingredient${interpretedCount === 1 ? '' : 's'}. ` +
+        const message =
+          resolvedAutomatically === 0
+            ? `AI interpreted ${interpretedCount} ingredient${interpretedCount === 1 ? '' : 's'}. ` +
               'No additional ingredients could be resolved automatically. ' +
               `${stillNeedReview} still need${stillNeedReview === 1 ? 's' : ''} review.`
-          );
-        } else {
-          setAiMessage(
-            `AI interpreted ${interpretedCount} ingredient${interpretedCount === 1 ? '' : 's'}. ` +
+            : `AI interpreted ${interpretedCount} ingredient${interpretedCount === 1 ? '' : 's'}. ` +
               `${resolvedAutomatically} resolved automatically from verified local data. ` +
-              `${stillNeedReview} still need${stillNeedReview === 1 ? 's' : ''} review.`
-          );
-        }
+              `${stillNeedReview} still need${stillNeedReview === 1 ? 's' : ''} review.`;
+        setAiMessage(message);
+        return {
+          ok: true,
+          resolvedAutomatically,
+          stillNeedReview,
+          interpretedCount,
+          message,
+        };
       } catch {
-        if (stillCurrent()) {
-          setAiMessage('AI assistance is unavailable. You can continue with USDA search manually.');
-        }
+        const message = 'AI assistance is unavailable. You can continue with USDA search manually.';
+        if (stillCurrent()) setAiMessage(message);
+        return {
+          ok: false,
+          resolvedAutomatically: 0,
+          stillNeedReview: summarizeLiveRows(liveRowsRef.current).actionable,
+          interpretedCount: 0,
+          message,
+        };
       } finally {
         if (aiRequestSeq.current === seq) {
           aiRunningRef.current = false;
@@ -2272,13 +2404,12 @@ onReviewRecipeContextWithAi,
   useEffect(() => {
     const pending = pendingGenerateAi;
     if (pending === null) return;
-    // A closed editor can never later receive a provider call. If the user
-    // closes while availability is still being reconciled, the intent is spent
-    // without spending a request.
-    if (!isOpen) {
-      setPendingGenerateAi(null);
-      return;
-    }
+    // COLD-START WAIT, NOT CANCELLATION. The working editor is legitimately
+    // closed while the USDA bundle is authenticating. The explicit Generate
+    // intent must survive that interval. Genuine closure/cancellation is handled
+    // by `cancelGenerateAiIntent` through the close action, recipe change,
+    // bundle failure and unmount.
+    if (!isOpen) return;
     if (!session || !adaptation.ok) return;
     if (pending.recipeKey !== adaptation.recipe.recipe_key) {
       setPendingGenerateAi(null);
@@ -2297,9 +2428,52 @@ onReviewRecipeContextWithAi,
     }
     generateAiStartedRef.current = pending.recipeKey;
     setPendingGenerateAi(null);
-    if (!onResolveWithAi || !aiAvailabilityAvailable) return;
-    if (actionableRows.length === 0) return;
-    void handleResolveWithAi(undefined, { orchestration: 'generate' });
+    if (!onResolveWithAi || !aiAvailabilityAvailable) {
+      setGenerateAiFeedback({
+        kind: 'unavailable',
+        message:
+          aiAvailabilityReason ??
+          'AI Advanced Nutrition is unavailable. Deterministic analysis is ready without AI.',
+      });
+      return;
+    }
+    if (actionableRows.length === 0) {
+      setGenerateAiFeedback({
+        kind: 'success',
+        message:
+          'Deterministic analysis resolved every ingredient. No AI interpretation was needed.',
+      });
+      return;
+    }
+    setGenerateAiFeedback({
+      kind: 'running',
+      message: 'AI Advanced Nutrition is interpreting the whole recipe and validating USDA matches…',
+    });
+    const recipeKey = pending.recipeKey;
+    void (async () => {
+      try {
+        const outcome = await handleResolveWithAi(undefined, { orchestration: 'generate' });
+        // Never publish feedback for a recipe the user has left or an editor that
+        // has been closed while the request was in flight.
+        if (identityRef.current.recipeKey !== recipeKey || !isOpenRef.current) return;
+        setGenerateAiFeedback(
+          outcome.ok
+            ? {
+                kind: outcome.stillNeedReview > 0 ? 'partial' : 'success',
+                message: outcome.message,
+              }
+            : { kind: 'error', message: outcome.message }
+        );
+      } catch {
+        if (identityRef.current.recipeKey === recipeKey && isOpenRef.current) {
+          setGenerateAiFeedback({
+            kind: 'error',
+            message:
+              'AI assistance failed or timed out. Deterministic partial nutrition remains available.',
+          });
+        }
+      }
+    })();
   }, [
     pendingGenerateAi,
     isOpen,
@@ -2768,7 +2942,8 @@ onReviewRecipeContextWithAi,
       {session && adaptation.ok && (
         <AdvancedNutritionModal
           isOpen={isOpen}
-          onClose={() => setIsOpen(false)}
+          onClose={handleCloseWorkingEditor}
+          generateAiFeedback={generateAiFeedback}
           title={adaptation.recipe.title}
           assumedServingBasis={servingBasisAssumed}
           session={session}
