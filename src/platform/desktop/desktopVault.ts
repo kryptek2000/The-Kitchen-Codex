@@ -6,9 +6,86 @@
  * preload IPC bridge. No Node APIs are reachable from the renderer.
  */
 
+export interface ChatGptAccountView {
+  accountKey: string;
+  email: string;
+  planEnabled: boolean;
+  signedOut: boolean;
+  active: boolean;
+  savedAt?: string;
+}
+
+export interface ChatGptStatusView {
+  enabled: boolean;
+  secureStorage: boolean;
+  sessionOnly: boolean;
+  signInRequiredAfterRestart: boolean;
+  legacyCredentials: 'none' | 'removed' | 'present_inert';
+  connected: boolean;
+  accounts: ChatGptAccountView[];
+  activeAccount: {
+    accountKey: string;
+    email: string;
+    planEnabled: boolean;
+    scopes: string[];
+    signedOut: boolean;
+    expiresAt: number;
+  } | null;
+  models: Array<{ id: string; name: string }>;
+  error: { code: string; message: string } | null;
+}
+
+export interface ChatGptBridge {
+  status(): Promise<ChatGptStatusView>;
+  connect(options?: { accountKey?: string }): Promise<
+    | { ok: true; value: ChatGptStatusView }
+    | { ok: false; error: { code: string; message: string; manageUsageUrl?: string } }
+  >;
+  cancelConnect(): Promise<
+    | { ok: true; value: { cancelled: boolean } }
+    | { ok: false; error: { code: string; message: string } }
+  >;
+  reconnect(accountKey?: string): Promise<
+    | { ok: true; value: ChatGptStatusView }
+    | { ok: false; error: { code: string; message: string; manageUsageUrl?: string } }
+  >;
+  selectAccount(accountKey: string): Promise<
+    | { ok: true; value: ChatGptStatusView }
+    | { ok: false; error: { code: string; message: string; manageUsageUrl?: string } }
+  >;
+  disconnect(accountKey?: string): Promise<
+    | {
+        ok: true;
+        value: { status: ChatGptStatusView; remoteRevocationConfirmed: boolean };
+      }
+    | { ok: false; error: { code: string; message: string; manageUsageUrl?: string } }
+  >;
+  models(options?: { accountKey?: string; force?: boolean }): Promise<
+    | { ok: true; value: Array<{ id: string; name: string }> }
+    | { ok: false; error: { code: string; message: string; manageUsageUrl?: string } }
+  >;
+  infer(request: {
+    accountKey?: string;
+    model: string;
+    input: Array<{ role: 'user' | 'assistant'; content: string }>;
+    instructions?: string;
+    requestId?: string;
+  }): Promise<
+    | { ok: true; value: { requestId: string; model: string; text: string; completed: true } }
+    | { ok: false; error: { code: string; message: string; manageUsageUrl?: string } }
+  >;
+  cancel(requestId: string): Promise<
+    { ok: true; value: { cancelled: boolean } } | { ok: false; error: { code: string; message: string } }
+  >;
+  manageUsage(): Promise<
+    { ok: true; value: { opened: boolean } } | { ok: false; error: { code: string; message: string } }
+  >;
+}
+
 export interface DesktopBridge {
   isDesktop: true;
   platform: string;
+  chatgpt?: ChatGptBridge;
   getAppInfo(): Promise<{ version: string; platform: string; isPackaged: boolean; userData: string }>;
   getVaultInfo(): Promise<DesktopVaultInfo | null>;
   ensureManagedVault(): Promise<DesktopVaultInfo>;
@@ -60,6 +137,10 @@ export function getDesktopBridge(): DesktopBridge | null {
 
 export function isDesktopRuntime(): boolean {
   return !!getDesktopBridge();
+}
+
+export function getChatGptBridge(): ChatGptBridge | null {
+  return getDesktopBridge()?.chatgpt || null;
 }
 
 function requiredBridge(): DesktopBridge {
