@@ -2711,6 +2711,7 @@ export default function App() {
     liveRows,
     state,
     recipe,
+    orchestration,
   }) => {
     // Phase 9B-3C: build the WHOLE-recipe semantic source from the authored
     // recipe and the SAME deterministic adapter the card already used, so the
@@ -2745,6 +2746,10 @@ export default function App() {
       state,
       capabilities: await resolveEffectiveNutritionCapabilitiesOnce(),
       liveCanonicalInterpretation: true,
+      // AN-ARCH-1: ONLY the explicit Generate operation authorizes a validated
+      // AI semantic match to remain automatic. The manual AI-help action keeps
+      // the conservative below-threshold offer contract unchanged.
+      ...(orchestration === 'generate' ? { acceptValidatedSemanticMatches: true } : {}),
       ...(wholeRecipe !== undefined ? { wholeRecipe } : {}),
     });
   };

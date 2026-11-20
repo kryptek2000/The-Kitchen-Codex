@@ -240,6 +240,10 @@ describe('unified AI exception eligibility — UI', () => {
     const handler = vi.fn(async () => ({ ok: true, outcome: EMPTY_FOOD, amounts: EMPTY_AMOUNTS }));
     render(<AdvancedNutritionCard recipe={recipe('3 garlic cloves, minced')} session={session} onResolveWithAi={handler} />);
     await openAndAnalyze();
+    // Generate now performs the deterministic baseline AND one AI pass. Wait for
+    // that intentional automatic pass before isolating the explicit row action.
+    await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    handler.mockClear();
     fireEvent.click(screen.getByTestId('advanced-nutrition-edit'));
     fireEvent.click(await screen.findByTestId('advanced-nutrition-ai-help'));
     await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
@@ -475,6 +479,10 @@ describe('AI amount offers and post-result feedback — UI', () => {
     const handler = vi.fn(async () => ({ ok: true, outcome: EMPTY_FOOD, amounts: EMPTY_AMOUNTS }));
     render(<AdvancedNutritionCard recipe={recipe('3 garlic cloves, minced')} session={session} onResolveWithAi={handler} />);
     await openAndAnalyze();
+    // Consume the one intentional Generate-triggered AI pass first; the guard
+    // under test is the explicit control's synchronous re-entry guard.
+    await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    handler.mockClear();
     const button = screen.getByTestId('advanced-nutrition-ai-resolve');
     fireEvent.click(button);
     fireEvent.click(button);
@@ -584,5 +592,106 @@ describe('recipe-bound AI lifecycle — needs_amount', () => {
     expect(screen.queryByTestId('advanced-nutrition-ai-message')).toBeNull();
     await openAndAnalyze();
     expect(rowStatusText()).toBe('Needs amount');
+  });
+});
+
+describe('Generate — deterministic baseline then ONE AI interpretation pass', () => {
+  const AVAILABLE = {
+    available: true,
+    reason: null,
+    refreshing: false,
+    canRetry: false,
+  } as const;
+
+  it('automatically invokes the existing whole-recipe AI port after the deterministic baseline leaves an exception', async () => {
+    const handler = vi.fn(async (_args: {
+      readonly rows: ReadonlyArray<Phase4Row>;
+      readonly adapted: ReadonlyArray<AdaptedIngredient>;
+      readonly issueKinds: Record<string, string>;
+      readonly recipe?: ObsidianRecipe;
+      readonly orchestration?: 'generate';
+    }) => ({
+      ok: true,
+      outcome: EMPTY_FOOD,
+      amounts: EMPTY_AMOUNTS,
+    }));
+    render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup berries')}
+        session={session}
+        onResolveWithAi={handler}
+        advancedNutritionAiAvailability={AVAILABLE}
+      />
+    );
+    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
+    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    // The user performed ONE explicit action. The deterministic baseline runs
+    // first, then the SAME AI port the manual button uses receives the
+    // remaining actionable rows for whole-recipe interpretation.
+    await waitFor(() => expect(handler).toHaveBeenCalledTimes(1), { timeout: 5000 });
+    const args = handler.mock.calls[0][0] as {
+      rows: ReadonlyArray<Phase4Row>;
+      adapted: ReadonlyArray<AdaptedIngredient>;
+      issueKinds: Record<string, string>;
+    };
+    expect(args.rows).toHaveLength(1);
+    expect(args.rows[0].original_text).toBe('1 cup berries');
+    expect(args.issueKinds[args.rows[0].line_ref]).toBe('review_suggested');
+    // The authored recipe is forwarded so the existing shell callback can build
+    // the WHOLE-recipe semantic request (ingredients + instructions + targets).
+    expect((args as unknown as { recipe?: { ingredients?: unknown } }).recipe).toBeDefined();
+    // Only this Generate-triggered pass carries the bounded orchestration mode.
+    expect((args as unknown as { orchestration?: string }).orchestration).toBe('generate');
+  });
+
+  it('does not ask AI when the deterministic baseline already resolved every line', async () => {
+    const handler = vi.fn(async () => ({
+      ok: true,
+      outcome: EMPTY_FOOD,
+      amounts: EMPTY_AMOUNTS,
+    }));
+    render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup Mystery, raw')}
+        session={session}
+        onResolveWithAi={handler}
+        advancedNutritionAiAvailability={AVAILABLE}
+      />
+    );
+    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
+    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await waitFor(() => expect(screen.getByTestId('advanced-nutrition-live-summary')).toBeTruthy());
+    expect(summaryText()).toMatch(/1 source-backed/);
+    expect(summaryText()).toMatch(/0 need attention/);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('never calls a provider when the composed availability is Basic/unavailable', async () => {
+    const handler = vi.fn(async () => ({
+      ok: true,
+      outcome: EMPTY_FOOD,
+      amounts: EMPTY_AMOUNTS,
+    }));
+    render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup berries')}
+        session={session}
+        onResolveWithAi={handler}
+        advancedNutritionAiAvailability={{
+          available: false,
+          reason: 'AI Advanced Nutrition is not available.',
+          refreshing: false,
+          canRetry: false,
+        }}
+      />
+    );
+    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
+    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await waitFor(() => expect(screen.getByTestId('advanced-nutrition-live-summary')).toBeTruthy());
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(handler).not.toHaveBeenCalled();
+    // Basic/manual deterministic review remains fully available.
+    expect(screen.getByTestId('advanced-nutrition-analyze')).toBeTruthy();
   });
 });

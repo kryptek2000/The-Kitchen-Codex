@@ -358,6 +358,14 @@ export type AdvancedNutritionAiResolveHandler = (args: {
    * deterministic adapter.
    */
   readonly recipe?: ObsidianRecipe;
+  /**
+   * AN-ARCH-1 — set ONLY for the automatic AI pass that follows the explicit
+   * Generate action. The shell may then keep a DETERMINISTICALLY VALIDATED
+   * semantic match automatic instead of downgrading every `review_suggested`
+   * line to a per-row offer. Manual AI help omits it and keeps the conservative
+   * contract.
+   */
+  readonly orchestration?: 'generate';
 }) => Promise<{
   readonly ok: boolean;
   readonly message?: string;
@@ -690,6 +698,22 @@ onReviewRecipeContextWithAi,
   );
 
   const [pendingGenerateRecipeKey, setPendingGenerateRecipeKey] = useState<string | null>(null);
+  /**
+   * AI ORCHESTRATION INTENT for one explicit Generate request.
+   *
+   * Generate is the user's authorization for the complete Advanced Nutrition
+   * operation: deterministic baseline first, then ONE whole-recipe AI
+   * interpretation pass over whatever genuinely remains unresolved. The intent is
+   * bound to the recipe key and to the baseline run counter at click time, so it
+   * can only fire after THAT recipe's deterministic baseline has been applied.
+   * It is memory-only, consumed once, and never set by viewing, Edit, or
+   * Re-analyze.
+   */
+  const [pendingGenerateAi, setPendingGenerateAi] = useState<{
+    readonly recipeKey: string;
+    readonly baselineRuns: number;
+  } | null>(null);
+  const generateAiStartedRef = useRef<string | null>(null);
 
   // The saved report renders from this ALREADY-VALIDATED block alone; no USDA
   // session, catalog authentication, or matcher initialization is required.
@@ -722,6 +746,8 @@ onReviewRecipeContextWithAi,
     aiRunningRef.current = false;
     pendingOpenRecipeKey.current = null;
     setPendingGenerateRecipeKey(null);
+    setPendingGenerateAi(null);
+    generateAiStartedRef.current = null;
     setAiSuggestions({});
     setAiAmountOffers({});
     setAiEstimateOffers({});
@@ -1524,6 +1550,8 @@ onReviewRecipeContextWithAi,
     }
     // Bind the intent to the recipe CURRENT at click time; it is consumed only if
     // that same recipe is still current once the editor is ready.
+    generateAiStartedRef.current = null;
+    setPendingGenerateAi({ recipeKey: currentRecipeKey, baselineRuns: analysisRuns });
     setPendingGenerateRecipeKey(currentRecipeKey);
     openWorkingEditor();
   };
@@ -1668,7 +1696,10 @@ onReviewRecipeContextWithAi,
    * review. The AI never grants authority and never writes.
    */
   const handleResolveWithAi = useCallback(
-    async (lineRefs?: ReadonlyArray<string>) => {
+    async (
+      lineRefs?: ReadonlyArray<string>,
+      options?: { readonly orchestration?: 'generate' }
+    ) => {
       if (!session || !adaptation.ok) return;
       if (!onResolveWithAi) {
         setAiMessage('AI assistance is unavailable. You can continue with USDA search manually.');
@@ -1740,6 +1771,9 @@ onReviewRecipeContextWithAi,
           // current at CLICK time, and `stillCurrent()` below still discards any
           // response whose recipe/session generation has moved on.
           recipe,
+          ...(options?.orchestration !== undefined
+            ? { orchestration: options.orchestration }
+            : {}),
         });
         // STALE-RESPONSE PROTECTION: a response for a different recipe/session,
         // an older generation, a superseded request, or a closed editor is
@@ -1770,6 +1804,7 @@ onReviewRecipeContextWithAi,
         // explicit decision is preserved exactly and is never credited to AI.
         const conflictedRefs = conflictedWorkingLineRefs(base, capturedWorkingChoices);
         const matches: Record<string, MatchChoice> = { ...base.matches };
+        const portions: Record<string, PortionChoice> = { ...base.portions };
         const countPortions: Record<string, CountPortionChoice> = { ...base.countPortions };
         const suggestions: Record<string, AdvancedNutritionAiSuggestion> = {};
         const amountOffers: Record<string, ReadonlyArray<AdvancedNutritionAiAmountOffer>> = {};
@@ -1780,6 +1815,12 @@ onReviewRecipeContextWithAi,
             // AI-assisted DETERMINISTIC acceptance: automatic authority, never
             // user-confirmed (the choice carries aiAssisted + aiAccepted).
             matches[candidate.line_ref] = Object.freeze({ ...candidate.choice });
+            // The application layer may have proved ONE authenticated volume
+            // portion with the SAME deterministic rule the analyzer uses. It
+            // supplies grams; AI never does.
+            if (candidate.portion) {
+              portions[candidate.line_ref] = Object.freeze({ ...candidate.portion });
+            }
           } else {
             suggestions[candidate.line_ref] = Object.freeze({
               line_ref: candidate.line_ref,
@@ -1825,7 +1866,12 @@ onReviewRecipeContextWithAi,
 
         setAiSuggestions(suggestions);
         setAiAmountOffers(amountOffers);
-        const applied = applyWorkingSelections({ matches, countPortions, householdPortions });
+        const applied = applyWorkingSelections({
+          matches,
+          portions,
+          countPortions,
+          householdPortions,
+        });
 
         const interpretedCount =
           typeof result.interpretedCount === 'number' && Number.isFinite(result.interpretedCount)
@@ -2201,6 +2247,73 @@ onReviewRecipeContextWithAi,
   const aiAvailabilityReason = advancedNutritionAiAvailability?.reason ?? null;
   const aiCanRetry = advancedNutritionAiAvailability?.canRetry === true;
   const aiOnRetry = advancedNutritionAiAvailability?.onRetry;
+
+  /**
+   * GENERATE -> DETERMINISTIC BASELINE -> ONE AI INTERPRETATION PASS.
+   *
+   * The explicit Generate action already authorizes the deterministic analysis
+   * (the existing pending-Generate effect above). Once THAT baseline has been
+   * applied for the same recipe, this effect hands the genuinely actionable
+   * exceptions to the EXISTING whole-recipe AI resolution port exactly once.
+   *
+   * It is not a second workflow: `handleResolveWithAi` is the same function the
+   * "Resolve remaining with AI" control calls, and every AI proposal still goes
+   * through the deterministic USDA catalog, confidence contract, authenticated
+   * portion checks and calculator. AI availability is read from the shell's
+   * composed capability state, so Basic Nutrition never reaches a provider.
+   *
+   * Ordering is deliberate:
+   *   - wait for the session and the SAME recipe;
+   *   - wait until the forecast baseline run has actually been applied;
+   *   - wait out an availability refresh instead of guessing;
+   *   - consume the intent before calling, so a re-render cannot double-call;
+   *   - do nothing when the deterministic pass already resolved every line.
+   */
+  useEffect(() => {
+    const pending = pendingGenerateAi;
+    if (pending === null) return;
+    // A closed editor can never later receive a provider call. If the user
+    // closes while availability is still being reconciled, the intent is spent
+    // without spending a request.
+    if (!isOpen) {
+      setPendingGenerateAi(null);
+      return;
+    }
+    if (!session || !adaptation.ok) return;
+    if (pending.recipeKey !== adaptation.recipe.recipe_key) {
+      setPendingGenerateAi(null);
+      return;
+    }
+    if (state.recipeKey !== adaptation.recipe.recipe_key) return;
+    if (pendingGenerateRecipeKey !== null) return;
+    if (analysisRuns <= pending.baselineRuns) return;
+    // The composed availability answer is still being reconciled. Waiting is
+    // honest; guessing would either spend a provider call the product forbids or
+    // skip AI the user is entitled to.
+    if (aiRefreshing) return;
+    if (generateAiStartedRef.current === pending.recipeKey) {
+      setPendingGenerateAi(null);
+      return;
+    }
+    generateAiStartedRef.current = pending.recipeKey;
+    setPendingGenerateAi(null);
+    if (!onResolveWithAi || !aiAvailabilityAvailable) return;
+    if (actionableRows.length === 0) return;
+    void handleResolveWithAi(undefined, { orchestration: 'generate' });
+  }, [
+    pendingGenerateAi,
+    isOpen,
+    session,
+    adaptation,
+    state.recipeKey,
+    pendingGenerateRecipeKey,
+    analysisRuns,
+    aiRefreshing,
+    aiAvailabilityAvailable,
+    onResolveWithAi,
+    actionableRows.length,
+    handleResolveWithAi,
+  ]);
 
   /**
    * The AI-4D2 review view model: a pure projection of the inert review session.
