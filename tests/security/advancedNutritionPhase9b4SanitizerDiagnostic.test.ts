@@ -912,23 +912,34 @@ describe('9B-P4 — a broken diagnostic sink cannot change the result', () => {
 describe('9B-P4 — schema permits, sanitizer rejects (documented mismatches)', () => {
   const schema = buildAiAdvancedInterpretationSchema();
 
-  it('the schema sent to Gemini declares no maxItems, maxLength, or minimum', () => {
+  it('the schema sent to Gemini retains bounded unknown-size keywords but declares semantic-content requirements', () => {
     const serialized = JSON.stringify(schema);
     expect(serialized).not.toContain('maxItems');
     expect(serialized).not.toContain('maxLength');
     expect(serialized).not.toContain('minimum');
     expect(serialized).not.toContain('additionalProperties');
+    // AN-SEM-1: a target row must carry a usable identity/search phrase OR an
+    // explicit ambiguity/alternatives non-resolution.
+    expect(serialized).toContain('anyOf');
+    expect(serialized).toContain('minLength');
+    expect(serialized).toContain('minItems');
   });
 
-  it('the schema declares empty strings as legal for every optional string', () => {
-    // No minLength anywhere: "" is schema-legal for every string property.
-    expect(JSON.stringify(schema)).not.toContain('minLength');
+  it('the schema no longer declares empty semantic identity/search wording as sufficient on its own', () => {
+    const rowSchema = schema.properties.interpretations as {
+      items: { anyOf: ReadonlyArray<Record<string, unknown>> };
+    };
+    expect(rowSchema.items.anyOf).toHaveLength(4);
+    expect(JSON.stringify(rowSchema.items.anyOf)).toContain('normalized_name');
+    expect(JSON.stringify(rowSchema.items.anyOf)).toContain('search_phrases');
+    expect(JSON.stringify(rowSchema.items.anyOf)).toContain('ambiguity');
+    expect(JSON.stringify(rowSchema.items.anyOf)).toContain('alternatives');
   });
 
   /**
-   * Each row is a payload the JSON SCHEMA permits and the SANITIZER rejects.
-   * These are VERIFIED by construction from the two definitions; they are NOT a
-   * claim about what Gemini actually returned during the 9B-P3 live smoke.
+   * Each row is a payload the SANITIZER rejects. Some are also prevented by the
+   * provider schema; all remain defense-in-depth checks. These are NOT a claim
+   * about what Gemini actually returned during any live smoke.
    */
   const MISMATCHES: Array<{ label: string; reason: AiAdvancedRejectReason; row: () => Record<string, unknown> }> = [
     {

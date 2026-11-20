@@ -375,6 +375,15 @@ export type AdvancedNutritionAiResolveHandler = (args: {
   readonly amounts: AiAmountResolveOutcome;
   /** Verified-household resolutions (optional for back-compatible ports). */
   readonly households?: AiHouseholdResolveOutcome;
+  /** Bounded server diagnostics: source-contradicted quantity interpretations. */
+  readonly contradicted?: ReadonlyArray<string>;
+  /** Bounded server diagnostics: interpretations with no usable semantic content. */
+  readonly inadaptable?: ReadonlyArray<string>;
+  /** Bounded server diagnostics: understood but withheld non-resolutions. */
+  readonly withheld?: ReadonlyArray<{
+    readonly line_ref: string;
+    readonly reason: 'ambiguous' | 'alternatives';
+  }>;
 }>;
 
 /**
@@ -387,6 +396,7 @@ export type GenerateAiFeedback =
   | { readonly kind: 'running'; readonly message: string }
   | { readonly kind: 'success'; readonly message: string }
   | { readonly kind: 'partial'; readonly message: string }
+  | { readonly kind: 'insufficient'; readonly message: string }
   | { readonly kind: 'unavailable'; readonly message: string }
   | { readonly kind: 'error'; readonly message: string };
 
@@ -2040,15 +2050,43 @@ onReviewRecipeContextWithAi,
           }
         }
         const stillNeedReview = summarizeLiveRows(afterLiveRows).actionable;
-
+        const withheld = result.withheld ?? [];
+        const ambiguousCount = withheld.filter((entry) => entry.reason === 'ambiguous').length;
+        const alternativeCount = withheld.filter((entry) => entry.reason === 'alternatives').length;
+        const contradictedCount = (result.contradicted ?? []).length;
+        const inadaptableCount = (result.inadaptable ?? []).length;
+        const diagnostics: string[] = [];
+        if (ambiguousCount > 0) {
+          diagnostics.push(`${ambiguousCount} withheld as ambiguous`);
+        }
+        if (alternativeCount > 0) {
+          diagnostics.push(`${alternativeCount} had explicit alternative readings`);
+        }
+        if (inadaptableCount > 0) {
+          diagnostics.push(`${inadaptableCount} had insufficient semantic information`);
+        }
+        if (contradictedCount > 0) {
+          diagnostics.push(`${contradictedCount} contradicted the authored quantity`);
+        }
+        const diagnosticSuffix =
+          diagnostics.length > 0 ? ` Diagnostics: ${diagnostics.join('; ')}.` : '';
+        const remaining = `${stillNeedReview} still need${
+          stillNeedReview === 1 ? 's' : ''
+        } review.`;
         const message =
-          resolvedAutomatically === 0
-            ? `AI interpreted ${interpretedCount} ingredient${interpretedCount === 1 ? '' : 's'}. ` +
-              'No additional ingredients could be resolved automatically. ' +
-              `${stillNeedReview} still need${stillNeedReview === 1 ? 's' : ''} review.`
-            : `AI interpreted ${interpretedCount} ingredient${interpretedCount === 1 ? '' : 's'}. ` +
-              `${resolvedAutomatically} resolved automatically from verified local data. ` +
-              `${stillNeedReview} still need${stillNeedReview === 1 ? 's' : ''} review.`;
+          interpretedCount === 0
+            ? `AI returned no usable food suggestion.${diagnosticSuffix} ${remaining}`
+            : resolvedAutomatically > 0
+              ? `AI returned usable search wording for ${interpretedCount} ingredient${
+                  interpretedCount === 1 ? '' : 's'
+                }. ${resolvedAutomatically} resolved automatically from verified local data. ${remaining}${diagnosticSuffix}`
+              : result.outcome.candidates.length === 0
+                ? `AI returned usable search wording for ${interpretedCount} ingredient${
+                    interpretedCount === 1 ? '' : 's'
+                  }. No additional ingredients could be resolved automatically: no authenticated USDA candidate passed validation. ${remaining}${diagnosticSuffix}`
+                : `AI returned usable search wording for ${interpretedCount} ingredient${
+                    interpretedCount === 1 ? '' : 's'
+                  }. No additional ingredients could be resolved automatically. ${remaining}${diagnosticSuffix}`;
         setAiMessage(message);
         return {
           ok: true,
@@ -2459,7 +2497,12 @@ onReviewRecipeContextWithAi,
         setGenerateAiFeedback(
           outcome.ok
             ? {
-                kind: outcome.stillNeedReview > 0 ? 'partial' : 'success',
+                kind:
+                  outcome.interpretedCount === 0
+                    ? 'insufficient'
+                    : outcome.stillNeedReview > 0
+                      ? 'partial'
+                      : 'success',
                 message: outcome.message,
               }
             : { kind: 'error', message: outcome.message }

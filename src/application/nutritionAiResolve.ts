@@ -89,6 +89,10 @@ export interface AuthenticatedAdvisoryRequestResult {
   readonly message?: string;
   readonly suggestions: ReadonlyArray<AiResolutionSuggestion>;
   readonly withheld: ReadonlyArray<AiAdvancedWithheldInterpretation>;
+  /** Bounded line refs whose AI quantity interpretation contradicted source. */
+  readonly contradicted: ReadonlyArray<string>;
+  /** Bounded line refs with no usable semantic identity/search wording. */
+  readonly inadaptable: ReadonlyArray<string>;
   readonly aiAttempted: boolean;
 }
 
@@ -597,6 +601,10 @@ export interface AiResolutionRunResult {
    * resolution (ambiguity, or authored alternatives). Audit/display only.
    */
   readonly withheld: ReadonlyArray<AiAdvancedWithheldInterpretation>;
+  /** Bounded source-contradicted amount interpretations (server advisory). */
+  readonly contradicted: ReadonlyArray<string>;
+  /** Bounded interpretations with no usable semantic identity/search wording. */
+  readonly inadaptable: ReadonlyArray<string>;
   /** Food-identity verification outcome (needs_match / review_suggested). */
   readonly outcome: AiResolveOutcome;
   /** Amount-interpretation verification outcome (needs_amount). */
@@ -691,6 +699,8 @@ async function requestAuthenticatedWholeRecipeSuggestions(
       message: 'Nothing unresolved to interpret.',
       suggestions: Object.freeze([]),
       withheld: Object.freeze([]),
+      contradicted: Object.freeze([]),
+      inadaptable: Object.freeze([]),
       aiAttempted: false,
     };
   }
@@ -713,6 +723,8 @@ async function requestAuthenticatedWholeRecipeSuggestions(
       message: AI_RESOLUTION_UNAVAILABLE_MESSAGE,
       suggestions: Object.freeze([]),
       withheld: Object.freeze([]),
+      contradicted: Object.freeze([]),
+      inadaptable: Object.freeze([]),
       aiAttempted: true,
     };
   }
@@ -723,6 +735,8 @@ async function requestAuthenticatedWholeRecipeSuggestions(
       message: nutritionResolutionFailureMessage(response?.status),
       suggestions: Object.freeze([]),
       withheld: Object.freeze([]),
+      contradicted: Object.freeze([]),
+      inadaptable: Object.freeze([]),
       aiAttempted: true,
     };
   }
@@ -740,6 +754,8 @@ async function requestAuthenticatedWholeRecipeSuggestions(
       message: AI_RESOLUTION_INVALID_MESSAGE,
       suggestions: Object.freeze([]),
       withheld: Object.freeze([]),
+      contradicted: Object.freeze([]),
+      inadaptable: Object.freeze([]),
       aiAttempted: true,
     };
   }
@@ -760,10 +776,22 @@ async function requestAuthenticatedWholeRecipeSuggestions(
     }
   }
 
+  const readLineRefs = (raw: unknown): ReadonlyArray<string> => {
+    if (!Array.isArray(raw)) return Object.freeze([]);
+    const refs: string[] = [];
+    for (const value of raw) {
+      if (typeof value !== 'string' || !allowedLineRefs.includes(value)) continue;
+      if (!refs.includes(value)) refs.push(value);
+    }
+    return Object.freeze(refs);
+  };
+
   return {
     ok: true,
     suggestions: sanitized.suggestions,
     withheld: Object.freeze(withheld),
+    contradicted: readLineRefs(response.data?.['contradicted']),
+    inadaptable: readLineRefs(response.data?.['inadaptable']),
     aiAttempted: true,
   };
 }
@@ -781,6 +809,8 @@ export async function resolveUnresolvedRowsWithAi(
       interpretedCount: 0,
       semanticInterpretedCount: 0,
       withheld: Object.freeze([]),
+      contradicted: Object.freeze([]),
+      inadaptable: Object.freeze([]),
       outcome: EMPTY_FOOD_OUTCOME,
       amounts: EMPTY_AMOUNT_OUTCOME,
       households: EMPTY_HOUSEHOLD_OUTCOME,
@@ -793,6 +823,8 @@ export async function resolveUnresolvedRowsWithAi(
   let suggestions: ReadonlyArray<AiResolutionSuggestion>;
   let aiAttempted: boolean;
   let withheld: ReadonlyArray<AiAdvancedWithheldInterpretation> = Object.freeze([]);
+  let contradicted: ReadonlyArray<string> = Object.freeze([]);
+  let inadaptable: ReadonlyArray<string> = Object.freeze([]);
   let semanticInterpretedCount = 0;
   if (wholeRecipePath) {
     // PHASE 9B-3C: ONE atomic request performs interpretation, receipt issuance,
@@ -809,6 +841,8 @@ export async function resolveUnresolvedRowsWithAi(
         interpretedCount: 0,
         semanticInterpretedCount: 0,
         withheld: Object.freeze([]),
+        contradicted: Object.freeze([]),
+        inadaptable: Object.freeze([]),
         outcome: EMPTY_FOOD_OUTCOME,
         amounts: EMPTY_AMOUNT_OUTCOME,
         households: EMPTY_HOUSEHOLD_OUTCOME,
@@ -816,6 +850,8 @@ export async function resolveUnresolvedRowsWithAi(
     }
     suggestions = live.suggestions;
     withheld = live.withheld;
+    contradicted = live.contradicted;
+    inadaptable = live.inadaptable;
     semanticInterpretedCount = live.suggestions.length;
     aiAttempted = true;
   } else if (canonicalInterpretationPath) {
@@ -837,6 +873,8 @@ export async function resolveUnresolvedRowsWithAi(
           interpretedCount: 0,
           semanticInterpretedCount: 0,
           withheld: Object.freeze([]),
+          contradicted: Object.freeze([]),
+          inadaptable: Object.freeze([]),
           outcome: EMPTY_FOOD_OUTCOME,
           amounts: EMPTY_AMOUNT_OUTCOME,
           households: EMPTY_HOUSEHOLD_OUTCOME,
@@ -863,6 +901,8 @@ export async function resolveUnresolvedRowsWithAi(
         interpretedCount: 0,
         semanticInterpretedCount: 0,
         withheld: Object.freeze([]),
+        contradicted: Object.freeze([]),
+        inadaptable: Object.freeze([]),
         outcome: EMPTY_FOOD_OUTCOME,
         amounts: EMPTY_AMOUNT_OUTCOME,
         households: EMPTY_HOUSEHOLD_OUTCOME,
@@ -881,6 +921,8 @@ export async function resolveUnresolvedRowsWithAi(
         interpretedCount: requested.suggestions.length,
         semanticInterpretedCount: 0,
         withheld: Object.freeze([]),
+        contradicted: Object.freeze([]),
+        inadaptable: Object.freeze([]),
         outcome: EMPTY_FOOD_OUTCOME,
         amounts: EMPTY_AMOUNT_OUTCOME,
         households: EMPTY_HOUSEHOLD_OUTCOME,
@@ -963,6 +1005,8 @@ export async function resolveUnresolvedRowsWithAi(
     interpretedCount: suggestions.length,
     semanticInterpretedCount,
     withheld,
+    contradicted,
+    inadaptable,
     outcome,
     amounts,
     households,

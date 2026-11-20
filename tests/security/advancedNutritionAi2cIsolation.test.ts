@@ -111,7 +111,10 @@ const THAWED_BY_AI3: Record<string, string> = {
  * the AI-3 precedent.
  */
 const THAWED_BY_9B4: Record<string, string> = {
-  'src/core/nutritionV2/aiAdvanced.ts': '7ac74d645b4db85e13d2a02478c7534359ef5a51f5b6bce69eeb81a3aaf50ed3',
+  // AN-SEM-1 (architect-authorized semantic-contract repair) changes the same
+  // already-thawed contract: meaningful-content schema/helpers and explicit
+  // non-resolution classification. No other frozen module is widened.
+  'src/core/nutritionV2/aiAdvanced.ts': 'c9c9778a82518c3b65381aa041f94e466091f8beb36392c77028c9f567afbd5f',
 };
 
 /**

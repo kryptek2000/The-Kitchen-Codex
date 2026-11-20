@@ -919,6 +919,41 @@ export function buildAiAdvancedInterpretationSchema(): {
             notes: { type: 'string' },
           },
           required: ['line_ref'],
+          // A target row must carry actual semantic content or an explicit
+          // non-resolution. A bare `line_ref` with empty/default fields is not a
+          // meaningful interpretation and must not become silent empty success.
+          anyOf: [
+            {
+              required: ['semantic_food'],
+              properties: {
+                semantic_food: {
+                  type: 'object',
+                  required: ['normalized_name'],
+                  properties: { normalized_name: { type: 'string', minLength: 1 } },
+                },
+              },
+            },
+            {
+              required: ['search_phrases'],
+              properties: {
+                search_phrases: { type: 'array', minItems: 1, items: { type: 'string', minLength: 1 } },
+              },
+            },
+            {
+              required: ['ambiguity'],
+              properties: {
+                ambiguity: {
+                  type: 'object',
+                  required: ['ambiguous'],
+                  properties: { ambiguous: { type: 'boolean', enum: [true] } },
+                },
+              },
+            },
+            {
+              required: ['alternatives'],
+              properties: { alternatives: { type: 'array', minItems: 1 } },
+            },
+          ],
         },
       },
     },
@@ -1260,6 +1295,33 @@ export function withholdNonDeterministicAdaptations(input: {
     inadaptable: input.outcome.inadaptable,
     withheld: Object.freeze(withheld),
   });
+}
+
+/**
+ * True when one canonical interpretation carries at least one usable semantic
+ * identity/search phrase. Those values are only advisory matching input; they
+ * still must pass the browser-side USDA catalog and deterministic confidence
+ * contract.
+ */
+export function hasUsableAiAdvancedSemanticContent(
+  interpretation: AiAdvancedIngredientInterpretation
+): boolean {
+  const normalized = interpretation.semantic_food.normalized_name;
+  if (typeof normalized === 'string' && normalized.trim().length > 0) return true;
+  return interpretation.search_phrases.some(
+    (phrase) => typeof phrase === 'string' && phrase.trim().length > 0
+  );
+}
+
+/**
+ * True when the provider explicitly declared a genuine non-resolution (genuine
+ * ambiguity or authored alternative readings). Such a row is meaningful
+ * interpretation but may never become an automatic identity decision.
+ */
+export function hasExplicitAiAdvancedNonResolution(
+  interpretation: AiAdvancedIngredientInterpretation
+): boolean {
+  return interpretation.ambiguity.ambiguous === true || interpretation.alternatives.length > 0;
 }
 
 /**

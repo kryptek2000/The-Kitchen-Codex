@@ -940,7 +940,19 @@ describe('Generate — cold start, cancellation, and visible AI outcomes', () =>
   });
 
   it('shows visible success/partial feedback without hiding unresolved uncertainty', async () => {
-    const handler = emptyHandler();
+    const handler = vi.fn(async (args: { rows: ReadonlyArray<Phase4Row> }) => ({
+      ok: true,
+      interpretedCount: 1,
+      outcome: {
+        candidates: [],
+        unresolved: [args.rows[0].line_ref],
+        auto_count: 0,
+      },
+      amounts: EMPTY_AMOUNTS,
+      withheld: [],
+      contradicted: [],
+      inadaptable: [],
+    }));
     render(
       <AdvancedNutritionCard
         recipe={recipe('1 cup berries', 'partial-success')}
@@ -955,5 +967,143 @@ describe('Generate — cold start, cancellation, and visible AI outcomes', () =>
     await waitFor(() => expect(feedback.getAttribute('role')).toBe('status'));
     expect(feedback.textContent).toMatch(/some lines still need review|complete/i);
     expect(summaryText()).toMatch(/1 source review/);
+  });
+});
+
+describe('AN-SEM-1 — semantic outcome classification in Generate feedback', () => {
+  const AVAILABLE = { available: true, reason: null, refreshing: false, canRetry: false } as const;
+
+  function diagnosticHandler(diagnostics: {
+    withheld?: ReadonlyArray<{ line_ref: string; reason: 'ambiguous' | 'alternatives' }>;
+    contradicted?: ReadonlyArray<string>;
+    inadaptable?: ReadonlyArray<string>;
+    interpretedCount?: number;
+    candidates?: number;
+  }) {
+    return vi.fn(async (args: { rows: ReadonlyArray<Phase4Row> }) => {
+      const ref = args.rows[0].line_ref;
+      return {
+        ok: true,
+        interpretedCount: diagnostics.interpretedCount ?? 0,
+        outcome: {
+          candidates:
+            (diagnostics.candidates ?? 0) > 0
+              ? [
+                  {
+                    line_ref: ref,
+                    query: 'mystery raw',
+                    fdc_id: 7002,
+                    description: 'Mystery, raw',
+                    record_digest: 'a'.repeat(64),
+                    auto: false,
+                    choice: {
+                      kind: 'manual' as const,
+                      fdc_id: 7002,
+                      review_digest:
+                        args.rows[0].review_digest ?? '',
+                      record_digest: 'a'.repeat(64),
+                      catalog_digest: session.metadata().catalog_digest,
+                      description: 'Mystery, raw',
+                      aiAssisted: true,
+                    },
+                  },
+                ]
+              : [],
+          unresolved: diagnostics.candidates === 0 ? [ref] : [],
+          auto_count: 0,
+        },
+        amounts: EMPTY_AMOUNTS,
+        withheld: diagnostics.withheld ?? [],
+        contradicted: diagnostics.contradicted ?? [],
+        inadaptable: diagnostics.inadaptable ?? [],
+      };
+    });
+  }
+
+  async function generateWith(
+    handler: ReturnType<typeof diagnosticHandler>,
+    id: string
+  ): Promise<HTMLElement> {
+    render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup berries', id)}
+        session={session}
+        onResolveWithAi={handler}
+        advancedNutritionAiAvailability={AVAILABLE}
+      />
+    );
+    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
+    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    return screen.findByTestId('advanced-nutrition-generate-ai-status');
+  }
+
+  it('explains genuine ambiguity instead of reporting successful interpretation', async () => {
+    const handler = vi.fn(async (args: { rows: ReadonlyArray<Phase4Row> }) => ({
+      ok: true,
+      interpretedCount: 0,
+      outcome: { candidates: [], unresolved: [args.rows[0].line_ref], auto_count: 0 },
+      amounts: EMPTY_AMOUNTS,
+      withheld: [{ line_ref: args.rows[0].line_ref, reason: 'ambiguous' as const }],
+      contradicted: [],
+      inadaptable: [],
+    }));
+    const feedback = await generateWith(handler as never, 'semantic-ambiguous');
+    await waitFor(() => expect(feedback.textContent).toMatch(/insufficient interpretation/i));
+    expect(feedback.textContent).toMatch(/withheld as ambiguous/i);
+    expect(feedback.textContent).not.toMatch(/AI returned usable search wording/i);
+  });
+
+  it('explains explicit alternatives without choosing one', async () => {
+    const handler = vi.fn(async (args: { rows: ReadonlyArray<Phase4Row> }) => ({
+      ok: true,
+      interpretedCount: 0,
+      outcome: { candidates: [], unresolved: [args.rows[0].line_ref], auto_count: 0 },
+      amounts: EMPTY_AMOUNTS,
+      withheld: [{ line_ref: args.rows[0].line_ref, reason: 'alternatives' as const }],
+      contradicted: [],
+      inadaptable: [],
+    }));
+    const feedback = await generateWith(handler as never, 'semantic-alternatives');
+    await waitFor(() => expect(feedback.textContent).toMatch(/explicit alternative readings/i));
+  });
+
+  it('explains insufficient semantic information for an empty interpretation', async () => {
+    // Use a row-ref-aware empty classification, matching the server bridge.
+    const emptyHandler = vi.fn(async (args: { rows: ReadonlyArray<Phase4Row> }) => ({
+      ok: true,
+      interpretedCount: 0,
+      outcome: { candidates: [], unresolved: [args.rows[0].line_ref], auto_count: 0 },
+      amounts: EMPTY_AMOUNTS,
+      withheld: [],
+      contradicted: [],
+      inadaptable: [args.rows[0].line_ref],
+    }));
+    const feedback = await generateWith(emptyHandler as never, 'semantic-empty');
+    await waitFor(() => expect(feedback.textContent).toMatch(/insufficient interpretation/i));
+    expect(feedback.textContent).toMatch(/insufficient semantic information/i);
+    expect(feedback.textContent).not.toMatch(/AI returned usable search wording/i);
+  });
+
+  it('explains a source-contradicted quantity without applying it', async () => {
+    const contradictedHandler = vi.fn(async (args: { rows: ReadonlyArray<Phase4Row> }) => ({
+      ok: true,
+      interpretedCount: 0,
+      outcome: { candidates: [], unresolved: [args.rows[0].line_ref], auto_count: 0 },
+      amounts: EMPTY_AMOUNTS,
+      withheld: [],
+      contradicted: [args.rows[0].line_ref],
+      inadaptable: [],
+    }));
+    const feedback = await generateWith(contradictedHandler as never, 'semantic-contradicted');
+    await waitFor(() => expect(feedback.textContent).toMatch(/contradicted the authored quantity/i));
+  });
+
+  it('distinguishes usable AI wording that fails USDA validation', async () => {
+    const handler = diagnosticHandler({ interpretedCount: 1, candidates: 0 });
+    const feedback = await generateWith(handler, 'semantic-usda-fail');
+    await waitFor(() => expect(feedback.textContent).toMatch(/some lines still need review/i));
+    expect(feedback.textContent).toMatch(/no authenticated USDA candidate passed validation/i);
+    expect(feedback.textContent).toMatch(/AI returned usable search wording for 1 ingredient/i);
   });
 });
