@@ -153,7 +153,7 @@ const AUTHORED_RECIPE = {
 };
 const INSTRUCTIONS = [{ text: 'Garnish with parsley' }];
 
-/** The eight routes exercised by this AI-5F gate matrix. */
+/** The nine routes exercised by this AI-5F gate matrix. */
 const GATED_ROUTES: ReadonlyArray<readonly [string, string]> = [
   ['/api/nutrition/resolve-ingredients', 'ai_interpretation'],
   ['/api/nutrition/interpret-ingredients', 'ai_interpretation'],
@@ -162,6 +162,7 @@ const GATED_ROUTES: ReadonlyArray<readonly [string, string]> = [
   ['/api/nutrition/recipe-context', 'ai_recipe_context_review'],
   ['/api/nutrition/recipe-context/reconcile', 'ai_recipe_context_review'],
   ['/api/nutrition/evaluate-candidates', 'ai_interpretation'],
+  ['/api/nutrition/research-ingredients', 'ai_interpretation'],
   ['/api/shiso/nutrition', 'ai_interpretation'],
 ];
 
@@ -195,6 +196,11 @@ function requestBody(path: string): unknown {
             measurement_basis: { kind: 'direct_input', line_ref: 'row:1', mass_g: 400 },
           },
         ],
+      };
+    case '/api/nutrition/research-ingredients':
+      return {
+        request_version: 'nutrition_ai_web_research_request_v1',
+        targets: [],
       };
     case '/api/nutrition/evaluate-candidates':
       return {
@@ -761,7 +767,7 @@ describe('AI-5F — one request, one authority attempt, no retry', () => {
     }
     // No second authority seam and no second gate REGISTRATION per route. The
     // SHISO nutrition route joins the same server-owned authority and four-feature set.
-    expect([...APP_SOURCE.matchAll(/requireNutritionProductFeature\(/g)]).toHaveLength(11);
+    expect([...APP_SOURCE.matchAll(/requireNutritionProductFeature\(/g)]).toHaveLength(12);
     expect(APP_SOURCE).not.toContain('"ai_recipe_context_application"');
   });
 });

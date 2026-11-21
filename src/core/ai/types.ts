@@ -92,6 +92,8 @@ export interface AiSearchOptions {
   /** Provider model id. REQUIRED (no silent role-model default). */
   model: string;
   temperature?: number;
+  /** Optional cancellation signal propagated to the provider transport. */
+  signal?: AbortSignal;
 }
 
 /**

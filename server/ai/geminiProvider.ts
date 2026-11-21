@@ -217,6 +217,7 @@ export class GeminiProvider implements AiProvider {
       config: {
         ...(typeof options.temperature === "number" ? { temperature: options.temperature } : {}),
         tools: [{ googleSearch: {} }],
+        ...(options.signal ? { abortSignal: options.signal } : {}),
       },
     });
     const candidates = extractWebResultsFromGrounding(response);

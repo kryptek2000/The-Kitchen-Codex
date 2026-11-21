@@ -165,6 +165,18 @@ export interface AdvancedNutritionAiReview {
   readonly candidate_count: number;
 }
 
+/** One reviewed external-source nutrition offer. It is inert until the user uses it. */
+export interface AdvancedNutritionResearchOffer {
+  readonly line_ref: string;
+  readonly ingredient: string;
+  readonly source_title: string;
+  readonly source_url: string;
+  readonly quantity_basis: string;
+  readonly classification: 'source_backed';
+  readonly nutrients: Readonly<Record<string, { readonly amount: number; readonly unit: string }>>;
+  readonly limitations: ReadonlyArray<string>;
+}
+
 /**
  * One AI-interpreted, LOCALLY AUTHENTICATED count portion that remains the
  * user's explicit choice (materially different weights are never auto-chosen).
@@ -207,6 +219,13 @@ export interface AdvancedNutritionAiUi {
   readonly reviews?: Readonly<Record<string, AdvancedNutritionAiReview>>;
   /** Clears one review explanation after the user answers it manually. */
   readonly onClearReview?: (lineRef: string) => void;
+  /** AN-WEB-1: explicit external research for unresolved, non-ambiguous lines. */
+  readonly researchAvailable?: boolean;
+  readonly researchRunning?: boolean;
+  readonly researchMessage?: string | null;
+  readonly researchOffers?: ReadonlyArray<AdvancedNutritionResearchOffer>;
+  readonly onResearch?: () => void;
+  readonly onUseResearch?: () => void;
   readonly amountOffers: Readonly<Record<string, ReadonlyArray<AdvancedNutritionAiAmountOffer>>>;
   /**
    * AI-3 estimate OFFERS. Display-only. An offer that merely exists never
@@ -1437,7 +1456,66 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                     {ai.planRunning === true ? 'Planning candidates…' : 'Plan candidates with AI'}
                   </button>
                 )}
+                {ai.researchAvailable === true && ai.onResearch !== undefined && (
+                  <button
+                    type="button"
+                    data-testid="advanced-nutrition-ai-research"
+                    disabled={!ai.available || ai.running || ai.researchRunning === true}
+                    aria-disabled={!ai.available || ai.running || ai.researchRunning === true}
+                    onClick={ai.onResearch}
+                    className="inline-flex min-h-[44px] shrink-0 items-center rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-3 text-[13px] font-semibold text-[var(--text-primary,#F3F4F6)] transition-colors hover:bg-[var(--bg-root,#0C0C0C)] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {ai.researchRunning === true ? 'Researching external sources…' : 'Research unresolved with AI'}
+                  </button>
+                )}
               </div>
+              {ai.researchMessage !== undefined && ai.researchMessage !== null && (
+                <p
+                  data-testid="advanced-nutrition-ai-research-message"
+                  role="status"
+                  className="text-[12px] text-[var(--text-secondary,#9CA3AF)]"
+                >
+                  {ai.researchMessage}
+                </p>
+              )}
+              {(ai.researchOffers?.length ?? 0) > 0 && (
+                <div
+                  data-testid="advanced-nutrition-ai-research-offers"
+                  className="space-y-2 rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] p-2"
+                >
+                  <p className="text-[13px] font-semibold text-[var(--text-primary,#F3F4F6)]">External nutrition evidence</p>
+                  <ul className="space-y-2">
+                    {ai.researchOffers?.map((offer) => (
+                      <li key={offer.line_ref} className="space-y-1 rounded-md border border-[var(--border-subtle,rgba(255,255,255,0.08))] p-2 text-[12px] text-[var(--text-secondary,#9CA3AF)]">
+                        <p className="font-semibold text-[var(--text-primary,#F3F4F6)]">{offer.ingredient}</p>
+                        <p>
+                          {offer.quantity_basis} · <span className="text-[var(--accent-text,#F59E0B)]">External source-backed</span>
+                        </p>
+                        <p>
+                          Source:{' '}
+                          <a href={offer.source_url} target="_blank" rel="noreferrer noopener" className="underline underline-offset-2 text-[var(--text-primary,#F3F4F6)]">
+                            {offer.source_title}
+                          </a>
+                        </p>
+                        <p>{Object.entries(offer.nutrients).map(([id, value]) => `${id}: ${value.amount} ${value.unit}`).join(' · ')}</p>
+                        {offer.limitations.length > 0 && (
+                          <p>Limitations: {offer.limitations.join(' ')}</p>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                  {ai.onUseResearch !== undefined && (
+                    <button
+                      type="button"
+                      data-testid="advanced-nutrition-ai-research-use"
+                      onClick={ai.onUseResearch}
+                      className="min-h-[40px] rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--accent-subtle,rgba(245,158,11,0.15))] px-3 text-[12px] font-semibold text-[var(--text-primary,#F3F4F6)] transition-colors hover:bg-[var(--bg-root,#0C0C0C)]"
+                    >
+                      Use researched nutrition
+                    </button>
+                  )}
+                </div>
+              )}
               {!ai.available && (
                 <div className="flex flex-wrap items-center gap-2">
                   <p
@@ -2451,7 +2529,7 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
               {preview.ai_contributions && preview.ai_contributions.length > 0 && (
                 <div aria-label="AI nutrition contributions" className="space-y-2">
                   <h4 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--text-secondary,#9CA3AF)]">
-                    AI-estimated ingredient contributions
+                    Researched and AI ingredient contributions
                   </h4>
                   <ul className="space-y-2">
                     {preview.ai_contributions.map((entry) => (
@@ -2466,7 +2544,24 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                         <p>{Object.entries(entry.nutrients).map(([id, value]) => `${id}: ${value?.amount} ${value?.unit}`).join(' · ') || 'No nutrient values established'}</p>
                         {entry.unknown_nutrients.length > 0 && <p className="text-[var(--text-primary,#F3F4F6)]">Unknown: {entry.unknown_nutrients.join(', ')}</p>}
                         {entry.assumptions.length > 0 && <ul className="list-inside list-disc text-[var(--text-secondary,#9CA3AF)]">{entry.assumptions.map((assumption, index) => <li key={`${entry.line_ref}-assumption-${index}`}>{assumption}</li>)}</ul>}
-                        {entry.sources.length > 0 && <p className="text-[var(--text-secondary,#9CA3AF)]">References: {entry.sources.map((source) => source.title).join(', ')}</p>}
+                        {entry.sources.length > 0 && (
+                          <p className="text-[var(--text-secondary,#9CA3AF)]">
+                            References:{' '}
+                            {entry.sources.map((source, index) => (
+                              <React.Fragment key={`${entry.line_ref}-source-${index}`}>
+                                {index > 0 ? ' · ' : ''}
+                                <a
+                                  href={source.url}
+                                  target="_blank"
+                                  rel="noreferrer noopener"
+                                  className="underline underline-offset-2 text-[var(--text-primary,#F3F4F6)]"
+                                >
+                                  {source.title}
+                                </a>
+                              </React.Fragment>
+                            ))}
+                          </p>
+                        )}
                       </li>
                     ))}
                   </ul>

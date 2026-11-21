@@ -4,7 +4,7 @@
  * Boots the REAL Express app and drives the REAL AI Advanced Nutrition routes to
  * prove the server is the authority:
  *
- *   M. the ROUTE MATRIX: every one of the eight paid AI Advanced Nutrition routes
+ *   M. the ROUTE MATRIX: every one of the nine paid AI Advanced Nutrition routes
  *      refuses a Basic deployment with 403 `NUTRITION_AI_NOT_ENTITLED` and
  *      `aiAttempted: false`;
  *   Z. ZERO PROVIDER WORK on that refusal: no transport entrypoint, no provider
@@ -263,6 +263,7 @@ const GATED_ROUTES: ReadonlyArray<readonly [string, string]> = [
   ['/api/nutrition/recipe-context', 'ai_recipe_context_review'],
   ['/api/nutrition/recipe-context/reconcile', 'ai_recipe_context_review'],
   ['/api/nutrition/evaluate-candidates', 'ai_interpretation'],
+  ['/api/nutrition/research-ingredients', 'ai_interpretation'],
   ['/api/shiso/nutrition', 'ai_interpretation'],
 ];
 
@@ -295,6 +296,12 @@ function requestBody(path: string, overrides: Record<string, unknown> = {}): unk
         instructions: INSTRUCTIONS,
         targets: [],
         candidate_sets: [],
+        ...overrides,
+      };
+    case '/api/nutrition/research-ingredients':
+      return {
+        request_version: 'nutrition_ai_web_research_request_v1',
+        targets: [],
         ...overrides,
       };
     case '/api/nutrition/recipe-context':
@@ -441,7 +448,7 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('AI-5B — route matrix under the FAIL-CLOSED Basic default', () => {
-  it('refuses all eight paid AI Advanced Nutrition routes when product access is ABSENT', async () => {
+  it('refuses all nine paid AI Advanced Nutrition routes when product access is ABSENT', async () => {
     // No authority at all: the exact production default (AI-5E fail-closed Basic).
     const { server, baseUrl } = await startApp(undefined);
     try {
@@ -455,7 +462,7 @@ describe('AI-5B — route matrix under the FAIL-CLOSED Basic default', () => {
     }
   });
 
-  it('refuses all eight when product access is exactly "basic"', async () => {
+  it('refuses all nine when product access is exactly "basic"', async () => {
     const { server, baseUrl } = await startApp('basic');
     try {
       for (const [path] of GATED_ROUTES) {
@@ -733,7 +740,7 @@ describe('AI-5B — middleware order is structural, not incidental', () => {
   it('gates exactly the four AI-5A features and nothing else', () => {
     const gateCalls = [...APP_SOURCE.matchAll(/requireNutritionProductFeature\([^)]*\)/g)].map((m) => m[0]);
     // The SHISO estimator adds one route while reusing the four AI-5A features.
-    expect(gateCalls).toHaveLength(11);
+    expect(gateCalls).toHaveLength(12);
     const features = new Set(gateCalls.map((call) => /"([a-z_]+)"\)$/.exec(call)![1]));
     expect([...features].sort()).toEqual([
       'ai_bounded_mass_estimation',

@@ -607,7 +607,10 @@ export class WafProtectionError extends Error {
  * - Manual redirect handling with FULL re-validation and re-pinning of every
  *   redirect target (a redirect cannot smuggle in a second, unchecked hop)
  */
-export async function safeFetchHtml(initialUrl: string): Promise<{ html: string; finalUrl: string }> {
+export async function safeFetchHtml(
+  initialUrl: string,
+  options: { readonly requireHtmlContentType?: boolean; readonly signal?: AbortSignal } = {}
+): Promise<{ html: string; finalUrl: string }> {
   let currentUrl = initialUrl;
   let redirectsFollowed = 0;
 
@@ -616,7 +619,9 @@ export async function safeFetchHtml(initialUrl: string): Promise<{ html: string;
     const target = await validateAndPinUrl(currentUrl);
 
     // 2. Outbound request pinned to the validated IP, with timeout signal
-    const timeoutSignal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+    const timeoutSignal = options.signal
+      ? AbortSignal.any([AbortSignal.timeout(FETCH_TIMEOUT_MS), options.signal])
+      : AbortSignal.timeout(FETCH_TIMEOUT_MS);
 
     let response: IncomingMessage;
     try {
@@ -673,6 +678,14 @@ export async function safeFetchHtml(initialUrl: string): Promise<{ html: string;
     if (status < 200 || status >= 300) {
       response.destroy();
       throw new Error(`Remote server responded with status HTTP ${status}.`);
+    }
+
+    if (options.requireHtmlContentType === true) {
+      const contentType = normalizeHeader(response.headers["content-type"]);
+      if (!contentType || !/^(?:text\/html|application\/xhtml\+xml)\b/i.test(contentType)) {
+        response.destroy();
+        throw new Error("Remote source is not an HTML page.");
+      }
     }
 
     // 4. Check Content-Length header if present

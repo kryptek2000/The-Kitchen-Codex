@@ -625,7 +625,7 @@ describe('9B-2C — structural invariants of the new route', () => {
     // cost/rate category, and no second whole-recipe bucket was introduced by
     // the 9B-3C atomic route either.
     const limiterRoutes = [...APP_SOURCE.matchAll(/app\.post\([^\n]*nutritionInterpretRateLimiter/g)];
-    expect(limiterRoutes).toHaveLength(4);
+    expect(limiterRoutes).toHaveLength(5);
     expect(APP_SOURCE).not.toMatch(/wholeRecipe[A-Za-z]*RateLimiter/);
   });
 

@@ -18,6 +18,7 @@ import { interpretIngredientsOnServer } from "./nutritionInterpret.js";
 import { interpretWholeRecipeSemantics } from "./wholeRecipeSemanticInterpret.js";
 import { bridgeAuthenticatedSemanticsToAdvisorySuggestions } from "./wholeRecipeSemanticUsdaBridge.js";
 import { evaluateAiFirstCandidates } from "./aiFirstCandidateEvaluation.js";
+import { researchNutritionOnServer } from "./nutritionResearch.js";
 import { planIngredientsOnServer } from "./nutritionPlan.js";
 import { interpretRecipeContextOnServer } from "./nutritionContext.js";
 import { reconcileRecipeContextOnServer } from "./recipeContextReconcile.js";
@@ -1410,6 +1411,69 @@ export function createApp(opts: CreateAppOptions): express.Express {
         ok: false,
         code: "AI_FIRST_CANDIDATE_EVALUATION_INTERNAL_ERROR",
         error: "An unexpected error occurred during AI candidate evaluation.",
+        aiAttempted: false,
+      });
+    }
+  });
+
+  // AI NUTRITION RESEARCH — bounded external evidence for locally unresolved foods.
+  //
+  // The route is a TRANSPORT. The operation owns provider selection, grounded
+  // search, SSRF-safe retrieval, extraction, and deterministic scaling. A search
+  // URL is never evidence until the server retrieves and inspects the page.
+  app.post("/api/nutrition/research-ingredients", routeCancellationMiddleware, requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccessAuthority, "ai_interpretation"), textPricingGuard, nutritionInterpretRateLimiter, async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    try {
+      const routeState = cancellationFor(req);
+      const cancellation = routeState.controller;
+      if (cancellation.signal.aborted || res.destroyed || res.writableEnded) return;
+      const userSelection = parseTextSelectionHeader(req.headers);
+      const result = await researchNutritionOnServer(req.body, userSelection, cancellation.signal);
+      if (result.ok !== true) {
+        if (result.code === "invalid_request") {
+          return res.status(400).json({
+            ok: false,
+            code: "INVALID_NUTRITION_RESEARCH_REQUEST",
+            error: "Invalid nutrition research request.",
+            aiAttempted: false,
+          });
+        }
+        if (result.code === "no_supported_evidence") {
+          return res.status(200).json({
+            ok: false,
+            code: "NO_SUPPORTED_RESEARCH_EVIDENCE",
+            error: "No reliable external nutrition evidence could be verified for the unresolved ingredients.",
+            aiAttempted: result.aiAttempted === true,
+            skipped: result.skipped ?? [],
+          });
+        }
+        return res.status(503).json({
+          ok: false,
+          code: result.code === "web_unavailable"
+            ? "WEB_RESEARCH_UNAVAILABLE"
+            : "NUTRITION_RESEARCH_UNAVAILABLE",
+          error: result.code === "web_unavailable"
+            ? "The selected AI provider does not support grounded web research."
+            : "Nutrition research is unavailable. The deterministic review and manual USDA search remain available.",
+          aiAttempted: result.aiAttempted === true,
+          skipped: result.skipped ?? [],
+        });
+      }
+      return res.status(200).json({
+        ok: true,
+        request_version: result.request_version,
+        recipe_digest: result.recipe_digest,
+        contributions: result.contributions,
+        evidence: result.evidence,
+        skipped: result.skipped,
+        sources: result.sources,
+        aiAttempted: true,
+      });
+    } catch {
+      return res.status(500).json({
+        ok: false,
+        code: "NUTRITION_RESEARCH_INTERNAL_ERROR",
+        error: "An unexpected error occurred during nutrition research.",
         aiAttempted: false,
       });
     }

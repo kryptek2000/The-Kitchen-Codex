@@ -45,6 +45,7 @@ import {
   actionableExceptionRows,
   buildUserChoiceFromAiAmountOffer,
   ingredientEvidenceViews,
+  ingredientMeasurement,
   liveExceptionKind,
   projectLiveRows,
   summarizeLiveRows,
@@ -69,7 +70,8 @@ import {
   type AiEstimateOffer,
 } from '../core/nutritionV2/phase4/aiEstimateAccept';
 import { aiEstimateSnapshotBinding } from '../core/nutritionV2/phase4/aiEstimateValidation';
-import { combineAiContributionsWithPreview } from '../core/nutritionV2/aiContribution';
+import { combineAiContributionsWithPreview, type AiNutrientContribution } from '../core/nutritionV2/aiContribution';
+import type { ResearchTarget } from '../core/nutritionV2/aiResearch';
 import type { AiEstimateSelectionEvidence } from '../core/nutritionV2/phase4/aiEstimateSelection';
 import { useShiso } from '../application-ui/shisoEntryPoints';
 import type { ShisoAnalysisOutcome, ShisoNutritionCorrectionsOutcome } from '../core/shiso/protocol';
@@ -86,6 +88,7 @@ import {
   type AdvancedNutritionAiUi,
   type AdvancedNutritionAiReview,
   type AdvancedNutritionAiSuggestion,
+  type AdvancedNutritionResearchOffer,
   type AdvancedNutritionRecipeContextUi,
 } from './AdvancedNutritionModal';
 import { AdvancedNutritionSavedReport } from './AdvancedNutritionSavedReport';
@@ -169,6 +172,8 @@ interface AdvancedNutritionCardProps {
    * Generate path.
    */
   onResolveWithAiFirst?: AdvancedNutritionAiResolveHandler;
+  /** Optional bounded external nutrition research port (AN-WEB-1). */
+  onResearchNutritionWithAi?: AdvancedNutritionResearchHandler;
   /**
    * Optional AI candidate-PLAN port (AI-2C), injected by the shell for the SAME
    * reason: the UI never imports the application layer, and the shell owns the
@@ -409,6 +414,21 @@ export type AdvancedNutritionAiResolveHandler = (args: {
   readonly aiFirstReviews?: ReadonlyArray<AdvancedNutritionAiReview>;
 }>;
 
+/** AN-WEB-1: one explicit external-research request from the UI. */
+export type AdvancedNutritionResearchHandler = (args: {
+  readonly targets: ReadonlyArray<ResearchTarget>;
+  readonly lineRefs: ReadonlyArray<string>;
+  readonly lineTextByRef: Readonly<Record<string, string>>;
+  readonly signal?: AbortSignal;
+}) => Promise<{
+  readonly ok: boolean;
+  readonly message?: string;
+  readonly code?: string;
+  readonly contributions?: ReadonlyArray<AiNutrientContribution>;
+  readonly offers?: ReadonlyArray<AdvancedNutritionResearchOffer>;
+  readonly skipped?: ReadonlyArray<{ readonly line_ref: string; readonly reason: string }>;
+}>;
+
 /**
  * Visible outcome of the automatic Generate AI pass. This is deliberately
  * separate from the manual AI panel's `aiMessage`: the automatic operation must
@@ -511,6 +531,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
   savedAdvancedBlock,
   onResolveWithAi,
   onResolveWithAiFirst,
+  onResearchNutritionWithAi,
   onPlanWithAi,
   onEstimateMassesWithAi,
 onReviewRecipeContextWithAi,
@@ -550,6 +571,11 @@ onReviewRecipeContextWithAi,
    * never mutates nutrition or grants selection authority.
    */
   const [aiReviews, setAiReviews] = useState<Record<string, AdvancedNutritionAiReview>>({});
+  const [researchRunning, setResearchRunning] = useState(false);
+  const [researchMessage, setResearchMessage] = useState<string | null>(null);
+  const [researchOffers, setResearchOffers] = useState<ReadonlyArray<AdvancedNutritionResearchOffer>>([]);
+  const [researchContributions, setResearchContributions] = useState<ReadonlyArray<AiNutrientContribution>>([]);
+  const researchAbortRef = useRef<AbortController | null>(null);
   /**
    * AI-interpreted authenticated count portions that remain the USER'S explicit
    * choice (materially different weights). Never auto-selected.
@@ -798,9 +824,15 @@ onReviewRecipeContextWithAi,
   const cancelGenerateAiIntent = useCallback(() => {
     aiAbortRef.current?.abort();
     aiAbortRef.current = null;
+    researchAbortRef.current?.abort();
+    researchAbortRef.current = null;
     setPendingGenerateAi(null);
     setGenerateAiFeedback(null);
     setAiReviews({});
+    setResearchRunning(false);
+    setResearchMessage(null);
+    setResearchOffers([]);
+    setResearchContributions([]);
     generateAiStartedRef.current = null;
   }, []);
 
@@ -870,6 +902,8 @@ onReviewRecipeContextWithAi,
       aiRequestSeq.current += 1;
       aiAbortRef.current?.abort();
       aiAbortRef.current = null;
+      researchAbortRef.current?.abort();
+      researchAbortRef.current = null;
       generateAiStartedRef.current = null;
     },
     []
@@ -886,8 +920,14 @@ onReviewRecipeContextWithAi,
     aiRunningRef.current = false;
     aiAbortRef.current?.abort();
     aiAbortRef.current = null;
+    researchAbortRef.current?.abort();
+    researchAbortRef.current = null;
     setAiSuggestions({});
     setAiReviews({});
+    setResearchRunning(false);
+    setResearchMessage(null);
+    setResearchOffers([]);
+    setResearchContributions([]);
     setAiAmountOffers({});
     setAiEstimateOffers({});
     setAiEstimateOfferBindings({});
@@ -1535,6 +1575,14 @@ onReviewRecipeContextWithAi,
         : Object.freeze([] as Phase4Row[]),
     [session, adaptation, state.rows, liveRows]
   );
+  /** AN-WEB-1: unresolved identity-missing lines eligible for external research. */
+  const researchEligibleRows = useMemo(
+    () => liveRows.filter((live) =>
+      live.status === 'needs_match' &&
+      aiReviews[live.line_ref]?.decision !== 'needs_review'
+    ),
+    [liveRows, aiReviews]
+  );
   /**
    * The CURRENT live-row status per line, straight from the live projection.
    * This is the authoritative actionability fact the AI-3 estimate port
@@ -1651,6 +1699,10 @@ onReviewRecipeContextWithAi,
     // reviewed decisions and must not linger against a new review identity).
     setAiSuggestions({});
     setAiReviews({});
+    setResearchRunning(false);
+    setResearchMessage(null);
+    setResearchOffers([]);
+    setResearchContributions([]);
     setAiAmountOffers({});
     setAiEstimateOffers({});
     setAiEstimateOfferBindings({});
@@ -2190,6 +2242,112 @@ onReviewRecipeContextWithAi,
   );
 
   /**
+   * AN-WEB-1 — explicit external research for locally unresolved, non-ambiguous
+   * lines. Research never decides a salted/unsalted/brand ambiguity: only
+   * `no_match` explanations are eligible. The returned contributions are OFFERS;
+   * the user must click Use before they enter working state.
+   */
+  const handleResearchWithAi = useCallback(async () => {
+    if (!session || !adaptation.ok || !onResearchNutritionWithAi) {
+      setResearchMessage('External nutrition research is unavailable. Use USDA search or manual review.');
+      return;
+    }
+    if (researchRunning) return;
+    const targets: ResearchTarget[] = [];
+    for (const live of researchEligibleRows) {
+      const lineRef = live.line_ref;
+      const row = stateRef.current.rows.find((entry) => entry.line_ref === lineRef);
+      const entry = adapted.find((item) => item.line_ref === lineRef);
+      if (!row || !entry) continue;
+      const measurement = ingredientMeasurement(entry);
+      targets.push(Object.freeze({
+        line_ref: lineRef,
+        ingredient_text: entry.ingredient.original,
+        amount: measurement.amount,
+        unit: measurement.raw_unit ?? null,
+        measurement_kind: measurement.measurement_kind,
+        ...(measurement.grams !== undefined ? { quantity_grams: measurement.grams } : {}),
+        ...(measurement.milliliters !== undefined ? { quantity_ml: measurement.milliliters } : {}),
+        ambiguity: 'missing_information',
+      }));
+    }
+    if (targets.length === 0) {
+      setResearchMessage('No non-ambiguous unresolved ingredients are eligible for external research.');
+      return;
+    }
+    researchAbortRef.current?.abort();
+    const controller = new AbortController();
+    researchAbortRef.current = controller;
+    setResearchRunning(true);
+    setResearchMessage('Researching credible external nutrition sources for the unresolved ingredients…');
+    setResearchOffers([]);
+    setResearchContributions([]);
+    try {
+      const result = await onResearchNutritionWithAi({
+        targets,
+        lineRefs: targets.map((target) => target.line_ref),
+        lineTextByRef: Object.fromEntries(targets.map((target) => [target.line_ref, target.ingredient_text])),
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted) return;
+      if (result.ok) {
+        setResearchOffers(result.offers ?? []);
+        setResearchContributions(result.contributions ?? []);
+        setResearchMessage(result.message ?? 'External nutrition evidence is ready for review.');
+      } else {
+        setResearchMessage(result.message ?? 'No reliable external nutrition evidence was found.');
+      }
+    } catch {
+      if (!controller.signal.aborted) {
+        setResearchMessage('External nutrition research failed. Use USDA search or manual review.');
+      }
+    } finally {
+      if (researchAbortRef.current === controller) researchAbortRef.current = null;
+      setResearchRunning(false);
+    }
+  }, [session, adaptation, onResearchNutritionWithAi, researchRunning, researchEligibleRows, adapted]);
+
+  /**
+   * Explicit user acceptance of researched contributions. Existing AI-nutrition
+   * state, preview combination, Apply, Save and reopen remain the only authority.
+   */
+  const handleUseResearch = useCallback(() => {
+    if (!session || !adaptation.ok || researchContributions.length === 0) return;
+    const current = stateRef.current;
+    if (current.recipeKey === null) return;
+    if (researchContributions.some((entry) => !current.rows.some((row) => row.line_ref === entry.line_ref))) {
+      setResearchMessage('Researched nutrition no longer matches this review. Run research again.');
+      return;
+    }
+    const calculated = session.calculate(buildCalculationRequest(adapted, current));
+    if (!calculated.ok) {
+      setResearchMessage('Researched nutrition could not be combined with the current review.');
+      return;
+    }
+    const combined = combineAiContributionsWithPreview(calculated.preview, researchContributions);
+    workingDispatch({
+      type: 'accept_ai_nutrition',
+      recipeKey: current.recipeKey,
+      servings: current.baseServings,
+      contributions: researchContributions,
+    });
+    dispatch({
+      type: 'preview_succeeded',
+      seq: current.operationSeq,
+      recipeKey: current.recipeKey,
+      preview: combined,
+    });
+    setAiReviews((current) => {
+      const next = { ...current };
+      for (const contribution of researchContributions) delete next[contribution.line_ref];
+      return next;
+    });
+    setResearchOffers([]);
+    setResearchContributions([]);
+    setResearchMessage('Researched nutrition was added to the working review. Apply to keep it.');
+  }, [session, adaptation, researchContributions, workingDispatch]);
+
+  /**
    * AI CANDIDATE PLAN (AI-2C) — optional, explicit, SECONDARY. Asks the shell for
    * ONE deterministic candidate plan over the current actionable exceptions, then
    * applies ONLY what the deterministic authority already confirmed:
@@ -2722,6 +2880,14 @@ onReviewRecipeContextWithAi,
               return next;
             });
           },
+          researchAvailable: onResearchNutritionWithAi !== undefined && researchEligibleRows.length > 0,
+          researchRunning,
+          researchMessage,
+          researchOffers,
+          onResearch: () => {
+            void handleResearchWithAi();
+          },
+          onUseResearch: handleUseResearch,
           amountOffers: aiAmountOffers,
           // AI-3 estimate offers. INERT until the second explicit click.
           ...(onEstimateMassesWithAi

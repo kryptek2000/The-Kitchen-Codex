@@ -362,6 +362,116 @@ describe('AI-first needs_review — UI', () => {
     expect(document.body.textContent).not.toContain('Old recipe explanation');
   });
 
+  it('offers external research for a no_match line and accepts it only on explicit Use', async () => {
+    const legacy = vi.fn(async () => ({ ok: true, outcome: EMPTY_FOOD, amounts: EMPTY_AMOUNTS }));
+    let lineRef = '';
+    const aiFirst = vi.fn(async (args: { rows: ReadonlyArray<Phase4Row> }) => {
+      lineRef = args.rows[0].line_ref;
+      return {
+        ok: true,
+        outcome: { candidates: [], unresolved: [lineRef], auto_count: 0 },
+        amounts: EMPTY_AMOUNTS,
+        aiFirstReviews: [
+          {
+            line_ref: lineRef,
+            decision: 'no_match' as const,
+            justification: 'No local USDA record is a defensible match.',
+            uncertainty: 'External product evidence may help.',
+            candidate_count: 0,
+          },
+        ],
+      };
+    });
+    const research = vi.fn(async () => ({
+      ok: true,
+      message: 'Researched 1 unresolved ingredient from 1 external source. Review the evidence before using it.',
+      contributions: [
+        {
+          line_ref: lineRef,
+          ingredient: '1 cup Zzz',
+          quantity_basis: '100 g scaled from source per 100 g',
+          weight_grams: 100,
+          disposition: 'edible' as const,
+          exclusion_role: 'none' as const,
+          exclusion_assumption: '',
+          classification: 'source_backed' as const,
+          nutrients: { calories: { amount: 200, unit: 'kcal' as const }, protein: { amount: 5, unit: 'g' as const } },
+          unknown_nutrients: ['fat' as const],
+          assumptions: ['Label values scaled deterministically.'],
+          confidence: 'medium' as const,
+          sources: [{ title: 'Example label', url: 'https://example.com/label' }],
+        },
+      ],
+      offers: [
+        {
+          line_ref: lineRef,
+          ingredient: '1 cup Zzz',
+          source_title: 'Example label',
+          source_url: 'https://example.com/label',
+          quantity_basis: '100 g scaled from source per 100 g',
+          classification: 'source_backed' as const,
+          nutrients: { calories: { amount: 200, unit: 'kcal' }, protein: { amount: 5, unit: 'g' } },
+          limitations: ['Verify the exact product label.'],
+        },
+      ],
+      skipped: [],
+    }));
+    render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup Zzz')}
+        session={session}
+        onResolveWithAi={legacy}
+        onResolveWithAiFirst={aiFirst}
+        onResearchNutritionWithAi={research}
+      />
+    );
+    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
+    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await waitFor(() => expect(aiFirst).toHaveBeenCalledTimes(1));
+    fireEvent.click(await screen.findByTestId('advanced-nutrition-ai-research'));
+    await waitFor(() => expect(research).toHaveBeenCalledTimes(1));
+    expect((research.mock.calls[0] as unknown as [{ targets: ReadonlyArray<{ line_ref: string; ambiguity: string }> }])[0].targets[0]).toMatchObject({
+      line_ref: lineRef,
+      ambiguity: 'missing_information',
+    });
+    const offers = await screen.findByTestId('advanced-nutrition-ai-research-offers');
+    expect(offers.textContent).toContain('External source-backed');
+    expect(offers.textContent).toContain('Example label');
+    expect(offers.textContent).toContain('calories: 200 kcal');
+    fireEvent.click(screen.getByTestId('advanced-nutrition-ai-research-use'));
+    await waitFor(() =>
+      expect(screen.getByTestId('advanced-nutrition-ai-research-message').textContent).toMatch(
+        /Researched nutrition was added/i
+      )
+    );
+  });
+
+  it('offers research for a needs_match line even when no AI-first review explanation exists', async () => {
+    const legacy = vi.fn(async () => ({ ok: true, outcome: EMPTY_FOOD, amounts: EMPTY_AMOUNTS }));
+    const research = vi.fn(async () => ({
+      ok: false,
+      code: 'unavailable',
+      message: 'No reliable external nutrition evidence was found.',
+      skipped: [],
+    }));
+    render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup Zzz')}
+        session={session}
+        onResolveWithAi={legacy}
+        onResearchNutritionWithAi={research}
+      />
+    );
+    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
+    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await waitFor(() => expect(legacy).toHaveBeenCalledTimes(1));
+    fireEvent.click(await screen.findByTestId('advanced-nutrition-ai-research'));
+    await waitFor(() => expect(research).toHaveBeenCalledTimes(1));
+    expect((await screen.findByTestId('advanced-nutrition-ai-research-message')).textContent).toContain(
+      'No reliable external nutrition evidence'
+    );
+  });
+
   it('passes the needs_review marker to explicit Apply without changing the selection', async () => {
     const legacy = vi.fn(async () => ({ ok: true, outcome: EMPTY_FOOD, amounts: EMPTY_AMOUNTS }));
     const applyHandler = vi.fn(async () => ({ ok: true, message: 'Applied.' }));
