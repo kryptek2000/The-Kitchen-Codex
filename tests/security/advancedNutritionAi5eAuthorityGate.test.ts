@@ -17,7 +17,7 @@
  *      before D1 currentness, so an unauthorized caller gets no receipt oracle;
  *   8. FORGED CLIENT INPUT has zero authority and cannot SELECT an authority;
  *   9. DEFAULT `createApp()` is canonical Basic, and one deployment authority governs
- *      the status route and all ten gates identically.
+ *      the status route and all eleven gates identically.
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import http from 'http';
@@ -178,6 +178,7 @@ const GATED_ROUTES: ReadonlyArray<readonly [string, string]> = [
   ['/api/nutrition/interpret-ingredients', 'ai_interpretation'],
   ['/api/nutrition/interpret-whole-recipe', 'ai_interpretation'],
   ['/api/nutrition/resolve-whole-recipe', 'ai_interpretation'],
+  ['/api/nutrition/evaluate-candidates', 'ai_interpretation'],
   // SHISO-C1: the conversational turn is a NINTH transport for AI
   // interpretation under the SAME existing `ai_interpretation` product
   // feature. It introduces no fifth feature and no new entitlement vocabulary.
@@ -217,6 +218,15 @@ function requestBody(path: string, overrides: Record<string, unknown> = {}): unk
         },
         model_invocations_used: 0,
         tool_calls_used: 0,
+        ...overrides,
+      };
+    case '/api/nutrition/evaluate-candidates':
+      return {
+        request_version: 'nutrition_ai_first_candidate_evaluation_request_v1',
+        recipe: AUTHORED_RECIPE,
+        instructions: INSTRUCTIONS,
+        targets: [],
+        candidate_sets: [],
         ...overrides,
       };
     case '/api/nutrition/resolve-whole-recipe':
@@ -712,8 +722,8 @@ describe('AI-5E — the status route under a resolved authority', () => {
 // 5. THE SIX GATES
 // ===========================================================================
 
-describe('AI-5E — the ten gates follow the authority decision', () => {
-  it('Basic denies all ten with the bounded 403 and ZERO provider work', async () => {
+describe('AI-5E — the eleven gates follow the authority decision', () => {
+  it('Basic denies all eleven with the bounded 403 and ZERO provider work', async () => {
     const app = await startApp({ kind: 'deployment', tier: 'basic' });
     try {
       for (const [path] of GATED_ROUTES) {
@@ -725,7 +735,7 @@ describe('AI-5E — the ten gates follow the authority decision', () => {
     }
   });
 
-  it('an UNAVAILABLE authority fails all ten closed with the bounded 503', async () => {
+  it('an UNAVAILABLE authority fails all eleven closed with the bounded 503', async () => {
     for (const behaviour of ['throw', 'reject', 'null', 'hand-authored', 'unknown-status'] as const) {
       const app = await startApp({ kind: 'broken', behaviour, count: true });
       try {
@@ -754,7 +764,7 @@ describe('AI-5E — the ten gates follow the authority decision', () => {
     }
   });
 
-  it('AI Advanced passes the product gate on all ten to their EXISTING downstream semantics', async () => {
+  it('AI Advanced passes the product gate on all eleven to their EXISTING downstream semantics', async () => {
     const app = await startApp({ kind: 'deployment', tier: 'ai_advanced' });
     try {
       for (const [path] of GATED_ROUTES) {
@@ -782,13 +792,13 @@ describe('AI-5E — the ten gates follow the authority decision', () => {
     expect(new Set(gatedInSource)).toEqual(new Set(GATED_ROUTES.map(([p]) => p)));
   });
 
-  it('ten gates, four features: no fifth product feature was introduced', () => {
+  it('eleven gates, four features: no fifth product feature was introduced', () => {
     const gateCalls = [...APP_SOURCE.matchAll(/requireNutritionProductFeature\([^)]*\)/g)].map(
       (m) => m[0],
     );
     // The SHISO conversational and nutrition routes both reuse the existing
     // `ai_interpretation` feature; no fifth feature is introduced.
-    expect(gateCalls).toHaveLength(10);
+    expect(gateCalls).toHaveLength(11);
     const features = new Set(
       gateCalls.map((call) => /"([a-z_]+)"\)/.exec(call)?.[1]).filter(Boolean),
     );
