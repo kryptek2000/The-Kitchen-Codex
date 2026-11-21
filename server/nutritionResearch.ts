@@ -242,36 +242,60 @@ function buildExtractionPrompt(
 
 
 function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return value.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&');
 }
 
-function nutrientSupportedBySource(text: string, nutrient: { id: string; amount: number; unit: string }): boolean {
+/**
+ * A published amount only supports a source-backed claim when the food-label
+ * nutrient and its value occur inside the SAME explicit serving-basis section.
+ * Do not combine a per-100-g number with the per-serving column of a label.
+ * Unclear multi-column layouts fail closed rather than manufacture provenance.
+ */
+function nutrientSupportedBySource(section: string, nutrient: { id: string; amount: number; unit: string }): boolean {
   const definition = (NUTRIENT_REGISTRY as Record<string, { label?: string }>)[nutrient.id];
-  const keywords = [definition?.label, nutrient.id.replace(/_/g, ' '), nutrient.id].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+  const keywords = [definition?.label, nutrient.id.replace(/_/g, ' '), nutrient.id]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
   const amount = escapeRegExp(String(nutrient.amount));
   const unit = escapeRegExp(String(nutrient.unit));
-  return keywords.some((keyword) => {
-    const key = escapeRegExp(keyword.trim());
-    return new RegExp(`${key}[^\\n]{0,40}${amount}\\s*${unit}`, 'i').test(text) ||
-      new RegExp(`${amount}\\s*${unit}[^\\n]{0,40}${key}`, 'i').test(text);
-  });
+  return keywords.some((keyword) => new RegExp(
+    '\\b' + escapeRegExp(keyword.trim()) + '\\b\\s*[:=\\-]?\\s*' + amount + '\\s*' + unit + '\\b',
+    'i'
+  ).test(section));
 }
 
-function sourceSupportsEvidence(item: any, sourceText: string): boolean {
-  const text = String(sourceText || '').toLowerCase();
-  if (text.length === 0) return false;
-  const basis = item.basis || {};
-  if (basis.kind === 'per_100_g') {
-    if (!/100\s*g/i.test(text)) return false;
-  } else {
-    if (basis.serving_amount !== undefined && !text.includes(String(basis.serving_amount))) return false;
-    if (basis.serving_unit !== undefined && !text.toLowerCase().includes(String(basis.serving_unit).toLowerCase())) return false;
-    if (basis.serving_grams !== undefined && !text.includes(String(basis.serving_grams))) return false;
+function sourceSupportsEvidence(item: ResearchEvidence, sourceText: string): boolean {
+  const text = String(sourceText || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  if (!text || !Array.isArray(item.nutrients) || item.nutrients.length === 0) return false;
+  const basis = item.basis;
+  // These headings are the only supported provenance boundaries. Complex
+  // nutrition tables with interleaved per-100-g/per-serving columns are not
+  // confidently attributable from flattened text and must remain unresolved.
+  const headings = [...text.matchAll(
+    /\bper\s*100\s*(?:g|grams)\b|\b(?:serving(?:\s+size)?\s*:\s*|per\s+)\d+(?:\.\d+)?\s*(?:tbsp|tablespoons?|tsp|teaspoons?|cups?|g|grams?|ml|milliliters?|oz|slices?|pieces?)\b/gi
+  )];
+  const servingHeading = basis.kind === 'per_serving' && basis.serving_amount !== undefined && basis.serving_unit !== undefined
+    ? new RegExp(
+        '^(?:serving(?:\\s+size)?\\s*:\\s*|per\\s+)' +
+          escapeRegExp(String(basis.serving_amount)) + '\\s*' +
+          escapeRegExp(basis.serving_unit) + '\\b',
+        'i'
+      )
+    : null;
+  for (let i = 0; i < headings.length; i++) {
+    const heading = headings[i];
+    const per100 = /^per\s*100\s*(?:g|grams)\b/i.test(heading[0]);
+    if ((basis.kind === 'per_100_g') !== per100) continue;
+    if (!per100 && (!servingHeading || !servingHeading.test(heading[0]))) continue;
+    const section = text.slice(heading.index, headings[i + 1]?.index ?? text.length);
+    if (basis.kind === 'per_serving' && basis.serving_grams !== undefined) {
+      const grams = new RegExp('\\b' + escapeRegExp(String(basis.serving_grams)) + '\\s*g\\b', 'i');
+      if (!grams.test(section.slice(0, 70))) continue;
+    }
+    if (item.nutrients.every((nutrient) => nutrientSupportedBySource(section, nutrient))) {
+      return true;
+    }
   }
-  for (const nutrient of item.nutrients || []) {
-    if (!nutrientSupportedBySource(text, nutrient)) return false;
-  }
-  return true;
+  return false;
 }
 
 /**
