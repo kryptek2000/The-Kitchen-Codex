@@ -18,7 +18,7 @@
 
 import { safeFetchHtml } from './ssrfGuard.js';
 import { resolveExecutableTextCandidates } from './ai/effectiveSelection.js';
-import { getRegisteredProviders } from './ai/providerRegistry.js';
+import { getRegisteredProviders, findRegisteredProvider, effectiveCapabilities } from './ai/providerRegistry.js';
 import { normalizeProviderError, throwIfCallerCancelled } from './ai/providerErrors.js';
 import { resolveThinkingProviderOptions } from './ai/thinkingPolicy.js';
 import { MODEL_CONFIG } from './modelConfig.js';
@@ -245,6 +245,16 @@ function sourceSupportsEvidence(item: any, sourceText: string): boolean {
   const text = String(sourceText || '').toLowerCase();
   if (text.length === 0) return false;
   if (item.basis?.kind === 'per_100_g') {
+    if (!/100\s*g/.test(text)) return false;
+    for (const nutrient of item.nutrients || []) {
+      const amount = String(nutrient.amount);
+      if (!text.includes(amount)) return false;
+    }
+  } else {
+    const basis = item.basis || {};
+    if (basis.serving_amount !== undefined && !text.includes(String(basis.serving_amount))) return false;
+    if (basis.serving_unit !== undefined && !text.includes(String(basis.serving_unit).toLowerCase())) return false;
+    if (basis.serving_grams !== undefined && !text.includes(String(basis.serving_grams))) return false;
     for (const nutrient of item.nutrients || []) {
       const amount = String(nutrient.amount);
       if (!text.includes(amount)) return false;
@@ -286,7 +296,10 @@ export async function researchNutritionOnServer(
   if (signal?.aborted) return failure('search_failed', false, skipped);
 
   const candidates = resolveExecutableTextCandidates('nutrition', getRegisteredProviders(), selection)
-    .filter((candidate) => candidate.provider.capabilities?.webSearch === true && typeof candidate.provider.searchWeb === 'function')
+    .filter((candidate) => {
+      const registered = findRegisteredProvider(getRegisteredProviders(), candidate.provider.id);
+      return Boolean(registered && effectiveCapabilities(registered, candidate.model).webSearch === true && typeof candidate.provider.searchWeb === 'function');
+    })
     .slice(0, 1)
     .map((candidate) => ({ ...candidate, singleAttempt: true, terminalOnFailure: true }));
   if (candidates.length === 0) return failure('web_unavailable', false, skipped);
