@@ -71,11 +71,24 @@ const BENCHMARK_B_INSTRUCTIONS = [
   'Simmer gently; do not boil hard.',
 ];
 
+/**
+ * The app is imported AFTER `vi.resetModules()`, so the test must use the SAME
+ * fresh providerErrors module instance for an `instanceof`-preserved CANCELLED
+ * error. A module loaded before `resetModules` would be a different class.
+ */
+let liveCallerCancellationError:
+  | ((ctx?: { providerId?: string; model?: string }, cause?: unknown) => Error)
+  | null = null;
+
 const prov = vi.hoisted(() => ({
   calls: 0,
   prompts: [] as string[],
   throwOnPass: 0 as 0 | 1 | 2,
+  overridePassOne: null as null | ((payload: unknown) => unknown),
   overridePassTwo: null as null | ((payload: unknown) => unknown),
+  abortPassOne: false,
+  passOneSignal: null as AbortSignal | null,
+  markPassOneStarted: null as (() => void) | null,
 }));
 
 vi.mock('../../server/ai/providerRegistry.js', async () => {
@@ -284,10 +297,32 @@ const mockProvider: AiProvider = {
     if (prov.throwOnPass === 1 || prov.throwOnPass === 2) {
       throw new Error('provider unavailable');
     }
-    if (prompt.includes('RECIPE AND USDA CANDIDATE DATA')) {
+    const isPassTwo = prompt.includes('RECIPE AND USDA CANDIDATE DATA');
+    if (!isPassTwo && prov.abortPassOne) {
+      prov.passOneSignal = _options?.signal ?? null;
+      prov.markPassOneStarted?.();
+      return await new Promise<never>((_resolve, reject) => {
+        const signal = _options?.signal;
+        if (!signal) {
+          reject(new Error('missing pass-1 cancellation signal'));
+          return;
+        }
+        const cancellation = () =>
+          liveCallerCancellationError
+            ? liveCallerCancellationError({ providerId: 'gemini', model: 'mock-pass-1' })
+            : new Error('cancelled');
+        if (signal.aborted) {
+          reject(cancellation());
+          return;
+        }
+        signal.addEventListener('abort', () => reject(cancellation()), { once: true });
+      });
+    }
+    if (isPassTwo) {
       if (prov.overridePassTwo) return prov.overridePassTwo(payloadAfter(prompt, 'RECIPE AND USDA CANDIDATE DATA')) as never;
       return evaluationReply(prompt) as never;
     }
+    if (prov.overridePassOne) return prov.overridePassOne(payloadAfter(prompt, 'RECIPE DATA')) as never;
     return semanticReply(prompt) as never;
   },
 };
@@ -312,6 +347,8 @@ let network: NetworkAdapter;
 
 beforeAll(async () => {
   vi.resetModules();
+  const liveErrors = await import('../../server/ai/providerErrors.js');
+  liveCallerCancellationError = liveErrors.callerCancellationError;
   for (const key of ENV_KEYS) delete process.env[key];
   process.env.AI_ENDPOINT_TOKEN = AI_ENDPOINT_TOKEN;
   process.env.NUTRITION_INTERPRET_RATE_LIMIT = '1000';
@@ -332,11 +369,17 @@ beforeAll(async () => {
   const address = server.address() as AddressInfo;
   baseUrl = `http://127.0.0.1:${address.port}`;
 
-  const doFetch = async <T>(method: string, path: string, bodyValue?: unknown) => {
+  const doFetch = async <T>(
+    method: string,
+    path: string,
+    bodyValue?: unknown,
+    options?: { signal?: AbortSignal }
+  ) => {
     const response = await fetch(`${baseUrl}${path}`, {
       method,
       headers: { 'content-type': 'application/json', authorization: `Bearer ${AI_ENDPOINT_TOKEN}` },
       ...(bodyValue !== undefined ? { body: JSON.stringify(bodyValue) } : {}),
+      ...(options?.signal !== undefined ? { signal: options.signal } : {}),
     });
     const raw = await response.text();
     let data: unknown;
@@ -348,10 +391,12 @@ beforeAll(async () => {
     return { status: response.status, ok: response.ok, data };
   };
   network = {
-    request: (request: { method: string; path: string; body?: unknown }) =>
-      doFetch(request.method, request.path, request.body),
-    get: (path: string) => doFetch('GET', path),
-    post: (path: string, body?: unknown) => doFetch('POST', path, body),
+    request: (request: { method: string; path: string; body?: unknown; signal?: AbortSignal }) =>
+      doFetch(request.method, request.path, request.body, { signal: request.signal }),
+    get: (path: string, options?: { signal?: AbortSignal }) =>
+      doFetch('GET', path, undefined, options),
+    post: (path: string, body?: unknown, options?: { signal?: AbortSignal }) =>
+      doFetch('POST', path, body, options),
   } as unknown as NetworkAdapter;
 }, 240000);
 
@@ -383,7 +428,11 @@ beforeEach(() => {
   prov.calls = 0;
   prov.prompts = [];
   prov.throwOnPass = 0;
+  prov.overridePassOne = null;
   prov.overridePassTwo = null;
+  prov.abortPassOne = false;
+  prov.passOneSignal = null;
+  prov.markPassOneStarted = null;
 });
 
 interface PreparedRecipe {
@@ -556,6 +605,89 @@ describe('AI-first Generate — real USDA records, two passes, local authority',
       }
       expect(calculated.preview.totals.calories?.amount ?? 0).toBeGreaterThan(0);
     }
+  }, 120000);
+
+  it('investigates a broader USDA food family from an AI-declared qualifier when the authored name is absent', async () => {
+    const prepared = prepare(BENCHMARK_A_LINES, BENCHMARK_A_INSTRUCTIONS);
+    const actionable = prepared.liveRows.filter((row) => liveExceptionKind(row.status) !== undefined);
+    const targetRows = prepared.rows.filter((row) => actionable.some((live) => live.line_ref === row.line_ref));
+
+    // A REALISTIC live failure shape: the model provides only `tomato passata`
+    // for passata, but declares `tomato` as its food-family qualifier. The
+    // generic discovery fallback must investigate actual tomato records rather
+    // than leaving an empty candidate set.
+    prov.overridePassOne = (payload) => {
+      const data = payload as {
+        requested_targets: Array<{ line_ref: string }>;
+        recipe: { ingredients: Array<{ line_ref: string; source_text: string }> };
+      };
+      const sourceByRef = new Map(data.recipe.ingredients.map((entry) => [entry.line_ref, entry.source_text]));
+      return {
+        contract_version: 'nutrition_ai_advanced_interpretation_v1',
+        interpretations: data.requested_targets.map((target) => {
+          const source = sourceByRef.get(target.line_ref) ?? '';
+          const base = semanticInterpretation(target.line_ref, source) as any;
+          if (!source.toLowerCase().includes('passata')) return base;
+          return {
+            ...base,
+            semantic_food: { ...base.semantic_food, qualifiers: ['tomato'] },
+            search_phrases: ['tomato passata'],
+          };
+        }),
+      };
+    };
+
+    const result = await resolveWithAiFirst({
+      network,
+      session,
+      rows: targetRows,
+      adapted: prepared.adapted,
+      capabilities: AI_ADVANCED_CAPABILITIES,
+      wholeRecipe: wholeRecipeSource(prepared, BENCHMARK_A_LINES, BENCHMARK_A_INSTRUCTIONS, targetRows),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(prov.calls).toBe(2);
+    const passataRef = prepared.adapted.find((entry) => entry.ingredient.original.includes('passata'))?.line_ref as string;
+    const selected = result.outcome.candidates.find((candidate) => candidate.line_ref === passataRef);
+    expect(selected).toBeDefined();
+    expect(selected?.description.toLowerCase()).toContain('tomato');
+    expect(selected?.description.toLowerCase()).toContain('puree');
+    expect(selected?.choice.aiFirst).toBe(true);
+    // The pass-2 prompt must contain actual tomato records, not an empty set.
+    const passTwo = prov.prompts[1] as string;
+    expect(passTwo.toLowerCase()).toContain('tomato, puree, canned');
+  }, 120000);
+
+  it('forwards client cancellation through the real HTTP route to the pass-1 provider signal', async () => {
+    const prepared = prepare(BENCHMARK_A_LINES, BENCHMARK_A_INSTRUCTIONS);
+    const actionable = prepared.liveRows.filter((row) => liveExceptionKind(row.status) !== undefined);
+    const targetRows = prepared.rows.filter((row) => actionable.some((live) => live.line_ref === row.line_ref));
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    prov.abortPassOne = true;
+    prov.markPassOneStarted = markStarted;
+    const controller = new AbortController();
+    const running = resolveWithAiFirst({
+      network,
+      session,
+      rows: targetRows,
+      adapted: prepared.adapted,
+      capabilities: AI_ADVANCED_CAPABILITIES,
+      wholeRecipe: wholeRecipeSource(prepared, BENCHMARK_A_LINES, BENCHMARK_A_INSTRUCTIONS, targetRows),
+      signal: controller.signal,
+    });
+    await started;
+    expect(prov.passOneSignal).not.toBeNull();
+    controller.abort();
+    const result = await running;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(result.ok).toBe(false);
+    expect(prov.passOneSignal?.aborted).toBe(true);
+    // ONE provider attempt. Cancellation is terminal: no retry, no pass 2.
+    expect(prov.calls).toBe(1);
   }, 120000);
 
   it('Benchmark B: uses recipe context to distinguish canned cooking milk from a sweetened product', async () => {

@@ -368,6 +368,11 @@ export type AdvancedNutritionAiResolveHandler = (args: {
    */
   readonly recipe?: ObsidianRecipe;
   /**
+   * Caller cancellation owned by the card. The AI-first port forwards it through
+   * both HTTP requests so the route can abort the actual provider transport.
+   */
+  readonly signal?: AbortSignal;
+  /**
    * AN-ARCH-1 — set ONLY for the automatic AI pass that follows the explicit
    * Generate action. The shell may then keep a DETERMINISTICALLY VALIDATED
    * semantic match automatic instead of downgrading every `review_suggested`
@@ -567,6 +572,12 @@ onReviewRecipeContextWithAi,
   const aiGeneration = useRef(0);
   /** Synchronous re-entry guard (a rapid double-click must make ONE request). */
   const aiRunningRef = useRef(false);
+  /**
+   * Cancellation owner for the CURRENT AI request. Closing the editor, changing
+   * the recipe/session, bundle failure or unmount aborts it; the AI-first port
+   * forwards this signal to the HTTP route and the actual provider transport.
+   */
+  const aiAbortRef = useRef<AbortController | null>(null);
   /** Latest recipe/session identity, readable from async callbacks. */
   const identityRef = useRef<{ recipeKey: string | null; sessionIdentity: string | null }>({
     recipeKey: null,
@@ -770,6 +781,8 @@ onReviewRecipeContextWithAi,
    * opened yet during lazy loading.
    */
   const cancelGenerateAiIntent = useCallback(() => {
+    aiAbortRef.current?.abort();
+    aiAbortRef.current = null;
     setPendingGenerateAi(null);
     setGenerateAiFeedback(null);
     generateAiStartedRef.current = null;
@@ -839,6 +852,8 @@ onReviewRecipeContextWithAi,
       isOpenRef.current = false;
       aiGeneration.current += 1;
       aiRequestSeq.current += 1;
+      aiAbortRef.current?.abort();
+      aiAbortRef.current = null;
       generateAiStartedRef.current = null;
     },
     []
@@ -853,6 +868,8 @@ onReviewRecipeContextWithAi,
     aiGeneration.current += 1;
     aiRequestSeq.current += 1;
     aiRunningRef.current = false;
+    aiAbortRef.current?.abort();
+    aiAbortRef.current = null;
     setAiSuggestions({});
     setAiAmountOffers({});
     setAiEstimateOffers({});
@@ -1854,6 +1871,11 @@ onReviewRecipeContextWithAi,
         };
       }
       aiRunningRef.current = true;
+      // ONE cancellation owner for this request. It is aborted by editor close,
+      // recipe/session change, bundle failure, unmount, or a newer request.
+      aiAbortRef.current?.abort();
+      const requestController = new AbortController();
+      aiAbortRef.current = requestController;
       // MID-FLIGHT USER-AUTHORITY SNAPSHOT. For EVERY current row, capture the
       // semantic working choice at the instant the request starts. At apply time
       // any row whose choice changed in the meantime is SKIPPED: the user's newer
@@ -1899,6 +1921,7 @@ onReviewRecipeContextWithAi,
           // current at CLICK time, and `stillCurrent()` below still discards any
           // response whose recipe/session generation has moved on.
           recipe,
+          signal: requestController.signal,
           ...(options?.orchestration !== undefined
             ? { orchestration: options.orchestration }
             : {}),
@@ -2121,6 +2144,7 @@ onReviewRecipeContextWithAi,
           message,
         };
       } finally {
+        if (aiAbortRef.current === requestController) aiAbortRef.current = null;
         if (aiRequestSeq.current === seq) {
           aiRunningRef.current = false;
           setAiRunning(false);

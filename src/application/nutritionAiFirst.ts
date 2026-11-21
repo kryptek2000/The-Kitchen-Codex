@@ -124,6 +124,12 @@ export interface AiFirstRunArgs {
   /** The complete authored source, when the shell already built it. */
   readonly wholeRecipe?: AiFirstWholeRecipeSource;
   readonly capabilities?: NutritionCapabilities;
+  /**
+   * Caller cancellation from the UI/shell. Forwarded through BOTH transport
+   * requests so the HTTP route can abort the actual provider call. It never
+   * replaces the server-owned deadlines.
+   */
+  readonly signal?: AbortSignal;
 }
 
 interface PassOneResult {
@@ -163,7 +169,9 @@ async function requestWholeRecipeInterpretations(
         instructions: source.instructions,
         targets: source.targets,
       },
-      await buildAiSelectionRequestOptions()
+      await buildAiSelectionRequestOptions(
+        args.signal !== undefined ? { signal: args.signal } : undefined
+      )
     );
   } catch {
     return { ok: false, interpretations: [], withheld: [], message: AI_FIRST_UNAVAILABLE_MESSAGE };
@@ -230,37 +238,65 @@ function discoverCandidates(
       continue;
     }
     const byFdc = new Map<number, AiFirstLocalCandidate>();
-    for (const query of discoveryQueries(interpretation)) {
-      if (byFdc.size >= MAX_DISCOVERY_CANDIDATES_PER_TARGET) break;
-      let result;
-      try {
-        result = session.searchFoods(query, MAX_DISCOVERY_HITS_PER_QUERY);
-      } catch {
-        continue;
-      }
-      if (!result.ok) continue;
-      for (const hit of result.results) {
+    const collect = (queries: ReadonlyArray<string>): void => {
+      for (const query of queries) {
         if (byFdc.size >= MAX_DISCOVERY_CANDIDATES_PER_TARGET) break;
-        if (byFdc.has(hit.fdc_id)) continue;
-        const description = hit.description.slice(0, MAX_AI_FIRST_CANDIDATE_DESCRIPTION_LENGTH);
-        if (description.length === 0) continue;
-        const dataType = typeof hit.data_type === 'string' ? hit.data_type : '';
-        if (dataType !== 'foundation' && dataType !== 'sr_legacy' && dataType !== 'fndds') continue;
-        const portionSummary =
-          typeof hit.portion_summary === 'string' && hit.portion_summary.trim().length > 0
-            ? hit.portion_summary.trim().slice(0, 80)
-            : undefined;
-        byFdc.set(
-          hit.fdc_id,
-          Object.freeze({
-            candidate_ref: `c${byFdc.size + 1}`,
-            fdc_id: hit.fdc_id,
-            description,
-            record_digest: hit.record_digest,
-            data_type: dataType,
-            ...(portionSummary !== undefined ? { portion_summary: portionSummary } : {}),
-          })
-        );
+        let result;
+        try {
+          result = session.searchFoods(query, MAX_DISCOVERY_HITS_PER_QUERY);
+        } catch {
+          continue;
+        }
+        if (!result.ok) continue;
+        for (const hit of result.results) {
+          if (byFdc.size >= MAX_DISCOVERY_CANDIDATES_PER_TARGET) break;
+          if (byFdc.has(hit.fdc_id)) continue;
+          const description = hit.description.slice(0, MAX_AI_FIRST_CANDIDATE_DESCRIPTION_LENGTH);
+          if (description.length === 0) continue;
+          const dataType = typeof hit.data_type === 'string' ? hit.data_type : '';
+          if (dataType !== 'foundation' && dataType !== 'sr_legacy' && dataType !== 'fndds') continue;
+          const portionSummary =
+            typeof hit.portion_summary === 'string' && hit.portion_summary.trim().length > 0
+              ? hit.portion_summary.trim().slice(0, 80)
+              : undefined;
+          byFdc.set(
+            hit.fdc_id,
+            Object.freeze({
+              candidate_ref: `c${byFdc.size + 1}`,
+              fdc_id: hit.fdc_id,
+              description,
+              record_digest: hit.record_digest,
+              data_type: dataType,
+              ...(portionSummary !== undefined ? { portion_summary: portionSummary } : {}),
+            })
+          );
+        }
+      }
+    };
+
+    const primaryQueries = discoveryQueries(interpretation);
+    collect(primaryQueries);
+
+    // GENERIC DISCOVERY FALLBACK. The model may declare a food-family/composition
+    // qualifier (for example `tomato` or `dairy`) that is broader than the
+    // authored name. When the authored wording finds nothing in the catalog, try
+    // ONE additional bounded hypothesis built from those MODEL-DECLARED
+    // qualifiers. This is not an ingredient-specific synonym map and it grants no
+    // authority: every returned record is still compared by pass 2 and verified
+    // locally against the authored source. Without this, a correct interpretation
+    // using regional terminology can produce an empty candidate set even when the
+    // catalog contains the broader food family.
+    if (byFdc.size === 0) {
+      const qualifierQuery = interpretation.semantic_food.qualifiers
+        .map((qualifier) => qualifier.trim())
+        .filter((qualifier) => qualifier.length > 0)
+        .join(' ')
+        .slice(0, 120);
+      if (
+        qualifierQuery.length > 0 &&
+        !primaryQueries.some((query) => query.toLowerCase() === qualifierQuery.toLowerCase())
+      ) {
+        collect([qualifierQuery]);
       }
     }
     sets.push(
@@ -318,7 +354,9 @@ async function requestCandidateEvaluation(
         targets: source.targets,
         candidate_sets: targets,
       },
-      await buildAiSelectionRequestOptions()
+      await buildAiSelectionRequestOptions(
+        args.signal !== undefined ? { signal: args.signal } : undefined
+      )
     );
   } catch {
     return { ok: false, decisions: [], message: AI_FIRST_UNAVAILABLE_MESSAGE };

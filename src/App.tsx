@@ -2771,6 +2771,7 @@ export default function App() {
     rows,
     adapted,
     recipe,
+    signal,
   }) => {
     let wholeRecipe: WholeRecipeSemanticSource | undefined;
     if (recipe !== undefined) {
@@ -2797,6 +2798,7 @@ export default function App() {
       capabilities: await resolveEffectiveNutritionCapabilitiesOnce(),
       ...(recipe !== undefined ? { recipe } : {}),
       ...(wholeRecipe !== undefined ? { wholeRecipe } : {}),
+      ...(signal !== undefined ? { signal } : {}),
     });
   };
 

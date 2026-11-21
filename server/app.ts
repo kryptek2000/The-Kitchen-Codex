@@ -1130,7 +1130,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // about request validation and consumes no AI budget. Reusing
   // `nutritionInterpretRateLimiter` keeps both semantic transports in ONE
   // cost/rate category so route-switching cannot double the quota.
-  app.post("/api/nutrition/interpret-whole-recipe", requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccessAuthority, "ai_interpretation"), textPricingGuard, nutritionInterpretRateLimiter, async (req, res) => {
+  app.post("/api/nutrition/interpret-whole-recipe", routeCancellationMiddleware, requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccessAuthority, "ai_interpretation"), textPricingGuard, nutritionInterpretRateLimiter, async (req, res) => {
     const clientIp = getClientIp(req);
 
     // The response carries freshness-bound semantics, execution identity and an
@@ -1138,6 +1138,9 @@ export function createApp(opts: CreateAppOptions): express.Express {
     res.setHeader("Cache-Control", "no-store");
 
     try {
+      const routeState = cancellationFor(req);
+      const cancellation = routeState.controller;
+      if (cancellation.signal.aborted || res.destroyed || res.writableEnded) return;
       // F-02 / §14: the route NEVER derives or trusts context. It passes the RAW
       // body straight through so the operation's CLOSED request sanitizer can SEE
       // and REFUSE forbidden or unknown fields. Rebuilding only recipe /
@@ -1145,10 +1148,14 @@ export function createApp(opts: CreateAppOptions): express.Express {
       // `context_binding`, `provider_context`, `operation_id`, `origin_receipt`,
       // fdc_id, ... — turning a refusal into a silent success.
       const userSelection = parseTextSelectionHeader(req.headers);
-      // The ONLY server option the route may supply is the strictly-parsed,
-      // non-secret provider selection. The internal `registry` / `candidates` /
-      // `authority` test seams are NOT reachable from HTTP.
-      const result = await interpretWholeRecipeSemantics(req.body, { userSelection });
+      // The ONLY server options the route may supply are the strictly-parsed,
+      // non-secret provider selection and the route-owned abort signal. The
+      // internal `registry` / `candidates` / `authority` test seams are NOT
+      // reachable from HTTP.
+      const result = await interpretWholeRecipeSemantics(req.body, {
+        userSelection,
+        signal: cancellation.signal,
+      });
 
       if (result.ok !== true) {
         const failure = result as {

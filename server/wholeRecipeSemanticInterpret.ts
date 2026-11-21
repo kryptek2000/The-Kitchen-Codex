@@ -430,6 +430,8 @@ export const WHOLE_RECIPE_SEMANTIC_INSTRUCTIONS: readonly string[] = Object.free
   'For each requested line, describe what the WORDS mean in this recipe: the food identity wording, food-defining modifiers (e.g. whole, raw, cooked, ground, skinless), the preparation being performed, the physical state, any qualifiers, the authored amount language, the unit wording, any count noun and size wording, useful short generic search wordings, plausible alternatives, and genuine ambiguity.',
   'Search wording must be specific enough for a food database. When a bare token is shared with other food families or is otherwise ambiguous, include the food family/category in the search phrase; never offer an isolated ambiguous token as the only search wording.',
   'Prefer specific, commonly understood food descriptions over isolated words. Use ordinary food terminology only when it is genuinely equivalent to what the recipe means; never invent a food category, identity, or equivalence without support in the authored wording or recipe context.',
+  'An authored food may have a regional, branded, translated, or home-cooking name that is not a database description. In that case, provide the authored wording AND additional discovery hypotheses phrased as ordinary database-style food descriptions. A useful broader hypothesis may name the same food family with its form, processing, preparation, or composition. These are SEARCH HYPOTHESES, not assertions that a broader food is equivalent: never erase a food-defining modifier, and never claim equivalence the recipe does not support.',
+  'When the direct name may not be a database description, return more than one distinct search formulation when genuinely useful (for example, the authored name and a broader culinary description). Keep the set small, bounded, and deduplicated. When no defensible broader description exists, say so through ambiguity instead of inventing one.',
   'Preserve relevant composition, processing, preparation, and state in the search wording. Return a small bounded set of distinct useful search phrases when more than one wording helps discovery; do not pad with unsupported synonyms or guesses.',
   'Distinguish FOOD IDENTITY from PREPARATION WORDING. Preparation describes what was done to the food; it does not replace what the food is.',
   'Use ordinary cooking knowledge. Ingredients may be separated, combined, recombined, retained, discarded, reserved, divided, transformed, or used as a cooking medium. Work out what actually ends up in the dish and what the recipe means by that line in this context.',
@@ -529,6 +531,12 @@ export interface WholeRecipeSemanticOperationOptions {
   readonly authority?: WholeRecipeSemanticOriginAuthority;
   /** Non-secret client selection intent, honored by the existing selection owner. */
   readonly userSelection?: SelectionInput;
+  /**
+   * Caller cancellation owned by the HTTP route. It aborts the ACTUAL provider
+   * request promptly and is independent of the server-owned 45-second timeout.
+   * A cancellation is terminal and never triggers retry or fallback.
+   */
+  readonly signal?: AbortSignal;
 }
 
 // ---------------------------------------------------------------------------
@@ -717,6 +725,9 @@ export async function interpretWholeRecipeSemantics(
           // Operation-specific server-owned deadline. Ordinary text operations
           // retain MODEL_CONFIG.requestTimeoutMs.
           timeoutMs: MODEL_CONFIG.wholeRecipeSemanticTimeoutMs,
+          // Caller cancellation is forwarded to the ACTUAL provider transport,
+          // independently of the trusted 45-second timeout above.
+          ...(options.signal !== undefined ? { signal: options.signal } : {}),
           // Phase 9B-P1: resolved from the EXECUTING candidate (see
           // `server/ai/thinkingPolicy.ts`). The 9B-2C smoke proved the primary
           // Gemini 3.7 Flash candidate rejects a hard-coded `MINIMAL` with HTTP
