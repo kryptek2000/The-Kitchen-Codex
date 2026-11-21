@@ -18,7 +18,7 @@
 
 import { safeFetchHtml } from './ssrfGuard.js';
 import { resolveExecutableTextCandidates } from './ai/effectiveSelection.js';
-import { getRegisteredProviders } from './ai/providerRegistry.js';
+import { getRegisteredProviders, findRegisteredProvider, effectiveCapabilities } from './ai/providerRegistry.js';
 import { normalizeProviderError, throwIfCallerCancelled } from './ai/providerErrors.js';
 import { resolveThinkingProviderOptions } from './ai/thinkingPolicy.js';
 import { culinaryExpertiseBlock } from './ai/culinaryExpertise.js';
@@ -244,16 +244,61 @@ export function buildExtractionPrompt(
 }
 
 
-function sourceSupportsEvidence(item: any, sourceText: string): boolean {
-  const text = String(sourceText || '').toLowerCase();
-  if (text.length === 0) return false;
-  if (item.basis?.kind === 'per_100_g') {
-    for (const nutrient of item.nutrients || []) {
-      const amount = String(nutrient.amount);
-      if (!text.includes(amount)) return false;
+function escapeRegExp(value: string): string {
+  return value.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&');
+}
+
+/**
+ * A published amount only supports a source-backed claim when the food-label
+ * nutrient and its value occur inside the SAME explicit serving-basis section.
+ * Do not combine a per-100-g number with the per-serving column of a label.
+ * Unclear multi-column layouts fail closed rather than manufacture provenance.
+ */
+function nutrientSupportedBySource(section: string, nutrient: { id: string; amount: number; unit: string }): boolean {
+  const definition = (NUTRIENT_REGISTRY as Record<string, { label?: string }>)[nutrient.id];
+  const keywords = [definition?.label, nutrient.id.replace(/_/g, ' '), nutrient.id]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+  const amount = escapeRegExp(String(nutrient.amount));
+  const unit = escapeRegExp(String(nutrient.unit));
+  return keywords.some((keyword) => new RegExp(
+    '\\b' + escapeRegExp(keyword.trim()) + '\\b\\s*[:=\\-]?\\s*' + amount + '\\s*' + unit + '\\b',
+    'i'
+  ).test(section));
+}
+
+function sourceSupportsEvidence(item: ResearchEvidence, sourceText: string): boolean {
+  const text = String(sourceText || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  if (!text || !Array.isArray(item.nutrients) || item.nutrients.length === 0) return false;
+  const basis = item.basis;
+  // These headings are the only supported provenance boundaries. Complex
+  // nutrition tables with interleaved per-100-g/per-serving columns are not
+  // confidently attributable from flattened text and must remain unresolved.
+  const headings = [...text.matchAll(
+    /\bper\s*100\s*(?:g|grams)\b|\b(?:serving(?:\s+size)?\s*:\s*|per\s+)\d+(?:\.\d+)?\s*(?:tbsp|tablespoons?|tsp|teaspoons?|cups?|g|grams?|ml|milliliters?|oz|slices?|pieces?)\b/gi
+  )];
+  const servingHeading = basis.kind === 'per_serving' && basis.serving_amount !== undefined && basis.serving_unit !== undefined
+    ? new RegExp(
+        '^(?:serving(?:\\s+size)?\\s*:\\s*|per\\s+)' +
+          escapeRegExp(String(basis.serving_amount)) + '\\s*' +
+          escapeRegExp(basis.serving_unit) + '\\b',
+        'i'
+      )
+    : null;
+  for (let i = 0; i < headings.length; i++) {
+    const heading = headings[i];
+    const per100 = /^per\s*100\s*(?:g|grams)\b/i.test(heading[0]);
+    if ((basis.kind === 'per_100_g') !== per100) continue;
+    if (!per100 && (!servingHeading || !servingHeading.test(heading[0]))) continue;
+    const section = text.slice(heading.index, headings[i + 1]?.index ?? text.length);
+    if (basis.kind === 'per_serving' && basis.serving_grams !== undefined) {
+      const grams = new RegExp('\\b' + escapeRegExp(String(basis.serving_grams)) + '\\s*g\\b', 'i');
+      if (!grams.test(section.slice(0, 70))) continue;
+    }
+    if (item.nutrients.every((nutrient) => nutrientSupportedBySource(section, nutrient))) {
+      return true;
     }
   }
-  return true;
+  return false;
 }
 
 /**
@@ -289,7 +334,10 @@ export async function researchNutritionOnServer(
   if (signal?.aborted) return failure('search_failed', false, skipped);
 
   const candidates = resolveExecutableTextCandidates('nutrition', getRegisteredProviders(), selection)
-    .filter((candidate) => candidate.provider.capabilities?.webSearch === true && typeof candidate.provider.searchWeb === 'function')
+    .filter((candidate) => {
+      const registered = findRegisteredProvider(getRegisteredProviders(), candidate.provider.id);
+      return Boolean(registered && effectiveCapabilities(registered, candidate.model).webSearch === true && typeof candidate.provider.searchWeb === 'function');
+    })
     .slice(0, 1)
     .map((candidate) => ({ ...candidate, singleAttempt: true, terminalOnFailure: true }));
   if (candidates.length === 0) return failure('web_unavailable', false, skipped);

@@ -105,7 +105,7 @@ beforeEach(() => {
   state.extraction = () => evidence();
   state.searchResults = [{ url: 'https://example.com/marmite', title: 'Example Marmite label' }];
   state.fetchCalls = 0;
-  state.fetchHtml = '<html><body><h1>Example Marmite label</h1><p>Nutrition Facts: per 100 g calories 250, protein 10 g, fat 12 g, carbohydrates 20 g, sodium 400 mg.</p><p>Typical values are published by the manufacturer for the stated 100 g basis. This fixture intentionally contains enough readable text to pass the bounded page-content check.</p></body></html>';
+  state.fetchHtml = '<html><body><h1>Example Marmite label</h1><p>Nutrition Facts: per 100 g calories 250 kcal, protein 10 g, fat 12 g, carbohydrates 20 g, sodium 400 mg.</p><p>Serving: 1 tbsp (15 g): calories 30 kcal, sodium 500 mg.</p><p>Typical values are published by the manufacturer for the stated 100 g basis. This fixture intentionally contains enough readable text to pass the bounded page-content check.</p></body></html>';
 });
 
 describe('AN-WEB-1 — research contract and deterministic scaling', () => {
@@ -140,6 +140,36 @@ describe('AN-WEB-1 — research contract and deterministic scaling', () => {
     if (result.ok === false) return;
     expect(result.contributions[0].nutrients.calories?.amount).toBe(60);
     expect(result.contributions[0].nutrients.sodium?.amount).toBe(1000);
+  });
+
+  it('rejects per-100-g claims copied from a different serving-basis section', async () => {
+    // Both numbers genuinely appear on the page, but ONLY in the tablespoon
+    // label. A real URL plus matching numbers is not proof of a per-100-g value.
+    state.extraction = () => evidence({
+      basis: { kind: 'per_100_g' },
+      nutrients: [
+        { id: 'calories', amount: 30, unit: 'kcal' },
+        { id: 'sodium', amount: 500, unit: 'mg' },
+      ],
+    });
+    const result = await researchNutritionOnServer(request([target()]));
+    expect(result.ok).toBe(false);
+    if (result.ok === false) expect(result.code).toBe('no_supported_evidence');
+  });
+
+  it('rejects serving-based claims copied from the per-100-g section', async () => {
+    state.extraction = () => evidence({
+      basis: { kind: 'per_serving', serving_amount: 1, serving_unit: 'tbsp' },
+      nutrients: [
+        { id: 'calories', amount: 250, unit: 'kcal' },
+        { id: 'sodium', amount: 400, unit: 'mg' },
+      ],
+    });
+    const result = await researchNutritionOnServer(request([
+      target({ ingredient_text: '2 tbsp Marmite', amount: 2, unit: 'tbsp', measurement_kind: 'volume', quantity_grams: undefined, quantity_ml: 30 }),
+    ]));
+    expect(result.ok).toBe(false);
+    if (result.ok === false) expect(result.code).toBe('no_supported_evidence');
   });
 
   it('refuses a per-100-g source for a volume target without a mass conversion', async () => {
