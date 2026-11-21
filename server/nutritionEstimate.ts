@@ -35,6 +35,7 @@ import { normalizeProviderError } from './ai/providerErrors.js';
 import type { AiJsonSchema } from './ai/types.js';
 import type { SelectionInput } from './ai/effectiveSelection.js';
 import { logModelAttempt } from './providerDiagnostics.js';
+import { CULINARY_EXPERTISE_INSTRUCTIONS } from './ai/culinaryExpertise.js';
 
 export type NutritionEstimateFailureCode =
   | 'invalid_request'
@@ -62,6 +63,7 @@ export type NutritionEstimateResult =
     };
 
 export const NUTRITION_ESTIMATE_INSTRUCTIONS = [
+  ...CULINARY_EXPERTISE_INSTRUCTIONS,
   'You estimate ingredient MASS ranges for a nutrition calculator.',
   'For each line, return LOWER and UPPER grams plus the representative value.',
   'The representative value MUST be the arithmetic midpoint of your own range,',

@@ -109,6 +109,7 @@ import {
   type WholeRecipeSemanticOriginAuthority,
 } from './wholeRecipeSemanticOriginReceipt.js';
 import { getProcessSemanticOriginAuthority } from './wholeRecipeSemanticAuthority.js';
+import { CULINARY_EXPERTISE_INSTRUCTIONS } from './ai/culinaryExpertise.js';
 
 /** Diagnostic scope for the existing redacted provider-attempt logger. */
 const DIAGNOSTIC_SCOPE = 'wholeRecipeSemanticInterpret';
@@ -423,6 +424,7 @@ function logFallbackExhausted(error: unknown): void {
  * contract rejects (no second vocabulary owner).
  */
 export const WHOLE_RECIPE_SEMANTIC_INSTRUCTIONS: readonly string[] = Object.freeze([
+  ...CULINARY_EXPERTISE_INSTRUCTIONS,
   'You interpret recipe meaning for a deterministic food-matching system.',
   'You are a SEMANTIC INTERPRETATION assistant. You are NOT a nutrition calculator, NOT a food-database lookup, and NOT a decision maker.',
   'You receive the WHOLE recipe: every ingredient line and the complete instruction list. Read it AS A WHOLE, and use each ingredient line together with the instructions: the same word can mean different things in different recipes, so never judge a line in isolation.',
