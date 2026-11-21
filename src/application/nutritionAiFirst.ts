@@ -299,6 +299,39 @@ function discoverCandidates(
         collect([qualifierQuery]);
       }
     }
+
+    // PREPARATION-TOKEN RELAXATION. A model-declared preparation adjective (for
+    // example `strained`) may not appear in any USDA description even when the
+    // underlying food family does. When every primary/qualifier query is empty,
+    // try at most TWO formulations with the model-declared PREPARATION tokens
+    // removed. This is not a synonym table: it only reuses the model's own
+    // wording, drops words the model itself classified as preparation, and keeps
+    // the remaining food-identity tokens. Pass 2 still compares the actual
+    // records, and local source constraints still decide what may be used.
+    if (byFdc.size === 0) {
+      const preparationTokens = new Set(
+        interpretation.semantic_food.preparation
+          .flatMap((preparation) => preparation.toLowerCase().split(/[^a-z0-9]+/))
+          .filter((token) => token.length > 0)
+      );
+      if (preparationTokens.size > 0) {
+        const relaxed: string[] = [];
+        for (const phrase of interpretation.search_phrases) {
+          const tokens = phrase.split(/\s+/).filter(Boolean);
+          const kept = tokens.filter((token) => !preparationTokens.has(token.toLowerCase()));
+          if (kept.length < 2 || kept.length === tokens.length) continue;
+          const query = kept.join(' ').slice(0, 120);
+          if (
+            !primaryQueries.some((entry) => entry.toLowerCase() === query.toLowerCase()) &&
+            !relaxed.some((entry) => entry.toLowerCase() === query.toLowerCase())
+          ) {
+            relaxed.push(query);
+          }
+          if (relaxed.length >= 2) break;
+        }
+        if (relaxed.length > 0) collect(relaxed);
+      }
+    }
     sets.push(
       Object.freeze({
         line_ref: lineRef,

@@ -659,6 +659,63 @@ describe('AI-first Generate — real USDA records, two passes, local authority',
     expect(passTwo.toLowerCase()).toContain('tomato, puree, canned');
   }, 120000);
 
+  it('relaxes only model-declared preparation wording to investigate the underlying food family', async () => {
+    const prepared = prepare(BENCHMARK_A_LINES, BENCHMARK_A_INSTRUCTIONS);
+    const actionable = prepared.liveRows.filter((row) => liveExceptionKind(row.status) !== undefined);
+    const targetRows = prepared.rows.filter((row) => actionable.some((live) => live.line_ref === row.line_ref));
+
+    // EXACT live-response shape from AN-AIFIRST-1R: passata was interpreted as
+    // `passata` with preparation `strained`, state `pureed`, no qualifiers, and
+    // two search phrases. `strained tomato puree` finds nothing under the AND
+    // search contract because no USDA description contains `strained`.
+    prov.overridePassOne = (payload) => {
+      const data = payload as {
+        requested_targets: Array<{ line_ref: string }>;
+        recipe: { ingredients: Array<{ line_ref: string; source_text: string }> };
+      };
+      const sourceByRef = new Map(data.recipe.ingredients.map((entry) => [entry.line_ref, entry.source_text]));
+      return {
+        contract_version: 'nutrition_ai_advanced_interpretation_v1',
+        interpretations: data.requested_targets.map((target) => {
+          const source = sourceByRef.get(target.line_ref) ?? '';
+          const base = semanticInterpretation(target.line_ref, source) as any;
+          if (!source.toLowerCase().includes('passata')) return base;
+          return {
+            ...base,
+            semantic_food: {
+              ...base.semantic_food,
+              preparation: ['strained'],
+              state: ['pureed'],
+              qualifiers: [],
+            },
+            search_phrases: ['tomato passata', 'strained tomato puree'],
+          };
+        }),
+      };
+    };
+
+    const result = await resolveWithAiFirst({
+      network,
+      session,
+      rows: targetRows,
+      adapted: prepared.adapted,
+      capabilities: AI_ADVANCED_CAPABILITIES,
+      wholeRecipe: wholeRecipeSource(prepared, BENCHMARK_A_LINES, BENCHMARK_A_INSTRUCTIONS, targetRows),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(prov.calls).toBe(2);
+    const passataRef = prepared.adapted.find((entry) => entry.ingredient.original.includes('passata'))?.line_ref as string;
+    const selected = result.outcome.candidates.find((candidate) => candidate.line_ref === passataRef);
+    expect(selected).toBeDefined();
+    expect(selected?.description.toLowerCase()).toContain('tomato');
+    expect(selected?.description.toLowerCase()).toContain('puree');
+    expect(selected?.choice.aiFirst).toBe(true);
+    expect(selected?.portion).toBeDefined();
+    const passTwo = prov.prompts[1] as string;
+    expect(passTwo.toLowerCase()).toContain('tomato products, canned, puree, without salt added');
+  }, 120000);
+
   it('forwards client cancellation through the real HTTP route to the pass-1 provider signal', async () => {
     const prepared = prepare(BENCHMARK_A_LINES, BENCHMARK_A_INSTRUCTIONS);
     const actionable = prepared.liveRows.filter((row) => liveExceptionKind(row.status) !== undefined);
