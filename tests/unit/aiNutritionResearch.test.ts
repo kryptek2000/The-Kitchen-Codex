@@ -154,7 +154,7 @@ describe('AN-WEB-1 — research contract and deterministic scaling', () => {
     });
     const result = await researchNutritionOnServer(request([target()]));
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.code).toBe('no_supported_evidence');
+    if (result.ok === false) expect(result.code).toBe('no_supported_evidence');
   });
 
   it('rejects serving-based claims copied from the per-100-g section', async () => {
@@ -169,7 +169,7 @@ describe('AN-WEB-1 — research contract and deterministic scaling', () => {
       target({ ingredient_text: '2 tbsp Marmite', amount: 2, unit: 'tbsp', measurement_kind: 'volume', quantity_grams: undefined, quantity_ml: 30 }),
     ]));
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.code).toBe('no_supported_evidence');
+    if (result.ok === false) expect(result.code).toBe('no_supported_evidence');
   });
 
   it('refuses a per-100-g source for a volume target without a mass conversion', async () => {
