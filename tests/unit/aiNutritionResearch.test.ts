@@ -105,7 +105,7 @@ beforeEach(() => {
   state.extraction = () => evidence();
   state.searchResults = [{ url: 'https://example.com/marmite', title: 'Example Marmite label' }];
   state.fetchCalls = 0;
-  state.fetchHtml = '<html><body><h1>Example Marmite label</h1><p>Nutrition Facts: per 100 g calories 250, protein 10 g, fat 12 g, carbohydrates 20 g, sodium 400 mg.</p><p>Typical values are published by the manufacturer for the stated 100 g basis. This fixture intentionally contains enough readable text to pass the bounded page-content check.</p></body></html>';
+  state.fetchHtml = '<html><body><h1>Example Marmite label</h1><p>Nutrition Facts: per 100 g calories 250 kcal, protein 10 g, fat 12 g, carbohydrates 20 g, sodium 400 mg.</p><p>Serving: 1 tbsp (15 g): calories 30 kcal, sodium 500 mg.</p><p>Typical values are published by the manufacturer for the stated 100 g basis. This fixture intentionally contains enough readable text to pass the bounded page-content check.</p></body></html>';
 });
 
 describe('AN-WEB-1 — research contract and deterministic scaling', () => {

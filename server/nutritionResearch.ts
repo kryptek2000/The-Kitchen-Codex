@@ -241,24 +241,35 @@ function buildExtractionPrompt(
 }
 
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function nutrientSupportedBySource(text: string, nutrient: { id: string; amount: number; unit: string }): boolean {
+  const definition = (NUTRIENT_REGISTRY as Record<string, { label?: string }>)[nutrient.id];
+  const keywords = [definition?.label, nutrient.id.replace(/_/g, ' '), nutrient.id].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+  const amount = escapeRegExp(String(nutrient.amount));
+  const unit = escapeRegExp(String(nutrient.unit));
+  return keywords.some((keyword) => {
+    const key = escapeRegExp(keyword.trim());
+    return new RegExp(`${key}[^\\n]{0,40}${amount}\\s*${unit}`, 'i').test(text) ||
+      new RegExp(`${amount}\\s*${unit}[^\\n]{0,40}${key}`, 'i').test(text);
+  });
+}
+
 function sourceSupportsEvidence(item: any, sourceText: string): boolean {
   const text = String(sourceText || '').toLowerCase();
   if (text.length === 0) return false;
-  if (item.basis?.kind === 'per_100_g') {
-    if (!/100\s*g/.test(text)) return false;
-    for (const nutrient of item.nutrients || []) {
-      const amount = String(nutrient.amount);
-      if (!text.includes(amount)) return false;
-    }
+  const basis = item.basis || {};
+  if (basis.kind === 'per_100_g') {
+    if (!/100\s*g/i.test(text)) return false;
   } else {
-    const basis = item.basis || {};
     if (basis.serving_amount !== undefined && !text.includes(String(basis.serving_amount))) return false;
-    if (basis.serving_unit !== undefined && !text.includes(String(basis.serving_unit).toLowerCase())) return false;
+    if (basis.serving_unit !== undefined && !text.toLowerCase().includes(String(basis.serving_unit).toLowerCase())) return false;
     if (basis.serving_grams !== undefined && !text.includes(String(basis.serving_grams))) return false;
-    for (const nutrient of item.nutrients || []) {
-      const amount = String(nutrient.amount);
-      if (!text.includes(amount)) return false;
-    }
+  }
+  for (const nutrient of item.nutrients || []) {
+    if (!nutrientSupportedBySource(text, nutrient)) return false;
   }
   return true;
 }
