@@ -240,6 +240,19 @@ function buildExtractionPrompt(
   ].join('\n');
 }
 
+
+function sourceSupportsEvidence(item: any, sourceText: string): boolean {
+  const text = String(sourceText || '').toLowerCase();
+  if (text.length === 0) return false;
+  if (item.basis?.kind === 'per_100_g') {
+    for (const nutrient of item.nutrients || []) {
+      const amount = String(nutrient.amount);
+      if (!text.includes(amount)) return false;
+    }
+  }
+  return true;
+}
+
 /**
  * Runs the complete bounded research operation. Never throws.
  */
@@ -273,12 +286,11 @@ export async function researchNutritionOnServer(
   if (signal?.aborted) return failure('search_failed', false, skipped);
 
   const candidates = resolveExecutableTextCandidates('nutrition', getRegisteredProviders(), selection)
-    .filter((candidate) => candidate.provider.searchWeb)
+    .filter((candidate) => candidate.provider.capabilities?.webSearch === true && typeof candidate.provider.searchWeb === 'function')
     .slice(0, 1)
     .map((candidate) => ({ ...candidate, singleAttempt: true, terminalOnFailure: true }));
   if (candidates.length === 0) return failure('web_unavailable', false, skipped);
   const candidate = candidates[0];
-  if (!candidate.provider.searchWeb) return failure('web_unavailable', false, skipped);
 
   let grounded: ResearchSource[];
   try {
@@ -286,6 +298,7 @@ export async function researchNutritionOnServer(
     const results = await candidate.provider.searchWeb(buildSearchPrompt(researchable), {
       model: candidate.model,
       temperature: 0,
+      signal,
     });
     grounded = safeGroundedSources(results);
   } catch (error) {
@@ -302,7 +315,7 @@ export async function researchNutritionOnServer(
   for (const source of grounded.slice(0, MAX_RESEARCH_SOURCES)) {
     if (signal?.aborted) return failure('search_failed', true, skipped);
     try {
-      const page = await safeFetchHtml(source.url, { requireHtmlContentType: true });
+      const page = await safeFetchHtml(source.url, { requireHtmlContentType: true, signal });
       const text = extractReadableText(page.html);
       if (text.length < 200) continue;
       const finalUrl = page.finalUrl;
@@ -322,6 +335,7 @@ export async function researchNutritionOnServer(
       // A single unreachable source is a bounded miss; try the next grounded one.
     }
   }
+  const sourceTextByUrl = new Map(fetched.map((entry) => [entry.source.url, entry.text]));
   if (fetched.length === 0) return failure('source_unavailable', true, skipped);
   if (signal?.aborted) return failure('extraction_failed', true, skipped);
 
@@ -360,6 +374,11 @@ export async function researchNutritionOnServer(
     const target = targetByRef.get(item.line_ref);
     const source = sourceByUrl.get(item.source_url);
     if (!target || !source) {
+      skipped.push(Object.freeze({ line_ref: item.line_ref, reason: 'invalid_evidence' }));
+      continue;
+    }
+    const sourceText = sourceTextByUrl.get(source.url) || '';
+    if (!sourceSupportsEvidence(item, sourceText)) {
       skipped.push(Object.freeze({ line_ref: item.line_ref, reason: 'invalid_evidence' }));
       continue;
     }

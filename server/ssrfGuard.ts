@@ -609,7 +609,7 @@ export class WafProtectionError extends Error {
  */
 export async function safeFetchHtml(
   initialUrl: string,
-  options: { readonly requireHtmlContentType?: boolean } = {}
+  options: { readonly requireHtmlContentType?: boolean; readonly signal?: AbortSignal } = {}
 ): Promise<{ html: string; finalUrl: string }> {
   let currentUrl = initialUrl;
   let redirectsFollowed = 0;
@@ -619,7 +619,9 @@ export async function safeFetchHtml(
     const target = await validateAndPinUrl(currentUrl);
 
     // 2. Outbound request pinned to the validated IP, with timeout signal
-    const timeoutSignal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+    const timeoutSignal = options.signal
+      ? AbortSignal.any([AbortSignal.timeout(FETCH_TIMEOUT_MS), options.signal])
+      : AbortSignal.timeout(FETCH_TIMEOUT_MS);
 
     let response: IncomingMessage;
     try {
