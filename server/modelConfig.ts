@@ -72,6 +72,15 @@ export const MODEL_CONFIG = {
    */
   wholeRecipeSemanticTimeoutMs: 45_000,
   /**
+   * AI-first Advanced Nutrition candidate evaluation (pass 2 of the Generate
+   * workflow) reads the bounded whole-recipe context PLUS a bounded set of real
+   * USDA candidate descriptions and emits one decision per target. Like pass 1,
+   * this routinely exceeds the ordinary text-request ceiling, so it has its own
+   * server-owned deadline. It is never derived from recipe data, client headers,
+   * or candidate text, and unrelated text operations retain `requestTimeoutMs`.
+   */
+  aiFirstCandidateEvaluationTimeoutMs: 45_000,
+  /**
    * Server-owned image-GENERATION timeout (milliseconds). Image generation is
    * routinely slower than a text model response (10-60s for real image models),
    * so it gets its OWN ceiling instead of reusing the 25s TEXT `requestTimeoutMs`

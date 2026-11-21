@@ -82,6 +82,15 @@ describe('AN-SEM-2 — prompt contract', () => {
     expect(prompt).toContain('do not pad with unsupported synonyms');
   });
 
+  it('asks for multiple database-style discovery hypotheses when the authored name is not a database description', () => {
+    expect(prompt).toContain('regional, branded, translated, or home-cooking name');
+    expect(prompt).toContain('discovery hypotheses');
+    expect(prompt).toContain('database-style food descriptions');
+    expect(prompt).toContain('more than one distinct search formulation');
+    expect(prompt).toContain('search hypotheses, not assertions');
+    expect(prompt).toContain('never erase a food-defining modifier');
+  });
+
   it('contains no ingredient-specific dictionary or example food mapping', () => {
     expect(prompt).not.toContain('half and half');
     expect(prompt).not.toContain('passata');

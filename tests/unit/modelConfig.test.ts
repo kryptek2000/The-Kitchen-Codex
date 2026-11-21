@@ -42,6 +42,14 @@ describe("MODEL_CONFIG", () => {
     expect(MODEL_CONFIG.wholeRecipeSemanticTimeoutMs).toBeLessThanOrEqual(120_000);
   });
 
+  it("gives AI-first candidate evaluation its own bounded 45s deadline", () => {
+    expect(MODEL_CONFIG.aiFirstCandidateEvaluationTimeoutMs).toBe(45_000);
+    expect(MODEL_CONFIG.aiFirstCandidateEvaluationTimeoutMs).toBeGreaterThan(
+      MODEL_CONFIG.requestTimeoutMs
+    );
+    expect(MODEL_CONFIG.aiFirstCandidateEvaluationTimeoutMs).toBeLessThanOrEqual(120_000);
+  });
+
   it("contains no stale retired model identifiers", () => {
     const serialized = JSON.stringify(MODEL_CONFIG);
     expect(serialized).not.toContain("gemini-3.6-flash");

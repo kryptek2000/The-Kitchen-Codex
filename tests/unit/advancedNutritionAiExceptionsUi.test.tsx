@@ -256,6 +256,154 @@ describe('unified AI exception eligibility — UI', () => {
   });
 });
 
+describe('AI-first needs_review — UI', () => {
+  it('shows the model explanation and opens the existing USDA search with a discovered query', async () => {
+    const legacy = vi.fn(async () => ({ ok: true, outcome: EMPTY_FOOD, amounts: EMPTY_AMOUNTS }));
+    const handler = vi.fn(async (args: {
+      rows: ReadonlyArray<Phase4Row>;
+    }) => {
+      const lineRef = args.rows[0].line_ref;
+      return {
+        ok: true,
+        outcome: { candidates: [], unresolved: [lineRef], auto_count: 0 },
+        amounts: EMPTY_AMOUNTS,
+        aiFirstReviews: [
+          {
+            line_ref: lineRef,
+            decision: 'needs_review' as const,
+            justification: 'The recipe does not specify salted or unsalted tomato puree.',
+            uncertainty: 'Salt level is ambiguous.',
+            candidate_query: 'Mystery raw',
+            candidate_count: 1,
+          },
+        ],
+      };
+    });
+    render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup Zzz')}
+        session={session}
+        onResolveWithAi={legacy}
+        onResolveWithAiFirst={handler}
+      />
+    );
+    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
+    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    fireEvent.click(await screen.findByTestId('advanced-nutrition-edit'));
+
+    const review = await screen.findByTestId('advanced-nutrition-ai-review');
+    expect(review.textContent).toContain('AI needs your review');
+    expect(review.textContent).toContain('salted or unsalted tomato puree');
+    expect(review.textContent).toContain('Salt level is ambiguous');
+    expect(review.textContent).toContain('Review 1 discovered USDA candidate');
+
+    fireEvent.click(screen.getByTestId('advanced-nutrition-ai-review-search'));
+    const input = (await screen.findByTestId('advanced-nutrition-search-input')) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe('Mystery raw'));
+    fireEvent.click(screen.getByTestId('advanced-nutrition-search-run'));
+    fireEvent.click(await screen.findByTestId('advanced-nutrition-use-usda-7002'));
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-testid="advanced-nutrition-row"]')?.textContent ?? ''
+      ).toContain('Mystery, raw')
+    );
+  });
+
+  it('discards a needs_review result that resolves after the recipe changed', async () => {
+    const legacy = vi.fn(async () => ({ ok: true, outcome: EMPTY_FOOD, amounts: EMPTY_AMOUNTS }));
+    let resolveHandler!: (value: unknown) => void;
+    const handler = vi.fn(
+      (): Promise<any> =>
+        new Promise((resolve) => {
+          resolveHandler = resolve;
+        })
+    );
+    const first = render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup Zzz', 'A')}
+        session={session}
+        onResolveWithAi={legacy}
+        onResolveWithAiFirst={handler}
+      />
+    );
+    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
+    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    const oldLineRef = (handler.mock.calls[0] as unknown as [{ rows: ReadonlyArray<Phase4Row> }])[0].rows[0].line_ref;
+
+    first.rerender(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup Qqq', 'B')}
+        session={session}
+        onResolveWithAi={legacy}
+        onResolveWithAiFirst={handler}
+      />
+    );
+    await act(async () => {
+      resolveHandler({
+        ok: true,
+        outcome: { candidates: [], unresolved: [oldLineRef], auto_count: 0 },
+        amounts: EMPTY_AMOUNTS,
+        aiFirstReviews: [
+          {
+            line_ref: oldLineRef,
+            decision: 'needs_review',
+            justification: 'Old recipe explanation.',
+            uncertainty: 'Old recipe uncertainty.',
+            candidate_query: 'Mystery raw',
+            candidate_count: 1,
+          },
+        ],
+      });
+      await Promise.resolve();
+    });
+    expect(screen.queryByTestId('advanced-nutrition-ai-review')).toBeNull();
+    expect(document.body.textContent).not.toContain('Old recipe explanation');
+  });
+
+  it('passes the needs_review marker to explicit Apply without changing the selection', async () => {
+    const legacy = vi.fn(async () => ({ ok: true, outcome: EMPTY_FOOD, amounts: EMPTY_AMOUNTS }));
+    const applyHandler = vi.fn(async () => ({ ok: true, message: 'Applied.' }));
+    let lineRef = '';
+    const handler = vi.fn(async (args: { rows: ReadonlyArray<Phase4Row> }) => {
+      lineRef = args.rows[0].line_ref;
+      return {
+        ok: true,
+        outcome: { candidates: [], unresolved: [lineRef], auto_count: 0 },
+        amounts: EMPTY_AMOUNTS,
+        aiFirstReviews: [
+          {
+            line_ref: lineRef,
+            decision: 'needs_review' as const,
+            justification: 'Salt level is ambiguous.',
+            uncertainty: 'The recipe does not specify salted or unsalted.',
+            candidate_query: 'Mystery raw',
+            candidate_count: 1,
+          },
+        ],
+      };
+    });
+    render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup Zzz')}
+        session={session}
+        onResolveWithAi={legacy}
+        onResolveWithAiFirst={handler}
+        onApplyAdvancedNutrition={applyHandler}
+      />
+    );
+    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
+    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    fireEvent.click(await screen.findByRole('button', { name: /^Apply to recipe$/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Confirm Apply$/i }));
+    await waitFor(() => expect(applyHandler).toHaveBeenCalledTimes(1));
+    const args = (applyHandler.mock.calls[0] as unknown as [{ reviewReasons?: Record<string, string> }])[0];
+    expect(args.reviewReasons).toEqual({ [lineRef]: 'needs_review' });
+  });
+});
+
 describe('live status summary authority — UI', () => {
   it('summary follows an explicit user resolution immediately (no stale counters)', async () => {
     render(<AdvancedNutritionCard recipe={recipe('1 cup berries')} session={session} />);

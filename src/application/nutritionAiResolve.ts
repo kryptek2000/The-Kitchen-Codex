@@ -45,6 +45,7 @@ import {
   type AdvancedNutritionSession,
   type AdaptedIngredient,
   type AiAmountResolveOutcome,
+  type AiFirstReview,
   type AiHouseholdResolveOutcome,
   type AiResolveOutcome,
   type LiveRowState,
@@ -611,6 +612,11 @@ export interface AiResolutionRunResult {
   readonly amounts: AiAmountResolveOutcome;
   /** Verified-household verification outcome (needs_amount). */
   readonly households: AiHouseholdResolveOutcome;
+  /**
+   * AI-FIRST only: per-line model explanations for `needs_review` / `no_match`.
+   * Display-only; never authority and never part of the nutrition calculation.
+   */
+  readonly aiFirstReviews?: ReadonlyArray<AiFirstReview>;
 }
 
 export interface AiResolutionRunArgs extends AiResolutionRequestArgs {

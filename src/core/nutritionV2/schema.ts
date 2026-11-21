@@ -199,6 +199,12 @@ export interface UnresolvedIngredientRef {
   line_ref: string;
   reason: UnresolvedReason;
   /**
+   * Display-only AI review classification for a line the model declined to
+   * select. Absent for deterministic/no-match lines. It never changes the
+   * unresolved `reason`, nutrient totals, matching, or authorization.
+   */
+  review_reason?: 'needs_review';
+  /**
    * Optional USER-CONFIRMED reviewed FOOD IDENTITY for a line whose MASS is still
    * unresolved (e.g. the user selected `Broccoli, raw` but no authenticated
    * portion reproduces the recipe amount and no manual weight was entered yet).

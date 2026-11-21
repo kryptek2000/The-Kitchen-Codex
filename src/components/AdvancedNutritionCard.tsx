@@ -84,6 +84,7 @@ import {
   type AdvancedNutritionAiAmountOffer,
   type AdvancedNutritionApplyUi,
   type AdvancedNutritionAiUi,
+  type AdvancedNutritionAiReview,
   type AdvancedNutritionAiSuggestion,
   type AdvancedNutritionRecipeContextUi,
 } from './AdvancedNutritionModal';
@@ -114,6 +115,12 @@ export interface AdvancedNutritionApplyHandlerArgs {
   readonly recipe: ObsidianRecipe;
   readonly state: Phase4State;
   readonly expectedMode: 'create' | 'replace';
+  /**
+   * Display-only `needs_review` markers from the current AI-first review. Apply
+   * persists them as unresolved metadata so reopen does not mislabel the line as
+   * `no_match`. They never change nutrition or matching authority.
+   */
+  readonly reviewReasons?: Readonly<Record<string, 'needs_review'>>;
 }
 
 export interface AdvancedNutritionApplyUiResult {
@@ -153,6 +160,15 @@ interface AdvancedNutritionCardProps {
    * layer directly). Advisory only: it returns deterministic local candidates.
    */
   onResolveWithAi?: AdvancedNutritionAiResolveHandler;
+  /**
+   * Optional AI-FIRST resolution port. When supplied, the automatic Generate
+   * pass uses the two-pass AI-first workflow (whole-recipe interpretation ->
+   * real USDA discovery -> candidate evaluation -> local verification) instead
+   * of the legacy advisory-search resolver. The manual AI-help action keeps the
+   * legacy port, so the experimental workflow is exercised only by the explicit
+   * Generate path.
+   */
+  onResolveWithAiFirst?: AdvancedNutritionAiResolveHandler;
   /**
    * Optional AI candidate-PLAN port (AI-2C), injected by the shell for the SAME
    * reason: the UI never imports the application layer, and the shell owns the
@@ -359,6 +375,11 @@ export type AdvancedNutritionAiResolveHandler = (args: {
    */
   readonly recipe?: ObsidianRecipe;
   /**
+   * Caller cancellation owned by the card. The AI-first port forwards it through
+   * both HTTP requests so the route can abort the actual provider transport.
+   */
+  readonly signal?: AbortSignal;
+  /**
    * AN-ARCH-1 — set ONLY for the automatic AI pass that follows the explicit
    * Generate action. The shell may then keep a DETERMINISTICALLY VALIDATED
    * semantic match automatic instead of downgrading every `review_suggested`
@@ -384,6 +405,8 @@ export type AdvancedNutritionAiResolveHandler = (args: {
     readonly line_ref: string;
     readonly reason: 'ambiguous' | 'alternatives';
   }>;
+  /** AI-FIRST per-line model explanations for non-selections. */
+  readonly aiFirstReviews?: ReadonlyArray<AdvancedNutritionAiReview>;
 }>;
 
 /**
@@ -487,6 +510,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
   onApplyAdvancedNutrition,
   savedAdvancedBlock,
   onResolveWithAi,
+  onResolveWithAiFirst,
   onPlanWithAi,
   onEstimateMassesWithAi,
 onReviewRecipeContextWithAi,
@@ -520,6 +544,12 @@ onReviewRecipeContextWithAi,
   const [aiRunning, setAiRunning] = useState(false);
   const [aiMessage, setAiMessage] = useState<string | null>(null);
   const [aiSuggestions, setAiSuggestions] = useState<Record<string, AdvancedNutritionAiSuggestion>>({});
+  /**
+   * AI-FIRST `needs_review` / `no_match` explanations. EPHEMERAL working state:
+   * cleared on every new analysis, recipe/session change and editor closure. It
+   * never mutates nutrition or grants selection authority.
+   */
+  const [aiReviews, setAiReviews] = useState<Record<string, AdvancedNutritionAiReview>>({});
   /**
    * AI-interpreted authenticated count portions that remain the USER'S explicit
    * choice (materially different weights). Never auto-selected.
@@ -557,6 +587,12 @@ onReviewRecipeContextWithAi,
   const aiGeneration = useRef(0);
   /** Synchronous re-entry guard (a rapid double-click must make ONE request). */
   const aiRunningRef = useRef(false);
+  /**
+   * Cancellation owner for the CURRENT AI request. Closing the editor, changing
+   * the recipe/session, bundle failure or unmount aborts it; the AI-first port
+   * forwards this signal to the HTTP route and the actual provider transport.
+   */
+  const aiAbortRef = useRef<AbortController | null>(null);
   /** Latest recipe/session identity, readable from async callbacks. */
   const identityRef = useRef<{ recipeKey: string | null; sessionIdentity: string | null }>({
     recipeKey: null,
@@ -760,8 +796,11 @@ onReviewRecipeContextWithAi,
    * opened yet during lazy loading.
    */
   const cancelGenerateAiIntent = useCallback(() => {
+    aiAbortRef.current?.abort();
+    aiAbortRef.current = null;
     setPendingGenerateAi(null);
     setGenerateAiFeedback(null);
+    setAiReviews({});
     generateAiStartedRef.current = null;
   }, []);
 
@@ -829,6 +868,8 @@ onReviewRecipeContextWithAi,
       isOpenRef.current = false;
       aiGeneration.current += 1;
       aiRequestSeq.current += 1;
+      aiAbortRef.current?.abort();
+      aiAbortRef.current = null;
       generateAiStartedRef.current = null;
     },
     []
@@ -843,7 +884,10 @@ onReviewRecipeContextWithAi,
     aiGeneration.current += 1;
     aiRequestSeq.current += 1;
     aiRunningRef.current = false;
+    aiAbortRef.current?.abort();
+    aiAbortRef.current = null;
     setAiSuggestions({});
+    setAiReviews({});
     setAiAmountOffers({});
     setAiEstimateOffers({});
     setAiEstimateOfferBindings({});
@@ -1043,10 +1087,20 @@ onReviewRecipeContextWithAi,
     if (!onApplyAdvancedNutrition || !session || !adaptation.ok) return;
     if (applyState.kind !== 'confirming') return;
     const expectedMode = applyState.mode;
+    const reviewReasons: Record<string, 'needs_review'> = {};
+    for (const [lineRef, review] of Object.entries(aiReviews)) {
+      if (review.decision === 'needs_review') reviewReasons[lineRef] = 'needs_review';
+    }
     setApplyState({ kind: 'applying' });
     setAppliedNutritionSaved(false);
     try {
-      const result = await onApplyAdvancedNutrition({ session, recipe, state, expectedMode });
+      const result = await onApplyAdvancedNutrition({
+        session,
+        recipe,
+        state,
+        expectedMode,
+        ...(Object.keys(reviewReasons).length > 0 ? { reviewReasons } : {}),
+      });
       setApplyState(
         result.ok
           ? { kind: 'success', message: result.message }
@@ -1596,6 +1650,7 @@ onReviewRecipeContextWithAi,
     // state: a fresh deterministic Re-analyze invalidates them (they are never
     // reviewed decisions and must not linger against a new review identity).
     setAiSuggestions({});
+    setAiReviews({});
     setAiAmountOffers({});
     setAiEstimateOffers({});
     setAiEstimateOfferBindings({});
@@ -1781,7 +1836,7 @@ onReviewRecipeContextWithAi,
   const handleResolveWithAi = useCallback(
     async (
       lineRefs?: ReadonlyArray<string>,
-      options?: { readonly orchestration?: 'generate' }
+      options?: { readonly orchestration?: 'generate'; readonly aiFirst?: boolean }
     ): Promise<AiResolveUiOutcome> => {
       if (!session || !adaptation.ok) {
         return {
@@ -1792,7 +1847,12 @@ onReviewRecipeContextWithAi,
           message: 'Advanced Nutrition cannot analyse this recipe yet.',
         };
       }
-      if (!onResolveWithAi) {
+      // The automatic Generate pass may use the AI-first port. The manual AI-help
+      // action deliberately keeps the conservative legacy port. If the AI-first
+      // port fails, this returns its failure visibly: it never silently falls back
+      // to a SECOND provider workflow.
+      const resolvePort = options?.aiFirst === true ? onResolveWithAiFirst : onResolveWithAi;
+      if (!resolvePort) {
         const message = 'AI assistance is unavailable. You can continue with USDA search manually.';
         setAiMessage(message);
         return {
@@ -1839,6 +1899,11 @@ onReviewRecipeContextWithAi,
         };
       }
       aiRunningRef.current = true;
+      // ONE cancellation owner for this request. It is aborted by editor close,
+      // recipe/session change, bundle failure, unmount, or a newer request.
+      aiAbortRef.current?.abort();
+      const requestController = new AbortController();
+      aiAbortRef.current = requestController;
       // MID-FLIGHT USER-AUTHORITY SNAPSHOT. For EVERY current row, capture the
       // semantic working choice at the instant the request starts. At apply time
       // any row whose choice changed in the meantime is SKIPPED: the user's newer
@@ -1862,6 +1927,7 @@ onReviewRecipeContextWithAi,
       aiRequestSeq.current = seq;
       setAiRunning(true);
       setAiMessage(null);
+      setAiReviews({});
       const stillCurrent = (): boolean => {
         if (aiRequestSeq.current !== seq) return false;
         if (aiGeneration.current !== capturedGeneration) return false;
@@ -1872,7 +1938,7 @@ onReviewRecipeContextWithAi,
         return isOpenRef.current === true;
       };
       try {
-        const result = await onResolveWithAi({
+        const result = await resolvePort({
           session,
           rows: targets,
           adapted,
@@ -1884,6 +1950,7 @@ onReviewRecipeContextWithAi,
           // current at CLICK time, and `stillCurrent()` below still discards any
           // response whose recipe/session generation has moved on.
           recipe,
+          signal: requestController.signal,
           ...(options?.orchestration !== undefined
             ? { orchestration: options.orchestration }
             : {}),
@@ -1934,7 +2001,12 @@ onReviewRecipeContextWithAi,
         const portions: Record<string, PortionChoice> = { ...base.portions };
         const countPortions: Record<string, CountPortionChoice> = { ...base.countPortions };
         const suggestions: Record<string, AdvancedNutritionAiSuggestion> = {};
+        const reviews: Record<string, AdvancedNutritionAiReview> = {};
         const amountOffers: Record<string, ReadonlyArray<AdvancedNutritionAiAmountOffer>> = {};
+        for (const review of result.aiFirstReviews ?? []) {
+          if (conflictedRefs.has(review.line_ref)) continue;
+          reviews[review.line_ref] = review;
+        }
 
         for (const candidate of result.outcome.candidates) {
           if (conflictedRefs.has(candidate.line_ref)) continue;
@@ -1992,6 +2064,7 @@ onReviewRecipeContextWithAi,
         });
 
         setAiSuggestions(suggestions);
+        setAiReviews(reviews);
         setAiAmountOffers(amountOffers);
         const applied = applyWorkingSelections({
           matches,
@@ -2106,13 +2179,14 @@ onReviewRecipeContextWithAi,
           message,
         };
       } finally {
+        if (aiAbortRef.current === requestController) aiAbortRef.current = null;
         if (aiRequestSeq.current === seq) {
           aiRunningRef.current = false;
           setAiRunning(false);
         }
       }
     },
-    [session, adaptation, onResolveWithAi, adapted, applyWorkingSelections, analyzedByRef, analysis]
+    [session, adaptation, onResolveWithAi, onResolveWithAiFirst, adapted, applyWorkingSelections, analyzedByRef, analysis]
   );
 
   /**
@@ -2466,7 +2540,7 @@ onReviewRecipeContextWithAi,
     }
     generateAiStartedRef.current = pending.recipeKey;
     setPendingGenerateAi(null);
-    if (!onResolveWithAi || !aiAvailabilityAvailable) {
+    if ((!onResolveWithAi && !onResolveWithAiFirst) || !aiAvailabilityAvailable) {
       setGenerateAiFeedback({
         kind: 'unavailable',
         message:
@@ -2485,12 +2559,18 @@ onReviewRecipeContextWithAi,
     }
     setGenerateAiFeedback({
       kind: 'running',
-      message: 'AI Advanced Nutrition is interpreting the whole recipe and validating USDA matches…',
+      message:
+        onResolveWithAiFirst !== undefined
+          ? 'AI Advanced Nutrition is interpreting the whole recipe, finding real USDA candidates, and verifying selections…'
+          : 'AI Advanced Nutrition is interpreting the whole recipe and validating USDA matches…',
     });
     const recipeKey = pending.recipeKey;
     void (async () => {
       try {
-        const outcome = await handleResolveWithAi(undefined, { orchestration: 'generate' });
+        const outcome = await handleResolveWithAi(undefined, {
+          orchestration: 'generate',
+          aiFirst: onResolveWithAiFirst !== undefined,
+        });
         // Never publish feedback for a recipe the user has left or an editor that
         // has been closed while the request was in flight.
         if (identityRef.current.recipeKey !== recipeKey || !isOpenRef.current) return;
@@ -2528,6 +2608,7 @@ onReviewRecipeContextWithAi,
     aiRefreshing,
     aiAvailabilityAvailable,
     onResolveWithAi,
+    onResolveWithAiFirst,
     actionableRows.length,
     handleResolveWithAi,
   ]);
@@ -2632,6 +2713,15 @@ onReviewRecipeContextWithAi,
           running: aiRunning,
           message: aiMessage,
           suggestions: aiSuggestions,
+          reviews: aiReviews,
+          onClearReview: (lineRef: string) => {
+            setAiReviews((current) => {
+              if (!(lineRef in current)) return current;
+              const next = { ...current };
+              delete next[lineRef];
+              return next;
+            });
+          },
           amountOffers: aiAmountOffers,
           // AI-3 estimate offers. INERT until the second explicit click.
           ...(onEstimateMassesWithAi

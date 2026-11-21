@@ -236,6 +236,7 @@ interface ApplyOptions {
   readonly readBack?: ((recipe: ObsidianRecipe) => Promise<string>) | undefined;
   readonly expectedMode?: unknown;
   readonly computedAt?: unknown;
+  readonly reviewReasons?: unknown;
 }
 
 async function apply(reviewed: Reviewed, options: ApplyOptions = {}): Promise<AdvancedNutritionApplyResult> {
@@ -252,6 +253,7 @@ async function apply(reviewed: Reviewed, options: ApplyOptions = {}): Promise<Ad
   if (options.readBack !== undefined) request.readBack = options.readBack;
   if (options.expectedMode !== undefined) request.expectedMode = options.expectedMode;
   if (options.computedAt !== undefined) request.computedAt = options.computedAt;
+  if (options.reviewReasons !== undefined) request.reviewReasons = options.reviewReasons;
   return applyAdvancedNutrition(request);
 }
 
@@ -517,6 +519,33 @@ describe('phase 5B — explicit Apply success', () => {
     const decoded = decodeCodexNutrition(reparsed.codexNutrition);
     expect(decoded.kind).toBe('v1');
     if (decoded.kind === 'v1') expect(validateCodexNutritionV1(decoded.value).ok).toBe(true);
+  });
+
+  it('persists needs_review unresolved metadata through Apply, Save and reopen without changing nutrition', async () => {
+    const recipe = obsidianRecipe(
+      [structured(FLOUR_LINE), structured('1 cup sugar')],
+      { title: 'Needs Review Persistence', servings: 2, filePath: 'Recipes/Needs Review Persistence.md' }
+    );
+    const reviewed = buildReviewed(SESSION, recipe, ['calories', 'protein']);
+    const unresolved = reviewed.preview.unresolved[0];
+    expect(unresolved).toBeDefined();
+    const vault = makeVault();
+    const result = await apply(reviewed, {
+      write: vault.write,
+      readBack: vault.readBack,
+      reviewReasons: { [unresolved.line_ref]: 'needs_review' },
+    });
+    expect(failureCodeOf(result)).toBe('ok');
+    const markdown = vault.files.get(resolveRecipeVaultPath(recipe)) as string;
+    const reparsed = parseObsidianRecipeMarkdown(markdown, recipe.fileName, recipe.filePath);
+    const decoded = decodeCodexNutrition(reparsed.codexNutrition);
+    expect(decoded.kind).toBe('v1');
+    if (decoded.kind !== 'v1') return;
+    const saved = decoded.value.unresolved.find((entry) => entry.line_ref === unresolved.line_ref);
+    expect(saved).toBeDefined();
+    expect(saved?.review_reason).toBe('needs_review');
+    expect(decoded.value.nutrients.calories?.amount).toBe(reviewed.preview.totals.calories?.amount);
+    expect(validateCodexNutritionV1(decoded.value).ok).toBe(true);
   });
 });
 

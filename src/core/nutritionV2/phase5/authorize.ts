@@ -334,7 +334,11 @@ function persistedRangeRepresentative(
  * deterministically returns to the smallest truthful schema version on the next
  * Apply (v2 with household only, v1 with neither).
  */
-function buildPersistenceBlock(preview: AdvisoryNutritionPreview, computedAt: string): BlockBuild {
+function buildPersistenceBlock(
+  preview: AdvisoryNutritionPreview,
+  computedAt: string,
+  reviewReasonByRef: ReadonlyMap<string, 'needs_review'>
+): BlockBuild {
   const hasAiEvidence = Boolean(preview.ai_contributions?.length);
   // An all-unresolved USDA review still has a dataset source, with no nutrient
   // amounts. Preserve that canonical v1 representation instead of building an
@@ -456,6 +460,9 @@ function buildPersistenceBlock(preview: AdvisoryNutritionPreview, computedAt: st
     unresolved.push({
       line_ref: entry.line_ref,
       reason,
+      ...(reviewReasonByRef.get(entry.line_ref) === 'needs_review'
+        ? { review_reason: 'needs_review' as const }
+        : {}),
       ...(reviewedFood
         ? {
             source_food_id: String((evidence as { fdc_id: number }).fdc_id),
@@ -522,6 +529,26 @@ export function authorizeNutritionPersistence(requestRaw: unknown): Phase5Author
     if (!stateField.present || !isPlainObject(stateField.value)) return fail('invalid_request');
     const state = stateField.value;
 
+    // AI-FIRST review metadata is DISPLAY-ONLY. It can only mark an ALREADY
+    // unresolved line as `needs_review`; it never creates/removes an unresolved
+    // entry, changes its `reason`, or affects matching/mass/nutrients.
+    const reviewReasonsField = ownField(requestRaw, 'reviewReasons');
+    if (!reviewReasonsField.ok) return fail('unsafe_request');
+    const reviewReasonByRef = new Map<string, 'needs_review'>();
+    if (
+      reviewReasonsField.present &&
+      reviewReasonsField.value !== null &&
+      reviewReasonsField.value !== undefined
+    ) {
+      const materialized = materializeNarrow(reviewReasonsField.value);
+      if (!materialized.ok || !isPlainObject(materialized.value)) return fail('unsafe_request');
+      for (const [lineRef, reason] of Object.entries(materialized.value)) {
+        if (lineRef.length === 0 || lineRef.length > 200) return fail('invalid_request');
+        if (reason !== 'needs_review') return fail('invalid_request');
+        reviewReasonByRef.set(lineRef, 'needs_review');
+      }
+    }
+
     // The reviewed preview is a stale-detection claim only — never authority.
     const previewField = ownField(state, 'preview');
     if (!previewField.ok) return fail('unsafe_request');
@@ -587,7 +614,7 @@ export function authorizeNutritionPersistence(requestRaw: unknown): Phase5Author
     if (!previewStillBinds(claimedPreview, persistencePreview)) return fail('calculation_mismatch');
 
     // --- Build the canonical block from the GENUINE result ------------------
-    const built = buildPersistenceBlock(persistencePreview, computedAt.value);
+    const built = buildPersistenceBlock(persistencePreview, computedAt.value, reviewReasonByRef);
 
     // --- REPLACE-MODE REGRESSION GATE ---------------------------------------
     // An explicit re-Apply must never silently downgrade a previously applied

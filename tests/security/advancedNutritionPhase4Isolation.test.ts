@@ -146,6 +146,7 @@ describe('phase 4 isolation — source purity', () => {
         'aiEstimateResolve.ts',
         'aiEstimateSelection.ts',
         'aiEstimateValidation.ts',
+        'aiFirstVerify.ts',
         'aiHouseholdResolve.ts',
         'aiMidFlight.ts',
         'aiPlanReconcile.ts',

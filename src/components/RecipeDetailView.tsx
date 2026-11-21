@@ -117,6 +117,8 @@ interface RecipeDetailViewProps {
   onApplyAdvancedNutrition?: AdvancedNutritionApplyHandler;
   /** Optional AI-assisted USDA resolution port (browser shell only). */
   onResolveAdvancedNutritionAi?: AdvancedNutritionAiResolveHandler;
+  /** Optional AI-FIRST Generate resolution port (browser shell only). */
+  onResolveAdvancedNutritionAiFirst?: AdvancedNutritionAiResolveHandler;
   /** Optional AI-3 bounded mass-estimate port (injected by the shell). */
   onEstimateMassesWithAi?: AdvancedNutritionAiEstimateHandler;
   /** Optional AI-4D2 recipe-context REVIEW port (injected by the shell). */
@@ -152,6 +154,7 @@ export function RecipeDetailView({
   advancedNutritionAiAvailability,
   onApplyAdvancedNutrition,
   onResolveAdvancedNutritionAi,
+  onResolveAdvancedNutritionAiFirst,
   onEstimateMassesWithAi,
   onReviewRecipeContextWithAi,
 }: RecipeDetailViewProps) {
@@ -1090,6 +1093,7 @@ export function RecipeDetailView({
                 onLoadAdvancedNutritionBundle={onLoadAdvancedNutritionBundle}
                 onApplyAdvancedNutrition={onApplyAdvancedNutrition}
                 onResolveAdvancedNutritionAi={onResolveAdvancedNutritionAi}
+                onResolveAdvancedNutritionAiFirst={onResolveAdvancedNutritionAiFirst}
                 onEstimateMassesWithAi={onEstimateMassesWithAi}
                 onReviewRecipeContextWithAi={onReviewRecipeContextWithAi}
                 advancedNutritionAiAvailability={advancedNutritionAiAvailability}

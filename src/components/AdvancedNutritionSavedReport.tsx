@@ -218,7 +218,8 @@ export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReport
                 ))}
                 {block.unresolved.map((entry) => (
                   <li key={`unresolved-${entry.line_ref}`} data-testid="saved-line-unresolved">
-                    <span className="text-[var(--text-primary,#F3F4F6)]">Unresolved</span> · {entry.line_ref} · {entry.reason}
+                    <span className="text-[var(--text-primary,#F3F4F6)]">Unresolved</span> · {entry.line_ref} ·{' '}
+                    {entry.review_reason === 'needs_review' ? 'needs review' : entry.reason}
                   </li>
                 ))}
               </ul>

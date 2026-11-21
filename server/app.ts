@@ -17,6 +17,7 @@ import { resolveIngredientFoodsOnServer } from "./nutritionResolve.js";
 import { interpretIngredientsOnServer } from "./nutritionInterpret.js";
 import { interpretWholeRecipeSemantics } from "./wholeRecipeSemanticInterpret.js";
 import { bridgeAuthenticatedSemanticsToAdvisorySuggestions } from "./wholeRecipeSemanticUsdaBridge.js";
+import { evaluateAiFirstCandidates } from "./aiFirstCandidateEvaluation.js";
 import { planIngredientsOnServer } from "./nutritionPlan.js";
 import { interpretRecipeContextOnServer } from "./nutritionContext.js";
 import { reconcileRecipeContextOnServer } from "./recipeContextReconcile.js";
@@ -1129,7 +1130,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // about request validation and consumes no AI budget. Reusing
   // `nutritionInterpretRateLimiter` keeps both semantic transports in ONE
   // cost/rate category so route-switching cannot double the quota.
-  app.post("/api/nutrition/interpret-whole-recipe", requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccessAuthority, "ai_interpretation"), textPricingGuard, nutritionInterpretRateLimiter, async (req, res) => {
+  app.post("/api/nutrition/interpret-whole-recipe", routeCancellationMiddleware, requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccessAuthority, "ai_interpretation"), textPricingGuard, nutritionInterpretRateLimiter, async (req, res) => {
     const clientIp = getClientIp(req);
 
     // The response carries freshness-bound semantics, execution identity and an
@@ -1137,6 +1138,9 @@ export function createApp(opts: CreateAppOptions): express.Express {
     res.setHeader("Cache-Control", "no-store");
 
     try {
+      const routeState = cancellationFor(req);
+      const cancellation = routeState.controller;
+      if (cancellation.signal.aborted || res.destroyed || res.writableEnded) return;
       // F-02 / §14: the route NEVER derives or trusts context. It passes the RAW
       // body straight through so the operation's CLOSED request sanitizer can SEE
       // and REFUSE forbidden or unknown fields. Rebuilding only recipe /
@@ -1144,10 +1148,14 @@ export function createApp(opts: CreateAppOptions): express.Express {
       // `context_binding`, `provider_context`, `operation_id`, `origin_receipt`,
       // fdc_id, ... — turning a refusal into a silent success.
       const userSelection = parseTextSelectionHeader(req.headers);
-      // The ONLY server option the route may supply is the strictly-parsed,
-      // non-secret provider selection. The internal `registry` / `candidates` /
-      // `authority` test seams are NOT reachable from HTTP.
-      const result = await interpretWholeRecipeSemantics(req.body, { userSelection });
+      // The ONLY server options the route may supply are the strictly-parsed,
+      // non-secret provider selection and the route-owned abort signal. The
+      // internal `registry` / `candidates` / `authority` test seams are NOT
+      // reachable from HTTP.
+      const result = await interpretWholeRecipeSemantics(req.body, {
+        userSelection,
+        signal: cancellation.signal,
+      });
 
       if (result.ok !== true) {
         const failure = result as {
@@ -1347,6 +1355,61 @@ export function createApp(opts: CreateAppOptions): express.Express {
         ok: false,
         code: "WHOLE_RECIPE_RESOLUTION_INTERNAL_ERROR",
         error: "An unexpected error occurred during whole-recipe resolution.",
+        aiAttempted: false,
+      });
+    }
+  });
+
+  // AI-FIRST ADVANCED NUTRITION — candidate evaluation (pass 2 of Generate).
+  //
+  // The browser owns the authenticated USDA catalog. It sends the authored recipe
+  // source plus bounded, opaque candidate DESCRIPTIONS it discovered locally. The
+  // server re-derives the recipe context itself, runs ONE structured provider
+  // operation, and returns one bounded decision per target. No FDC id, record
+  // digest, gram weight, nutrient, portion, Apply token, provider id or model id
+  // crosses the public boundary.
+  //
+  // Middleware order is the SAME released nutrition-AI order: auth -> product
+  // feature gate -> pricing guard -> shared semantic limiter.
+  app.post("/api/nutrition/evaluate-candidates", routeCancellationMiddleware, requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccessAuthority, "ai_interpretation"), textPricingGuard, nutritionInterpretRateLimiter, async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    try {
+      const routeState = cancellationFor(req);
+      const cancellation = routeState.controller;
+      if (cancellation.signal.aborted || res.destroyed || res.writableEnded) return;
+      const userSelection = parseTextSelectionHeader(req.headers);
+      const result = await evaluateAiFirstCandidates(req.body, {
+        userSelection,
+        signal: cancellation.signal,
+      });
+      if (result.ok !== true) {
+        if (result.code === "invalid_request") {
+          return res.status(400).json({
+            ok: false,
+            code: "INVALID_AI_FIRST_CANDIDATE_REQUEST",
+            error: "Invalid AI-first candidate evaluation request.",
+            aiAttempted: false,
+          });
+        }
+        return res.status(503).json({
+          ok: false,
+          code: "AI_FIRST_CANDIDATE_EVALUATION_UNAVAILABLE",
+          error:
+            "AI candidate evaluation is unavailable. The deterministic review and manual USDA search remain available.",
+          aiAttempted: result.aiAttempted === true,
+        });
+      }
+      return res.status(200).json({
+        ok: true,
+        contract_version: result.contract_version,
+        decisions: result.decisions,
+        aiAttempted: true,
+      });
+    } catch {
+      return res.status(500).json({
+        ok: false,
+        code: "AI_FIRST_CANDIDATE_EVALUATION_INTERNAL_ERROR",
+        error: "An unexpected error occurred during AI candidate evaluation.",
         aiAttempted: false,
       });
     }

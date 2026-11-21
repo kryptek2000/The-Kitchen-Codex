@@ -206,7 +206,13 @@ const RANGE_REPRESENTATIVE_KEYS = new Set([
 /** Bounded household evidence text fields (registry release / key / unit / size / state). */
 const MAX_HOUSEHOLD_EVIDENCE_TEXT_LENGTH = 120;
 const EVIDENCE_AMOUNT_KEYS = new Set(['value', 'unit']);
-const UNRESOLVED_KEYS = new Set(['line_ref', 'reason', 'source_food_id', 'source_release']);
+const UNRESOLVED_KEYS = new Set([
+  'line_ref',
+  'reason',
+  'review_reason',
+  'source_food_id',
+  'source_release',
+]);
 const MANUAL_OVERRIDE_KEYS = new Set(['overridden_at', 'note']);
 
 /**
@@ -873,6 +879,14 @@ function validateInertCodexNutrition(
       if (typeof entry.reason !== 'string' || !UNRESOLVED_REASONS.includes(entry.reason as UnresolvedIngredientRef['reason'])) {
         diag.add('invalid_unresolved_reason');
       }
+      let reviewReason: 'needs_review' | undefined;
+      if (hasOwn(entry, 'review_reason')) {
+        if (entry.review_reason !== 'needs_review') {
+          diag.add('invalid_unresolved_review_reason');
+        } else {
+          reviewReason = 'needs_review';
+        }
+      }
       // Optional USER-CONFIRMED food identity for an unresolved-mass row. The two
       // fields are present together or absent together, and the release must match
       // the declared `usda_fdc` release. This never contributes a nutrient total.
@@ -916,6 +930,7 @@ function validateInertCodexNutrition(
       unresolved.push({
         line_ref: typeof lineRef === 'string' ? lineRef : '',
         reason: entry.reason as UnresolvedIngredientRef['reason'],
+        ...(reviewReason !== undefined ? { review_reason: reviewReason } : {}),
         ...(unresolvedFoodId !== undefined ? { source_food_id: unresolvedFoodId } : {}),
         ...(unresolvedRelease !== undefined ? { source_release: unresolvedRelease } : {}),
       });

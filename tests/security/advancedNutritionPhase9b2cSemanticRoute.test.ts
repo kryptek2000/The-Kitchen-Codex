@@ -625,7 +625,7 @@ describe('9B-2C — structural invariants of the new route', () => {
     // cost/rate category, and no second whole-recipe bucket was introduced by
     // the 9B-3C atomic route either.
     const limiterRoutes = [...APP_SOURCE.matchAll(/app\.post\([^\n]*nutritionInterpretRateLimiter/g)];
-    expect(limiterRoutes).toHaveLength(3);
+    expect(limiterRoutes).toHaveLength(4);
     expect(APP_SOURCE).not.toMatch(/wholeRecipe[A-Za-z]*RateLimiter/);
   });
 
@@ -653,13 +653,17 @@ describe('9B-2C — structural invariants of the new route', () => {
     expect(line).not.toContain('requireNutritionProductFeature');
   });
 
-  it('forwards ONLY userSelection — never the registry/candidates/authority test seams', () => {
-    expect(routeBlock).toContain('interpretWholeRecipeSemantics(req.body, { userSelection })');
+  it('forwards ONLY userSelection and the route cancellation signal — never the registry/candidates/authority test seams', () => {
+    expect(routeBlock).toContain('interpretWholeRecipeSemantics(req.body, {');
+    expect(routeBlock).toContain('userSelection,');
+    expect(routeBlock).toContain('signal: cancellation.signal');
     for (const seam of ['registry:', 'candidates:', 'authority:']) {
       expect(routeBlock, seam).not.toContain(seam);
     }
     // userSelection comes ONLY from the strict header parser.
     expect(routeBlock).toContain('parseTextSelectionHeader(req.headers)');
+    // The signal comes ONLY from the existing route-cancellation owner.
+    expect(routeBlock).toContain('cancellationFor(req)');
   });
 
   it('passes the RAW body so the closed sanitizer can refuse forbidden fields', () => {
