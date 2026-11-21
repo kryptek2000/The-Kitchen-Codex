@@ -708,6 +708,7 @@ describe('AI-first Generate — real USDA records, two passes, local authority',
     const passataRef = prepared.adapted.find((entry) => entry.ingredient.original.includes('passata'))?.line_ref as string;
     const selected = result.outcome.candidates.find((candidate) => candidate.line_ref === passataRef);
     expect(selected).toBeDefined();
+    expect(selected?.fdc_id).toBe(170460);
     expect(selected?.description.toLowerCase()).toContain('tomato');
     expect(selected?.description.toLowerCase()).toContain('puree');
     expect(selected?.choice.aiFirst).toBe(true);
