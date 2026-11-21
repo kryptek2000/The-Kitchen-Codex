@@ -107,16 +107,12 @@ function bounded(value: unknown, max: number): string | undefined {
 
 function extractReadableText(html: string): string {
   return html
-    .replace(/<script\b[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style\b[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<noscript\b[\s\S]*?<\/noscript>/gi, ' ')
-    .replace(/<svg\b[\s\S]*?<\/svg>/gi, ' ')
+    .replace(/<script\b[\s\S]*?<\/script[^>]*>/gi, ' ')
+    .replace(/<style\b[\s\S]*?<\/style[^>]*>/gi, ' ')
+    .replace(/<noscript\b[\s\S]*?<\/noscript[^>]*>/gi, ' ')
+    .replace(/<svg\b[\s\S]*?<\/svg[^>]*>/gi, ' ')
     .replace(/<!--[\s\S]*?-->/g, ' ')
     .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/g, "'")
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, MAX_RESEARCH_SOURCE_TEXT);
