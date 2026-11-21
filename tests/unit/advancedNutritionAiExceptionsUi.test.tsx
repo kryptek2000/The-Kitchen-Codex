@@ -446,6 +446,32 @@ describe('AI-first needs_review — UI', () => {
     );
   });
 
+  it('offers research for a needs_match line even when no AI-first review explanation exists', async () => {
+    const legacy = vi.fn(async () => ({ ok: true, outcome: EMPTY_FOOD, amounts: EMPTY_AMOUNTS }));
+    const research = vi.fn(async () => ({
+      ok: false,
+      code: 'unavailable',
+      message: 'No reliable external nutrition evidence was found.',
+      skipped: [],
+    }));
+    render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup Zzz')}
+        session={session}
+        onResolveWithAi={legacy}
+        onResearchNutritionWithAi={research}
+      />
+    );
+    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
+    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await waitFor(() => expect(legacy).toHaveBeenCalledTimes(1));
+    fireEvent.click(await screen.findByTestId('advanced-nutrition-ai-research'));
+    await waitFor(() => expect(research).toHaveBeenCalledTimes(1));
+    expect((await screen.findByTestId('advanced-nutrition-ai-research-message')).textContent).toContain(
+      'No reliable external nutrition evidence'
+    );
+  });
+
   it('passes the needs_review marker to explicit Apply without changing the selection', async () => {
     const legacy = vi.fn(async () => ({ ok: true, outcome: EMPTY_FOOD, amounts: EMPTY_AMOUNTS }));
     const applyHandler = vi.fn(async () => ({ ok: true, message: 'Applied.' }));

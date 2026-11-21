@@ -1575,6 +1575,14 @@ onReviewRecipeContextWithAi,
         : Object.freeze([] as Phase4Row[]),
     [session, adaptation, state.rows, liveRows]
   );
+  /** AN-WEB-1: unresolved identity-missing lines eligible for external research. */
+  const researchEligibleRows = useMemo(
+    () => liveRows.filter((live) =>
+      live.status === 'needs_match' &&
+      aiReviews[live.line_ref]?.decision !== 'needs_review'
+    ),
+    [liveRows, aiReviews]
+  );
   /**
    * The CURRENT live-row status per line, straight from the live projection.
    * This is the authoritative actionability fact the AI-3 estimate port
@@ -2246,8 +2254,8 @@ onReviewRecipeContextWithAi,
     }
     if (researchRunning) return;
     const targets: ResearchTarget[] = [];
-    for (const [lineRef, review] of Object.entries(aiReviews)) {
-      if (review.decision !== 'no_match') continue;
+    for (const live of researchEligibleRows) {
+      const lineRef = live.line_ref;
       const row = stateRef.current.rows.find((entry) => entry.line_ref === lineRef);
       const entry = adapted.find((item) => item.line_ref === lineRef);
       if (!row || !entry) continue;
@@ -2297,7 +2305,7 @@ onReviewRecipeContextWithAi,
       if (researchAbortRef.current === controller) researchAbortRef.current = null;
       setResearchRunning(false);
     }
-  }, [session, adaptation, onResearchNutritionWithAi, researchRunning, aiReviews, adapted]);
+  }, [session, adaptation, onResearchNutritionWithAi, researchRunning, researchEligibleRows, adapted]);
 
   /**
    * Explicit user acceptance of researched contributions. Existing AI-nutrition
@@ -2872,9 +2880,7 @@ onReviewRecipeContextWithAi,
               return next;
             });
           },
-          researchAvailable:
-            onResearchNutritionWithAi !== undefined &&
-            Object.values(aiReviews).some((review) => review.decision === 'no_match'),
+          researchAvailable: onResearchNutritionWithAi !== undefined && researchEligibleRows.length > 0,
           researchRunning,
           researchMessage,
           researchOffers,
