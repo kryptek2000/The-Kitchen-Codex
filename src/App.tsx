@@ -113,6 +113,7 @@ import {
   resolveUnresolvedRowsWithAi,
   type WholeRecipeSemanticSource,
 } from './application/nutritionAiResolve';
+import { AI_FIRST_GENERATE_ENABLED, resolveWithAiFirst } from './application/nutritionAiFirst';
 import {
   NUTRITION_AI_REFRESHING_MESSAGE,
   UNAVAILABLE_EFFECTIVE_CAPABILITIES,
@@ -2755,6 +2756,51 @@ export default function App() {
   };
 
   /**
+   * AI-FIRST GENERATE — the experimental two-pass workflow.
+   *
+   * ONE explicit Generate action. Pass 1 is the released whole-recipe semantic
+   * route. The browser then performs bounded full-catalog USDA discovery and
+   * sends the ACTUAL candidate descriptions to the pass-2 evaluation route. The
+   * returned opaque refs are resolved against the SAME local session and every
+   * selection is re-authenticated before the existing card merge sees it.
+   *
+   * No third pass, no hidden retry, no fallback to the legacy AI resolver.
+   */
+  const handleResolveAdvancedNutritionAiFirst: AdvancedNutritionAiResolveHandler = async ({
+    session,
+    rows,
+    adapted,
+    recipe,
+  }) => {
+    let wholeRecipe: WholeRecipeSemanticSource | undefined;
+    if (recipe !== undefined) {
+      const ingredients = recipe.ingredients
+        .map((ingredient) => ingredient.original ?? ingredient.name ?? '')
+        .map((original) => original.trim())
+        .filter((original) => original.length > 0);
+      const targetLineRefs = rows
+        .map((row) => row.line_ref)
+        .filter((lineRef): lineRef is string => typeof lineRef === 'string' && lineRef.length > 0);
+      if (ingredients.length > 0 && targetLineRefs.length > 0) {
+        wholeRecipe = {
+          recipe: { ingredients: ingredients.map((name) => ({ name })) },
+          instructions: recipe.instructions.map((step) => ({ text: step.text })),
+          targets: targetLineRefs.map((line_ref) => ({ line_ref })),
+        };
+      }
+    }
+    return resolveWithAiFirst({
+      network: networkAdapter,
+      session,
+      rows,
+      adapted,
+      capabilities: await resolveEffectiveNutritionCapabilitiesOnce(),
+      ...(recipe !== undefined ? { recipe } : {}),
+      ...(wholeRecipe !== undefined ? { wholeRecipe } : {}),
+    });
+  };
+
+  /**
    * AI-3 PRODUCTION COMPOSITION OWNER — bounded mass estimates.
    *
    * This is a THIN adapter. It does not parse, hash, build a provider payload,
@@ -4029,6 +4075,9 @@ export default function App() {
             onLoadAdvancedNutritionBundle={handleLoadAdvancedNutritionBundle}
             onApplyAdvancedNutrition={handleApplyAdvancedNutrition}
             onResolveAdvancedNutritionAi={handleResolveAdvancedNutritionAi}
+            onResolveAdvancedNutritionAiFirst={
+              AI_FIRST_GENERATE_ENABLED ? handleResolveAdvancedNutritionAiFirst : undefined
+            }
             onEstimateMassesWithAi={handleEstimateMassesWithAi}
             onReviewRecipeContextWithAi={handleReviewRecipeContextWithAi}
             advancedNutritionAiAvailability={{

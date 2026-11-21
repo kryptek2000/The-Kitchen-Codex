@@ -354,6 +354,18 @@ export interface MatchChoice {
    */
   readonly aiAccepted?: boolean;
   /**
+   * DISPLAY-ONLY provenance for the AI-first workflow: the model evaluated the
+   * ACTUAL bounded USDA candidate records and proposed this one, and local
+   * deterministic verification (record authenticity + source constraints)
+   * accepted it. It carries NO extra authority; the calculator re-authenticates
+   * the manual selection exactly like any other. Never persisted by Apply.
+   */
+  readonly aiFirst?: boolean;
+  /** DISPLAY-ONLY culinary comparison from the pass-2 decision. Never authority. */
+  readonly aiFirstJustification?: string;
+  /** DISPLAY-ONLY remaining difference/uncertainty from the pass-2 decision. */
+  readonly aiFirstUncertainty?: string;
+  /**
    * Display-only human-readable description for a manual selection. Never
    * authority; the calculation engine resolves the description from the
    * authenticated record it verifies.

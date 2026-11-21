@@ -154,6 +154,15 @@ interface AdvancedNutritionCardProps {
    */
   onResolveWithAi?: AdvancedNutritionAiResolveHandler;
   /**
+   * Optional AI-FIRST resolution port. When supplied, the automatic Generate
+   * pass uses the two-pass AI-first workflow (whole-recipe interpretation ->
+   * real USDA discovery -> candidate evaluation -> local verification) instead
+   * of the legacy advisory-search resolver. The manual AI-help action keeps the
+   * legacy port, so the experimental workflow is exercised only by the explicit
+   * Generate path.
+   */
+  onResolveWithAiFirst?: AdvancedNutritionAiResolveHandler;
+  /**
    * Optional AI candidate-PLAN port (AI-2C), injected by the shell for the SAME
    * reason: the UI never imports the application layer, and the shell owns the
    * network + Phase-4 authority. It returns ONLY inert, already-confirmed
@@ -487,6 +496,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
   onApplyAdvancedNutrition,
   savedAdvancedBlock,
   onResolveWithAi,
+  onResolveWithAiFirst,
   onPlanWithAi,
   onEstimateMassesWithAi,
 onReviewRecipeContextWithAi,
@@ -1781,7 +1791,7 @@ onReviewRecipeContextWithAi,
   const handleResolveWithAi = useCallback(
     async (
       lineRefs?: ReadonlyArray<string>,
-      options?: { readonly orchestration?: 'generate' }
+      options?: { readonly orchestration?: 'generate'; readonly aiFirst?: boolean }
     ): Promise<AiResolveUiOutcome> => {
       if (!session || !adaptation.ok) {
         return {
@@ -1792,7 +1802,12 @@ onReviewRecipeContextWithAi,
           message: 'Advanced Nutrition cannot analyse this recipe yet.',
         };
       }
-      if (!onResolveWithAi) {
+      // The automatic Generate pass may use the AI-first port. The manual AI-help
+      // action deliberately keeps the conservative legacy port. If the AI-first
+      // port fails, this returns its failure visibly: it never silently falls back
+      // to a SECOND provider workflow.
+      const resolvePort = options?.aiFirst === true ? onResolveWithAiFirst : onResolveWithAi;
+      if (!resolvePort) {
         const message = 'AI assistance is unavailable. You can continue with USDA search manually.';
         setAiMessage(message);
         return {
@@ -1872,7 +1887,7 @@ onReviewRecipeContextWithAi,
         return isOpenRef.current === true;
       };
       try {
-        const result = await onResolveWithAi({
+        const result = await resolvePort({
           session,
           rows: targets,
           adapted,
@@ -2112,7 +2127,7 @@ onReviewRecipeContextWithAi,
         }
       }
     },
-    [session, adaptation, onResolveWithAi, adapted, applyWorkingSelections, analyzedByRef, analysis]
+    [session, adaptation, onResolveWithAi, onResolveWithAiFirst, adapted, applyWorkingSelections, analyzedByRef, analysis]
   );
 
   /**
@@ -2466,7 +2481,7 @@ onReviewRecipeContextWithAi,
     }
     generateAiStartedRef.current = pending.recipeKey;
     setPendingGenerateAi(null);
-    if (!onResolveWithAi || !aiAvailabilityAvailable) {
+    if ((!onResolveWithAi && !onResolveWithAiFirst) || !aiAvailabilityAvailable) {
       setGenerateAiFeedback({
         kind: 'unavailable',
         message:
@@ -2485,12 +2500,18 @@ onReviewRecipeContextWithAi,
     }
     setGenerateAiFeedback({
       kind: 'running',
-      message: 'AI Advanced Nutrition is interpreting the whole recipe and validating USDA matches…',
+      message:
+        onResolveWithAiFirst !== undefined
+          ? 'AI Advanced Nutrition is interpreting the whole recipe, finding real USDA candidates, and verifying selections…'
+          : 'AI Advanced Nutrition is interpreting the whole recipe and validating USDA matches…',
     });
     const recipeKey = pending.recipeKey;
     void (async () => {
       try {
-        const outcome = await handleResolveWithAi(undefined, { orchestration: 'generate' });
+        const outcome = await handleResolveWithAi(undefined, {
+          orchestration: 'generate',
+          aiFirst: onResolveWithAiFirst !== undefined,
+        });
         // Never publish feedback for a recipe the user has left or an editor that
         // has been closed while the request was in flight.
         if (identityRef.current.recipeKey !== recipeKey || !isOpenRef.current) return;
@@ -2528,6 +2549,7 @@ onReviewRecipeContextWithAi,
     aiRefreshing,
     aiAvailabilityAvailable,
     onResolveWithAi,
+    onResolveWithAiFirst,
     actionableRows.length,
     handleResolveWithAi,
   ]);

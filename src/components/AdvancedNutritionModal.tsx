@@ -1829,10 +1829,19 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                               <span
                                 data-testid="advanced-nutrition-ai-badge"
                                 className="text-[var(--accent-text,#F59E0B)]"
-                                title="Food discovered with AI-assisted interpretation; the pinned USDA catalog and deterministic matcher accepted it."
+                                title={
+                                  choice?.aiFirst === true
+                                    ? 'AI evaluated the actual pinned-USDA candidate records and proposed this one; local record and source-constraint verification accepted it. Apply remains the user’s decision.'
+                                    : 'Food discovered with AI-assisted interpretation; the pinned USDA catalog and deterministic matcher accepted it.'
+                                }
                               >
                                 {' '}
-                                · {choice?.aiAccepted === true ? 'AI-assisted USDA match' : 'AI-assisted'}
+                                ·{' '}
+                                {choice?.aiFirst === true
+                                  ? 'AI-proposed · USDA verified'
+                                  : choice?.aiAccepted === true
+                                    ? 'AI-assisted USDA match'
+                                    : 'AI-assisted'}
                               </span>
                             )}
                             {state.countPortions[row.line_ref]?.aiAssisted === true && (
@@ -1957,10 +1966,30 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                               {choice?.aiAssisted === true && (
                                 <span className="text-[var(--accent-text,#F59E0B)]">
                                   {' '}
-                                  · {choice?.aiAccepted === true ? 'AI-assisted USDA match' : 'AI-assisted · user-confirmed'}
+                                  ·{' '}
+                                  {choice?.aiFirst === true
+                                    ? 'AI-proposed · USDA verified'
+                                    : choice?.aiAccepted === true
+                                      ? 'AI-assisted USDA match'
+                                      : 'AI-assisted · user-confirmed'}
                                 </span>
                               )}
                             </p>
+                            {choice?.aiFirst === true &&
+                              ((choice.aiFirstJustification?.length ?? 0) > 0 ||
+                                (choice.aiFirstUncertainty?.length ?? 0) > 0) && (
+                                <div
+                                  data-testid="advanced-nutrition-ai-first-rationale"
+                                  className="rounded-md border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-2 py-1.5 text-[12px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]"
+                                >
+                                  {choice.aiFirstJustification !== undefined && (
+                                    <p>AI comparison: {choice.aiFirstJustification}</p>
+                                  )}
+                                  {choice.aiFirstUncertainty !== undefined && (
+                                    <p>Remaining uncertainty: {choice.aiFirstUncertainty}</p>
+                                  )}
+                                </div>
+                              )}
                             {row.outcome === 'review_required' && (
                               <button
                                 type="button"

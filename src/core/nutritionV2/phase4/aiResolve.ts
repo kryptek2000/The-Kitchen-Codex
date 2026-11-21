@@ -115,7 +115,7 @@ export function aiResolutionEligibleRows(
  * cannot be reconstructed (the candidate is then judged on the suggestion's own
  * deterministic review only). Never throws.
  */
-function sourceProjectionFor(row: Phase4Row): IngredientQueryProjection | undefined {
+export function sourceProjectionFor(row: Phase4Row): IngredientQueryProjection | undefined {
   const text = typeof row.original_text === 'string' ? row.original_text.trim() : '';
   if (text.length === 0) return undefined;
   try {
@@ -140,7 +140,7 @@ function sourceProjectionFor(row: Phase4Row): IngredientQueryProjection | undefi
  * silence is neutral, source agreement never grants authority, and only the
  * closed Phase 2/3 counters are used (no parallel state/form/variety grammar).
  */
-function candidateContradictsSource(
+export function candidateContradictsSource(
   candidateTokens: ReadonlyArray<string>,
   source: IngredientQueryProjection | undefined,
   sourceHasIdentityCandidate: boolean = true

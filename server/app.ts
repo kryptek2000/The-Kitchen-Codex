@@ -17,6 +17,7 @@ import { resolveIngredientFoodsOnServer } from "./nutritionResolve.js";
 import { interpretIngredientsOnServer } from "./nutritionInterpret.js";
 import { interpretWholeRecipeSemantics } from "./wholeRecipeSemanticInterpret.js";
 import { bridgeAuthenticatedSemanticsToAdvisorySuggestions } from "./wholeRecipeSemanticUsdaBridge.js";
+import { evaluateAiFirstCandidates } from "./aiFirstCandidateEvaluation.js";
 import { planIngredientsOnServer } from "./nutritionPlan.js";
 import { interpretRecipeContextOnServer } from "./nutritionContext.js";
 import { reconcileRecipeContextOnServer } from "./recipeContextReconcile.js";
@@ -1347,6 +1348,61 @@ export function createApp(opts: CreateAppOptions): express.Express {
         ok: false,
         code: "WHOLE_RECIPE_RESOLUTION_INTERNAL_ERROR",
         error: "An unexpected error occurred during whole-recipe resolution.",
+        aiAttempted: false,
+      });
+    }
+  });
+
+  // AI-FIRST ADVANCED NUTRITION — candidate evaluation (pass 2 of Generate).
+  //
+  // The browser owns the authenticated USDA catalog. It sends the authored recipe
+  // source plus bounded, opaque candidate DESCRIPTIONS it discovered locally. The
+  // server re-derives the recipe context itself, runs ONE structured provider
+  // operation, and returns one bounded decision per target. No FDC id, record
+  // digest, gram weight, nutrient, portion, Apply token, provider id or model id
+  // crosses the public boundary.
+  //
+  // Middleware order is the SAME released nutrition-AI order: auth -> product
+  // feature gate -> pricing guard -> shared semantic limiter.
+  app.post("/api/nutrition/evaluate-candidates", routeCancellationMiddleware, requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccessAuthority, "ai_interpretation"), textPricingGuard, nutritionInterpretRateLimiter, async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    try {
+      const routeState = cancellationFor(req);
+      const cancellation = routeState.controller;
+      if (cancellation.signal.aborted || res.destroyed || res.writableEnded) return;
+      const userSelection = parseTextSelectionHeader(req.headers);
+      const result = await evaluateAiFirstCandidates(req.body, {
+        userSelection,
+        signal: cancellation.signal,
+      });
+      if (result.ok !== true) {
+        if (result.code === "invalid_request") {
+          return res.status(400).json({
+            ok: false,
+            code: "INVALID_AI_FIRST_CANDIDATE_REQUEST",
+            error: "Invalid AI-first candidate evaluation request.",
+            aiAttempted: false,
+          });
+        }
+        return res.status(503).json({
+          ok: false,
+          code: "AI_FIRST_CANDIDATE_EVALUATION_UNAVAILABLE",
+          error:
+            "AI candidate evaluation is unavailable. The deterministic review and manual USDA search remain available.",
+          aiAttempted: result.aiAttempted === true,
+        });
+      }
+      return res.status(200).json({
+        ok: true,
+        contract_version: result.contract_version,
+        decisions: result.decisions,
+        aiAttempted: true,
+      });
+    } catch {
+      return res.status(500).json({
+        ok: false,
+        code: "AI_FIRST_CANDIDATE_EVALUATION_INTERNAL_ERROR",
+        error: "An unexpected error occurred during AI candidate evaluation.",
         aiAttempted: false,
       });
     }

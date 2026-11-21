@@ -25,6 +25,7 @@ export * from './analyzer';
 export * from './liveRow';
 export * from './hydrate';
 export * from './aiResolve';
+export * from './aiFirstVerify';
 export * from './aiAmountResolve';
 export * from './aiHouseholdResolve';
 export * from './deterministicAcceptanceView';
