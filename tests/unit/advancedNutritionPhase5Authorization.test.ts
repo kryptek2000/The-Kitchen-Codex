@@ -258,6 +258,41 @@ describe('phase 5A — valid authorization', () => {
     expect(validateCodexNutritionV1(candidate.block).ok).toBe(true);
   });
 
+  it('persists a needs_review distinction for an unresolved line without changing its reason or nutrition', () => {
+    const setup = calculatePreview(
+      SESSION,
+      recipeWith([structured(FLOUR_LINE), structured('1 cup sugar')]),
+      ['calories', 'protein', 'fat']
+    );
+    const unresolved = setup.preview.unresolved[0];
+    expect(unresolved).toBeDefined();
+    const baseline = candidateOf(authorize(setup));
+    const baselineReason = baseline.block.unresolved[0].reason;
+
+    const candidate = candidateOf(
+      authorize(setup, { reviewReasons: { [unresolved.line_ref]: 'needs_review' } })
+    );
+    const entry = candidate.block.unresolved.find((item) => item.line_ref === unresolved.line_ref);
+    expect(entry).toBeDefined();
+    expect(entry?.review_reason).toBe('needs_review');
+    // The deterministic reason and every nutrition value remain unchanged.
+    expect(entry?.reason).toBe(baselineReason);
+    expect(candidate.block.nutrients).toEqual(baseline.block.nutrients);
+    expect(validateCodexNutritionV1(candidate.block).ok).toBe(true);
+  });
+
+  it('rejects a reviewReasons entry that is not exactly needs_review', () => {
+    const setup = calculatePreview(
+      SESSION,
+      recipeWith([structured(FLOUR_LINE), structured('1 cup sugar')]),
+      ['calories', 'protein', 'fat']
+    );
+    const unresolved = setup.preview.unresolved[0];
+    expect(
+      failureCodeOf(authorize(setup, { reviewReasons: { [unresolved.line_ref]: 'no_match' } }))
+    ).toBe('invalid_request');
+  });
+
   it('a fully-resolved calculation is a schema-valid COMPLETE block even when a scoped nutrient is absent', () => {
     const setup = calculatePreview(SESSION, recipeWith([structured(FLOUR_LINE)]), ['calories', 'protein', 'fat']);
     expect(setup.preview.unresolved.length).toBe(0);

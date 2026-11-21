@@ -144,6 +144,12 @@ export interface AdvancedNutritionApplyRequest {
    */
   readonly expectedMode?: unknown;
   /**
+   * Display-only AI review markers for unresolved lines. Apply forwards them to
+   * Phase 5A so a `needs_review` line is not persisted as `no_match`. They
+   * never influence matching, mass, nutrients, or authorization.
+   */
+  readonly reviewReasons?: unknown;
+  /**
    * TEST-ONLY timestamp seam forwarded to Phase 5A. The production UI NEVER
    * supplies this: Phase 5A owns the candidate `computed_at`.
    */
@@ -256,6 +262,7 @@ export async function applyAdvancedNutrition(requestRaw: unknown): Promise<Advan
     const stateField = ownField(requestRaw, 'state');
     const writeField = ownField(requestRaw, 'write');
     const readBackField = ownField(requestRaw, 'readBack');
+    const reviewReasonsField = ownField(requestRaw, 'reviewReasons');
     const computedAtField = ownField(requestRaw, 'computedAt');
 
     if (!sessionField.ok || !sessionField.present) return fail('unsafe_request');
@@ -267,6 +274,7 @@ export async function applyAdvancedNutrition(requestRaw: unknown): Promise<Advan
     if (readBackField.ok && readBackField.present && typeof readBackField.value !== 'function') {
       return fail('unsafe_request');
     }
+    if (!reviewReasonsField.ok) return fail('unsafe_request');
 
     const existing = readExistingBlock(recipeField.value);
     if (!existing.ok) return fail('unsafe_request');
@@ -294,6 +302,9 @@ export async function applyAdvancedNutrition(requestRaw: unknown): Promise<Advan
       recipe: recipeField.value,
       state: stateField.value,
       existingBlock: existing.value,
+      ...(reviewReasonsField.present && reviewReasonsField.value !== null && reviewReasonsField.value !== undefined
+        ? { reviewReasons: reviewReasonsField.value }
+        : {}),
       ...(computedAtField.ok && computedAtField.present ? { computedAt: computedAtField.value } : {}),
     });
     if (!authorization.ok) {

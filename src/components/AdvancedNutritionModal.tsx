@@ -152,6 +152,20 @@ export interface AdvancedNutritionAiSuggestion {
 }
 
 /**
+ * One AI-FIRST model review explanation for a line it did not select. Display
+ * only: it grants no authority, preserves `needs_review` distinctly from
+ * `no_match`, and points at the existing authenticated manual-search control.
+ */
+export interface AdvancedNutritionAiReview {
+  readonly line_ref: string;
+  readonly decision: 'needs_review' | 'no_match';
+  readonly justification: string;
+  readonly uncertainty: string;
+  readonly candidate_query?: string;
+  readonly candidate_count: number;
+}
+
+/**
  * One AI-interpreted, LOCALLY AUTHENTICATED count portion that remains the
  * user's explicit choice (materially different weights are never auto-chosen).
  * `hint` is a bounded count-identity hint (closed vocabulary), never a mass.
@@ -189,6 +203,10 @@ export interface AdvancedNutritionAiUi {
   readonly running: boolean;
   readonly message: string | null;
   readonly suggestions: Readonly<Record<string, AdvancedNutritionAiSuggestion>>;
+  /** AI-FIRST per-line `needs_review` / `no_match` explanations. */
+  readonly reviews?: Readonly<Record<string, AdvancedNutritionAiReview>>;
+  /** Clears one review explanation after the user answers it manually. */
+  readonly onClearReview?: (lineRef: string) => void;
   readonly amountOffers: Readonly<Record<string, ReadonlyArray<AdvancedNutritionAiAmountOffer>>>;
   /**
    * AI-3 estimate OFFERS. Display-only. An offer that merely exists never
@@ -853,6 +871,10 @@ interface FoodSearchPanelProps {
   session: AdvancedNutritionSession;
   dispatch: React.Dispatch<Phase4Action>;
   onApplied: () => void;
+  /** Monotonic request from an AI review action; opens and seeds the panel. */
+  openRequest?: number;
+  /** Bounded local-catalog query supplied by the AI review explanation. */
+  prefillQuery?: string;
 }
 
 /**
@@ -860,7 +882,14 @@ interface FoodSearchPanelProps {
  * bundle as Advanced Nutrition (no network, no AI). Discovery only — the chosen
  * record is re-authenticated by the calculation engine.
  */
-const FoodSearchPanel: React.FC<FoodSearchPanelProps> = ({ row, session, dispatch, onApplied }) => {
+const FoodSearchPanel: React.FC<FoodSearchPanelProps> = ({
+  row,
+  session,
+  dispatch,
+  onApplied,
+  openRequest,
+  prefillQuery,
+}) => {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<ReadonlyArray<FoodSearchResult> | null>(null);
@@ -870,6 +899,18 @@ const FoodSearchPanel: React.FC<FoodSearchPanelProps> = ({ row, session, dispatc
   const [searched, setSearched] = useState(false);
   const catalogDigest = useMemo(() => session.metadata().catalog_digest, [session]);
   const prefill = row.query || row.original_text;
+  const lastOpenRequest = useRef<number | undefined>(undefined);
+
+  // An AI review explanation can open the EXISTING manual search with a
+  // bounded, locally discovered catalog query. It never selects anything.
+  useEffect(() => {
+    if (openRequest === undefined || lastOpenRequest.current === openRequest) return;
+    lastOpenRequest.current = openRequest;
+    setOpen(true);
+    if (prefillQuery !== undefined && prefillQuery.trim().length > 0) {
+      setQuery(prefillQuery.trim().slice(0, 300));
+    }
+  }, [openRequest, prefillQuery]);
 
   const run = useCallback(
     (requestedLimit: number) => {
@@ -1046,6 +1087,12 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
   const { dialogRef, onKeyDown } = useDialogFocus(isOpen, onClose);
   const [expandedLineRef, setExpandedLineRef] = useState<string | null>(null);
   const [changeFoodFor, setChangeFoodFor] = useState<string | null>(null);
+  const [reviewSearch, setReviewSearch] = useState<{
+    readonly line_ref: string;
+    readonly query?: string;
+    readonly nonce: number;
+  } | null>(null);
+  const reviewSearchNonce = useRef(0);
 
   const preview = state.preview;
   const display = useMemo(
@@ -1783,6 +1830,7 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
             <ul className="space-y-2">
               {state.rows.map((row) => {
                 const choice = state.matches[row.line_ref];
+                const aiReview = ai?.reviews?.[row.line_ref];
                 const live = liveByRef.get(row.line_ref);
                 const status: LiveRowStatus = live?.status ?? 'needs_match';
                 const effective = nutritionCoverage.lines.find((line) => line.line_ref === row.line_ref);
@@ -2030,6 +2078,7 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                                         review_digest: row.review_digest ?? '',
                                       },
                                     });
+                                    ai?.onClearReview?.(row.line_ref);
                                     setChangeFoodFor(null);
                                   }}
                                   className="mt-0.5"
@@ -2059,6 +2108,7 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                                     lineRef: row.line_ref,
                                     choice: { kind: 'none', review_digest: row.review_digest ?? '' },
                                   });
+                                  ai?.onClearReview?.(row.line_ref);
                                   setChangeFoodFor(null);
                                 }}
                                 className="mt-0.5"
@@ -2075,7 +2125,18 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                             row={row}
                             session={session}
                             dispatch={dispatch}
-                            onApplied={() => setChangeFoodFor(null)}
+                            onApplied={() => {
+                              setChangeFoodFor(null);
+                              ai?.onClearReview?.(row.line_ref);
+                            }}
+                            {...(reviewSearch !== null && reviewSearch.line_ref === row.line_ref
+                              ? {
+                                  openRequest: reviewSearch.nonce,
+                                  ...(reviewSearch.query !== undefined
+                                    ? { prefillQuery: reviewSearch.query }
+                                    : {}),
+                                }
+                              : {})}
                           />
                         )}
 
@@ -2192,6 +2253,40 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                           </p>
                         )}
 
+                            {aiReview !== undefined && (
+                              <div
+                                data-testid="advanced-nutrition-ai-review"
+                                className="rounded-md border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-2.5 py-2 text-[12px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]"
+                              >
+                                <p className="font-medium text-[var(--text-primary,#F3F4F6)]">
+                                  {aiReview.decision === 'needs_review'
+                                    ? 'AI needs your review'
+                                    : 'AI found no suitable USDA match'}
+                                </p>
+                                <p>{aiReview.justification}</p>
+                                {aiReview.uncertainty.length > 0 && (
+                                  <p>Uncertainty: {aiReview.uncertainty}</p>
+                                )}
+                                {aiReview.candidate_count > 0 && aiReview.candidate_query !== undefined && (
+                                  <button
+                                    type="button"
+                                    data-testid="advanced-nutrition-ai-review-search"
+                                    onClick={() => {
+                                      reviewSearchNonce.current += 1;
+                                      setReviewSearch({
+                                        line_ref: row.line_ref,
+                                        query: aiReview.candidate_query,
+                                        nonce: reviewSearchNonce.current,
+                                      });
+                                    }}
+                                    className="mt-1 min-h-[32px] rounded-md border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-2 text-[12px] font-semibold text-[var(--text-primary,#F3F4F6)] transition-colors hover:bg-[var(--bg-root,#0C0C0C)]"
+                                  >
+                                    Review {aiReview.candidate_count} discovered USDA candidate
+                                    {aiReview.candidate_count === 1 ? '' : 's'}
+                                  </button>
+                                )}
+                              </div>
+                            )}
                         {fdcId !== undefined && (
                           <PortionControls
                             row={row}

@@ -552,5 +552,6 @@ export async function resolveWithAiFirst(
     }),
     amounts: EMPTY_AMOUNTS,
     households: EMPTY_HOUSEHOLDS,
+    aiFirstReviews: verified.reviews,
   };
 }

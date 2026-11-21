@@ -84,6 +84,7 @@ import {
   type AdvancedNutritionAiAmountOffer,
   type AdvancedNutritionApplyUi,
   type AdvancedNutritionAiUi,
+  type AdvancedNutritionAiReview,
   type AdvancedNutritionAiSuggestion,
   type AdvancedNutritionRecipeContextUi,
 } from './AdvancedNutritionModal';
@@ -114,6 +115,12 @@ export interface AdvancedNutritionApplyHandlerArgs {
   readonly recipe: ObsidianRecipe;
   readonly state: Phase4State;
   readonly expectedMode: 'create' | 'replace';
+  /**
+   * Display-only `needs_review` markers from the current AI-first review. Apply
+   * persists them as unresolved metadata so reopen does not mislabel the line as
+   * `no_match`. They never change nutrition or matching authority.
+   */
+  readonly reviewReasons?: Readonly<Record<string, 'needs_review'>>;
 }
 
 export interface AdvancedNutritionApplyUiResult {
@@ -398,6 +405,8 @@ export type AdvancedNutritionAiResolveHandler = (args: {
     readonly line_ref: string;
     readonly reason: 'ambiguous' | 'alternatives';
   }>;
+  /** AI-FIRST per-line model explanations for non-selections. */
+  readonly aiFirstReviews?: ReadonlyArray<AdvancedNutritionAiReview>;
 }>;
 
 /**
@@ -535,6 +544,12 @@ onReviewRecipeContextWithAi,
   const [aiRunning, setAiRunning] = useState(false);
   const [aiMessage, setAiMessage] = useState<string | null>(null);
   const [aiSuggestions, setAiSuggestions] = useState<Record<string, AdvancedNutritionAiSuggestion>>({});
+  /**
+   * AI-FIRST `needs_review` / `no_match` explanations. EPHEMERAL working state:
+   * cleared on every new analysis, recipe/session change and editor closure. It
+   * never mutates nutrition or grants selection authority.
+   */
+  const [aiReviews, setAiReviews] = useState<Record<string, AdvancedNutritionAiReview>>({});
   /**
    * AI-interpreted authenticated count portions that remain the USER'S explicit
    * choice (materially different weights). Never auto-selected.
@@ -785,6 +800,7 @@ onReviewRecipeContextWithAi,
     aiAbortRef.current = null;
     setPendingGenerateAi(null);
     setGenerateAiFeedback(null);
+    setAiReviews({});
     generateAiStartedRef.current = null;
   }, []);
 
@@ -871,6 +887,7 @@ onReviewRecipeContextWithAi,
     aiAbortRef.current?.abort();
     aiAbortRef.current = null;
     setAiSuggestions({});
+    setAiReviews({});
     setAiAmountOffers({});
     setAiEstimateOffers({});
     setAiEstimateOfferBindings({});
@@ -1070,10 +1087,20 @@ onReviewRecipeContextWithAi,
     if (!onApplyAdvancedNutrition || !session || !adaptation.ok) return;
     if (applyState.kind !== 'confirming') return;
     const expectedMode = applyState.mode;
+    const reviewReasons: Record<string, 'needs_review'> = {};
+    for (const [lineRef, review] of Object.entries(aiReviews)) {
+      if (review.decision === 'needs_review') reviewReasons[lineRef] = 'needs_review';
+    }
     setApplyState({ kind: 'applying' });
     setAppliedNutritionSaved(false);
     try {
-      const result = await onApplyAdvancedNutrition({ session, recipe, state, expectedMode });
+      const result = await onApplyAdvancedNutrition({
+        session,
+        recipe,
+        state,
+        expectedMode,
+        ...(Object.keys(reviewReasons).length > 0 ? { reviewReasons } : {}),
+      });
       setApplyState(
         result.ok
           ? { kind: 'success', message: result.message }
@@ -1623,6 +1650,7 @@ onReviewRecipeContextWithAi,
     // state: a fresh deterministic Re-analyze invalidates them (they are never
     // reviewed decisions and must not linger against a new review identity).
     setAiSuggestions({});
+    setAiReviews({});
     setAiAmountOffers({});
     setAiEstimateOffers({});
     setAiEstimateOfferBindings({});
@@ -1899,6 +1927,7 @@ onReviewRecipeContextWithAi,
       aiRequestSeq.current = seq;
       setAiRunning(true);
       setAiMessage(null);
+      setAiReviews({});
       const stillCurrent = (): boolean => {
         if (aiRequestSeq.current !== seq) return false;
         if (aiGeneration.current !== capturedGeneration) return false;
@@ -1972,7 +2001,12 @@ onReviewRecipeContextWithAi,
         const portions: Record<string, PortionChoice> = { ...base.portions };
         const countPortions: Record<string, CountPortionChoice> = { ...base.countPortions };
         const suggestions: Record<string, AdvancedNutritionAiSuggestion> = {};
+        const reviews: Record<string, AdvancedNutritionAiReview> = {};
         const amountOffers: Record<string, ReadonlyArray<AdvancedNutritionAiAmountOffer>> = {};
+        for (const review of result.aiFirstReviews ?? []) {
+          if (conflictedRefs.has(review.line_ref)) continue;
+          reviews[review.line_ref] = review;
+        }
 
         for (const candidate of result.outcome.candidates) {
           if (conflictedRefs.has(candidate.line_ref)) continue;
@@ -2030,6 +2064,7 @@ onReviewRecipeContextWithAi,
         });
 
         setAiSuggestions(suggestions);
+        setAiReviews(reviews);
         setAiAmountOffers(amountOffers);
         const applied = applyWorkingSelections({
           matches,
@@ -2678,6 +2713,15 @@ onReviewRecipeContextWithAi,
           running: aiRunning,
           message: aiMessage,
           suggestions: aiSuggestions,
+          reviews: aiReviews,
+          onClearReview: (lineRef: string) => {
+            setAiReviews((current) => {
+              if (!(lineRef in current)) return current;
+              const next = { ...current };
+              delete next[lineRef];
+              return next;
+            });
+          },
           amountOffers: aiAmountOffers,
           // AI-3 estimate offers. INERT until the second explicit click.
           ...(onEstimateMassesWithAi

@@ -71,6 +71,21 @@ export interface AiFirstVerifiedProposal {
   readonly uncertainty: string;
 }
 
+/**
+ * A model non-selection that the user must see. This is DISPLAY state only: it
+ * grants no authority and never changes the row's deterministic outcome. It
+ * exists so `needs_review` is not silently collapsed into `no_match`.
+ */
+export interface AiFirstReview {
+  readonly line_ref: string;
+  readonly decision: 'needs_review' | 'no_match';
+  readonly justification: string;
+  readonly uncertainty: string;
+  /** Bounded local catalog query for the existing manual-search control. */
+  readonly candidate_query?: string;
+  readonly candidate_count: number;
+}
+
 export interface AiFirstVerificationOutcome {
   /** Verified selections, shaped exactly like the released AI resolver output. */
   readonly candidates: ReadonlyArray<AiResolveCandidate>;
@@ -82,6 +97,8 @@ export interface AiFirstVerificationOutcome {
   readonly needs_review: ReadonlyArray<string>;
   /** Display provenance for accepted proposals (never authority). */
   readonly proposed: ReadonlyArray<AiFirstVerifiedProposal>;
+  /** Per-line model explanations for non-selections, keyed by line_ref. */
+  readonly reviews: ReadonlyArray<AiFirstReview>;
 }
 
 function finitePositiveInteger(value: unknown): value is number {
@@ -103,6 +120,7 @@ export function verifyAiFirstCandidateDecisions(
   const localByRef = new Map(
     params.candidateSets.map((set) => [set.line_ref, new Map(set.candidates.map((candidate) => [candidate.candidate_ref, candidate]))])
   );
+  const candidateSetByRef = new Map(params.candidateSets.map((set) => [set.line_ref, set]));
   const catalogDigest = params.session.metadata().catalog_digest;
 
   const candidates: AiResolveCandidate[] = [];
@@ -111,6 +129,24 @@ export function verifyAiFirstCandidateDecisions(
   const noMatch: string[] = [];
   const needsReview: string[] = [];
   const proposed: AiFirstVerifiedProposal[] = [];
+  const reviews: AiFirstReview[] = [];
+
+  const pushReview = (decision: 'needs_review' | 'no_match', lineRef: string, justification: string, uncertainty: string): void => {
+    const set = candidateSetByRef.get(lineRef);
+    const first = set?.candidates[0]?.description;
+    reviews.push(
+      Object.freeze({
+        line_ref: lineRef,
+        decision,
+        justification,
+        uncertainty,
+        ...(first !== undefined && first.length > 0
+          ? { candidate_query: first.slice(0, 120) }
+          : {}),
+        candidate_count: set?.candidates.length ?? 0,
+      })
+    );
+  };
 
   for (const decision of params.decisions) {
     const lineRef = decision.line_ref;
@@ -121,11 +157,13 @@ export function verifyAiFirstCandidateDecisions(
     }
     if (decision.decision === 'no_match') {
       noMatch.push(lineRef);
+      pushReview('no_match', lineRef, decision.justification, decision.uncertainty);
       unresolved.push(lineRef);
       continue;
     }
     if (decision.decision === 'needs_review') {
       needsReview.push(lineRef);
+      pushReview('needs_review', lineRef, decision.justification, decision.uncertainty);
       unresolved.push(lineRef);
       continue;
     }
@@ -273,5 +311,6 @@ export function verifyAiFirstCandidateDecisions(
     no_match: Object.freeze(noMatch),
     needs_review: Object.freeze(needsReview),
     proposed: Object.freeze(proposed),
+    reviews: Object.freeze(reviews),
   });
 }

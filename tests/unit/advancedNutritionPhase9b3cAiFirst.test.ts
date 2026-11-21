@@ -717,6 +717,88 @@ describe('AI-first Generate — real USDA records, two passes, local authority',
     expect(passTwo.toLowerCase()).toContain('tomato products, canned, puree, without salt added');
   }, 120000);
 
+  it('preserves the exact live needs_review explanation and its real candidate set', async () => {
+    const prepared = prepare(BENCHMARK_A_LINES, BENCHMARK_A_INSTRUCTIONS);
+    const actionable = prepared.liveRows.filter((row) => liveExceptionKind(row.status) !== undefined);
+    const targetRows = prepared.rows.filter((row) => actionable.some((live) => live.line_ref === row.line_ref));
+
+    prov.overridePassOne = (payload) => {
+      const data = payload as {
+        requested_targets: Array<{ line_ref: string }>;
+        recipe: { ingredients: Array<{ line_ref: string; source_text: string }> };
+      };
+      const sourceByRef = new Map(data.recipe.ingredients.map((entry) => [entry.line_ref, entry.source_text]));
+      return {
+        contract_version: 'nutrition_ai_advanced_interpretation_v1',
+        interpretations: data.requested_targets.map((target) => {
+          const source = sourceByRef.get(target.line_ref) ?? '';
+          const base = semanticInterpretation(target.line_ref, source) as any;
+          if (!source.toLowerCase().includes('passata')) return base;
+          return {
+            ...base,
+            semantic_food: {
+              ...base.semantic_food,
+              preparation: ['strained'],
+              state: ['pureed'],
+              qualifiers: [],
+            },
+            search_phrases: ['tomato passata', 'strained tomato puree'],
+          };
+        }),
+      };
+    };
+    prov.overridePassTwo = (payload) => {
+      const data = payload as {
+        requested_targets: Array<{ line_ref: string }>;
+        recipe: { ingredients: Array<{ line_ref: string; source_text: string }> };
+      };
+      const sourceByRef = new Map(data.recipe.ingredients.map((entry) => [entry.line_ref, entry.source_text]));
+      return {
+        contract_version: 'nutrition_ai_first_candidate_evaluation_v1',
+        decisions: data.requested_targets.map((target) => {
+          const source = sourceByRef.get(target.line_ref) ?? '';
+          if (source.toLowerCase().includes('passata')) {
+            return {
+              line_ref: target.line_ref,
+              decision: 'needs_review',
+              candidate_ref: '',
+              justification: 'Passata is an uncooked tomato puree, and it is unclear if the recipe requires added salt or no salt.',
+              uncertainty: 'The recipe does not specify if the passata should be salted or unsalted.',
+            };
+          }
+          return {
+            line_ref: target.line_ref,
+            decision: 'select',
+            candidate_ref: 'c2',
+            justification: 'Cream, fluid, half and half is the standard culinary definition for half-and-half.',
+            uncertainty: '',
+          };
+        }),
+      };
+    };
+
+    const result = await resolveWithAiFirst({
+      network,
+      session,
+      rows: targetRows,
+      adapted: prepared.adapted,
+      capabilities: AI_ADVANCED_CAPABILITIES,
+      wholeRecipe: wholeRecipeSource(prepared, BENCHMARK_A_LINES, BENCHMARK_A_INSTRUCTIONS, targetRows),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(prov.calls).toBe(2);
+    const passataRef = prepared.adapted.find((entry) => entry.ingredient.original.includes('passata'))?.line_ref as string;
+    expect(result.outcome.candidates.some((candidate) => candidate.line_ref === passataRef)).toBe(false);
+    const review = result.aiFirstReviews?.find((entry) => entry.line_ref === passataRef);
+    expect(review).toBeDefined();
+    expect(review?.decision).toBe('needs_review');
+    expect(review?.justification).toContain('unclear if the recipe requires added salt');
+    expect(review?.uncertainty).toContain('does not specify if the passata should be salted');
+    expect(review?.candidate_count).toBe(3);
+    expect(review?.candidate_query).toBe('Tomato, puree, canned');
+  }, 120000);
+
   it('forwards client cancellation through the real HTTP route to the pass-1 provider signal', async () => {
     const prepared = prepare(BENCHMARK_A_LINES, BENCHMARK_A_INSTRUCTIONS);
     const actionable = prepared.liveRows.filter((row) => liveExceptionKind(row.status) !== undefined);

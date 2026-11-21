@@ -2434,6 +2434,7 @@ export default function App() {
       recipe: args.recipe,
       state: args.state,
       expectedMode: args.expectedMode,
+      ...(args.reviewReasons !== undefined ? { reviewReasons: args.reviewReasons } : {}),
       write: async (updated: ObsidianRecipe) => {
         const existingWorking = shisoWorkingRecipeRef.current;
         const sameWorking = existingWorking !== null && sameCanonicalRecipeIdentity(existingWorking.base, updated)
