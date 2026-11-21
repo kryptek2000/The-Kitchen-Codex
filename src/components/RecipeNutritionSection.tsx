@@ -8,6 +8,7 @@ import {
   type AdvancedNutritionAiEstimateHandler,
   type AdvancedNutritionRecipeContextReviewHandler,
   type AdvancedNutritionAiResolveHandler,
+  type AdvancedNutritionResearchHandler,
   type AdvancedNutritionApplyHandler,
   type AdvancedNutritionBundleUiStatus,
   type AdvancedNutritionAiAvailability,
@@ -34,6 +35,8 @@ interface RecipeNutritionSectionProps {
   onResolveAdvancedNutritionAi?: AdvancedNutritionAiResolveHandler;
   /** Optional AI-FIRST Generate resolution port (injected by the shell). */
   onResolveAdvancedNutritionAiFirst?: AdvancedNutritionAiResolveHandler;
+  /** Optional external nutrition research port (injected by the shell). */
+  onResearchAdvancedNutritionAi?: AdvancedNutritionResearchHandler;
   /**
    * Optional AI-3 bounded mass-estimate port (injected by the shell).
    * Injection-only: this component never parses, hashes, calls a provider or
@@ -76,6 +79,7 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
   onApplyAdvancedNutrition,
   onResolveAdvancedNutritionAi,
   onResolveAdvancedNutritionAiFirst,
+  onResearchAdvancedNutritionAi,
   onEstimateMassesWithAi,
   onReviewRecipeContextWithAi,
 }) => {
@@ -220,6 +224,7 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
         savedAdvancedBlock={presentation.advanced}
         onResolveWithAi={onResolveAdvancedNutritionAi}
         onResolveWithAiFirst={onResolveAdvancedNutritionAiFirst}
+        onResearchNutritionWithAi={onResearchAdvancedNutritionAi}
         onEstimateMassesWithAi={onEstimateMassesWithAi}
         onReviewRecipeContextWithAi={onReviewRecipeContextWithAi}
       />

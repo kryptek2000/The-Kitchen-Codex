@@ -550,6 +550,78 @@ describe('phase 5B — explicit Apply success', () => {
 });
 
 // ---------------------------------------------------------------------------
+// AN-WEB-1 source-backed contribution persistence
+// ---------------------------------------------------------------------------
+
+describe('phase 5B — AN-WEB-1 external source-backed contribution', () => {
+  it('applies, saves and reopens a mixed USDA + source-backed recipe with truthful provenance', async () => {
+    const recipe = obsidianRecipe([structured('1 cup Zzz')], {
+      title: 'AN-WEB-1 Research Persistence',
+      servings: 2,
+      filePath: 'Recipes/AN-WEB-1 Research Persistence.md',
+    });
+    const reviewed = buildReviewed(SESSION, recipe, ['calories', 'protein']);
+    const adapted = adaptRecipe(recipe);
+    if (!adapted.ok) throw new Error('adaptation failed');
+    const lineRef = adapted.recipe.adapted[0].line_ref;
+    const checked = validateAiNutrientContributions([
+      {
+        line_ref: lineRef,
+        ingredient: '1 cup Zzz',
+        quantity_basis: '100 g scaled from source per 100 g',
+        weight_grams: 100,
+        disposition: 'edible',
+        exclusion_role: 'none',
+        exclusion_assumption: '',
+        classification: 'source_backed',
+        nutrients: {
+          calories: { amount: 200, unit: 'kcal' },
+          protein: { amount: 5, unit: 'g' },
+        },
+        unknown_nutrients: ['fat', 'carbohydrates'],
+        assumptions: ['Label values scaled deterministically; verify the product label.'],
+        confidence: 'medium',
+        sources: [{ title: 'Example manufacturer label', url: 'https://example.com/label' }],
+      },
+    ], {
+      recipe_digest: reviewed.preview.ingredient_digest,
+      line_refs: [lineRef],
+      line_text_by_ref: { [lineRef]: '1 cup Zzz' },
+    });
+    expect(checked.ok).toBe(true);
+    if (!checked.ok) return;
+    let state = phase4Reducer(reviewed.state, {
+      type: 'accept_ai_nutrition',
+      recipeKey: reviewed.state.recipeKey as string,
+      servings: reviewed.state.baseServings,
+      contributions: checked.contributions,
+    });
+    const combined = combineAiContributionsWithPreview(reviewed.preview, checked.contributions);
+    state = phase4Reducer(state, {
+      type: 'preview_succeeded',
+      seq: state.operationSeq,
+      recipeKey: state.recipeKey as string,
+      preview: combined,
+    });
+    const vault = makeVault();
+    const applied = await apply({ recipe, state, preview: combined }, { write: vault.write, readBack: vault.readBack });
+    expect(failureCodeOf(applied)).toBe('ok');
+    const markdown = vault.files.get(resolveRecipeVaultPath(recipe)) as string;
+    const reparsed = parseObsidianRecipeMarkdown(markdown, recipe.fileName, recipe.filePath);
+    const decoded = decodeCodexNutrition(reparsed.codexNutrition);
+    expect(decoded.kind).toBe('v5');
+    if (decoded.kind !== 'v5') return;
+    expect(decoded.value.ai_contributions).toHaveLength(1);
+    expect(decoded.value.ai_contributions?.[0].classification).toBe('source_backed');
+    expect(decoded.value.ai_contributions?.[0].sources).toEqual([
+      { title: 'Example manufacturer label', url: 'https://example.com/label' },
+    ]);
+    expect(decoded.value.ai_contributions?.[0].nutrients.calories?.amount).toBe(200);
+    expect(decoded.value.unresolved).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // TOCTOU / stale state
 // ---------------------------------------------------------------------------
 

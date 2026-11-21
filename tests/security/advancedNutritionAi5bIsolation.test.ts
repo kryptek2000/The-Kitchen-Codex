@@ -402,7 +402,7 @@ describe('AI-5B — composition ownership', () => {
     const gates = [...appSource.matchAll(/requireNutritionProductFeature\(([^,)]+)/g)].map((m) => m[1]);
     // The added whole-recipe SHISO estimator is an `ai_interpretation` gate,
     // reusing the existing feature and authority seam.
-    expect(gates.length).toBe(11);
+    expect(gates.length).toBe(12);
     expect(new Set(gates)).toEqual(new Set(['nutritionProductAccessAuthority']));
   });
 

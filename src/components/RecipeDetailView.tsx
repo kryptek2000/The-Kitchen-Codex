@@ -49,6 +49,7 @@ import { buildRecipeRelationshipIndex, recipeIdentity } from '../utils/recipeRel
 import { storedRecipeDescription, visibleRecipeTags } from '../utils/recipePresentation';
 import {
   type AdvancedNutritionAiResolveHandler,
+  type AdvancedNutritionResearchHandler,
   type AdvancedNutritionAiEstimateHandler,
   type AdvancedNutritionRecipeContextReviewHandler,
   type AdvancedNutritionApplyHandler,
@@ -119,6 +120,8 @@ interface RecipeDetailViewProps {
   onResolveAdvancedNutritionAi?: AdvancedNutritionAiResolveHandler;
   /** Optional AI-FIRST Generate resolution port (browser shell only). */
   onResolveAdvancedNutritionAiFirst?: AdvancedNutritionAiResolveHandler;
+  /** Optional external nutrition research port (browser shell only). */
+  onResearchAdvancedNutritionAi?: AdvancedNutritionResearchHandler;
   /** Optional AI-3 bounded mass-estimate port (injected by the shell). */
   onEstimateMassesWithAi?: AdvancedNutritionAiEstimateHandler;
   /** Optional AI-4D2 recipe-context REVIEW port (injected by the shell). */
@@ -155,6 +158,7 @@ export function RecipeDetailView({
   onApplyAdvancedNutrition,
   onResolveAdvancedNutritionAi,
   onResolveAdvancedNutritionAiFirst,
+  onResearchAdvancedNutritionAi,
   onEstimateMassesWithAi,
   onReviewRecipeContextWithAi,
 }: RecipeDetailViewProps) {
@@ -1094,6 +1098,7 @@ export function RecipeDetailView({
                 onApplyAdvancedNutrition={onApplyAdvancedNutrition}
                 onResolveAdvancedNutritionAi={onResolveAdvancedNutritionAi}
                 onResolveAdvancedNutritionAiFirst={onResolveAdvancedNutritionAiFirst}
+                onResearchAdvancedNutritionAi={onResearchAdvancedNutritionAi}
                 onEstimateMassesWithAi={onEstimateMassesWithAi}
                 onReviewRecipeContextWithAi={onReviewRecipeContextWithAi}
                 advancedNutritionAiAvailability={advancedNutritionAiAvailability}

@@ -114,6 +114,7 @@ import {
   type WholeRecipeSemanticSource,
 } from './application/nutritionAiResolve';
 import { AI_FIRST_GENERATE_ENABLED, resolveWithAiFirst } from './application/nutritionAiFirst';
+import { requestNutritionWebResearch } from './application/nutritionWebResearch';
 import {
   NUTRITION_AI_REFRESHING_MESSAGE,
   UNAVAILABLE_EFFECTIVE_CAPABILITIES,
@@ -193,6 +194,7 @@ import { RecipeDetailView } from './components/RecipeDetailView';
 import { createVoiceCache } from './application/voiceCache';
 import type {
   AdvancedNutritionAiResolveHandler,
+  AdvancedNutritionResearchHandler,
   AdvancedNutritionAiEstimateHandler,
   AdvancedNutritionRecipeContextReviewHandler,
   AdvancedNutritionApplyHandler,
@@ -2804,6 +2806,57 @@ export default function App() {
   };
 
   /**
+   * AN-WEB-1 — explicit external nutrition research.
+   *
+   * The application transport re-validates every returned source-backed
+   * contribution against the exact requested lines. Evidence remains an OFFER
+   * until the user accepts it in Advanced Nutrition.
+   */
+  const handleResearchAdvancedNutritionAi: AdvancedNutritionResearchHandler = async ({
+    targets,
+    lineRefs,
+    lineTextByRef,
+    signal,
+  }) => {
+    const result = await requestNutritionWebResearch({
+      network: networkAdapter,
+      targets,
+      lineRefs,
+      lineTextByRef,
+      ...(signal !== undefined ? { signal } : {}),
+    });
+    if (result.ok !== true) {
+      return {
+        ok: false,
+        code: result.code,
+        message: result.message,
+        skipped: result.skipped,
+      };
+    }
+    const contributionByRef = new Map(result.contributions.map((entry) => [entry.line_ref, entry]));
+    const offers = result.evidence.map((evidence) => {
+      const contribution = contributionByRef.get(evidence.line_ref);
+      return {
+        line_ref: evidence.line_ref,
+        ingredient: contribution?.ingredient ?? evidence.food_identity,
+        source_title: evidence.source_title,
+        source_url: evidence.source_url,
+        quantity_basis: evidence.quantity_basis,
+        classification: 'source_backed' as const,
+        nutrients: evidence.nutrients,
+        limitations: evidence.limitations,
+      };
+    });
+    return {
+      ok: true,
+      message: result.message,
+      contributions: result.contributions,
+      offers,
+      skipped: result.skipped,
+    };
+  };
+
+  /**
    * AI-3 PRODUCTION COMPOSITION OWNER — bounded mass estimates.
    *
    * This is a THIN adapter. It does not parse, hash, build a provider payload,
@@ -4081,6 +4134,7 @@ export default function App() {
             onResolveAdvancedNutritionAiFirst={
               AI_FIRST_GENERATE_ENABLED ? handleResolveAdvancedNutritionAiFirst : undefined
             }
+            onResearchAdvancedNutritionAi={handleResearchAdvancedNutritionAi}
             onEstimateMassesWithAi={handleEstimateMassesWithAi}
             onReviewRecipeContextWithAi={handleReviewRecipeContextWithAi}
             advancedNutritionAiAvailability={{
