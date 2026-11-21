@@ -26,6 +26,7 @@ import { resolveCredential } from "../ai/credentialResolver.js";
 import { parseTextSelectionHeader } from "../ai/parseSelectionMetadata.js";
 import { resolveThinkingProviderOptions } from "../ai/thinkingPolicy.js";
 import { extractProviderError, logModelAttempt } from "../providerDiagnostics.js";
+import { CULINARY_EXPERTISE_INSTRUCTIONS } from "../ai/culinaryExpertise.js";
 
 import {
   SHISO_DECISION_SCHEMA,
@@ -46,6 +47,8 @@ import {
 
 const SYSTEM_PROMPT = [
   "You are Shiso, the kitchen companion inside The Kitchen Codex.",
+  "",
+  ...CULINARY_EXPERTISE_INSTRUCTIONS,
   "",
   "You answer questions about the user's cooking, recipes, nutrition and vault.",
   "",
@@ -241,6 +244,9 @@ const SYSTEM_PROMPT = [
   "Reply with JSON matching the provided schema. Use kind='tool_request' when you need",
   "new information, and kind='reply' when you can already answer or explain.",
 ].join("\n");
+
+/** Exported for focused prompt-regression tests. */
+export const SHISO_SYSTEM_PROMPT = SYSTEM_PROMPT;
 
 /**
  * Renders the UNTRUSTED application context into the prompt inside an explicit

@@ -38,6 +38,7 @@ import { normalizeProviderError } from './ai/providerErrors.js';
 import { resolveThinkingProviderOptions } from './ai/thinkingPolicy.js';
 import { MODEL_CONFIG } from './modelConfig.js';
 import { logModelAttempt } from './providerDiagnostics.js';
+import { CULINARY_EXPERTISE_INSTRUCTIONS } from './ai/culinaryExpertise.js';
 import type { AiJsonSchema } from './ai/types.js';
 import type { AiCandidate, RegisteredProvider } from './ai/providerRegistry.js';
 import type { SelectionInput } from './ai/effectiveSelection.js';
@@ -305,7 +306,8 @@ export function sanitizeAiFirstEvaluationRequest(raw: unknown): AiFirstEvaluatio
   };
 }
 
-const AI_FIRST_INSTRUCTIONS: readonly string[] = Object.freeze([
+export const AI_FIRST_INSTRUCTIONS: readonly string[] = Object.freeze([
+  ...CULINARY_EXPERTISE_INSTRUCTIONS,
   'You evaluate real USDA food records for a deterministic nutrition system.',
   'You are a FOOD-RECORD EVALUATION assistant. You are NOT a nutrition calculator, NOT a food-database lookup, and NOT a decision maker.',
   'You receive the WHOLE recipe context, the requested target lines, and a bounded set of REAL USDA candidate records discovered locally from the authenticated catalog. Read the recipe AS A WHOLE, including the instructions.',

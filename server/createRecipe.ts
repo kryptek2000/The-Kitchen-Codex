@@ -32,6 +32,7 @@ import { isOpenRouterRecipeGenerationAuthorized, verifiedOpenRouterProfile } fro
 import { getRecipeGenerationVerification } from "./ai/capabilityVerificationStore.js";
 import { coerceSelectionInput } from "./ai/effectiveSelection.js";
 import type { SelectionInput } from "./ai/effectiveSelection.js";
+import { culinaryExpertiseBlock } from "./ai/culinaryExpertise.js";
 import {
   buildGeneratedRecipeSchema,
   normalizeGeneratedRecipeDraft,
@@ -173,7 +174,9 @@ export function formatCreateConstraints(constraints?: CreateRecipeConstraints): 
 }
 
 /** Fixed, deterministic generation instructions (never contains user content). */
-const SYSTEM_GENERATION_INSTRUCTIONS = `You are the recipe generator for The Kitchen Codex.
+const SYSTEM_GENERATION_INSTRUCTIONS = `${culinaryExpertiseBlock()}
+
+You are the recipe generator for The Kitchen Codex.
 The user EXPLICITLY requested an invented recipe. Invention is allowed here.
 
 Return exactly ONE complete recipe draft. It MUST obey the explicit constraints.

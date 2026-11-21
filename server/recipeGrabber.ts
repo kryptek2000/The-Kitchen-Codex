@@ -6,6 +6,7 @@ import type { ProviderDiagnostic } from "./ai/providerErrors.js";
 import type { AiJsonSchema } from "./ai/types.js";
 import type { SelectionInput } from "./ai/effectiveSelection.js";
 import { logFallbackAttempt, logModelAttempt } from "./providerDiagnostics.js";
+import { culinaryExpertiseBlock } from "./ai/culinaryExpertise.js";
 
 dotenv.config();
 
@@ -711,7 +712,9 @@ export async function grabRecipeFromWeb(params: {
   // candidate and then to the deterministic JSON-LD / heuristic pipelines below.
   // The AI only NORMALIZES trusted fetched/extracted text — it never fetches a URL.
   if (cleanedText.length > 0 || Object.keys(metaTags).length > 0) {
-    const prompt = `You are an expert culinary chef and Obsidian Markdown archivist.
+    const prompt = `${culinaryExpertiseBlock()}
+
+You are an expert culinary chef and Obsidian Markdown archivist.
 Extract this recipe into an accurate, structured JSON recipe object tailored for an Obsidian culinary vault.
 
 Available Data:
