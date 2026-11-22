@@ -15,6 +15,80 @@ inventories. This document reconciles their intent without merging PR #11.
 
 ---
 
+## Authoritative product decision — November 21, 2026 — Nutrition Product Alignment
+
+This section is the CURRENT product authority for Basic and Advanced Nutrition.
+It supersedes conflicting historical roadmap wording below, including earlier
+statements that manual USDA editing is always Basic or that Generate Nutrition
+automatically starts an AI pass. Historical implementation records are preserved
+as history; they are not rewritten.
+
+### Tier rules
+
+| | Basic Nutrition (free) | Advanced Nutrition (future paid) |
+|---|---|---|
+| Deterministic USDA generation | Yes | Yes |
+| Nutrition & Macros card, entire-recipe/per-serving | Yes | Yes |
+| Partial/unknown provenance disclosure | Yes | Yes |
+| Open the Advanced review/edit workspace | No | Yes |
+| Change USDA matches, source portions, or weights | No | Yes |
+| Apply/save an Advanced reviewed result | No | Yes |
+| AI nutrition assistance / estimates / external research | No | Yes |
+
+- A configured Gemini key or provider readiness does **not** create product
+  entitlement. Entitlement is the server-owned nutrition product tier
+  (`basic` / `ai_advanced`) resolved through the existing product-access
+  contract.
+- Basic generation is deterministic, local, and AI-free.
+- Basic users can view saved nutrition, including historical AI estimates, but
+  the displayed provenance is never relabelled and saved data is never silently
+  overwritten.
+
+### Generation and approval sequence
+
+1. **Generate Nutrition** — explicit user action. Load the authenticated USDA
+   catalog, run deterministic matching, resolve supported portions/quantities,
+   calculate, and disclose missing/partial coverage. **Zero AI provider calls.**
+   Basic displays the read-only result; Advanced opens the deterministic review
+   workspace.
+2. **Analyze with SHISO** — explicit Advanced-only action. Run the existing
+   AI-first whole-recipe interpretation, candidate evaluation, and local
+   deterministic verification. It is never automatic on Generate or on opening
+   a saved report.
+3. **User review** — verified USDA selections, source-backed contributions,
+   clearly labeled estimates, unresolved lines, and proposed changes remain
+   visible and reviewable.
+4. **Apply / Save** — explicit user approval only. Apply updates the authorized
+   working review; Save persists through the existing trusted Vault path. AI
+   results are never saved silently.
+
+### SHISO responsibilities
+
+For an entitled user, SHISO may intelligently propose the same operations the
+manual Advanced workflow permits: correct food identity, preparation/state
+interpretation, alternative USDA foods, authenticated portions, ingredient mass,
+quantity corrections, external evidence, defensible estimates, and a
+recalculated working review. The evidence hierarchy is:
+
+1. authenticated appropriate USDA data;
+2. verified external nutritional evidence;
+3. clearly labeled reasoned AI estimate with assumptions/uncertainty;
+4. unresolved when no defensible evidence or estimate exists.
+
+SHISO never fabricates USDA records, treats an estimate as sourced, bypasses
+deterministic verification, or applies/saves without user approval.
+
+### Remaining milestones
+
+- Full manual-operation parity for SHISO beyond the existing AI-first,
+  correction, research, and bounded-estimate ports.
+- Production per-account entitlement/billing/identity; deployment tier is
+  testing-only and is not a licensing system.
+- Continued first-Generate performance work; this pass removes the automatic AI
+  wait and prevents the long synchronous authentication freeze.
+
+---
+
 ## 1. One AI companion: Shiso
 
 The Kitchen Codex will have **ONE** AI companion, named **Shiso**.

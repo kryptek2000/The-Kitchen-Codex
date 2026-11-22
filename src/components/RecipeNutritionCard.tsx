@@ -143,6 +143,63 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
     ? roundNutritionForDisplay(Object.fromEntries(Object.entries(basicDisplayedTotals).filter(([, value]) => typeof value === 'number').map(([key, value]) => [key, (value as number) / recipeBaseServings])))
     : null;
 
+  /**
+   * BASIC REVIEW PRESENTATION.
+   *
+   * Different nutrients can cover different ingredient lines. The premium hero
+   * may present the known energy amount only when its coverage is at least as
+   * broad as the least-covered macro; otherwise it explicitly shows an
+   * incomplete state and keeps the known energy subtotal as secondary evidence.
+   * Macro distribution is shown only when protein/carbohydrate/fat cover the
+   * SAME lines, so incompatible subtotals never look like one distribution.
+   */
+  const basicCoverage = basicEstimate?.nutrientCoverage;
+  const basicEnergyCoverage = basicCoverage?.calories;
+  const basicProteinCoverage = basicCoverage?.protein;
+  const basicCarbsCoverage = basicCoverage?.carbohydrates;
+  const basicFatCoverage = basicCoverage?.fat;
+  const basicFiberCoverage = basicCoverage?.fiber;
+  const basicSodiumCoverage = basicCoverage?.sodium;
+  const basicMacroCovered = Math.min(
+    basicProteinCoverage?.covered ?? 0,
+    basicCarbsCoverage?.covered ?? 0,
+    basicFatCoverage?.covered ?? 0,
+  );
+  const basicEnergyKnownSubtotal = displayedBasic?.calories;
+  const basicEnergyHeroUsable =
+    basicEnergyCoverage !== undefined &&
+    basicEnergyCoverage.status !== 'missing' &&
+    basicEnergyCoverage.covered > 0 &&
+    typeof basicEnergyKnownSubtotal === 'number' &&
+    basicEnergyCoverage.covered >= basicMacroCovered;
+  const basicMacroCoverageCompatible =
+    basicProteinCoverage !== undefined &&
+    basicCarbsCoverage !== undefined &&
+    basicFatCoverage !== undefined &&
+    basicProteinCoverage.covered > 0 &&
+    basicProteinCoverage.covered === basicCarbsCoverage.covered &&
+    basicCarbsCoverage.covered === basicFatCoverage.covered &&
+    basicProteinCoverage.measurable === basicCarbsCoverage.measurable &&
+    basicCarbsCoverage.measurable === basicFatCoverage.measurable;
+  const basicProtein = displayedBasic?.protein;
+  const basicCarbs = displayedBasic?.carbohydrates;
+  const basicFat = displayedBasic?.fat;
+  const basicMacroTotal =
+    typeof basicProtein === 'number' &&
+    Number.isFinite(basicProtein) &&
+    typeof basicCarbs === 'number' &&
+    Number.isFinite(basicCarbs) &&
+    typeof basicFat === 'number' &&
+    Number.isFinite(basicFat)
+      ? basicProtein + basicCarbs + basicFat
+      : 0;
+  const basicProteinPct = basicMacroTotal > 0 ? Math.round((basicProtein! / basicMacroTotal) * 100) : 0;
+  const basicCarbsPct = basicMacroTotal > 0 ? Math.round((basicCarbs! / basicMacroTotal) * 100) : 0;
+  const basicFatPct = basicMacroTotal > 0 ? Math.max(0, 100 - basicProteinPct - basicCarbsPct) : 0;
+  const basicVisibleAssumptions = (basicEstimate?.assumptions ?? [])
+    .map((note) => note.trim())
+    .filter((note) => note.length > 0);
+
   // Provenance labels (subtle; null when absent so nothing misleading is shown).
   const currentSourceLabel = nutritionSourceLabel(currentNutrition?.source);
   const currentConfidenceLabel = nutritionConfidenceLabel(currentNutrition?.confidence);
@@ -318,54 +375,150 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
         {basicEstimate && (
           <div
             data-testid="basic-nutrition-review"
-            className="space-y-3 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] p-4"
+            className="space-y-4 rounded-2xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] p-4 sm:p-5"
           >
-            <div className="flex flex-wrap items-start justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <Sparkles className="h-4 w-4 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
-                <p className="text-xs font-semibold text-[var(--text-primary,#F3F4F6)]">
-                  {basicEstimate.coverage.complete ? 'Basic Nutrition Estimate — Review & Save' : 'Basic Nutrition Partial Subtotal — Review & Save'}
-                </p>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="flex items-start gap-2.5">
+                <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
+                <div>
+                  <p className="font-serif text-[18px] leading-snug text-[var(--text-primary,#F3F4F6)]">
+                    Basic Nutrition
+                  </p>
+                  <p className="text-[12px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
+                    {basicEstimate.coverage.complete
+                      ? 'Review and save this deterministic USDA result.'
+                      : 'Known subtotal · review before saving.'}
+                  </p>
+                </div>
               </div>
-              <span className="font-mono text-[11px] text-[var(--text-secondary,#9CA3AF)]">
-                {currentServings === recipeBaseServings
-                  ? `Entire recipe · base ${recipeBaseServings} servings`
-                  : `Total for ${currentServings} servings · base ${recipeBaseServings}`}
-              </span>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <span className="rounded-full border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-2.5 py-1 font-mono text-[11px] text-[var(--text-secondary,#9CA3AF)]">
+                  {basicEstimate.coverage.resolved}/{basicEstimate.coverage.total} ingredient lines
+                </span>
+                <span className="font-mono text-[11px] text-[var(--text-secondary,#9CA3AF)]">
+                  {currentServings === recipeBaseServings
+                    ? `Entire recipe · base ${recipeBaseServings} servings`
+                    : `Total for ${currentServings} servings · base ${recipeBaseServings}`}
+                </span>
+              </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-2 text-left sm:grid-cols-3">
-              <div className="rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-2.5 py-2">
-                <span className="block font-mono text-[11px] uppercase tracking-normal text-[var(--text-secondary,#9CA3AF)]">{basicEstimate.coverage.complete ? 'Calories' : 'Calories · subtotal'}</span>
-                <span className="mt-0.5 block font-mono text-sm font-semibold text-[var(--text-primary,#F3F4F6)]">{displayedBasic?.calories ?? basicEstimate.totals.calories ?? '—'}</span>
-                <span className="block text-[11px] text-[var(--text-secondary,#9CA3AF)]">kcal</span>
-              </div>
-              <div className="rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-2.5 py-2">
-                <span className="block font-mono text-[11px] uppercase tracking-normal text-[var(--text-secondary,#9CA3AF)]">{basicEstimate.coverage.complete ? 'Protein' : 'Protein · subtotal'}</span>
-                <span className="mt-0.5 block font-mono text-sm font-semibold text-[var(--text-primary,#F3F4F6)]">{displayedBasic?.protein ?? basicEstimate.totals.protein ?? '—'}</span>
-                <span className="block text-[11px] text-[var(--text-secondary,#9CA3AF)]">g</span>
-              </div>
-              <div className="rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-2.5 py-2">
-                <span className="block font-mono text-[11px] uppercase tracking-normal text-[var(--text-secondary,#9CA3AF)]">{basicEstimate.coverage.complete ? 'Carbs' : 'Carbs · subtotal'}</span>
-                <span className="mt-0.5 block font-mono text-sm font-semibold text-[var(--text-primary,#F3F4F6)]">{displayedBasic?.carbohydrates ?? basicEstimate.totals.carbohydrates ?? '—'}</span>
-                <span className="block text-[11px] text-[var(--text-secondary,#9CA3AF)]">g</span>
-              </div>
-              <div className="rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-2.5 py-2">
-                <span className="block font-mono text-[11px] uppercase tracking-normal text-[var(--text-secondary,#9CA3AF)]">{basicEstimate.coverage.complete ? 'Fat' : 'Fat · subtotal'}</span>
-                <span className="mt-0.5 block font-mono text-sm font-semibold text-[var(--text-primary,#F3F4F6)]">{displayedBasic?.fat ?? basicEstimate.totals.fat ?? '—'}</span>
-                <span className="block text-[11px] text-[var(--text-secondary,#9CA3AF)]">g</span>
-              </div>
-              <div className="rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-2.5 py-2">
-                <span className="block font-mono text-[11px] uppercase tracking-normal text-[var(--text-secondary,#9CA3AF)]">{basicEstimate.coverage.complete ? 'Fiber' : 'Fiber · subtotal'}</span>
-                <span className="mt-0.5 block font-mono text-sm font-semibold text-[var(--text-primary,#F3F4F6)]">{displayedBasic?.fiber ?? '—'}</span>
-                <span className="block text-[11px] text-[var(--text-secondary,#9CA3AF)]">g</span>
-              </div>
-              <div className="rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-2.5 py-2">
-                <span className="block font-mono text-[11px] uppercase tracking-normal text-[var(--text-secondary,#9CA3AF)]">{basicEstimate.coverage.complete ? 'Sodium' : 'Sodium · subtotal'}</span>
-                <span className="mt-0.5 block font-mono text-sm font-semibold text-[var(--text-primary,#F3F4F6)]">{displayedBasic?.sodium ?? '—'}</span>
-                <span className="block text-[11px] text-[var(--text-secondary,#9CA3AF)]">mg</span>
+            {/* Premium calorie hero. A sparsely covered energy subtotal is not
+                presented as the recipe calorie total; the known amount stays
+                visible as secondary evidence. */}
+            <div className="rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-4 py-4">
+              <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
+                <div className="min-w-0">
+                  <p className="font-mono text-[11px] uppercase tracking-[0.08em] text-[var(--text-secondary,#9CA3AF)]">
+                    {basicEnergyHeroUsable
+                      ? basicEstimate.coverage.complete
+                        ? 'Calories'
+                        : 'Calories · known subtotal'
+                      : 'Calories'}
+                  </p>
+                  <div className="mt-1.5 flex items-baseline gap-1.5">
+                    <span
+                      data-testid="basic-calorie-hero"
+                      className="font-serif text-[44px] leading-none text-[var(--text-primary,#F3F4F6)]"
+                    >
+                      {basicEnergyHeroUsable ? basicEnergyKnownSubtotal : '—'}
+                    </span>
+                    <span className="text-[13px] font-medium text-[var(--text-secondary,#9CA3AF)]">kcal</span>
+                  </div>
+                  {!basicEnergyHeroUsable && (
+                    <p
+                      data-testid="basic-energy-incomplete"
+                      className="mt-1 max-w-md text-[11px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]"
+                    >
+                      {basicEnergyCoverage && basicEnergyCoverage.covered > 0
+                        ? `Energy evidence covers ${basicEnergyCoverage.covered} of ${basicEnergyCoverage.measurable} ingredient lines. `
+                        : 'Energy evidence is unavailable for the resolved lines. '}
+                      {typeof basicEnergyKnownSubtotal === 'number'
+                        ? `Known energy subtotal: ${basicEnergyKnownSubtotal} kcal.`
+                        : 'No usable energy subtotal is available.'}
+                    </p>
+                  )}
+                  {basicEnergyHeroUsable && !basicEstimate.coverage.complete && basicEnergyCoverage && (
+                    <p className="mt-1 text-[11px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
+                      Known energy subtotal · covers {basicEnergyCoverage.covered} of {basicEnergyCoverage.measurable} ingredient lines.
+                    </p>
+                  )}
+                </div>
+                <p className="text-[11px] text-[var(--text-secondary,#9CA3AF)]">
+                  {currentServings} serving{currentServings === 1 ? '' : 's'}
+                </p>
               </div>
             </div>
+
+            <dl className="grid grid-cols-2 gap-x-3 gap-y-2.5 sm:grid-cols-3 lg:grid-cols-5">
+              {([
+                ['Protein', displayedBasic?.protein, 'g', basicProteinCoverage, 'dietary'],
+                ['Carbs', displayedBasic?.carbohydrates, 'g', basicCarbsCoverage, 'dietary'],
+                ['Fat', displayedBasic?.fat, 'g', basicFatCoverage, 'dietary'],
+                ['Fiber', displayedBasic?.fiber, 'g', basicFiberCoverage, 'dietary'],
+                ['Sodium', displayedBasic?.sodium, 'mg', basicSodiumCoverage, 'mineral'],
+              ] as const).map(([label, amount, unit, coverage, note]) => (
+                <div
+                  key={label}
+                  className="min-w-0 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-3 py-2.5"
+                >
+                  <dt className="font-mono text-[11px] uppercase tracking-normal text-[var(--text-secondary,#9CA3AF)]">
+                    {label}
+                  </dt>
+                  <dd className="mt-0.5 flex items-baseline gap-1">
+                    <span className="font-mono text-[17px] font-semibold leading-tight text-[var(--text-primary,#F3F4F6)]">
+                      {amount !== undefined ? `${amount}${unit === 'g' ? 'g' : ''}` : '—'}
+                    </span>
+                    {unit === 'mg' && amount !== undefined && (
+                      <span className="text-[11px] text-[var(--text-secondary,#9CA3AF)]">mg</span>
+                    )}
+                  </dd>
+                  <dd className="mt-0.5 text-[11px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
+                    {coverage === undefined || coverage.status === 'missing'
+                      ? 'not covered by source'
+                      : coverage.status === 'complete'
+                        ? note
+                        : `covers ${coverage.covered}/${coverage.measurable} lines`}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+
+            {basicMacroCoverageCompatible && basicMacroTotal > 0 ? (
+              <div
+                data-testid="basic-macro-distribution"
+                className="space-y-2 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-3 py-3"
+              >
+                <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                  <p className="text-[11px] font-semibold text-[var(--text-primary,#F3F4F6)]">Macro distribution</p>
+                  <p className="text-[11px] text-[var(--text-secondary,#9CA3AF)]">
+                    Among the same covered lines · percentages compare grams, not calories.
+                  </p>
+                </div>
+                <div
+                  className="flex h-2.5 w-full overflow-hidden rounded-full bg-[var(--bg-elevated,#1E1E1E)]"
+                  role="img"
+                  aria-label={`Macro distribution by grams among equally covered lines: protein ${basicProteinPct} percent, carbohydrates ${basicCarbsPct} percent, fat ${basicFatPct} percent`}
+                >
+                  <div style={{ width: `${basicProteinPct}%` }} className="h-full bg-[var(--accent,#F59E0B)] transition-all duration-500 motion-reduce:transition-none" title={`Protein: ${basicProtein}g (${basicProteinPct}%)`} />
+                  <div style={{ width: `${basicCarbsPct}%` }} className="h-full bg-[var(--accent,#F59E0B)] opacity-60 transition-all duration-500 motion-reduce:transition-none" title={`Carbohydrates: ${basicCarbs}g (${basicCarbsPct}%)`} />
+                  <div style={{ width: `${basicFatPct}%` }} className="h-full bg-[var(--accent,#F59E0B)] opacity-30 transition-all duration-500 motion-reduce:transition-none" title={`Fat: ${basicFat}g (${basicFatPct}%)`} />
+                </div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-[11px] text-[var(--text-secondary,#9CA3AF)]">
+                  <span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-[var(--accent,#F59E0B)]" />Protein {basicProteinPct}%</span>
+                  <span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-[var(--accent,#F59E0B)] opacity-60" />Carbs {basicCarbsPct}%</span>
+                  <span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-[var(--accent,#F59E0B)] opacity-30" />Fat {basicFatPct}%</span>
+                </div>
+              </div>
+            ) : (
+              <p
+                data-testid="basic-macro-incompatible"
+                className="rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-3 py-2 text-[11px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]"
+              >
+                Macro distribution is withheld because protein, carbohydrate and fat subtotals
+                cover different ingredient lines. Their values are not directly comparable.
+              </p>
+            )}
 
             <p className="font-mono text-[11px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
               Per serving at {currentServings} servings{basicEstimate.coverage.complete ? '' : ' · partial subtotal'}{typeof recipe.servings === 'number' && recipe.servings > 0 ? '' : ' · assumed 4-serving basis; recipe yield not authored'}: {basicPerServing?.calories ?? '—'} kcal
@@ -385,8 +538,8 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
                 <div className="space-y-1">
                   <p className="leading-relaxed">
-                    Partial estimate — {basicEstimate.coverage.resolved} of {estimateLineCount} ingredient lines contributed.
-                    The figures above are known subtotals per serving. Unresolved lines are excluded; full recipe totals are unknown.
+                    Known subtotals — unresolved lines are excluded; full recipe totals are unknown.
+                    Individual nutrients may cover different lines.
                   </p>
                   {estimateUnresolved.length > 0 && (
                     <ul className="list-disc list-inside space-y-0.5 text-[11px] text-[var(--text-secondary,#9CA3AF)]">
@@ -399,14 +552,14 @@ export const RecipeNutritionCard: React.FC<RecipeNutritionCardProps> = ({
               </div>
             )}
 
-            {basicEstimate.assumptions.length > 0 && (
+            {basicVisibleAssumptions.length > 0 && (
               <details className="text-[11px] text-[var(--text-secondary,#9CA3AF)]">
                 <summary className="cursor-pointer text-[var(--text-secondary,#9CA3AF)] hover:text-[var(--text-primary,#F3F4F6)]">
-                  Portion assumptions ({basicEstimate.assumptions.length})
+                  Portion assumptions ({basicVisibleAssumptions.length})
                 </summary>
                 <ul className="mt-1 list-disc list-inside space-y-0.5">
-                  {basicEstimate.assumptions.map((note) => (
-                    <li key={note} className="break-words">{note}</li>
+                  {basicVisibleAssumptions.map((note, index) => (
+                    <li key={`${index}-${note.slice(0, 24)}`} className="break-words">{note}</li>
                   ))}
                 </ul>
               </details>

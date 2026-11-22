@@ -71,6 +71,75 @@ evidence/authority rules, privacy constraints, and the phased roadmap.
 
 ---
 
+## Authoritative product correction — November 21, 2026 — Nutrition Product Alignment
+
+This dated section is the CURRENT product contract and supersedes conflicting
+historical statements elsewhere in this document. Historical phase records
+remain intact as implementation history.
+
+### 1. Basic versus Advanced
+
+- **Basic Nutrition is free and permanent.** It uses the deterministic USDA
+  foundation, authenticated local records, supported quantities, deterministic
+  calculation, honest partial/unknown disclosure, and the existing Signature
+  Edition **Nutrition & Macros** card (large calories; protein, carbohydrates,
+  fat, fiber, sodium; macro-distribution visualization). Basic generates and
+  views nutrition without AI.
+- **Advanced Nutrition is the future paid editing/AI layer.** It owns the
+  Advanced review workspace, USDA match changes, source-portion and weight
+  editing, recalculation, AI-first completion, external research, labeled
+  estimates, Apply, and explicit Save.
+- Basic users cannot open the Advanced workspace or perform Advanced editing.
+  Ordinary recipe authoring is not restricted.
+- Product entitlement is server-authoritative (`basic` / `ai_advanced`). A
+  configured provider or API key never grants entitlement. Deployment-level
+  Advanced access is testing configuration, not billing or per-account identity.
+- Historical imported/AI nutrition remains labeled by its actual provenance and
+  is never silently relabelled or overwritten because tier rules changed.
+
+### 2. Stage A — Generate Nutrition (deterministic only)
+
+Generate Nutrition is an explicit action that loads the authenticated local USDA
+catalog, runs deterministic matching and supported portion/quantity resolution,
+calculates available nutrients, identifies missing/uncertain evidence, and
+displays results. **No AI provider call occurs in this stage.** Basic displays
+the read-only result. Advanced opens the deterministic working review.
+
+### 3. Stage B — Analyze with SHISO (explicit Advanced action)
+
+The existing AI-first whole-recipe workflow (semantic interpretation, real USDA
+candidate evaluation, local deterministic verification) runs ONLY after the
+entitled user explicitly selects **Analyze with SHISO**. Generate and opening a
+saved report never trigger AI. The action must do genuine interpretation work,
+not repeat the deterministic calculation.
+
+### 4. Stages C–D — review, Apply, Save
+
+The working review keeps verified USDA selections, source-backed evidence,
+labeled AI estimates, unresolved lines, and proposed changes visible. Apply is
+explicit and updates only the authorized working state. Save persists through
+the existing trusted Vault path. AI never applies or saves silently.
+
+### 5. Evidence and SHISO parity
+
+For an entitled user, SHISO is intended to perform intelligently the same
+operations the manual Advanced workflow allows, subject to the same validation
+and approval boundaries. Evidence order: authenticated USDA data; verified
+external evidence; clearly labeled reasoned estimates; unresolved. SHISO must
+not fabricate USDA records, mislabel estimates as sourced, or bypass review.
+This pass reuses the existing AI-first, manual correction, source-backed
+research, and bounded-estimate ports. Remaining parity gaps are listed in the
+Shiso roadmap rather than claimed as complete.
+
+### 6. Performance
+
+First-Generate bundle authentication is time-sliced and uses native SHA-256 where
+available; canonicality is checked per record with event-loop yields instead of
+one multi-second whole-bundle serialization. The measured 20-second synchronous
+task is removed. Automatic AI is no longer part of Generate.
+
+---
+
 ## 1. Trusted-source plan
 
 | Role | Source | Why |

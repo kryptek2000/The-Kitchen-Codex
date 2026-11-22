@@ -116,12 +116,12 @@ describe('post-Phase-5 — compact analyzer UI', () => {
 
   it('exposes one primary SHISO action and a local no-AI calculation', () => {
     const { onAnalyze, onAnalyzeRecipe } = renderModal();
-    const button = screen.getByRole('button', { name: 'Analyze Recipe' });
+    const button = screen.getByRole('button', { name: 'Analyze with SHISO' });
     fireEvent.click(button);
     expect(onAnalyzeRecipe).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole('button', { name: 'Calculate Without AI' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Recalculate without AI' }));
     expect(onAnalyze).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole('button', { name: /Analyze with Shiso/i })).toBeNull();
+    expect(screen.getAllByRole('button', { name: /Analyze with SHISO/i })).toHaveLength(1);
   });
 
   it('announces real in-progress state and keeps the offline calculation available', () => {
@@ -249,11 +249,11 @@ describe('post-Phase-5 — Advanced card Analyze after saved-state reopen', () =
     // Edit / Re-analyze explicitly initializes the working analyzer.
     fireEvent.click(screen.getByTestId('saved-advanced-edit'));
     const analyze = await screen.findByTestId('advanced-nutrition-analyze');
-    expect(analyze.textContent).toMatch(/Calculate Without AI/i);
+    expect(analyze.textContent).toMatch(/Recalculate without AI/i);
     fireEvent.click(analyze);
     // Visible transition: the run counter/state updates.
     expect(screen.getByTestId('advanced-nutrition-analysis-runs').textContent).toMatch(/run 1/i);
-    expect(screen.getByTestId('advanced-nutrition-analyze').textContent).toMatch(/Calculate Without AI/i);
+    expect(screen.getByTestId('advanced-nutrition-analyze').textContent).toMatch(/Recalculate without AI/i);
     fireEvent.click(screen.getByTestId('advanced-nutrition-analyze'));
     expect(screen.getByTestId('advanced-nutrition-analysis-runs').textContent).toMatch(/run 2/i);
     // Analyze NEVER persists.

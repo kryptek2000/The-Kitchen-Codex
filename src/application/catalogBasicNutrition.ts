@@ -98,11 +98,20 @@ export function calculateCatalogBasicNutrition(input: BasicNutritionInput, sessi
   const totals = {} as Record<typeof KEYS[number], number | null>;
   const knownSubtotal = {} as Record<typeof KEYS[number], number | null>;
   const perServing = {} as Record<typeof KEYS[number], number | null>;
+  const nutrientCoverage = {} as Record<typeof KEYS[number], { status: 'complete' | 'partial' | 'missing'; covered: number; measurable: number }>;
+  const measurableCount = preview.ingredients.filter((entry) => !entry.qualitative).length;
   for (const key of KEYS) {
     const n = preview.totals[key];
     knownSubtotal[key] = n && n.covered_ingredient_count > 0 ? n.amount : null;
     totals[key] = n?.status === 'complete' ? n.amount : null;
     perServing[key] = totals[key] === null ? null : (roundNutritionForDisplay({ [key]: totals[key]! / servings })[key] ?? null);
+    nutrientCoverage[key] = n
+      ? {
+          status: n.status,
+          covered: n.covered_ingredient_count,
+          measurable: n.measurable_ingredient_count,
+        }
+      : { status: 'missing', covered: 0, measurable: measurableCount };
   }
   const missingNutrients = KEYS.filter(key => totals[key] === null);
   const lines: BasicNutritionLine[] = preview.ingredients.map((e, i) => {
@@ -134,7 +143,10 @@ export function calculateCatalogBasicNutrition(input: BasicNutritionInput, sessi
     source: 'offline_heuristic', confidence: assumed.size ? 'low' : 'medium', confidenceNote, baseServings: servings,
     totals: Object.freeze(totals), perServing: Object.freeze(perServing), knownSubtotal: Object.freeze(knownSubtotal),
     coverage: { total: lines.length, resolved, qualitative, unresolved, complete },
-    assumptions: [confidenceNote, ...assumed.values()], lines,
+    nutrientCoverage: Object.freeze(nutrientCoverage),
+    assumptions: [confidenceNote, ...assumed.values()]
+      .map((note) => note.trim())
+      .filter((note) => note.length > 0), lines,
   };
 }
 

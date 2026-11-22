@@ -22,6 +22,7 @@ import {
   countDerivationLabel,
   coverageSummary,
   deriveDisplayNutrients,
+  deriveEnergyDisplay,
   formatAmount,
   formatDailyValue,
   ingredientCountAmount,
@@ -165,6 +166,19 @@ export interface AdvancedNutritionAiReview {
   readonly candidate_count: number;
 }
 
+/** One eligible unresolved ingredient the user may explicitly select. */
+export interface AdvancedNutritionResearchCandidate {
+  readonly line_ref: string;
+  readonly ingredient: string;
+}
+
+/** One unresolved line that MUST NOT be researched until identity is resolved. */
+export interface AdvancedNutritionResearchIneligible {
+  readonly line_ref: string;
+  readonly ingredient: string;
+  readonly reason: 'identity_ambiguous';
+}
+
 /** One reviewed external-source nutrition offer. It is inert until the user uses it. */
 export interface AdvancedNutritionResearchOffer {
   readonly line_ref: string;
@@ -224,6 +238,12 @@ export interface AdvancedNutritionAiUi {
   readonly researchRunning?: boolean;
   readonly researchMessage?: string | null;
   readonly researchOffers?: ReadonlyArray<AdvancedNutritionResearchOffer>;
+  /** AN-LIVE-R1: the exact selectable targets and the user's explicit selection. */
+  readonly researchCandidates?: ReadonlyArray<AdvancedNutritionResearchCandidate>;
+  readonly researchSelectedRefs?: ReadonlyArray<string>;
+  readonly researchIneligible?: ReadonlyArray<AdvancedNutritionResearchIneligible>;
+  readonly onToggleResearchSelection?: (lineRef: string) => void;
+  readonly researchLimit?: number;
   readonly onResearch?: () => void;
   readonly onUseResearch?: () => void;
   readonly amountOffers: Readonly<Record<string, ReadonlyArray<AdvancedNutritionAiAmountOffer>>>;
@@ -1123,6 +1143,16 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
   );
   const evidence = useMemo(() => (preview ? ingredientEvidenceViews(preview) : null), [preview]);
   const coverage = useMemo(() => (preview ? coverageSummary(preview) : null), [preview]);
+  const energy = useMemo(
+    () =>
+      display && preview
+        ? deriveEnergyDisplay(
+            display.find((entry) => entry.nutrient === 'calories'),
+            preview
+          )
+        : null,
+    [display, preview]
+  );
 
   const analyzedByRef = useMemo(() => {
     const map = new Map<string, AnalyzedRow>();
@@ -1456,18 +1486,90 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                     {ai.planRunning === true ? 'Planning candidates…' : 'Plan candidates with AI'}
                   </button>
                 )}
-                {ai.researchAvailable === true && ai.onResearch !== undefined && (
-                  <button
-                    type="button"
-                    data-testid="advanced-nutrition-ai-research"
-                    disabled={!ai.available || ai.running || ai.researchRunning === true}
-                    aria-disabled={!ai.available || ai.running || ai.researchRunning === true}
-                    onClick={ai.onResearch}
-                    className="inline-flex min-h-[44px] shrink-0 items-center rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-3 text-[13px] font-semibold text-[var(--text-primary,#F3F4F6)] transition-colors hover:bg-[var(--bg-root,#0C0C0C)] disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {ai.researchRunning === true ? 'Researching external sources…' : 'Research unresolved with AI'}
-                  </button>
-                )}
+                {ai.researchAvailable === true && ai.onResearch !== undefined && (() => {
+                  const candidates = ai.researchCandidates ?? [];
+                  const selected = ai.researchSelectedRefs ?? [];
+                  const ineligible = ai.researchIneligible ?? [];
+                  const limit = ai.researchLimit ?? 3;
+                  const selectionDisabled =
+                    !ai.available || ai.running || ai.researchRunning === true;
+                  return (
+                    <div className="w-full space-y-2 rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] p-3">
+                      <div className="flex flex-wrap items-baseline justify-between gap-2">
+                        <p className="text-[13px] font-semibold text-[var(--text-primary,#F3F4F6)]">
+                          Choose ingredients to research
+                        </p>
+                        <p
+                          data-testid="advanced-nutrition-ai-research-count"
+                          className="font-mono text-[11px] text-[var(--text-secondary,#9CA3AF)]"
+                        >
+                          {selected.length} of {limit} selected
+                        </p>
+                      </div>
+                      {candidates.length > 0 ? (
+                        <fieldset disabled={selectionDisabled} className="space-y-1.5">
+                          <legend className="text-[12px] text-[var(--text-secondary,#9CA3AF)]">
+                            Select one to {limit} unresolved ingredients. Only checked ingredients are sent.
+                          </legend>
+                          <ul className="space-y-1">
+                            {candidates.map((candidate) => {
+                              const checked = selected.includes(candidate.line_ref);
+                              const atLimit = selected.length >= limit;
+                              return (
+                                <li key={candidate.line_ref}>
+                                  <label className="flex min-h-[40px] cursor-pointer items-start gap-2 rounded-md border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-2.5 py-2 text-[12px] text-[var(--text-primary,#F3F4F6)]">
+                                    <input
+                                      type="checkbox"
+                                      data-testid={`advanced-nutrition-ai-research-target-${candidate.line_ref}`}
+                                      checked={checked}
+                                      disabled={selectionDisabled || (!checked && atLimit)}
+                                      onChange={() => ai.onToggleResearchSelection?.(candidate.line_ref)}
+                                      className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--accent,#F59E0B)]"
+                                    />
+                                    <span className="min-w-0 break-words">{candidate.ingredient}</span>
+                                  </label>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        </fieldset>
+                      ) : (
+                        <p className="text-[12px] text-[var(--text-secondary,#9CA3AF)]">
+                          No identity-unambiguous unresolved ingredients are eligible for research.
+                        </p>
+                      )}
+                      {ineligible.length > 0 && (
+                        <div
+                          data-testid="advanced-nutrition-ai-research-ineligible"
+                          className="space-y-1 rounded-md border-l-[3px] border-l-[var(--accent-text,#F59E0B)] bg-[var(--bg-elevated,#1E1E1E)] px-2.5 py-2 text-[12px] text-[var(--text-secondary,#9CA3AF)]"
+                        >
+                          <p className="font-medium text-[var(--text-primary,#F3F4F6)]">
+                            Not eligible — identity needs clarification before research:
+                          </p>
+                          <ul className="list-inside list-disc space-y-0.5">
+                            {ineligible.map((entry) => (
+                              <li key={entry.line_ref} className="break-words">{entry.ingredient}</li>
+                            ))}
+                          </ul>
+                          <p>
+                            Resolve the identity ambiguity with the existing manual USDA review; external
+                            research does not decide salted/unsalted, brand, or similar product ambiguity.
+                          </p>
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        data-testid="advanced-nutrition-ai-research"
+                        disabled={selectionDisabled || selected.length === 0}
+                        aria-disabled={selectionDisabled || selected.length === 0}
+                        onClick={ai.onResearch}
+                        className="inline-flex min-h-[44px] shrink-0 items-center rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-3 text-[13px] font-semibold text-[var(--text-primary,#F3F4F6)] transition-colors hover:bg-[var(--bg-root,#0C0C0C)] disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {ai.researchRunning === true ? 'Researching selected…' : 'Research Selected'}
+                      </button>
+                    </div>
+                  );
+                })()}
               </div>
               {ai.researchMessage !== undefined && ai.researchMessage !== null && (
                 <p
@@ -1831,16 +1933,16 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
           </section>
 
           <section
-            aria-label="Automatic ingredient analysis"
+            aria-label="Nutrition analysis actions"
             data-testid="advanced-nutrition-analysis"
             className="space-y-3"
           >
             <div className="space-y-3 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] p-4">
               <div className="space-y-1">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary,#9CA3AF)]">Analyze</p>
-                <p className="text-[18px] font-serif text-[var(--text-primary,#F3F4F6)]">Nutrition with SHISO</p>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary,#9CA3AF)]">Intelligent completion</p>
+                <p className="text-[18px] font-serif text-[var(--text-primary,#F3F4F6)]">Analyze with SHISO</p>
                 <p className="text-[14px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
-                  Let SHISO review the recipe, use available food data, and clearly label estimates and unknowns. Review the result before applying it.
+                  Runs the genuine whole-recipe AI-first workflow only when you explicitly choose it. SHISO proposes; the local USDA catalog and calculator verify; nothing is saved until Apply.
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -1848,12 +1950,12 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                   type="button"
                   data-testid="advanced-nutrition-analyze-with-shiso"
                   onClick={onAnalyzeRecipe}
-                  disabled={shisoAnalysisState.kind === 'running'}
+                  disabled={shisoAnalysisState.kind === 'running' || (ai !== undefined && ai.available === false)}
                   aria-describedby="advanced-nutrition-shiso-status"
                   className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-amber-500 px-4 text-[14px] font-semibold text-black transition-colors hover:bg-amber-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring,#F59E0B)] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Sparkles className="w-3.5 h-3.5" />
-                  {shisoAnalysisState.kind === 'running' ? 'Analyzing Recipe…' : 'Analyze Recipe'}
+                  {shisoAnalysisState.kind === 'running' ? 'SHISO is analyzing…' : 'Analyze with SHISO'}
                 </button>
                 <button
                   type="button"
@@ -1862,7 +1964,7 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                   disabled={calculating || (analysis === null && !session)}
                   className="inline-flex min-h-[44px] items-center rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-4 text-[14px] font-medium text-[var(--text-primary,#F3F4F6)] transition-colors hover:bg-[var(--bg-root,#0C0C0C)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring,#F59E0B)] disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {calculating ? 'Calculating…' : 'Calculate Without AI'}
+                  {calculating ? 'Calculating…' : 'Recalculate without AI'}
                 </button>
               </div>
               <p
@@ -2450,6 +2552,31 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                 </p>
               )}
 
+              {energy && (
+                <div
+                  data-testid="advanced-nutrition-energy-status"
+                  data-energy-kind={energy.kind}
+                  className={`rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] border-l-[3px] px-4 py-3 text-[13px] leading-relaxed ${
+                    energy.kind === 'complete'
+                      ? 'border-l-[var(--accent,#F59E0B)] bg-[var(--bg-elevated,#1E1E1E)] text-[var(--text-secondary,#9CA3AF)]'
+                      : 'border-l-[var(--accent-text,#F59E0B)] bg-[var(--bg-elevated,#1E1E1E)] text-[var(--text-primary,#F3F4F6)]'
+                  }`}
+                >
+                  <p className="font-semibold">
+                    {energy.kind === 'complete'
+                      ? `Complete recipe calories: ${formatAmount(energy.amount)} kcal`
+                      : energy.kind === 'partial_subtotal'
+                        ? `Energy subtotal: ${formatAmount(energy.amount)} kcal`
+                        : 'Calories unavailable'}
+                  </p>
+                  <p className="mt-0.5 text-[12px] text-[var(--text-secondary,#9CA3AF)]">
+                    {energy.kind === 'complete'
+                      ? 'Every measured ingredient line contributes energy evidence.'
+                      : energy.note}
+                  </p>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
                 {NUTRIENT_GROUPS.map((group) => {
                   const rows = (display ?? []).filter((nutrient) => group.nutrients.includes(nutrient.nutrient));
@@ -2465,7 +2592,9 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                             key={nutrient.nutrient}
                             className="flex items-baseline justify-between gap-3 border-b border-[var(--border-subtle,rgba(255,255,255,0.08))] py-1.5 text-[13px] last:border-b-0"
                           >
-                            <span className="min-w-0 text-[var(--text-secondary,#9CA3AF)]">{nutrient.label}</span>
+                            <span className="min-w-0 text-[var(--text-secondary,#9CA3AF)]">
+                              {nutrient.nutrient === 'calories' && energy ? energy.label : nutrient.label}
+                            </span>
                             <span className="flex shrink-0 items-baseline gap-2 text-right font-mono text-[var(--text-primary,#F3F4F6)]">
                               <span>
                                 {formatAmount(nutrient.amount)}
@@ -2475,7 +2604,9 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                                 {formatDailyValue(nutrient.percent_daily_value)} DV
                               </span>
                               {nutrient.coverage === 'partial' && (
-                                <span className="rounded-full border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-1.5 py-0.5 text-[11px] text-[var(--text-primary,#F3F4F6)]">partial</span>
+                                <span className="rounded-full border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-1.5 py-0.5 text-[11px] text-[var(--text-primary,#F3F4F6)]">
+                                  {nutrient.nutrient === 'calories' ? 'energy subtotal' : 'partial'}
+                                </span>
                               )}
                             </span>
                           </li>

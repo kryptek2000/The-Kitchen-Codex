@@ -28,7 +28,8 @@ interface AdvancedNutritionSavedReportProps {
   /** The already-validated canonical saved block. */
   block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5;
   /** Opens the working analyzer/editor. */
-  onEdit: () => void;
+  /** Present only when the Advanced editing entitlement is active. */
+  onEdit?: () => void;
 }
 
 /**
@@ -379,15 +380,17 @@ export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReport
               >
                 Close
               </button>
-              <button
-                type="button"
-                data-testid="saved-advanced-edit"
-                onClick={onEdit}
-                className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-amber-500 px-4 text-[13px] font-semibold text-black transition-colors hover:bg-amber-400"
-              >
-                <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
-                <span>Edit / Re-analyze Nutrition</span>
-              </button>
+              {onEdit !== undefined && (
+                <button
+                  type="button"
+                  data-testid="saved-advanced-edit"
+                  onClick={onEdit}
+                  className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-amber-500 px-4 text-[13px] font-semibold text-black transition-colors hover:bg-amber-400"
+                >
+                  <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>Edit / Re-analyze Nutrition</span>
+                </button>
+              )}
             </div>
           </div>
         </div>

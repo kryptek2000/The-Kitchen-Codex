@@ -2425,6 +2425,17 @@ export default function App() {
   const handleApplyAdvancedNutrition: AdvancedNutritionApplyHandler = async (
     args: AdvancedNutritionApplyHandlerArgs
   ): Promise<AdvancedNutritionApplyUiResult> => {
+    // AUTHORITATIVE PRODUCT-ACCESS GATE. The Advanced Apply operation is not a
+    // Basic feature. This check runs at the operation boundary, not only in the
+    // button render, so a Basic deployment cannot apply an Advanced review even if
+    // a stale/forged UI state reaches this handler.
+    if (nutritionAiClientStateRef.current?.productAccessIsAiAdvanced !== true) {
+      return {
+        ok: false,
+        message:
+          'Advanced Nutrition editing is not enabled for this deployment. Basic Nutrition remains available in Nutrition & Macros.',
+      };
+    }
     if (isBuiltInRecipe(args.recipe)) {
       return {
         ok: false,
@@ -2521,7 +2532,11 @@ export default function App() {
       // back, or a status we may not yet have verified. A definitive Basic product
       // answer is policy, not a transient failure, so it never offers Retry.
       canRetry: !refreshing && (state.availability === 'provider_unavailable' || state.availability === 'product_access_unverified'),
-      ...(refreshing ? {} : {}),
+      advancedEditingAccess: state.productAccessIsAiAdvanced
+        ? ('entitled' as const)
+        : state.productAccessIsBasic
+          ? ('basic' as const)
+          : ('unknown' as const),
     });
   }, []);
 
@@ -2614,13 +2629,11 @@ export default function App() {
    * operational `NutritionCapabilities` shape, so every existing AI port gates on
    * effective availability without any of them being rewritten.
    *
-   * `deterministicReview` and `manualEditing` are literal `true` here, exactly as
-   * `nutritionCapabilities.ts` defines them: Basic Nutrition — deterministic USDA
-   * analysis, matching, manual correction, portions, calculation, provenance, Review
-   * and Apply — is never reduced by AI-5C. Only the AI assistance layer is gated.
-   *
-   * The core capability module is NOT modified or reinterpreted; this is an
-   * application-layer projection of the composed result.
+   * `deterministicReview` and `manualEditing` are literal `true` here because they
+   * describe the deterministic ENGINE available in this build. PRODUCT entitlement
+   * to open the Advanced workspace and edit USDA matches/portions is separate and
+   * is derived from the server-owned product tier in the presentation state below.
+   * Only the AI assistance layer is gated by provider readiness.
    */
   const toEffectiveNutritionCapabilities = useCallback(
     (effective: NutritionAiEffectiveCapabilities): NutritionCapabilities =>
@@ -2660,18 +2673,21 @@ export default function App() {
   /**
    * The bounded presentation state handed to the Advanced Nutrition UI.
    *
-   * Components receive only `available` plus a fixed, bounded reason string: they
-   * never call the status endpoint, never import the application layer, never
-   * inspect the environment, never infer BYOK, and never resolve entitlement.
+   * Components receive the effective AI availability, a fixed bounded reason,
+   * and the SEPARATE product entitlement for Advanced editing. They never call
+   * the status endpoint, never import the application layer, never inspect the
+   * environment, never infer BYOK, and never resolve entitlement themselves.
    *
    * Before the lazy read completes this is `unknown` rather than Basic, so the UI
-   * cannot claim a product fact the server has not stated.
+   * cannot claim a product fact the server has not stated and cannot open the
+   * paid Advanced workspace.
    */
   const [nutritionAiPresentation, setNutritionAiPresentation] = useState<{
     readonly available: boolean;
     readonly reason: string | null;
     readonly refreshing: boolean;
     readonly canRetry: boolean;
+    readonly advancedEditingAccess: 'unknown' | 'basic' | 'entitled';
   }>(() => {
     const initial = unresolvedNutritionAiClientState();
     return {
@@ -2679,6 +2695,7 @@ export default function App() {
       reason: nutritionAiUnavailableMessage(initial.availability),
       refreshing: false,
       canRetry: true,
+      advancedEditingAccess: 'unknown',
     };
   });
 
@@ -2699,6 +2716,18 @@ export default function App() {
     const knownAdvanced = cached !== null && isAiAdvancedProductAccessRead(cached);
     void runNutritionAiRefresh({ reuseProductAccess: knownAdvanced });
   }, [advancedNutritionBundle, runNutritionAiRefresh]);
+
+  /**
+   * Lightweight product-tier read used only to decide whether Basic or Advanced
+   * UI may be offered. It never loads the USDA bundle and never probes a
+   * provider; it reuses the same server-owned product access endpoint and cached
+   * decision.
+   */
+  const handleResolveAdvancedEditingAccess = useCallback(() => {
+    if (nutritionRefreshingRef.current) return;
+    if (nutritionProductReadRef.current !== null) return;
+    void runNutritionAiRefresh({ reuseProductAccess: false });
+  }, [runNutritionAiRefresh]);
 
   // Optional AI-assisted USDA resolution port. This shell owns the network +
   // application layer; the Advanced Nutrition UI receives ONLY this bounded port
@@ -4139,6 +4168,7 @@ export default function App() {
             onReviewRecipeContextWithAi={handleReviewRecipeContextWithAi}
             advancedNutritionAiAvailability={{
               ...nutritionAiPresentation,
+              onResolveAccess: handleResolveAdvancedEditingAccess,
               onRetry: handleRetryNutritionAiAvailability,
             }}
           />

@@ -121,11 +121,9 @@ describe('AI-assisted resolution UI', () => {
     render(<AdvancedNutritionCard recipe={recipe()} session={session} onResolveWithAi={handler} />);
     fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
     await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
-
-    // Generate now performs one intentional AI pass after the deterministic
-    // baseline. Consume that pass before asserting the explicit manual control.
-    await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
-    handler.mockClear();
+    await waitFor(() => expect(screen.getByTestId('advanced-nutrition-live-summary')).toBeTruthy());
+    // Generate is deterministic only; the explicit AI control is isolated here.
+    expect(handler).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId('advanced-nutrition-ai-resolve'));
     await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
     // A food-only suggestion does NOT resolve the row: the live needs_amount
@@ -196,10 +194,10 @@ describe('AI-assisted resolution UI', () => {
     render(<AdvancedNutritionCard recipe={recipe()} session={session} onResolveWithAi={handler} />);
     fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
     await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
-    // Consume the Generate-triggered pass so this assertion isolates the
-    // explicit row-level action under test.
-    await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
-    handler.mockClear();
+    await waitFor(() => expect(screen.getByTestId('advanced-nutrition-live-summary')).toBeTruthy());
+    // Generate is deterministic only; this assertion isolates the explicit
+    // row-level action under test.
+    expect(handler).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId('advanced-nutrition-edit'));
     fireEvent.click(await screen.findByTestId('advanced-nutrition-ai-help'));
     await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));

@@ -12,12 +12,13 @@ import {
   PHASE4_UNREADABLE_MESSAGE,
   PHASE4_UNSUPPORTED_MESSAGE,
   adaptRecipe,
-  analyzeRecipe,
+  analyzeRecipeFromRows,
   basisLabel,
   buildCalculationRequest,
   buildReviewRows,
   coverageSummary,
   deriveDisplayNutrients,
+  deriveEnergyDisplay,
   formatAmount,
   hydrateWorkingReview,
   phase4Failure,
@@ -71,7 +72,7 @@ import {
 } from '../core/nutritionV2/phase4/aiEstimateAccept';
 import { aiEstimateSnapshotBinding } from '../core/nutritionV2/phase4/aiEstimateValidation';
 import { combineAiContributionsWithPreview, type AiNutrientContribution } from '../core/nutritionV2/aiContribution';
-import type { ResearchTarget } from '../core/nutritionV2/aiResearch';
+import { MAX_RESEARCH_TARGETS, type ResearchTarget } from '../core/nutritionV2/aiResearch';
 import type { AiEstimateSelectionEvidence } from '../core/nutritionV2/phase4/aiEstimateSelection';
 import { useShiso } from '../application-ui/shisoEntryPoints';
 import type { ShisoAnalysisOutcome, ShisoNutritionCorrectionsOutcome } from '../core/shiso/protocol';
@@ -164,12 +165,11 @@ interface AdvancedNutritionCardProps {
    */
   onResolveWithAi?: AdvancedNutritionAiResolveHandler;
   /**
-   * Optional AI-FIRST resolution port. When supplied, the automatic Generate
-   * pass uses the two-pass AI-first workflow (whole-recipe interpretation ->
-   * real USDA discovery -> candidate evaluation -> local verification) instead
-   * of the legacy advisory-search resolver. The manual AI-help action keeps the
-   * legacy port, so the experimental workflow is exercised only by the explicit
-   * Generate path.
+   * Optional AI-FIRST resolution port. The explicit “Analyze with SHISO” action
+   * uses the two-pass AI-first workflow (whole-recipe interpretation -> real USDA
+   * discovery -> candidate evaluation -> local verification). Generate Nutrition
+   * and opening a saved report never call it. The manual AI-help action keeps the
+   * legacy port.
    */
   onResolveWithAiFirst?: AdvancedNutritionAiResolveHandler;
   /** Optional bounded external nutrition research port (AN-WEB-1). */
@@ -252,6 +252,20 @@ export interface AdvancedNutritionAiAvailability {
   readonly canRetry?: boolean;
   /** AI-5D: the explicit user-triggered re-check. Never called while refreshing. */
   readonly onRetry?: () => void;
+  /**
+   * Product entitlement to the Advanced review workspace. This is INDEPENDENT of
+   * provider readiness: a product-entitled user may still review/edit manually
+   * when the provider is unavailable, while a Basic user cannot enter the
+   * workspace at all. `unknown` fails closed until the server-owned product read
+   * completes.
+   */
+  readonly advancedEditingAccess?: 'unknown' | 'basic' | 'entitled';
+  /**
+   * Lightweight product-tier read used ONLY to decide whether the Advanced
+   * workspace may be offered. It must not load the USDA bundle and must not make
+   * an AI/provider call. Called once on mount only while access is unknown.
+   */
+  readonly onResolveAccess?: () => void;
 }
 
 /**
@@ -385,10 +399,10 @@ export type AdvancedNutritionAiResolveHandler = (args: {
    */
   readonly signal?: AbortSignal;
   /**
-   * AN-ARCH-1 — set ONLY for the automatic AI pass that follows the explicit
-   * Generate action. The shell may then keep a DETERMINISTICALLY VALIDATED
-   * semantic match automatic instead of downgrading every `review_suggested`
-   * line to a per-row offer. Manual AI help omits it and keeps the conservative
+   * AN-ARCH-1 — set ONLY for the explicit “Analyze with SHISO” action. The shell
+   * may then keep a DETERMINISTICALLY VALIDATED semantic match automatic instead
+   * of downgrading every `review_suggested` line to a per-row offer. Generate
+   * Nutrition never sets it; manual AI help omits it and keeps the conservative
    * contract.
    */
   readonly orchestration?: 'generate';
@@ -430,10 +444,10 @@ export type AdvancedNutritionResearchHandler = (args: {
 }>;
 
 /**
- * Visible outcome of the automatic Generate AI pass. This is deliberately
- * separate from the manual AI panel's `aiMessage`: the automatic operation must
- * report its own completion/failure in the primary Generate experience even
- * when the secondary review panel is collapsed.
+ * Visible outcome of the explicit “Analyze with SHISO” operation. This is
+ * deliberately separate from the manual AI panel's `aiMessage`: the intentional
+ * SHISO operation must report its own completion/failure even when the secondary
+ * review panel is collapsed.
  */
 export type GenerateAiFeedback =
   | { readonly kind: 'running'; readonly message: string }
@@ -540,6 +554,27 @@ onReviewRecipeContextWithAi,
   const servingBasisAssumed = !(typeof recipe.servings === 'number' && Number.isFinite(recipe.servings) && recipe.servings > 0);
   const shiso = useShiso();
   const nutritionUnsaved = shiso.workingRecipe?.nutrition_unsaved === true;
+  // Product entitlement is independent of provider readiness. `unknown` fails
+  // closed until the server-owned product read completes.
+  const advancedEditingAccess =
+    advancedNutritionAiAvailability?.advancedEditingAccess ?? 'entitled';
+  const advancedEditingEntitled = advancedEditingAccess === 'entitled';
+  const advancedEditingBasic = advancedEditingAccess === 'basic';
+  const aiRefreshing = advancedNutritionAiAvailability?.refreshing === true;
+  const aiAvailabilityAvailable =
+    !aiRefreshing && (advancedNutritionAiAvailability?.available ?? true);
+  const aiAvailabilityReason = advancedNutritionAiAvailability?.reason ?? null;
+  const aiCanRetry = advancedNutritionAiAvailability?.canRetry === true;
+  const aiOnRetry = advancedNutritionAiAvailability?.onRetry;
+  const onResolveAccess = advancedNutritionAiAvailability?.onResolveAccess;
+
+  // Resolve the product tier once for an honest Basic/Advanced surface. This is a
+  // lightweight server-owned product read, never a bundle load or provider call.
+  useEffect(() => {
+    if (advancedEditingAccess !== 'unknown') return;
+    onResolveAccess?.();
+  }, [advancedEditingAccess, onResolveAccess]);
+
   const [isOpen, setIsOpen] = useState(false);
   const [isSavedReportOpen, setIsSavedReportOpen] = useState(false);
   const [calculating, setCalculating] = useState(false);
@@ -575,7 +610,13 @@ onReviewRecipeContextWithAi,
   const [researchMessage, setResearchMessage] = useState<string | null>(null);
   const [researchOffers, setResearchOffers] = useState<ReadonlyArray<AdvancedNutritionResearchOffer>>([]);
   const [researchContributions, setResearchContributions] = useState<ReadonlyArray<AiNutrientContribution>>([]);
+  /**
+   * AN-LIVE-R1: the user's explicit research selection. Research never gathers
+   * eligible lines automatically; only these bounded refs may be requested.
+   */
+  const [researchSelectedRefs, setResearchSelectedRefs] = useState<ReadonlyArray<string>>([]);
   const researchAbortRef = useRef<AbortController | null>(null);
+  const researchRequestSeq = useRef(0);
   /**
    * AI-interpreted authenticated count portions that remain the USER'S explicit
    * choice (materially different weights). Never auto-selected.
@@ -792,48 +833,30 @@ onReviewRecipeContextWithAi,
 
   const [pendingGenerateRecipeKey, setPendingGenerateRecipeKey] = useState<string | null>(null);
   /**
-   * AI ORCHESTRATION INTENT for one explicit Generate request.
-   *
-   * Generate is the user's authorization for the complete Advanced Nutrition
-   * operation: deterministic baseline first, then ONE whole-recipe AI
-   * interpretation pass over whatever genuinely remains unresolved. The intent is
-   * bound to the recipe key and to the baseline run counter at click time, so it
-   * can only fire after THAT recipe's deterministic baseline has been applied.
-   * It is memory-only, consumed once, and never set by viewing, Edit, or
-   * Re-analyze.
-   */
-  const [pendingGenerateAi, setPendingGenerateAi] = useState<{
-    readonly recipeKey: string;
-    readonly baselineRuns: number;
-  } | null>(null);
-  const generateAiStartedRef = useRef<string | null>(null);
-  /**
-   * The user-visible state of the automatic Generate AI pass. It is distinct
-   * from the manual AI panel because an automatic timeout/failure must be visible
-   * without opening that secondary panel.
+   * User-visible state of the EXPLICIT “Analyze with SHISO” action. Generate
+   * Nutrition never sets this and never calls AI; only the intentional SHISO
+   * action does.
    */
   const [generateAiFeedback, setGenerateAiFeedback] = useState<GenerateAiFeedback | null>(null);
 
   /**
-   * Cancels a not-yet-started Generate AI intent and clears its visible status.
-   * It is called only for a genuine cancellation: the user closes the working
-   * editor, the recipe changes, the component unmounts, or bundle
-   * initialization fails. It is NEVER called merely because the editor has not
-   * opened yet during lazy loading.
+   * Cancels any in-flight AI/SHISO/research request and clears its visible
+   * status. It is called only for a genuine cancellation: the user closes the
+   * working editor, the recipe changes, the component unmounts, or bundle
+   * initialization fails.
    */
   const cancelGenerateAiIntent = useCallback(() => {
     aiAbortRef.current?.abort();
     aiAbortRef.current = null;
     researchAbortRef.current?.abort();
     researchAbortRef.current = null;
-    setPendingGenerateAi(null);
     setGenerateAiFeedback(null);
     setAiReviews({});
     setResearchRunning(false);
     setResearchMessage(null);
     setResearchOffers([]);
     setResearchContributions([]);
-    generateAiStartedRef.current = null;
+    setResearchSelectedRefs([]);
   }, []);
 
   // The saved report renders from this ALREADY-VALIDATED block alone; no USDA
@@ -904,7 +927,6 @@ onReviewRecipeContextWithAi,
       aiAbortRef.current = null;
       researchAbortRef.current?.abort();
       researchAbortRef.current = null;
-      generateAiStartedRef.current = null;
     },
     []
   );
@@ -928,6 +950,7 @@ onReviewRecipeContextWithAi,
     setResearchMessage(null);
     setResearchOffers([]);
     setResearchContributions([]);
+    setResearchSelectedRefs([]);
     setAiAmountOffers({});
     setAiEstimateOffers({});
     setAiEstimateOfferBindings({});
@@ -938,22 +961,27 @@ onReviewRecipeContextWithAi,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentSessionIdentity]);
 
-  // When a user-initiated load succeeds, focus the (now-rendered) opener and
-  // open the review UI exactly once — ONLY when the SAME recipe that requested
-  // the load is still current (a mid-load recipe switch cancels the intent).
+  // When a user-initiated load succeeds AND the server-owned product read says
+  // Advanced is entitled, focus the (now-rendered) opener and open the review UI
+  // exactly once — ONLY when the SAME recipe that requested the load is current.
   useEffect(() => {
-    if (!session) return;
+    if (advancedEditingAccess === 'basic') {
+      pendingOpenRecipeKey.current = null;
+      return;
+    }
+    if (!session || advancedEditingAccess !== 'entitled') return;
     const captured = pendingOpenRecipeKey.current;
     if (captured === null) return;
     pendingOpenRecipeKey.current = null;
     if (!adaptation.ok || adaptation.recipe.recipe_key !== captured) return;
     openerRef.current?.focus();
     setIsOpen(true);
-  }, [session, adaptation]);
+  }, [session, adaptation, advancedEditingAccess]);
 
   /** Opens the WORKING analyzer/editor, initializing the USDA bundle if needed. */
   const openWorkingEditor = () => {
-    if (session) {
+    if (advancedEditingBasic) return;
+    if (advancedEditingEntitled && session) {
       setIsOpen(true);
       return;
     }
@@ -1200,9 +1228,9 @@ onReviewRecipeContextWithAi,
   const analysis = useMemo<RecipeAnalysis | null>(
     () =>
       session && adaptation.ok
-        ? analyzeRecipe(session, adapted, adaptation.recipe.base_servings)
+        ? analyzeRecipeFromRows(session, adapted, rows, adaptation.recipe.base_servings)
         : null,
-    [session, adaptation, adapted]
+    [session, adaptation, adapted, rows]
   );
 
   // The ONE central projection of every row's CURRENT effective state, shared
@@ -1238,44 +1266,6 @@ onReviewRecipeContextWithAi,
   const phase4StateRef = useRef(state);
   phase4StateRef.current = state;
 
-  /**
-   * SHISO — the authorized analysis entry point.
-   *
-   * Registered HERE because this component owns everything the request needs: the
-   * authenticated session, the adaptation, the deterministic analyzer and
-   * `handleCalculate`, which runs the SAME calculator the Calculate button runs.
-   *
-   * Shiso may therefore ASK for nutrition analysis, and this delegates to the
-   * existing path rather than reimplementing any of it. It still does not decide
-   * anything: no match is auto-accepted, nothing is persisted, and the user
-   * still presses the existing final Apply control.
-   *
-   * Every number reported back is read from the LIVE projection this component
-   * already owns, so Shiso can never compute its own totals.
-   */
-  const handleAnalyzeRecipeWithShiso = async () => {
-    if (shisoNutritionRunningRef.current) return;
-    shisoNutritionRunningRef.current = true;
-    setShisoNutritionState({ kind: 'running', message: 'SHISO is analyzing the recipe and validating its nutrition contributions…' });
-    try {
-      const outcome = await shiso.runNutritionAnalysis?.();
-      if (outcome?.ok === true) {
-        setShisoNutritionState({
-          kind: 'success',
-          message: `${outcome.message} Review assumptions and unknown nutrients before Apply. Nothing was saved.`,
-        });
-      } else {
-        setShisoNutritionState({
-          kind: 'error',
-          message: outcome?.message ?? 'SHISO analysis is unavailable. Your existing review is unchanged; use Calculate Without AI to continue.',
-        });
-      }
-    } catch {
-      setShisoNutritionState({ kind: 'error', message: 'SHISO could not complete the analysis. Your existing review is unchanged; use Calculate Without AI to continue.' });
-    } finally {
-      shisoNutritionRunningRef.current = false;
-    }
-  };
   const shisoRegisterAnalysis = shiso.registerAnalysisApplier;
   useEffect(() => {
     return shisoRegisterAnalysis(async (): Promise<ShisoAnalysisOutcome> => {
@@ -1584,6 +1574,56 @@ onReviewRecipeContextWithAi,
     [liveRows, aiReviews]
   );
   /**
+   * AN-LIVE-R1: the bounded, user-selectable research targets. The UI never
+   * infers a selection from recipe order; only these rows may be requested.
+   */
+  const researchCandidates = useMemo(
+    () =>
+      researchEligibleRows.map((live) =>
+        Object.freeze({
+          line_ref: live.line_ref,
+          ingredient: live.original_text,
+        })
+      ),
+    [researchEligibleRows]
+  );
+  /**
+   * Identity-ambiguous unresolved lines stay VISIBLE but ineligible. The AI-first
+   * review already refused to decide them; research must not bypass that.
+   */
+  const researchIneligibleRows = useMemo(
+    () =>
+      liveRows
+        .filter(
+          (live) =>
+            live.status === 'needs_match' &&
+            aiReviews[live.line_ref]?.decision === 'needs_review'
+        )
+        .map((live) =>
+          Object.freeze({
+            line_ref: live.line_ref,
+            ingredient: live.original_text,
+            reason: 'identity_ambiguous' as const,
+          })
+        ),
+    [liveRows, aiReviews]
+  );
+  const researchCandidateRefs = useMemo(
+    () => new Set(researchCandidates.map((candidate) => candidate.line_ref)),
+    [researchCandidates]
+  );
+  /**
+   * Selection is always intersected with the CURRENT eligible set. A fresh
+   * analysis, recipe change or newly ambiguous review can never leave a stale
+   * ref selected.
+   */
+  useEffect(() => {
+    setResearchSelectedRefs((current) => {
+      const next = current.filter((lineRef) => researchCandidateRefs.has(lineRef));
+      return next.length === current.length ? current : next;
+    });
+  }, [researchCandidateRefs]);
+  /**
    * The CURRENT live-row status per line, straight from the live projection.
    * This is the authoritative actionability fact the AI-3 estimate port
    * receives; a line absent from this map is never assumed actionable.
@@ -1609,7 +1649,7 @@ onReviewRecipeContextWithAi,
     // computation if the memoized analysis is unavailable, so the control can
     // never become a dead button after a saved-state reopen.
     const current =
-      analysis ?? analyzeRecipe(session, adapted, adaptation.recipe.base_servings);
+      analysis ?? analyzeRecipeFromRows(session, adapted, rows, adaptation.recipe.base_servings);
     if (!current) return;
 
     // REVIEWED-DECISION PRESERVATION. Re-analysis is a gap-filling pass, never a
@@ -1703,6 +1743,7 @@ onReviewRecipeContextWithAi,
     setResearchMessage(null);
     setResearchOffers([]);
     setResearchContributions([]);
+    setResearchSelectedRefs([]);
     setAiAmountOffers({});
     setAiEstimateOffers({});
     setAiEstimateOfferBindings({});
@@ -1717,6 +1758,17 @@ onReviewRecipeContextWithAi,
         return row;
       })
     : null;
+  /**
+   * AN-LIVE-R1: incomplete energy is a SUBTOTAL, never complete recipe calories.
+   * The compact review summary and the modal share this one presentation rule.
+   */
+  const compactEnergy =
+    display && preview
+      ? deriveEnergyDisplay(
+          display.find((entry) => entry.nutrient === 'calories'),
+          preview
+        )
+      : null;
 
   /**
    * GENERATE NUTRITION — the single recipe-facing entry and an EXPLICIT user
@@ -1726,7 +1778,7 @@ onReviewRecipeContextWithAi,
    * called here: it remains an optional secondary action for rows the
    * deterministic pass cannot resolve. Nothing is written until Apply.
    */
-  /** Genuine user closure: discard any not-yet-started Generate AI intent. */
+  /** Genuine user closure: cancel all in-flight AI/SHISO/research work. */
   const handleCloseWorkingEditor = useCallback(() => {
     cancelGenerateAiIntent();
     setIsOpen(false);
@@ -1737,11 +1789,11 @@ onReviewRecipeContextWithAi,
       setIsSavedReportOpen(true);
       return;
     }
-    // Bind the intent to the recipe CURRENT at click time; it is consumed only if
-    // that same recipe is still current once the editor is ready.
-    generateAiStartedRef.current = null;
+    if (advancedEditingBasic) return;
+    // Bind the DETERMINISTIC analysis intent to the recipe CURRENT at click time;
+    // it is consumed only if that same recipe is still current once the editor is
+    // ready. This is not an AI intent.
     setGenerateAiFeedback(null);
-    setPendingGenerateAi({ recipeKey: currentRecipeKey, baselineRuns: analysisRuns });
     setPendingGenerateRecipeKey(currentRecipeKey);
     openWorkingEditor();
   };
@@ -1899,10 +1951,10 @@ onReviewRecipeContextWithAi,
           message: 'Advanced Nutrition cannot analyse this recipe yet.',
         };
       }
-      // The automatic Generate pass may use the AI-first port. The manual AI-help
-      // action deliberately keeps the conservative legacy port. If the AI-first
-      // port fails, this returns its failure visibly: it never silently falls back
-      // to a SECOND provider workflow.
+      // Analyze with SHISO explicitly selects the AI-first port. The manual
+      // AI-help action deliberately keeps the conservative legacy port. If the
+      // AI-first port fails, this returns its failure visibly: it never silently
+      // falls back to a SECOND provider workflow.
       const resolvePort = options?.aiFirst === true ? onResolveWithAiFirst : onResolveWithAi;
       if (!resolvePort) {
         const message = 'AI assistance is unavailable. You can continue with USDA search manually.';
@@ -2242,20 +2294,152 @@ onReviewRecipeContextWithAi,
   );
 
   /**
+   * ANALYZE WITH SHISO — the ONE explicit intelligent Advanced Nutrition action.
+   *
+   * Generate Nutrition is deterministic only. This action is the user's
+   * authorization for the existing genuine AI-first whole-recipe workflow
+   * (semantic interpretation -> real USDA discovery -> candidate evaluation ->
+   * local authentication). It reuses `handleResolveWithAi` with the AI-first port;
+   * every result still crosses the same deterministic verification, review and
+   * explicit Apply boundaries.
+   */
+  const handleAnalyzeNutritionWithShiso = useCallback(async () => {
+    if (!session || !adaptation.ok) {
+      setGenerateAiFeedback({
+        kind: 'error',
+        message: 'Advanced Nutrition cannot analyse this recipe yet.',
+      });
+      return;
+    }
+    if (!advancedEditingEntitled) {
+      setGenerateAiFeedback({
+        kind: 'unavailable',
+        message: 'Advanced Nutrition editing is not enabled for this deployment.',
+      });
+      return;
+    }
+    if (onResolveWithAiFirst === undefined) {
+      setGenerateAiFeedback({
+        kind: 'unavailable',
+        message: 'SHISO whole-recipe analysis is unavailable in this build. Deterministic review remains available.',
+      });
+      return;
+    }
+    if (!aiAvailabilityAvailable) {
+      setGenerateAiFeedback({
+        kind: 'unavailable',
+        message:
+          aiAvailabilityReason ??
+          'AI Advanced Nutrition is unavailable. Deterministic analysis is ready without AI.',
+      });
+      return;
+    }
+    if (shisoNutritionRunningRef.current) return;
+    if (actionableRows.length === 0) {
+      setGenerateAiFeedback({
+        kind: 'success',
+        message: 'The deterministic review resolved every ingredient. No AI interpretation was needed.',
+      });
+      return;
+    }
+    shisoNutritionRunningRef.current = true;
+    setShisoNutritionState({
+      kind: 'running',
+      message: 'SHISO is interpreting the whole recipe, finding real USDA candidates, and verifying selections…',
+    });
+    setGenerateAiFeedback({
+      kind: 'running',
+      message:
+        'AI Advanced Nutrition is interpreting the whole recipe, finding real USDA candidates, and verifying selections…',
+    });
+    const recipeKey = identityRef.current.recipeKey;
+    try {
+      const outcome = await handleResolveWithAi(undefined, {
+        orchestration: 'generate',
+        aiFirst: true,
+      });
+      if (identityRef.current.recipeKey !== recipeKey || !isOpenRef.current) return;
+      setGenerateAiFeedback(
+        outcome.ok
+          ? {
+              kind:
+                outcome.interpretedCount === 0
+                  ? 'insufficient'
+                  : outcome.stillNeedReview > 0
+                    ? 'partial'
+                    : 'success',
+              message: outcome.message,
+            }
+          : { kind: 'error', message: outcome.message }
+      );
+      setShisoNutritionState(
+        outcome.ok
+          ? { kind: 'success', message: `${outcome.message} Review before Apply. Nothing was saved.` }
+          : { kind: 'error', message: outcome.message }
+      );
+    } catch {
+      if (identityRef.current.recipeKey === recipeKey && isOpenRef.current) {
+        setGenerateAiFeedback({
+          kind: 'error',
+          message:
+            'AI assistance failed or timed out. Deterministic partial nutrition remains available.',
+        });
+        setShisoNutritionState({
+          kind: 'error',
+          message: 'SHISO could not complete the analysis. Your existing review is unchanged.',
+        });
+      }
+    } finally {
+      shisoNutritionRunningRef.current = false;
+    }
+  }, [
+    session,
+    adaptation,
+    advancedEditingEntitled,
+    onResolveWithAiFirst,
+    aiAvailabilityAvailable,
+    aiAvailabilityReason,
+    actionableRows.length,
+    handleResolveWithAi,
+  ]);
+
+  /**
    * AN-WEB-1 — explicit external research for locally unresolved, non-ambiguous
    * lines. Research never decides a salted/unsalted/brand ambiguity: only
    * `no_match` explanations are eligible. The returned contributions are OFFERS;
    * the user must click Use before they enter working state.
    */
+  /** Explicit checkbox toggle for ONE eligible unresolved line. */
+  const handleToggleResearchSelection = useCallback(
+    (lineRef: string) => {
+      if (researchRunning) return;
+      if (researchSelectedRefs.includes(lineRef)) {
+        setResearchSelectedRefs((current) => current.filter((ref) => ref !== lineRef));
+        return;
+      }
+      if (!researchCandidateRefs.has(lineRef)) return;
+      if (researchSelectedRefs.length >= MAX_RESEARCH_TARGETS) {
+        setResearchMessage(
+          `You can research at most ${MAX_RESEARCH_TARGETS} ingredients at a time. Clear one to choose another.`
+        );
+        return;
+      }
+      setResearchSelectedRefs((current) => Object.freeze([...current, lineRef]));
+    },
+    [researchRunning, researchSelectedRefs, researchCandidateRefs]
+  );
+
   const handleResearchWithAi = useCallback(async () => {
     if (!session || !adaptation.ok || !onResearchNutritionWithAi) {
       setResearchMessage('External nutrition research is unavailable. Use USDA search or manual review.');
       return;
     }
     if (researchRunning) return;
+    // EXACT SELECTION ONLY. Never fall back to every eligible row, never use
+    // recipe order, and never include a line the user did not check.
+    const selected = researchSelectedRefs.filter((lineRef) => researchCandidateRefs.has(lineRef));
     const targets: ResearchTarget[] = [];
-    for (const live of researchEligibleRows) {
-      const lineRef = live.line_ref;
+    for (const lineRef of selected) {
       const row = stateRef.current.rows.find((entry) => entry.line_ref === lineRef);
       const entry = adapted.find((item) => item.line_ref === lineRef);
       if (!row || !entry) continue;
@@ -2272,14 +2456,17 @@ onReviewRecipeContextWithAi,
       }));
     }
     if (targets.length === 0) {
-      setResearchMessage('No non-ambiguous unresolved ingredients are eligible for external research.');
+      setResearchMessage('Select one to three eligible unresolved ingredients before researching.');
       return;
     }
     researchAbortRef.current?.abort();
     const controller = new AbortController();
+    const requestSeq = ++researchRequestSeq.current;
     researchAbortRef.current = controller;
     setResearchRunning(true);
-    setResearchMessage('Researching credible external nutrition sources for the unresolved ingredients…');
+    setResearchMessage(
+      `Researching credible external nutrition sources for ${targets.length} selected ingredient${targets.length === 1 ? '' : 's'}…`
+    );
     setResearchOffers([]);
     setResearchContributions([]);
     try {
@@ -2289,7 +2476,7 @@ onReviewRecipeContextWithAi,
         lineTextByRef: Object.fromEntries(targets.map((target) => [target.line_ref, target.ingredient_text])),
         signal: controller.signal,
       });
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || requestSeq !== researchRequestSeq.current) return;
       if (result.ok) {
         setResearchOffers(result.offers ?? []);
         setResearchContributions(result.contributions ?? []);
@@ -2298,14 +2485,22 @@ onReviewRecipeContextWithAi,
         setResearchMessage(result.message ?? 'No reliable external nutrition evidence was found.');
       }
     } catch {
-      if (!controller.signal.aborted) {
+      if (!controller.signal.aborted && requestSeq === researchRequestSeq.current) {
         setResearchMessage('External nutrition research failed. Use USDA search or manual review.');
       }
     } finally {
       if (researchAbortRef.current === controller) researchAbortRef.current = null;
-      setResearchRunning(false);
+      if (requestSeq === researchRequestSeq.current) setResearchRunning(false);
     }
-  }, [session, adaptation, onResearchNutritionWithAi, researchRunning, researchEligibleRows, adapted]);
+  }, [
+    session,
+    adaptation,
+    onResearchNutritionWithAi,
+    researchRunning,
+    researchSelectedRefs,
+    researchCandidateRefs,
+    adapted,
+  ]);
 
   /**
    * Explicit user acceptance of researched contributions. Existing AI-nutrition
@@ -2344,6 +2539,7 @@ onReviewRecipeContextWithAi,
     });
     setResearchOffers([]);
     setResearchContributions([]);
+    setResearchSelectedRefs([]);
     setResearchMessage('Researched nutrition was added to the working review. Apply to keep it.');
   }, [session, adaptation, researchContributions, workingDispatch]);
 
@@ -2643,133 +2839,19 @@ onReviewRecipeContextWithAi,
    */
   // AI-5D: a refresh in flight always disables the AI layer, even before the shell's
   // published `available` flips, so no control can be clicked mid-reconciliation.
-  const aiRefreshing = advancedNutritionAiAvailability?.refreshing === true;
-  const aiAvailabilityAvailable =
-    !aiRefreshing && (advancedNutritionAiAvailability?.available ?? true);
-  const aiAvailabilityReason = advancedNutritionAiAvailability?.reason ?? null;
-  const aiCanRetry = advancedNutritionAiAvailability?.canRetry === true;
-  const aiOnRetry = advancedNutritionAiAvailability?.onRetry;
-
-  /**
-   * GENERATE -> DETERMINISTIC BASELINE -> ONE AI INTERPRETATION PASS.
-   *
-   * The explicit Generate action already authorizes the deterministic analysis
-   * (the existing pending-Generate effect above). Once THAT baseline has been
-   * applied for the same recipe, this effect hands the genuinely actionable
-   * exceptions to the EXISTING whole-recipe AI resolution port exactly once.
-   *
-   * It is not a second workflow: `handleResolveWithAi` is the same function the
-   * "Resolve remaining with AI" control calls, and every AI proposal still goes
-   * through the deterministic USDA catalog, confidence contract, authenticated
-   * portion checks and calculator. AI availability is read from the shell's
-   * composed capability state, so Basic Nutrition never reaches a provider.
-   *
-   * Ordering is deliberate:
-   *   - wait for the session and the SAME recipe;
-   *   - wait until the forecast baseline run has actually been applied;
-   *   - wait out an availability refresh instead of guessing;
-   *   - consume the intent before calling, so a re-render cannot double-call;
-   *   - do nothing when the deterministic pass already resolved every line.
-   */
+  // Basic product: never mount or leave the Advanced working workspace open.
+  // The compact Basic Nutrition card remains available; this is the separate
+  // paid editing surface.
   useEffect(() => {
-    const pending = pendingGenerateAi;
-    if (pending === null) return;
-    // COLD-START WAIT, NOT CANCELLATION. The working editor is legitimately
-    // closed while the USDA bundle is authenticating. The explicit Generate
-    // intent must survive that interval. Genuine closure/cancellation is handled
-    // by `cancelGenerateAiIntent` through the close action, recipe change,
-    // bundle failure and unmount.
-    if (!isOpen) return;
-    if (!session || !adaptation.ok) return;
-    if (pending.recipeKey !== adaptation.recipe.recipe_key) {
-      setPendingGenerateAi(null);
-      return;
+    if (!advancedEditingBasic) return;
+    pendingOpenRecipeKey.current = null;
+    setPendingGenerateRecipeKey(null);
+    setGenerateAiFeedback(null);
+    if (isOpenRef.current) {
+      cancelGenerateAiIntent();
+      setIsOpen(false);
     }
-    if (state.recipeKey !== adaptation.recipe.recipe_key) return;
-    if (pendingGenerateRecipeKey !== null) return;
-    if (analysisRuns <= pending.baselineRuns) return;
-    // The composed availability answer is still being reconciled. Waiting is
-    // honest; guessing would either spend a provider call the product forbids or
-    // skip AI the user is entitled to.
-    if (aiRefreshing) return;
-    if (generateAiStartedRef.current === pending.recipeKey) {
-      setPendingGenerateAi(null);
-      return;
-    }
-    generateAiStartedRef.current = pending.recipeKey;
-    setPendingGenerateAi(null);
-    if ((!onResolveWithAi && !onResolveWithAiFirst) || !aiAvailabilityAvailable) {
-      setGenerateAiFeedback({
-        kind: 'unavailable',
-        message:
-          aiAvailabilityReason ??
-          'AI Advanced Nutrition is unavailable. Deterministic analysis is ready without AI.',
-      });
-      return;
-    }
-    if (actionableRows.length === 0) {
-      setGenerateAiFeedback({
-        kind: 'success',
-        message:
-          'Deterministic analysis resolved every ingredient. No AI interpretation was needed.',
-      });
-      return;
-    }
-    setGenerateAiFeedback({
-      kind: 'running',
-      message:
-        onResolveWithAiFirst !== undefined
-          ? 'AI Advanced Nutrition is interpreting the whole recipe, finding real USDA candidates, and verifying selections…'
-          : 'AI Advanced Nutrition is interpreting the whole recipe and validating USDA matches…',
-    });
-    const recipeKey = pending.recipeKey;
-    void (async () => {
-      try {
-        const outcome = await handleResolveWithAi(undefined, {
-          orchestration: 'generate',
-          aiFirst: onResolveWithAiFirst !== undefined,
-        });
-        // Never publish feedback for a recipe the user has left or an editor that
-        // has been closed while the request was in flight.
-        if (identityRef.current.recipeKey !== recipeKey || !isOpenRef.current) return;
-        setGenerateAiFeedback(
-          outcome.ok
-            ? {
-                kind:
-                  outcome.interpretedCount === 0
-                    ? 'insufficient'
-                    : outcome.stillNeedReview > 0
-                      ? 'partial'
-                      : 'success',
-                message: outcome.message,
-              }
-            : { kind: 'error', message: outcome.message }
-        );
-      } catch {
-        if (identityRef.current.recipeKey === recipeKey && isOpenRef.current) {
-          setGenerateAiFeedback({
-            kind: 'error',
-            message:
-              'AI assistance failed or timed out. Deterministic partial nutrition remains available.',
-          });
-        }
-      }
-    })();
-  }, [
-    pendingGenerateAi,
-    isOpen,
-    session,
-    adaptation,
-    state.recipeKey,
-    pendingGenerateRecipeKey,
-    analysisRuns,
-    aiRefreshing,
-    aiAvailabilityAvailable,
-    onResolveWithAi,
-    onResolveWithAiFirst,
-    actionableRows.length,
-    handleResolveWithAi,
-  ]);
+  }, [advancedEditingBasic, cancelGenerateAiIntent]);
 
   /**
    * The AI-4D2 review view model: a pure projection of the inert review session.
@@ -2880,10 +2962,17 @@ onReviewRecipeContextWithAi,
               return next;
             });
           },
-          researchAvailable: onResearchNutritionWithAi !== undefined && researchEligibleRows.length > 0,
+          researchAvailable:
+            onResearchNutritionWithAi !== undefined &&
+            (researchCandidates.length > 0 || researchIneligibleRows.length > 0),
           researchRunning,
           researchMessage,
           researchOffers,
+          researchCandidates,
+          researchSelectedRefs,
+          researchIneligible: researchIneligibleRows,
+          onToggleResearchSelection: handleToggleResearchSelection,
+          researchLimit: MAX_RESEARCH_TARGETS,
           onResearch: () => {
             void handleResearchWithAi();
           },
@@ -2992,21 +3081,31 @@ onReviewRecipeContextWithAi,
             <Lock className="w-3.5 h-3.5" />
             <span>This is not an error in the recipe.</span>
           </p>
-          <button
-            type="button"
-            data-testid="advanced-nutrition-open"
-            onClick={handleOpenRequest}
-            disabled={!savedBlock}
-            aria-disabled={!savedBlock}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[14px] font-medium border transition-colors ${
-              savedBlock
-                ? 'text-[var(--text-primary,#F3F4F6)] bg-[var(--accent-subtle,rgba(245,158,11,0.15))] hover:bg-[var(--bg-root,#0C0C0C)] border-[var(--border-subtle,rgba(255,255,255,0.08))]'
-                : 'text-[var(--text-secondary,#9CA3AF)] bg-[var(--bg-elevated,#1E1E1E)] border-[var(--border-subtle,rgba(255,255,255,0.08))] cursor-not-allowed'
-            }`}
-          >
-            <FlaskConical className="w-3.5 h-3.5" />
-            <span>{savedBlock ? (nutritionUnsaved ? 'Open Working Advanced Report' : 'Open Saved Advanced Report') : 'Generate Nutrition'}</span>
-          </button>
+          {advancedEditingBasic && !savedBlock ? (
+            <p
+              data-testid="advanced-nutrition-basic-locked"
+              className="text-[13px] leading-relaxed text-[var(--text-primary,#F3F4F6)]"
+            >
+              Advanced Nutrition editing is not enabled for this deployment. Basic Nutrition remains
+              available in Nutrition &amp; Macros.
+            </p>
+          ) : (
+            <button
+              type="button"
+              data-testid="advanced-nutrition-open"
+              onClick={handleOpenRequest}
+              disabled={!savedBlock}
+              aria-disabled={!savedBlock}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[14px] font-medium border transition-colors ${
+                savedBlock
+                  ? 'text-[var(--text-primary,#F3F4F6)] bg-[var(--accent-subtle,rgba(245,158,11,0.15))] hover:bg-[var(--bg-root,#0C0C0C)] border-[var(--border-subtle,rgba(255,255,255,0.08))]'
+                  : 'text-[var(--text-secondary,#9CA3AF)] bg-[var(--bg-elevated,#1E1E1E)] border-[var(--border-subtle,rgba(255,255,255,0.08))] cursor-not-allowed'
+              }`}
+            >
+              <FlaskConical className="w-3.5 h-3.5" />
+              <span>{savedBlock ? (nutritionUnsaved ? 'Open Working Advanced Report' : 'Open Saved Advanced Report') : 'Generate Nutrition'}</span>
+            </button>
+          )}
         </div>
       )}
 
@@ -3072,7 +3171,15 @@ onReviewRecipeContextWithAi,
               <RefreshCw className="w-3.5 h-3.5" />
               <span>{PHASE4_BUNDLE_RETRY_LABEL}</span>
             </button>
-          ) : bundleStatus === 'unsupported' ? null : (
+          ) : bundleStatus === 'unsupported' ? null : advancedEditingBasic && !savedBlock ? (
+            <p
+              data-testid="advanced-nutrition-basic-locked"
+              className="text-[13px] leading-relaxed text-[var(--text-primary,#F3F4F6)]"
+            >
+              Advanced Nutrition editing is not enabled for this deployment. Basic Nutrition remains
+              available in Nutrition &amp; Macros.
+            </p>
+          ) : (
             <button
               type="button"
               data-testid="advanced-nutrition-open"
@@ -3149,19 +3256,38 @@ onReviewRecipeContextWithAi,
                 {state.status === 'preview_stale' ? ' · stale' : ''}
               </p>
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-[14px]">
-                {compact.map((nutrient) =>
-                  nutrient ? (
-                    <span key={nutrient.nutrient} className="text-[var(--text-secondary,#9CA3AF)]">
-                      {nutrient.label}:{' '}
+                {compact.map((nutrient) => {
+                  if (!nutrient) return null;
+                  const isEnergy = nutrient.nutrient === 'calories' && compactEnergy !== null;
+                  const label = isEnergy
+                    ? compactEnergy.label
+                    : nutrient.coverage === 'partial'
+                      ? `${nutrient.label} · subtotal`
+                      : nutrient.label;
+                  return (
+                    <span
+                      key={nutrient.nutrient}
+                      data-testid={isEnergy ? 'advanced-nutrition-unsaved-energy' : undefined}
+                      className="text-[var(--text-secondary,#9CA3AF)]"
+                    >
+                      {label}:{' '}
                       <span className="font-mono text-[var(--text-primary,#F3F4F6)]">{formatAmount(nutrient.amount)}</span>{' '}
                       {nutrient.amount !== undefined ? nutrient.unit_label : ''}
                     </span>
-                  ) : null
-                )}
+                  );
+                })}
               </div>
               {coverage && (
                 <p className="text-[12px] text-[var(--text-secondary,#9CA3AF)] mt-1">
                   Coverage {coverage.status} · {coverage.unresolved_count} unresolved line(s)
+                </p>
+              )}
+              {compactEnergy !== null && compactEnergy.kind !== 'complete' && (
+                <p
+                  data-testid="advanced-nutrition-unsaved-energy-note"
+                  className="text-[12px] mt-1 leading-relaxed text-[var(--text-primary,#F3F4F6)]"
+                >
+                  {compactEnergy.note}
                 </p>
               )}
               <p className="text-[12px] text-[var(--text-secondary,#9CA3AF)] mt-1">
@@ -3224,16 +3350,26 @@ onReviewRecipeContextWithAi,
               <ShieldCheck className="w-3 h-3" />
               <span>Advisory · not saved · not medical advice</span>
             </span>
-            <button
-              type="button"
-              ref={openerRef}
-              data-testid="advanced-nutrition-open"
-              onClick={savedBlock ? handleOpenRequest : handleGenerate}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-[14px] font-semibold text-[var(--text-primary,#F3F4F6)] bg-[var(--accent-subtle,rgba(245,158,11,0.15))] hover:bg-[var(--bg-root,#0C0C0C)] border border-[var(--border-subtle,rgba(255,255,255,0.08))] transition-colors"
-            >
-              <FlaskConical className="w-3.5 h-3.5" />
-              <span>{savedBlock ? (nutritionUnsaved ? 'Open Working Advanced Report' : 'Open Saved Advanced Report') : 'Generate Nutrition'}</span>
-            </button>
+            {advancedEditingBasic && !savedBlock ? (
+              <p
+                data-testid="advanced-nutrition-basic-locked"
+                className="max-w-md text-[13px] leading-relaxed text-[var(--text-primary,#F3F4F6)]"
+              >
+                Advanced Nutrition editing is not enabled for this deployment. Basic Nutrition remains
+                available in Nutrition &amp; Macros.
+              </p>
+            ) : (
+              <button
+                type="button"
+                ref={openerRef}
+                data-testid="advanced-nutrition-open"
+                onClick={savedBlock ? handleOpenRequest : handleGenerate}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-[14px] font-semibold text-[var(--text-primary,#F3F4F6)] bg-[var(--accent-subtle,rgba(245,158,11,0.15))] hover:bg-[var(--bg-root,#0C0C0C)] border border-[var(--border-subtle,rgba(255,255,255,0.08))] transition-colors"
+              >
+                <FlaskConical className="w-3.5 h-3.5" />
+                <span>{savedBlock ? (nutritionUnsaved ? 'Open Working Advanced Report' : 'Open Saved Advanced Report') : 'Generate Nutrition'}</span>
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -3253,7 +3389,7 @@ onReviewRecipeContextWithAi,
           calculating={calculating}
           analysis={analysis}
           onAnalyze={handleAnalyze}
-          onAnalyzeRecipe={() => { void handleAnalyzeRecipeWithShiso(); }}
+          onAnalyzeRecipe={() => { void handleAnalyzeNutritionWithShiso(); }}
           shisoAnalysisState={shisoNutritionState}
           analysisRuns={analysisRuns}
           apply={applyUi}
@@ -3273,10 +3409,14 @@ onReviewRecipeContextWithAi,
           block={savedBlock}
           stale={savedPresentation.advanced_stale}
           servingBasisAssumed={servingBasisAssumed}
-          onEdit={() => {
-            setIsSavedReportOpen(false);
-            openWorkingEditor();
-          }}
+          {...(advancedEditingEntitled
+            ? {
+                onEdit: () => {
+                  setIsSavedReportOpen(false);
+                  openWorkingEditor();
+                },
+              }
+            : {})}
         />
       )}
     </div>
