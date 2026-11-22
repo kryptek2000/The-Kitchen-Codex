@@ -21,7 +21,7 @@ import type { AdaptedIngredient, AdvancedNutritionSession } from '../../src/core
 
 const BUNDLE_DIR = join(
   __dirname,
-  '../../data/advanced-nutrition/usda/usda_fdc_87c5408a3e98838944a87be74824761e'
+  '../../data/advanced-nutrition/usda/usda_fdc_1f3e3068a7ae0702f360d1caae40a628'
 );
 const LINES = ['2 tbsp unsalted butter', '1 cup half and half', '1 cup passata'];
 

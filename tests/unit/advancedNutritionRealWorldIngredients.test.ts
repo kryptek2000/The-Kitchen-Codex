@@ -7,6 +7,7 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { gunzipSync } from 'node:zlib';
 import { join } from 'node:path';
 import { describe, it, expect, beforeAll } from 'vitest';
 
@@ -23,7 +24,7 @@ import type { Phase4Row, Phase4State } from '../../src/core/nutritionV2/phase4/t
 
 const BUNDLE_DIR = join(
   __dirname,
-  '../../data/advanced-nutrition/usda/usda_fdc_87c5408a3e98838944a87be74824761e'
+  '../../data/advanced-nutrition/usda/usda_fdc_1f3e3068a7ae0702f360d1caae40a628'
 );
 
 let session: AdvancedNutritionSession;
@@ -499,6 +500,15 @@ describe('owner fixture — Gochujang Chicken Rice Bowls intelligent completion'
     expect(analysis.rows).toHaveLength(18);
     expect(analysis.summary.matched).toBe(16);
     expect(analysis.summary.needs_match).toBe(2);
+    expect(analysis.preview?.totals.calories).toEqual(
+      expect.objectContaining({
+        covered_ingredient_count: 16,
+        measurable_ingredient_count: 18,
+        status: 'partial',
+      })
+    );
+    expect(analysis.preview?.totals.calories?.amount).toBeCloseTo(2300.723333, 5);
+
     const byLine = new Map(analysis.rows.map((row) => [row.original_text, row]));
     expect(byLine.get('1 tbsp minced fresh ginger')?.selected_description).toBe('Ginger root, raw');
     expect(byLine.get('100 g broccoli florets')?.selected_description).toMatch(/Broccoli, flower clusters, raw/i);
@@ -518,6 +528,37 @@ describe('owner fixture — Gochujang Chicken Rice Bowls intelligent completion'
     ).toEqual(['1 tbsp rice vinegar', '2 tbsp gochujang (Korean chili paste)']);
     for (const row of analysis.rows) {
       expect(row.selected_description ?? '').not.toMatch(/chili sauce|generic vinegar/i);
+    }
+  });
+
+  it('the four previously energy-less Foundation matches carry USDA food-specific kcal', () => {
+    const parsed = JSON.parse(
+      gunzipSync(readFileSync(join(BUNDLE_DIR, 'records.foundation.json.gz'))).toString('utf8')
+    ) as ReadonlyArray<Record<string, any>>;
+    const byFdc = new Map<number, Record<string, any>>(parsed.map((record) => [record.fdc_id, record]));
+
+    // These four matched Foundation records publish no 1008 "Energy" component.
+    // The pinned USDA download does publish 2048 "Energy (Atwater Specific
+    // Factors)", which is real USDA-calculated kcal, not 4/4/9 arithmetic.
+    const expected: ReadonlyArray<readonly [number, number]> = [
+      [2646171, 149],
+      [2258590, 27],
+      [2003601, 23.7],
+      [2512381, 370],
+    ];
+    for (const [fdcId, kcal] of expected) {
+      const record = byFdc.get(fdcId);
+      expect(record, String(fdcId)).toBeDefined();
+      expect(record?.nutrients.calories).toEqual(
+        expect.objectContaining({
+          nutrient_id: 'calories',
+          unit: 'kcal',
+          amount_per_100g: kcal,
+          usda_nutrient_id: 2048,
+          source_unit: 'KCAL',
+          converted: false,
+        })
+      );
     }
   });
 });

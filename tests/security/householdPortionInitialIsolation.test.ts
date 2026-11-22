@@ -40,7 +40,7 @@ const ROOT = resolve(__dirname, '../..');
 const HOUSEHOLD_DIR = resolve(ROOT, 'src/core/nutritionV2/household');
 const BUNDLE_DIR = join(
   ROOT,
-  'data/advanced-nutrition/usda/usda_fdc_87c5408a3e98838944a87be74824761e'
+  'data/advanced-nutrition/usda/usda_fdc_1f3e3068a7ae0702f360d1caae40a628'
 );
 
 function stripComments(source: string): string {

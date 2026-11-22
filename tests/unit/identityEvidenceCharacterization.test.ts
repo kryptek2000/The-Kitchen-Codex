@@ -78,11 +78,17 @@ function originalDigestOf(payload: unknown): string {
   return `sha256:${sha256Hex(canonicalStringify(payload))}`;
 }
 
-/** Digests produced by the PRE-extraction calculator at baseline 4a943997. */
+/**
+ * Digests produced by the PRE-extraction calculator at baseline 4a943997.
+ *
+ * 2026-11-22: three digests were updated because nutrient-map v3 changed the
+ * fixture records' canonical `record_digest` inputs. The identity payload field
+ * list, field order, omission rules, and hashing logic below are unchanged.
+ */
 const GOLDEN: ReadonlyArray<{ readonly id: string; readonly line: string; readonly digest: string }> = [
-  { id: 'ordinary matched ingredient', line: '100 g Flour, wheat, white', digest: 'sha256:972125e97622190444caed0d3ec3ceb1c476803692fd0d01d3a406493d7695e2' },
-  { id: 'direct authored mass line', line: '50 g Butter, salted', digest: 'sha256:d666c7ae05bff7cc04f39d766913ef52a389450afb5ef77deea7407f22c7b69c' },
-  { id: 'a second unique-exact match', line: '10 g Salt, table', digest: 'sha256:449d0a4e181cdb0cc7de2e5a29e88b9f97ccddcb3f0ff82961ba6ac504d47444' },
+  { id: 'ordinary matched ingredient', line: '100 g Flour, wheat, white', digest: 'sha256:95fa8e3e05d343022072f69285ea0bb706e57a6bbe5c0b5d2a5792cdcdeb23c8' },
+  { id: 'direct authored mass line', line: '50 g Butter, salted', digest: 'sha256:ea14ab15665cd788cf80d999c9f603913f4c79f9a3989a95bf07ec9d8862856f' },
+  { id: 'a second unique-exact match', line: '10 g Salt, table', digest: 'sha256:459cb19e60b29c1e4cdd9979aae94dbf5bc8f2cfecaa49ebc2dfa0dfd0737e5e' },
   { id: 'a cooked (FNDDS) record', line: '75 g Cornmeal, cooked, FNDDS', digest: 'sha256:ca8418155a4ca71be6d01534a6a153f3ba504f0a194946d832696cd36e92c52a' },
   { id: 'a record with no usable quantity', line: 'Mystery, quantity not specified', digest: 'sha256:fb47bc2eab35493788d4297366dc61c93d96fa3a8aafcfce0ec72422da16c83c' },
   { id: 'a qualifier-bearing line', line: '1 large Egg, whole, raw, fresh', digest: 'sha256:39c81179c91a4317594d06a3f62daf349a3e9033fd65dfb81584dd75566d69f7' },

@@ -251,7 +251,7 @@ describe('Phase 8B acceptance fixture', () => {
 
 describe('Phase 8B pinned USDA expectations', () => {
   it('pins the bundle release and record count the proof runs against', () => {
-    expect(PINNED_BUNDLE_RELEASE).toBe('usda_fdc_87c5408a3e98838944a87be74824761e');
+    expect(PINNED_BUNDLE_RELEASE).toBe('usda_fdc_1f3e3068a7ae0702f360d1caae40a628');
     expect(PINNED_BUNDLE_RECORD_COUNT).toBe(13559);
   });
 

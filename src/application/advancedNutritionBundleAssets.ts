@@ -22,11 +22,11 @@
  * source-controlled release lock, so a wrong or substituted asset fails closed.
  */
 
-import artifactUrl from '../../data/advanced-nutrition/usda/usda_fdc_87c5408a3e98838944a87be74824761e/artifact.json?url&no-inline';
-import manifestUrl from '../../data/advanced-nutrition/usda/usda_fdc_87c5408a3e98838944a87be74824761e/manifest.json?url&no-inline';
-import foundationUrl from '../../data/advanced-nutrition/usda/usda_fdc_87c5408a3e98838944a87be74824761e/records.foundation.json.gz?url&no-inline';
-import srLegacyUrl from '../../data/advanced-nutrition/usda/usda_fdc_87c5408a3e98838944a87be74824761e/records.sr_legacy.json.gz?url&no-inline';
-import fnddsUrl from '../../data/advanced-nutrition/usda/usda_fdc_87c5408a3e98838944a87be74824761e/records.fndds.json.gz?url&no-inline';
+import artifactUrl from '../../data/advanced-nutrition/usda/usda_fdc_1f3e3068a7ae0702f360d1caae40a628/artifact.json?url&no-inline';
+import manifestUrl from '../../data/advanced-nutrition/usda/usda_fdc_1f3e3068a7ae0702f360d1caae40a628/manifest.json?url&no-inline';
+import foundationUrl from '../../data/advanced-nutrition/usda/usda_fdc_1f3e3068a7ae0702f360d1caae40a628/records.foundation.json.gz?url&no-inline';
+import srLegacyUrl from '../../data/advanced-nutrition/usda/usda_fdc_1f3e3068a7ae0702f360d1caae40a628/records.sr_legacy.json.gz?url&no-inline';
+import fnddsUrl from '../../data/advanced-nutrition/usda/usda_fdc_1f3e3068a7ae0702f360d1caae40a628/records.fndds.json.gz?url&no-inline';
 
 /** One fixed logical bundle input and its compile-time-generated asset URL. */
 export interface AdvancedNutritionBundleAsset {
