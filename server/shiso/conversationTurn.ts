@@ -674,7 +674,7 @@ function classifyShisoProviderFailure(error: unknown): {
     return {
       code: "provider_timeout",
       message:
-        "The AI provider took too long to answer this message and timed out, so Shiso stopped rather than guessing. Anything it already found is kept. Try a shorter message.",
+        "The AI provider took too long to answer this message and timed out, so Shiso stopped rather than guessing. Anything it already found is kept. Try again when the provider is responsive.",
       modelHint: "<candidate>",
     };
   }
@@ -731,6 +731,22 @@ function classifyShisoProviderFailure(error: unknown): {
 }
 
 /**
+ * A bounded local greeting. It performs no provider call and no nutrition or
+ * USDA operation, so a simple hello cannot time out behind a provider outage.
+ * Anything that adds a request, question or action falls through to the normal
+ * bounded model turn.
+ */
+const SIMPLE_GREETING =
+  /^(?:hi|hiya|hello|hey|howdy|yo|good\s+(?:morning|afternoon|evening))(?:\s+shiso)?\s*[!.,?]*$/i;
+
+function simpleGreetingReply(body: ShisoTurnRequestBody): string | null {
+  if (body.observation !== undefined || body.tool_calls_used > 0 || body.finalize === true) return null;
+  const message = body.user_message.trim();
+  if (!SIMPLE_GREETING.test(message)) return null;
+  return "Hello. I'm Shiso, your kitchen companion. Ask me about a recipe, an ingredient, or your nutrition review.";
+}
+
+/**
  * Runs one conversational step. Returns either a bounded reply (with any
  * proposals to revalidate) or a request for one approved capability.
  */
@@ -740,6 +756,17 @@ export async function runShisoTurn(
 ): Promise<ShisoTurnResponse> {
   if (options.signal?.aborted) {
     return { ok: false, code: 'cancelled', message: 'This Shiso turn was cancelled.', aiAttempted: false };
+  }
+  const greeting = simpleGreetingReply(body);
+  if (greeting !== null) {
+    return {
+      ok: true,
+      kind: 'reply',
+      text: greeting,
+      proposals: [],
+      model_invocations_used: body.model_invocations_used,
+      tool_calls_used: body.tool_calls_used,
+    };
   }
   const modelInvocations = body.model_invocations_used + 1;
   const used = {

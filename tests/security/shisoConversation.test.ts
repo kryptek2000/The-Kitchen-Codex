@@ -461,7 +461,7 @@ describe('SHISO — bounded conversational turn against the real route', () => {
       // NOTE: no authorization header — this is the unauthenticated case.
       body: JSON.stringify({
         turn_version: 'shiso_turn_request_v1',
-        user_message: 'hello',
+        user_message: 'why are my calories incomplete?',
         history: [],
         context: { recipe: null, nutrition: { available: false } },
         model_invocations_used: 0,
@@ -490,7 +490,7 @@ describe('SHISO — bounded conversational turn against the real route', () => {
       signal: client.signal,
       headers: { 'Content-Type': 'application/json', authorization: `Bearer ${AI_ENDPOINT_TOKEN}` },
       body: JSON.stringify({
-        turn_version: 'shiso_turn_request_v1', user_message: 'hello', history: [],
+        turn_version: 'shiso_turn_request_v1', user_message: 'why are my calories incomplete?', history: [],
         context: { recipe: null, nutrition: { available: false } },
         model_invocations_used: 0, tool_calls_used: 0,
       }),
@@ -636,7 +636,7 @@ describe('SHISO — bounded conversational turn against the real route', () => {
     const outcome = await runShisoConversationTurn(
       { network: network(), context: { recipe: null, nutrition: { available: false, summary: null, unresolvedCount: 0, needsAmountCount: 0, needsMatchCount: 0, unsavedWorkingReview: false }, recipeKey: null, sessionIdentity: null }, toolContext: toolCtx() },
       initialShisoConversation(),
-      'hello',
+      'why are my calories incomplete?',
     );
     expect(outcome.ok).toBe(false);
     expect(outcome.message).toBeNull();
@@ -719,13 +719,13 @@ describe('SHISO — bounded conversational turn against the real route', () => {
   // H-1 Scenario D — provider failures are classified, and findings survive them
   // ===========================================================================
 
-  function postOnce(): Promise<{ status: number; body: Record<string, unknown> }> {
+  function postOnce(userMessage = 'why are my calories incomplete?'): Promise<{ status: number; body: Record<string, unknown> }> {
     return fetch(`${baseUrl}/api/shiso/turn`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', authorization: `Bearer ${AI_ENDPOINT_TOKEN}` },
       body: JSON.stringify({
         turn_version: 'shiso_turn_request_v1',
-        user_message: 'hello',
+        user_message: userMessage,
         history: [],
         context: { recipe: null, nutrition: { available: false } },
         model_invocations_used: 0,
@@ -767,6 +767,13 @@ describe('SHISO — bounded conversational turn against the real route', () => {
       expectText: /authenticate/i,
     },
     {
+      label: 'a 503 high-demand response is an upstream service error, not a timeout',
+      spec: { name: 'ProviderOperationError', status: 503, code: 'UNAVAILABLE',
+        message: '{"error":{"code":503,"message":"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.","status":"UNAVAILABLE"}}' },
+      expectCode: 'provider_unavailable',
+      expectText: /service error/i,
+    },
+    {
       label: 'anything else stays provider_unavailable',
       spec: { name: 'ProviderOperationError', status: 500, code: 'PROVIDER_ERROR', message: 'internal' },
       expectCode: 'provider_unavailable',
@@ -786,6 +793,18 @@ describe('SHISO — bounded conversational turn against the real route', () => {
       expect(JSON.stringify(body)).not.toContain('ProviderOperationError');
     }, 60000);
   }
+
+  it('a simple greeting answers locally with no provider call or nutrition tool', async () => {
+    // If the provider were consulted, this scripted failure would win.
+    prov.script = [{ throws: { name: 'ProviderOperationError', status: 503, code: 'UNAVAILABLE', message: 'high demand' } }];
+    const { body } = await postOnce('hello');
+    expect(body['ok']).toBe(true);
+    expect(body['kind']).toBe('reply');
+    expect(String(body['text'])).toMatch(/Hello\. I'm Shiso/i);
+    expect(body['model_invocations_used']).toBe(0);
+    expect(body['tool_calls_used']).toBe(0);
+    expect(JSON.stringify(body)).not.toMatch(/provider|503|UNAVAILABLE/i);
+  });
 
   it('findings gathered BEFORE a provider failure are preserved, not erased', async () => {
     // A turn that gathered real evidence, then hit a timeout, must still be able

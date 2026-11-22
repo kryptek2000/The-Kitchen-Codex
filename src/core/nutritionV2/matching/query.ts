@@ -44,7 +44,7 @@
  * helpers used by the deterministic ranking and confidence contract.
  */
 
-export const QUERY_PROJECTION_VERSION = 'usda_query_projection_v14';
+export const QUERY_PROJECTION_VERSION = 'usda_query_projection_v15';
 
 /**
  * Optional, bounded Phase 1 metadata that a caller can supply when it already
@@ -173,6 +173,7 @@ const PREPARATION_QUALIFIERS: ReadonlySet<string> = new Set([
   'thawed',
   'defrosted',
   'fresh',
+  'toasted',
   'patted',
   'chilled',
   'chilling',
@@ -882,6 +883,11 @@ const DESCRIPTOR_TOKENS: ReadonlySet<string> = new Set([
   'bone',
   'bones',
   'boneless',
+  // Plant-part descriptor (`Ginger root, raw`, `Beet root`), not a foreign
+  // compound food. It never becomes required identity and never establishes a
+  // match by itself.
+  'root',
+  'roots',
   'coating',
   'coated',
   'breaded',
@@ -1418,6 +1424,8 @@ const STATE_CONTRADICTION_PAIRS: ReadonlyArray<
   Object.freeze([new Set(['fresh']), new Set(['frozen'])] as const),
   // Canned <> raw/fresh.
   Object.freeze([new Set(['canned']), new Set(['raw', 'uncooked', 'fresh'])] as const),
+  // Pickled is a prepared preserve, not fresh/raw produce.
+  Object.freeze([new Set(['pickled']), new Set(['raw', 'uncooked', 'fresh'])] as const),
   // Drained <> undrained.
   Object.freeze([new Set(['drained']), new Set(['undrained'])] as const),
   // Ground <> whole (a committed form vs the whole food). `ground` is NOT
@@ -1546,6 +1554,69 @@ interface CulinaryAlias {
  * never authorize an automatic exact match.
  */
 const ALIASES: ReadonlyArray<CulinaryAlias> = Object.freeze([
+  // Cut/form wording and common market names are not food identity. These are
+  // directional, source-controlled culinary equivalences; they never rewrite a
+  // recipe and they never authorize an exact match by themselves.
+  Object.freeze({
+    id: 'broccoli_florets_to_flower_clusters',
+    from: Object.freeze(['broccoli', 'florets']),
+    to: Object.freeze(['broccoli', 'flower', 'clusters']),
+    anchors: Object.freeze([Object.freeze(['broccoli'])]),
+  }),
+  Object.freeze({
+    id: 'broccoli_floret_to_flower_clusters',
+    from: Object.freeze(['broccoli', 'floret']),
+    to: Object.freeze(['broccoli', 'flower', 'clusters']),
+    anchors: Object.freeze([Object.freeze(['broccoli'])]),
+  }),
+  Object.freeze({
+    id: 'sugar_snap_peas_to_edible_podded_peas',
+    from: Object.freeze(['sugar', 'snap', 'peas']),
+    to: Object.freeze(['peas', 'edible', 'podded']),
+    anchors: Object.freeze([Object.freeze(['peas'])]),
+  }),
+  Object.freeze({
+    id: 'sugar_snap_pea_to_edible_podded_peas',
+    from: Object.freeze(['sugar', 'snap', 'pea']),
+    to: Object.freeze(['peas', 'edible', 'podded']),
+    anchors: Object.freeze([Object.freeze(['peas'])]),
+  }),
+  Object.freeze({
+    id: 'snap_peas_to_edible_podded_peas',
+    from: Object.freeze(['snap', 'peas']),
+    to: Object.freeze(['peas', 'edible', 'podded']),
+    anchors: Object.freeze([Object.freeze(['peas'])]),
+  }),
+  Object.freeze({
+    id: 'cremini_to_crimini',
+    from: Object.freeze(['cremini']),
+    to: Object.freeze(['crimini']),
+    anchors: Object.freeze([Object.freeze(['mushroom', 'mushrooms'])]),
+  }),
+  Object.freeze({
+    id: 'scallions_to_green_onions',
+    from: Object.freeze(['scallions']),
+    to: Object.freeze(['green', 'onions']),
+    anchors: Object.freeze([Object.freeze(['onion', 'onions'])]),
+  }),
+  Object.freeze({
+    id: 'scallion_to_green_onion',
+    from: Object.freeze(['scallion']),
+    to: Object.freeze(['green', 'onion']),
+    anchors: Object.freeze([Object.freeze(['onion', 'onions'])]),
+  }),
+  Object.freeze({
+    id: 'dry_jasmine_rice_to_white_long_grain_raw_rice',
+    from: Object.freeze(['dry', 'jasmine', 'rice']),
+    to: Object.freeze(['white', 'long', 'grain', 'raw', 'rice']),
+    anchors: Object.freeze([Object.freeze(['rice'])]),
+  }),
+  Object.freeze({
+    id: 'jasmine_rice_to_white_long_grain_rice',
+    from: Object.freeze(['jasmine', 'rice']),
+    to: Object.freeze(['white', 'long', 'grain', 'rice']),
+    anchors: Object.freeze([Object.freeze(['rice'])]),
+  }),
   Object.freeze({
     id: 'burger_bun_to_hamburger_bun',
     from: Object.freeze(['burger', 'bun']),

@@ -234,11 +234,11 @@ describe('nutrition production UI integration',()=>{
   // primary calorie total; the known energy subtotal stays visible as evidence.
   expect(screen.getByTestId('basic-calorie-hero').textContent).toBe('—');
   const incomplete=screen.getByTestId('basic-energy-incomplete').textContent ?? '';
-  expect(incomplete).toMatch(/Energy evidence covers 7 of 18 ingredient lines/i);
-  expect(incomplete).toMatch(/Known energy subtotal: 358 kcal/i);
-  expect(review.textContent).toContain('134.9g');
-  expect(review.textContent).toContain('73.3g');
-  expect(review.textContent).toContain('covers 9/18 lines');
+  expect(incomplete).toMatch(/Energy evidence covers 12 of 18 ingredient lines/i);
+  expect(incomplete).toMatch(/Known energy subtotal: 483 kcal/i);
+  expect(review.textContent).toContain('158.5g');
+  expect(review.textContent).toContain('80.9g');
+  expect(review.textContent).toContain('covers 16/18 lines');
   expect(screen.getByTestId('basic-macro-distribution')).toBeTruthy();
   expect(screen.queryByTestId('basic-macro-incompatible')).toBeNull();
   // Empty assumptions must never render an empty bullet.

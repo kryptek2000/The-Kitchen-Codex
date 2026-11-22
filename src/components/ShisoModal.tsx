@@ -790,8 +790,8 @@ export function ShisoModal({
           {busy && (
             <div className="flex justify-start">
               <div role="status" aria-live="polite" data-testid="shiso-progress" className="px-3.5 py-2.5 rounded-2xl rounded-bl-md bg-[#141414] border border-amber-500/20 text-gray-300 text-sm">
-                <span className="font-semibold text-amber-200">{status ?? (creationMode ? 'Shiso is working on your recipe…' : 'Shiso is analyzing the recipe…')}</span>
-                {!creationMode && <span className="block text-[11px] text-gray-400 mt-0.5">Checking ingredient context, available portions, and nutrition evidence. Results are not saved.</span>}
+                <span className="font-semibold text-amber-200">{status ?? (creationMode ? 'Shiso is working on your recipe…' : 'Shiso is thinking…')}</span>
+                {!creationMode && <span className="block text-[11px] text-gray-400 mt-0.5">Using only the context and tools this request needs. Results are not saved.</span>}
               </div>
             </div>
           )}

@@ -467,6 +467,61 @@ describe('manual USDA search', () => {
 // Adversarial composed-food boundaries
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// SINC-1 owner acceptance fixture
+// ---------------------------------------------------------------------------
+
+describe('owner fixture — Gochujang Chicken Rice Bowls intelligent completion', () => {
+  const OWNER_LINES: ReadonlyArray<string> = [
+    '680 g raw boneless skinless chicken thighs',
+    '1 tbsp olive oil',
+    '1 medium yellow onion (150 g)',
+    '3 garlic cloves',
+    '1 tbsp minced fresh ginger',
+    '1 red bell pepper (150 g)',
+    '1 medium carrot (70 g)',
+    '100 g broccoli florets',
+    '100 g sugar snap peas',
+    '100 g cremini mushrooms',
+    '2 tbsp gochujang (Korean chili paste)',
+    '2 tbsp reduced-sodium soy sauce',
+    '1 tbsp rice vinegar',
+    '1 tbsp honey',
+    '1 tsp toasted sesame oil',
+    '200 g dry jasmine rice',
+    '1 tbsp sesame seeds',
+    '2 scallions (30 g)',
+  ];
+
+  it('resolves the defensible local USDA identities and leaves only true evidence gaps unresolved', () => {
+    const adapted = adaptLines(OWNER_LINES);
+    const analysis = analyzeRecipe(session, adapted, 4);
+    expect(analysis.rows).toHaveLength(18);
+    expect(analysis.summary.matched).toBe(16);
+    expect(analysis.summary.needs_match).toBe(2);
+    const byLine = new Map(analysis.rows.map((row) => [row.original_text, row]));
+    expect(byLine.get('1 tbsp minced fresh ginger')?.selected_description).toBe('Ginger root, raw');
+    expect(byLine.get('100 g broccoli florets')?.selected_description).toMatch(/Broccoli, flower clusters, raw/i);
+    expect(byLine.get('100 g sugar snap peas')?.selected_description).toBe('Peas, edible-podded, raw');
+    expect(byLine.get('100 g cremini mushrooms')?.selected_description).toMatch(/crimini/i);
+    expect(byLine.get('1 tsp toasted sesame oil')?.selected_description).toBe('Sesame oil');
+    expect(byLine.get('200 g dry jasmine rice')?.selected_description).toMatch(/Rice, white, long grain/i);
+    expect(byLine.get('200 g dry jasmine rice')?.selected_description).not.toMatch(/brown/i);
+    expect(byLine.get('2 scallions (30 g)')?.selected_description).toMatch(/onion/i);
+
+    // These two have no defensible pinned-USDA identity. They must remain
+    // unresolved rather than becoming a generic condiment or vinegar.
+    expect(byLine.get('2 tbsp gochujang (Korean chili paste)')?.status).toBe('needs_match');
+    expect(byLine.get('1 tbsp rice vinegar')?.status).toBe('needs_match');
+    expect(
+      analysis.rows.filter((row) => row.status === 'needs_match').map((row) => row.original_text).sort()
+    ).toEqual(['1 tbsp rice vinegar', '2 tbsp gochujang (Korean chili paste)']);
+    for (const row of analysis.rows) {
+      expect(row.selected_description ?? '').not.toMatch(/chili sauce|generic vinegar/i);
+    }
+  });
+});
+
 describe('adversarial composed-food boundaries', () => {
   it('a composed hamburger cannot be selected for a plain burger bun', () => {
     const { row } = analyzeLine('4 burger buns');
