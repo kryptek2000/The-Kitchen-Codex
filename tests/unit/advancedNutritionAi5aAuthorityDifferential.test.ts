@@ -73,7 +73,7 @@ import type { AdvancedNutritionSession, Phase4State } from '../../src/core/nutri
 
 const REPO = process.cwd();
 const FIXED_TIME = '2026-01-01T00:00:00.000Z';
-const BUNDLE_DIR = join(REPO, 'data/advanced-nutrition/usda/usda_fdc_87c5408a3e98838944a87be74824761e');
+const BUNDLE_DIR = join(REPO, 'data/advanced-nutrition/usda/usda_fdc_1f3e3068a7ae0702f360d1caae40a628');
 
 let session: AdvancedNutritionSession;
 beforeAll(async () => {

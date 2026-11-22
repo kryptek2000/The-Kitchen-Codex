@@ -12,6 +12,8 @@ import {
   duplicateMappedRaw,
   conflictingEnergyRaw,
   kjOnlyEnergyRaw,
+  specificEnergyRaw,
+  generalEnergyOnlyRaw,
   wrongUnitRaw,
   iuVitaminDRaw,
   folateTotalRaw,
@@ -185,6 +187,60 @@ describe('usda adapter — energy policy', () => {
     if (!result.ok) return;
     expect(result.record.nutrients.calories?.amount_per_100g).toBe(100);
     expect(result.record.nutrients.calories?.usda_nutrient_id).toBe(1008);
+  });
+
+  it("uses USDA's food-specific Atwater energy (2048) when Foundation publishes no direct kcal", () => {
+    const result = adaptUsdaFood(specificEnergyRaw(), ctx('foundation'));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.record.nutrients.calories?.amount_per_100g).toBe(369.637321);
+    expect(result.record.nutrients.calories?.usda_nutrient_id).toBe(2048);
+    expect(result.record.nutrients.calories?.source_unit).toBe('KCAL');
+    expect(result.record.nutrients.calories?.converted).toBe(false);
+  });
+
+  it('does not treat generic Atwater general factors (2047) as authoritative energy', () => {
+    const result = adaptUsdaFood(generalEnergyOnlyRaw(), ctx('foundation'));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect('calories' in result.record.nutrients).toBe(false);
+    expect(result.record.nutrients.protein?.amount_per_100g).toBe(7.04);
+  });
+
+  it('prefers direct kcal over specific Atwater kcal and specific Atwater over kJ', () => {
+    const direct = cloneFixture(FOUNDATION_RAW);
+    direct.foodNutrients = [
+      { nutrient: { id: 1008, unitName: 'kcal' }, amount: 100 },
+      { nutrient: { id: 2048, unitName: 'kcal' }, amount: 120 },
+      { nutrient: { id: 1062, unitName: 'kJ' }, amount: 99999 },
+    ];
+    const directResult = adaptUsdaFood(direct, ctx('foundation'));
+    expect(directResult.ok).toBe(true);
+    if (directResult.ok) {
+      expect(directResult.record.nutrients.calories?.amount_per_100g).toBe(100);
+      expect(directResult.record.nutrients.calories?.usda_nutrient_id).toBe(1008);
+    }
+
+    const specific = cloneFixture(FOUNDATION_RAW);
+    specific.foodNutrients = [
+      { nutrient: { id: 2048, unitName: 'kcal' }, amount: 120 },
+      { nutrient: { id: 1062, unitName: 'kJ' }, amount: 99999 },
+    ];
+    const specificResult = adaptUsdaFood(specific, ctx('foundation'));
+    expect(specificResult.ok).toBe(true);
+    if (specificResult.ok) {
+      expect(specificResult.record.nutrients.calories?.amount_per_100g).toBe(120);
+      expect(specificResult.record.nutrients.calories?.usda_nutrient_id).toBe(2048);
+    }
+  });
+
+  it('rejects duplicate specific Atwater energy components at the winning rank', () => {
+    const duplicate = cloneFixture(FOUNDATION_RAW);
+    duplicate.foodNutrients = [
+      { nutrient: { id: 2048, unitName: 'kcal' }, amount: 100 },
+      { nutrient: { id: 2048, unitName: 'kcal' }, amount: 250 },
+    ];
+    expect(failureOf(adaptUsdaFood(duplicate, ctx('foundation')))).toBe('duplicate_nutrient');
   });
 });
 

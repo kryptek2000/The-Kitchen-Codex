@@ -542,7 +542,7 @@ describe('Phase 8A — AI-6 exit baselines are frozen', () => {
   });
 
   it('records the pinned bundle release actually locked in code', () => {
-    expect(report().pinned_bundle_release).toBe('usda_fdc_87c5408a3e98838944a87be74824761e');
+    expect(report().pinned_bundle_release).toBe('usda_fdc_1f3e3068a7ae0702f360d1caae40a628');
   });
 
   it('reaches no live or external USDA endpoint', () => {

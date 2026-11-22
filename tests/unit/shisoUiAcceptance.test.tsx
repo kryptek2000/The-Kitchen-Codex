@@ -211,6 +211,26 @@ describe('SHISO-C1 — the user can actually reach acceptance', () => {
     ok: true, kind: 'reply', text, proposals: [], model_invocations_used: 1, tool_calls_used: 0,
   } });
 
+  it('a greeting shows neutral progress and executes no nutrition tools', async () => {
+    const pending = pendingNetwork();
+    render(<Host network={pending.adapter} canApply={false} onApplied={async () => ({ ok: true }) as never} />);
+    fireEvent.click(screen.getByText('open shiso'));
+    fireEvent.change(screen.getByPlaceholderText('Ask Shiso…'), { target: { value: 'hello' } });
+    fireEvent.click(screen.getByText('Send'));
+    await waitFor(() => expect(pending.calls).toHaveLength(1));
+    const progress = await screen.findByTestId('shiso-progress');
+    expect(progress.textContent).toMatch(/Shiso is thinking/i);
+    expect(progress.textContent).not.toMatch(/analyzing the recipe/i);
+    expect(progress.textContent).toMatch(/Results are not saved/i);
+    await act(async () => {
+      pending.calls[0]!.resolve(successfulReply('Hello. I am Shiso, your kitchen companion.'));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await waitForText(/Hello\. I am Shiso/i);
+    expect(hasText(/Analyze the complete nutrition for this recipe/i)).toBe(false);
+  });
+
   it('closing SHISO aborts the active request and ignores a late success', async () => {
     const pending = pendingNetwork();
     render(<Host network={pending.adapter} canApply={false} onApplied={async () => ({ ok: true }) as never} />);

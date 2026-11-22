@@ -20,7 +20,7 @@ import type { IngredientReviewResult } from '../../src/core/nutritionV2/matching
 const LOCK = USDA_BUNDLE_RELEASE_LOCK;
 const BUNDLE_DIR = join(
   __dirname,
-  '../../data/advanced-nutrition/usda/usda_fdc_87c5408a3e98838944a87be74824761e'
+  '../../data/advanced-nutrition/usda/usda_fdc_1f3e3068a7ae0702f360d1caae40a628'
 );
 
 const HAMBURGER_LINES: ReadonlyArray<string> = [

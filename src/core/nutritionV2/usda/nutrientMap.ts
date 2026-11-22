@@ -32,19 +32,28 @@
  *
  * ENERGY POLICY
  * -------------
- * Only 1008 (`Energy`, kcal) is the approved direct kilocalorie component. 1062
- * (`Energy`, kJ) is a documented FALLBACK used only when no 1008 is present,
- * converted with the existing exact 4.184 helper (`convertEnergy`). Energy
- * components are never summed, the first value is never chosen arbitrarily, a
- * duplicate direct component is rejected as a conflict, and the fallback never
- * creates a second calories entry.
+ * Foundation Foods publish energy in a different shape from SR Legacy and
+ * FNDDS. The single canonical `calories` value is selected by an explicit
+ * deterministic preference, never by array order and never by summation:
+ *
+ *   1. 1008 `Energy` (kcal) — the direct component.
+ *   2. 2048 `Energy (Atwater Specific Factors)` (kcal) — USDA's official
+ *      food-specific metabolizable energy. Foundation records that publish only
+ *      Atwater energy use this component instead of 1008.
+ *   3. 1062 `Energy` (kJ) — exact 4.184 conversion fallback.
+ *
+ * 2047 `Energy (Atwater General Factors)` is deliberately NOT mapped. It is the
+ * generic 4/4/9 macro derivation and is not substituted for direct or
+ * food-specific USDA energy; a record that publishes only 2047 keeps calories
+ * genuinely absent. Energy components are never summed. Multiple components at
+ * the winning preference level are still a conflict (`duplicate_nutrient`).
  */
 
 import { convertEnergy, convertUnit, MAX_DECIMAL_PLACES, type CanonicalUnit } from '../units';
 import type { NutrientId } from '../nutrients';
 
 /** Mapping version; part of bundle identity and every canonical record. */
-export const USDA_NUTRIENT_MAP_VERSION = 'usda_fdc_nutrient_map_v2';
+export const USDA_NUTRIENT_MAP_VERSION = 'usda_fdc_nutrient_map_v3';
 
 export type UsdaSourceUnit = 'G' | 'MG' | 'UG' | 'KCAL' | 'KJ';
 
@@ -62,8 +71,12 @@ export interface UsdaNutrientMapping {
   readonly canonical_unit: CanonicalUnit;
   readonly source_unit: UsdaSourceUnit;
   readonly conversion: UsdaConversion;
-  /** True for the kJ energy fallback (used only when no direct kcal exists). */
-  readonly energy_fallback?: boolean;
+  /**
+   * Preference among the energy components that satisfy `calories`. Lower wins.
+   * Every mapped energy component carries a rank; equal-rank duplicates remain
+   * conflicts rather than being resolved by order.
+   */
+  readonly energy_rank?: number;
   readonly version: string;
 }
 
@@ -74,8 +87,9 @@ const MAPPINGS: ReadonlyArray<UsdaNutrientMapping> = [
   { usda_nutrient_id: 1003, nutrient_id: 'protein', canonical_unit: 'g', source_unit: 'G', conversion: 'identity', version: V },
   { usda_nutrient_id: 1004, nutrient_id: 'fat', canonical_unit: 'g', source_unit: 'G', conversion: 'identity', version: V },
   { usda_nutrient_id: 1005, nutrient_id: 'carbohydrates', canonical_unit: 'g', source_unit: 'G', conversion: 'identity', version: V },
-  { usda_nutrient_id: 1008, nutrient_id: 'calories', canonical_unit: 'kcal', source_unit: 'KCAL', conversion: 'identity', version: V },
-  { usda_nutrient_id: 1062, nutrient_id: 'calories', canonical_unit: 'kcal', source_unit: 'KJ', conversion: 'energy_kj_to_kcal', energy_fallback: true, version: V },
+  { usda_nutrient_id: 1008, nutrient_id: 'calories', canonical_unit: 'kcal', source_unit: 'KCAL', conversion: 'identity', energy_rank: 1, version: V },
+  { usda_nutrient_id: 2048, nutrient_id: 'calories', canonical_unit: 'kcal', source_unit: 'KCAL', conversion: 'identity', energy_rank: 2, version: V },
+  { usda_nutrient_id: 1062, nutrient_id: 'calories', canonical_unit: 'kcal', source_unit: 'KJ', conversion: 'energy_kj_to_kcal', energy_rank: 3, version: V },
   { usda_nutrient_id: 1079, nutrient_id: 'fiber', canonical_unit: 'g', source_unit: 'G', conversion: 'identity', version: V },
   { usda_nutrient_id: 1087, nutrient_id: 'calcium', canonical_unit: 'mg', source_unit: 'MG', conversion: 'identity', version: V },
   { usda_nutrient_id: 1089, nutrient_id: 'iron', canonical_unit: 'mg', source_unit: 'MG', conversion: 'identity', version: V },

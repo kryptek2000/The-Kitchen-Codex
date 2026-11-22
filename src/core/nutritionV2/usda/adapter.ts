@@ -256,8 +256,15 @@ function resolveNutrients(
   for (const [nutrientId, list] of byNutrient) {
     let resolved = list;
     if (list.length > 1 && nutrientId === 'calories') {
-      const direct = list.filter((candidate) => candidate.mapping.energy_fallback !== true);
-      if (direct.length > 0) resolved = direct;
+      // Lowest rank wins: direct kcal, then USDA food-specific Atwater kcal,
+      // then the kJ conversion. Equal-rank duplicates are still conflicts.
+      const bestRank = Math.min(
+        ...list.map((candidate) => candidate.mapping.energy_rank ?? Number.MAX_SAFE_INTEGER)
+      );
+      resolved = list.filter(
+        (candidate) =>
+          (candidate.mapping.energy_rank ?? Number.MAX_SAFE_INTEGER) === bestRank
+      );
     }
     if (resolved.length > 1) return { ok: false, code: 'duplicate_nutrient' };
     const candidate = resolved[0];

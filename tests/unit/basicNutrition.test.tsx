@@ -205,7 +205,7 @@ describe('nutrition production UI integration',()=>{
   expect(screen.getByText(/^0$/)).toBeTruthy();
  },30000);
 
- it('owner Gochujang fixture: sparse energy is not the calorie hero and coverage stays distinct',async()=>{
+ it('owner Gochujang fixture: foundation energy coverage reaches the macro lines but stays a labeled subtotal',async()=>{
   const ownerLines=[
    '680 g raw boneless skinless chicken thighs',
    '1 tbsp olive oil',
@@ -230,15 +230,17 @@ describe('nutrition production UI integration',()=>{
   render(<RecipeNutritionCard recipe={owner} network={network} onUpdateNutrition={vi.fn()} />);
   fireEvent.click(screen.getByTestId('calculate-basic-nutrition-empty-btn'));
   const review=await screen.findByTestId('basic-nutrition-review',{}, {timeout:30000});
-  // Energy covers fewer lines than the macros, so it is not displayed as the
-  // primary calorie total; the known energy subtotal stays visible as evidence.
-  expect(screen.getByTestId('basic-calorie-hero').textContent).toBe('—');
-  const incomplete=screen.getByTestId('basic-energy-incomplete').textContent ?? '';
-  expect(incomplete).toMatch(/Energy evidence covers 7 of 18 ingredient lines/i);
-  expect(incomplete).toMatch(/Known energy subtotal: 358 kcal/i);
-  expect(review.textContent).toContain('134.9g');
-  expect(review.textContent).toContain('73.3g');
-  expect(review.textContent).toContain('covers 9/18 lines');
+  // Every matched Foundation record now publishes USDA food-specific energy,
+  // so energy covers the same 16 lines as the macros. The recipe still has two
+  // unresolved lines, so the number remains a labeled KNOWN SUBTOTAL, never a
+  // complete recipe calorie total.
+  expect(screen.getByTestId('basic-calorie-hero').textContent).toBe('2301');
+  expect(review.textContent).toContain('Calories · known subtotal');
+  expect(review.textContent).toContain('Known energy subtotal · covers 16 of 18 ingredient lines');
+  expect(screen.queryByTestId('basic-energy-incomplete')).toBeNull();
+  expect(review.textContent).toContain('158.5g');
+  expect(review.textContent).toContain('80.9g');
+  expect(review.textContent).toContain('covers 16/18 lines');
   expect(screen.getByTestId('basic-macro-distribution')).toBeTruthy();
   expect(screen.queryByTestId('basic-macro-incompatible')).toBeNull();
   // Empty assumptions must never render an empty bullet.

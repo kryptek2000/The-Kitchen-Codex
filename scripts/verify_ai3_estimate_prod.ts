@@ -70,7 +70,7 @@ import type {
 } from '../src/core/nutritionV2/phase4/types';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
-const BUNDLE_DIR = join(REPO, 'data/advanced-nutrition/usda/usda_fdc_87c5408a3e98838944a87be74824761e');
+const BUNDLE_DIR = join(REPO, 'data/advanced-nutrition/usda/usda_fdc_1f3e3068a7ae0702f360d1caae40a628');
 
 let pass = 0;
 let fail = 0;

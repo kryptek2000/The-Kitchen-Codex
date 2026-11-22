@@ -34,7 +34,7 @@ import type { AdvancedNutritionSession, Phase4State } from '../../src/core/nutri
 import type { AnalyzedRow } from '../../src/core/nutritionV2/phase4/analyzer';
 
 const REPO = process.cwd();
-const BUNDLE_DIR = join(REPO, 'data/advanced-nutrition/usda/usda_fdc_87c5408a3e98838944a87be74824761e');
+const BUNDLE_DIR = join(REPO, 'data/advanced-nutrition/usda/usda_fdc_1f3e3068a7ae0702f360d1caae40a628');
 const LOWER = 150;
 const UPPER = 200;
 const EXPECTED_MID = deterministicMidpointGrams(LOWER, UPPER);

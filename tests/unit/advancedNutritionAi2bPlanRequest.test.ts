@@ -96,7 +96,7 @@ function review() {
     query: 'tomato sauce',
     normalized_query: 'tomato sauce',
     query_tokens: ['tomato', 'sauce'],
-    bundle_release: 'usda_fdc_87c5408a3e98838944a87be74824761e',
+    bundle_release: 'usda_fdc_1f3e3068a7ae0702f360d1caae40a628',
     catalog_digest: 'catalog-digest',
     normalization_version: 'n1',
     ranking_version: 'r1',

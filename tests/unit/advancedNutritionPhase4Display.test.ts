@@ -22,7 +22,7 @@ function previewWith(totals: Partial<Record<NutrientId, NutrientTotalResult>>): 
     calculation_version: 'usda_advisory_calc_v1',
     bundle_release: 'bundle',
     catalog_digest: 'c'.repeat(64),
-    nutrient_map_version: 'usda_fdc_nutrient_map_v2',
+    nutrient_map_version: 'usda_fdc_nutrient_map_v3',
     servings: 4,
     ingredient_digest: 'sha256:' + 'a'.repeat(64),
     nutrient_scope: Object.freeze(['protein'] as NutrientId[]),

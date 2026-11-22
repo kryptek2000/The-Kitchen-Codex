@@ -3,7 +3,7 @@
  * repaired dataset validity, provenance-lock, cross-FDC rationale, and policy.
  *
  * The oracle is the REAL pinned USDA bundle
- * (`usda_fdc_87c5408a3e98838944a87be74824761e`), loaded from the locked `.gz`
+ * (`usda_fdc_1f3e3068a7ae0702f360d1caae40a628`), loaded from the locked `.gz`
  * shards with the existing canonical record validator. Every production record
  * is independently re-derived from its cited source portion, and every
  * provenance/equivalence mutation is shown to change or invalidate the lock.
@@ -60,15 +60,15 @@ import {
 
 const BUNDLE_DIR = join(
   __dirname,
-  '../../data/advanced-nutrition/usda/usda_fdc_87c5408a3e98838944a87be74824761e'
+  '../../data/advanced-nutrition/usda/usda_fdc_1f3e3068a7ae0702f360d1caae40a628'
 );
 
 /** Pinned literal expectations (a data edit without a reviewed lock edit fails). */
 const EXPECTED_RECORD_COUNT = 31;
 const EXPECTED_FOOD_COUNT = 11;
-const EXPECTED_REGISTRY_DIGEST = '6ad593ef558ca9325197549f005da5b1eee822211f2ec6b5290f5c58fedc4ac4';
-const EXPECTED_PROVENANCE_DIGEST = 'adba614327f9cb078ffd35d6abade50b25de180b43f4b373eea6ab8825694b31';
-const EXPECTED_AGGREGATE_DIGEST = 'f8fed2230ac210c8dc2548f3a300134091c3a490ac6eb68add2766ac9b85b256';
+const EXPECTED_REGISTRY_DIGEST = '096d10d1c79d1a2e8a1880c46e1daac800e0636299070ca45fa549bebbb7ac27';
+const EXPECTED_PROVENANCE_DIGEST = '1f8db8ea18de0203ab44df400aec4058303395303ab95a433b70be8778cdf088';
+const EXPECTED_AGGREGATE_DIGEST = '062fcbf8ab724e73b7b73069a8fce9712b1bbbf9b68d00cb86dc926afa0a7d2e';
 const EXPECTED_MIN_GRAMS = 3;
 const EXPECTED_MAX_GRAMS = 1248;
 
@@ -715,7 +715,7 @@ describe('phase 5 repair — record-level and lock negative detection', () => {
       bounds: null,
       source: {
         kind: 'usda_fdc',
-        citation: 'USDA FDC 168155 Limes, raw; portion 82570 (1 x fruit (2" dia) = 67 g); bundle usda_fdc_87c5408a3e98838944a87be74824761e',
+        citation: 'USDA FDC 168155 Limes, raw; portion 82570 (1 x fruit (2" dia) = 67 g); bundle usda_fdc_1f3e3068a7ae0702f360d1caae40a628',
         url: null,
         accessed: null,
       },

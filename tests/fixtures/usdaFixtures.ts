@@ -170,6 +170,31 @@ export function kjOnlyEnergyRaw() {
   };
 }
 
+export function specificEnergyRaw() {
+  return {
+    fdcId: 900015,
+    dataType: 'Foundation',
+    description: 'Synthetic Atwater-specific energy',
+    foodNutrients: [
+      { nutrient: { id: 1003, unitName: 'G' }, amount: 7.04 },
+      { nutrient: { id: 2047, unitName: 'KCAL' }, amount: 359 },
+      { nutrient: { id: 2048, unitName: 'KCAL' }, amount: 369.637321 },
+    ],
+  };
+}
+
+export function generalEnergyOnlyRaw() {
+  return {
+    fdcId: 900016,
+    dataType: 'Foundation',
+    description: 'Synthetic Atwater-general-only energy',
+    foodNutrients: [
+      { nutrient: { id: 1003, unitName: 'G' }, amount: 7.04 },
+      { nutrient: { id: 2047, unitName: 'KCAL' }, amount: 359 },
+    ],
+  };
+}
+
 export function wrongUnitRaw() {
   return {
     fdcId: 900006,

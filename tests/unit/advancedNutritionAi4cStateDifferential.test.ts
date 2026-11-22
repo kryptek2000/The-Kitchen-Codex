@@ -85,7 +85,7 @@ vi.mock('../../server/ai/effectiveSelection.js', () => ({
 const { interpretRecipeContextOnServer } = await import('../../server/nutritionContext.js');
 
 const REPO = process.cwd();
-const BUNDLE_DIR = join(REPO, 'data/advanced-nutrition/usda/usda_fdc_87c5408a3e98838944a87be74824761e');
+const BUNDLE_DIR = join(REPO, 'data/advanced-nutrition/usda/usda_fdc_1f3e3068a7ae0702f360d1caae40a628');
 const FIXED_TIME = '2026-01-01T00:00:00.000Z';
 
 let session: AdvancedNutritionSession;

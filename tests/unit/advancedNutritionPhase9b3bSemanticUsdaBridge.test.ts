@@ -9,7 +9,7 @@
  *     verification — receipt verification is NOT mocked,
  *   - the adapter and withholding are the RELEASED ones,
  *   - the USDA catalog is the REAL pinned, digest-authenticated bundle
- *     (`usda_fdc_87c5408a3e98838944a87be74824761e`), composed through the real
+ *     (`usda_fdc_1f3e3068a7ae0702f360d1caae40a628`), composed through the real
  *     bundle authenticator,
  *   - food-identity matching, confidence, source-constraint veto and review
  *     withholding are the GENUINE deterministic functions.
@@ -59,7 +59,7 @@ import type { AiResolutionIssueKind, AiResolutionSuggestion } from '../../src/co
 
 const BUNDLE_DIR = join(
   __dirname,
-  '../../data/advanced-nutrition/usda/usda_fdc_87c5408a3e98838944a87be74824761e'
+  '../../data/advanced-nutrition/usda/usda_fdc_1f3e3068a7ae0702f360d1caae40a628'
 );
 
 // ---------------------------------------------------------------------------

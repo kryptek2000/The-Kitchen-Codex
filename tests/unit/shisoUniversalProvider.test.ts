@@ -68,7 +68,7 @@ function makeProvider(id: string, structuredOutput: boolean, result: unknown) {
 function turn() {
   const body = readShisoTurnRequest({
     turn_version: 'shiso_turn_request_v1',
-    user_message: 'Hi Shiso',
+    user_message: 'why are my calories incomplete?',
     history: [],
     context: { recipe: null, nutrition: { available: false } },
     model_invocations_used: 0,

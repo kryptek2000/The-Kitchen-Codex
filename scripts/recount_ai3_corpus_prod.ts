@@ -28,7 +28,7 @@ import { evaluateAiEstimateEligibility } from '../src/core/nutritionV2/phase4/ai
 import { RESOLUTION_COVERAGE_CORPUS } from '../tests/fixtures/advancedNutritionResolutionCorpus';
 
 const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
-const BUNDLE_DIR = join(ROOT, 'data/advanced-nutrition/usda/usda_fdc_87c5408a3e98838944a87be74824761e');
+const BUNDLE_DIR = join(ROOT, 'data/advanced-nutrition/usda/usda_fdc_1f3e3068a7ae0702f360d1caae40a628');
 
 function structured(line: string): Record<string, unknown> {
   const parsed = parseIngredient(line);

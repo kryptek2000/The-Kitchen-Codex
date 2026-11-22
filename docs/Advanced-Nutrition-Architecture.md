@@ -534,7 +534,7 @@ enable machine-generated nutrition application.
   nothing; the audited acquisition/generation step (Phase 4.5A) has since been
   implemented and its manifest-bound canonical bundle IS committed under
   `data/advanced-nutrition/usda/` (release
-  `usda_fdc_87c5408a3e98838944a87be74824761e`). Audit gate: source license +
+  `usda_fdc_1f3e3068a7ae0702f360d1caae40a628`). Audit gate: source license +
   privacy review.
 - **Phase 2 — deterministic ingredient parsing/matching review.** DONE (offline,
   isolated): defensive ingredient parsing, conservative query normalization, a
@@ -748,12 +748,13 @@ field name survives into canonical output.
 
 ### 13.5 Stable nutrient-ID mapping
 
-`nutrientMap.ts` (version `usda_fdc_nutrient_map_v2`) is the single closed mapping
+`nutrientMap.ts` (version `usda_fdc_nutrient_map_v3`) is the single closed mapping
 from verified USDA nutrient ids to Phase 0 `NutrientId`s. It never maps by display
 name. Ids, names, and the single observed `unitName` were verified against the
 **pinned archives themselves** (all three releases), and the official micro sign
 `µg` (U+00B5) is normalized before comparison. Representative mappings:
-1003→protein, 1004→fat, 1005→carbohydrates, 1008→calories (kcal), 1079→fiber,
+1003→protein, 1004→fat, 1005→carbohydrates, 1008→calories (kcal),
+2048→calories (Atwater-specific kcal), 1079→fiber,
 1093→sodium, 1106→vitamin_a (`ug_rae`, RAE form), 1114→vitamin_d, 1190→folate
 (`ug_dfe`, DFE form), 1253→cholesterol, 1258→saturated_fat, 2000→total_sugars.
 
@@ -771,12 +772,20 @@ name. Ids, names, and the single observed `unitName` were verified against the
 - Unsupported USDA nutrients are ignored only after the whole record passes
   bounded inert validation, and they never enter the output as authority.
 
-**Energy policy.** Only 1008 (`Energy`, kcal) directly represents kilocalories.
-1062 (`Energy`, kJ) is a documented fallback used only when no 1008 is present,
-converted with the existing exact 4.184 `convertEnergy` helper. Energy components
-are never summed, no arbitrary "first" value is chosen, a duplicate direct kcal
-component is rejected as a conflict, and the fallback never creates a second
-calories entry.
+**Energy policy.** The single canonical `calories` value is selected by an
+explicit rank, never by array order and never by summation:
+
+1. 1008 (`Energy`, kcal) — the direct component;
+2. 2048 (`Energy (Atwater Specific Factors)`, kcal) — USDA's official
+   food-specific metabolizable energy, used by Foundation records that publish
+   no 1008;
+3. 1062 (`Energy`, kJ) — exact 4.184 `convertEnergy` fallback.
+
+2047 (`Energy (Atwater General Factors)`) is deliberately **not** mapped: it is
+the generic 4/4/9 macro derivation and is not substituted for direct or
+food-specific USDA energy. A record that publishes only 2047 keeps calories
+genuinely absent. Energy components are never summed, and multiple components at
+the winning rank are rejected as a conflict (`duplicate_nutrient`).
 
 ### 13.6 Missing, zero, null, and exact units
 
@@ -1734,19 +1743,19 @@ requires the external release lock below.
 
 ### 17.5 Generated artifact (exact bytes and digests)
 
-Bundle release: **`usda_fdc_87c5408a3e98838944a87be74824761e`**.
+Bundle release: **`usda_fdc_1f3e3068a7ae0702f360d1caae40a628`**.
 
 | File | Bytes | SHA-256 |
 | --- | --- | --- |
-| `manifest.json` | 1,573 | `3b4ee9888bda49ff705e9e38971621beac7a091fe0b53e1187e68d050e70e2ba` |
-| `artifact.json` | 1,604 | `1e525d9423572ab202d80ed78ff05b7ec34899744f62b24664f8d32c4d0efd3b` |
-| `records.foundation.json.gz` | 53,877 | `50bb6999d12b7c68f167509bc2d88d35ad9c2df9d6a03a9a7f89379323399709` |
-| `records.sr_legacy.json.gz` | 1,456,503 | `2fa6be1ebefa1ffd2b70554e082237f15e14ce2c51302fdf00cde97ae6e3a876` |
-| `records.fndds.json.gz` | 981,412 | `1a25a5d8c4e18fbca8e91d80a0b051860bad72aedb27486e8940699ad8158b2b` |
+| `manifest.json` | 1,573 | `5a8596432d5f050ce5a3482ef06340d876a9ff7244c88fd64b4cdb2802e2fd8f` |
+| `artifact.json` | 1,604 | `0049be77aeed9328772a9b3561df054a80f10002a4c2b6153f2b0f1a6b6116f4` |
+| `records.foundation.json.gz` | 54,188 | `cab340a836c230581b6fc891b7543cc161ab637254c45d0411d2470a394dd274` |
+| `records.sr_legacy.json.gz` | 1,445,111 | `4f73b99807b71bf08e30677d7f1c185916f721e488168ee75e896d1086b7c3fd` |
+| `records.fndds.json.gz` | 972,897 | `4e6f7e2a7c5a438638344fd8fa23508d61a9183608e46c7bdbf05cd55f2c461b` |
 
-Total compressed: **2,491,792 bytes**; total uncompressed canonical:
-**59,678,264 bytes**; canonical-content digest:
-`dd9740bcf0efb577f0afd5b87ddb70a652384e4d7833947e83b30da8b39f67e4`.
+Total compressed: **2,472,196 bytes**; total uncompressed canonical:
+**59,704,487 bytes**; canonical-content digest:
+`de639e0cc2a2b0455577e0ad055e8691c73ef7dc395bfb57e76a224e050fa739`.
 
 ### 17.6 Exact census
 
@@ -1873,9 +1882,9 @@ or read from that directory, is never caller-supplied at verification time, and
 accepts no environment/query/CLI overrides. It pins the independently audited
 exact production release:
 
-* lock schema `1`; bundle release `usda_fdc_87c5408a3e98838944a87be74824761e`;
+* lock schema `1`; bundle release `usda_fdc_1f3e3068a7ae0702f360d1caae40a628`;
 * generator `the-kitchen-codex-usda-bundle` schema `1`; pinned build timestamp
-  `2026-09-15T00:00:00.000Z`; nutrient-map `usda_fdc_nutrient_map_v2`;
+  `2026-09-15T00:00:00.000Z`; nutrient-map `usda_fdc_nutrient_map_v3`;
   canonicalization `usda_canonical_v1`;
 * the three source archive filenames, official URLs, releases, and SHA-256 values
   from §17.1;
@@ -1885,19 +1894,19 @@ exact production release:
 * canonical record count `13,559`; rejected non-null `29`; Foundation null
   placeholders `32`;
 * canonical-content digest
-  `dd9740bcf0efb577f0afd5b87ddb70a652384e4d7833947e83b30da8b39f67e4`;
-* `manifest.json` 1,573 bytes / `3b4ee9888bda49ff705e9e38971621beac7a091fe0b53e1187e68d050e70e2ba`;
-  `artifact.json` 1,604 bytes / `1e525d9423572ab202d80ed78ff05b7ec34899744f62b24664f8d32c4d0efd3b`;
+  `de639e0cc2a2b0455577e0ad055e8691c73ef7dc395bfb57e76a224e050fa739`;
+* `manifest.json` 1,573 bytes / `5a8596432d5f050ce5a3482ef06340d876a9ff7244c88fd64b4cdb2802e2fd8f`;
+  `artifact.json` 1,604 bytes / `0049be77aeed9328772a9b3561df054a80f10002a4c2b6153f2b0f1a6b6116f4`;
 * per shard (compressed bytes / SHA-256; uncompressed bytes / SHA-256; record
   count):
 
   | Shard | Compressed | Compressed SHA-256 | Uncompressed | Uncompressed SHA-256 | Records |
   | --- | --- | --- | --- | --- | --- |
-  | `records.foundation.json.gz` | 53,877 | `50bb6999d12b7c68f167509bc2d88d35ad9c2df9d6a03a9a7f89379323399709` | 958,025 | `5082031987b75d388880b8d416b4c3cacd3ee4f7c227a2717d1cedfdc6b043e6` | 353 |
-  | `records.sr_legacy.json.gz` | 1,456,503 | `2fa6be1ebefa1ffd2b70554e082237f15e14ce2c51302fdf00cde97ae6e3a876` | 33,695,908 | `e916f71396f4f55db04365e4b622fdfa3ec8006d499ed67789434e4e5d213f35` | 7,775 |
-  | `records.fndds.json.gz` | 981,412 | `1a25a5d8c4e18fbca8e91d80a0b051860bad72aedb27486e8940699ad8158b2b` | 25,024,331 | `426e6e2642bcccfe64c2f86e831ef9c272b3def9829e25a17f179b283a055fc7` | 5,431 |
+  | `records.foundation.json.gz` | 54,188 | `cab340a836c230581b6fc891b7543cc161ab637254c45d0411d2470a394dd274` | 984,248 | `cfdf4af6472f0c3501361df525a2c485c607c6baf23778b3380ab38cbecc7b8a` | 353 |
+  | `records.sr_legacy.json.gz` | 1,445,111 | `4f73b99807b71bf08e30677d7f1c185916f721e488168ee75e896d1086b7c3fd` | 33,695,908 | `1aedba90770903fb60944f2d9be5d92ff078bbfd464ce427c2c1e21a1ef6388a` | 7,775 |
+  | `records.fndds.json.gz` | 972,897 | `4e6f7e2a7c5a438638344fd8fa23508d61a9183608e46c7bdbf05cd55f2c461b` | 25,024,331 | `47002c269078cd69106bd805a5486312243c9b46cad855fe5d7a67d81b7a1bdc` | 5,431 |
 
-* totals: compressed `2,491,792`; uncompressed `59,678,264`;
+* totals: compressed `2,472,196`; uncompressed `59,704,487`;
 * exact warning codes/counts (`foundation_null_placeholder: 32`,
   `rejected_invalid_nutrient: 10`, `rejected_invalid_portion: 18`,
   `rejected_no_supported_nutrients: 1`);
@@ -2048,7 +2057,7 @@ and the composer's signature accepts only the raw byte inputs.
    record count, and unique positive FDC identity.
 7. Require the exact total count of 13,559 canonical records.
 8. Recompute and compare the canonical-content digest
-   `dd9740bcf0efb577f0afd5b87ddb70a652384e4d7833947e83b30da8b39f67e4`.
+   `de639e0cc2a2b0455577e0ad055e8691c73ef7dc395bfb57e76a224e050fa739`.
 9. Cross-check artifact, manifest, shard, record, component, count, byte, digest,
    generator, timestamp, version, warning, and attribution identities against one
    another and the independent lock.
@@ -2098,8 +2107,8 @@ authenticated by the unchanged composer against the source-controlled release
 lock, so a wrong or substituted asset fails closed.
 
 Measured build output: the five original files are emitted as five distinct
-static assets; the original compressed USDA payload totals **2,491,792 bytes**
-and the full authenticated uncompressed data is **59,678,264 bytes**. No shard
+static assets; the original compressed USDA payload totals **2,472,196 bytes**
+and the full authenticated uncompressed data is **59,704,487 bytes**. No shard
 payload or long base64 representation exists in the eager main JavaScript or in
 any lazy JavaScript chunk — the client JavaScript carries only the fixed
 generated asset URLs. No raw USDA archive (`.zip`) or extracted upstream JSON is
@@ -4987,7 +4996,7 @@ while matching, AI, nutrients, and persistence semantics remain unchanged.
 
 Every record is derived EXCLUSIVELY from declared portions of the already pinned
 USDA FoodData Central bundle
-`usda_fdc_87c5408a3e98838944a87be74824761e` (source-locked in
+`usda_fdc_1f3e3068a7ae0702f360d1caae40a628` (source-locked in
 `usda/releaseLock.ts`). The pinned canonical record and its declared portion are
 the numerical authority. Derivation rules (reviewed, v1):
 
@@ -5025,11 +5034,11 @@ web tables, AI values, and guessed grams are NOT present.
 `src/core/nutritionV2/household/initialLock.ts` is a separate, source-controlled
 lock that pins the schema version, registry release, exact record count (31),
 the complete expected registry digest
-`6ad593ef558ca9325197549f005da5b1eee822211f2ec6b5290f5c58fedc4ac4`, the complete
+`096d10d1c79d1a2e8a1880c46e1daac800e0636299070ca45fa549bebbb7ac27`, the complete
 provenance/equivalence digest
-`adba614327f9cb078ffd35d6abade50b25de180b43f4b373eea6ab8825694b31`, and the
+`1f8db8ea18de0203ab44df400aec4058303395303ab95a433b70be8778cdf088`, and the
 aggregate release digest
-`f8fed2230ac210c8dc2548f3a300134091c3a490ac6eb68add2766ac9b85b256` that
+`062fcbf8ab724e73b7b73069a8fce9712b1bbbf9b68d00cb86dc926afa0a7d2e` that
 cryptographically commits to both. The verified loader recomputes every digest
 from the data and fails closed unless all match. Because the lock is deliberately
 kept in a separate module from `initialData.ts`, editing, adding, removing, or
@@ -12693,7 +12702,7 @@ Through the real production loader (`loadProductionAdvancedNutritionSession`),
 a real browser fetched all five pinned artifacts same-origin
 (`artifact`, `manifest`, `records.foundation`, `records.sr_legacy`,
 `records.fndds`) and completed byte authentication against the pinned release
-lock `usda_fdc_87c5408a3e98838944a87be74824761e` (13,559 canonical records).
+lock `usda_fdc_1f3e3068a7ae0702f360d1caae40a628` (13,559 canonical records).
 The session became usable and review rows rendered. No live USDA call occurred.
 
 ### Entitlement and readiness proof (AND, never OR)

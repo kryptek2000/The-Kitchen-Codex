@@ -32,13 +32,13 @@ export const HOUSEHOLD_INITIAL_REGISTRY_LOCK = Object.freeze({
   schema_version: HOUSEHOLD_PORTION_REGISTRY_SCHEMA_VERSION,
   registry_release: HOUSEHOLD_INITIAL_REGISTRY_RELEASE,
   record_count: 31,
-  registry_digest: '6ad593ef558ca9325197549f005da5b1eee822211f2ec6b5290f5c58fedc4ac4',
+  registry_digest: '096d10d1c79d1a2e8a1880c46e1daac800e0636299070ca45fa549bebbb7ac27',
 });
 
 /** Fixed provenance/equivalence digest for the reviewed dataset. */
 export const HOUSEHOLD_INITIAL_PROVENANCE_DIGEST =
-  'adba614327f9cb078ffd35d6abade50b25de180b43f4b373eea6ab8825694b31';
+  '1f8db8ea18de0203ab44df400aec4058303395303ab95a433b70be8778cdf088';
 
 /** Fixed aggregate release digest committing to the registry + provenance digests. */
 export const HOUSEHOLD_INITIAL_AGGREGATE_RELEASE_DIGEST =
-  'f8fed2230ac210c8dc2548f3a300134091c3a490ac6eb68add2766ac9b85b256';
+  '062fcbf8ab724e73b7b73069a8fce9712b1bbbf9b68d00cb86dc926afa0a7d2e';
