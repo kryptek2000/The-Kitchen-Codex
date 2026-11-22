@@ -49,6 +49,45 @@ import { createAdvancedNutritionSession } from '../phase4/session';
 import type { AdvancedNutritionSession, Phase4SessionMetadata } from '../phase4/types';
 import { decodeBoundedGzip, decodeUtf8Strict, GzipDecodeError } from './gzip';
 
+/**
+ * Yield a real macrotask so first-Generate authentication cannot freeze the UI.
+ * `MessageChannel` is deliberately used instead of a timer: it is a structural
+ * event-loop yield with no wall-clock nondeterminism.
+ */
+const yieldChannel = typeof MessageChannel === 'function' ? new MessageChannel() : null;
+const yieldWaiters: Array<() => void> = [];
+if (yieldChannel !== null) {
+  yieldChannel.port1.onmessage = () => {
+    yieldWaiters.shift()?.();
+  };
+}
+function yieldToMainThread(): Promise<void> {
+  if (yieldChannel === null) return Promise.resolve();
+  return new Promise((resolve) => {
+    yieldWaiters.push(resolve);
+    yieldChannel.port2.postMessage(null);
+  });
+}
+
+/**
+ * Native SHA-256 when the runtime exposes WebCrypto, with the existing pure
+ * implementation as a portable fallback. The digest and all comparisons are
+ * unchanged; only the computation moves off the synchronous JS call stack when
+ * the platform supports it.
+ */
+async function sha256HexBytesAsync(bytes: Uint8Array): Promise<string> {
+  const subtle = typeof crypto !== 'undefined' ? crypto.subtle : undefined;
+  if (subtle !== undefined) {
+    try {
+      const digest = await subtle.digest('SHA-256', bytes as unknown as BufferSource);
+      return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+    } catch {
+      // Fall through to the verified pure implementation.
+    }
+  }
+  return sha256HexFromBytes(bytes);
+}
+
 // ---------------------------------------------------------------------------
 // Closed contract
 // ---------------------------------------------------------------------------
@@ -518,16 +557,16 @@ type DecodedShardValidation =
  * FDC identity. Returns a closed union; never throws on bad content. It is NOT
  * exported and is reachable only through the locked composer.
  */
-function validateDecodedShard(
+async function validateDecodedShard(
   uncompressed: Uint8Array,
   expected: RuntimeShardExpectation
-): DecodedShardValidation {
+): Promise<DecodedShardValidation> {
   try {
     if (!(uncompressed instanceof Uint8Array)) return { ok: false, code: 'shard_bytes_mismatch' };
     if (uncompressed.length !== expected.uncompressed_bytes) {
       return { ok: false, code: 'shard_bytes_mismatch' };
     }
-    if (sha256HexFromBytes(uncompressed) !== expected.uncompressed_sha256) {
+    if ((await sha256HexBytesAsync(uncompressed)) !== expected.uncompressed_sha256) {
       return { ok: false, code: 'shard_digest_mismatch' };
     }
     const text = decodeUtf8Strict(uncompressed);
@@ -539,12 +578,28 @@ function validateDecodedShard(
       return { ok: false, code: 'shard_json_invalid' };
     }
     if (!Array.isArray(parsed)) return { ok: false, code: 'shard_not_array' };
-    if (canonicalStringify(parsed) !== text.text) return { ok: false, code: 'shard_not_canonical' };
     if (parsed.length !== expected.record_count) return { ok: false, code: 'count_mismatch' };
+    if (text.text.length < 2 || text.text[0] !== '[') return { ok: false, code: 'shard_not_canonical' };
 
+    // Canonicality is checked ONE record at a time and the loop yields so the
+    // 60 MB locked bundle cannot monopolize the renderer. The exact same
+    // canonical serialization is compared; only large-string allocation and the
+    // single 20-second task are removed.
     const records: CanonicalUsdaFoodRecord[] = [];
     const seen = new Set<number>();
-    for (const rawRecord of parsed) {
+    let cursor = 1;
+    for (let index = 0; index < parsed.length; index += 1) {
+      const rawRecord = parsed[index];
+      const canonical = canonicalStringify(rawRecord);
+      if (text.text.slice(cursor, cursor + canonical.length) !== canonical) {
+        return { ok: false, code: 'shard_not_canonical' };
+      }
+      cursor += canonical.length;
+      if (index < parsed.length - 1) {
+        if (text.text[cursor] !== ',') return { ok: false, code: 'shard_not_canonical' };
+        cursor += 1;
+      }
+
       const validation = validateCanonicalRecord(rawRecord);
       if (!validation.ok) return { ok: false, code: 'invalid_canonical_record' };
       const record = validation.record;
@@ -563,6 +618,10 @@ function validateDecodedShard(
       if (seen.has(record.fdc_id)) return { ok: false, code: 'duplicate_fdc_id' };
       seen.add(record.fdc_id);
       records.push(record);
+      if ((index & 127) === 127) await yieldToMainThread();
+    }
+    if (text.text[cursor] !== ']' || cursor + 1 !== text.text.length) {
+      return { ok: false, code: 'shard_not_canonical' };
     }
     return { ok: true, records };
   } catch {
@@ -597,7 +656,7 @@ async function compose(inputs: unknown): Promise<RuntimeBundleResult> {
   // --- artifact.json -------------------------------------------------------
   const artifactBytes = files.get(lock.artifact.filename) as Uint8Array;
   if (artifactBytes.length !== lock.artifact.bytes) fail('artifact_bytes_mismatch');
-  if (sha256HexFromBytes(artifactBytes) !== lock.artifact.sha256) fail('artifact_digest_mismatch');
+  if ((await sha256HexBytesAsync(artifactBytes)) !== lock.artifact.sha256) fail('artifact_digest_mismatch');
   const artifactText = decodeUtf8Strict(artifactBytes);
   if (!artifactText.ok) fail('artifact_utf8_invalid');
   const artifactRaw = parseJsonOrFail(artifactText.text, 'artifact_json_invalid');
@@ -608,7 +667,7 @@ async function compose(inputs: unknown): Promise<RuntimeBundleResult> {
   // --- manifest.json -------------------------------------------------------
   const manifestBytes = files.get(lock.manifest.filename) as Uint8Array;
   if (manifestBytes.length !== lock.manifest.bytes) fail('manifest_bytes_mismatch');
-  if (sha256HexFromBytes(manifestBytes) !== lock.manifest.sha256) fail('manifest_digest_mismatch');
+  if ((await sha256HexBytesAsync(manifestBytes)) !== lock.manifest.sha256) fail('manifest_digest_mismatch');
   if (manifestBytes.length > MAX_MANIFEST_BYTES) fail('invalid_manifest');
   const manifestText = decodeUtf8Strict(manifestBytes);
   if (!manifestText.ok) fail('manifest_utf8_invalid');
@@ -634,7 +693,7 @@ async function compose(inputs: unknown): Promise<RuntimeBundleResult> {
     const compressed = files.get(locked.filename);
     if (!compressed) fail('missing_input');
     if (compressed.length !== locked.compressed_bytes) fail('shard_bytes_mismatch');
-    if (sha256HexFromBytes(compressed) !== locked.compressed_sha256) fail('shard_digest_mismatch');
+    if ((await sha256HexBytesAsync(compressed)) !== locked.compressed_sha256) fail('shard_digest_mismatch');
     if (locked.compressed_bytes > LIMIT_COMPRESSED_SHARD_BYTES) fail('shard_too_large');
     if (locked.uncompressed_bytes > LIMIT_UNCOMPRESSED_SHARD_BYTES) fail('shard_too_large');
     if (
@@ -659,7 +718,7 @@ async function compose(inputs: unknown): Promise<RuntimeBundleResult> {
     const source = sourceByType.get(locked.data_type);
     if (!source) fail('cross_check_failed');
 
-    const shardValidation = validateDecodedShard(decodedBytes, {
+    const shardValidation = await validateDecodedShard(decodedBytes, {
       data_type: locked.data_type as UsdaDataType,
       upstream_release: source.upstream_release,
       bundle_release: lock.bundle_release,
@@ -685,6 +744,7 @@ async function compose(inputs: unknown): Promise<RuntimeBundleResult> {
     totalUncompressed += decodedBytes.length;
     // Release compressed bytes as soon as the shard is verified and decoded.
     files.delete(locked.filename);
+    await yieldToMainThread();
   }
 
   if (allRecords.length !== lock.canonical_record_count) fail('count_mismatch');
@@ -697,6 +757,7 @@ async function compose(inputs: unknown): Promise<RuntimeBundleResult> {
   const contentDigest = computeCanonicalContentDigest(allRecords);
   if (contentDigest !== lock.canonical_content_digest) fail('content_digest_mismatch');
   if (contentDigest !== manifest.canonical_content_digest) fail('content_digest_mismatch');
+  await yieldToMainThread();
 
   // --- genuine Phase 4 session (only after full authentication) ------------
   const sessionResult = createAdvancedNutritionSession(manifest, allRecords);

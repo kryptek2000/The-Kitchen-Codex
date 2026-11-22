@@ -170,12 +170,14 @@ export interface NutritionProductAccess {
 /**
  * BASIC NUTRITION: free/basic product access with ZERO AI entitlement.
  *
- * Note what is intentionally ABSENT: deterministic USDA analysis, deterministic
- * matching, manual food correction, manual total-weight entry, authenticated
- * source/count/household portions, deterministic calculation, provenance, Review
- * and Apply are all Basic products and are NOT modelled as paid capabilities. They
- * are not fields of this value, because this value describes only AI entitlement.
- * Their availability is a permanent product invariant, not an entitlement.
+ * Basic includes deterministic USDA generation, matching, supported quantities,
+ * calculation, provenance, honest partial/unknown disclosure, and the normal
+ * Nutrition & Macros card. It does NOT include opening the Advanced review
+ * workspace or changing USDA matches, source portions, weights, or advanced
+ * applied results; that manual advanced editing entitlement is derived from the
+ * closed tier by `isAdvancedNutritionEditingEntitled` below. The AI feature
+ * booleans remain separate fields because this value distinguishes AI ownership
+ * from deterministic Basic value.
  */
 export const BASIC_NUTRITION_PRODUCT_ACCESS: NutritionProductAccess = Object.freeze({
   version: NUTRITION_PRODUCT_ACCESS_VERSION,
@@ -190,8 +192,8 @@ export const BASIC_NUTRITION_PRODUCT_ACCESS: NutritionProductAccess = Object.fre
  * AI ADVANCED NUTRITION: the paid/product-entitled AI interpretation layer over
  * the deterministic foundation.
  *
- * It does NOT replace deterministic USDA authority, does NOT remove manual
- * editing, and does NOT itself grant nutrition authority.
+ * It includes manual Advanced review/editing entitlement, does NOT replace
+ * deterministic USDA authority, and does NOT itself grant nutrition authority.
  */
 export const AI_ADVANCED_NUTRITION_PRODUCT_ACCESS: NutritionProductAccess = Object.freeze({
   version: NUTRITION_PRODUCT_ACCESS_VERSION,
@@ -262,6 +264,22 @@ export function isAiAdvancedProductAccess(access: unknown): boolean {
 /** True only for the canonical Basic product-access value. */
 export function isBasicProductAccess(access: unknown): boolean {
   return access === BASIC_NUTRITION_PRODUCT_ACCESS;
+}
+
+/**
+ * The MANUAL ADVANCED EDITING entitlement.
+ *
+ * Basic Nutrition remains a permanent free feature: deterministic generation,
+ * viewing, partial/unknown disclosure, and the normal Nutrition & Macros card.
+ * Opening the Advanced review workspace, changing USDA matches, editing source
+ * portions/weights, and applying an Advanced review are paid Advanced product
+ * operations. They are derived from the SAME closed tier, never from provider
+ * readiness or credential presence.
+ *
+ * Non-canonical access values fail closed.
+ */
+export function isAdvancedNutritionEditingEntitled(access: unknown): boolean {
+  return isAiAdvancedProductAccess(access);
 }
 
 /**

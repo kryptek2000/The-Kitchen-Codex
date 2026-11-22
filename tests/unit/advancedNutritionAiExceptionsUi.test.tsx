@@ -142,6 +142,15 @@ async function openAndAnalyze(): Promise<void> {
   await waitFor(() => expect(screen.getByTestId('advanced-nutrition-live-summary')).toBeTruthy());
 }
 
+/** Explicitly run the one AI-first workflow after the deterministic baseline. */
+async function analyzeWithShiso(): Promise<void> {
+  const button = (await screen.findByTestId(
+    'advanced-nutrition-analyze-with-shiso'
+  )) as HTMLButtonElement;
+  await waitFor(() => expect(button.disabled).toBe(false));
+  fireEvent.click(button);
+}
+
 function summaryText(): string {
   return screen.getByTestId('advanced-nutrition-live-summary').textContent ?? '';
 }
@@ -240,10 +249,8 @@ describe('unified AI exception eligibility — UI', () => {
     const handler = vi.fn(async () => ({ ok: true, outcome: EMPTY_FOOD, amounts: EMPTY_AMOUNTS }));
     render(<AdvancedNutritionCard recipe={recipe('3 garlic cloves, minced')} session={session} onResolveWithAi={handler} />);
     await openAndAnalyze();
-    // Generate now performs the deterministic baseline AND one AI pass. Wait for
-    // that intentional automatic pass before isolating the explicit row action.
-    await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
-    handler.mockClear();
+    // Generate is deterministic only. No AI call has happened yet.
+    expect(handler).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId('advanced-nutrition-edit'));
     fireEvent.click(await screen.findByTestId('advanced-nutrition-ai-help'));
     await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
@@ -287,8 +294,8 @@ describe('AI-first needs_review — UI', () => {
         onResolveWithAiFirst={handler}
       />
     );
-    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
-    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await openAndAnalyze();
+    await analyzeWithShiso();
     await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
     fireEvent.click(await screen.findByTestId('advanced-nutrition-edit'));
 
@@ -327,8 +334,8 @@ describe('AI-first needs_review — UI', () => {
         onResolveWithAiFirst={handler}
       />
     );
-    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
-    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await openAndAnalyze();
+    await analyzeWithShiso();
     await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
     const oldLineRef = (handler.mock.calls[0] as unknown as [{ rows: ReadonlyArray<Phase4Row> }])[0].rows[0].line_ref;
 
@@ -425,9 +432,12 @@ describe('AI-first needs_review — UI', () => {
         onResearchNutritionWithAi={research}
       />
     );
-    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
-    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await openAndAnalyze();
+    await analyzeWithShiso();
     await waitFor(() => expect(aiFirst).toHaveBeenCalledTimes(1));
+    fireEvent.click(
+      await screen.findByTestId(`advanced-nutrition-ai-research-target-${lineRef}`)
+    );
     fireEvent.click(await screen.findByTestId('advanced-nutrition-ai-research'));
     await waitFor(() => expect(research).toHaveBeenCalledTimes(1));
     expect((research.mock.calls[0] as unknown as [{ targets: ReadonlyArray<{ line_ref: string; ambiguity: string }> }])[0].targets[0]).toMatchObject({
@@ -462,9 +472,9 @@ describe('AI-first needs_review — UI', () => {
         onResearchNutritionWithAi={research}
       />
     );
-    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
-    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
-    await waitFor(() => expect(legacy).toHaveBeenCalledTimes(1));
+    await openAndAnalyze();
+    expect(legacy).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('checkbox', { name: /1 cup Zzz/i }));
     fireEvent.click(await screen.findByTestId('advanced-nutrition-ai-research'));
     await waitFor(() => expect(research).toHaveBeenCalledTimes(1));
     expect((await screen.findByTestId('advanced-nutrition-ai-research-message')).textContent).toContain(
@@ -503,8 +513,8 @@ describe('AI-first needs_review — UI', () => {
         onApplyAdvancedNutrition={applyHandler}
       />
     );
-    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
-    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await openAndAnalyze();
+    await analyzeWithShiso();
     await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
     fireEvent.click(await screen.findByRole('button', { name: /^Apply to recipe$/i }));
     fireEvent.click(await screen.findByRole('button', { name: /^Confirm Apply$/i }));
@@ -737,10 +747,9 @@ describe('AI amount offers and post-result feedback — UI', () => {
     const handler = vi.fn(async () => ({ ok: true, outcome: EMPTY_FOOD, amounts: EMPTY_AMOUNTS }));
     render(<AdvancedNutritionCard recipe={recipe('3 garlic cloves, minced')} session={session} onResolveWithAi={handler} />);
     await openAndAnalyze();
-    // Consume the one intentional Generate-triggered AI pass first; the guard
-    // under test is the explicit control's synchronous re-entry guard.
-    await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
-    handler.mockClear();
+    // Generate is deterministic only; this test isolates the explicit control's
+    // synchronous re-entry guard.
+    expect(handler).not.toHaveBeenCalled();
     const button = screen.getByTestId('advanced-nutrition-ai-resolve');
     fireEvent.click(button);
     fireEvent.click(button);
@@ -853,16 +862,48 @@ describe('recipe-bound AI lifecycle — needs_amount', () => {
   });
 });
 
-describe('Generate — deterministic baseline then ONE AI interpretation pass', () => {
+describe('Generate — deterministic first, AI only on explicit SHISO action', () => {
   const AVAILABLE = {
     available: true,
     reason: null,
     refreshing: false,
     canRetry: false,
+    advancedEditingAccess: 'entitled',
   } as const;
 
-  it('automatically invokes the existing whole-recipe AI port after the deterministic baseline leaves an exception', async () => {
-    const handler = vi.fn(async (_args: {
+  it('Generate performs the deterministic baseline with ZERO AI provider calls', async () => {
+    const legacy = vi.fn(async () => ({
+      ok: true,
+      outcome: EMPTY_FOOD,
+      amounts: EMPTY_AMOUNTS,
+    }));
+    const aiFirst = vi.fn(async () => ({
+      ok: true,
+      outcome: EMPTY_FOOD,
+      amounts: EMPTY_AMOUNTS,
+    }));
+    render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup berries')}
+        session={session}
+        onResolveWithAi={legacy}
+        onResolveWithAiFirst={aiFirst}
+        advancedNutritionAiAvailability={AVAILABLE}
+      />
+    );
+    await openAndAnalyze();
+    expect(summaryText()).toMatch(/1 source review|0 source-backed/);
+    expect(legacy).not.toHaveBeenCalled();
+    expect(aiFirst).not.toHaveBeenCalled();
+  });
+
+  it('invokes the genuine AI-first whole-recipe port only after Analyze with SHISO', async () => {
+    const legacy = vi.fn(async () => ({
+      ok: true,
+      outcome: EMPTY_FOOD,
+      amounts: EMPTY_AMOUNTS,
+    }));
+    const aiFirst = vi.fn(async (_args: {
       readonly rows: ReadonlyArray<Phase4Row>;
       readonly adapted: ReadonlyArray<AdaptedIngredient>;
       readonly issueKinds: Record<string, string>;
@@ -877,29 +918,27 @@ describe('Generate — deterministic baseline then ONE AI interpretation pass', 
       <AdvancedNutritionCard
         recipe={recipe('1 cup berries')}
         session={session}
-        onResolveWithAi={handler}
+        onResolveWithAi={legacy}
+        onResolveWithAiFirst={aiFirst}
         advancedNutritionAiAvailability={AVAILABLE}
       />
     );
-    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
-    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
-    // The user performed ONE explicit action. The deterministic baseline runs
-    // first, then the SAME AI port the manual button uses receives the
-    // remaining actionable rows for whole-recipe interpretation.
-    await waitFor(() => expect(handler).toHaveBeenCalledTimes(1), { timeout: 5000 });
-    const args = handler.mock.calls[0][0] as {
+    await openAndAnalyze();
+    expect(aiFirst).not.toHaveBeenCalled();
+    await analyzeWithShiso();
+    await waitFor(() => expect(aiFirst).toHaveBeenCalledTimes(1));
+    const args = aiFirst.mock.calls[0][0] as {
       rows: ReadonlyArray<Phase4Row>;
       adapted: ReadonlyArray<AdaptedIngredient>;
       issueKinds: Record<string, string>;
+      recipe?: ObsidianRecipe;
+      orchestration?: string;
     };
     expect(args.rows).toHaveLength(1);
     expect(args.rows[0].original_text).toBe('1 cup berries');
     expect(args.issueKinds[args.rows[0].line_ref]).toBe('review_suggested');
-    // The authored recipe is forwarded so the existing shell callback can build
-    // the WHOLE-recipe semantic request (ingredients + instructions + targets).
-    expect((args as unknown as { recipe?: { ingredients?: unknown } }).recipe).toBeDefined();
-    // Only this Generate-triggered pass carries the bounded orchestration mode.
-    expect((args as unknown as { orchestration?: string }).orchestration).toBe('generate');
+    expect(args.recipe).toBeDefined();
+    expect(args.orchestration).toBe('generate');
   });
 
   it('does not ask AI when the deterministic baseline already resolved every line', async () => {
@@ -913,19 +952,41 @@ describe('Generate — deterministic baseline then ONE AI interpretation pass', 
         recipe={recipe('1 cup Mystery, raw')}
         session={session}
         onResolveWithAi={handler}
+        onResolveWithAiFirst={handler}
         advancedNutritionAiAvailability={AVAILABLE}
       />
     );
-    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
-    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
-    await waitFor(() => expect(screen.getByTestId('advanced-nutrition-live-summary')).toBeTruthy());
+    await openAndAnalyze();
     expect(summaryText()).toMatch(/1 source-backed/);
     expect(summaryText()).toMatch(/0 need attention/);
+    await analyzeWithShiso();
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(handler).not.toHaveBeenCalled();
+    expect(screen.getByTestId('advanced-nutrition-generate-ai-status').textContent).toMatch(
+      /resolved every ingredient|No AI interpretation was needed/i
+    );
   });
 
-  it('never calls a provider when the composed availability is Basic/unavailable', async () => {
+  it('resolves the server-owned product tier once while access is unknown', () => {
+    const resolve = vi.fn();
+    render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup berries')}
+        session={session}
+        advancedNutritionAiAvailability={{
+          available: false,
+          reason: 'Checking AI availability…',
+          refreshing: false,
+          canRetry: false,
+          advancedEditingAccess: 'unknown',
+          onResolveAccess: resolve,
+        }}
+      />
+    );
+    expect(resolve).toHaveBeenCalledTimes(1);
+  });
+
+  it('Basic product access cannot mount the Advanced editing workspace', async () => {
     const handler = vi.fn(async () => ({
       ok: true,
       outcome: EMPTY_FOOD,
@@ -936,40 +997,31 @@ describe('Generate — deterministic baseline then ONE AI interpretation pass', 
         recipe={recipe('1 cup berries')}
         session={session}
         onResolveWithAi={handler}
+        onResolveWithAiFirst={handler}
         advancedNutritionAiAvailability={{
           available: false,
-          reason: 'AI Advanced Nutrition is not available.',
+          reason: 'AI Advanced Nutrition is not enabled for this deployment.',
           refreshing: false,
           canRetry: false,
+          advancedEditingAccess: 'basic',
         }}
       />
     );
-    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
-    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
-    await waitFor(() => expect(screen.getByTestId('advanced-nutrition-live-summary')).toBeTruthy());
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(screen.getByTestId('advanced-nutrition-basic-locked').textContent).toMatch(
+      /Basic Nutrition remains available/i
+    );
+    expect(screen.queryByTestId('advanced-nutrition-open')).toBeNull();
     expect(handler).not.toHaveBeenCalled();
-    // Basic/manual deterministic review remains fully available.
-    expect(screen.getByTestId('advanced-nutrition-analyze')).toBeTruthy();
-    // The automatic Generate experience must explain why AI did not run.
-    const feedback = screen.getByTestId('advanced-nutrition-generate-ai-status');
-    expect(feedback.textContent).toMatch(/unavailable/i);
-    expect(feedback.textContent).toMatch(/Deterministic analysis is ready without AI|not available/i);
   });
 });
 
-describe('Generate — cold start, cancellation, and visible AI outcomes', () => {
+describe('Generate and explicit SHISO action — cold start, cancellation, feedback', () => {
   const AVAILABLE = {
     available: true,
     reason: null,
     refreshing: false,
     canRetry: false,
-  } as const;
-  const REFRESHING = {
-    available: false,
-    reason: null,
-    refreshing: true,
-    canRetry: true,
+    advancedEditingAccess: 'entitled',
   } as const;
 
   function emptyHandler() {
@@ -983,7 +1035,7 @@ describe('Generate — cold start, cancellation, and visible AI outcomes', () =>
     }));
   }
 
-  it('preserves ONE Generate AI intent across cold bundle initialization and fires no duplicate', async () => {
+  it('cold bundle initialization performs deterministic analysis with no AI, then one explicit SHISO call', async () => {
     const handler = emptyHandler();
     const load = vi.fn();
     const target = recipe('1 cup berries', 'cold-start');
@@ -998,28 +1050,32 @@ describe('Generate — cold start, cancellation, and visible AI outcomes', () =>
     fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
     expect(load).toHaveBeenCalledTimes(1);
 
-    // The bundle authenticates and the SAME component receives the session.
     first.rerender(
       <AdvancedNutritionCard
         recipe={target}
         session={session}
         onLoadBundle={load}
         onResolveWithAi={handler}
+        onResolveWithAiFirst={handler}
         advancedNutritionAiAvailability={AVAILABLE}
       />
     );
-    await waitFor(() => expect(handler).toHaveBeenCalledTimes(1), { timeout: 5000 });
+    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await waitFor(() => expect(screen.getByTestId('advanced-nutrition-live-summary')).toBeTruthy());
+    expect(handler).not.toHaveBeenCalled();
+
+    await analyzeWithShiso();
+    await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
     const call = handler.mock.calls[0][0] as { orchestration?: string };
     expect(call.orchestration).toBe('generate');
 
-    // Re-render and allow effects to settle: the consumed intent must not fire a
-    // second provider request.
     first.rerender(
       <AdvancedNutritionCard
         recipe={target}
         session={session}
         onLoadBundle={load}
         onResolveWithAi={handler}
+        onResolveWithAiFirst={handler}
         advancedNutritionAiAvailability={AVAILABLE}
       />
     );
@@ -1027,149 +1083,53 @@ describe('Generate — cold start, cancellation, and visible AI outcomes', () =>
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it('cancels the pending Generate AI intent when the user closes during availability refresh', async () => {
-    const handler = emptyHandler();
-    const first = render(
+  it('cancels an in-flight explicit SHISO analysis when the editor closes', async () => {
+    let resolveHandler!: (value: unknown) => void;
+    const handler = vi.fn(
+      (): Promise<any> =>
+        new Promise((resolve) => {
+          resolveHandler = resolve;
+        })
+    );
+    render(
       <AdvancedNutritionCard
-        recipe={recipe('1 cup berries', 'close-refresh')}
+        recipe={recipe('1 cup berries', 'close-explicit')}
         session={session}
         onResolveWithAi={handler}
-        advancedNutritionAiAvailability={REFRESHING}
+        onResolveWithAiFirst={handler}
+        advancedNutritionAiAvailability={AVAILABLE}
       />
     );
-    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
-    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
-    await waitFor(() => expect(screen.getByTestId('advanced-nutrition-live-summary')).toBeTruthy());
+    await openAndAnalyze();
+    await analyzeWithShiso();
+    await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByTestId('advanced-nutrition-close-without-saving'));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-
-    // Availability becomes ready only after the user has canceled.
-    first.rerender(
-      <AdvancedNutritionCard
-        recipe={recipe('1 cup berries', 'close-refresh')}
-        session={session}
-        onResolveWithAi={handler}
-        advancedNutritionAiAvailability={AVAILABLE}
-      />
-    );
-    await new Promise((resolve) => setTimeout(resolve, 80));
-    expect(handler).not.toHaveBeenCalled();
+    await act(async () => {
+      resolveHandler({
+        ok: true,
+        outcome: EMPTY_FOOD,
+        amounts: EMPTY_AMOUNTS,
+        aiFirstReviews: [
+          {
+            line_ref: 'stale',
+            decision: 'needs_review',
+            justification: 'Late result must be discarded.',
+            uncertainty: '',
+            candidate_count: 0,
+          },
+        ],
+      });
+      await Promise.resolve();
+    });
     expect(screen.queryByTestId('advanced-nutrition-generate-ai-status')).toBeNull();
-  });
-
-  it('waits for an in-flight availability refresh, then performs exactly one AI pass', async () => {
-    const handler = emptyHandler();
-    const target = recipe('1 cup berries', 'refresh-wait');
-    const first = render(
-      <AdvancedNutritionCard
-        recipe={target}
-        session={session}
-        onResolveWithAi={handler}
-        advancedNutritionAiAvailability={REFRESHING}
-      />
-    );
-    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
-    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
-    await waitFor(() => expect(screen.getByTestId('advanced-nutrition-live-summary')).toBeTruthy());
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(handler).not.toHaveBeenCalled();
-
-    first.rerender(
-      <AdvancedNutritionCard
-        recipe={target}
-        session={session}
-        onResolveWithAi={handler}
-        advancedNutritionAiAvailability={AVAILABLE}
-      />
-    );
-    await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
-    const feedback = await screen.findByTestId('advanced-nutrition-generate-ai-status');
-    await waitFor(() => expect(feedback.getAttribute('role')).toBe('status'));
-  });
-
-  it('cancels on recipe change before bundle initialization completes', async () => {
-    const handler = emptyHandler();
-    const load = vi.fn();
-    const first = render(
-      <AdvancedNutritionCard
-        recipe={recipe('1 cup berries', 'recipe-a')}
-        session={null}
-        onLoadBundle={load}
-        advancedNutritionAiAvailability={AVAILABLE}
-      />
-    );
-    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
-    expect(load).toHaveBeenCalledTimes(1);
-
-    // Recipe B replaces A while the bundle is still loading.
-    first.rerender(
-      <AdvancedNutritionCard
-        recipe={recipe('1 cup berries', 'recipe-b')}
-        session={session}
-        onLoadBundle={load}
-        onResolveWithAi={handler}
-        advancedNutritionAiAvailability={AVAILABLE}
-      />
-    );
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(handler).not.toHaveBeenCalled();
-  });
-
-  it('cancels on unmount while the Generate intent is pending', async () => {
-    const handler = emptyHandler();
-    const load = vi.fn();
-    const first = render(
-      <AdvancedNutritionCard
-        recipe={recipe('1 cup berries', 'unmount')}
-        session={null}
-        onLoadBundle={load}
-        advancedNutritionAiAvailability={REFRESHING}
-      />
-    );
-    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
-    first.unmount();
-    await new Promise((resolve) => setTimeout(resolve, 80));
-    expect(handler).not.toHaveBeenCalled();
-  });
-
-  it('cancels when bundle initialization fails', async () => {
-    const handler = emptyHandler();
-    const target = recipe('1 cup berries', 'bundle-failure');
-    const first = render(
-      <AdvancedNutritionCard
-        recipe={target}
-        session={null}
-        onLoadBundle={vi.fn()}
-        advancedNutritionAiAvailability={AVAILABLE}
-      />
-    );
-    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
-    first.rerender(
-      <AdvancedNutritionCard
-        recipe={target}
-        session={null}
-        onLoadBundle={vi.fn()}
-        bundleStatus="failed"
-        advancedNutritionAiAvailability={AVAILABLE}
-      />
-    );
-    first.rerender(
-      <AdvancedNutritionCard
-        recipe={target}
-        session={session}
-        bundleStatus="failed"
-        onResolveWithAi={handler}
-        advancedNutritionAiAvailability={AVAILABLE}
-      />
-    );
-    await new Promise((resolve) => setTimeout(resolve, 80));
-    expect(handler).not.toHaveBeenCalled();
+    expect(document.body.textContent).not.toContain('Late result must be discarded');
   });
 
   it.each([
     ['503 service failure', 'The selected AI could not complete nutrition interpretation.'],
     ['504 deadline failure', 'AI assistance failed or timed out. Deterministic partial nutrition remains available.'],
-  ])('shows visible, accessible failure feedback for a %s with no retry', async (_label, failureMessage) => {
+  ])('shows visible failure feedback for an explicit %s with no retry', async (_label, failureMessage) => {
     const handler = vi.fn(async () => ({
       ok: false,
       message: failureMessage,
@@ -1181,23 +1141,24 @@ describe('Generate — cold start, cancellation, and visible AI outcomes', () =>
         recipe={recipe('1 cup berries', 'failure')}
         session={session}
         onResolveWithAi={handler}
+        onResolveWithAiFirst={handler}
         advancedNutritionAiAvailability={AVAILABLE}
       />
     );
-    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
-    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await openAndAnalyze();
+    expect(handler).not.toHaveBeenCalled();
+    await analyzeWithShiso();
     await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
 
     const feedback = await screen.findByTestId('advanced-nutrition-generate-ai-status');
     expect(feedback.getAttribute('role')).toBe('alert');
     expect(feedback.textContent).toMatch(failureMessage);
-    expect(feedback.textContent).toMatch(/Deterministic partial nutrition remains available/i);
     await new Promise((resolve) => setTimeout(resolve, 80));
     expect(handler).toHaveBeenCalledTimes(1);
     expect(summaryText()).toMatch(/1 source review/);
   });
 
-  it('shows visible success/partial feedback without hiding unresolved uncertainty', async () => {
+  it('shows visible partial success feedback without hiding unresolved uncertainty', async () => {
     const handler = vi.fn(async (args: { rows: ReadonlyArray<Phase4Row> }) => ({
       ok: true,
       interpretedCount: 1,
@@ -1216,11 +1177,12 @@ describe('Generate — cold start, cancellation, and visible AI outcomes', () =>
         recipe={recipe('1 cup berries', 'partial-success')}
         session={session}
         onResolveWithAi={handler}
+        onResolveWithAiFirst={handler}
         advancedNutritionAiAvailability={AVAILABLE}
       />
     );
-    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
-    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await openAndAnalyze();
+    await analyzeWithShiso();
     const feedback = await screen.findByTestId('advanced-nutrition-generate-ai-status');
     await waitFor(() => expect(feedback.getAttribute('role')).toBe('status'));
     expect(feedback.textContent).toMatch(/some lines still need review|complete/i);
@@ -1229,7 +1191,13 @@ describe('Generate — cold start, cancellation, and visible AI outcomes', () =>
 });
 
 describe('AN-SEM-1 — semantic outcome classification in Generate feedback', () => {
-  const AVAILABLE = { available: true, reason: null, refreshing: false, canRetry: false } as const;
+  const AVAILABLE = {
+    available: true,
+    reason: null,
+    refreshing: false,
+    canRetry: false,
+    advancedEditingAccess: 'entitled',
+  } as const;
 
   function diagnosticHandler(diagnostics: {
     withheld?: ReadonlyArray<{ line_ref: string; reason: 'ambiguous' | 'alternatives' }>;
@@ -1287,11 +1255,13 @@ describe('AN-SEM-1 — semantic outcome classification in Generate feedback', ()
         recipe={recipe('1 cup berries', id)}
         session={session}
         onResolveWithAi={handler}
+        onResolveWithAiFirst={handler}
         advancedNutritionAiAvailability={AVAILABLE}
       />
     );
-    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
-    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await openAndAnalyze();
+    expect(handler).not.toHaveBeenCalled();
+    await analyzeWithShiso();
     await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
     return screen.findByTestId('advanced-nutrition-generate-ai-status');
   }

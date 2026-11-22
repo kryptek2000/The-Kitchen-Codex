@@ -204,4 +204,47 @@ describe('nutrition production UI integration',()=>{
   expect(screen.getByText('Calories · subtotal')).toBeTruthy();
   expect(screen.getByText(/^0$/)).toBeTruthy();
  },30000);
+
+ it('owner Gochujang fixture: sparse energy is not the calorie hero and coverage stays distinct',async()=>{
+  const ownerLines=[
+   '680 g raw boneless skinless chicken thighs',
+   '1 tbsp olive oil',
+   '1 medium yellow onion (150 g)',
+   '3 garlic cloves',
+   '1 tbsp minced fresh ginger',
+   '1 red bell pepper (150 g)',
+   '1 medium carrot (70 g)',
+   '100 g broccoli florets',
+   '100 g sugar snap peas',
+   '100 g cremini mushrooms',
+   '2 tbsp gochujang (Korean chili paste)',
+   '2 tbsp reduced-sodium soy sauce',
+   '1 tbsp rice vinegar',
+   '1 tbsp honey',
+   '1 tsp toasted sesame oil',
+   '200 g dry jasmine rice',
+   '1 tbsp sesame seeds',
+   '2 scallions (30 g)',
+  ];
+  const owner=parseObsidianRecipeMarkdown(`---\ntitle: Gochujang Chicken Rice Bowls\nservings: 4\n---\n# Gochujang Chicken Rice Bowls\n## Ingredients\n${ownerLines.map(l=>'- '+l).join('\n')}\n## Instructions\n1. Cook.`,'owner.md','Recipes/owner.md');
+  render(<RecipeNutritionCard recipe={owner} network={network} onUpdateNutrition={vi.fn()} />);
+  fireEvent.click(screen.getByTestId('calculate-basic-nutrition-empty-btn'));
+  const review=await screen.findByTestId('basic-nutrition-review',{}, {timeout:30000});
+  // Energy covers fewer lines than the macros, so it is not displayed as the
+  // primary calorie total; the known energy subtotal stays visible as evidence.
+  expect(screen.getByTestId('basic-calorie-hero').textContent).toBe('—');
+  const incomplete=screen.getByTestId('basic-energy-incomplete').textContent ?? '';
+  expect(incomplete).toMatch(/Energy evidence covers 7 of 18 ingredient lines/i);
+  expect(incomplete).toMatch(/Known energy subtotal: 358 kcal/i);
+  expect(review.textContent).toContain('134.9g');
+  expect(review.textContent).toContain('73.3g');
+  expect(review.textContent).toContain('covers 9/18 lines');
+  expect(screen.getByTestId('basic-macro-distribution')).toBeTruthy();
+  expect(screen.queryByTestId('basic-macro-incompatible')).toBeNull();
+  // Empty assumptions must never render an empty bullet.
+  fireEvent.click(screen.getByText(/Portion assumptions \(1\)/));
+  const assumptionItems=Array.from(review.querySelectorAll('details ul li'));
+  expect(assumptionItems.length).toBeGreaterThan(0);
+  for(const item of assumptionItems) expect((item.textContent ?? '').trim().length).toBeGreaterThan(0);
+ },30000);
 });

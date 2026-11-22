@@ -39,6 +39,13 @@ export interface BasicNutritionCoverage {
   readonly complete: boolean;
 }
 
+/** Per-nutrient source coverage. Different nutrients can cover different lines. */
+export interface BasicNutritionNutrientCoverage {
+  readonly status: 'complete' | 'partial' | 'missing';
+  readonly covered: number;
+  readonly measurable: number;
+}
+
 export interface BasicNutritionEstimate {
   /** False when no defensible contribution could be calculated. */
   readonly ok: boolean;
@@ -54,6 +61,8 @@ export interface BasicNutritionEstimate {
   readonly perServing: BasicNutritionTotals;
   readonly knownSubtotal?: BasicNutritionTotals;
   readonly coverage: BasicNutritionCoverage;
+  /** Individual source coverage for each displayed nutrient. */
+  readonly nutrientCoverage: Readonly<Record<keyof BasicNutritionTotals, BasicNutritionNutrientCoverage>>;
   /** Distinct, bounded assumptions the numbers rely on. */
   readonly assumptions: readonly string[];
   readonly lines: readonly BasicNutritionLine[];

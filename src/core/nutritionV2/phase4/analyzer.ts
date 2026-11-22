@@ -255,7 +255,25 @@ export function analyzeRecipe(
   adapted: ReadonlyArray<AdaptedIngredient>,
   baseServings = 1
 ): RecipeAnalysis {
-  const rows = buildReviewRows(session, adapted);
+  return analyzeRecipeFromRows(
+    session,
+    adapted,
+    buildReviewRows(session, adapted),
+    baseServings
+  );
+}
+
+/**
+ * Analyzes the SAME genuine Phase 4 rows already built by the caller. This
+ * avoids repeating the expensive catalog review when the card already owns the
+ * review rows, while preserving the identical analysis contract.
+ */
+export function analyzeRecipeFromRows(
+  session: AdvancedNutritionSession,
+  adapted: ReadonlyArray<AdaptedIngredient>,
+  rows: ReadonlyArray<Phase4Row>,
+  baseServings = 1
+): RecipeAnalysis {
   const adaptedByRef = new Map(adapted.map((entry) => [entry.line_ref, entry]));
 
   const matches: Record<string, MatchChoice> = {};

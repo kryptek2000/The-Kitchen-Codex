@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, within } from '@testing-library/react';
 import { RecipeNutritionCard } from '../../src/components/RecipeNutritionCard';
 import { parseObsidianRecipeMarkdown } from '../../src/utils/markdownParser';
 import type { NetworkAdapter } from '../../src/application/adapters/NetworkAdapter';
@@ -10,7 +10,16 @@ vi.mock('../../src/browser/basicNutrition', () => ({ calculateProductionBasicNut
   ok: true, message: null, source: 'offline_heuristic', confidence: 'low', confidenceNote: 'PARTIAL test subtotal', baseServings: servings,
   totals: { calories: null, protein: null, carbohydrates: null, fat: null, fiber: null, sodium: null },
   knownSubtotal: { calories: 1182, protein: 30.5, carbohydrates: 150, fat: 40, fiber: null, sodium: 0 },
-  perServing: {}, coverage: { total: 12, resolved: 8, unresolved: 4, qualitative: 0, complete: false }, assumptions: [], lines: [],
+  perServing: {}, coverage: { total: 12, resolved: 8, unresolved: 4, qualitative: 0, complete: false },
+  nutrientCoverage: {
+    calories: { status: 'partial', covered: 6, measurable: 12 },
+    protein: { status: 'partial', covered: 8, measurable: 12 },
+    carbohydrates: { status: 'partial', covered: 8, measurable: 12 },
+    fat: { status: 'partial', covered: 7, measurable: 12 },
+    fiber: { status: 'missing', covered: 0, measurable: 12 },
+    sodium: { status: 'partial', covered: 4, measurable: 12 },
+  },
+  assumptions: [], lines: [],
 }) }));
 afterEach(cleanup);
 const recipe = (servings: number) => parseObsidianRecipeMarkdown(`---\ntitle: Cochinita\nservings: ${servings}\n---\n# Cochinita\n## Ingredients\n- 4 lb pork shoulder\n## Instructions\n1. Cook.`, 'cochinita.md', 'Recipes/cochinita.md');
@@ -25,6 +34,16 @@ describe('Basic subtotal serving labels', () => {
     expect(review.textContent).toContain('8/12 ingredient lines covered');
     expect(save).not.toHaveBeenCalled();
   });
+  it('withholds macro distribution when macro subtotals cover different lines', async () => {
+    render(<RecipeNutritionCard recipe={recipe(4)} onUpdateNutrition={vi.fn()} network={{} as NetworkAdapter} />);
+    fireEvent.click(screen.getAllByText('Calculate Basic Nutrition')[0]);
+    const review = await screen.findByTestId('basic-nutrition-review');
+    expect(screen.getByTestId('basic-macro-incompatible').textContent).toMatch(
+      /cover different ingredient lines/i,
+    );
+    expect(within(review).queryByTestId('basic-macro-distribution')).toBeNull();
+  });
+
   it('labels gram percentages as grams, not energy share', () => {
     const r = recipe(4); r.nutrition = { ...totals, fiber: undefined, servings: 4, protein: 10.7, carbohydrates: 51.6, fat: 66.8 };
     render(<RecipeNutritionCard recipe={r} onUpdateNutrition={() => {}} network={{} as NetworkAdapter} />);

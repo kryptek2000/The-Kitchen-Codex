@@ -525,6 +525,7 @@ describe('AI-5B — the AI-5A contract is consumed, not rewritten', () => {
       'NUTRITION_PRODUCT_ACCESS_VERSION',
       'NUTRITION_PRODUCT_AI_FEATURES',
       'NUTRITION_PRODUCT_TIERS',
+      'isAdvancedNutritionEditingEntitled',
       'isAiAdvancedProductAccess',
       'isBasicProductAccess',
       'isNutritionProductAccess',

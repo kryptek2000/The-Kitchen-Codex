@@ -627,7 +627,7 @@ async function runEntitledProof(origin: string, appPort: number, cdpPort: number
         extractionErrors,
         mentionsPartial: /partial|Some ingredient lines are unresolved/i.test(text),
         mentionsUnresolvedCount: /unresolved/i.test(text),
-        hasCalories: /Calories/i.test(text),
+        hasCalories: /Calories|Energy subtotal/i.test(text),
         hasCoverageSemantics: /coverage|covered|of \\d+ ingredients/i.test(text),
         advisoryOnlyCopy: /not saved unless you explicitly Apply|advisory/i.test(text),
       };
@@ -827,31 +827,60 @@ async function runBasicProof(origin: string, cdpPort: number): Promise<Phase8bOb
     await openAcceptanceRecipe(session);
     const access = await (await fetch(`${origin}/api/nutrition/product-access`)).json();
     check('server product-access authority reports the basic tier', access?.tier === BASIC_TIER, JSON.stringify(access));
-    await loadBundleAndReachReview(session);
-    await assertEntitlementSurface(session, 'product_not_enabled');
+    const locked = await session.evaluate(
+      `(() => { const e = document.querySelector('[data-testid=advanced-nutrition-basic-locked]'); return e ? e.innerText : ''; })()`
+    );
+    check('Basic tier locks the Advanced editing workspace', /not enabled/i.test(locked), locked);
+    const advancedEntry = await session.evaluate(`!!document.querySelector('[data-testid=advanced-nutrition-open]')`);
+    check('Basic tier exposes no Advanced editing entry', advancedEntry === false, String(advancedEntry));
+    const advancedAi = await session.evaluate(`!!document.querySelector('[data-testid=advanced-nutrition-ai]')`);
+    check('Basic tier exposes no Advanced AI panel', advancedAi === false, String(advancedAi));
     d.entitlement = {
       productAccessTier: access?.tier ?? null,
-      aiPanelRendered: true,
+      aiPanelRendered: false,
       expectedReason: 'product_not_enabled',
-      observedMessage: await session.evaluate(
-        `(() => { const e = document.querySelector('[data-testid=advanced-nutrition-ai-unavailable]'); return e ? e.innerText : ''; })()`
-      ),
+      observedMessage: locked,
       aiActionsDisabled: true,
     };
-    // Basic must still get the deterministic core, proving only AI is gated.
-    const summary = await readLiveSummary(session);
-    check('Basic tier still receives deterministic review and matching', summary.total === RECIPE_LEVEL_EXPECTATIONS.totalIngredientCount && summary.matched === RECIPE_LEVEL_EXPECTATIONS.matchedCount, JSON.stringify(summary));
-    d.review = summary;
-    await calculatePreview(session);
-    const determinism = await session.evaluate(`!!document.querySelector('[aria-label="Advisory nutrition preview"]')`);
-    check('Basic tier still receives deterministic calculation and Apply eligibility', determinism === true);
-    d.calculation = {
-      previewRendered: determinism === true,
-      nutrientTotalsPresent: determinism === true,
-      partialReportedTruthfully: true,
-      previewDigest: '',
-      applyEligible: true,
-    };
+
+    // Basic keeps its approved deterministic Nutrition & Macros surface while
+    // the Advanced workspace remains locked.
+    const basicClicked = await session.evaluate(`(() => {
+      const btn = Array.from(document.querySelectorAll('button')).find((b) => /Calculate Basic Nutrition/i.test((b.innerText || '').trim()));
+      if (!btn) return 'missing';
+      if (btn.disabled) return 'disabled';
+      btn.click();
+      return 'clicked';
+    })()`);
+    check('Basic Nutrition calculation control is enabled and clickable', basicClicked === 'clicked', String(basicClicked));
+    if (basicClicked === 'clicked') {
+      await session.waitFor(
+        `!!document.querySelector('[data-testid=basic-nutrition-review]')`,
+        120000,
+        'Basic Nutrition review'
+      );
+      const basic = await session.evaluate(`(() => {
+        const el = document.querySelector('[data-testid=basic-nutrition-review]');
+        const hero = document.querySelector('[data-testid=basic-calorie-hero]');
+        const partial = document.querySelector('[data-testid=basic-nutrition-partial]');
+        return {
+          text: el ? el.innerText : '',
+          hero: hero ? hero.innerText : '',
+          hasPartial: !!partial,
+        };
+      })()`);
+      check('Basic tier receives deterministic Basic Nutrition', /Basic Nutrition/i.test(basic.text) && /kcal|Calories|Energy/i.test(basic.text), basic.text.slice(0, 200));
+      check('Basic tier reports known/partial coverage truthfully', basic.hasPartial && /full recipe totals are unknown|Known subtotals|partial/i.test(basic.text), basic.text.slice(0, 240));
+      check('Basic tier stays out of the Advanced Apply flow', (await session.evaluate(`!!document.querySelector('[aria-label="Apply advanced nutrition"]')`)) === false);
+      d.review = null;
+      d.calculation = {
+        previewRendered: true,
+        nutrientTotalsPresent: /kcal|Calories|Energy/i.test(basic.text),
+        partialReportedTruthfully: basic.hasPartial,
+        previewDigest: '',
+        applyEligible: false,
+      };
+    }
     assertNetworkIsolation(session, BASIC_TIER);
     d.runtime = {
       consoleErrors: session.consoleErrors.length,

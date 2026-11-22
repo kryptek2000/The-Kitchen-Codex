@@ -1412,6 +1412,8 @@ const STATE_CONTRADICTION_PAIRS: ReadonlyArray<
   Object.freeze([new Set(['raw', 'uncooked']), new Set(['cooked'])] as const),
   // Fresh <> dried (equivalence covers powdered/dry).
   Object.freeze([new Set(['fresh']), new Set(['dried'])] as const),
+  // Fresh <> ground (dried ground spices are not fresh produce).
+  Object.freeze([new Set(['fresh']), new Set(['ground'])] as const),
   // Fresh <> frozen.
   Object.freeze([new Set(['fresh']), new Set(['frozen'])] as const),
   // Canned <> raw/fresh.

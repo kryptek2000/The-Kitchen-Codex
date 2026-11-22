@@ -121,6 +121,11 @@ function presentationFor(reason: NutritionAiAvailabilityReason) {
   return {
     available: state.available,
     reason: nutritionAiUnavailableMessage(state.availability),
+    advancedEditingAccess: state.productAccessIsAiAdvanced
+      ? ('entitled' as const)
+      : state.productAccessIsBasic
+        ? ('basic' as const)
+        : ('unknown' as const),
   };
 }
 
@@ -145,32 +150,51 @@ function unusedPort() {
 
 afterEach(() => cleanup());
 
-describe('AI-5C UI — the deterministic foundation is never gated', () => {
-  it.each([
-    ['product_not_enabled'],
-    ['provider_unavailable'],
-    ['product_access_unverified'],
-  ] as const)('%s keeps deterministic/manual Advanced Nutrition usable', async (reason) => {
+describe('AI-5C UI — product entitlement gates Advanced editing, provider readiness does not', () => {
+  it('provider_unavailable keeps entitled deterministic/manual Advanced Nutrition usable', async () => {
     render(
       <AdvancedNutritionCard
         recipe={recipe()}
         session={genuineSession()}
         onResolveWithAi={unusedPort()}
-        advancedNutritionAiAvailability={presentationFor(reason)}
+        advancedNutritionAiAvailability={presentationFor('provider_unavailable')}
       />,
     );
     await openEditor();
-    // The manual analysis path — the Basic product — is present in every state.
-    const analyzer = screen.getByRole('button', { name: /Analyze/i });
+    const analyzer = screen.getByRole('button', { name: /Recalculate without AI/i });
     expect(analyzer).toBeTruthy();
     expect((analyzer as HTMLButtonElement).disabled).toBe(false);
-    // The dialog itself is fully rendered: AI-5C never locks the card or modal.
-    expect(screen.getByRole('dialog', { name: 'Advanced Nutrition' })).toBeTruthy();
+    expect(screen.getByTestId('advanced-nutrition-analyze-with-shiso')).toBeTruthy();
   });
+
+  it.each(['product_not_enabled', 'product_access_unverified'] as const)(
+    '%s cannot open the paid Advanced workspace',
+    async (reason) => {
+      render(
+        <AdvancedNutritionCard
+          recipe={recipe()}
+          session={genuineSession()}
+          onResolveWithAi={unusedPort()}
+          advancedNutritionAiAvailability={presentationFor(reason)}
+        />,
+      );
+      if (reason === 'product_not_enabled') {
+        expect(screen.getByTestId('advanced-nutrition-basic-locked').textContent).toMatch(
+          /Basic Nutrition remains available/i,
+        );
+        expect(screen.queryByRole('button', { name: /Generate Nutrition/i })).toBeNull();
+      } else {
+        // Unknown access fails closed: no Advanced dialog, no AI controls.
+        fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
+        expect(screen.queryByRole('dialog', { name: 'Advanced Nutrition' })).toBeNull();
+        expect(screen.queryByTestId('advanced-nutrition-ai-resolve')).toBeNull();
+      }
+    },
+  );
 });
 
 describe('AI-5C UI — three distinct truthful reasons', () => {
-  it('Known Basic says the deployment has not enabled it, and keeps Basic available', async () => {
+  it('Known Basic keeps the free Basic Nutrition surface and does not open Advanced', () => {
     render(
       <AdvancedNutritionCard
         recipe={recipe()}
@@ -179,10 +203,10 @@ describe('AI-5C UI — three distinct truthful reasons', () => {
         advancedNutritionAiAvailability={presentationFor('product_not_enabled')}
       />,
     );
-    await openEditor();
-    const notice = screen.getByTestId('advanced-nutrition-ai-unavailable');
-    expect(notice.textContent).toContain("isn't enabled for this deployment");
-    expect(notice.textContent).toContain('Basic manual review and correction are still available');
+    expect(screen.getByTestId('advanced-nutrition-basic-locked').textContent).toMatch(
+      /Basic Nutrition remains available/i,
+    );
+    expect(screen.queryByRole('dialog', { name: 'Advanced Nutrition' })).toBeNull();
   });
 
   it('AI Advanced + unavailable provider says ENABLED, and never claims not entitled', async () => {
@@ -202,7 +226,7 @@ describe('AI-5C UI — three distinct truthful reasons', () => {
     expect(notice.textContent).not.toContain("isn't enabled for this deployment");
   });
 
-  it('Unknown status says access could NOT be verified, and blames nothing', async () => {
+  it('Unknown status fails closed and blames nothing', () => {
     render(
       <AdvancedNutritionCard
         recipe={recipe()}
@@ -211,15 +235,10 @@ describe('AI-5C UI — three distinct truthful reasons', () => {
         advancedNutritionAiAvailability={presentationFor('product_access_unverified')}
       />,
     );
-    await openEditor();
-    const notice = screen.getByTestId('advanced-nutrition-ai-unavailable');
-    expect(notice.textContent).toContain("couldn't be verified");
-    // It must NOT claim Basic, and must NOT blame the provider, a subscription or a
-    // payment — the client knows none of those.
-    expect(notice.textContent).not.toContain("isn't enabled for this deployment");
-    expect(notice.textContent).not.toContain('provider');
-    expect(notice.textContent).not.toContain('subscription');
-    expect(notice.textContent).not.toContain('expired');
+    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
+    expect(screen.queryByRole('dialog', { name: 'Advanced Nutrition' })).toBeNull();
+    expect(screen.queryByTestId('advanced-nutrition-ai-resolve')).toBeNull();
+    expect(screen.queryByTestId('advanced-nutrition-ai-unavailable')).toBeNull();
   });
 
   it('no state emits billing, upgrade, paywall or product-sales language', async () => {
@@ -250,28 +269,40 @@ describe('AI-5C UI — three distinct truthful reasons', () => {
 });
 
 describe('AI-5C UI — AI controls cannot execute when unavailable', () => {
-  it.each([
-    ['product_not_enabled'],
-    ['provider_unavailable'],
-    ['product_access_unverified'],
-  ] as const)('%s leaves the AI resolve control disabled', async (reason) => {
+  it('provider_unavailable leaves the entitled AI resolve control disabled', async () => {
     const port = unusedPort();
     render(
       <AdvancedNutritionCard
         recipe={recipe()}
         session={genuineSession()}
         onResolveWithAi={port}
-        advancedNutritionAiAvailability={presentationFor(reason)}
+        advancedNutritionAiAvailability={presentationFor('provider_unavailable')}
       />,
     );
     await openEditor();
     const control = screen.getByTestId('advanced-nutrition-ai-resolve');
     expect((control as HTMLButtonElement).disabled).toBe(true);
     expect(control.getAttribute('aria-disabled')).toBe('true');
-    // A visually disabled control must not secretly invoke a paid route.
     fireEvent.click(control);
     expect(port).not.toHaveBeenCalled();
   });
+
+  it.each(['product_not_enabled', 'product_access_unverified'] as const)(
+    '%s exposes no Advanced AI control to invoke',
+    async (reason) => {
+      const port = unusedPort();
+      render(
+        <AdvancedNutritionCard
+          recipe={recipe()}
+          session={genuineSession()}
+          onResolveWithAi={port}
+          advancedNutritionAiAvailability={presentationFor(reason)}
+        />,
+      );
+      expect(screen.queryByTestId('advanced-nutrition-ai-resolve')).toBeNull();
+      expect(port).not.toHaveBeenCalled();
+    },
+  );
 
   it('AI Advanced + ready leaves the AI controls enabled', async () => {
     const port = unusedPort();
@@ -290,28 +321,20 @@ describe('AI-5C UI — AI controls cannot execute when unavailable', () => {
     expect(screen.queryByTestId('advanced-nutrition-ai-unavailable')).toBeNull();
   });
 
-  it('the recipe-context review control is disabled in every unavailable state', async () => {
-    for (const reason of [
-      'product_not_enabled',
-      'provider_unavailable',
-      'product_access_unverified',
-    ] as const) {
-      render(
-        <AdvancedNutritionCard
-          recipe={recipe()}
-          session={genuineSession()}
-          onReviewRecipeContextWithAi={vi.fn(async () => ({ ok: false, message: 'x' }))}
-          advancedNutritionAiAvailability={presentationFor(reason)}
-        />,
-      );
-      await openEditor();
-      const control = screen.getByTestId('advanced-nutrition-recipe-context-review');
-      expect((control as HTMLButtonElement).disabled).toBe(true);
-      // And it carries the same truthful reason, not a generic build message.
-      const notice = screen.getByTestId('advanced-nutrition-recipe-context-unavailable');
-      expect(notice.textContent).not.toContain('not configured in this build');
-      cleanup();
-    }
+  it('the entitled recipe-context review control is disabled when the provider is unavailable', async () => {
+    render(
+      <AdvancedNutritionCard
+        recipe={recipe()}
+        session={genuineSession()}
+        onReviewRecipeContextWithAi={vi.fn(async () => ({ ok: false, message: 'x' }))}
+        advancedNutritionAiAvailability={presentationFor('provider_unavailable')}
+      />,
+    );
+    await openEditor();
+    const control = screen.getByTestId('advanced-nutrition-recipe-context-review');
+    expect((control as HTMLButtonElement).disabled).toBe(true);
+    const notice = screen.getByTestId('advanced-nutrition-recipe-context-unavailable');
+    expect(notice.textContent).not.toContain('not configured in this build');
   });
 });
 

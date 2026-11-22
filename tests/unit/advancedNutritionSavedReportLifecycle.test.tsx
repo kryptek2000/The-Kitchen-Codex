@@ -111,6 +111,30 @@ function savedBlockFor(target: ObsidianRecipe, overrides: Partial<CodexNutrition
 }
 
 describe('saved Advanced report lifecycle', () => {
+  it('Basic can view a saved report read-only but cannot enter Advanced editing', () => {
+    const onLoadBundle = vi.fn();
+    render(
+      <AdvancedNutritionCard
+        recipe={recipe()}
+        savedAdvancedBlock={savedBlockFor(recipe())}
+        onLoadBundle={onLoadBundle}
+        onApplyAdvancedNutrition={vi.fn()}
+        advancedNutritionAiAvailability={{
+          available: false,
+          reason: 'AI Advanced Nutrition is not enabled for this deployment.',
+          refreshing: false,
+          canRetry: false,
+          advancedEditingAccess: 'basic',
+        }}
+      />
+    );
+    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
+    expect(screen.getByTestId('saved-advanced-status')).toBeTruthy();
+    expect(screen.queryByTestId('saved-advanced-edit')).toBeNull();
+    expect(screen.queryByTestId('advanced-nutrition-working-banner')).toBeNull();
+    expect(onLoadBundle).not.toHaveBeenCalled();
+  });
+
   it('opens the saved report immediately without initializing the USDA analyzer', () => {
     const onLoadBundle = vi.fn();
     render(
