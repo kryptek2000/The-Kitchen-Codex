@@ -2327,7 +2327,12 @@ export default function App() {
         ],
     [shisoWorkingForSelected],
   );
-  useEffect(() => {
+  // Publish the working-recipe summary in a LAYOUT effect so the visible
+  // Apply/Save banner reflects a just-applied Advanced Nutrition block in the
+  // SAME paint. A passive effect left a transient "saved" frame after Apply
+  // even though the block existed only in the working copy. This remains a
+  // display-order fix; it never writes or saves anything.
+  useLayoutEffect(() => {
     if (shisoWorkingForSelected === null) {
       publishWorkingRecipe(null);
       return;
