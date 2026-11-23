@@ -3603,7 +3603,6 @@ onReviewRecipeContextWithAi,
                     {savedPresentation.advanced_stale ? 'Saved result needs review — recalculate before using these totals' : stored.kind === 'v5' || stored.kind === 'v6' ? 'Source-backed + AI-estimated contributions' : 'USDA reviewed'}
                     {savedPresentation.advanced_ingredient_count ? ` · ${savedPresentation.advanced_ingredient_count} ingredient lines accounted for` : ''}
                     {savedPresentation.advanced_supplement_count ? ` · ${savedPresentation.advanced_supplement_count} supplemental AI estimate${savedPresentation.advanced_supplement_count === 1 ? '' : 's'}` : ''}
-                {savedPresentation.advanced_supplement_count ? ` · ${savedPresentation.advanced_supplement_count} supplemental AI estimate${savedPresentation.advanced_supplement_count === 1 ? '' : 's'}` : ''}
                     {savedPresentation.advanced_excluded_count ? ` · ${savedPresentation.advanced_excluded_count} cooking wrapper excluded` : ''}
                     {stored.servings ? ` · base ${stored.servings} servings` : ''}
                   </p>
