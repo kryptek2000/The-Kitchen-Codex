@@ -14,6 +14,7 @@ import {
   SHISO_TURN_CONTRACT_VERSION,
   isShisoToolName,
   type ShisoCollectedFinding,
+  type ShisoConversationContinuation,
   type ShisoConversationContext,
   type ShisoConversationMessage,
   type ShisoObservation,
@@ -31,6 +32,7 @@ const TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
   "turn_version",
   "user_message",
   "history",
+  "continuation",
   "context",
   "observation",
   "collected",
@@ -88,6 +90,59 @@ function readHistory(raw: unknown): ShisoConversationMessage[] {
     out.push({ role, text: bounded });
   }
   return out;
+}
+
+/**
+ * Bounded older-turn continuation memory. Unknown fields are ignored, every
+ * string/array is capped, and verified findings use the same closed tool
+ * vocabulary as the in-turn findings channel.
+ */
+function readContinuation(raw: unknown): ShisoConversationContinuation | undefined {
+  if (!isPlainObject(raw)) return undefined;
+  const user = raw["earlier_user_messages"];
+  const assistant = raw["earlier_assistant_messages"];
+  const findings = raw["verified_findings"];
+  const workingState = raw["working_state"];
+  const readTexts = (value: unknown, max: number): string[] => {
+    if (!Array.isArray(value)) return [];
+    return value
+      .slice(-max)
+      .flatMap((entry) => typeof entry === "string" && entry.trim().length > 0
+        ? [entry.trim().slice(0, SHISO_LIMITS.maxContinuationMessageChars)]
+        : []);
+  };
+  const earlierUserMessages = readTexts(user, SHISO_LIMITS.maxContinuationUserMessages);
+  const earlierAssistantMessages = readTexts(assistant, SHISO_LIMITS.maxContinuationAssistantMessages);
+  const verifiedFindings: ShisoCollectedFinding[] = [];
+  if (Array.isArray(findings)) {
+    for (const entry of findings.slice(-SHISO_LIMITS.maxContinuationFindings)) {
+      if (!isPlainObject(entry)) continue;
+      const tool = entry["tool"];
+      const summary = entry["summary"];
+      if (!isShisoToolName(tool) || typeof summary !== "string") continue;
+      const bounded = summary.trim().slice(0, SHISO_LIMITS.maxContinuationFindingChars);
+      if (bounded.length === 0) continue;
+      verifiedFindings.push({ tool, ok: entry["ok"] === true, summary: bounded });
+    }
+  }
+  const boundedWorkingState =
+    typeof workingState === "string"
+      ? workingState.trim().slice(0, SHISO_LIMITS.maxContinuationWorkingStateChars)
+      : undefined;
+  if (
+    earlierUserMessages.length === 0 &&
+    earlierAssistantMessages.length === 0 &&
+    verifiedFindings.length === 0 &&
+    (boundedWorkingState === undefined || boundedWorkingState.length === 0)
+  ) {
+    return undefined;
+  }
+  return {
+    earlier_user_messages: earlierUserMessages,
+    earlier_assistant_messages: earlierAssistantMessages,
+    verified_findings: verifiedFindings,
+    ...(boundedWorkingState ? { working_state: boundedWorkingState } : {}),
+  };
 }
 
 function readObservation(raw: unknown): ShisoObservation | undefined {
@@ -158,10 +213,12 @@ export function readShisoTurnRequest(raw: unknown): ShisoTurnRequestBody | null 
 
   const observation = readObservation(raw["observation"]);
   const collected = readCollected(raw["collected"]);
+  const continuation = readContinuation(raw["continuation"]);
   return {
     turn_version: SHISO_TURN_CONTRACT_VERSION,
     user_message: trimmed,
     history: readHistory(raw["history"]),
+    ...(continuation !== undefined ? { continuation } : {}),
     context: readContext(raw["context"]),
     ...(observation !== undefined ? { observation } : {}),
     ...(collected.length > 0 ? { collected } : {}),

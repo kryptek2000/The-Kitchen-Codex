@@ -4879,6 +4879,7 @@ export default function App() {
         nutritionReviewRows={shiso.snapshot?.reviewRows ?? []}
         nutritionSummary={shiso.snapshot?.summary ?? null}
         nutritionUnsaved={shiso.snapshot?.unsaved ?? false}
+        settings={settingsAdapter}
         onSaveCreatedDraft={async (draft: GeneratedRecipeDraft, provenance: GeneratedRecipeProvenance) => {
           const recipeToSave = generatedDraftToObsidianRecipe({ draft, provenance });
           await handleSaveGeneratedRecipe(recipeToSave);
