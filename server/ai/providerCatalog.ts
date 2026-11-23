@@ -43,6 +43,11 @@ import {
 } from "../platform/ServerEnvironmentSecretAdapter.js";
 import type { SecretStorageScope } from "../../src/application/adapters/SecretAdapter.js";
 import { roleModelsForProvider, curatedTextModels, selectableTextModels } from "./roleModels.js";
+import {
+  CHATGPT_PLAN_PROVIDER_ID,
+  isChatGptPlanBridgeConfigured,
+  chatGptPlanModelRows,
+} from "./chatGptPlanBridge.js";
 import { AI_OPERATIONS } from "./operations.js";
 import {
   getImageSelection,
@@ -362,8 +367,13 @@ function primaryRoleModels(registered: RegisteredProvider): Set<string> {
 
 function textProviderRows(regs: RegisteredProvider[]): ProviderCatalogTextProvider[] {
   return regs.map((registered) => {
+    const isChatGptPlan = registered.provider.id === CHATGPT_PLAN_PROVIDER_ID;
     const secretId = providerSecretIdForProvider(registered.provider.id);
-    const configured = secretId ? Boolean(getServerSecretSync(secretId)) : false;
+    const configured = isChatGptPlan
+      ? isChatGptPlanBridgeConfigured()
+      : secretId
+      ? Boolean(getServerSecretSync(secretId))
+      : false;
     const enabled = registered.enabled !== false;
     const available = registered.provider.isAvailable();
     const primary = primaryRoleModels(registered);
@@ -417,6 +427,15 @@ function textProviderRows(regs: RegisteredProvider[]): ProviderCatalogTextProvid
         const dyn = findOpenRouterCatalogModel(model);
         if (dyn) return toRow(dyn);
       }
+      if (isChatGptPlan) {
+        const live = chatGptPlanModelRows().find((row) => row.id === model);
+        return {
+          id: model,
+          default: primary.has(model),
+          capabilities: effectiveCapabilities(registered, model),
+          ...(live ? { displayName: live.name } : {}),
+        };
+      }
       return {
         id: model,
         default: primary.has(model),
@@ -441,11 +460,17 @@ function textProviderRows(regs: RegisteredProvider[]): ProviderCatalogTextProvid
       configured,
       enabled,
       available,
-      storageScope: "server_environment",
+      // ChatGPT plan credentials are session-only in the trusted Electron
+      // process. No server environment key exists for it.
+      storageScope: isChatGptPlan ? "session_only" : "server_environment",
       supportsSecretWrites: false,
-      connectionTest: connectionTestKindForProvider(registered.provider.id, "text"),
-      selectable: enabled && available && models.length > 0,
-      sessionKeySupported: supportsSessionBoundTextProvider(registered.provider.id),
+      // The dedicated ChatGPT plan section owns its connection test. The generic
+      // provider probe is deliberately unavailable for this native-only provider.
+      connectionTest: isChatGptPlan ? "unavailable" : connectionTestKindForProvider(registered.provider.id, "text"),
+      // Selected through the dedicated ChatGPT plan panel, never the generic
+      // API-key provider picker. The server still validates the exact selection.
+      selectable: isChatGptPlan ? false : enabled && available && models.length > 0,
+      sessionKeySupported: isChatGptPlan ? false : supportsSessionBoundTextProvider(registered.provider.id),
       models,
       ...(discoveredModels ? { discoveredModels } : {}),
     };

@@ -780,6 +780,14 @@ function classifyShisoProviderFailure(error: unknown): {
 }
 
 /**
+ * SHISO-C1.5: the native ChatGPT plan has no API key. A disconnected, expired,
+ * or unentitled account gets a concrete reconnect instruction and NEVER causes a
+ * different provider to be selected.
+ */
+const NATIVE_PLAN_UNAVAILABLE_MESSAGE =
+  'ChatGPT plan is selected as the Text AI provider, but it is not connected or its plan usage is unavailable. Reconnect the account in AI Studio → ChatGPT plan; Shiso did not switch providers.';
+
+/**
  * A bounded local greeting. It performs no provider call and no nutrition or
  * USDA operation, so a simple hello cannot time out behind a provider outage.
  * Anything that adds a request, question or action falls through to the normal
@@ -841,11 +849,20 @@ export async function runShisoTurn(
   }
 
   const registry = (options.registry as RegisteredProvider[] | undefined) ?? getRegisteredProviders();
+  const selection = coerceSelectionInput(options.userSelection as never);
+  const nativePlanSelected = selection.metadata?.providerId === 'chatgpt-plan';
   const context = resolveTextCandidateContext('shisoConversation', registry, options.userSelection as never);
   const candidates = selectCandidates(registry, context.candidates, []);
   if (candidates.length === 0) {
-    const selection = coerceSelectionInput(options.userSelection as never);
     const requested = selection.metadata;
+    if (nativePlanSelected) {
+      return {
+        ok: false,
+        code: 'provider_unavailable',
+        message: NATIVE_PLAN_UNAVAILABLE_MESSAGE,
+        aiAttempted: false,
+      };
+    }
     if (context.credentialSource === 'session_only' && requested?.providerId) {
       const credential = resolveCredential(requested.providerId, 'session_only');
       if ('code' in credential) {
@@ -932,6 +949,20 @@ export async function runShisoTurn(
     // a quota from a credential problem, and nothing was logged to diagnose it.
     const classified = classifyShisoProviderFailure(error);
     logModelAttempt('shiso', classified.modelHint, error);
+    if (
+      nativePlanSelected &&
+      (classified.code === 'credentials_missing' ||
+        classified.code === 'provider_error' ||
+        classified.code === 'provider_unavailable' ||
+        classified.code === 'no_capability_available')
+    ) {
+      return {
+        ok: false,
+        code: 'provider_unavailable',
+        message: NATIVE_PLAN_UNAVAILABLE_MESSAGE,
+        aiAttempted: true,
+      };
+    }
     return {
       ok: false,
       code: classified.code,

@@ -26,6 +26,7 @@ import { OPENROUTER_STRUCTURED_MODEL } from "./openRouterProvider.js";
 import { openRouterConversationTextModelIds, openRouterSelectableTextModelIds } from "./openRouterCatalog.js";
 import { DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL } from "./deepSeekProvider.js";
 import { OPENAI_DEFAULT_MODEL, OPENAI_FALLBACK_MODEL } from "./openAIProvider.js";
+import { chatGptPlanModelIds } from "./chatGptPlanBridge.js";
 
 /** Gemini role models per operation (unchanged v0.6 behavior). */
 const GEMINI_ROLE_MODELS: Record<AiOperation, string[]> = {
@@ -115,6 +116,10 @@ export function roleModelsForProvider(providerId: string, operation: AiOperation
   if (providerId === "openrouter") return openRouterModels(operation);
   if (providerId === "deepseek") return deepSeekModels(operation);
   if (providerId === "openai") return OPENAI_ROLE_MODELS[operation] ?? [];
+  // ChatGPT plan is a live, account-scoped catalog. It exposes the same bounded
+  // plain-text model set for every operation; capability selection then filters
+  // it out of structured/web-search operations.
+  if (providerId === "chatgpt-plan") return chatGptPlanModelIds();
   return [];
 }
 

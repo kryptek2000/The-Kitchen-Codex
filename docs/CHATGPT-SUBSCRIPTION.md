@@ -171,11 +171,16 @@ The owner must personally complete browser authorization and plan consent.
 
 - AI Studio exposes **ChatGPT plan** with Continue/Connect, session status,
   plan status, available models, Reconnect, Add account, Disconnect, Manage
-  usage, and a basic text test. It states that sign-in is required after
-  application restart.
-- Only basic Responses text is exposed. Structured recipe generation, SHISO
-  tools, recipe interpretation, and Advanced Nutrition are **not** claimed as
-  supported; their output contracts still need separate validation.
+  usage, a basic text test, and **Use as Default Text AI**. It states that
+  sign-in is required after application restart.
+- SHISO-C1.5 adds a native-only Default Text AI selection. The local server
+  reaches the Electron session through a loopback bridge that never exposes an
+  OAuth token. See
+  [`SHISO-C1.5-ChatGPT-Plan-Default-Text-AI.md`](./SHISO-C1.5-ChatGPT-Plan-Default-Text-AI.md).
+- Plain Responses text and SHISO conversation are supported. Structured
+  recipe generation, structured nutrition, recipe interpretation, web search,
+  and Advanced Nutrition are **not** claimed as supported; their output
+  contracts still need separate validation.
 - Image generation is excluded by the documented flow.
 - No live ChatGPT authorization or subscription usage was performed by the
   implementation/audit environment.

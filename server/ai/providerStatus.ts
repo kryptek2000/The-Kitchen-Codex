@@ -26,6 +26,7 @@
 import type { AiCapabilities, AiCapability } from "./types.js";
 import type { RegisteredProvider } from "./providerRegistry.js";
 import { getRegisteredProviders } from "./providerRegistry.js";
+import { CHATGPT_PLAN_PROVIDER_ID, isChatGptPlanBridgeConfigured } from "./chatGptPlanBridge.js";
 import {
   getServerSecretSync,
   providerSecretIdForProvider,
@@ -86,15 +87,21 @@ export interface ProviderStatus {
  */
 export function getAiProviderStatus(): ProviderStatus[] {
   return getRegisteredProviders().map((registered) => {
+    const isChatGptPlan = registered.provider.id === CHATGPT_PLAN_PROVIDER_ID;
     const secretId = providerSecretIdForProvider(registered.provider.id);
-    const configured = secretId ? Boolean(getServerSecretSync(secretId)) : false;
+    const configured = isChatGptPlan
+      ? isChatGptPlanBridgeConfigured()
+      : secretId
+      ? Boolean(getServerSecretSync(secretId))
+      : false;
     return {
       providerId: registered.provider.id,
       name: registered.provider.name,
       configured,
       enabled: registered.enabled !== false,
       available: registered.provider.isAvailable(),
-      storageScope: "server_environment",
+      // The ChatGPT plan session lives in trusted Electron main-process memory.
+      storageScope: isChatGptPlan ? "session_only" : "server_environment",
       supportsSecretWrites: false,
       capabilities: providerCapabilityUnion(registered),
     };

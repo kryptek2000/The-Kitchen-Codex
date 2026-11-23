@@ -12,6 +12,16 @@ import {
 } from 'lucide-react';
 import { getChatGptBridge } from '../platform/desktop/desktopVault';
 import type { ChatGptStatusView } from '../platform/desktop/desktopVault';
+import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
+import type { SettingsAdapter } from '../application/adapters/SettingsAdapter';
+import {
+  getCachedAiSelections,
+  hydrateAiSelections,
+  resetAiSelectionWithOutcome,
+  saveAiSelectionWithOutcome,
+  type SavedSelection,
+} from '../application/aiSelection';
+import { fetchProviderCatalog } from '../application-ui/providerCatalog';
 
 interface ErrorView {
   code: string;
@@ -44,7 +54,17 @@ function isCancelled(error: unknown): boolean {
  * The renderer never receives OAuth tokens. All credential and inference work
  * stays in the trusted Electron main process through the narrow preload bridge.
  */
-export function ChatGptSubscriptionPanel() {
+export function ChatGptSubscriptionPanel({
+  network,
+  settings,
+  onTextAiRuntimeChanged,
+  onSelectionChanged,
+}: {
+  network?: NetworkAdapter;
+  settings?: SettingsAdapter;
+  onTextAiRuntimeChanged?: () => void;
+  onSelectionChanged?: () => void;
+} = {}) {
   const bridge = useMemo(() => getChatGptBridge(), []);
   const [status, setStatus] = useState<ChatGptStatusView | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -56,6 +76,14 @@ export function ChatGptSubscriptionPanel() {
   const [prompt, setPrompt] = useState('Say exactly: Hello from The Kitchen Codex.');
   const [result, setResult] = useState('');
   const [requestId, setRequestId] = useState('');
+  const [defaultSelection, setDefaultSelection] = useState<SavedSelection>(
+    () => getCachedAiSelections().textAi
+  );
+  const [selectionNotice, setSelectionNotice] = useState('');
+  const [serverManagedText, setServerManagedText] = useState(false);
+  const [serverManagedLabel, setServerManagedLabel] = useState('');
+  const [catalogTruthLoaded, setCatalogTruthLoaded] = useState(false);
+  const [nativePlanCatalogReady, setNativePlanCatalogReady] = useState(false);
 
   const refreshStatus = useCallback(async () => {
     if (!bridge) return;
@@ -67,9 +95,69 @@ export function ChatGptSubscriptionPanel() {
     }
   }, [bridge]);
 
+  const refreshCatalogTruth = useCallback(async (): Promise<{
+    ok: boolean;
+    hasProvider: boolean;
+    models: string[];
+  }> => {
+    if (!network) return { ok: false, hasProvider: false, models: [] };
+    try {
+      const catalog = await fetchProviderCatalog(network);
+      const allowed = catalog.selection.userSelectionAllowed.text;
+      const nativeRow = catalog.textProviders.find((p) => p.providerId === 'chatgpt-plan');
+      setCatalogTruthLoaded(true);
+      setNativePlanCatalogReady(Boolean(nativeRow));
+      setServerManagedText(!allowed);
+      setServerManagedLabel(
+        allowed
+          ? ''
+          : `${catalog.selection.text.selectedProviderId ?? 'server default'}${
+              catalog.selection.text.selectedModelId
+                ? ` / ${catalog.selection.text.selectedModelId}`
+                : ''
+            }`
+      );
+      return {
+        ok: true,
+        hasProvider: Boolean(nativeRow),
+        models: nativeRow?.models.map((m) => m.id) ?? [],
+      };
+    } catch {
+      // Leave the last known truth untouched. The dedicated ChatGPT panel still
+      // reports its own live connection state; a failed catalog read never grants
+      // selection authority.
+      return { ok: false, hasProvider: false, models: [] };
+    }
+  }, [network]);
+
   useEffect(() => {
     void refreshStatus();
   }, [refreshStatus]);
+
+  useEffect(() => {
+    void refreshCatalogTruth();
+  }, [refreshCatalogTruth]);
+
+  useEffect(() => {
+    let alive = true;
+    if (!settings) {
+      setDefaultSelection(getCachedAiSelections().textAi);
+      return () => { alive = false; };
+    }
+    void hydrateAiSelections(settings)
+      .then((selections) => {
+        if (alive) setDefaultSelection(selections.textAi);
+      })
+      .catch(() => {
+        if (alive) {
+          setError({
+            code: 'AI_SELECTION_UNAVAILABLE',
+            message: 'The saved Text AI preference could not be read. No provider is charged until this is resolved.',
+          });
+        }
+      });
+    return () => { alive = false; };
+  }, [settings]);
 
   const active = status?.activeAccount || null;
   const planReady = Boolean(active && active.planEnabled && !active.signedOut);
@@ -90,14 +178,32 @@ export function ChatGptSubscriptionPanel() {
         const rows = await unwrap(bridge.models());
         if (!alive) return;
         setModels(rows);
-        setModel(rows[0]?.id || '');
+        const savedModel = defaultSelection.modelId;
+        setModel(rows.some((row) => row.id === savedModel) ? savedModel! : rows[0]?.id || '');
       } catch (nextError) {
         if (!alive) return;
         setError(nextError as ErrorView);
       }
     })();
     return () => { alive = false; };
-  }, [bridge, active?.accountKey, planReady]);
+  }, [bridge, active?.accountKey, planReady, defaultSelection.modelId]);
+
+  const chatGptDefault =
+    defaultSelection.mode === 'user_selected' && defaultSelection.providerId === 'chatgpt-plan';
+  const defaultAccountMatches =
+    !defaultSelection.accountKey || defaultSelection.accountKey === active?.accountKey;
+  const defaultModel = models.find((row) => row.id === defaultSelection.modelId);
+  const defaultActive =
+    chatGptDefault &&
+    planReady &&
+    defaultAccountMatches &&
+    Boolean(defaultSelection.modelId) &&
+    Boolean(defaultModel);
+  const defaultModelLabel =
+    defaultModel?.name || defaultSelection.modelId || 'no model selected';
+  const defaultTextAiLabel = chatGptDefault
+    ? `ChatGPT plan / ${defaultModelLabel}`
+    : 'Server provider';
 
   if (!bridge || !status || !status.enabled) return null;
 
@@ -109,8 +215,15 @@ export function ChatGptSubscriptionPanel() {
       await task();
     } catch (nextError) {
       const value = nextError as ErrorView;
-      if (!isCancelled(value)) setError(value);
-      else setNotice('ChatGPT request cancelled. Nothing was accepted.');
+      if (!isCancelled(value)) {
+        setError(value);
+        // A failed request can mean the session expired or entitlement changed.
+        // Refresh the non-secret truth rather than leaving a stale "connected".
+        void refreshStatus();
+        void refreshCatalogTruth();
+      } else {
+        setNotice('ChatGPT request cancelled. Nothing was accepted.');
+      }
     } finally {
       setBusy(null);
     }
@@ -120,24 +233,28 @@ export function ChatGptSubscriptionPanel() {
     const next = await unwrap(bridge.connect());
     setStatus(next);
     setNotice('ChatGPT account connected for this session.');
+    void refreshCatalogTruth();
   });
 
   const reconnect = () => run('reconnect', async () => {
     const next = await unwrap(bridge.reconnect(active?.accountKey));
     setStatus(next);
     setNotice('ChatGPT connection renewed for this session.');
+    void refreshCatalogTruth();
   });
 
   const addAccount = () => run('connect', async () => {
     const next = await unwrap(bridge.connect({}));
     setStatus(next);
     setNotice('Additional ChatGPT account connected for this session.');
+    void refreshCatalogTruth();
   });
 
   const selectAccount = (accountKey: string) => run('account', async () => {
     const next = await unwrap(bridge.selectAccount(accountKey));
     setStatus(next);
     setNotice('Active ChatGPT account changed.');
+    void refreshCatalogTruth();
   });
 
   const disconnect = () => {
@@ -153,6 +270,7 @@ export function ChatGptSubscriptionPanel() {
           ? 'ChatGPT session disconnected.'
           : 'Local ChatGPT session cleared. Remote revocation was not confirmed.'
       );
+      void refreshCatalogTruth();
     });
   };
 
@@ -190,6 +308,97 @@ export function ChatGptSubscriptionPanel() {
     void bridge.cancelConnect().catch(() => {});
   };
 
+  const useChatGptAsDefault = () => run('default', async () => {
+    setSelectionNotice('');
+    if (!settings) {
+      throw { code: 'SETTINGS_UNAVAILABLE', message: 'AI preferences are not available in this shell.' };
+    }
+    if (serverManagedText) {
+      throw {
+        code: 'SERVER_MANAGED_TEXT',
+        message: 'Text AI is server-managed on this deployment, so a local default cannot override it.',
+      };
+    }
+    if (!active || !planReady) {
+      throw {
+        code: 'CHATGPT_NOT_CONNECTED',
+        message: 'Connect an eligible ChatGPT plan account before making it the default.',
+      };
+    }
+    if (!model) {
+      throw { code: 'UNSUPPORTED_MODEL', message: 'Choose an available ChatGPT model.' };
+    }
+    // Refresh the server-side model/capability cache before saving the preference.
+    const verified = await refreshCatalogTruth();
+    if (!verified.ok || !verified.hasProvider) {
+      throw {
+        code: 'CATALOG_UNAVAILABLE',
+        message: 'The local server does not expose the native ChatGPT plan bridge. Nothing was saved.',
+      };
+    }
+    if (!verified.models.includes(model)) {
+      throw {
+        code: 'MODEL_UNVERIFIED',
+        message: 'The server could not verify the selected ChatGPT model. Nothing was saved.',
+      };
+    }
+    const outcome = await saveAiSelectionWithOutcome(
+      settings,
+      'text',
+      'user_selected',
+      'chatgpt-plan',
+      model,
+      'native_plan',
+      undefined,
+      active.accountKey
+    );
+    setDefaultSelection(outcome.selections.textAi);
+    setSelectionNotice(
+      outcome.persistenceFailed
+        ? 'ChatGPT plan is the Default Text AI for this session, but the preference could not be saved.'
+        : 'ChatGPT plan is now the Default Text AI for supported text requests.'
+    );
+    onTextAiRuntimeChanged?.();
+    onSelectionChanged?.();
+  });
+
+  const resetDefaultTextAi = () => run('default', async () => {
+    setSelectionNotice('');
+    if (!settings) {
+      throw { code: 'SETTINGS_UNAVAILABLE', message: 'AI preferences are not available in this shell.' };
+    }
+    const outcome = await resetAiSelectionWithOutcome(settings, 'text');
+    setDefaultSelection(outcome.selections.textAi);
+    setSelectionNotice(
+      outcome.persistenceFailed
+        ? 'The configured server provider is active for this session; the preference could not be saved.'
+        : 'Switched back to the configured server provider.'
+    );
+    onTextAiRuntimeChanged?.();
+    onSelectionChanged?.();
+    void refreshCatalogTruth();
+  });
+
+  const defaultStatusText = !catalogTruthLoaded
+    ? 'Text AI selection status could not be verified. No provider is charged until this is resolved.'
+    : !nativePlanCatalogReady
+    ? 'The local server does not expose the native ChatGPT plan bridge. Restart the desktop app with the ChatGPT feature enabled.'
+    : serverManagedText
+    ? `Text AI is server-managed (${serverManagedLabel || 'operator pin'}). A local default cannot override it.`
+    : !chatGptDefault
+    ? planReady
+      ? 'ChatGPT plan is connected but is not the default. Server selection remains in effect.'
+      : 'Connect an eligible ChatGPT account to make it the Default Text AI.'
+    : !planReady
+    ? 'Saved, but ChatGPT plan is not connected. Reconnect this account; no other provider will be used automatically.'
+    : !defaultAccountMatches
+    ? 'Saved for a different ChatGPT account. Reconnect or select that account; no other provider will be used automatically.'
+    : !defaultSelection.modelId
+    ? 'Saved without a model. Choose an available model and save the default again.'
+    : defaultActive
+    ? 'Active for supported text requests, including Shiso conversation.'
+    : 'Saved, but the selected model is not currently available. Choose another model or reset.';
+
   const storageUnavailable = status.error?.code === 'SECURE_STORAGE_UNAVAILABLE';
 
   return (
@@ -219,9 +428,68 @@ export function ChatGptSubscriptionPanel() {
             OAuth runs in your system browser. Access, refresh, and ID tokens stay only in trusted
             Electron main-process memory for this session. They are never exposed to the React
             renderer, written to disk, or stored in the Recipe Vault. Sign-in is required again
-            after the application restarts. Basic text inference only; structured recipe and SHISO
-            workflows are not enabled yet.
+            after the application restarts. Plain-text ChatGPT plan requests and Shiso conversation
+            are supported; structured recipe and nutrition operations are not yet enabled for this
+            connection.
           </p>
+        </div>
+
+        <div
+          data-chatgpt-default-text-ai="true"
+          className="rounded-xl border border-[var(--color-control-border,rgba(255,255,255,0.1))] bg-[var(--bg-elevated,#1E1E1E)] p-4 space-y-3"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div className="min-w-0">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--text-muted,#6B7280)]">
+                Default Text AI
+              </div>
+              <div className="text-[14px] font-semibold text-[var(--text-primary,#F3F4F6)]">
+                {defaultTextAiLabel}
+              </div>
+              <p
+                data-chatgpt-default-status="true"
+                role="status"
+                className="mt-1 text-[11px] leading-[1.5] text-[var(--text-secondary,#9CA3AF)]"
+              >
+                {defaultStatusText}
+              </p>
+            </div>
+            {chatGptDefault && defaultActive && (
+              <span className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
+                Active
+              </span>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              data-chatgpt-use-default="true"
+              onClick={useChatGptAsDefault}
+              disabled={Boolean(busy) || !planReady || !model || serverManagedText || !catalogTruthLoaded || !nativePlanCatalogReady || !settings}
+              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-[var(--accent,#F59E0B)] px-4 py-2 text-[13px] font-semibold text-[var(--color-on-accent,#0C0C0C)] disabled:opacity-60"
+            >
+              Use as Default Text AI
+            </button>
+            <button
+              type="button"
+              data-chatgpt-reset-default="true"
+              onClick={resetDefaultTextAi}
+              disabled={Boolean(busy) || !chatGptDefault || !settings}
+              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-[var(--color-control-border,rgba(255,255,255,0.1))] bg-[var(--bg-surface,#141414)] px-4 py-2 text-[13px] text-[var(--text-primary,#F3F4F6)] disabled:opacity-60"
+            >
+              Use configured server provider
+            </button>
+          </div>
+          {selectionNotice && (
+            <p role="status" className="text-[12px] text-emerald-300">
+              {selectionNotice}
+            </p>
+          )}
+          {busy === 'default' && (
+            <p role="status" className="text-[11px] text-[var(--text-muted,#6B7280)]">
+              Updating the Default Text AI preference…
+            </p>
+          )}
         </div>
 
         {status.legacyCredentials === 'present_inert' && (

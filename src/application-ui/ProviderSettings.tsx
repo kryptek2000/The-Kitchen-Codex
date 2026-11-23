@@ -154,6 +154,8 @@ export function activeSelectionLabel(
   const source =
     selection.credentialSource === 'session_only'
       ? ' / Session only'
+      : selection.credentialSource === 'native_plan'
+      ? ' / ChatGPT plan'
       : selection.credentialSource === 'server_environment'
       ? ' / Server environment'
       : '';
@@ -173,6 +175,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   'gemini-image': 'Google Gemini Image',
   'openrouter-image': 'OpenRouter Image',
   'openai-image': 'OpenAI Image',
+  'chatgpt-plan': 'ChatGPT plan',
 };
 
 const MODEL_DISPLAY_NAMES: Record<string, string> = {
@@ -207,6 +210,7 @@ export function friendlyModelName(modelId: string | undefined): string {
 
 /** Friendly user-facing label for WHOSE credential is active. */
 export function credentialUsageLabel(source: SavedCredentialSource | undefined): string {
+  if (source === 'native_plan') return 'Using ChatGPT plan';
   return source === 'session_only' ? 'Using your temporary API key' : 'Using server API key';
 }
 
@@ -225,6 +229,7 @@ export function surfaceStatusLabel(
   sessionConfigured: boolean
 ): string {
   if (selection.mode !== 'user_selected' || !selection.providerId) return 'Server default';
+  if (selection.credentialSource === 'native_plan') return 'ChatGPT plan selected';
   if (selection.credentialSource === 'session_only') {
     return sessionConfigured ? 'Connected' : 'Key required';
   }
@@ -938,7 +943,24 @@ export function SelectionControlCard({
         </div>
       </div>
 
-      {!allowed ? (
+      {allowed && kind === 'text' && (effective.providerId === 'chatgpt-plan' || draft.providerId === 'chatgpt-plan') ? (
+        <div
+          data-native-chatgpt-default={kind}
+          className="space-y-3 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-3 py-3"
+        >
+          <p className="text-[12px] leading-[1.55] text-[var(--text-secondary,#9CA3AF)]">
+            ChatGPT plan is selected as the Default Text AI. The connected account and available
+            model are managed in AI Studio → ChatGPT plan. No API key is used.
+          </p>
+          <button
+            type="button"
+            onClick={onReset}
+            className="min-h-[44px] rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-3 text-[12px] font-medium text-[var(--text-primary,#F3F4F6)]"
+          >
+            Use configured server provider
+          </button>
+        </div>
+      ) : !allowed ? (
         <div className="text-[12px] text-[var(--text-secondary,#9CA3AF)]">
           This surface is managed by the server operator and cannot be changed here.
         </div>

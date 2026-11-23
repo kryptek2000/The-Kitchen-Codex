@@ -71,6 +71,7 @@ const comparedFiles = [
   'vaultFs.cjs',
   'native/tkc_vault.node',
   'chatgpt/config.cjs',
+  'chatgpt/bridge.cjs',
   'chatgpt/pkce.cjs',
   'chatgpt/jwt.cjs',
   'chatgpt/credentialStore.cjs',

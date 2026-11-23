@@ -25,6 +25,8 @@ import { OpenRouterProvider, OPENROUTER_MODEL_CAPABILITIES } from "./openRouterP
 import { openRouterDynamicCapabilities } from "./openRouterCatalog.js";
 import { DeepSeekProvider, DEEPSEEK_MODEL_CAPABILITIES } from "./deepSeekProvider.js";
 import { OpenAIProvider, OPENAI_MODEL_CAPABILITIES } from "./openAIProvider.js";
+import { ChatGptPlanProvider } from "./chatGptPlanProvider.js";
+import { isChatGptPlanBridgeConfigured } from "./chatGptPlanBridge.js";
 import { getServerSecretSync } from "../platform/ServerEnvironmentSecretAdapter.js";
 import type { AiCapabilities, AiProvider } from "./types.js";
 import {
@@ -179,6 +181,18 @@ export function getRegisteredProviders(): RegisteredProvider[] {
         defaultFallback: false,
       },
     ];
+    // SHISO-C1.5: the native ChatGPT plan is registered ONLY when the desktop
+    // main process supplied its loopback bridge. Web deployments never see this
+    // provider. It is opt-in and plain-text-only (SHISO conversation).
+    if (isChatGptPlanBridgeConfigured()) {
+      const chatGptPlan = new ChatGptPlanProvider();
+      registry.push({
+        provider: chatGptPlan,
+        defaultCapabilities: { ...chatGptPlan.capabilities },
+        enabled: true,
+        defaultFallback: false,
+      });
+    }
   }
   return registry;
 }
@@ -246,7 +260,13 @@ export function selectCandidates(
     // A session_only candidate's availability is governed by the SESSION store,
     // not by the operator env-key enablement; it still must satisfy capabilities
     // and its own runtime availability check below.
-    if (registered.enabled === false && candidate.credentialSource !== "session_only") continue;
+    if (
+      registered.enabled === false &&
+      candidate.credentialSource !== "session_only" &&
+      candidate.credentialSource !== "native_plan"
+    ) {
+      continue;
+    }
     if (!hasAllCapabilities(effectiveCapabilities(registered, candidate.model), requiredCapabilities)) {
       continue; // capability mismatch -> skip (never execute)
     }

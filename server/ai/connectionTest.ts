@@ -675,6 +675,9 @@ export function connectionTestKindForProvider(
   providerId: string,
   kind: "text" | "image"
 ): ConnectionTestKind {
+  // SHISO-C1.5: the native ChatGPT plan has its own explicit basic-text test in
+  // AI Studio. It is never probed through this server-env connection-test route.
+  if (kind === "text" && providerId === "chatgpt-plan") return "unavailable";
   const isConfiguredAndAvailable = (() => {
     if (kind === "text") {
       const reg = findRegisteredProvider(getRegisteredProviders(), providerId);

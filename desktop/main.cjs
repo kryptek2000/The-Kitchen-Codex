@@ -44,6 +44,7 @@ const { ChatGptOAuthClient } = require('./chatgpt/oauth.cjs');
 const { ChatGptSubscriptionService } = require('./chatgpt/service.cjs');
 const { publicError } = require('./chatgpt/errors.cjs');
 const { createSafeStorageAdapter } = require('./chatgpt/safeStorageAdapter.cjs');
+const { createChatGptPlanBridge } = require('./chatgpt/bridge.cjs');
 
 // Electron's Linux auto-detection does not select libsecret under Hyprland.
 // When the experimental integration is explicitly enabled, request the real
@@ -71,6 +72,7 @@ let vaultState = null;
 let vaultFs = null;
 let desktopSessionToken = null;
 let chatgptService = null;
+let chatGptPlanBridge = null;
 const allowedRoots = new Set();
 const rootIdentities = new Map();
 
@@ -262,6 +264,10 @@ async function startBackend() {
     TKC_DESKTOP_RUNTIME: '1',
     TKC_DESKTOP_USER_DATA: app.getPath('userData'),
     TKC_DESKTOP_SESSION_TOKEN: desktopSessionToken,
+    // The server process never sees an OAuth token. It can only ask the trusted
+    // main process for a bounded completion through this loopback bridge.
+    TKC_CHATGPT_PLAN_BRIDGE_URL: chatGptPlanBridge?.url || '',
+    TKC_CHATGPT_PLAN_BRIDGE_TOKEN: chatGptPlanBridge?.token || '',
     // Node child processes spawned by the server (native voice) must stay
     // Node processes rather than opening another Electron window.
     ELECTRON_RUN_AS_NODE: '1',
@@ -739,6 +745,20 @@ async function boot() {
     return;
   }
   initializeChatGptSubscription();
+  if (chatgptService) {
+    try {
+      chatGptPlanBridge = await createChatGptPlanBridge({
+        service: chatgptService,
+        logger: (event) => {
+          const name = event && event.event ? event.event : 'event';
+          console.warn(`[chatgpt] ${name}`);
+        },
+      });
+    } catch {
+      chatGptPlanBridge = null;
+      console.warn('[chatgpt] local plan bridge unavailable');
+    }
+  }
   try {
     await startBackend();
   } catch (error) {
@@ -772,6 +792,12 @@ if (!app.requestSingleInstanceLock()) {
   });
   app.on('before-quit', () => {
     quitting = true;
+    try {
+      void chatGptPlanBridge?.close();
+    } catch {
+      /* best effort */
+    }
+    chatGptPlanBridge = null;
     try {
       chatgptService?.shutdown();
     } catch {

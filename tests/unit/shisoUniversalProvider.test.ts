@@ -4,7 +4,11 @@ import type { RegisteredProvider } from '../../server/ai/providerRegistry';
 
 const harness = vi.hoisted(() => ({
   registry: [] as RegisteredProvider[],
-  candidates: [] as Array<{ provider: AiProvider; model: string; credentialSource?: 'server_environment' | 'session_only' }>,
+  candidates: [] as Array<{
+    provider: AiProvider;
+    model: string;
+    credentialSource?: 'server_environment' | 'session_only' | 'native_plan';
+  }>,
   operation: '' as string,
   selection: undefined as unknown,
   credentialOk: true,
@@ -113,6 +117,53 @@ describe('SHISO universal provider dispatch', () => {
     expect(calls[0].prompt).toContain('a missing USDA match or portion does not');
     expect(calls[0].prompt).toContain('Estimated weights are allowed through complete_nutrition and run_nutrition_analysis');
     expect(calls[0].prompt).not.toContain('Only the user can enter a weight');
+  });
+
+  it('uses the ChatGPT plan plain-text adapter for Shiso conversation', async () => {
+    const { provider, calls } = makeProvider('chatgpt-plan', false, {
+      kind: 'reply',
+      text: 'Native plan reply',
+    });
+    harness.registry = [{ provider, defaultCapabilities: { ...provider.capabilities }, enabled: true }];
+    harness.candidates = [
+      {
+        provider,
+        model: 'gpt-plan-test',
+        credentialSource: 'native_plan',
+      },
+    ];
+    const selection = {
+      mode: 'user_selected',
+      providerId: 'chatgpt-plan',
+      modelId: 'gpt-plan-test',
+      credentialSource: 'native_plan',
+      accountKey: 'acct_0123456789abcdef0123456789abcdef',
+    };
+    const response = await runShisoTurn(turn(), {
+      registry: harness.registry,
+      userSelection: selection,
+    });
+    expect(response).toMatchObject({ ok: true, text: 'Native plan reply' });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ kind: 'text', model: 'gpt-plan-test' });
+    expect(calls[0].prompt).toContain('Return exactly one JSON object');
+  });
+
+  it('reports a disconnected ChatGPT plan without switching providers', async () => {
+    harness.candidates = [];
+    const response = await runShisoTurn(turn(), {
+      registry: [],
+      userSelection: {
+        mode: 'user_selected',
+        providerId: 'chatgpt-plan',
+        modelId: 'gpt-plan-test',
+        credentialSource: 'native_plan',
+        accountKey: 'acct_0123456789abcdef0123456789abcdef',
+      },
+    });
+    expect(response).toMatchObject({ ok: false, code: 'provider_unavailable', aiAttempted: false });
+    expect(response.ok === false && response.message).toMatch(/Reconnect the account.*ChatGPT plan/i);
+    expect(response.ok === false && response.message).toMatch(/did not switch providers/i);
   });
 
   it('uses native structured output when the selected model supports it', async () => {
