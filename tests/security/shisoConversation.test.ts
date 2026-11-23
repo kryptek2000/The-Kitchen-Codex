@@ -130,10 +130,12 @@ const LINES = [
 describe('SHISO — closed vocabulary and argument validation', () => {
   it('accepts only the approved capabilities', () => {
     for (const name of [
-      'get_current_recipe', 'get_nutrition_review', 'search_usda_foods',
+      'get_current_recipe', 'get_nutrition_review', 'get_branded_evidence', 'search_usda_foods',
       'inspect_usda_food', 'investigate_ingredient_amount',
       // H-1 additions. Both are read-only or delegate to the existing owner.
       'investigate_unresolved_ingredients', 'run_nutrition_analysis',
+      // SINC-3: source-first completion of the unresolved review.
+      'complete_nutrition',
       // H-1F: prerequisite reporting.
       'get_capability_status',
     ]) {

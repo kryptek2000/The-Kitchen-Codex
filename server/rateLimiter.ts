@@ -1075,3 +1075,49 @@ export function updateCheckRateLimiter(req: Request, res: Response, next: NextFu
 
   next();
 }
+
+/**
+ * Dedicated limiter for the explicit USDA Branded Foods lookup.
+ *
+ * A lookup can perform one official search plus up to three product-detail
+ * requests, so this bucket is deliberately tighter than ordinary AI endpoints.
+ * It is separate from every AI provider budget: a branded lookup does not call
+ * an AI model and must not consume the user's AI quota. Default 6 per minute;
+ * configurable via USDA_BRANDED_LOOKUP_RATE_LIMIT.
+ */
+export function usdaBrandedLookupRateLimiter(req: Request, res: Response, next: NextFunction) {
+  const parsedLimit = parseInt(process.env.USDA_BRANDED_LOOKUP_RATE_LIMIT || "6", 10);
+  const maxRequestsPerWindow = isNaN(parsedLimit) || parsedLimit <= 0 ? 6 : parsedLimit;
+  const windowMs = 60 * 1000;
+
+  const clientIp = getClientIp(req);
+  const now = Date.now();
+  const key = `usda_branded_${clientIp}`;
+  let entry = clientIpStore.get(key);
+
+  if (!entry || entry.resetTime <= now) {
+    entry = { count: 1, resetTime: now + windowMs };
+    clientIpStore.set(key, entry);
+  } else {
+    entry.count += 1;
+  }
+
+  const remaining = Math.max(0, maxRequestsPerWindow - entry.count);
+  const resetSeconds = Math.ceil((entry.resetTime - now) / 1000);
+
+  res.setHeader("RateLimit-Limit", maxRequestsPerWindow);
+  res.setHeader("RateLimit-Remaining", remaining);
+  res.setHeader("RateLimit-Reset", resetSeconds);
+
+  if (entry.count > maxRequestsPerWindow) {
+    res.setHeader("Retry-After", resetSeconds);
+    return res.status(429).json({
+      ok: false,
+      code: "USDA_BRANDED_LOOKUP_RATE_LIMITED",
+      error: "Too many USDA Branded Foods lookups. Please wait before trying again.",
+      retryAfterSeconds: resetSeconds,
+    });
+  }
+
+  next();
+}

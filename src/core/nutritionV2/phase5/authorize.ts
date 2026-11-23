@@ -50,6 +50,7 @@ import {
   type CodexNutritionV3,
   type CodexNutritionV4,
   type CodexNutritionV5,
+  type CodexNutritionV6,
   type IngredientEvidenceV2,
   type IngredientEvidenceV3,
   type IngredientEvidenceV4,
@@ -62,13 +63,21 @@ import {
 } from '../schema';
 import { canonicalStringify, sha256Hex } from '../usda/digest';
 import { DV_STANDARD_ID } from '../dailyValues';
+import { USDA_BRANDED_API_RELEASE_ID } from '../brandedFoods';
+import {
+  authenticateBrandedContributionsForApply,
+  brandedReviewIdentity,
+  type BrandedApplyAuthentication,
+} from '../brandedEvidenceTrust';
 import { decodeCodexNutrition, encodeCodexNutrition, validateCodexNutrition } from '../validate';
-import { combineAiContributionsWithPreview, validateAiNutrientContributions } from '../aiContribution';
+import { combineAiContributionsWithPreview, validateAiNutrientContributions, validateAiNutrientSupplements, type AiNutrientContribution, type AiNutrientSupplement } from '../aiContribution';
 import { isNutrientId, NUTRIENT_IDS, type NutrientId } from '../nutrients';
 import { isValidStrictServingCount } from '../calculation/servings';
 import { roundCanonicalTotal } from '../calculation/numeric';
 import type { AdvisoryNutritionPreview } from '../calculation/types';
 import { recomputeReviewedNutrition } from '../phase4/session';
+import { adaptRecipe } from '../phase4/adapt';
+import { ingredientMeasurement } from '../phase4/rows';
 import { hasDangerousOwnKey, hasSymbolKeys, materializeNarrow, readOwnDataField } from '../phase4/materialize';
 import {
   PHASE5_AUTHORIZATION_VERSION,
@@ -273,7 +282,7 @@ function conversionBasisFor(
 
 interface BlockBuild {
   readonly ok: true;
-  readonly block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5;
+  readonly block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5 | CodexNutritionV6;
 }
 
 /**
@@ -337,22 +346,33 @@ function persistedRangeRepresentative(
 function buildPersistenceBlock(
   preview: AdvisoryNutritionPreview,
   computedAt: string,
-  reviewReasonByRef: ReadonlyMap<string, 'needs_review'>
+  reviewReasonByRef: ReadonlyMap<string, 'needs_review'>,
+  sourcePreview: AdvisoryNutritionPreview,
 ): BlockBuild {
-  const hasAiEvidence = Boolean(preview.ai_contributions?.length);
+  const supplements = preview.nutrient_supplements ?? [];
+  const hasSupplements = supplements.length > 0;
+  const hasAiEvidence = Boolean(preview.ai_contributions?.length || hasSupplements);
+  const hasBrandedEvidence = Boolean(
+    preview.ai_contributions?.some((entry) => entry.source_kind === 'usda_branded')
+  );
+  const hasAiEstimateEvidence = Boolean(
+    hasSupplements || preview.ai_contributions?.some((entry) => entry.source_kind !== 'usda_branded')
+  );
   // An all-unresolved USDA review still has a dataset source, with no nutrient
   // amounts. Preserve that canonical v1 representation instead of building an
   // invalid source-less block when the last resolved line is cleared.
-  const hasUsdaEvidence = !hasAiEvidence || preview.ingredients.some(
+  const hasUsdaEvidence = preview.ingredients.some(
     (entry) => entry.outcome === 'calculated' && entry.fdc_id !== undefined
-  );
+  ) || (!hasAiEvidence && !hasBrandedEvidence);
   const sources: NutritionSourceId[] = [
     ...(hasUsdaEvidence ? ['usda_fdc' as const] : []),
-    ...(hasAiEvidence ? ['ai_estimate' as const] : []),
+    ...(hasBrandedEvidence ? ['usda_branded' as const] : []),
+    ...(hasAiEstimateEvidence ? ['ai_estimate' as const] : []),
   ];
-  const sourceReleases: Partial<Record<NutritionSourceId, string>> = hasUsdaEvidence
-    ? { usda_fdc: preview.bundle_release }
-    : {};
+  const sourceReleases: Partial<Record<NutritionSourceId, string>> = {
+    ...(hasUsdaEvidence ? { usda_fdc: preview.bundle_release } : {}),
+    ...(hasBrandedEvidence ? { usda_branded: USDA_BRANDED_API_RELEASE_ID } : {}),
+  };
 
   const nutrients: Partial<Record<NutrientId, NutrientResult>> = {};
   for (const id of preview.nutrient_scope) {
@@ -368,7 +388,7 @@ function buildPersistenceBlock(
     };
   }
 
-  const ingredients: IngredientEvidenceV4[] = [];
+  const ingredients: Array<IngredientEvidenceV4 & { source_nutrients?: ReadonlyArray<NutrientId> }> = [];
   let hasEstimate = false;
   let hasCountEvidence = false;
   let hasHouseholdBasis = false;
@@ -436,6 +456,10 @@ function buildPersistenceBlock(
       ...(entry.mass_source === 'ai_estimate' && entry.ai_estimate ? { quantity_estimate: { ...entry.ai_estimate, representative_grams: canonicalGrams } } : {}),
       ...(householdPortion ? { household_portion: householdPortion } : {}),
       ...(rangeRepresentative ? { range_representative: rangeRepresentative } : {}),
+      // SINC-4R1: persisted source coverage is copied from the GENUINE
+      // Apply-time preview, never from the client. It is the proof later
+      // decode/hydration use to reject a conflicting supplement.
+      ...(hasSupplements ? { source_nutrients: [...entry.contributing_nutrients] } : {}),
     });
   }
 
@@ -472,7 +496,29 @@ function buildPersistenceBlock(
     });
   }
 
-  const schema = preview.ai_contributions?.length ? 5 : hasEstimate || hasCountEvidence ? 4 : hasRangeRepresentative ? 3 : hasHouseholdBasis ? 2 : 1;
+  // v6 is written ONLY when separately attributed supplements exist, so an
+  // unchanged v5 workflow keeps producing the identical v5 contract.
+  // Authoritative source-only subtotal per nutrient. Copied from the source
+  // preview BEFORE AI contributions/supplements are combined; it is validation
+  // metadata, not a display total.
+  const sourceAmounts: Partial<Record<NutrientId, number>> = {};
+  if (hasSupplements) {
+    for (const id of preview.nutrient_scope) {
+      const total = sourcePreview.totals[id];
+      if (total && total.covered_ingredient_count > 0) sourceAmounts[id] = total.amount;
+    }
+  }
+  const schema = hasSupplements
+    ? 6
+    : preview.ai_contributions?.length
+      ? 5
+      : hasEstimate || hasCountEvidence
+        ? 4
+        : hasRangeRepresentative
+          ? 3
+          : hasHouseholdBasis
+            ? 2
+            : 1;
   const block = {
     schema,
     basis: 'total',
@@ -488,7 +534,9 @@ function buildPersistenceBlock(
     ingredients,
     unresolved,
     ...(preview.ai_contributions?.length ? { ai_contributions: [...preview.ai_contributions] } : {}),
-  } as CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5;
+    ...(hasSupplements ? { nutrient_supplements: [...supplements] } : {}),
+    ...(hasSupplements ? { source_amounts: sourceAmounts } : {}),
+  } as CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5 | CodexNutritionV6;
   return { ok: true, block };
 }
 
@@ -504,7 +552,18 @@ function buildPersistenceBlock(
  * never throws; always returns a closed result with bounded, input-redacted
  * failures.
  */
-export function authorizeNutritionPersistence(requestRaw: unknown): Phase5AuthorizationResult {
+type Phase5AuthorizationMode = 'apply' | 'preview';
+
+interface Phase5AuthorizationOptions {
+  readonly mode: Phase5AuthorizationMode;
+  /** Present only on the real Apply path, after exact assertion verification. */
+  readonly authenticatedBranded?: BrandedApplyAuthentication;
+}
+
+function authorizeNutritionPersistenceInternal(
+  requestRaw: unknown,
+  options: Phase5AuthorizationOptions,
+): Phase5AuthorizationResult {
   try {
     if (!isPlainObject(requestRaw)) return fail('invalid_request');
     if (hasSymbolKeys(requestRaw) || hasDangerousOwnKey(requestRaw)) return fail('unsafe_request');
@@ -601,20 +660,104 @@ export function authorizeNutritionPersistence(requestRaw: unknown): Phase5Author
           if (text.ok && typeof text.value === 'string') instructions.push(text.value);
         }
       }
-      const validatedAi = validateAiNutrientContributions(aiNutrition.value.contributions, {
-        recipe_digest: trusted.preview.ingredient_digest,
-        line_refs: lineRefs,
-        line_text_by_ref: lineTextByRef,
-        instructions,
-        requireExclusionContext: true,
-      });
-      if (!validatedAi.ok) return fail('stale_preview');
-      persistencePreview = combineAiContributionsWithPreview(trusted.preview, validatedAi.contributions);
+      // A supplement-only review legitimately has no line contributions. An
+      // EMPTY list is not an invalid contribution list; it simply skips the
+      // contribution validator and still validates every supplement below.
+      let validatedContributions: readonly AiNutrientContribution[] = [];
+      if (aiNutrition.value.contributions.length > 0) {
+        const validatedAi = validateAiNutrientContributions(aiNutrition.value.contributions, {
+          recipe_digest: trusted.preview.ingredient_digest,
+          line_refs: lineRefs,
+          line_text_by_ref: lineTextByRef,
+          instructions,
+          requireExclusionContext: true,
+          requireTrustedBranded: options.mode === 'apply',
+          ...(options.mode === 'apply' && options.authenticatedBranded !== undefined
+            ? { brandedAuthentication: options.authenticatedBranded }
+            : {}),
+        });
+        if (!validatedAi.ok) return fail('stale_preview');
+        // SINC-2R2: a branded contribution is bound to the exact authored target
+        // the server verified. Re-adapt the CURRENT recipe and require a full
+        // target match; a client cannot apply a verification issued for a
+        // different ingredient, quantity, unit, or measurement basis.
+        const branded = validatedAi.contributions.filter((entry) => entry.source_kind === 'usda_branded');
+        if (branded.length > 0) {
+          const adaptation = adaptRecipe(recipeField.value);
+          if (!adaptation.ok) return fail('stale_preview');
+          const adaptedByRef = new Map(adaptation.recipe.adapted.map((entry) => [entry.line_ref, entry]));
+          for (const contribution of branded) {
+            const entry = adaptedByRef.get(contribution.line_ref);
+            const target = contribution.usda_branded?.target;
+            const verification = contribution.usda_branded?.verification;
+            if (!entry || !target || !verification) return fail('stale_preview');
+            const expectedReviewIdentity = brandedReviewIdentity(
+              trusted.session_identity,
+              trusted.recipe_key,
+              trusted.servings
+            );
+            if (
+              verification.recipe_digest !== trusted.preview.ingredient_digest ||
+              verification.review_identity !== expectedReviewIdentity
+            ) {
+              return fail('stale_preview');
+            }
+            const measurement = ingredientMeasurement(entry);
+            if (contribution.ingredient.trim() !== entry.ingredient.original.trim()) return fail('stale_preview');
+            if (
+              target.amount !== measurement.amount ||
+              target.unit !== (measurement.raw_unit ?? null) ||
+              target.measurement_kind !== measurement.measurement_kind ||
+              (target.quantity_grams ?? undefined) !== (measurement.grams ?? undefined) ||
+              (target.quantity_ml ?? undefined) !== (measurement.milliliters ?? undefined)
+            ) {
+              return fail('stale_preview');
+            }
+          }
+        }
+        validatedContributions = validatedAi.contributions;
+      }
+      // SINC-4: supplemental estimates are validated against the SAME genuine
+      // source-backed preview. They can only cover a nutrient the source line
+      // genuinely lacks; source identity, release, and resolved weight must match
+      // exactly, and duplicates are rejected. They never replace USDA evidence.
+      const supplementsField = ownField(aiNutrition.value, 'supplements');
+      if (!supplementsField.ok) return fail('unsafe_request');
+      let validatedSupplements: readonly AiNutrientSupplement[] = [];
+      if (supplementsField.present && supplementsField.value !== undefined) {
+        const sourcesByRef = new Map<string, {
+          nutrient_ids: ReadonlyArray<NutrientId>;
+          source_food_id?: string;
+          source_release?: string;
+          weight_grams?: number;
+        }>();
+        for (const entry of trusted.preview.ingredients) {
+          if (entry.outcome !== 'calculated' || entry.fdc_id === undefined) continue;
+          sourcesByRef.set(entry.line_ref, {
+            nutrient_ids: entry.contributing_nutrients,
+            source_food_id: String(entry.fdc_id),
+            source_release: trusted.preview.bundle_release,
+            ...(entry.resolved_grams !== undefined ? { weight_grams: entry.resolved_grams } : {}),
+          });
+        }
+        const validated = validateAiNutrientSupplements(supplementsField.value, {
+          recipe_digest: trusted.preview.ingredient_digest,
+          line_text_by_ref: lineTextByRef,
+          sources_by_ref: sourcesByRef,
+        });
+        if (!validated.ok) return fail('stale_preview');
+        validatedSupplements = validated.supplements;
+      }
+      persistencePreview = combineAiContributionsWithPreview(
+        trusted.preview,
+        validatedContributions,
+        validatedSupplements,
+      );
     }
     if (!previewStillBinds(claimedPreview, persistencePreview)) return fail('calculation_mismatch');
 
     // --- Build the canonical block from the GENUINE result ------------------
-    const built = buildPersistenceBlock(persistencePreview, computedAt.value, reviewReasonByRef);
+    const built = buildPersistenceBlock(persistencePreview, computedAt.value, reviewReasonByRef, trusted.preview);
 
     // --- REPLACE-MODE REGRESSION GATE ---------------------------------------
     // An explicit re-Apply must never silently downgrade a previously applied
@@ -630,7 +773,7 @@ export function authorizeNutritionPersistence(requestRaw: unknown): Phase5Author
       // The existing block may be stored in its encoded frontmatter form; use
       // the SAME decoding the mode resolution already performed.
       const decodedExisting = decodeCodexNutrition(existingField.value);
-      if (decodedExisting.kind === 'v1' || decodedExisting.kind === 'v2' || (decodedExisting.kind === 'v3' || decodedExisting.kind === 'v4' || decodedExisting.kind === 'v5')) {
+      if (decodedExisting.kind === 'v1' || decodedExisting.kind === 'v2' || (decodedExisting.kind === 'v3' || decodedExisting.kind === 'v4' || decodedExisting.kind === 'v5' || decodedExisting.kind === 'v6')) {
         const derivedResolved = new Set(
           built.block.ingredients.filter((entry) => entry.resolved === true).map((entry) => entry.line_ref)
         );
@@ -693,4 +836,62 @@ export function authorizeNutritionPersistence(requestRaw: unknown): Phase5Author
   } catch {
     return fail('validation_error');
   }
+}
+
+/**
+ * The authoritative Phase 5 Apply authorization. Branded contributions are
+ * accepted only with a per-Apply capability minted after cryptographic
+ * verification of the exact attached assertion. A direct call without that
+ * capability fails closed for branded evidence.
+ */
+export function authorizeNutritionPersistence(
+  requestRaw: unknown,
+  authenticatedBranded?: BrandedApplyAuthentication,
+): Phase5AuthorizationResult {
+  return authorizeNutritionPersistenceInternal(requestRaw, {
+    mode: 'apply',
+    ...(authenticatedBranded !== undefined ? { authenticatedBranded } : {}),
+  });
+}
+
+/**
+ * UI-only structural eligibility preview. It never returns a persistence
+ * candidate and never authorizes a write. The real Apply path re-authenticates
+ * every branded assertion before constructing its candidate.
+ */
+export function previewNutritionApplyEligibility(requestRaw: unknown): boolean {
+  return authorizeNutritionPersistenceInternal(requestRaw, { mode: 'preview' }).ok;
+}
+
+/**
+ * The real Apply boundary. It first builds a structurally valid candidate,
+ * verifies the exact ECDSA assertion attached to every branded contribution in
+ * that candidate, then re-authorizes with a one-shot capability bound to the
+ * exact contribution, signature, key, recipe, review, and expiration.
+ */
+export async function authorizeNutritionPersistenceForApply(
+  requestRaw: unknown,
+): Promise<Phase5AuthorizationResult> {
+  const structural = authorizeNutritionPersistenceInternal(requestRaw, { mode: 'preview' });
+  if (!structural.ok) return structural;
+
+  const block = structural.candidate.block as { readonly ai_contributions?: ReadonlyArray<import('../aiContribution').AiNutrientContribution> };
+  const contributions = Array.isArray(block.ai_contributions) ? block.ai_contributions : [];
+  const branded = contributions.filter((entry) => entry.source_kind === 'usda_branded');
+  if (branded.length === 0) return structural;
+
+  const authentication = await authenticateBrandedContributionsForApply(branded, {
+    recipe_digest: structural.candidate.identity.ingredient_digest,
+    review_identity: brandedReviewIdentity(
+      structural.candidate.identity.session_identity,
+      structural.candidate.identity.recipe_key,
+      structural.candidate.identity.servings,
+    ),
+  });
+  if (!authentication.ok) return fail('stale_preview');
+
+  return authorizeNutritionPersistenceInternal(requestRaw, {
+    mode: 'apply',
+    authenticatedBranded: authentication.authentication,
+  });
 }

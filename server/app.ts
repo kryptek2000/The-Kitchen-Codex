@@ -19,6 +19,12 @@ import { interpretWholeRecipeSemantics } from "./wholeRecipeSemanticInterpret.js
 import { bridgeAuthenticatedSemanticsToAdvisorySuggestions } from "./wholeRecipeSemanticUsdaBridge.js";
 import { evaluateAiFirstCandidates } from "./aiFirstCandidateEvaluation.js";
 import { researchNutritionOnServer } from "./nutritionResearch.js";
+import { lookupUsdaBrandedFoods, verifyUsdaBrandedContributions } from "./usdaBrandedFoods.js";
+import {
+  readBrandedLookupRequest,
+  USDA_BRANDED_LOOKUP_RESPONSE_VERSION,
+  USDA_BRANDED_VERIFICATION_RESPONSE_VERSION,
+} from "../src/core/nutritionV2/brandedFoods.js";
 import { planIngredientsOnServer } from "./nutritionPlan.js";
 import { interpretRecipeContextOnServer } from "./nutritionContext.js";
 import { reconcileRecipeContextOnServer } from "./recipeContextReconcile.js";
@@ -39,6 +45,7 @@ import {
   nutritionPlanRateLimiter,
   nutritionContextRateLimiter,
   nutritionContextReconcileRateLimiter,
+  usdaBrandedLookupRateLimiter,
   metadataRecoveryRateLimiter,
   kitchenInterpretRateLimiter,
   kitchenRankRateLimiter,
@@ -135,6 +142,7 @@ import {
   buildNutritionProductAccessStatus,
   buildNutritionProductAccessUnavailableStatusBody,
   NUTRITION_PRODUCT_ACCESS_STATUS_ENDPOINT,
+  requireAdvancedNutritionEditing,
   requireNutritionProductFeature,
   resolveNutritionProductAccessDecision,
 } from "./nutritionProductAccess.js";
@@ -1478,6 +1486,192 @@ export function createApp(opts: CreateAppOptions): express.Express {
       });
     }
   });
+
+  // USDA BRANDED FOODS — explicit Advanced-only external lookup.
+  //
+  // This is NOT an AI route and NOT Basic Nutrition. The user explicitly asks
+  // for manufacturer-supplied USDA records for one selected food term. The
+  // server reads the key from its own environment, contacts only the fixed
+  // official origin, rejects redirects, keeps at most three validated records,
+  // and returns canonical source snapshots. Nothing is applied or saved here.
+  //
+  // Gate order: route cancellation -> endpoint auth -> Advanced entitlement ->
+  // dedicated lookup limiter -> handler. A Basic caller costs ZERO upstream
+  // requests. No recipe, Vault content, or quantity is sent to USDA.
+  app.post(
+    "/api/nutrition/branded-foods/search",
+    routeCancellationMiddleware,
+    requireAiAccessToken,
+    requireAdvancedNutritionEditing(nutritionProductAccessAuthority),
+    usdaBrandedLookupRateLimiter,
+    async (req, res) => {
+      res.setHeader("Cache-Control", "no-store");
+      const request = readBrandedLookupRequest(req.body);
+      if (!request) {
+        return res.status(400).json({
+          ok: false,
+          code: "USDA_BRANDED_LOOKUP_INVALID_REQUEST",
+          error: "Invalid USDA Branded Foods lookup request.",
+          aiAttempted: false,
+        });
+      }
+      const routeState = cancellationFor(req);
+      const cancellation = routeState.controller;
+      if (cancellation.signal.aborted || res.destroyed || res.writableEnded) return;
+
+      const result = await lookupUsdaBrandedFoods(request.query, { signal: cancellation.signal });
+      if (cancellation.signal.aborted || res.destroyed || res.writableEnded) return;
+
+      if (result.ok !== true) {
+        if (result.code === "invalid_request") {
+          return res.status(400).json({
+            ok: false,
+            code: "USDA_BRANDED_LOOKUP_INVALID_REQUEST",
+            error: "Invalid USDA Branded Foods lookup request.",
+            aiAttempted: false,
+          });
+        }
+        if (result.code === "not_configured") {
+          return res.status(503).json({
+            ok: false,
+            code: "USDA_BRANDED_LOOKUP_NOT_CONFIGURED",
+            error: "USDA Branded Foods lookup is not configured on this server.",
+            aiAttempted: false,
+          });
+        }
+        if (result.code === "rate_limited") {
+          const retryAfter = result.retry_after_seconds;
+          if (retryAfter !== undefined) res.setHeader("Retry-After", String(retryAfter));
+          return res.status(429).json({
+            ok: false,
+            code: "USDA_BRANDED_LOOKUP_RATE_LIMITED",
+            error: "USDA Branded Foods lookup is temporarily rate limited. Please wait before trying again.",
+            aiAttempted: false,
+            ...(retryAfter !== undefined ? { retryAfterSeconds: retryAfter } : {}),
+          });
+        }
+        if (result.code === "timeout") {
+          return res.status(504).json({
+            ok: false,
+            code: "USDA_BRANDED_LOOKUP_TIMEOUT",
+            error: "USDA Branded Foods lookup timed out. The ingredient remains unresolved.",
+            aiAttempted: false,
+          });
+        }
+        if (result.code === "not_found") {
+          return res.status(404).json({
+            ok: false,
+            code: "USDA_BRANDED_LOOKUP_NOT_FOUND",
+            error: "No USDA Branded Foods record was found for that request.",
+            aiAttempted: false,
+          });
+        }
+        return res.status(503).json({
+          ok: false,
+          code: result.code === "auth_failed"
+            ? "USDA_BRANDED_LOOKUP_AUTH_FAILED"
+            : result.code === "invalid_response"
+              ? "USDA_BRANDED_LOOKUP_INVALID_RESPONSE"
+              : "USDA_BRANDED_LOOKUP_UNAVAILABLE",
+          error: result.code === "auth_failed"
+            ? "USDA Branded Foods lookup is not authorized by the server configuration."
+            : result.code === "invalid_response"
+              ? "USDA Branded Foods returned an unusable response. The ingredient remains unresolved."
+              : "USDA Branded Foods lookup is temporarily unavailable. The ingredient remains unresolved.",
+          aiAttempted: false,
+        });
+      }
+
+      return res.status(200).json({
+        ok: true,
+        request_version: USDA_BRANDED_LOOKUP_RESPONSE_VERSION,
+        line_ref: request.line_ref,
+        query: result.query,
+        total_hits: result.total_hits,
+        candidates: result.candidates,
+        cache_status: result.cache_status,
+        retrieved_at: result.retrieved_at,
+        signing_public_key: result.signing_public_key,
+        signing_key_id: result.signing_key_id,
+        limitations: [
+          "USDA Branded Foods are manufacturer-supplied label records, not analytically measured generic foods.",
+          "A branded product is a representative estimate unless the authored ingredient names the brand.",
+          "USDA is not sent the recipe, the Vault, or the recipe quantity.",
+        ],
+      });
+    }
+  );
+
+  // USDA BRANDED FOODS — server-authoritative verification at Apply.
+  //
+  // The client may have shown a branded contribution in the working review, but
+  // it cannot make it trusted. This route looks up the SERVER-HELD verified source
+  // snapshot, deterministically recomputes the contribution from that snapshot
+  // and the exact local target, and rejects any mismatch. On success it returns a
+  // fresh verification bound to the canonical contribution digest. No USDA call
+  // and no browser nutrient value is trusted here.
+  app.post(
+    "/api/nutrition/branded-foods/verify",
+    routeCancellationMiddleware,
+    requireAiAccessToken,
+    requireAdvancedNutritionEditing(nutritionProductAccessAuthority),
+    usdaBrandedLookupRateLimiter,
+    async (req, res) => {
+      res.setHeader("Cache-Control", "no-store");
+      const routeState = cancellationFor(req);
+      const cancellation = routeState.controller;
+      if (cancellation.signal.aborted || res.destroyed || res.writableEnded) return;
+      const result = verifyUsdaBrandedContributions(req.body);
+      if (cancellation.signal.aborted || res.destroyed || res.writableEnded) return;
+      if (result.ok !== true) {
+        if (result.code === "invalid_request") {
+          return res.status(400).json({
+            ok: false,
+            code: "USDA_BRANDED_VERIFICATION_INVALID_REQUEST",
+            error: "Invalid USDA Branded Foods verification request.",
+            aiAttempted: false,
+          });
+        }
+        if (result.code === "not_configured") {
+          return res.status(503).json({
+            ok: false,
+            code: "USDA_BRANDED_VERIFICATION_NOT_CONFIGURED",
+            error: "USDA Branded Foods signing is not configured on this server. Branded Apply is unavailable.",
+            aiAttempted: false,
+          });
+        }
+        if (result.code === "evidence_expired") {
+          return res.status(409).json({
+            ok: false,
+            code: "USDA_BRANDED_VERIFICATION_EXPIRED",
+            error: "The USDA Branded Foods source evidence is no longer available. Search again before applying.",
+            aiAttempted: false,
+          });
+        }
+        if (result.code === "evidence_mismatch") {
+          return res.status(409).json({
+            ok: false,
+            code: "USDA_BRANDED_VERIFICATION_EVIDENCE_MISMATCH",
+            error: "The USDA Branded Foods evidence changed and was not applied. Review the product again.",
+            aiAttempted: false,
+          });
+        }
+        return res.status(422).json({
+          ok: false,
+          code: "USDA_BRANDED_VERIFICATION_UNSUPPORTED_TARGET",
+          error: "This branded product cannot be scaled for the current ingredient quantity.",
+          aiAttempted: false,
+        });
+      }
+      return res.status(200).json({
+        ok: true,
+        request_version: USDA_BRANDED_VERIFICATION_RESPONSE_VERSION,
+        signing_public_key: result.signing_public_key,
+        signing_key_id: result.signing_key_id,
+        items: result.items,
+      });
+    }
+  );
 
   // SHISO — the conversational companion.
   //

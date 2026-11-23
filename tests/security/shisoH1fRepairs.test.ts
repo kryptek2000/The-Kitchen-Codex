@@ -444,7 +444,7 @@ describe('H-1F — security invariants', () => {
     // apply_nutrition_corrections, save_working_recipe). They still cannot reach
     // the filesystem, a shell, or the vault directly — every change is performed
     // by the application owner of that state.
-    expect(SHISO_TOOL_NAMES.length).toBe(11);
+    expect(SHISO_TOOL_NAMES.length).toBe(13);
     for (const forbidden of [
       'generate_image', 'create_image', 'edit_image', 'write_vault', 'save_recipe',
       'run_command', 'read_file', 'exec', 'spawn', 'apply_proposal', 'dispatch_action',

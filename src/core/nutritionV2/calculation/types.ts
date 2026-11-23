@@ -15,7 +15,7 @@ import type { NutrientId } from '../nutrients';
 import type { CanonicalUnit } from '../units';
 import type { WrittenMassRangeEvidence } from '../schema';
 import type { UsdaDataType } from '../usda/types';
-import type { AiNutrientContribution } from '../aiContribution';
+import type { AiNutrientContribution, AiNutrientSupplement } from '../aiContribution';
 
 export const CALCULATION_SCHEMA = 1;
 /**
@@ -304,6 +304,8 @@ export interface AdvisoryNutritionPreview {
   readonly unresolved: ReadonlyArray<UnresolvedIngredient>;
   /** Validated AI contributions for unresolved lines; never USDA identity evidence. */
   readonly ai_contributions?: ReadonlyArray<AiNutrientContribution>;
+  /** Separately attributed AI estimates for nutrients missing from source-backed lines. */
+  readonly nutrient_supplements?: ReadonlyArray<AiNutrientSupplement>;
   readonly advisory_only: true;
   readonly application_authorized: false;
 }

@@ -19,7 +19,9 @@
  *   - a record that has no usable portion is reported as exactly that, so SHISO
  *     can explain the limitation instead of inventing a number.
  *
- * No tool can write to disk, hit the network, or reach the Vault.
+ * Every network/analysis call is delegated through an application port owned by
+ * the surface that holds the live review. No tool can write to disk or reach the
+ * Vault; `complete_nutrition` only prepares proposals in the UNSAVED review.
  */
 
 import {
@@ -35,9 +37,44 @@ import {
 import { runBatchInvestigation } from '../core/shiso/batchInvestigation';
 
 import type { AdvancedNutritionSession } from '../core/nutritionV2/phase4';
+import {
+  buildBrandedContribution,
+  type BrandedLookupTarget,
+  type UsdaBrandedFoodCandidate,
+} from '../core/nutritionV2/brandedFoods';
 import type { LiveRowState } from '../core/nutritionV2/phase4/liveRow';
-import type { AiNutrientContribution } from '../core/nutritionV2/aiContribution';
-import { deriveNutritionCoverage, nutritionCoverageSummary } from '../core/shiso/nutritionCoverage';
+import { completionLookupTarget } from '../core/nutritionV2/phase4/rows';
+import { sumNutrientSupplements, validateAiNutrientSupplements, type AiNutrientContribution, type AiNutrientSupplement } from '../core/nutritionV2/aiContribution';
+import { NUTRIENT_REGISTRY, type NutrientId } from '../core/nutritionV2/nutrients';
+import { deriveNutritionCoverage, nutritionCoverageSummary, type EffectiveNutritionLine, type NutritionCoverage, type ShisoNutrientCoverageEntry } from '../core/shiso/nutritionCoverage';
+import type { ResearchTarget } from '../core/nutritionV2/aiResearch';
+
+export interface ShisoBrandedSearchOutcome {
+  readonly ok: boolean;
+  readonly candidates?: ReadonlyArray<UsdaBrandedFoodCandidate>;
+  readonly message?: string;
+  readonly code?: string;
+}
+
+export interface ShisoNutrientGapFocus {
+  readonly line_ref: string;
+  readonly unknown_nutrients: readonly string[];
+}
+
+export interface ShisoAiNutritionOptions {
+  /** Default true. Gap-fill passes set false and let completeNutrition merge once. */
+  readonly apply?: boolean;
+  readonly nutrientGapFocus?: readonly ShisoNutrientGapFocus[];
+}
+
+export interface ShisoExternalResearchOutcome {
+  readonly ok: boolean;
+  readonly contributions?: ReadonlyArray<AiNutrientContribution>;
+  readonly sources?: ReadonlyArray<{ readonly title: string; readonly url: string }>;
+  readonly skipped?: ReadonlyArray<{ readonly line_ref: string; readonly reason: string }>;
+  readonly message?: string;
+  readonly code?: string;
+}
 
 /** Everything a capability may read. Supplied by the application, never the model. */
 export interface ShisoToolContext {
@@ -58,15 +95,47 @@ export interface ShisoToolContext {
     readonly aiContributions?: ReadonlyArray<AiNutrientContribution>;
     readonly summary: string | null;
     readonly unsaved: boolean;
+    /** Canonical ingredient digest of the open review, when available. */
+    readonly recipeDigest?: string | null;
+    /** Current review/session identity (same canonical binding as Apply). */
+    readonly reviewIdentity?: string;
+    /** Whole-recipe 34-nutrient coverage from the existing calculated preview. */
+    readonly nutrientCoverage?: ReadonlyArray<ShisoNutrientCoverageEntry>;
+    /** Accepted supplemental AI estimates for source-backed nutrient gaps. */
+    readonly nutrientSupplements?: ReadonlyArray<AiNutrientSupplement>;
   } | null;
+  /**
+   * SINC-3 ports. They are supplied by the surface that owns the live review
+   * and the existing Advanced Nutrition transports. Absent means the
+   * corresponding source is unavailable; Shiso reports that honestly and
+   * continues with the next stage instead of inventing evidence.
+   */
+  readonly searchBrandedFoods?: ((args: {
+    readonly lineRef: string;
+    readonly query: string;
+    readonly signal?: AbortSignal;
+  }) => Promise<ShisoBrandedSearchOutcome>) | undefined;
+  readonly researchNutrition?: ((args: {
+    readonly targets: ReadonlyArray<ResearchTarget>;
+    readonly lineRefs: ReadonlyArray<string>;
+    readonly lineTextByRef: Readonly<Record<string, string>>;
+    readonly signal?: AbortSignal;
+  }) => Promise<ShisoExternalResearchOutcome>) | undefined;
+  /** Accepts prepared contributions into the UNSAVED working review. */
+  readonly acceptNutritionContributions?:
+    | ((contributions: ReadonlyArray<AiNutrientContribution>, supplements?: ReadonlyArray<AiNutrientSupplement>) => boolean)
+    | undefined;
+  /** Current eligible line refs, owned by the Advanced Nutrition review. */
+  readonly researchEligibleRefs?: ReadonlyArray<string> | undefined;
+  readonly brandedEligibleRefs?: ReadonlyArray<string> | undefined;
   /**
    * Runs the EXISTING Advanced Nutrition analysis through the component that
    * owns it. Registered by that owner; absent means Advanced Nutrition is not
    * open, and SHISO says so instead of simulating a result.
    */
   readonly runAnalysis?: ((signal?: AbortSignal) => Promise<ShisoAnalysisOutcome>) | undefined;
-  /** Structured whole-recipe AI contribution pass, independently validated by the application. */
-  readonly runAiNutrition?: ((signal?: AbortSignal) => Promise<{ readonly ok: boolean; readonly contributions?: readonly AiNutrientContribution[]; readonly totals?: Readonly<Record<string, unknown>>; readonly message?: string }>) | undefined;
+  /** Structured whole-recipe or nutrient-gap AI contribution pass, independently validated by the application. */
+  readonly runAiNutrition?: ((signal?: AbortSignal, options?: ShisoAiNutritionOptions) => Promise<{ readonly ok: boolean; readonly contributions?: readonly AiNutrientContribution[]; readonly totals?: Readonly<Record<string, unknown>>; readonly message?: string }>) | undefined;
   /**
    * H-1F. Loads the authenticated USDA bundle through the EXISTING application
    * controller (`useAdvancedNutritionBundle().load`).
@@ -227,6 +296,59 @@ function getNutritionReview(ctx: ShisoToolContext, includeIngredients: boolean):
       ? 'No ingredient lines in this recipe yet.'
       : nutritionCoverageSummary(coverage),
     data,
+  );
+}
+
+/**
+ * SINC-2: read-only summary of USDA Branded contributions already explicitly
+ * accepted into the working review. SHISO can explain and compare this evidence,
+ * but this tool cannot search USDA, create a candidate, or apply nutrition.
+ */
+function getBrandedEvidence(ctx: ShisoToolContext): ShisoObservation {
+  const n = ctx.nutrition;
+  if (n === null) {
+    return fail(
+      'get_branded_evidence',
+      'no_nutrition_review',
+      'Advanced Nutrition is not currently open for this recipe.',
+    );
+  }
+  if (!nutritionMatchesActiveRecipe(ctx)) {
+    return fail(
+      'get_branded_evidence',
+      'stale_recipe',
+      'This nutrition review no longer matches the open recipe. Re-analyse the current recipe before reviewing branded evidence.',
+    );
+  }
+  const branded = (n.aiContributions ?? []).filter(
+    (entry) => entry.source_kind === 'usda_branded' && entry.usda_branded !== undefined
+  );
+  if (branded.length === 0) {
+    return ok(
+      'get_branded_evidence',
+      'No USDA Branded product evidence has been accepted into this working review.',
+      { count: 0, items: [] },
+    );
+  }
+  const items = branded.slice(0, 10).map((entry) => ({
+    line_ref: entry.line_ref,
+    ingredient: entry.ingredient.slice(0, 200),
+    fdc_id: entry.usda_branded?.fdc_id,
+    product: entry.usda_branded?.description,
+    brand: entry.usda_branded?.brand_owner ?? entry.usda_branded?.brand_name ?? null,
+    basis: entry.usda_branded?.basis,
+    quantity_basis: entry.quantity_basis,
+    confidence: entry.confidence,
+    assumptions: entry.assumptions.slice(0, 8),
+    nutrients: entry.nutrients,
+    limitations: entry.usda_branded?.publication_date !== undefined
+      ? [`USDA publication date: ${entry.usda_branded.publication_date}`]
+      : [],
+  }));
+  return ok(
+    'get_branded_evidence',
+    `${items.length} accepted USDA Branded contribution${items.length === 1 ? '' : 's'} in the working review.`,
+    { count: items.length, items },
   );
 }
 
@@ -582,6 +704,1074 @@ function investigateUnresolvedIngredients(
     continuation_hint: report.complete
       ? null
       : `${report.remaining} ingredient(s) remain. Ask me to continue and I will investigate the rest without repeating this work.`,
+  });
+}
+
+const MAX_COMPLETION_BRANDED_SEARCHES = 4;
+const MAX_COMPLETION_RESEARCH_TARGETS = 3;
+
+interface CompletionRecipeSnapshot {
+  readonly title: string;
+  readonly servings: number | null;
+  readonly ingredients: ReadonlyArray<{ readonly line_ref: string | null; readonly text: string; readonly name: string }>;
+  readonly instructions: ReadonlyArray<string>;
+}
+
+function completionRecipeSnapshot(ctx: ShisoToolContext): CompletionRecipeSnapshot | null {
+  if (ctx.recipe === null) return null;
+  return Object.freeze({
+    title: ctx.recipe.title,
+    servings: ctx.recipe.servings,
+    ingredients: Object.freeze(ctx.recipe.ingredients.map((entry) => Object.freeze({
+      line_ref: typeof entry.line_ref === 'string' ? entry.line_ref : null,
+      text: entry.text,
+      name: entry.name,
+    }))),
+    instructions: Object.freeze(ctx.recipe.instructions.map((step) => step.text)),
+  });
+}
+
+function completionSnapshotKey(snapshot: CompletionRecipeSnapshot | null): string {
+  return snapshot === null ? '' : JSON.stringify(snapshot);
+}
+
+function completionTarget(line: { readonly line_ref: string; readonly text: string }): {
+  readonly target: BrandedLookupTarget;
+  readonly research: Omit<ResearchTarget, 'ambiguity'>;
+} | null {
+  const measurement = completionLookupTarget(line.text);
+  if (!measurement) return null;
+  const shared = {
+    line_ref: line.line_ref,
+    ingredient_text: line.text,
+    query: measurement.query,
+    amount: measurement.amount,
+    unit: measurement.unit,
+    measurement_kind: measurement.measurement_kind,
+    ...(measurement.grams !== undefined ? { quantity_grams: measurement.grams } : {}),
+    ...(measurement.milliliters !== undefined ? { quantity_ml: measurement.milliliters } : {}),
+  };
+  return Object.freeze({
+    target: Object.freeze(shared) as BrandedLookupTarget,
+    research: Object.freeze(shared) as Omit<ResearchTarget, 'ambiguity'>,
+  });
+}
+
+/**
+ * SINC-3 — bounded, source-first completion of the CURRENT unresolved review.
+ *
+ * The user's explicit "resolve/finish/complete the missing nutrition" request is
+ * the authorization. The pipeline runs entirely through the EXISTING authorities:
+ *
+ *   1. deterministic generic USDA analysis + calculator (the Calculate button);
+ *   2. USDA Branded manufacturer evidence (SINC-2), strong usable candidates only;
+ *   3. bounded external nutrition research (AN-WEB-1), eligible identity lines only;
+ *   4. validated AI estimates for whatever remains.
+ *
+ * It only prepares contributions in the UNSAVED working review. It never applies
+ * a saved block, never writes to the Vault, and never promotes a branded proposal
+ * to trusted provenance (Apply still performs the SINC-2 server verification).
+ */
+function nutrientGapLines(coverage: NutritionCoverage): ReadonlyArray<EffectiveNutritionLine> {
+  return coverage.lines.filter((line) =>
+    line.contribution !== undefined &&
+    line.contribution.classification === 'ai_estimate' &&
+    line.partial_known &&
+    line.unknown_nutrients.length > 0
+  );
+}
+
+function mergeGapContribution(
+  existing: AiNutrientContribution,
+  gap: AiNutrientContribution,
+): { readonly contribution: AiNutrientContribution; readonly filled: ReadonlyArray<{ id: string; amount: number; unit: string }> } {
+  if (existing.classification !== 'ai_estimate' || gap.line_ref !== existing.line_ref) {
+    return { contribution: existing, filled: [] };
+  }
+  const nutrients = { ...existing.nutrients };
+  const filled: Array<{ id: string; amount: number; unit: string }> = [];
+  for (const [id, value] of Object.entries(gap.nutrients)) {
+    if (value === undefined) continue;
+    if (existing.nutrients[id as keyof typeof existing.nutrients] !== undefined) continue;
+    if (!existing.unknown_nutrients.includes(id as never)) continue;
+    (nutrients as Record<string, { amount: number; unit: string }>)[id] = { amount: value.amount, unit: value.unit };
+    filled.push({ id, amount: value.amount, unit: value.unit });
+  }
+  if (filled.length === 0) return { contribution: existing, filled };
+  const unknownNutrients = existing.unknown_nutrients.filter(
+    (id) => (nutrients as Record<string, unknown>)[id] === undefined
+  );
+  const assumptions = [...new Set([
+    ...existing.assumptions,
+    ...gap.assumptions,
+    'Additional nutrient values were estimated in a focused nutrient-gap pass.',
+  ])].slice(0, 12);
+  return {
+    contribution: Object.freeze({
+      ...existing,
+      nutrients: Object.freeze(nutrients),
+      unknown_nutrients: Object.freeze(unknownNutrients),
+      assumptions: Object.freeze(assumptions),
+    }),
+    filled,
+  };
+}
+
+function buildWholeRecipeNutrientReport(
+  coverage: ReadonlyArray<ShisoNutrientCoverageEntry>,
+  contributions: ReadonlyArray<AiNutrientContribution>,
+  supplements: ReadonlyArray<AiNutrientSupplement>,
+  filledByRef: ReadonlyMap<string, ReadonlyArray<{ id: string; amount: number; unit: string }>>,
+) {
+  const aiLines = contributions.filter(
+    (entry) => entry.classification === 'ai_estimate' && entry.disposition !== 'excluded'
+  );
+  const supplementTotals = sumNutrientSupplements(supplements) as Record<string, {
+    amount: number;
+    covered_ingredient_count: number;
+    lines: ReadonlySet<string>;
+  }>;
+  const nutrients = coverage.map((entry) => {
+    const remainingAiLines = aiLines
+      .filter((line) => line.nutrients[entry.id] === undefined && line.unknown_nutrients.includes(entry.id))
+      .map((line) => ({ line_ref: line.line_ref, label: line.ingredient }));
+    const filledAiLines = [...filledByRef.values()].filter((values) =>
+      values.some((value) => value.id === entry.id)
+    ).length;
+    const supplementLines = supplementTotals[entry.id]?.lines ?? new Set<string>();
+    const remainingSourceLines = entry.missing_source_lines.filter((line) => !supplementLines.has(line.line_ref));
+    const supplementedSourceLines = [
+      ...(entry.supplemented_lines ?? []),
+      ...entry.missing_source_lines.filter((line) => supplementLines.has(line.line_ref)),
+    ];
+    const totalSupplementAmount = supplementTotals[entry.id]?.amount ?? 0;
+    const existingSupplementAmount = entry.supplemental_estimated_amount ?? 0;
+    const existingSupplementLines = entry.supplemented_lines?.length ?? 0;
+    const totalSupplementLines = supplementTotals[entry.id]?.covered_ingredient_count ?? 0;
+    const newSupplementAmount = Math.max(0, totalSupplementAmount - existingSupplementAmount);
+    const newSupplementLines = Math.max(0, totalSupplementLines - existingSupplementLines);
+    // The published coverage snapshot predates this pass. Add ONLY this pass's
+    // supplemental amounts so existing supplements are never double-counted.
+    const totalAmount = entry.total_amount === null
+      ? totalSupplementAmount > 0 ? Math.round(totalSupplementAmount * 1e6) / 1e6 : null
+      : Math.round((entry.total_amount + newSupplementAmount) * 1e6) / 1e6;
+    const unknownTotal = totalAmount === null;
+    const status = unknownTotal
+      ? 'unknown' as const
+      : remainingSourceLines.length + remainingAiLines.length > 0
+        ? 'partial' as const
+        : 'complete' as const;
+    return Object.freeze({
+      id: entry.id,
+      label: entry.label,
+      unit: entry.unit,
+      status,
+      total_amount: totalAmount,
+      derived_source_subtotal: entry.derived_source_subtotal,
+      ai_estimated_amount: entry.ai_estimated_amount,
+      supplemental_estimated_amount: Math.round(totalSupplementAmount * 1e6) / 1e6,
+      covered_ingredient_count: entry.covered_ingredient_count + newSupplementLines,
+      measurable_ingredient_count: entry.measurable_ingredient_count,
+      missing_source_count: remainingSourceLines.length,
+      missing_source_line_refs: remainingSourceLines.map((line) => line.line_ref),
+      supplemented_source_count: supplementedSourceLines.length,
+      supplemented_source_line_refs: supplementedSourceLines.map((line) => line.line_ref),
+      missing_ai_count: remainingAiLines.length,
+      missing_ai_line_refs: remainingAiLines.map((line) => line.line_ref),
+      filled_ai_lines: filledAiLines,
+    });
+  });
+  const sourceGapNutrients = nutrients.filter((entry) => entry.missing_source_count > 0);
+  const aiGapNutrients = nutrients.filter((entry) => entry.missing_ai_count > 0 || entry.filled_ai_lines > 0);
+  const remainingSourceGapValues = nutrients.reduce((sum, entry) => sum + entry.missing_source_count, 0);
+  const remainingAiGapValues = nutrients.reduce((sum, entry) => sum + entry.missing_ai_count, 0);
+  const supplementedSourceValues = nutrients.reduce((sum, entry) => sum + entry.supplemented_source_count, 0);
+  const reasons: string[] = [];
+  if (remainingAiGapValues > 0) {
+    reasons.push('AI-estimated line gaps can be retried with a working provider');
+  }
+  if (remainingSourceGapValues > 0) {
+    reasons.push(
+      'remaining source-backed gaps can be attempted with another bounded AI supplement pass; values without a defensible estimate remain unknown'
+    );
+  }
+  if (reasons.length === 0) reasons.push('no remaining declared nutrient gaps');
+  return Object.freeze({
+    total_nutrients: nutrients.length,
+    complete_nutrients: nutrients.filter((entry) => entry.status === 'complete').length,
+    partial_nutrients: nutrients.filter((entry) => entry.status === 'partial').length,
+    unknown_nutrients: nutrients.filter((entry) => entry.status === 'unknown').length,
+    nutrients: Object.freeze(nutrients),
+    source_gap_nutrients: Object.freeze(sourceGapNutrients),
+    ai_gap_nutrients: Object.freeze(aiGapNutrients),
+    remaining_source_gap_values: remainingSourceGapValues,
+    remaining_ai_gap_values: remainingAiGapValues,
+    supplemented_source_values: supplementedSourceValues,
+    total_supplements: supplements.length,
+    additional_completion: Object.freeze({
+      possible: remainingAiGapValues > 0 || remainingSourceGapValues > 0,
+      reason: `${reasons.join('; ')}.`,
+    }),
+  });
+}
+
+function wholeRecipeNutrientSummary(report: ReturnType<typeof buildWholeRecipeNutrientReport>): string {
+  if (report.total_nutrients === 0) {
+    return 'Whole-recipe nutrient coverage is unavailable from the current review snapshot.';
+  }
+  const priority = new Set(['niacin', 'added_sugars']);
+  const orderedSourceGaps = [...report.source_gap_nutrients].sort((left, right) =>
+    Number(priority.has(right.id)) - Number(priority.has(left.id))
+  );
+  const sourceNames = orderedSourceGaps.map((entry) => entry.label).join(', ');
+  const supplementedNutrients = report.nutrients.filter((entry) => entry.supplemented_source_count > 0);
+  const aiNames = report.ai_gap_nutrients
+    .filter((entry) => entry.missing_ai_count > 0)
+    .map((entry) => entry.label)
+    .join(', ');
+  return (
+    `Whole-recipe nutrient coverage: ${report.complete_nutrients} of ${report.total_nutrients} nutrients complete, ` +
+    `${report.partial_nutrients} partial, ${report.unknown_nutrients} unknown. ` +
+    (report.supplemented_source_values > 0
+      ? `Supplemental AI estimates cover ${report.supplemented_source_values} source-backed nutrient-line value(s)` +
+        `${supplementedNutrients.length > 0 ? ` (${supplementedNutrients.map((entry) => entry.label).join(', ')})` : ''}. `
+      : 'No source-backed nutrient value has been supplemented. ') +
+    (report.remaining_source_gap_values > 0
+      ? `USDA source-backed gaps remain for ${report.remaining_source_gap_values} nutrient-line value(s) across ` +
+        `${report.source_gap_nutrients.length} nutrient(s)${sourceNames ? ` (${sourceNames})` : ''}; defensible values can be proposed only as separately labeled supplemental AI estimates, otherwise they remain unknown. `
+      : 'No USDA source-backed nutrient-line gaps remain. ') +
+    (report.remaining_ai_gap_values > 0
+      ? `AI-estimated gaps remain for ${report.remaining_ai_gap_values} nutrient-line value(s)${aiNames ? ` (${aiNames})` : ''}. `
+      : 'No AI-estimated nutrient gaps remain. ') +
+    'Known source-backed subtotals and AI-estimated amounts remain separate; verified USDA values are never overwritten by AI estimates. ' +
+    `Additional completion: ${report.additional_completion.reason}`
+  );
+}
+
+const MAX_SOURCE_SUPPLEMENT_GAPS = 160;
+
+interface SourceSupplementPlanLine {
+  readonly line_ref: string;
+  readonly label: string;
+  readonly fdc_id?: number;
+  readonly record_digest?: string;
+  readonly weight_grams?: number;
+  readonly source_release?: string;
+  readonly nutrients: Set<string>;
+}
+
+/**
+ * Plans a bounded set of source-backed line/nutrient gaps. Priority nutrients
+ * (added sugars, niacin, fiber, fats, cholesterol, vitamins/minerals) are
+ * considered first; at most MAX_SOURCE_SUPPLEMENT_GAPS pairs are sent to one AI
+ * request. The full gap count is retained for truthful reporting.
+ */
+function planSourceSupplementGaps(nutrition: NonNullable<ShisoToolContext['nutrition']>): {
+  readonly focus: ReadonlyArray<{ line_ref: string; unknown_nutrients: ReadonlyArray<string> }>;
+  readonly lines: ReadonlyArray<SourceSupplementPlanLine>;
+  readonly total: number;
+  readonly sourcesByRef: ReadonlyMap<string, { nutrient_ids: ReadonlyArray<NutrientId>; source_food_id?: string; source_release?: string; weight_grams?: number }>;
+} {
+  const coverage = nutrition.nutrientCoverage ?? [];
+  const priority = (id: string): number => {
+    if (id === 'added_sugars') return 0;
+    if (id === 'niacin') return 1;
+    if (id === 'fiber') return 2;
+    if (id === 'saturated_fat') return 3;
+    if (id === 'trans_fat') return 4;
+    if (id === 'cholesterol') return 5;
+    if (id.startsWith('vitamin_') || ['thiamin', 'riboflavin', 'pantothenic_acid', 'vitamin_b6', 'biotin', 'folate', 'vitamin_b12', 'choline', 'manganese', 'selenium', 'potassium', 'calcium', 'iron', 'magnesium', 'phosphorus', 'zinc', 'copper'].includes(id)) return 6;
+    return 10;
+  };
+  const entries = [...coverage].sort((left, right) => priority(left.id) - priority(right.id));
+  // The set of nutrients each source line genuinely contributes, derived from
+  // the authoritative coverage projection. A nutrient is present for a line
+  // exactly when the line is NOT listed among that nutrient's missing lines.
+  const missingByRef = new Map<string, Set<string>>();
+  for (const entry of coverage) {
+    for (const line of entry.missing_source_lines) {
+      const ids = missingByRef.get(line.line_ref) ?? new Set<string>();
+      ids.add(entry.id);
+      missingByRef.set(line.line_ref, ids);
+    }
+  }
+  const byRef = new Map<string, SourceSupplementPlanLine>();
+  let total = 0;
+  let plannedPairs = 0;
+  for (const entry of entries) {
+    for (const line of entry.missing_source_lines) {
+      total += 1;
+      if (plannedPairs >= MAX_SOURCE_SUPPLEMENT_GAPS) continue;
+      let planned = byRef.get(line.line_ref);
+      if (!planned) {
+        planned = {
+          line_ref: line.line_ref,
+          label: line.label,
+          ...(line.fdc_id !== undefined ? { fdc_id: line.fdc_id } : {}),
+          ...(line.record_digest !== undefined ? { record_digest: line.record_digest } : {}),
+          ...(line.weight_grams !== undefined ? { weight_grams: line.weight_grams } : {}),
+          ...(line.source_release !== undefined ? { source_release: line.source_release } : {}),
+          nutrients: new Set<string>(),
+        };
+        byRef.set(line.line_ref, planned);
+      }
+      planned.nutrients.add(entry.id);
+      plannedPairs += 1;
+    }
+  }
+  const lines = [...byRef.values()];
+  const sourcesByRef = new Map<string, { nutrient_ids: ReadonlyArray<NutrientId>; source_food_id?: string; source_release?: string; weight_grams?: number }>();
+  for (const line of lines) {
+    const missing = missingByRef.get(line.line_ref) ?? new Set<string>();
+    sourcesByRef.set(line.line_ref, {
+      nutrient_ids: coverage.filter((entry) => !missing.has(entry.id)).map((entry) => entry.id as NutrientId),
+      ...(line.fdc_id !== undefined ? { source_food_id: String(line.fdc_id) } : {}),
+      ...(line.source_release !== undefined ? { source_release: line.source_release } : {}),
+      ...(line.weight_grams !== undefined ? { weight_grams: line.weight_grams } : {}),
+    });
+  }
+  return {
+    focus: lines.map((line) => ({ line_ref: line.line_ref, unknown_nutrients: [...line.nutrients] })),
+    lines,
+    total,
+    sourcesByRef,
+  };
+}
+
+async function completeNutrientGaps(
+  ctx: ShisoToolContext,
+  nutrition: NonNullable<ShisoToolContext['nutrition']>,
+  initialCoverage: NutritionCoverage,
+  gaps: ReadonlyArray<EffectiveNutritionLine>,
+  recipeTextByRef: ReadonlyMap<string, string>,
+  unchanged: () => boolean,
+  signal?: AbortSignal,
+): Promise<ShisoObservation> {
+  const steps: Array<Record<string, unknown>> = [];
+  const notes: Array<{ line_ref?: string; stage: 'usda_branded' | 'external_research' | 'ai_estimate'; message: string }> = [];
+  const existingByRef = new Map<string, AiNutrientContribution>();
+  for (const contribution of nutrition.aiContributions ?? []) existingByRef.set(contribution.line_ref, contribution);
+  const researchUpgrades = new Map<string, AiNutrientContribution>();
+  const filledByRef = new Map<string, ReadonlyArray<{ id: string; amount: number; unit: string }>>();
+  let researchAttempted = false;
+  let aiAttempted = false;
+
+  // Credible evidence first: the existing AN-WEB-1 research operation may upgrade
+  // an AI-estimated line to source-backed evidence. It is bounded to the same
+  // three-target request limit and never touches source-backed USDA lines.
+  const researchTargets = gaps
+    .slice(0, MAX_COMPLETION_RESEARCH_TARGETS)
+    .flatMap((line) => {
+      const lineText = recipeTextByRef.get(line.line_ref);
+      if (lineText === undefined) return [];
+      const targets = completionTarget({ line_ref: line.line_ref, text: lineText });
+      if (!targets) return [];
+      return [{ line: { ...line, text: lineText }, target: { ...targets.research, ambiguity: 'missing_information' as const } }];
+    });
+
+  if (ctx.researchNutrition === undefined) {
+    steps.push({ stage: 'external_research', attempted: false, selected: 0, message: 'External nutrition research is not available in this deployment.' });
+  } else if (researchTargets.length === 0) {
+    steps.push({ stage: 'external_research', attempted: false, selected: 0, message: 'No nutrient-gap line is eligible for external research.' });
+  } else {
+    researchAttempted = true;
+    const lineRefs = researchTargets.map((entry) => entry.line.line_ref);
+    const lineTextByRef = Object.fromEntries(researchTargets.map((entry) => [entry.line.line_ref, entry.line.text]));
+    let result: ShisoExternalResearchOutcome | undefined;
+    try {
+      result = await ctx.researchNutrition({
+        targets: researchTargets.map((entry) => entry.target),
+        lineRefs,
+        lineTextByRef,
+        ...(signal !== undefined ? { signal } : {}),
+      });
+    } catch {
+      notes.push({ stage: 'external_research', message: 'External nutrition research failed.' });
+    }
+    if (signal?.aborted) return fail('complete_nutrition', 'analysis_unavailable', 'The nutrition completion was cancelled.');
+    if (!unchanged()) return fail('complete_nutrition', 'stale_recipe', 'The recipe changed during external research. No contribution was accepted.');
+    if (result?.ok === true) {
+      const allowed = new Set(lineRefs);
+      for (const contribution of result.contributions ?? []) {
+        if (!allowed.has(contribution.line_ref) || contribution.classification !== 'source_backed') continue;
+        const existing = existingByRef.get(contribution.line_ref);
+        if (!existing) continue;
+        const existingKnown = Object.keys(existing.nutrients);
+        const sourceCoversExisting = existingKnown.every(
+          (id) => (contribution.nutrients as Record<string, unknown>)[id] !== undefined
+        );
+        if (!sourceCoversExisting) {
+          notes.push({
+            line_ref: contribution.line_ref,
+            stage: 'external_research',
+            message: 'Research evidence was less complete than the existing AI estimate and was not used.',
+          });
+          continue;
+        }
+        researchUpgrades.set(contribution.line_ref, contribution);
+      }
+      for (const skipped of result.skipped ?? []) {
+        notes.push({ line_ref: skipped.line_ref, stage: 'external_research', message: `External research skipped (${skipped.reason}).` });
+      }
+      if (researchUpgrades.size === 0) {
+        notes.push({ stage: 'external_research', message: 'External research returned no usable source-backed nutrient evidence.' });
+      }
+    } else if (result !== undefined) {
+      notes.push({ stage: 'external_research', message: 'External nutrition research is unavailable.' });
+    }
+    steps.push({ stage: 'external_research', attempted: true, selected: researchUpgrades.size });
+  }
+
+  // One bounded AI request covers both:
+  //   - declared unknown nutrients on EXISTING ai_estimate lines;
+  //   - missing nutrients on source-backed lines, proposed as separate supplements.
+  const sourcePlan = planSourceSupplementGaps(nutrition);
+  const existingSupplements = [...(nutrition.nutrientSupplements ?? [])];
+  const allSupplements = [...existingSupplements];
+  const supplementSeen = new Set(existingSupplements.map((entry) => `${entry.line_ref}\u0000${entry.nutrient_id}`));
+  const newSupplements: AiNutrientSupplement[] = [];
+  const remainingGaps = gaps.filter((line) => !researchUpgrades.has(line.line_ref));
+  const focusByRef = new Map<string, Set<string>>();
+  for (const line of remainingGaps) {
+    const ids = focusByRef.get(line.line_ref) ?? new Set<string>();
+    for (const id of line.unknown_nutrients) ids.add(id);
+    focusByRef.set(line.line_ref, ids);
+  }
+  for (const line of sourcePlan.focus) {
+    const ids = focusByRef.get(line.line_ref) ?? new Set<string>();
+    for (const id of line.unknown_nutrients) ids.add(id);
+    focusByRef.set(line.line_ref, ids);
+  }
+  const combinedFocus = [...focusByRef.entries()].map(([lineRef, ids]) => ({
+    line_ref: lineRef,
+    unknown_nutrients: [...ids],
+  }));
+
+  if (ctx.runAiNutrition === undefined) {
+    steps.push({ stage: 'ai_estimate', attempted: false, selected: 0, message: 'AI nutrition estimation is not available in this deployment.' });
+    steps.push({ stage: 'source_supplements', attempted: false, selected: 0, examined: sourcePlan.total, message: 'AI supplemental estimation is not available in this deployment.' });
+  } else if (combinedFocus.length === 0) {
+    steps.push({ stage: 'ai_estimate', attempted: false, selected: 0, message: 'No AI-estimated or source-backed nutrient gaps remain.' });
+    steps.push({ stage: 'source_supplements', attempted: false, selected: 0, examined: sourcePlan.total, message: 'No source-backed nutrient gaps remain.' });
+  } else {
+    aiAttempted = true;
+    let aiResult: Awaited<ReturnType<NonNullable<ShisoToolContext['runAiNutrition']>>> | undefined;
+    try {
+      aiResult = await ctx.runAiNutrition(signal, { apply: false, nutrientGapFocus: combinedFocus });
+    } catch {
+      aiResult = { ok: false, message: 'The AI estimate service could not be reached.' };
+    }
+    if (signal?.aborted) return fail('complete_nutrition', 'analysis_unavailable', 'The nutrition completion was cancelled.');
+    if (!unchanged()) return fail('complete_nutrition', 'stale_recipe', 'The recipe changed during AI nutrient-gap estimation. No contribution was accepted.');
+    if (aiResult?.ok === true) {
+      const gapByRef = new Map(remainingGaps.map((line) => [line.line_ref, line]));
+      for (const contribution of aiResult.contributions ?? []) {
+        const line = gapByRef.get(contribution.line_ref);
+        const existing = existingByRef.get(contribution.line_ref);
+        if (!line || !existing) continue;
+        const merged = mergeGapContribution(existing, contribution);
+        if (merged.filled.length > 0) {
+          existingByRef.set(contribution.line_ref, merged.contribution);
+          filledByRef.set(contribution.line_ref, merged.filled);
+        }
+      }
+
+      const sourceByRef = new Map(sourcePlan.lines.map((line) => [line.line_ref, line]));
+      const recipeDigest = nutrition.recipeDigest;
+      const reviewIdentity = nutrition.reviewIdentity;
+      if (sourcePlan.lines.length > 0) {
+        if (!recipeDigest || !reviewIdentity) {
+          notes.push({ stage: 'ai_estimate', message: 'Source-backed supplements could not be bound to the current recipe/review identity.' });
+        } else {
+          const proposed: AiNutrientSupplement[] = [];
+          for (const contribution of aiResult.contributions ?? []) {
+            if (contribution.disposition === 'excluded') continue;
+            const line = sourceByRef.get(contribution.line_ref);
+            if (!line) continue;
+            if (
+              contribution.weight_grams !== undefined &&
+              line.weight_grams !== undefined &&
+              Math.abs(contribution.weight_grams - line.weight_grams) > 0.05
+            ) {
+              notes.push({
+                line_ref: line.line_ref,
+                stage: 'ai_estimate',
+                message: 'The AI estimate used a different weight basis than the verified source line, so no supplement was proposed.',
+              });
+              continue;
+            }
+            const authoredLine = (recipeTextByRef.get(line.line_ref) ?? line.label).slice(0, 200);
+            for (const nutrientId of line.nutrients) {
+              const key = `${line.line_ref}\u0000${nutrientId}`;
+              if (supplementSeen.has(key)) continue;
+              const value = contribution.nutrients[nutrientId as NutrientId];
+              if (!value || !Number.isFinite(value.amount) || value.amount <= 0) continue;
+              const definition = NUTRIENT_REGISTRY[nutrientId as NutrientId];
+              if (!definition || value.unit !== definition.unit) continue;
+              if (line.fdc_id === undefined || line.weight_grams === undefined || line.source_release === undefined) {
+                notes.push({ line_ref: line.line_ref, stage: 'ai_estimate', message: 'The source identity or resolved weight is unavailable, so no supplement was proposed.' });
+                continue;
+              }
+              const assumptions = [...new Set([
+                ...contribution.assumptions,
+                'Supplemental AI estimate for a nutrient absent from the verified USDA record; the USDA values are unchanged.',
+              ])].slice(0, 12);
+              proposed.push({
+                supplement_version: 'ai_nutrient_supplement_v1',
+                line_ref: line.line_ref,
+                ingredient: authoredLine,
+                nutrient_id: nutrientId as NutrientId,
+                amount: value.amount,
+                unit: definition.unit,
+                classification: 'ai_estimate',
+                source_kind: 'ai_supplement',
+                source_food_id: String(line.fdc_id),
+                source_release: line.source_release,
+                weight_grams: line.weight_grams,
+                quantity_basis: `${line.label} — ${line.weight_grams} g resolved source weight`.slice(0, 200),
+                assumptions,
+                confidence: contribution.confidence,
+                recipe_digest: recipeDigest,
+                review_identity: reviewIdentity,
+              });
+            }
+          }
+          if (proposed.length > 0) {
+            const validated = validateAiNutrientSupplements(proposed, {
+              recipe_digest: recipeDigest,
+              review_identity: reviewIdentity,
+              line_text_by_ref: Object.fromEntries(recipeTextByRef),
+              sources_by_ref: sourcePlan.sourcesByRef,
+            });
+            if (validated.ok) {
+              for (const supplement of validated.supplements) {
+                const key = `${supplement.line_ref}\u0000${supplement.nutrient_id}`;
+                if (supplementSeen.has(key)) continue;
+                supplementSeen.add(key);
+                allSupplements.push(supplement);
+                newSupplements.push(supplement);
+              }
+            } else {
+              notes.push({ stage: 'ai_estimate', message: `Supplemental proposals were rejected (${(validated as { code?: string }).code ?? 'invalid'}).` });
+            }
+          }
+        }
+      }
+      if (filledByRef.size === 0 && newSupplements.length === 0) {
+        notes.push({ stage: 'ai_estimate', message: 'The AI estimate returned no additional defensible nutrient values.' });
+      }
+    } else {
+      notes.push({ stage: 'ai_estimate', message: aiResult?.message ?? 'AI nutrition estimation did not return a usable contribution.' });
+    }
+    steps.push({ stage: 'ai_estimate', attempted: true, selected: filledByRef.size });
+    steps.push({ stage: 'source_supplements', attempted: true, examined: sourcePlan.total, selected: newSupplements.length });
+  }
+
+  const merged = new Map(existingByRef);
+  for (const [lineRef, contribution] of researchUpgrades) merged.set(lineRef, contribution);
+  const contributions = [...merged.values()];
+  if (!unchanged()) return fail('complete_nutrition', 'stale_recipe', 'The recipe changed before the review could be updated. No contribution was accepted.');
+  let accepted = false;
+  try {
+    accepted = ctx.acceptNutritionContributions(contributions, allSupplements);
+  } catch {
+    accepted = false;
+  }
+  if (!accepted) return fail('complete_nutrition', 'no_nutrition_review', 'The Advanced Nutrition review is not open for this recipe revision, so the prepared contributions were not accepted.');
+
+  const finalCoverage = deriveNutritionCoverage(nutrition.rows, contributions);
+  const brandedLines = finalCoverage.lines.filter((line) => line.contribution?.source_kind === 'usda_branded');
+  const researchLines = finalCoverage.lines.filter((line) => line.contribution !== undefined && line.contribution.classification === 'source_backed' && line.contribution.source_kind !== 'usda_branded');
+  const aiLines = finalCoverage.lines.filter((line) => line.contribution?.classification === 'ai_estimate');
+  const partialLines = finalCoverage.lines.filter((line) => line.partial_known);
+  const filled = [...filledByRef.values()].reduce((sum, ids) => sum + ids.length, 0);
+  const upgraded = researchUpgrades.size;
+  const wholeReport = buildWholeRecipeNutrientReport(
+    ctx.nutrition?.nutrientCoverage ?? [],
+    contributions,
+    allSupplements,
+    filledByRef,
+  );
+  const summary =
+    `Ingredient coverage is ${finalCoverage.resolved + finalCoverage.excluded} of ${finalCoverage.total} lines ` +
+    `(${finalCoverage.source_backed} generic USDA, ${brandedLines.length} USDA Branded, ${researchLines.length} external research, ${aiLines.length} AI-estimated). ` +
+    `I examined ${gaps.length} AI-estimated line(s) with missing nutrient values: ` +
+    (filled > 0
+      ? `filled ${filled} nutrient value(s) across ${filledByRef.size} line(s) with validated AI estimates`
+      : 'no additional defensible nutrient values were returned') +
+    `${upgraded > 0 ? `; ${upgraded} line(s) upgraded to source-backed external research` : ''}. ` +
+    `I examined ${sourcePlan.total} source-backed nutrient gap(s); this bounded pass proposed ${newSupplements.length} supplemental AI estimate(s)` +
+    `${Math.max(0, sourcePlan.total - newSupplements.length) > 0 ? `, leaving ${Math.max(0, sourcePlan.total - newSupplements.length)} unsupplemented` : ''}. ` +
+    `${partialLines.length > 0
+      ? `${partialLines.length} line(s) still have unknown nutrients. `
+      : wholeReport.total_nutrients === 0 ? 'No AI-estimated nutrient gaps remain. ' : ''}` +
+    `${wholeRecipeNutrientSummary(wholeReport)} ` +
+    `Verified USDA contributions were preserved. Nothing was applied or saved.`;
+
+  return ok('complete_nutrition', summary, {
+    total_lines: finalCoverage.total,
+    accounted: finalCoverage.resolved + finalCoverage.excluded,
+    remaining: finalCoverage.unresolved,
+    initial_unresolved: 0,
+    resolved_new: 0,
+    ingredient_coverage: {
+      total_lines: finalCoverage.total,
+      accounted: finalCoverage.resolved + finalCoverage.excluded,
+      unresolved: finalCoverage.unresolved,
+      generic_usda: finalCoverage.source_backed,
+      usda_branded: brandedLines.length,
+      external_research: researchLines.length,
+      ai_estimated: aiLines.length,
+      excluded: finalCoverage.excluded,
+    },
+    whole_recipe_nutrient_coverage: wholeReport,
+    nutrient_coverage: {
+      gap_lines_examined: gaps.length,
+      filled_values: filled,
+      filled_lines: filledByRef.size,
+      upgraded_to_source: upgraded,
+      source_gaps_examined: sourcePlan.total,
+      source_gaps_focused: sourcePlan.focus.length,
+      source_supplements_this_pass: newSupplements.length,
+      total_supplements: allSupplements.length,
+      remaining_source_gap_values: wholeReport.remaining_source_gap_values,
+      additional_completion_possible: wholeReport.additional_completion.possible,
+      remaining_partial_lines: partialLines.length,
+      remaining_partial_line_refs: partialLines.map((line) => line.line_ref),
+      remaining_unknown_nutrients: partialLines.map((line) => ({ line_ref: line.line_ref, unknown_nutrients: line.unknown_nutrients })),
+      partial_known: finalCoverage.partial_known,
+    },
+    breakdown: {
+      generic_usda: finalCoverage.source_backed,
+      usda_branded: brandedLines.length,
+      external_research: researchLines.length,
+      ai_estimated: aiLines.length,
+      excluded: finalCoverage.excluded,
+      qualitative: finalCoverage.qualitative,
+      partial_known: finalCoverage.partial_known,
+    },
+    filled_line_refs: [...filledByRef.keys()],
+    research_upgrade_line_refs: [...researchUpgrades.keys()],
+    supplemental_line_refs: [...new Set(newSupplements.map((entry) => entry.line_ref))],
+    supplemental_nutrient_ids: [...new Set(newSupplements.map((entry) => entry.nutrient_id))],
+    notes: notes.map((note) => note.line_ref === undefined ? note.message : `${note.line_ref}: ${note.message}`).slice(0, 12),
+    steps,
+    honesty_note:
+      'Existing USDA contributions were preserved unchanged. Only previously unknown nutrients on AI-estimated lines were filled; source-backed lines retained their verified values and received separate AI supplemental estimates only for nutrients absent from the source. ' +
+      'No verified value, explicit zero, weight, source identity, or source release was overwritten. Supplemental and filled values remain AI estimates, not verified source records. Apply and Save remain separate explicit actions.',
+  });
+}
+
+function brandedLookupFailureMessage(search: ShisoBrandedSearchOutcome): string {
+  switch (search.code) {
+    case 'not_configured': return 'USDA Branded lookup is not configured.';
+    case 'rate_limited': return 'USDA Branded lookup was rate limited.';
+    case 'auth_failed': return 'USDA Branded lookup is not authorized.';
+    case 'timeout': return 'USDA Branded lookup timed out.';
+    case 'not_found': return 'No USDA Branded record was found.';
+    default: return 'USDA Branded lookup was unavailable.';
+  }
+}
+
+async function completeNutrition(ctx: ShisoToolContext, signal?: AbortSignal): Promise<ShisoObservation> {
+  const nutrition = ctx.nutrition;
+  if (ctx.recipe === null) {
+    return fail('complete_nutrition', 'no_active_recipe', 'No recipe is currently open, so there is no nutrition to complete.');
+  }
+  if (nutrition === null) {
+    return fail(
+      'complete_nutrition',
+      'no_nutrition_review',
+      'Advanced Nutrition is not open for this recipe. Open it first; loading the catalogue creates the review.',
+    );
+  }
+  if (!nutritionMatchesActiveRecipe(ctx)) {
+    return fail(
+      'complete_nutrition',
+      'stale_recipe',
+      'This nutrition review no longer matches the open recipe. Re-analyse the current recipe before completing it.',
+    );
+  }
+  if (ctx.runAnalysis === undefined) {
+    return fail(
+      'complete_nutrition',
+      'no_analysis_owner',
+      'Advanced Nutrition is not open for this recipe, so I cannot run the source analysis.',
+    );
+  }
+  if (ctx.acceptNutritionContributions === undefined) {
+    return fail(
+      'complete_nutrition',
+      'no_nutrition_review',
+      'The current Advanced Nutrition review cannot accept prepared contributions.',
+    );
+  }
+
+  const snapshot = completionRecipeSnapshot(ctx);
+  const snapshotKey = completionSnapshotKey(snapshot);
+  const digestAtStart = nutrition.recipeDigest ?? null;
+  const unchanged = () =>
+    completionSnapshotKey(completionRecipeSnapshot(ctx)) === snapshotKey &&
+    (digestAtStart === null || (ctx.nutrition?.recipeDigest ?? null) === digestAtStart);
+  const initialCoverage = deriveNutritionCoverage(nutrition.rows, nutrition.aiContributions ?? []);
+  const initialUnresolved = initialCoverage.lines.filter((line) => !line.resolved && line.status !== 'excluded');
+  const recipeTextByRef = new Map<string, string>();
+  for (const ingredient of ctx.recipe.ingredients) {
+    if (typeof ingredient.line_ref === 'string') recipeTextByRef.set(ingredient.line_ref, ingredient.text);
+  }
+
+  const initialGaps = nutrientGapLines(initialCoverage);
+  if (initialUnresolved.length === 0 && nutrition.rows.length > 0) {
+    // SINC-4: a fully resolved source-backed recipe can still have nutrient
+    // gaps that are absent from the verified USDA records. Explicit completion
+    // must investigate those as separately labeled supplements.
+    const hasSourceBackedGaps = (nutrition.nutrientCoverage ?? []).some(
+      (entry) => entry.missing_source_lines.length > 0
+    );
+    if (initialGaps.length > 0 || hasSourceBackedGaps) {
+      return completeNutrientGaps(ctx, nutrition, initialCoverage, initialGaps, recipeTextByRef, unchanged, signal);
+    }
+    const initialWholeReport = buildWholeRecipeNutrientReport(
+      nutrition.nutrientCoverage ?? [],
+      nutrition.aiContributions ?? [],
+      nutrition.nutrientSupplements ?? [],
+      new Map(),
+    );
+    return ok(
+      'complete_nutrition',
+      `Ingredient coverage is ${initialCoverage.resolved + initialCoverage.excluded} of ${initialCoverage.total} lines. ` +
+        `${wholeRecipeNutrientSummary(initialWholeReport)} ` +
+        `No new source or estimate request was needed. Existing verified USDA contributions are unchanged. Nothing was applied or saved.`,
+      {
+        total_lines: initialCoverage.total,
+        accounted: initialCoverage.resolved + initialCoverage.excluded,
+        remaining: initialCoverage.unresolved,
+        initial_unresolved: 0,
+        resolved_new: 0,
+        ingredient_coverage: {
+          total_lines: initialCoverage.total,
+          accounted: initialCoverage.resolved + initialCoverage.excluded,
+          unresolved: initialCoverage.unresolved,
+          generic_usda: initialCoverage.source_backed,
+          usda_branded: initialCoverage.lines.filter((line) => line.contribution?.source_kind === 'usda_branded').length,
+          external_research: initialCoverage.lines.filter((line) => line.contribution?.classification === 'source_backed' && line.contribution.source_kind !== 'usda_branded').length,
+          ai_estimated: initialCoverage.ai_estimated,
+          excluded: initialCoverage.excluded,
+        },
+        nutrient_coverage: {
+          gap_lines_examined: 0,
+          filled_values: 0,
+          filled_lines: 0,
+          upgraded_to_source: 0,
+          remaining_partial_lines: 0,
+          remaining_partial_line_refs: [],
+          remaining_unknown_nutrients: [],
+          partial_known: 0,
+        },
+        breakdown: {
+          generic_usda: initialCoverage.source_backed,
+          usda_branded: initialCoverage.lines.filter((line) => line.contribution?.source_kind === 'usda_branded').length,
+          external_research: initialCoverage.lines.filter((line) => line.contribution?.classification === 'source_backed' && line.contribution.source_kind !== 'usda_branded').length,
+          ai_estimated: initialCoverage.ai_estimated,
+          excluded: initialCoverage.excluded,
+          qualitative: initialCoverage.qualitative,
+          partial_known: initialCoverage.partial_known,
+        },
+        nutrition_status: 'partial',
+        preview_state: 'partial',
+        whole_recipe_nutrient_coverage: initialWholeReport,
+        steps: [],
+        notes: [],
+        honesty_note: 'No new provider or source request was made. This confirms only the review-declared nutrient gaps; it does not claim analytically complete nutrition for every USDA record.',
+      },
+    );
+  }
+
+  let analysis: ShisoAnalysisOutcome;
+  try {
+    analysis = await ctx.runAnalysis(signal);
+  } catch {
+    return fail('complete_nutrition', 'analysis_unavailable', 'The source nutrition analysis could not be completed.');
+  }
+  if (signal?.aborted) {
+    return fail('complete_nutrition', 'analysis_unavailable', 'The nutrition completion was cancelled.');
+  }
+  if (!analysis.ok) {
+    return fail('complete_nutrition', 'analysis_unavailable', analysis.message ?? 'The source nutrition analysis could not be completed.');
+  }
+  if (!unchanged()) {
+    return fail('complete_nutrition', 'stale_recipe', 'The recipe changed while the source analysis was running. No contribution was accepted.');
+  }
+
+  // The review snapshot can be empty when the catalogue has just been loaded.
+  // The fresh analysis outcome is then the authoritative unresolved set.
+  const unresolvedLines = initialUnresolved.length > 0
+    ? initialUnresolved
+    : analysis.unresolved_line_refs.map((ref) => ({
+        line_ref: ref,
+        source_status: 'needs_match' as const,
+        status: 'needs_match' as const,
+      } as unknown as (typeof initialUnresolved)[number]));
+
+  const steps: Array<Record<string, unknown>> = [];
+  const notes: Array<{ line_ref?: string; stage: 'usda_branded' | 'external_research' | 'ai_estimate'; message: string }> = [];
+  const branded: AiNutrientContribution[] = [];
+  const research: AiNutrientContribution[] = [];
+  let ai: AiNutrientContribution[] = [];
+  let brandedAttempted = false;
+  let researchAttempted = false;
+  let aiAttempted = false;
+
+  const brandedEligible = ctx.brandedEligibleRefs !== undefined ? new Set(ctx.brandedEligibleRefs) : null;
+  const brandedTargets = unresolvedLines
+    .filter((line) => line.source_status === 'needs_match')
+    .filter((line) => brandedEligible === null || brandedEligible.has(line.line_ref))
+    .slice(0, MAX_COMPLETION_BRANDED_SEARCHES);
+
+  if (ctx.searchBrandedFoods === undefined) {
+    steps.push({ stage: 'usda_branded', attempted: false, selected: 0, message: 'USDA Branded lookup is not available in this deployment.' });
+  } else if (brandedTargets.length === 0) {
+    steps.push({ stage: 'usda_branded', attempted: false, selected: 0, message: 'No unresolved identity line is eligible for a branded lookup.' });
+  } else {
+    brandedAttempted = true;
+    for (const line of brandedTargets) {
+      if (signal?.aborted) return fail('complete_nutrition', 'analysis_unavailable', 'The nutrition completion was cancelled.');
+      const lineText = recipeTextByRef.get(line.line_ref);
+      if (lineText === undefined) {
+        notes.push({ line_ref: line.line_ref, stage: 'usda_branded', message: 'The authored ingredient text is unavailable for a branded lookup.' });
+        continue;
+      }
+      const targets = completionTarget({ line_ref: line.line_ref, text: lineText });
+      if (!targets) {
+        notes.push({ line_ref: line.line_ref, stage: 'usda_branded', message: 'The ingredient text has no usable food name for a branded lookup.' });
+        continue;
+      }
+      let search: ShisoBrandedSearchOutcome;
+      try {
+        search = await ctx.searchBrandedFoods({
+          lineRef: line.line_ref,
+          query: targets.target.query,
+          ...(signal !== undefined ? { signal } : {}),
+        });
+      } catch {
+        notes.push({ line_ref: line.line_ref, stage: 'usda_branded', message: 'The USDA Branded lookup failed.' });
+        continue;
+      }
+      if (signal?.aborted) return fail('complete_nutrition', 'analysis_unavailable', 'The nutrition completion was cancelled.');
+      if (!unchanged()) {
+        return fail('complete_nutrition', 'stale_recipe', 'The recipe changed during the branded lookup. No contribution was accepted.');
+      }
+      if (!search.ok) {
+        notes.push({ line_ref: line.line_ref, stage: 'usda_branded', message: brandedLookupFailureMessage(search) });
+        continue;
+      }
+      const candidate = (search.candidates ?? []).find((entry) =>
+        entry.usable === true &&
+        entry.match_quality === 'strong' &&
+        typeof entry.evidence_id === 'string' &&
+        entry.evidence_id.length >= 8
+      );
+      if (!candidate) {
+        notes.push({ line_ref: line.line_ref, stage: 'usda_branded', message: 'No strong, usable USDA Branded product was found.' });
+        continue;
+      }
+      const built = buildBrandedContribution(candidate, targets.target);
+      if (!built.ok) {
+        notes.push({ line_ref: line.line_ref, stage: 'usda_branded', message: `The branded product could not be scaled safely (${(built as { reason?: string }).reason ?? 'unsupported'}).` });
+        continue;
+      }
+      branded.push(built.contribution);
+    }
+    steps.push({ stage: 'usda_branded', attempted: true, selected: branded.length });
+  }
+
+  const researchEligible = ctx.researchEligibleRefs !== undefined ? new Set(ctx.researchEligibleRefs) : null;
+  const brandedRefs = new Set(branded.map((entry) => entry.line_ref));
+  const researchTargets = unresolvedLines
+    .filter((line) => line.source_status === 'needs_match')
+    .filter((line) => !brandedRefs.has(line.line_ref))
+    .filter((line) => researchEligible === null || researchEligible.has(line.line_ref))
+    .slice(0, MAX_COMPLETION_RESEARCH_TARGETS)
+    .flatMap((line) => {
+      const lineText = recipeTextByRef.get(line.line_ref);
+      if (lineText === undefined) return [];
+      const targets = completionTarget({ line_ref: line.line_ref, text: lineText });
+      if (!targets) return [];
+      return [{ line: { ...line, text: lineText }, target: { ...targets.research, ambiguity: 'missing_information' as const } }];
+    });
+
+  if (ctx.researchNutrition === undefined) {
+    steps.push({ stage: 'external_research', attempted: false, selected: 0, message: 'External nutrition research is not available in this deployment.' });
+  } else if (researchTargets.length === 0) {
+    steps.push({ stage: 'external_research', attempted: false, selected: 0, message: 'No remaining identity line is eligible for external research.' });
+  } else {
+    researchAttempted = true;
+    const lineRefs = researchTargets.map((entry) => entry.line.line_ref);
+    const lineTextByRef = Object.fromEntries(researchTargets.map((entry) => [entry.line.line_ref, entry.line.text]));
+    let result: ShisoExternalResearchOutcome | undefined;
+    try {
+      result = await ctx.researchNutrition({
+        targets: researchTargets.map((entry) => entry.target),
+        lineRefs,
+        lineTextByRef,
+        ...(signal !== undefined ? { signal } : {}),
+      });
+    } catch {
+      notes.push({ stage: 'external_research', message: 'External nutrition research failed.' });
+    }
+    if (signal?.aborted) return fail('complete_nutrition', 'analysis_unavailable', 'The nutrition completion was cancelled.');
+    if (!unchanged()) {
+      return fail('complete_nutrition', 'stale_recipe', 'The recipe changed during external research. No contribution was accepted.');
+    }
+    if (result?.ok === true) {
+      const allowed = new Set(lineRefs);
+      for (const contribution of result.contributions ?? []) {
+        if (allowed.has(contribution.line_ref) && !brandedRefs.has(contribution.line_ref)) research.push(contribution);
+      }
+      for (const skipped of result.skipped ?? []) {
+        notes.push({ line_ref: skipped.line_ref, stage: 'external_research', message: `External research skipped (${skipped.reason}).` });
+      }
+      if (research.length === 0) notes.push({ stage: 'external_research', message: 'External research returned no usable source-backed contribution.' });
+    } else if (result !== undefined) {
+      notes.push({ stage: 'external_research', message: result.message ?? 'External nutrition research did not return usable evidence.' });
+    }
+    steps.push({ stage: 'external_research', attempted: true, selected: research.length });
+  }
+
+  const coveredRefs = new Set([...branded, ...research].map((entry) => entry.line_ref));
+  const remainingForAi = unresolvedLines.filter((line) => !coveredRefs.has(line.line_ref));
+  if (ctx.runAiNutrition === undefined) {
+    steps.push({ stage: 'ai_estimate', attempted: false, selected: 0, message: 'AI nutrition estimation is not available in this deployment.' });
+  } else if (remainingForAi.length === 0) {
+    steps.push({ stage: 'ai_estimate', attempted: false, selected: 0, message: 'Every remaining unresolved line was covered by verified source evidence.' });
+  } else {
+    aiAttempted = true;
+    let aiResult: Awaited<ReturnType<NonNullable<ShisoToolContext['runAiNutrition']>>> | undefined;
+    try {
+      aiResult = await ctx.runAiNutrition(signal);
+    } catch {
+      aiResult = { ok: false, message: 'The AI estimate service could not be reached.' };
+    }
+    if (signal?.aborted) return fail('complete_nutrition', 'analysis_unavailable', 'The nutrition completion was cancelled.');
+    if (!unchanged()) {
+      return fail('complete_nutrition', 'stale_recipe', 'The recipe changed during AI estimation. No contribution was accepted.');
+    }
+    if (aiResult?.ok === true) {
+      const remainingRefs = new Set(remainingForAi.map((line) => line.line_ref));
+      ai = (aiResult.contributions ?? []).filter((entry) => remainingRefs.has(entry.line_ref));
+      if (ai.length === 0) notes.push({ stage: 'ai_estimate', message: 'The AI estimate returned no usable contribution for the remaining lines.' });
+    } else {
+      notes.push({ stage: 'ai_estimate', message: aiResult?.message ?? 'AI nutrition estimation did not return a usable contribution.' });
+    }
+    steps.push({ stage: 'ai_estimate', attempted: true, selected: ai.length });
+  }
+
+  // One cumulative write to the UNSAVED review. Existing contributions are
+  // preserved; branded and researched evidence outrank an AI estimate on the
+  // same line. Source-resolved lines remain source-resolved because the existing
+  // combiner never lets a contribution replace deterministic USDA evidence.
+  const merged = new Map<string, AiNutrientContribution>();
+  for (const entry of nutrition.aiContributions ?? []) merged.set(entry.line_ref, entry);
+  for (const entry of ai) merged.set(entry.line_ref, entry);
+  for (const entry of research) merged.set(entry.line_ref, entry);
+  for (const entry of branded) merged.set(entry.line_ref, entry);
+  const contributions = [...merged.values()];
+
+  if (!unchanged()) {
+    return fail('complete_nutrition', 'stale_recipe', 'The recipe changed before the review could be updated. No contribution was accepted.');
+  }
+  let accepted = false;
+  try {
+    accepted = ctx.acceptNutritionContributions(contributions);
+  } catch {
+    accepted = false;
+  }
+  if (!accepted) {
+    return fail(
+      'complete_nutrition',
+      'no_nutrition_review',
+      'The Advanced Nutrition review is not open for this recipe revision, so the prepared contributions were not accepted.',
+    );
+  }
+
+  const finalCoverage = deriveNutritionCoverage(nutrition.rows, contributions);
+  const brandedLines = finalCoverage.lines.filter((line) => line.contribution?.source_kind === 'usda_branded');
+  const researchLines = finalCoverage.lines.filter((line) =>
+    line.contribution !== undefined &&
+    line.contribution.classification === 'source_backed' &&
+    line.contribution.source_kind !== 'usda_branded'
+  );
+  const aiLines = finalCoverage.lines.filter((line) => line.contribution?.classification === 'ai_estimate');
+  const remainingLines = finalCoverage.lines.filter((line) => !line.resolved && line.status !== 'excluded');
+  const accounted = finalCoverage.resolved + finalCoverage.excluded;
+  const resolvedNew = Math.max(0, unresolvedLines.length - remainingLines.length);
+  const hasEstimatedOrRepresentativeSource =
+    brandedLines.length > 0 || researchLines.length > 0 || aiLines.length > 0;
+  const nutritionStatus =
+    remainingLines.length === 0 && finalCoverage.partial_known === 0 && !hasEstimatedOrRepresentativeSource
+      ? 'complete'
+      : 'partial';
+  const resolvedByAi = new Set(aiLines.map((line) => line.line_ref));
+  const stillUnresolvedRefs = new Set(remainingLines.map((line) => line.line_ref));
+  const displayNotes = notes.flatMap((note) => {
+    if (note.line_ref === undefined) return [note.message];
+    const label = recipeTextByRef.get(note.line_ref) ?? note.line_ref;
+    if (stillUnresolvedRefs.has(note.line_ref)) {
+      return [`${label}: ${note.message} It still needs attention.`];
+    }
+    if (resolvedByAi.has(note.line_ref)) {
+      return [`${label}: ${note.message} Completed by a validated AI estimate.`];
+    }
+    return [];
+  });
+  const summary =
+    `Completed a bounded source-first nutrition pass: ${resolvedNew} of ${unresolvedLines.length} previously unresolved line(s) resolved. ` +
+    `${finalCoverage.source_backed} generic USDA, ${brandedLines.length} USDA Branded, ${researchLines.length} external research, ` +
+    `${aiLines.length} AI-estimated; ${accounted} of ${finalCoverage.total} lines are now accounted for` +
+    `${remainingLines.length > 0 ? `; ${remainingLines.length} still need attention` : ''}. ` +
+    `${finalCoverage.partial_known > 0 ? `${finalCoverage.partial_known} line(s) retain unknown nutrients. ` : ''}Nothing was applied or saved.`;
+
+  return ok('complete_nutrition', summary, {
+    total_lines: finalCoverage.total,
+    accounted,
+    remaining: remainingLines.length,
+    initial_unresolved: unresolvedLines.length,
+    resolved_new: resolvedNew,
+    breakdown: {
+      generic_usda: finalCoverage.source_backed,
+      usda_branded: brandedLines.length,
+      external_research: researchLines.length,
+      ai_estimated: aiLines.length,
+      excluded: finalCoverage.excluded,
+      qualitative: finalCoverage.qualitative,
+      partial_known: finalCoverage.partial_known,
+    },
+    branded_line_refs: brandedLines.map((line) => line.line_ref),
+    research_line_refs: researchLines.map((line) => line.line_ref),
+    ai_line_refs: aiLines.map((line) => line.line_ref),
+    remaining_line_refs: remainingLines.map((line) => line.line_ref),
+    remaining_lines: remainingLines.slice(0, 20).map((line) => ({
+      line_ref: line.line_ref,
+      status: line.status,
+      known_nutrients: line.known_nutrients,
+      unknown_nutrients: line.unknown_nutrients,
+    })),
+    partial_lines: finalCoverage.lines
+      .filter((line) => line.partial_known)
+      .slice(0, 20)
+      .map((line) => ({
+        line_ref: line.line_ref,
+        unknown_nutrients: line.unknown_nutrients,
+      })),
+    nutrition_status: nutritionStatus,
+    preview_state: remainingLines.length === 0 ? nutritionStatus : 'partial',
+    steps,
+    notes: displayNotes.slice(0, 12),
+    honesty_note:
+      'Branded and researched contributions are proposals in the UNSAVED working review. ' +
+      'Apply remains an explicit user action and performs the server-authenticated branded check; Save to Vault remains a separate explicit action. ' +
+      (aiAttempted ? 'AI values are estimates, not authenticated source records. ' : '') +
+      'Unknown nutrients are not treated as zero.',
   });
 }
 
@@ -1043,6 +2233,8 @@ export function executeShisoTool(
         return getCurrentRecipe(ctx);
       case 'get_nutrition_review':
         return getNutritionReview(ctx, args.include_ingredients === true);
+      case 'get_branded_evidence':
+        return getBrandedEvidence(ctx);
       case 'search_usda_foods':
         return searchUsdaFoods(ctx, args.query, args.limit ?? SHISO_LIMITS.maxSearchResults);
       case 'inspect_usda_food':
@@ -1057,6 +2249,8 @@ export function executeShisoTool(
         );
       case 'run_nutrition_analysis':
         return runNutritionAnalysis(ctx, signal);
+      case 'complete_nutrition':
+        return completeNutrition(ctx, signal);
       case 'get_capability_status':
         return getCapabilityStatus(ctx);
       case 'apply_ingredient_edits':

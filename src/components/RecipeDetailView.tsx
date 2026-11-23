@@ -50,6 +50,7 @@ import { storedRecipeDescription, visibleRecipeTags } from '../utils/recipePrese
 import {
   type AdvancedNutritionAiResolveHandler,
   type AdvancedNutritionResearchHandler,
+  type AdvancedNutritionBrandedLookupHandler,
   type AdvancedNutritionAiEstimateHandler,
   type AdvancedNutritionRecipeContextReviewHandler,
   type AdvancedNutritionApplyHandler,
@@ -122,6 +123,8 @@ interface RecipeDetailViewProps {
   onResolveAdvancedNutritionAiFirst?: AdvancedNutritionAiResolveHandler;
   /** Optional external nutrition research port (browser shell only). */
   onResearchAdvancedNutritionAi?: AdvancedNutritionResearchHandler;
+  /** Optional explicit USDA Branded Foods lookup port (browser shell only). */
+  onSearchBrandedFoods?: AdvancedNutritionBrandedLookupHandler;
   /** Optional AI-3 bounded mass-estimate port (injected by the shell). */
   onEstimateMassesWithAi?: AdvancedNutritionAiEstimateHandler;
   /** Optional AI-4D2 recipe-context REVIEW port (injected by the shell). */
@@ -159,6 +162,7 @@ export function RecipeDetailView({
   onResolveAdvancedNutritionAi,
   onResolveAdvancedNutritionAiFirst,
   onResearchAdvancedNutritionAi,
+  onSearchBrandedFoods,
   onEstimateMassesWithAi,
   onReviewRecipeContextWithAi,
 }: RecipeDetailViewProps) {
@@ -1099,6 +1103,7 @@ export function RecipeDetailView({
                 onResolveAdvancedNutritionAi={onResolveAdvancedNutritionAi}
                 onResolveAdvancedNutritionAiFirst={onResolveAdvancedNutritionAiFirst}
                 onResearchAdvancedNutritionAi={onResearchAdvancedNutritionAi}
+                onSearchBrandedFoods={onSearchBrandedFoods}
                 onEstimateMassesWithAi={onEstimateMassesWithAi}
                 onReviewRecipeContextWithAi={onReviewRecipeContextWithAi}
                 advancedNutritionAiAvailability={advancedNutritionAiAvailability}

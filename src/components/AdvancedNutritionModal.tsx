@@ -1,4 +1,5 @@
 import { flushSync } from 'react-dom';
+import { brandedBrandAppearsInIngredient, type UsdaBrandedFoodCandidate } from '../core/nutritionV2/brandedFoods';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { X, ShieldAlert, FlaskConical, CheckCircle2, AlertTriangle, Info, Search, Sparkles, ChevronDown } from 'lucide-react';
 import { convertMassToGrams, type NormalizedUnit } from '../utils/measurements';
@@ -205,6 +206,25 @@ export interface AdvancedNutritionAiAmountOffer {
   readonly hint: { readonly unit: string | null; readonly size: string | null };
 }
 
+/** One explicit USDA Branded Foods lookup state (SINC-2). */
+export interface AdvancedNutritionBrandedUi {
+  readonly available: boolean;
+  readonly running: boolean;
+  readonly message: string | null;
+  readonly lines: ReadonlyArray<AdvancedNutritionResearchCandidate>;
+  readonly selectedLineRef: string | null;
+  readonly candidates: ReadonlyArray<UsdaBrandedFoodCandidate>;
+  readonly selectedFdcId: number | null;
+  readonly representativeAccepted: boolean;
+  readonly cacheStatus: 'hit' | 'miss' | null;
+  readonly retrievedAt: string | null;
+  readonly onSelectLine: (lineRef: string) => void;
+  readonly onSearch: () => void;
+  readonly onSelectCandidate: (fdcId: number) => void;
+  readonly onAcceptRepresentative: (accepted: boolean) => void;
+  readonly onUse: () => void;
+}
+
 /**
  * Optional AI-assisted exception-resolution UI (advisory only). The AI suggests
  * food search phrases and bounded amount/count interpretations; the deterministic
@@ -246,6 +266,8 @@ export interface AdvancedNutritionAiUi {
   readonly researchLimit?: number;
   readonly onResearch?: () => void;
   readonly onUseResearch?: () => void;
+  /** SINC-2: explicit USDA Branded Foods lookup state. */
+  readonly brandedLookup?: AdvancedNutritionBrandedUi;
   readonly amountOffers: Readonly<Record<string, ReadonlyArray<AdvancedNutritionAiAmountOffer>>>;
   /**
    * AI-3 estimate OFFERS. Display-only. An offer that merely exists never
@@ -1143,6 +1165,13 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
   );
   const evidence = useMemo(() => (preview ? ingredientEvidenceViews(preview) : null), [preview]);
   const coverage = useMemo(() => (preview ? coverageSummary(preview) : null), [preview]);
+  // Nutrients that contain a separately attributed AI supplement. The row
+  // value stays the whole-recipe total, but the badge makes the mixed
+  // provenance explicit (verified subtotal + AI supplement).
+  const supplementedNutrients = useMemo(
+    () => new Set((preview?.nutrient_supplements ?? []).map((entry) => entry.nutrient_id)),
+    [preview]
+  );
   const energy = useMemo(
     () =>
       display && preview
@@ -1618,6 +1647,193 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                   )}
                 </div>
               )}
+              {ai.brandedLookup !== undefined && (() => {
+                const branded = ai.brandedLookup;
+                if (branded === undefined) return null;
+                const selectedLine = branded.lines.find((line) => line.line_ref === branded.selectedLineRef);
+                const selectedCandidate = branded.candidates.find((candidate) => candidate.fdc_id === branded.selectedFdcId);
+                const requiresRepresentative = selectedLine !== undefined && selectedCandidate !== undefined
+                  ? !brandedBrandAppearsInIngredient(selectedCandidate, selectedLine.ingredient)
+                  : false;
+                const basisText = (candidate: UsdaBrandedFoodCandidate): string => {
+                  if (candidate.basis === 'per_serving_g') {
+                    return candidate.serving !== undefined
+                      ? `Per 1 label serving (${candidate.serving.amount} ${candidate.serving.unit}${candidate.serving.household !== undefined ? `; ${candidate.serving.household}` : ''})`
+                      : 'Per 1 label serving';
+                  }
+                  if (candidate.basis === 'per_serving_ml') {
+                    return candidate.serving !== undefined
+                      ? `Per 1 label serving (${candidate.serving.amount} ${candidate.serving.unit}${candidate.serving.household !== undefined ? `; ${candidate.serving.household}` : ''}); volume basis`
+                      : 'Per 1 label serving; volume basis';
+                  }
+                  if (candidate.basis === 'per_100_g') return 'USDA standardized per 100 g';
+                  return 'Serving basis unavailable';
+                };
+                const nutrientText = (candidate: UsdaBrandedFoodCandidate): string =>
+                  Object.entries(candidate.nutrients)
+                    .map(([id, value]) => `${id}: ${value?.amount} ${value?.unit}`)
+                    .join(' · ');
+                const useDisabled =
+                  branded.running ||
+                  selectedCandidate === undefined ||
+                  !selectedCandidate.usable ||
+                  (requiresRepresentative && !branded.representativeAccepted);
+                return (
+                  <div
+                    data-testid="advanced-nutrition-branded-lookup"
+                    className="w-full space-y-2 rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] p-3"
+                  >
+                    <div className="flex flex-wrap items-baseline justify-between gap-2">
+                      <p className="text-[13px] font-semibold text-[var(--text-primary,#F3F4F6)]">
+                        Search USDA Branded Foods
+                      </p>
+                      <p className="text-[11px] text-[var(--text-secondary,#9CA3AF)]">
+                        Manufacturer-supplied label evidence · explicit review only
+                      </p>
+                    </div>
+                    <p className="text-[12px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
+                      Search verified USDA product records for one unresolved ingredient. A branded product is a
+                      representative estimate unless your recipe names the brand. Nothing is selected or applied
+                      automatically. After you use a product, Ask SHISO can help explain the accepted branded
+                      evidence; SHISO never searches or applies it for you.
+                    </p>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                      <label className="min-w-0 flex-1 text-[12px] text-[var(--text-secondary,#9CA3AF)]">
+                        Ingredient
+                        <select
+                          data-testid="advanced-nutrition-branded-line"
+                          value={branded.selectedLineRef ?? ''}
+                          disabled={branded.running || !branded.available}
+                          onChange={(event) => branded.onSelectLine(event.target.value)}
+                          className="mt-1 min-h-[40px] w-full rounded-md border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-2.5 text-[13px] text-[var(--text-primary,#F3F4F6)]"
+                        >
+                          <option value="">Choose an unresolved ingredient</option>
+                          {branded.lines.map((line) => (
+                            <option key={line.line_ref} value={line.line_ref}>{line.ingredient}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <button
+                        type="button"
+                        data-testid="advanced-nutrition-branded-search"
+                        disabled={branded.running || !branded.available || branded.selectedLineRef === null}
+                        aria-disabled={branded.running || !branded.available || branded.selectedLineRef === null}
+                        onClick={branded.onSearch}
+                        className="inline-flex min-h-[44px] shrink-0 items-center justify-center gap-1.5 rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-3 text-[13px] font-semibold text-[var(--text-primary,#F3F4F6)] transition-colors hover:bg-[var(--bg-root,#0C0C0C)] disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <Search className="h-3.5 w-3.5" aria-hidden="true" />
+                        {branded.running ? 'Searching USDA Branded Foods…' : 'Search USDA Branded Foods'}
+                      </button>
+                    </div>
+                    {branded.message !== null && (
+                      <p
+                        data-testid="advanced-nutrition-branded-message"
+                        role="status"
+                        className="text-[12px] text-[var(--text-secondary,#9CA3AF)]"
+                      >
+                        {branded.message}
+                      </p>
+                    )}
+                    {branded.cacheStatus !== null && (
+                      <p data-testid="advanced-nutrition-branded-cache" className="text-[11px] text-[var(--text-secondary,#9CA3AF)]">
+                        {branded.cacheStatus === 'hit' ? 'Cached USDA source snapshot' : 'Newly retrieved from USDA'}
+                        {branded.retrievedAt !== null ? ` · ${branded.retrievedAt}` : ''}
+                      </p>
+                    )}
+                    {branded.candidates.length > 0 && (
+                      <ul className="space-y-2">
+                        {branded.candidates.map((candidate) => {
+                          const selected = branded.selectedFdcId === candidate.fdc_id;
+                          const brandMatch = selectedLine !== undefined
+                            ? brandedBrandAppearsInIngredient(candidate, selectedLine.ingredient)
+                            : false;
+                          return (
+                            <li
+                              key={candidate.fdc_id}
+                              data-testid={`advanced-nutrition-branded-candidate-${candidate.fdc_id}`}
+                              className={`space-y-1 rounded-md border p-2.5 text-[12px] text-[var(--text-secondary,#9CA3AF)] ${
+                                selected
+                                  ? 'border-[var(--accent-text,#F59E0B)] bg-[var(--accent-subtle,rgba(245,158,11,0.10))]'
+                                  : 'border-[var(--border-subtle,rgba(255,255,255,0.08))]'
+                              }`}
+                            >
+                              <div className="flex items-start gap-2">
+                                <input
+                                  type="radio"
+                                  name="advanced-nutrition-branded-candidate"
+                                  data-testid={`advanced-nutrition-branded-select-${candidate.fdc_id}`}
+                                  checked={selected}
+                                  disabled={branded.running || !candidate.usable}
+                                  onChange={() => branded.onSelectCandidate(candidate.fdc_id)}
+                                  className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--accent,#F59E0B)]"
+                                />
+                                <div className="min-w-0 flex-1 space-y-1">
+                                  <p className="font-semibold text-[var(--text-primary,#F3F4F6)]">{candidate.description}</p>
+                                  <p>
+                                    {candidate.brand_owner !== undefined ? candidate.brand_owner : 'Brand not published'}
+                                    {' · '}USDA FDC {candidate.fdc_id}
+                                    {candidate.publication_date !== undefined ? ` · published ${candidate.publication_date}` : ''}
+                                  </p>
+                                  <p>{basisText(candidate)}</p>
+                                  <p>{nutrientText(candidate) || 'No usable label nutrients published.'}</p>
+                                  <p className="text-[11px]">
+                                    Match: <span className="text-[var(--text-primary,#F3F4F6)]">{candidate.match_quality}</span>
+                                    {' · '}{candidate.match_reason}
+                                  </p>
+                                  {!candidate.usable && (
+                                    <p className="font-medium text-[var(--accent-text,#F59E0B)]">
+                                      Serving weight or volume is unavailable; this product cannot be applied.
+                                    </p>
+                                  )}
+                                  {candidate.usable && selectedLine !== undefined && (
+                                    <p className="text-[11px]">
+                                      {brandMatch
+                                        ? 'Brand appears in the authored ingredient.'
+                                        : 'Representative product estimate — the recipe does not name this brand.'}
+                                    </p>
+                                  )}
+                                  {candidate.limitations.length > 0 && (
+                                    <ul className="list-inside list-disc text-[11px]">
+                                      {candidate.limitations.map((limitation, index) => (
+                                        <li key={`${candidate.fdc_id}-limit-${index}`}>{limitation}</li>
+                                      ))}
+                                    </ul>
+                                  )}
+                                </div>
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                    {selectedCandidate !== undefined && selectedCandidate.usable && requiresRepresentative && (
+                      <label className="flex min-h-[40px] items-start gap-2 rounded-md border-l-[3px] border-l-[var(--accent-text,#F59E0B)] bg-[var(--bg-elevated,#1E1E1E)] px-2.5 py-2 text-[12px] text-[var(--text-primary,#F3F4F6)]">
+                        <input
+                          type="checkbox"
+                          data-testid="advanced-nutrition-branded-representative"
+                          checked={branded.representativeAccepted}
+                          onChange={(event) => branded.onAcceptRepresentative(event.target.checked)}
+                          className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--accent,#F59E0B)]"
+                        />
+                        <span>
+                          I understand this branded product is a representative estimate, not an exact match for
+                          every version of this ingredient.
+                        </span>
+                      </label>
+                    )}
+                    <button
+                      type="button"
+                      data-testid="advanced-nutrition-branded-use"
+                      disabled={useDisabled}
+                      aria-disabled={useDisabled}
+                      onClick={branded.onUse}
+                      className="min-h-[40px] rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--accent-subtle,rgba(245,158,11,0.15))] px-3 text-[12px] font-semibold text-[var(--text-primary,#F3F4F6)] transition-colors hover:bg-[var(--bg-root,#0C0C0C)] disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      Use this branded product
+                    </button>
+                  </div>
+                );
+              })()}
               {!ai.available && (
                 <div className="flex flex-wrap items-center gap-2">
                   <p
@@ -2608,6 +2824,14 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                                   {nutrient.nutrient === 'calories' ? 'energy subtotal' : 'partial'}
                                 </span>
                               )}
+                              {supplementedNutrients.has(nutrient.nutrient) && (
+                                <span
+                                  data-testid={`advanced-nutrient-supplemented-${nutrient.nutrient}`}
+                                  className="rounded-full border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-1.5 py-0.5 text-[11px] text-[var(--text-primary,#F3F4F6)]"
+                                >
+                                  incl. AI supplement
+                                </span>
+                              )}
                             </span>
                           </li>
                         ))}
@@ -2660,7 +2884,7 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
               {preview.ai_contributions && preview.ai_contributions.length > 0 && (
                 <div aria-label="AI nutrition contributions" className="space-y-2">
                   <h4 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--text-secondary,#9CA3AF)]">
-                    Researched and AI ingredient contributions
+                    Researched, branded, and AI ingredient contributions
                   </h4>
                   <ul className="space-y-2">
                     {preview.ai_contributions.map((entry) => (
@@ -2668,10 +2892,22 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="font-semibold text-[var(--text-primary,#F3F4F6)]">{entry.ingredient}</span>
                           <span className="rounded-full border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] px-2 py-0.5 text-[11px] text-[var(--text-primary,#F3F4F6)]">
-                            {entry.classification === 'source_backed' ? 'Source-backed' : 'AI estimate'}
+                            {entry.source_kind === 'usda_branded'
+                              ? 'USDA Branded'
+                              : entry.classification === 'source_backed'
+                                ? 'Source-backed'
+                                : 'AI estimate'}
                           </span>
                           <span className="text-[var(--text-secondary,#9CA3AF)]">{entry.quantity_basis}{entry.weight_grams !== undefined ? ` · ${entry.classification === 'source_backed' ? 'Source-backed' : 'Estimated'} weight: ${entry.weight_grams} g` : ' · Weight unknown'}</span>
                         </div>
+                        {entry.source_kind === 'usda_branded' && entry.usda_branded !== undefined && (
+                          <p>
+                            USDA FDC {entry.usda_branded.fdc_id}
+                            {entry.usda_branded.brand_owner !== undefined ? ` · ${entry.usda_branded.brand_owner}` : ''}
+                            {' · '}{entry.usda_branded.basis.replace(/_/g, ' ')}
+                            {entry.usda_branded.publication_date !== undefined ? ` · published ${entry.usda_branded.publication_date}` : ''}
+                          </p>
+                        )}
                         <p>{Object.entries(entry.nutrients).map(([id, value]) => `${id}: ${value?.amount} ${value?.unit}`).join(' · ') || 'No nutrient values established'}</p>
                         {entry.unknown_nutrients.length > 0 && <p className="text-[var(--text-primary,#F3F4F6)]">Unknown: {entry.unknown_nutrients.join(', ')}</p>}
                         {entry.assumptions.length > 0 && <ul className="list-inside list-disc text-[var(--text-secondary,#9CA3AF)]">{entry.assumptions.map((assumption, index) => <li key={`${entry.line_ref}-assumption-${index}`}>{assumption}</li>)}</ul>}
@@ -2718,7 +2954,7 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
               <p className="flex items-start gap-1.5 text-[12px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
                 <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                 <span>
-                This advisory preview combines available food data{preview.ai_contributions?.length ? ' and labeled AI estimates' : ''}. Apply updates the working recipe; Save to Vault is a separate explicit step. This is not medical advice and does not claim complete
+                This advisory preview combines available food data{preview.ai_contributions?.length ? ' and reviewed external contributions' : ''}. Apply updates the working recipe; Save to Vault is a separate explicit step. This is not medical advice and does not claim complete
                   nutritional coverage.
                 </span>
               </p>

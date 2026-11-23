@@ -12,7 +12,9 @@ import {
   savedReportGroups,
   savedReportMeta,
 } from '../core/nutritionV2/phase5c/savedReport';
-import type { CodexNutritionV1, CodexNutritionV2, CodexNutritionV3, CodexNutritionV4, CodexNutritionV5 } from '../core/nutritionV2/schema';
+import type { CodexNutritionV1, CodexNutritionV2, CodexNutritionV3, CodexNutritionV4, CodexNutritionV5, CodexNutritionV6 } from '../core/nutritionV2/schema';
+import { NUTRIENT_REGISTRY } from '../core/nutritionV2/nutrients';
+import { formatUnitLabel } from '../core/nutritionV2/phase4/display';
 
 const DIALOG_FOCUSABLE =
   'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
@@ -26,7 +28,18 @@ interface AdvancedNutritionSavedReportProps {
   /** Materialized, bounded recipe title (never a raw untrusted recipe). */
   title: string;
   /** The already-validated canonical saved block. */
-  block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5;
+  block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5 | CodexNutritionV6;
+  /**
+   * SINC-4R2 trusted activation state for supplemental estimates. Absent means
+   * no trusted verification is available, so v6 supplements are displayed as
+   * verification-needed rather than authoritative.
+   */
+  readonly supplementVerification?: 'verified' | 'required' | 'partial';
+  readonly quarantinedSupplements?: ReadonlyArray<{
+    readonly line_ref: string;
+    readonly nutrient_id: string;
+    readonly reason: string;
+  }>;
   /** Opens the working analyzer/editor. */
   /** Present only when the Advanced editing entitlement is active. */
   onEdit?: () => void;
@@ -48,6 +61,8 @@ export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReport
   onClose,
   title,
   block,
+  supplementVerification,
+  quarantinedSupplements,
   onEdit,
 }) => {
   const [basis, setBasis] = useState<BasisMode>('entire_recipe');
@@ -155,7 +170,13 @@ export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReport
               </h2>
               <p className="truncate text-[13px] text-[var(--text-secondary,#9CA3AF)]">{title}</p>
               <p className="mt-0.5 font-mono text-[11px] uppercase tracking-wide text-[var(--text-secondary,#9CA3AF)]">
-                {block.schema === 5 ? 'Source-backed + AI-estimated · read-only' : 'USDA reviewed · read-only'}
+                {block.schema === 6 && (block.nutrient_supplements?.length ?? 0) > 0
+                  ? supplementVerification === 'verified'
+                    ? 'Source-backed + verified supplemental AI estimates · read-only'
+                    : 'Source-backed + supplemental AI estimates — verification needed · read-only'
+                  : block.schema === 5 || block.schema === 6
+                    ? 'Source-backed + AI-estimated · read-only'
+                    : 'USDA reviewed · read-only'}
               </p>
             </div>
           </div>
@@ -197,10 +218,33 @@ export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReport
             </p>
           </div>
 
-          {block.schema === 5 && (
+          {block.schema === 6 && (block.nutrient_supplements?.length ?? 0) > 0 && supplementVerification !== 'verified' && (
+            <div
+              data-testid="saved-supplement-verification-required"
+              role="status"
+              className="rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] border-l-[3px] border-l-[var(--accent-text,#F59E0B)] bg-[var(--bg-elevated,#1E1E1E)] p-3 text-[12px] leading-relaxed text-[var(--text-primary,#F3F4F6)]"
+            >
+              <p className="font-semibold">
+                {supplementVerification === 'partial'
+                  ? 'Some supplemental AI estimates need verification'
+                  : 'Supplemental AI estimates need verification'}
+              </p>
+              <p className="mt-1 text-[var(--text-secondary,#9CA3AF)]">
+                {supplementVerification === 'partial'
+                  ? 'The affected estimates are preserved below but are quarantined and not active. Verified USDA values remain authoritative.'
+                  : 'Trusted USDA source evidence was unavailable, so these saved estimates are preserved for recovery but are not active. The displayed totals may include unverified supplemental estimates and are not authoritative until Advanced Nutrition verifies them against the pinned USDA source.'}
+              </p>
+            </div>
+          )}
+
+          {(block.schema === 5 || block.schema === 6) && (
             <details className="rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)]" data-testid="saved-advanced-line-evidence">
               <summary className="min-h-[44px] cursor-pointer px-4 py-3 text-[13px] font-semibold text-[var(--text-primary,#F3F4F6)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring,#F59E0B)]">
-                Ingredient evidence · {meta.resolved_count} nutrition contributions · {meta.excluded_count} excluded · {meta.unresolved_count} unresolved
+                Ingredient evidence · {meta.resolved_count} nutrition contributions
+                {meta.supplement_count > 0
+                  ? ` · ${meta.supplement_count} supplemental estimate${meta.supplement_count === 1 ? '' : 's'}`
+                  : ''}
+                {' · '}{meta.excluded_count} excluded · {meta.unresolved_count} unresolved
               </summary>
               <ul className="space-y-1.5 px-4 pb-3 text-[12px] text-[var(--text-secondary,#9CA3AF)]">
                 {block.ingredients.map((entry) => (
@@ -208,13 +252,22 @@ export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReport
                     <span className="text-[var(--text-primary,#F3F4F6)]">Source-backed</span> · {entry.line_ref} · USDA {entry.source_food_id}
                   </li>
                 ))}
-                {block.ai_contributions.map((entry) => (
+                {(block.ai_contributions ?? []).map((entry) => (
                   <li key={`ai-${entry.line_ref}`} data-testid={`saved-line-${entry.disposition === 'excluded' ? 'excluded' : entry.classification}`}>
                     <span className="text-[var(--text-primary,#F3F4F6)]">
-                      {entry.disposition === 'excluded' ? 'Excluded cooking wrapper' : entry.classification === 'ai_estimate' ? 'AI estimate' : 'Source-backed contribution'}
+                      {entry.disposition === 'excluded'
+                        ? 'Excluded cooking wrapper'
+                        : entry.source_kind === 'usda_branded'
+                          ? 'USDA Branded'
+                          : entry.classification === 'ai_estimate'
+                            ? 'AI estimate'
+                            : 'Source-backed contribution'}
                     </span>
                     {' · '}{entry.ingredient}
                     {entry.disposition === 'excluded' ? ` · ${entry.exclusion_assumption}` : ` · ${entry.quantity_basis}`}
+                    {entry.source_kind === 'usda_branded' && entry.usda_branded !== undefined
+                      ? ` · USDA FDC ${entry.usda_branded.fdc_id}${entry.usda_branded.brand_owner !== undefined ? ` · ${entry.usda_branded.brand_owner}` : ''}`
+                      : ''}
                   </li>
                 ))}
                 {block.unresolved.map((entry) => (
@@ -224,6 +277,50 @@ export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReport
                   </li>
                 ))}
               </ul>
+            </details>
+          )}
+
+          {block.schema === 6 && (block.nutrient_supplements?.length ?? 0) > 0 && (
+            <details
+              className="rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)]"
+              data-testid="saved-advanced-supplements"
+            >
+              <summary className="min-h-[44px] cursor-pointer px-4 py-3 text-[13px] font-semibold text-[var(--text-primary,#F3F4F6)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring,#F59E0B)]">
+                Supplemental AI estimates · {block.nutrient_supplements.length} nutrient value{block.nutrient_supplements.length === 1 ? '' : 's'}
+                {supplementVerification === 'verified' ? ' · verified · verified USDA values unchanged' : ' · verification needed'}
+              </summary>
+              <div className="space-y-2 px-4 pb-3 text-[12px] text-[var(--text-secondary,#9CA3AF)]">
+                <p className="leading-relaxed">
+                  These values are separate AI estimates for nutrients the verified USDA records do not
+                  report. They are not USDA data, they never replace a verified value or an explicit zero,
+                  and unsupported nutrients remain unknown.
+                </p>
+                <ul className="space-y-1.5">
+                  {block.nutrient_supplements.map((entry) => {
+                    const definition = NUTRIENT_REGISTRY[entry.nutrient_id];
+                    const quarantine = quarantinedSupplements?.find(
+                      (candidate) => candidate.line_ref === entry.line_ref && candidate.nutrient_id === entry.nutrient_id
+                    );
+                    return (
+                      <li key={`supplement-${entry.line_ref}-${entry.nutrient_id}`} data-testid="saved-supplement-line">
+                        <span className="text-[var(--text-primary,#F3F4F6)]">AI supplement</span> ·{' '}
+                        {definition?.label ?? entry.nutrient_id}{' '}
+                        <span className="font-mono">
+                          {formatAmount(entry.amount)} {formatUnitLabel(entry.unit)}
+                        </span>{' '}
+                        · {entry.ingredient} · {entry.confidence} confidence
+                        {entry.source_food_id ? ` · USDA FDC ${entry.source_food_id}` : ''}
+                        {quarantine ? ` · Verification needed (${quarantine.reason})` : ''}
+                        {!quarantine && supplementVerification !== 'verified' ? ' · Unverified' : ''}
+                        <span className="block text-[11px] text-[var(--text-secondary,#9CA3AF)]">
+                          {entry.quantity_basis}
+                          {entry.assumptions.length > 0 ? ` · ${entry.assumptions.join(' · ')}` : ''}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
             </details>
           )}
 
@@ -341,11 +438,27 @@ export const AdvancedNutritionSavedReport: React.FC<AdvancedNutritionSavedReport
           {/* Provenance */}
           <div className="space-y-1 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] p-4 text-[13px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
             <p>
-              Source: <span className="text-[var(--text-primary,#F3F4F6)]">{block.schema === 5 ? 'USDA FoodData Central + saved AI contributions' : 'USDA FoodData Central'}</span>
+              Source: <span className="text-[var(--text-primary,#F3F4F6)]">
+                {block.schema === 5 || block.schema === 6
+                  ? (block.ai_contributions ?? []).some((entry) => entry.source_kind === 'usda_branded')
+                    ? (block.ai_contributions ?? []).some((entry) => entry.classification === 'ai_estimate')
+                      ? 'USDA FoodData Central + USDA Branded evidence and AI estimates'
+                      : 'USDA FoodData Central + USDA Branded evidence'
+                    : block.schema === 6 && (block.nutrient_supplements?.length ?? 0) > 0
+                      ? 'USDA FoodData Central + separately labeled supplemental AI estimates'
+                      : 'USDA FoodData Central + saved AI contributions'
+                  : 'USDA FoodData Central'}
+              </span>
               {meta.usda_release ? (
                 <>
                   {' '}
                   · bundle <span className="font-mono text-[var(--text-primary,#F3F4F6)]">{meta.usda_release}</span>
+                </>
+              ) : null}
+              {meta.usda_branded_release ? (
+                <>
+                  {' '}
+                  · branded API <span className="font-mono text-[var(--text-primary,#F3F4F6)]">{meta.usda_branded_release}</span>
                 </>
               ) : null}
             </p>

@@ -871,7 +871,7 @@ export function parseObsidianRecipeMarkdown(
   if (
     decodedAdvanced.kind === 'v1' ||
     decodedAdvanced.kind === 'v2' ||
-    (decodedAdvanced.kind === 'v3' || decodedAdvanced.kind === 'v4' || decodedAdvanced.kind === 'v5') ||
+    (decodedAdvanced.kind === 'v3' || decodedAdvanced.kind === 'v4' || decodedAdvanced.kind === 'v5' || decodedAdvanced.kind === 'v6') ||
     decodedAdvanced.kind === 'opaque'
   ) {
     parsed.codexNutrition = decodedAdvanced.value;
@@ -1063,7 +1063,7 @@ function applyAdvancedNutritionRoundTrip(
   const inert = materialized.value;
 
   const decoded = decodeCodexNutrition(inert);
-  if (decoded.kind === 'v1' || decoded.kind === 'v2' || (decoded.kind === 'v3' || decoded.kind === 'v4' || decoded.kind === 'v5') || decoded.kind === 'opaque') {
+  if (decoded.kind === 'v1' || decoded.kind === 'v2' || (decoded.kind === 'v3' || decoded.kind === 'v4' || decoded.kind === 'v5' || decoded.kind === 'v6') || decoded.kind === 'opaque') {
     try {
       frontmatterObj[key] = encodeCodexNutrition(decoded.value);
       return;

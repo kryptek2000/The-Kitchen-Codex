@@ -75,6 +75,28 @@ describe('Cochinita structured nutrition boundary', () => {
     expect(harness.calls).toHaveLength(1);
   });
 
+  it('accepts a bounded nutrient-gap focus and emphasizes it in the prompt', async () => {
+    const focus = [{ line_ref: request.recipe.ingredients[0].line_ref, unknown_nutrients: ['fiber', 'sodium'] }];
+    const result = await estimateRecipeNutrientsWithAi({ ...request, nutrient_gap_focus: focus });
+    expect(result.ok).toBe(true);
+    expect(harness.calls).toHaveLength(1);
+    expect(harness.calls[0].prompt).toContain('NUTRIENT GAP FOCUS');
+    expect(harness.calls[0].prompt).toContain(focus[0].line_ref);
+    expect(harness.calls[0].prompt).toContain('fiber');
+    expect(harness.calls[0].prompt).toContain('sodium');
+  });
+
+  it('rejects an unknown focus line or an invalid focus nutrient', async () => {
+    expect((await estimateRecipeNutrientsWithAi({
+      ...request,
+      nutrient_gap_focus: [{ line_ref: 'not-a-recipe-line', unknown_nutrients: ['fiber'] }],
+    })).ok).toBe(false);
+    expect((await estimateRecipeNutrientsWithAi({
+      ...request,
+      nutrient_gap_focus: [{ line_ref: request.recipe.ingredients[0].line_ref, unknown_nutrients: ['not-a-nutrient'] }],
+    })).ok).toBe(false);
+  });
+
   it('accepts schema-defined nullable optionals without turning unknowns into zero', async () => {
     harness.response.contributions = contributions().map(row => ({ ...row,
       nutrients: { ...Object.fromEntries(NUTRIENT_IDS.map(id => [id, null])), ...row.nutrients },

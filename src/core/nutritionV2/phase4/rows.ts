@@ -192,6 +192,38 @@ export function hasDirectRecipeVolume(ingredient: unknown): boolean {
   return parsed.ok && parsed.parsed.measurement_kind === 'volume';
 }
 
+/**
+ * Parses one authored ingredient line into the bounded lookup-target shape used
+ * by the explicit source-first completion pass. Phase 4 is the ONLY layer that
+ * may import the Phase 2 matcher, so this helper lives here rather than in the
+ * application layer. It is display/lookup evidence, never a mass authority.
+ */
+export function completionLookupTarget(text: string): {
+  readonly query: string;
+  readonly amount: number | null;
+  readonly unit: string | null;
+  readonly measurement_kind: MeasurementKind;
+  readonly grams?: number;
+  readonly milliliters?: number;
+} | null {
+  const parsed = parseIngredient(text);
+  if (!parsed.ok || parsed.parsed.query.trim().length < 2) return null;
+  const measurement = parsed.parsed;
+  // A trailing culinary parenthetical ("gochujang (Korean chili paste)") is
+  // context, not part of the product name, and would weaken an otherwise
+  // strong branded lookup.
+  const withoutParenthetical = measurement.query.replace(/\s*\([^()]*\)\s*/g, ' ').trim();
+  const query = withoutParenthetical.length >= 2 ? withoutParenthetical : measurement.query;
+  return Object.freeze({
+    query,
+    amount: measurement.amount,
+    unit: measurement.raw_unit ?? null,
+    measurement_kind: measurement.measurement_kind,
+    ...(measurement.grams !== undefined ? { grams: measurement.grams } : {}),
+    ...(measurement.milliliters !== undefined ? { milliliters: measurement.milliliters } : {}),
+  });
+}
+
 /** The deterministic measurement dimension of an adapted ingredient. */
 export function ingredientMeasurementKind(entry: AdaptedIngredient): MeasurementKind {
   const parsed = parseIngredient(entry.ingredient);

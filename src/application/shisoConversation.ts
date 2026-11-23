@@ -96,7 +96,13 @@ function requestsEstimatedNutrition(message: string): boolean {
     /\b(?:onions?|tomatoes?|ingredients?)\b.{0,70}\b(?:doesnt|dont|does not|do not|has no|have no|is missing|are missing|without)\b.{0,30}\b(?:weight|amount)\b/.test(text) ||
     /\b(?:finish|complete|fix|resolve|estimate|calculate)\b.{0,70}\bnutrition\b.{0,90}\b(?:for|on|of)\b.{0,50}\b(?:ingredients?|onions?|tomatoes?)\b/.test(text) ||
     /\b(resolve|estimate|calculate)\b.{0,90}\b(estimated nutrition|nutrition estimates?|using estimates?|with estimates?|not exact|doesnt have to be exact)\b/.test(text) ||
-    /\b(use|using)\b.{0,40}\bestimated nutrition\b/.test(text)
+    /\b(use|using)\b.{0,40}\bestimated nutrition\b/.test(text) ||
+    /\b(?:complete|finish|resolve)\b.{0,30}\b(?:my |the |this )?recipe'?s?\s+nutrition\b/.test(text) ||
+    /\b(?:estimate|fill|cover)\b.{0,60}\b(?:whatever|anything|everything|what)\b.{0,40}\b(?:is |are |')?(?:missing|unresolved|left|remains)\b/.test(text) ||
+    /\b(?:find|get|source|look up)\b.{0,70}\b(?:nutrition|nutrition information|nutrition values)\b.{0,80}\b(?:unresolved|missing|remaining|these)\b/.test(text) ||
+    /\b(?:figure out|work out)\b.{0,50}\b(?:missing|unresolved|remaining)\b.{0,40}\b(?:ingredient\s+)?(?:amounts?|nutrition|weights?)\b/.test(text) ||
+    /\b(?:finish|complete|resolve)\b.{0,30}\bnutrition\b/.test(text) ||
+    /\b(?:use|using|go with)\b.{0,40}\b(?:an?\s+)?estimates?\b/.test(text)
   );
 }
 
@@ -337,24 +343,52 @@ export async function runShisoConversationTurn(
     if (deps.signal?.aborted) return cancelled(working, toolsUsed);
     let result: ShisoObservation;
     try {
-      result = await executeShisoTool({ tool: 'run_nutrition_analysis' }, deps.toolContext, deps.signal);
+      result = await executeShisoTool({ tool: 'complete_nutrition' }, deps.toolContext, deps.signal);
     } catch {
-      result = { ok: false, tool: 'run_nutrition_analysis', code: 'unsupported', message: 'Nutrition estimation could not be completed.' };
+      result = { ok: false, tool: 'complete_nutrition', code: 'unsupported', message: 'Nutrition completion could not be run.' };
     }
     if (deps.signal?.aborted) return cancelled(working, toolsUsed);
     const summary = result.ok ? result.summary : (result as { readonly message: string }).message;
     const data = result.ok ? result.data : {};
-    const aiEstimated = typeof data['ai_estimated'] === 'number' ? data['ai_estimated'] : 0;
-    const aiStatus = data['ai_estimate_status'];
-    const aiFailure = typeof data['ai_estimate_message'] === 'string' ? ` ${data['ai_estimate_message']}` : '';
+    const breakdown = data['breakdown'] !== null && typeof data['breakdown'] === 'object' && !Array.isArray(data['breakdown'])
+      ? data['breakdown'] as Record<string, unknown>
+      : {};
+    const count = (key: string): number => typeof breakdown[key] === 'number' ? breakdown[key] as number : 0;
+    const total = typeof data['total_lines'] === 'number' ? data['total_lines'] : 0;
+    const accounted = typeof data['accounted'] === 'number' ? data['accounted'] : 0;
+    const remaining = typeof data['remaining'] === 'number' ? data['remaining'] : 0;
+    const initialUnresolved = typeof data['initial_unresolved'] === 'number' ? data['initial_unresolved'] : 0;
+    const resolvedNew = typeof data['resolved_new'] === 'number' ? data['resolved_new'] : 0;
+    const partialKnown = count('partial_known');
+    const notes = Array.isArray(data['notes'])
+      ? data['notes'].filter((note): note is string => typeof note === 'string').slice(0, 3)
+      : [];
+    const steps = Array.isArray(data['steps']) ? data['steps'] : [];
+    const aiStep = steps.find((step) => step !== null && typeof step === 'object' && !Array.isArray(step) && (step as Record<string, unknown>)['stage'] === 'ai_estimate') as Record<string, unknown> | undefined;
+    const aiFailed = aiStep?.['attempted'] === true && (aiStep?.['selected'] ?? 0) === 0;
+    const aiFailureNote = notes.find((note) => /AI|provider|estimate/i.test(note));
+    const sourceBreakdown = [
+      `${count('generic_usda')} generic USDA`,
+      `${count('usda_branded')} USDA Branded`,
+      `${count('external_research')} external research`,
+      `${count('ai_estimated')} AI-estimated`,
+    ].join(', ');
+    const nutrientCoverage = data['nutrient_coverage'];
+    const isNutrientGapPass =
+      nutrientCoverage !== null &&
+      typeof nutrientCoverage === 'object' &&
+      !Array.isArray(nutrientCoverage) &&
+      typeof (nutrientCoverage as Record<string, unknown>)['gap_lines_examined'] === 'number';
     const message = result.ok
-      ? aiEstimated > 0
-        ? `${summary} Accepted estimates are in the unsaved Advanced Nutrition review; inspect assumptions and unknown values before Apply. Nothing was saved.`
-        : `${summary} ${aiStatus === 'unavailable'
-          ? `No AI nutrition estimate was confirmed.${aiFailure}`
-          : aiStatus === 'skipped_covered'
-            ? 'The current review already covers every ingredient; no repeated estimate request was needed.'
-          : 'No usable AI nutrient contribution was confirmed; review the remaining source gaps and unknown nutrients.'} Nothing was saved.`
+      ? isNutrientGapPass
+        ? `${summary}${notes.length > 0 ? ` Notes: ${notes.join(' ')}` : ''}`
+        : `I completed a bounded source-first pass: ${resolvedNew} of ${initialUnresolved} previously unresolved line(s) resolved; ` +
+          `${accounted} of ${total} ingredient lines covered (${sourceBreakdown}). ` +
+          `${remaining > 0 ? `${remaining} still need attention. ` : 'Every ingredient line is accounted for. '}` +
+          `${partialKnown > 0 ? `${partialKnown} line(s) retain unknown nutrients. ` : ''}` +
+          `${aiFailed && aiFailureNote ? `No AI nutrition estimate was confirmed. ${aiFailureNote} ` : ''}` +
+          `${notes.length > 0 && !aiFailed ? `Source notes: ${notes.join(' ')} ` : ''}` +
+          `The prepared contributions are in the UNSAVED Advanced Nutrition review; inspect assumptions and unknown values before Apply. Nothing was applied or saved.`
       : `${summary} No ingredient edits or saves were made.`;
     const nextState = result.ok
       ? recordFinding(appendShisoMessage(working, { role: 'assistant', text: message, proposalCount: 0 }), { tool: result.tool, ok: true, summary: result.summary })
@@ -364,7 +398,7 @@ export async function runShisoConversationTurn(
       state: nextState,
       message,
       status: null,
-      toolsUsed: Object.freeze(['run_nutrition_analysis']) as readonly string[],
+      toolsUsed: Object.freeze(['complete_nutrition']) as readonly string[],
     };
   }
 

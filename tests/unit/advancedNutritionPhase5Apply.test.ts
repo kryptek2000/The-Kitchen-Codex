@@ -12,7 +12,7 @@ import { join } from 'node:path';
  * Synthetic fixtures are clearly labeled and used only for unit-level behavior.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { buildCalculationBundle, type CalcRecordSpec } from '../fixtures/usdaCalculationFixtures';
 import { createAdvancedNutritionSession } from '../../src/core/nutritionV2/phase4/session';
 import { adaptRecipe } from '../../src/core/nutritionV2/phase4/adapt';
@@ -23,10 +23,18 @@ import { phase4SessionIdentity } from '../../src/core/nutritionV2/phase4/types';
 import { hydrateWorkingReview } from '../../src/core/nutritionV2/phase4/hydrate';
 import type { AdvancedNutritionSession, Phase4Action, Phase4State } from '../../src/core/nutritionV2/phase4';
 import type { AdvisoryNutritionPreview } from '../../src/core/nutritionV2/calculation/types';
-import { decodeCodexNutrition, validateCodexNutritionV1 } from '../../src/core/nutritionV2/validate';
-import { combineAiContributionsWithPreview, validateAiNutrientContributions } from '../../src/core/nutritionV2/aiContribution';
+import { decodeCodexNutrition, validateCodexNutrition, validateCodexNutritionV1 } from '../../src/core/nutritionV2/validate';
+import { deriveSavedReportNutrients, savedReportMeta } from '../../src/core/nutritionV2/phase5c/savedReport';
+import { combineAiContributionsWithPreview, validateAiNutrientContributions, validateAiNutrientSupplements, type AiNutrientContribution, type AiNutrientSupplement } from '../../src/core/nutritionV2/aiContribution';
+import { adaptUsdaBrandedFoodRecord, buildBrandedContribution } from '../../src/core/nutritionV2/brandedFoods';
+import { authenticateBrandedContributionsForApply, brandedReviewIdentity } from '../../src/core/nutritionV2/brandedEvidenceTrust';
+import { authorizeNutritionPersistence } from '../../src/core/nutritionV2/phase5';
+import { makeAlternateAssertion, makeApplyAuthentication, makeAttackerAssertion, makeTrustedContribution, TEST_ALTERNATE_KEY_ID, TEST_ALTERNATE_PUBLIC_KEY } from '../fixtures/brandedAssertion';
+import { MOCK_BRANDED_GOCHUJANG_FDC_ID, mockBrandedDetail } from '../fixtures/usdaBrandedFixtures';
+import { requestUsdaBrandedFoodLookup } from '../../src/application/nutritionBrandedFoods';
+import type { NetworkAdapter } from '../../src/application/adapters/NetworkAdapter';
 import { DV_STANDARD_ID } from '../../src/core/nutritionV2/dailyValues';
-import type { CodexNutritionV1 } from '../../src/core/nutritionV2/schema';
+import type { CodexNutritionV1, CodexNutritionV6 } from '../../src/core/nutritionV2/schema';
 import { resolveRecipeVaultPath } from '../../src/core/vaultPath';
 import { deriveAdvancedCompactNutrition, resolveRecipeNutritionPresentation } from '../../src/core/nutritionV2/phase5c/presentation';
 import {
@@ -259,6 +267,27 @@ async function apply(reviewed: Reviewed, options: ApplyOptions = {}): Promise<Ad
 
 function failureCodeOf(result: AdvancedNutritionApplyResult): string {
   return result.ok ? 'ok' : (result as { ok: false; failure: { code: string } }).failure.code;
+}
+
+function stateWithBrandedContribution(
+  reviewed: Reviewed,
+  lineRef: string,
+  contribution: AiNutrientContribution,
+): { readonly state: Phase4State; readonly combined: AdvisoryNutritionPreview } {
+  let state = phase4Reducer(reviewed.state, {
+    type: 'accept_ai_nutrition',
+    recipeKey: reviewed.state.recipeKey as string,
+    servings: reviewed.state.baseServings,
+    contributions: [contribution],
+  });
+  const combined = combineAiContributionsWithPreview(reviewed.preview, [contribution]);
+  state = phase4Reducer(state, {
+    type: 'preview_succeeded',
+    seq: state.operationSeq,
+    recipeKey: state.recipeKey as string,
+    preview: combined,
+  });
+  return { state, combined };
 }
 
 // ---------------------------------------------------------------------------
@@ -619,6 +648,597 @@ describe('phase 5B — AN-WEB-1 external source-backed contribution', () => {
     expect(decoded.value.ai_contributions?.[0].nutrients.calories?.amount).toBe(200);
     expect(decoded.value.unresolved).toHaveLength(0);
   });
+
+  it('applies, saves and reopens an explicitly selected USDA Branded contribution with exact provenance', async () => {
+    const line = '100 g Sinc2 Mock Gochujang';
+    const recipe = obsidianRecipe([structured(line)], {
+      title: 'SINC-2 Branded Persistence',
+      servings: 2,
+      filePath: 'Recipes/SINC-2 Branded Persistence.md',
+    });
+    const reviewed = buildReviewed(SESSION, recipe, ['calories', 'protein', 'sodium']);
+    const adapted = adaptRecipe(recipe);
+    if (!adapted.ok) throw new Error('adaptation failed');
+    const lineRef = adapted.recipe.adapted[0].line_ref;
+
+    const adaptedCandidate = adaptUsdaBrandedFoodRecord(
+      mockBrandedDetail(MOCK_BRANDED_GOCHUJANG_FDC_ID),
+      'gochujang'
+    );
+    if (!adaptedCandidate.ok) throw new Error('synthetic branded fixture failed');
+    const candidate = Object.freeze({
+      ...adaptedCandidate.candidate,
+      evidence_id: 'test-evidence-sinc2r2-0001',
+    });
+    const built = buildBrandedContribution(candidate, {
+      line_ref: lineRef,
+      ingredient_text: line,
+      query: 'gochujang',
+      amount: 100,
+      unit: 'g',
+      measurement_kind: 'mass',
+      quantity_grams: 100,
+    });
+    if (!built.ok) throw new Error(`branded contribution failed: ${(built as { reason?: string }).reason}`);
+    const reviewIdentity = brandedReviewIdentity(
+      reviewed.state.sessionIdentity as string,
+      reviewed.state.recipeKey as string,
+      reviewed.state.baseServings
+    );
+    const trustedContribution = await makeTrustedContribution(built.contribution, {
+      recipeDigest: reviewed.preview.ingredient_digest,
+      reviewIdentity,
+    });
+
+    const authentication = await makeApplyAuthentication(trustedContribution, {
+      recipeDigest: reviewed.preview.ingredient_digest,
+      reviewIdentity,
+    });
+    const checked = validateAiNutrientContributions([trustedContribution], {
+      recipe_digest: reviewed.preview.ingredient_digest,
+      line_refs: [lineRef],
+      line_text_by_ref: { [lineRef]: line },
+      requireTrustedBranded: true,
+      brandedAuthentication: authentication,
+    });
+    expect(checked.ok).toBe(true);
+    if (!checked.ok) return;
+    let state = phase4Reducer(reviewed.state, {
+      type: 'accept_ai_nutrition',
+      recipeKey: reviewed.state.recipeKey as string,
+      servings: reviewed.state.baseServings,
+      contributions: checked.contributions,
+    });
+    const combined = combineAiContributionsWithPreview(reviewed.preview, checked.contributions);
+    state = phase4Reducer(state, {
+      type: 'preview_succeeded',
+      seq: state.operationSeq,
+      recipeKey: state.recipeKey as string,
+      preview: combined,
+    });
+
+    // The synchronous Phase 5 path cannot authorize a branded contribution
+    // without the per-Apply capability minted after ECDSA verification.
+    const direct = authorizeNutritionPersistence({ session: SESSION, recipe, state });
+    expect(direct.ok).toBe(false);
+
+    const vault = makeVault();
+    const applied = await apply({ recipe, state, preview: combined }, {
+      write: vault.write,
+      readBack: vault.readBack,
+    });
+    expect(failureCodeOf(applied)).toBe('ok');
+    expect(vault.writes).toHaveLength(1);
+
+    const markdown = vault.files.get(resolveRecipeVaultPath(recipe)) as string;
+    const reparsed = parseObsidianRecipeMarkdown(markdown, recipe.fileName, recipe.filePath);
+    const decoded = decodeCodexNutrition(reparsed.codexNutrition);
+    expect(decoded.kind).toBe('v5');
+    if (decoded.kind !== 'v5') return;
+    expect(decoded.value.unresolved).toHaveLength(0);
+    expect(decoded.value.ai_contributions).toHaveLength(1);
+    const contribution = decoded.value.ai_contributions?.[0];
+    expect(contribution?.classification).toBe('source_backed');
+    expect(contribution?.source_kind).toBe('usda_branded');
+    expect(contribution?.usda_branded).toMatchObject({
+      fdc_id: MOCK_BRANDED_GOCHUJANG_FDC_ID,
+      description: 'SINC2 MOCK GOCHUJANG SAUCE',
+      brand_owner: 'Mock Foods',
+      basis: 'per_serving_g',
+    });
+    expect(contribution?.usda_branded?.snapshot_digest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(contribution?.usda_branded?.verification?.signature).toMatch(/^[A-Za-z0-9+/=]{40,}$/);
+    expect(contribution?.nutrients.calories?.amount).toBe(200);
+    expect(contribution?.nutrients.sodium?.amount).toBe(1600);
+    expect(contribution?.sources[0]?.url).toContain(`fdc.nal.usda.gov/food-details/${MOCK_BRANDED_GOCHUJANG_FDC_ID}`);
+    expect(decoded.value.sources).toContain('usda_branded');
+    expect(decoded.value.source_releases.usda_branded).toBe('usda_fdc_branded_api_v1');
+  });
+
+  it('SINC-2R3 Test A — rejects a replaced signature at the Phase 5 Apply boundary and writes nothing', async () => {
+    const line = '100 g Sinc2 Mock Gochujang R3 Signature';
+    const recipe = obsidianRecipe([structured(line)], {
+      title: 'SINC-2R3 Signature Refusal',
+      servings: 2,
+      filePath: 'Recipes/SINC-2R3 Signature Refusal.md',
+    });
+    const reviewed = buildReviewed(SESSION, recipe, ['calories', 'protein']);
+    const adapted = adaptRecipe(recipe);
+    if (!adapted.ok) throw new Error('adaptation failed');
+    const lineRef = adapted.recipe.adapted[0].line_ref;
+    const adaptedCandidate = adaptUsdaBrandedFoodRecord(
+      mockBrandedDetail(MOCK_BRANDED_GOCHUJANG_FDC_ID),
+      'gochujang'
+    );
+    if (!adaptedCandidate.ok) throw new Error('synthetic branded fixture failed');
+    const candidate = Object.freeze({ ...adaptedCandidate.candidate, evidence_id: 'test-evidence-sinc2r3-signature' });
+    const built = buildBrandedContribution(candidate, {
+      line_ref: lineRef,
+      ingredient_text: line,
+      query: 'gochujang',
+      amount: 100,
+      unit: 'g',
+      measurement_kind: 'mass',
+      quantity_grams: 100,
+    });
+    if (!built.ok) throw new Error('branded contribution failed');
+    const trusted = await makeTrustedContribution(built.contribution, {
+      recipeDigest: reviewed.preview.ingredient_digest,
+      reviewIdentity: brandedReviewIdentity(
+        reviewed.state.sessionIdentity as string,
+        reviewed.state.recipeKey as string,
+        reviewed.state.baseServings
+      ),
+    });
+    const forged = Object.freeze({
+      ...trusted,
+      usda_branded: Object.freeze({
+        ...trusted.usda_branded,
+        verification: Object.freeze({
+          ...trusted.usda_branded!.verification!,
+          signature: Buffer.alloc(64, 7).toString('base64'),
+        }),
+      }),
+    });
+    const { state, combined } = stateWithBrandedContribution(reviewed, lineRef, forged);
+    const vault = makeVault();
+    const applied = await apply({ recipe, state, preview: combined }, { write: vault.write, readBack: vault.readBack });
+    expect(applied.ok).toBe(false);
+    expect(failureCodeOf(applied)).toBe('stale_authorization');
+    expect(vault.writes).toHaveLength(0);
+  });
+
+  it('SINC-2R3 Test B — rejects an expired assertion at Phase 5 and writes nothing', async () => {
+    const line = '100 g Sinc2 Mock Gochujang R3 Expired';
+    const recipe = obsidianRecipe([structured(line)], {
+      title: 'SINC-2R3 Expiry Refusal',
+      servings: 2,
+      filePath: 'Recipes/SINC-2R3 Expiry Refusal.md',
+    });
+    const reviewed = buildReviewed(SESSION, recipe, ['calories', 'protein']);
+    const adapted = adaptRecipe(recipe);
+    if (!adapted.ok) throw new Error('adaptation failed');
+    const lineRef = adapted.recipe.adapted[0].line_ref;
+    const adaptedCandidate = adaptUsdaBrandedFoodRecord(
+      mockBrandedDetail(MOCK_BRANDED_GOCHUJANG_FDC_ID),
+      'gochujang'
+    );
+    if (!adaptedCandidate.ok) throw new Error('synthetic branded fixture failed');
+    const candidate = Object.freeze({ ...adaptedCandidate.candidate, evidence_id: 'test-evidence-sinc2r3-expired' });
+    const built = buildBrandedContribution(candidate, {
+      line_ref: lineRef,
+      ingredient_text: line,
+      query: 'gochujang',
+      amount: 100,
+      unit: 'g',
+      measurement_kind: 'mass',
+      quantity_grams: 100,
+    });
+    if (!built.ok) throw new Error('branded contribution failed');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const issuedAt = Date.now();
+      const trusted = await makeTrustedContribution(built.contribution, {
+        recipeDigest: reviewed.preview.ingredient_digest,
+        reviewIdentity: brandedReviewIdentity(
+          reviewed.state.sessionIdentity as string,
+          reviewed.state.recipeKey as string,
+          reviewed.state.baseServings
+        ),
+        now: issuedAt,
+        ttlMs: 10 * 60 * 1000,
+      });
+      const { state, combined } = stateWithBrandedContribution(reviewed, lineRef, trusted);
+      vi.setSystemTime(issuedAt + 11 * 60 * 1000);
+      const vault = makeVault();
+      const applied = await apply({ recipe, state, preview: combined }, { write: vault.write, readBack: vault.readBack });
+      expect(applied.ok).toBe(false);
+      expect(failureCodeOf(applied)).toBe('stale_authorization');
+      expect(vault.writes).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('SINC-2R3 Test C — rejects Apply under a different signing identity and writes nothing', async () => {
+    const line = '100 g Sinc2 Mock Gochujang R3 Identity';
+    const recipe = obsidianRecipe([structured(line)], {
+      title: 'SINC-2R3 Identity Refusal',
+      servings: 2,
+      filePath: 'Recipes/SINC-2R3 Identity Refusal.md',
+    });
+    const reviewed = buildReviewed(SESSION, recipe, ['calories', 'protein']);
+    const adapted = adaptRecipe(recipe);
+    if (!adapted.ok) throw new Error('adaptation failed');
+    const lineRef = adapted.recipe.adapted[0].line_ref;
+    const adaptedCandidate = adaptUsdaBrandedFoodRecord(
+      mockBrandedDetail(MOCK_BRANDED_GOCHUJANG_FDC_ID),
+      'gochujang'
+    );
+    if (!adaptedCandidate.ok) throw new Error('synthetic branded fixture failed');
+    const candidate = Object.freeze({ ...adaptedCandidate.candidate, evidence_id: 'test-evidence-sinc2r3-identity' });
+    const built = buildBrandedContribution(candidate, {
+      line_ref: lineRef,
+      ingredient_text: line,
+      query: 'gochujang',
+      amount: 100,
+      unit: 'g',
+      measurement_kind: 'mass',
+      quantity_grams: 100,
+    });
+    if (!built.ok) throw new Error('branded contribution failed');
+    const reviewIdentity = brandedReviewIdentity(
+      reviewed.state.sessionIdentity as string,
+      reviewed.state.recipeKey as string,
+      reviewed.state.baseServings
+    );
+    // A valid P-256 signature from a DIFFERENT signing identity. The structural
+    // preview accepts its shape; the configured trust anchor rejects it.
+    const rotated = Object.freeze({
+      ...built.contribution,
+      usda_branded: Object.freeze({
+        ...built.contribution.usda_branded,
+        verification: makeAlternateAssertion(built.contribution, {
+          recipeDigest: reviewed.preview.ingredient_digest,
+          reviewIdentity,
+        }),
+      }),
+    });
+    const { state, combined } = stateWithBrandedContribution(reviewed, lineRef, rotated);
+    const vault = makeVault();
+    const applied = await apply({ recipe, state, preview: combined }, { write: vault.write, readBack: vault.readBack });
+    expect(applied.ok).toBe(false);
+    expect(failureCodeOf(applied)).toBe('stale_authorization');
+    expect(vault.writes).toHaveLength(0);
+  });
+
+  it('SINC-2R4 — attacker key and 999999 calories cannot pass the async Apply coordinator', async () => {
+    const line = '100 g Sinc2 Mock Gochujang R4 Attacker';
+    const recipe = obsidianRecipe([structured(line)], {
+      title: 'SINC-2R4 Attacker Refusal',
+      servings: 2,
+      filePath: 'Recipes/SINC-2R4 Attacker Refusal.md',
+    });
+    const reviewed = buildReviewed(SESSION, recipe, ['calories', 'protein']);
+    const adapted = adaptRecipe(recipe);
+    if (!adapted.ok) throw new Error('adaptation failed');
+    const lineRef = adapted.recipe.adapted[0].line_ref;
+    const adaptedCandidate = adaptUsdaBrandedFoodRecord(
+      mockBrandedDetail(MOCK_BRANDED_GOCHUJANG_FDC_ID),
+      'gochujang'
+    );
+    if (!adaptedCandidate.ok) throw new Error('synthetic branded fixture failed');
+    const candidate = Object.freeze({ ...adaptedCandidate.candidate, evidence_id: 'test-evidence-sinc2r4-attacker' });
+    const built = buildBrandedContribution(candidate, {
+      line_ref: lineRef,
+      ingredient_text: line,
+      query: 'gochujang',
+      amount: 100,
+      unit: 'g',
+      measurement_kind: 'mass',
+      quantity_grams: 100,
+    });
+    if (!built.ok) throw new Error('branded contribution failed');
+
+    // 1. Attempt to establish an attacker-controlled signing key through the
+    //    public lookup transport.
+    const attackerLookup = await requestUsdaBrandedFoodLookup({
+      network: {
+        post: async () => ({
+          status: 200,
+          ok: true,
+          data: {
+            ok: true,
+            request_version: 'usda_branded_lookup_response_v1',
+            line_ref: lineRef,
+            query: 'gochujang',
+            total_hits: 1,
+            candidates: [candidate],
+            cache_status: 'miss',
+            retrieved_at: '2026-11-22T00:00:00.000Z',
+            signing_public_key: TEST_ALTERNATE_PUBLIC_KEY,
+            signing_key_id: TEST_ALTERNATE_KEY_ID,
+            limitations: ['Synthetic test limitation.'],
+          },
+        }),
+        get: async () => ({ status: 404, ok: false, data: {} }),
+        request: async () => ({ status: 404, ok: false, data: {} }),
+      } as unknown as NetworkAdapter,
+      lineRef,
+      query: 'gochujang',
+    });
+    expect(attackerLookup.ok).toBe(false);
+    expect((attackerLookup as { code?: string }).code).toBe('invalid_response');
+
+    // 2. Forge 999999 calories and sign with the attacker key.
+    const reviewIdentity = brandedReviewIdentity(
+      reviewed.state.sessionIdentity as string,
+      reviewed.state.recipeKey as string,
+      reviewed.state.baseServings
+    );
+    const forgedBase = Object.freeze({
+      ...built.contribution,
+      nutrients: Object.freeze({
+        ...built.contribution.nutrients,
+        calories: Object.freeze({ amount: 999999, unit: 'kcal' as const }),
+      }),
+    });
+    const attackerAssertion = makeAttackerAssertion(forgedBase, {
+      recipeDigest: reviewed.preview.ingredient_digest,
+      reviewIdentity,
+    });
+    const forged = Object.freeze({
+      ...forgedBase,
+      usda_branded: Object.freeze({
+        ...forgedBase.usda_branded,
+        verification: attackerAssertion,
+      }),
+    });
+
+    // 3. Authentication fails even though its public digest is well formed.
+    const authentication = await authenticateBrandedContributionsForApply([forged], {
+      recipe_digest: reviewed.preview.ingredient_digest,
+      review_identity: reviewIdentity,
+    });
+    expect(authentication.ok).toBe(false);
+
+    // 4. The real async Apply coordinator rejects it before any write.
+    const { state, combined } = stateWithBrandedContribution(reviewed, lineRef, forged);
+    const vault = makeVault();
+    const applied = await apply({ recipe, state, preview: combined }, { write: vault.write, readBack: vault.readBack });
+    expect(applied.ok).toBe(false);
+    expect(failureCodeOf(applied)).toBe('stale_authorization');
+    expect(vault.writes).toHaveLength(0);
+  });
+
+  it('rejects a client-mutated branded contribution and writes nothing', async () => {
+    const line = '100 g Sinc2 Mock Gochujang Mutated';
+    const recipe = obsidianRecipe([structured(line)], {
+      title: 'SINC-2R2 Mutation Refusal',
+      servings: 2,
+      filePath: 'Recipes/SINC-2R2 Mutation Refusal.md',
+    });
+    const reviewed = buildReviewed(SESSION, recipe, ['calories', 'protein', 'sodium']);
+    const adapted = adaptRecipe(recipe);
+    if (!adapted.ok) throw new Error('adaptation failed');
+    const lineRef = adapted.recipe.adapted[0].line_ref;
+    const adaptedCandidate = adaptUsdaBrandedFoodRecord(
+      mockBrandedDetail(MOCK_BRANDED_GOCHUJANG_FDC_ID),
+      'gochujang'
+    );
+    if (!adaptedCandidate.ok) throw new Error('synthetic branded fixture failed');
+    const candidate = Object.freeze({ ...adaptedCandidate.candidate, evidence_id: 'test-evidence-sinc2r2-mutated' });
+    const built = buildBrandedContribution(candidate, {
+      line_ref: lineRef,
+      ingredient_text: line,
+      query: 'gochujang',
+      amount: 100,
+      unit: 'g',
+      measurement_kind: 'mass',
+      quantity_grams: 100,
+    });
+    if (!built.ok) throw new Error('branded contribution failed');
+    const trusted = await makeTrustedContribution(built.contribution, {
+      recipeDigest: reviewed.preview.ingredient_digest,
+      reviewIdentity: brandedReviewIdentity(
+        reviewed.state.sessionIdentity as string,
+        reviewed.state.recipeKey as string,
+        reviewed.state.baseServings
+      ),
+    });
+
+    // The attacker changes calories but leaves the old signature and digest.
+    const mutated = Object.freeze({
+      ...trusted,
+      nutrients: Object.freeze({
+        ...trusted.nutrients,
+        calories: Object.freeze({ amount: 999999, unit: 'kcal' as const }),
+      }),
+    });
+    const checked = validateAiNutrientContributions([mutated], {
+      recipe_digest: reviewed.preview.ingredient_digest,
+      line_refs: [lineRef],
+      line_text_by_ref: { [lineRef]: line },
+      requireTrustedBranded: true,
+    });
+    expect(checked.ok).toBe(false);
+    if (!checked.ok) expect((checked as { code: string }).code).toBe('branded_evidence_tampered');
+
+    let state = phase4Reducer(reviewed.state, {
+      type: 'accept_ai_nutrition',
+      recipeKey: reviewed.state.recipeKey as string,
+      servings: reviewed.state.baseServings,
+      contributions: [mutated],
+    });
+    const combined = combineAiContributionsWithPreview(reviewed.preview, [mutated]);
+    state = phase4Reducer(state, {
+      type: 'preview_succeeded',
+      seq: state.operationSeq,
+      recipeKey: state.recipeKey as string,
+      preview: combined,
+    });
+    const vault = makeVault();
+    const applied = await apply({ recipe, state, preview: combined }, { write: vault.write, readBack: vault.readBack });
+    expect(applied.ok).toBe(false);
+    expect(vault.writes).toHaveLength(0);
+  });
+
+  it('rejects a verified contribution whose target does not match the current recipe line', async () => {
+    const line = '100 g Sinc2 Mock Gochujang Target';
+    const recipe = obsidianRecipe([structured(line)], {
+      title: 'SINC-2R2 Target Binding Refusal',
+      servings: 2,
+      filePath: 'Recipes/SINC-2R2 Target Binding Refusal.md',
+    });
+    const reviewed = buildReviewed(SESSION, recipe, ['calories', 'protein']);
+    const adapted = adaptRecipe(recipe);
+    if (!adapted.ok) throw new Error('adaptation failed');
+    const lineRef = adapted.recipe.adapted[0].line_ref;
+    const adaptedCandidate = adaptUsdaBrandedFoodRecord(
+      mockBrandedDetail(MOCK_BRANDED_GOCHUJANG_FDC_ID),
+      'gochujang'
+    );
+    if (!adaptedCandidate.ok) throw new Error('synthetic branded fixture failed');
+    const candidate = Object.freeze({ ...adaptedCandidate.candidate, evidence_id: 'test-evidence-sinc2r2-target' });
+    const built = buildBrandedContribution(candidate, {
+      line_ref: lineRef,
+      ingredient_text: line,
+      query: 'gochujang',
+      amount: 100,
+      unit: 'g',
+      measurement_kind: 'mass',
+      quantity_grams: 100,
+    });
+    if (!built.ok) throw new Error('branded contribution failed');
+    // A genuine signature can cover any target the server produced; the local
+    // Apply boundary must still refuse it because the CURRENT authored line
+    // resolves to 100 g.
+    const targetTampered = Object.freeze({
+      ...built.contribution,
+      usda_branded: Object.freeze({
+        ...built.contribution.usda_branded,
+        target: Object.freeze({
+          ...built.contribution.usda_branded!.target!,
+          quantity_grams: 200,
+        }),
+      }),
+    });
+    const trusted = await makeTrustedContribution(targetTampered, {
+      recipeDigest: reviewed.preview.ingredient_digest,
+      reviewIdentity: brandedReviewIdentity(
+        reviewed.state.sessionIdentity as string,
+        reviewed.state.recipeKey as string,
+        reviewed.state.baseServings
+      ),
+    });
+    const authentication = await makeApplyAuthentication(trusted, {
+      recipeDigest: reviewed.preview.ingredient_digest,
+      reviewIdentity: brandedReviewIdentity(
+        reviewed.state.sessionIdentity as string,
+        reviewed.state.recipeKey as string,
+        reviewed.state.baseServings
+      ),
+    });
+    const checked = validateAiNutrientContributions([trusted], {
+      recipe_digest: reviewed.preview.ingredient_digest,
+      line_refs: [lineRef],
+      line_text_by_ref: { [lineRef]: line },
+      requireTrustedBranded: true,
+      brandedAuthentication: authentication,
+    });
+    expect(checked.ok).toBe(true);
+
+    let state = phase4Reducer(reviewed.state, {
+      type: 'accept_ai_nutrition',
+      recipeKey: reviewed.state.recipeKey as string,
+      servings: reviewed.state.baseServings,
+      contributions: [trusted],
+    });
+    const combined = combineAiContributionsWithPreview(reviewed.preview, [trusted]);
+    state = phase4Reducer(state, {
+      type: 'preview_succeeded',
+      seq: state.operationSeq,
+      recipeKey: state.recipeKey as string,
+      preview: combined,
+    });
+    const vault = makeVault();
+    const applied = await apply({ recipe, state, preview: combined }, { write: vault.write, readBack: vault.readBack });
+    expect(applied.ok).toBe(false);
+    expect(vault.writes).toHaveLength(0);
+  });
+
+  it('rejects a legitimate recipe-A verification replayed onto recipe B with identical text and line ref', async () => {
+    const line = '100 g Sinc2 Mock Gochujang Replay';
+    const recipeA = obsidianRecipe([structured(line)], {
+      title: 'SINC-2R2 Replay Recipe A',
+      servings: 2,
+      filePath: 'Recipes/SINC-2R2 Replay A.md',
+    });
+    const recipeB = obsidianRecipe([structured(line)], {
+      title: 'SINC-2R2 Replay Recipe B',
+      servings: 2,
+      filePath: 'Recipes/SINC-2R2 Replay B.md',
+    });
+    const reviewedA = buildReviewed(SESSION, recipeA, ['calories', 'protein']);
+    const reviewedB = buildReviewed(SESSION, recipeB, ['calories', 'protein']);
+    const adaptedA = adaptRecipe(recipeA);
+    const adaptedB = adaptRecipe(recipeB);
+    if (!adaptedA.ok || !adaptedB.ok) throw new Error('adaptation failed');
+    const lineRefA = adaptedA.recipe.adapted[0].line_ref;
+    const lineRefB = adaptedB.recipe.adapted[0].line_ref;
+    // The audit precondition: identical ingredient text AND identical line ref.
+    expect(reviewedA.preview.ingredient_digest).toBe(reviewedB.preview.ingredient_digest);
+    expect(lineRefA).toBe(lineRefB);
+    expect(reviewedA.state.recipeKey).not.toBe(reviewedB.state.recipeKey);
+
+    const adaptedCandidate = adaptUsdaBrandedFoodRecord(
+      mockBrandedDetail(MOCK_BRANDED_GOCHUJANG_FDC_ID),
+      'gochujang'
+    );
+    if (!adaptedCandidate.ok) throw new Error('synthetic branded fixture failed');
+    const candidate = Object.freeze({ ...adaptedCandidate.candidate, evidence_id: 'test-evidence-sinc2r2-replay' });
+    const built = buildBrandedContribution(candidate, {
+      line_ref: lineRefA,
+      ingredient_text: line,
+      query: 'gochujang',
+      amount: 100,
+      unit: 'g',
+      measurement_kind: 'mass',
+      quantity_grams: 100,
+    });
+    if (!built.ok) throw new Error('branded contribution failed');
+    const trustedForA = await makeTrustedContribution(built.contribution, {
+      recipeDigest: reviewedA.preview.ingredient_digest,
+      reviewIdentity: brandedReviewIdentity(
+        reviewedA.state.sessionIdentity as string,
+        reviewedA.state.recipeKey as string,
+        reviewedA.state.baseServings
+      ),
+    });
+
+    // Replay the exact recipe-A evidence into recipe B's review.
+    // The ingredient digest and line text are identical, so only the
+    // recipe/review binding can distinguish A from B. It is enforced at Apply.
+
+    let state = phase4Reducer(reviewedB.state, {
+      type: 'accept_ai_nutrition',
+      recipeKey: reviewedB.state.recipeKey as string,
+      servings: reviewedB.state.baseServings,
+      contributions: [trustedForA],
+    });
+    const combined = combineAiContributionsWithPreview(reviewedB.preview, [trustedForA]);
+    state = phase4Reducer(state, {
+      type: 'preview_succeeded',
+      seq: state.operationSeq,
+      recipeKey: state.recipeKey as string,
+      preview: combined,
+    });
+    const vault = makeVault();
+    const applied = await apply({ recipe: recipeB, state, preview: combined }, { write: vault.write, readBack: vault.readBack });
+    expect(applied.ok).toBe(false);
+    expect(failureCodeOf(applied)).toBe('stale_authorization');
+    expect(vault.writes).toHaveLength(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -789,7 +1409,7 @@ describe('phase 5B — forged input cannot cause a write', () => {
 
 describe('phase 5B — existing block protection', () => {
   it('fails closed and preserves an unknown future schema', async () => {
-    const future = { schema: 6, basis: 'total', futureField: { nested: [1, 2, 3] } };
+    const future = { schema: 7, basis: 'total', futureField: { nested: [1, 2, 3] } };
     const before = JSON.stringify(future);
     const recipe = obsidianRecipe([structured(FLOUR_LINE)], { frontmatter: { codex_nutrition: future } });
     const reviewed = buildReviewed(SESSION, recipe, ['calories', 'protein']);
@@ -874,5 +1494,287 @@ describe('phase 5B — write failure and atomicity', () => {
     });
     expect(result.ok).toBe(false);
     expect(stateCommits).toBe(0);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// SINC-4 — separately attributed supplemental estimates
+// ---------------------------------------------------------------------------
+
+function supplementState(
+  reviewed: Reviewed,
+  supplements: ReadonlyArray<AiNutrientSupplement>,
+): { readonly state: Phase4State; readonly combined: AdvisoryNutritionPreview } {
+  let state = phase4Reducer(reviewed.state, {
+    type: 'accept_ai_nutrition',
+    recipeKey: reviewed.state.recipeKey as string,
+    servings: reviewed.state.baseServings,
+    contributions: [],
+    supplements,
+  });
+  const combined = combineAiContributionsWithPreview(reviewed.preview, [], supplements);
+  state = phase4Reducer(state, {
+    type: 'preview_succeeded',
+    seq: state.operationSeq,
+    recipeKey: state.recipeKey as string,
+    preview: combined,
+  });
+  return { state, combined };
+}
+
+async function sourceGapSupplementFixture() {
+  const recipe = obsidianRecipe([structured(FLOUR_LINE)], {
+    title: 'Supplement test',
+    servings: 4,
+    filePath: 'Recipes/Supplement Test.md',
+  });
+  const reviewed = buildReviewed(SESSION, recipe, ['calories', 'protein', 'fiber', 'niacin']);
+  const adapted = adaptRecipe(recipe);
+  if (!adapted.ok) throw new Error('adaptation failed');
+  const line = adapted.recipe.adapted[0]!;
+  const reviewIdentity = brandedReviewIdentity(
+    reviewed.state.sessionIdentity as string,
+    reviewed.state.recipeKey as string,
+    reviewed.state.baseServings,
+  );
+  const raw = {
+    supplement_version: 'ai_nutrient_supplement_v1',
+    line_ref: line.line_ref,
+    ingredient: FLOUR_LINE,
+    nutrient_id: 'niacin',
+    amount: 1.2,
+    unit: 'mg_ne',
+    classification: 'ai_estimate',
+    source_kind: 'ai_supplement',
+    source_food_id: '6001',
+    source_release: reviewed.preview.bundle_release,
+    weight_grams: 100,
+    quantity_basis: '100 g resolved source weight',
+    assumptions: ['Synthetic niacin estimate for persistence verification.'],
+    confidence: 'medium',
+    recipe_digest: reviewed.preview.ingredient_digest,
+    review_identity: reviewIdentity,
+  };
+  const validated = validateAiNutrientSupplements([raw], {
+    recipe_digest: reviewed.preview.ingredient_digest,
+    review_identity: reviewIdentity,
+    line_text_by_ref: { [line.line_ref]: line.ingredient.original },
+    sources_by_ref: new Map([[line.line_ref, {
+      nutrient_ids: ['calories', 'protein', 'fiber'],
+      source_food_id: '6001',
+      source_release: reviewed.preview.bundle_release,
+      weight_grams: 100,
+    }]]),
+  });
+  if (!validated.ok) throw new Error(`supplement fixture rejected: ${(validated as { code?: string }).code ?? 'invalid'}`);
+  return { recipe, reviewed, line, reviewIdentity, supplement: validated.supplements[0]!, raw };
+}
+
+describe('SINC-4 — supplemental nutrient Apply / Save / reopen', () => {
+  it('applies and saves schema-v6 supplements with verified USDA values unchanged, then reopens them', async () => {
+    const { recipe, reviewed, supplement } = await sourceGapSupplementFixture();
+    const { state, combined } = supplementState(reviewed, [supplement]);
+    expect(combined.totals.niacin).toMatchObject({ amount: 1.2, unit: 'mg_ne', status: 'complete' });
+    expect(combined.totals.calories).toEqual(reviewed.preview.totals.calories);
+
+    let working: ObsidianRecipe | undefined;
+    const result = await apply(
+      { recipe, state, preview: combined },
+      {
+        write: async (next) => { working = next; },
+        readBack: async () => serializeRecipeToObsidianMarkdown(working!),
+      },
+    );
+    expect(failureCodeOf(result)).toBe('ok');
+    expect(working).toBeDefined();
+    const applied = working!.codexNutrition as CodexNutritionV6;
+    expect(applied.schema).toBe(6);
+    expect(applied.nutrient_supplements).toEqual([supplement]);
+    expect(applied.nutrients.calories?.amount).toBe(reviewed.preview.totals.calories?.amount);
+    expect(applied.nutrients.protein?.amount).toBe(reviewed.preview.totals.protein?.amount);
+    expect(applied.nutrients.fiber?.amount).toBe(0);
+    expect(applied.nutrients.niacin?.amount).toBe(1.2);
+    expect(applied.ingredients[0]?.source_nutrients).toEqual(['calories', 'protein', 'fiber']);
+    expect(applied.source_amounts).toMatchObject({ calories: 364, protein: 10.3, fiber: 0 });
+
+    // Explicit Save to a disposable file, then reopen.
+    const directory = mkdtempSync(join(tmpdir(), 'kcx-supplement-vault-'));
+    try {
+      mkdirSync(join(directory, 'Recipes'));
+      const target = join(directory, 'Recipes/Supplement Test.md');
+      writeFileSync(target, serializeRecipeToObsidianMarkdown(working!));
+      const reopened = parseObsidianRecipeMarkdown(readFileSync(target, 'utf8'), 'Supplement Test.md', 'Recipes/Supplement Test.md');
+      const decoded = decodeCodexNutrition(reopened.codexNutrition);
+      expect(decoded.kind).toBe('v6');
+      if (decoded.kind !== 'v6') return;
+      expect(decoded.value.nutrient_supplements).toEqual([supplement]);
+      expect(decoded.value.nutrients.calories?.amount).toBe(364);
+      expect(decoded.value.nutrients.niacin?.amount).toBe(1.2);
+      expect(savedReportMeta(decoded.value).supplement_count).toBe(1);
+      const perServing = deriveSavedReportNutrients(decoded.value, 'per_serving', 4);
+      expect(perServing.find((entry) => entry.nutrient === 'niacin')?.amount).toBe(0.3);
+      expect(perServing.find((entry) => entry.nutrient === 'calories')?.amount).toBe(91);
+
+      const reopenedAdapted = adaptRecipe(reopened);
+      expect(reopenedAdapted.ok).toBe(true);
+      if (!reopenedAdapted.ok) return;
+      const hydrated = hydrateWorkingReview({
+        session: SESSION,
+        recipeKey: reopenedAdapted.recipe.recipe_key,
+        baseServings: 4,
+        adapted: reopenedAdapted.recipe.adapted,
+        instructions: reopened.instructions.map((step) => step.text),
+        rows: buildReviewRows(SESSION, reopenedAdapted.recipe.adapted),
+        savedBlock: decoded.value,
+      });
+      expect(hydrated?.aiNutrition?.supplements).toEqual([supplement]);
+      expect(hydrated?.aiNutrition?.contributions).toEqual([]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('does not write schema-v6 unless supplements are actually present (v5 compatibility)', async () => {
+    const recipe = obsidianRecipe([structured(FLOUR_LINE)], { title: 'No supplement', servings: 4 });
+    const reviewed = buildReviewed(SESSION, recipe, ['calories', 'protein', 'fiber']);
+    let working: ObsidianRecipe | undefined;
+    const result = await apply(
+      { recipe, state: reviewed.state, preview: reviewed.preview },
+      { write: async (next) => { working = next; }, readBack: async () => serializeRecipeToObsidianMarkdown(working!) },
+    );
+    expect(failureCodeOf(result)).toBe('ok');
+    expect((working!.codexNutrition as { schema: number }).schema).toBe(1);
+    expect(decodeCodexNutrition(working!.codexNutrition).kind).toBe('v1');
+  });
+
+  it.each([
+    ['conflicting source nutrient', { nutrient_id: 'calories', unit: 'kcal', amount: 10 }],
+    ['explicit source zero', { nutrient_id: 'fiber', unit: 'g', amount: 1 }],
+    ['stale recipe digest', { recipe_digest: `sha256:${'b'.repeat(64)}` }],
+    ['wrong weight basis', { weight_grams: 90 }],
+  ])('fails closed for a %s supplement at Apply', async (_label, override) => {
+    const { recipe, reviewed, supplement } = await sourceGapSupplementFixture();
+    const hostile = Object.freeze({ ...supplement, ...override }) as AiNutrientSupplement;
+    const { state, combined } = supplementState(reviewed, [hostile]);
+    const write = vi.fn(async () => {});
+    const result = await apply({ recipe, state, preview: combined }, { write });
+    expect(failureCodeOf(result)).toBe('stale_authorization');
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it('never hydrates a forged saved calorie supplement onto a verified calorie source line', async () => {
+    const { recipe, reviewed, supplement } = await sourceGapSupplementFixture();
+    const { state, combined } = supplementState(reviewed, [supplement]);
+    let working: ObsidianRecipe | undefined;
+    const result = await apply(
+      { recipe, state, preview: combined },
+      { write: async (next) => { working = next; }, readBack: async () => serializeRecipeToObsidianMarkdown(working!) },
+    );
+    expect(failureCodeOf(result)).toBe('ok');
+    const applied = working!.codexNutrition as CodexNutritionV6;
+    // Sol Light's forged block: the verified flour line already contributes
+    // calories, and the supplement claims calories again for that same line.
+    const forged: CodexNutritionV6 = {
+      ...applied,
+      nutrient_supplements: [{
+        ...supplement,
+        nutrient_id: 'calories',
+        unit: 'kcal',
+        amount: 100,
+        quantity_basis: '100 g resolved source weight',
+      }],
+    };
+    const adaptation = adaptRecipe(recipe);
+    expect(adaptation.ok).toBe(true);
+    if (!adaptation.ok) return;
+    const hydrated = hydrateWorkingReview({
+      session: SESSION,
+      recipeKey: adaptation.recipe.recipe_key,
+      baseServings: adaptation.recipe.base_servings,
+      adapted: adaptation.recipe.adapted,
+      instructions: recipe.instructions.map((step) => step.text),
+      rows: buildReviewRows(SESSION, adaptation.recipe.adapted),
+      savedBlock: forged,
+    });
+    expect(hydrated?.aiNutrition).toBeUndefined();
+  });
+
+  it('quarantines a coordinated-metadata calorie supplement on reopen and never activates it', async () => {
+    const { recipe, reviewed, supplement } = await sourceGapSupplementFixture();
+    const { state, combined } = supplementState(reviewed, [supplement]);
+    let working: ObsidianRecipe | undefined;
+    const result = await apply(
+      { recipe, state, preview: combined },
+      { write: async (next) => { working = next; }, readBack: async () => serializeRecipeToObsidianMarkdown(working!) },
+    );
+    expect(failureCodeOf(result)).toBe('ok');
+    const applied = working!.codexNutrition as CodexNutritionV6;
+    // Sol Light's coordinated metadata: erase the persisted source calories,
+    // rewrite the source amounts and aggregate totals so the pure block is
+    // internally self-consistent, then add an AI calorie supplement.
+    const forged: CodexNutritionV6 = {
+      ...applied,
+      nutrient_scope: ['calories'],
+      nutrients: {
+        calories: {
+          amount: 100,
+          unit: 'kcal',
+          status: 'complete',
+          coverage: 1,
+          covered_ingredient_count: 1,
+          measurable_ingredient_count: 1,
+        },
+      },
+      ingredients: applied.ingredients.map((entry) => ({ ...entry, source_nutrients: [] })),
+      source_amounts: {},
+      nutrient_supplements: [{
+        ...supplement,
+        nutrient_id: 'calories',
+        unit: 'kcal',
+        amount: 100,
+      }],
+    };
+    // Pure parsing remains separate from trusted activation: the coordinated
+    // block is structurally coherent.
+    expect(validateCodexNutrition(forged).ok).toBe(true);
+    expect(decodeCodexNutrition(forged).kind).toBe('v6');
+
+    const adaptation = adaptRecipe(recipe);
+    expect(adaptation.ok).toBe(true);
+    if (!adaptation.ok) return;
+    const hydrated = hydrateWorkingReview({
+      session: SESSION,
+      recipeKey: adaptation.recipe.recipe_key,
+      baseServings: adaptation.recipe.base_servings,
+      adapted: adaptation.recipe.adapted,
+      instructions: recipe.instructions.map((step) => step.text),
+      rows: buildReviewRows(SESSION, adaptation.recipe.adapted),
+      savedBlock: forged,
+    });
+    expect(hydrated?.aiNutrition).toBeUndefined();
+    expect(hydrated?.quarantinedSupplements).toHaveLength(1);
+    expect(hydrated?.quarantinedSupplements?.[0]).toMatchObject({
+      reason: 'source_conflict',
+      code: 'source_already_has_nutrient',
+    });
+
+    // Pure presentation preserves the saved content but never treats the
+    // supplement-inclusive totals as authoritative.
+    const presentation = resolveRecipeNutritionPresentation(
+      obsidianRecipe([structured(FLOUR_LINE)], { frontmatter: { codex_nutrition: forged } }),
+    );
+    expect(presentation.advanced_verification_required).toBe(true);
+    expect(presentation.advanced_complete).toBe(false);
+    expect(deriveAdvancedCompactNutrition(presentation)).toBeUndefined();
+  });
+
+  it('fails closed for duplicate supplemental nutrients at Apply', async () => {
+    const { recipe, reviewed, supplement } = await sourceGapSupplementFixture();
+    const { state, combined } = supplementState(reviewed, [supplement, supplement]);
+    const write = vi.fn(async () => {});
+    const result = await apply({ recipe, state, preview: combined }, { write });
+    expect(failureCodeOf(result)).toBe('stale_authorization');
+    expect(write).not.toHaveBeenCalled();
   });
 });

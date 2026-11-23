@@ -9,6 +9,7 @@ import {
   type AdvancedNutritionRecipeContextReviewHandler,
   type AdvancedNutritionAiResolveHandler,
   type AdvancedNutritionResearchHandler,
+  type AdvancedNutritionBrandedLookupHandler,
   type AdvancedNutritionApplyHandler,
   type AdvancedNutritionBundleUiStatus,
   type AdvancedNutritionAiAvailability,
@@ -37,6 +38,8 @@ interface RecipeNutritionSectionProps {
   onResolveAdvancedNutritionAiFirst?: AdvancedNutritionAiResolveHandler;
   /** Optional external nutrition research port (injected by the shell). */
   onResearchAdvancedNutritionAi?: AdvancedNutritionResearchHandler;
+  /** Optional explicit USDA Branded Foods lookup port (injected by the shell). */
+  onSearchBrandedFoods?: AdvancedNutritionBrandedLookupHandler;
   /**
    * Optional AI-3 bounded mass-estimate port (injected by the shell).
    * Injection-only: this component never parses, hashes, calls a provider or
@@ -80,6 +83,7 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
   onResolveAdvancedNutritionAi,
   onResolveAdvancedNutritionAiFirst,
   onResearchAdvancedNutritionAi,
+  onSearchBrandedFoods,
   onEstimateMassesWithAi,
   onReviewRecipeContextWithAi,
 }) => {
@@ -153,6 +157,22 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
         </div>
       )}
 
+      {presentation.advanced_verification_required && (
+        <div
+          data-testid="advanced-supplement-verification-required"
+          role="status"
+          className="flex items-start gap-2 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] border-l-[3px] border-l-[var(--accent-text,#F59E0B)] bg-[var(--bg-elevated,#1E1E1E)] p-3 text-[11px] leading-relaxed text-[var(--text-primary,#F3F4F6)]"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
+          <span>
+            Saved Advanced Nutrition includes supplemental AI estimates that need
+            verification against the pinned USDA source. Open Advanced Nutrition to
+            verify them before using these totals; the saved values remain available
+            for review.
+          </span>
+        </div>
+      )}
+
       {presentation.kind === 'advanced_unsupported' && (
         <div
           role="status"
@@ -196,15 +216,23 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
             network={network}
             derivedNutrition={derivedNutrition}
             derivedPartialNutrients={advancedPartialNutrients(presentation)}
-            derivedSourceLabel={derivedNutrition ? (
-              presentation.advanced?.schema === 5
-                ? presentation.advanced.ai_contributions.some(line => line.classification === 'ai_estimate')
-                  ? 'Advanced Nutrition · includes AI estimates'
-                  : 'Advanced Nutrition · reviewed contributions'
-                : presentation.advanced?.schema === 4 && presentation.advanced.ingredients.some(e => e.quantity_estimate)
-                  ? 'USDA nutrients · includes accepted quantity estimates'
-                  : 'Advanced Nutrition · USDA reviewed'
-            ) : undefined}
+            derivedSourceLabel={derivedNutrition ? (() => {
+              if (presentation.advanced?.schema === 5 || presentation.advanced?.schema === 6) {
+                const contributions = presentation.advanced.ai_contributions ?? [];
+                const hasBranded = contributions.some((line) => line.source_kind === 'usda_branded');
+                const hasAi = contributions.some((line) => line.classification === 'ai_estimate');
+                if (hasBranded && hasAi) return 'Advanced Nutrition · includes USDA Branded and AI estimates';
+                if (hasBranded) return 'Advanced Nutrition · includes USDA Branded evidence';
+                if (hasAi) return 'Advanced Nutrition · includes AI estimates';
+                if (presentation.advanced.schema === 6 && (presentation.advanced.nutrient_supplements?.length ?? 0) > 0) {
+                  return 'Advanced Nutrition · includes supplemental AI estimates';
+                }
+                return 'Advanced Nutrition · reviewed contributions';
+              }
+              return presentation.advanced?.schema === 4 && presentation.advanced.ingredients.some(e => e.quantity_estimate)
+                ? 'USDA nutrients · includes accepted quantity estimates'
+                : 'Advanced Nutrition · USDA reviewed';
+            })() : undefined}
             advancedIncomplete={advancedIncomplete}
             hideLegacyEstimator
             onUpdateNutrition={(nut) => onUpdateNutrition?.(nut)}
@@ -225,6 +253,7 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
         onResolveWithAi={onResolveAdvancedNutritionAi}
         onResolveWithAiFirst={onResolveAdvancedNutritionAiFirst}
         onResearchNutritionWithAi={onResearchAdvancedNutritionAi}
+        onSearchBrandedFoods={onSearchBrandedFoods}
         onEstimateMassesWithAi={onEstimateMassesWithAi}
         onReviewRecipeContextWithAi={onReviewRecipeContextWithAi}
       />

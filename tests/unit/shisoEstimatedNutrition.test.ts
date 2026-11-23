@@ -50,6 +50,7 @@ function context(): ShisoToolContext {
       unresolved_line_refs: [onionRef], preview_state: 'partial' as const,
     })),
     runAiNutrition: vi.fn(async () => ({ ok: true, contributions: [onionContribution] })),
+    acceptNutritionContributions: vi.fn(() => true),
     applyIngredientEdits: vi.fn(async () => { throw new Error('must not edit recipe'); }),
   };
 }
@@ -222,7 +223,7 @@ describe('SHISO AI-estimated nutrition resolution', () => {
     }, initialShisoConversation(), message);
 
     expect(outcome.ok).toBe(true);
-    expect(outcome.toolsUsed).toEqual(['run_nutrition_analysis']);
+    expect(outcome.toolsUsed).toEqual(['complete_nutrition']);
     expect(outcome.message).toContain('1 of 1 ingredient lines covered');
     expect(outcome.message).toContain('AI-estimated');
     expect(tools.runAnalysis).toHaveBeenCalledTimes(1);

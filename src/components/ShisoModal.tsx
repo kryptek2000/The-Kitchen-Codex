@@ -35,6 +35,8 @@ import { validateAiNutrientContributions, sumAiNutrientContributions } from '../
 import { deriveNutritionCoverage, nutritionCoverageSummary } from '../core/shiso/nutritionCoverage';
 import type { AiNutrientContribution } from '../core/nutritionV2/aiContribution';
 import { buildAiSelectionRequestOptions } from '../application/aiSelection';
+import { requestUsdaBrandedFoodLookup } from '../application/nutritionBrandedFoods';
+import { requestNutritionWebResearch } from '../application/nutritionWebResearch';
 
 import { useShisoRecipeContext } from '../application-ui/useShisoRecipeContext';
 import { useShiso, type ShisoNutritionAnalysisOutcome } from '../application-ui/shisoEntryPoints';
@@ -252,6 +254,12 @@ export function ShisoModal({
     nutritionAiContributions,
     nutritionSummary,
     nutritionUnsaved,
+    recipeDigest: shiso.snapshot?.recipeDigest ?? null,
+    reviewIdentity: shiso.snapshot?.reviewIdentity,
+    researchEligibleRefs: shiso.snapshot?.researchEligibleRefs ?? [],
+    brandedEligibleRefs: shiso.snapshot?.brandedEligibleRefs ?? [],
+    nutrientCoverage: shiso.snapshot?.nutrientCoverage ?? [],
+    nutrientSupplements: shiso.snapshot?.nutrientSupplements ?? [],
     canEdit: shiso.canApplyIngredientEdits,
     canCorrect: shiso.canApplyNutritionCorrections,
     canSave: shiso.canSaveWorkingRecipe,
@@ -265,6 +273,12 @@ export function ShisoModal({
     nutritionAiContributions,
     nutritionSummary,
     nutritionUnsaved,
+    recipeDigest: shiso.snapshot?.recipeDigest ?? null,
+    reviewIdentity: shiso.snapshot?.reviewIdentity,
+    researchEligibleRefs: shiso.snapshot?.researchEligibleRefs ?? [],
+    brandedEligibleRefs: shiso.snapshot?.brandedEligibleRefs ?? [],
+    nutrientCoverage: shiso.snapshot?.nutrientCoverage ?? [],
+    nutrientSupplements: shiso.snapshot?.nutrientSupplements ?? [],
     canEdit: shiso.canApplyIngredientEdits,
     canCorrect: shiso.canApplyNutritionCorrections,
     canSave: shiso.canSaveWorkingRecipe,
@@ -306,6 +320,10 @@ export function ShisoModal({
                 ? nutritionCoverageSummary(deriveNutritionCoverage(current.nutritionRows, current.nutritionAiContributions))
                 : null,
               unsaved: current.nutritionUnsaved,
+              recipeDigest: current.recipeDigest,
+              reviewIdentity: current.reviewIdentity,
+              nutrientCoverage: current.nutrientCoverage,
+              nutrientSupplements: current.nutrientSupplements,
             }
           : null;
       },
@@ -313,13 +331,18 @@ export function ShisoModal({
       // Without this the capability reports that Advanced Nutrition is not open
       // rather than inventing a result.
       runAnalysis: async () => shisoRef.current.runAnalysis(),
-      runAiNutrition: async (signal) => {
+      runAiNutrition: async (signal, options) => {
         const currentRecipe = latest.current.recipeContext;
         if (!currentRecipe || currentRecipe.servings === null || currentRecipe.ingredients.length === 0) return { ok: false, message: 'Recipe ingredients or servings are unavailable.' };
         const requestSnapshot = JSON.stringify({ title: currentRecipe.title, servings: currentRecipe.servings, ingredients: currentRecipe.ingredients, instructions: currentRecipe.instructions });
         const response = await network.post<{ ok?: boolean; code?: string; reason?: string; recipe_digest?: string; contributions?: unknown }>(
           '/api/shiso/nutrition',
-          { recipe: { title: currentRecipe.title, servings: currentRecipe.servings, ingredients: currentRecipe.ingredients.map((i) => ({ line_ref: i.line_ref, text: i.text })), instructions: currentRecipe.instructions.map((i) => i.text) } },
+          {
+            recipe: { title: currentRecipe.title, servings: currentRecipe.servings, ingredients: currentRecipe.ingredients.map((i) => ({ line_ref: i.line_ref, text: i.text })), instructions: currentRecipe.instructions.map((i) => i.text) },
+            ...(options?.nutrientGapFocus && options.nutrientGapFocus.length > 0
+              ? { nutrient_gap_focus: options.nutrientGapFocus }
+              : {}),
+          },
           { ...(await buildAiSelectionRequestOptions()), ...(signal ? { signal } : {}) },
         );
         if (signal?.aborted) return { ok: false, message: 'Nutrition estimation was cancelled.' };
@@ -334,8 +357,45 @@ export function ShisoModal({
           requireExclusionContext: true,
         });
         if (!checked.ok) return { ok: false, message: 'The AI nutrition response did not match the current recipe.' };
-        if (!shisoRef.current.acceptAiNutrition(checked.contributions)) return { ok: false, message: 'The Advanced Nutrition review is not open for this recipe; the estimate was not applied.' };
+        if (options?.apply !== false) {
+          if (!shisoRef.current.acceptAiNutrition(checked.contributions)) return { ok: false, message: 'The Advanced Nutrition review is not open for this recipe; the estimate was not applied.' };
+        }
         return { ok: true, contributions: checked.contributions, totals: sumAiNutrientContributions(checked.contributions) };
+      },
+      // SINC-3: the EXISTING bounded source ports. These are the same transports
+      // the Advanced Nutrition UI calls; Shiso only orchestrates them over the
+      // explicit unresolved lines. No new provider, endpoint, or scoring path.
+      searchBrandedFoods: async ({ lineRef, query, signal }) => {
+        const result = await requestUsdaBrandedFoodLookup({
+          network,
+          lineRef,
+          query,
+          ...(signal !== undefined ? { signal } : {}),
+        });
+        if (result.ok === true) {
+          return { ok: true, candidates: result.candidates, message: result.message };
+        }
+        return { ok: false, code: (result as { code?: string }).code, message: result.message };
+      },
+      researchNutrition: async ({ targets, lineRefs, lineTextByRef, signal }) => {
+        const result = await requestNutritionWebResearch({
+          network,
+          targets,
+          lineRefs,
+          lineTextByRef,
+          ...(signal !== undefined ? { signal } : {}),
+        });
+        if (result.ok === true) {
+          return { ok: true, contributions: result.contributions, sources: result.sources, skipped: result.skipped, message: result.message };
+        }
+        return { ok: false, code: (result as { code?: string }).code, message: result.message, skipped: result.skipped };
+      },
+      acceptNutritionContributions: (contributions, supplements) => shisoRef.current.acceptAiNutrition(contributions, supplements),
+      get researchEligibleRefs() {
+        return latest.current.researchEligibleRefs;
+      },
+      get brandedEligibleRefs() {
+        return latest.current.brandedEligibleRefs;
       },
       // H-2: the ACTUAL edit/save/correction ports, resolved at call time. When
       // the owning surface is not mounted the ports are ABSENT, and the

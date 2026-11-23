@@ -149,11 +149,13 @@ export interface ShisoConversationMessage {
 export const SHISO_TOOL_NAMES = Object.freeze([
   'get_current_recipe',
   'get_nutrition_review',
+  'get_branded_evidence',
   'search_usda_foods',
   'inspect_usda_food',
   'investigate_ingredient_amount',
   'investigate_unresolved_ingredients',
   'run_nutrition_analysis',
+  'complete_nutrition',
   'get_capability_status',
   // H-2 AUTHORIZED EDITING. These are the FIRST capabilities that can change
   // application state. They change only the UNSAVED working copy (recipe edits,
@@ -177,6 +179,7 @@ export function isShisoToolName(value: unknown): value is ShisoToolName {
 export type ShisoToolArgs =
   | { readonly tool: 'get_current_recipe' }
   | { readonly tool: 'get_nutrition_review'; readonly include_ingredients?: boolean }
+  | { readonly tool: 'get_branded_evidence' }
   | { readonly tool: 'search_usda_foods'; readonly query: string; readonly limit?: number }
   | { readonly tool: 'inspect_usda_food'; readonly fdc_id: number }
   | {
@@ -204,6 +207,18 @@ export type ShisoToolArgs =
        * calculator the Calculate button runs.
        */
       readonly tool: 'run_nutrition_analysis';
+    }
+  | {
+      /**
+       * SINC-3. The user's explicit "resolve / finish / complete the missing
+       * nutrition" action. Runs one bounded completion pipeline over the
+       * CURRENT unresolved review lines: existing deterministic USDA first,
+       * then USDA Branded manufacturer evidence, then bounded external
+       * research, then validated AI estimates for whatever remains. Every
+       * resulting contribution is prepared in the UNSAVED working review; this
+       * tool never applies, saves, or writes to the Vault.
+       */
+      readonly tool: 'complete_nutrition';
     }
   | {
       /**
