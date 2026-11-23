@@ -28,6 +28,8 @@ import {
 } from '../application/shisoConversation';
 import type { ShisoToolContext } from '../application/shisoTools';
 import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
+import type { SettingsAdapter } from '../application/adapters/SettingsAdapter';
+import { loadShisoConversation, saveShisoConversation } from '../application/shisoConversationPersistence';
 import type { AdvancedNutritionSession } from '../core/nutritionV2/phase4';
 import type { LiveRowState } from '../core/nutritionV2/phase4/liveRow';
 import type { Phase4Row } from '../core/nutritionV2/phase4';
@@ -84,6 +86,8 @@ export interface ShisoModalProps {
   readonly nutritionReviewRows: readonly Phase4Row[];
   readonly nutritionSummary: string | null;
   readonly nutritionUnsaved: boolean;
+  /** Local, device-scoped conversation persistence. Optional for isolated tests. */
+  readonly settings?: SettingsAdapter;
   /** Save adapter for a newly generated draft; the application owns persistence. */
   readonly onSaveCreatedDraft?: (draft: GeneratedRecipeDraft, provenance: GeneratedRecipeProvenance) => Promise<void>;
 }
@@ -123,6 +127,7 @@ export function ShisoModal({
   nutritionReviewRows,
   nutritionSummary,
   nutritionUnsaved,
+  settings,
   onSaveCreatedDraft,
 }: ShisoModalProps) {
   const [conversation, setConversation] = useState<ShisoConversationState>(initialShisoConversation);
@@ -130,6 +135,8 @@ export function ShisoModal({
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  const [retryMessage, setRetryMessage] = useState<string | null>(null);
+  const [conversationLoading, setConversationLoading] = useState(settings !== undefined);
   const [appliedIds, setAppliedIds] = useState<ReadonlyArray<string>>([]);
   const [rejectedIds, setRejectedIds] = useState<ReadonlyArray<string>>([]);
   const [applyBusy, setApplyBusy] = useState(false);
@@ -153,6 +160,11 @@ export function ShisoModal({
   const creationMode = shiso.source === 'create';
   const seqRef = useRef(0);
   const activeTurnControllerRef = useRef<AbortController | null>(null);
+  const conversationRef = useRef(conversation);
+  conversationRef.current = conversation;
+  const entriesRef = useRef(entries);
+  entriesRef.current = entries;
+  const loadedConversationKeyRef = useRef<string | null>(null);
   // H-2: the LATEST Shiso port surface. The conversation turn can outlive a
   // render (it awaits tool executions), so tools must never read a stale
   // closure of the ports — an edit applied mid-turn changes the recipe, and the
@@ -178,37 +190,114 @@ export function ShisoModal({
     if (node) node.scrollTop = node.scrollHeight;
   }, [entries]);
 
-  // Switching recipe must never leave the old conversation implying the old
-  // ingredient context, so the transcript resets on a real identity change.
-  //
-  // H-2: the identity is the RECIPE's stable identity plus the nutrition
-  // session identity — deliberately NOT the content-derived Phase 4 recipe key.
-  // An authorized ingredient edit changes that key by design, and resetting the
-  // conversation mid-flow would erase the very request the user is completing.
-  // Staleness of individual proposals is still enforced by their own binding.
+  // SHISO-C1 — conversations are durable and scoped to the stable recipe
+  // identity (or the global/create surface). Changing recipes switches the
+  // ACTIVE transcript without erasing the previous one. Live authority still
+  // comes from the current recipe/context on every turn.
   const stableRecipeIdentity = recipeIdentityOf(recipe) || 'none';
-  const identity = `${stableRecipeIdentity}|${sessionIdentity ?? 'none'}|${shiso.source}`;
-  const lastIdentityRef = useRef(identity);
+  const conversationKey = creationMode
+    ? 'create'
+    : stableRecipeIdentity === 'none'
+      ? 'global'
+      : `recipe:${stableRecipeIdentity}`;
+
   useEffect(() => {
-    if (lastIdentityRef.current !== identity) {
-      activeTurnControllerRef.current?.abort();
-      activeTurnControllerRef.current = null;
-      lastIdentityRef.current = identity;
-      seqRef.current += 1;
-      setBusy(false);
-      setStatus(null);
-      setConversation(initialShisoConversation());
-      setEntries([]);
-      setStatus(null);
-      setAppliedIds([]);
-      setRejectedIds([]);
-      setApplyReport(null);
-      setApplyError(null);
-      // H-2 SECURITY: switching the active recipe invalidates any outstanding
-      // save authorization outright.
-      shisoRef.current.clearSaveAuthorization();
+    // A recipe/context switch supersedes the turn in flight and invalidates any
+    // outstanding save authorization. The previous transcript is persisted
+    // before the new one is loaded.
+    activeTurnControllerRef.current?.abort();
+    activeTurnControllerRef.current = null;
+    setBusy(false);
+    setStatus(null);
+    setRetryMessage(null);
+    setAppliedIds([]);
+    setRejectedIds([]);
+    setApplyReport(null);
+    setApplyError(null);
+    shisoRef.current.clearSaveAuthorization();
+
+    const previousKey = loadedConversationKeyRef.current;
+    if (settings !== undefined && previousKey !== null && previousKey !== conversationKey) {
+      void saveShisoConversation(settings, previousKey, {
+        messages: conversationRef.current.messages,
+        entries: entriesRef.current,
+        findings: conversationRef.current.findings,
+        nextSeq: seqRef.current,
+      });
     }
-  }, [identity]);
+    loadedConversationKeyRef.current = null;
+    setConversation(initialShisoConversation());
+    setEntries([]);
+    seqRef.current = 0;
+
+    if (settings === undefined) {
+      setConversationLoading(false);
+      loadedConversationKeyRef.current = conversationKey;
+      return;
+    }
+
+    let cancelled = false;
+    setConversationLoading(true);
+    void loadShisoConversation(settings, conversationKey).then((stored) => {
+      if (cancelled) return;
+      if (stored !== null) {
+        setConversation({
+          messages: stored.messages,
+          // Proposals are deliberately not restored: an old proposal must never
+          // become actionable merely because a transcript was restored.
+          proposals: Object.freeze([]),
+          findings: stored.findings,
+        });
+        setEntries(stored.entries.length > 0
+          ? stored.entries
+          : stored.messages.map((message, index) => ({
+              key: `restored-${index}`,
+              role: message.role,
+              text: message.text,
+              tools: [],
+            })));
+        seqRef.current = stored.nextSeq;
+        const last = stored.messages[stored.messages.length - 1];
+        if (last?.role === 'user') {
+          setRetryMessage(last.text);
+          setStatus('This message did not finish. Your conversation and verified results are preserved. You can retry it.');
+        }
+      }
+      loadedConversationKeyRef.current = conversationKey;
+      setConversationLoading(false);
+    }).catch(() => {
+      if (cancelled) return;
+      loadedConversationKeyRef.current = conversationKey;
+      setConversationLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [conversationKey, settings]);
+
+  // Persist the visible transcript and model memory locally after each change.
+  // This is a best-effort device-local save; it confers no authority and stores
+  // no credentials, save grants, or proposal capabilities.
+  useEffect(() => {
+    if (settings === undefined || loadedConversationKeyRef.current !== conversationKey) return;
+    void saveShisoConversation(settings, conversationKey, {
+      messages: conversation.messages,
+      entries,
+      findings: conversation.findings,
+      nextSeq: seqRef.current,
+    });
+  }, [conversation, entries, settings, conversationKey]);
+
+  useEffect(() => () => {
+    if (settings !== undefined && loadedConversationKeyRef.current === conversationKey) {
+      void saveShisoConversation(settings, conversationKey, {
+        messages: conversationRef.current.messages,
+        entries: entriesRef.current,
+        findings: conversationRef.current.findings,
+        nextSeq: seqRef.current,
+      });
+    }
+  }, [settings, conversationKey]);
 
   // H-2 SECURITY: closing the surface also invalidates any outstanding save
   // authorization, so a later reopen can never inherit one.
@@ -220,8 +309,16 @@ export function ShisoModal({
       setBusy(false);
       setStatus(null);
       shisoRef.current.clearSaveAuthorization();
+      if (settings !== undefined && loadedConversationKeyRef.current === conversationKey) {
+        void saveShisoConversation(settings, conversationKey, {
+          messages: conversationRef.current.messages,
+          entries: entriesRef.current,
+          findings: conversationRef.current.findings,
+          nextSeq: seqRef.current,
+        });
+      }
     }
-  }, [isOpen]);
+  }, [isOpen, settings, conversationKey]);
 
   useEffect(() => () => {
     activeTurnControllerRef.current?.abort();
@@ -241,6 +338,19 @@ export function ShisoModal({
     [nutritionAvailable, nutritionRows, nutritionAiContributions]
   );
   const effectiveNutritionSummary = nutritionAvailable ? nutritionCoverageSummary(nutritionCoverage) : null;
+  const workingStateNote = useMemo(() => {
+    const parts: string[] = [];
+    if (shiso.workingRecipe !== null && shiso.workingRecipe.unsaved) {
+      const changes = shiso.workingRecipe.changes.slice(-3).join('; ');
+      parts.push(
+        `Unsaved working recipe: ${shiso.workingRecipe.change_count} change` +
+          `${shiso.workingRecipe.change_count === 1 ? '' : 's'}` +
+          `${changes ? ` (${changes})` : ''}.`,
+      );
+    }
+    if (nutritionUnsaved) parts.push('The Advanced Nutrition working review is unsaved.');
+    return parts.join(' ').slice(0, 400);
+  }, [shiso.workingRecipe, nutritionUnsaved]);
 
   // H-2: the tool context exposes LIVE getters. The turn loop executes tools
   // between awaits, and an authorized edit applied mid-turn changes the recipe
@@ -480,9 +590,10 @@ export function ShisoModal({
     }
   }, [createdProvenance, onSaveCreatedDraft, createdSaveBusy, editableCreatedDraft]);
 
-  const send = useCallback(async (requestedMessage?: string) => {
+  const send = useCallback(async (requestedMessage?: string, options?: { readonly retry?: boolean }) => {
+    const retry = options?.retry === true;
     const message = (requestedMessage ?? draft).trim();
-    if (message.length === 0) return;
+    if (message.length === 0 || conversationLoading) return;
     // A new turn supersedes the old one. Abort is idempotent; the sequence guard
     // remains as defense against transports that resolve after abort.
     activeTurnControllerRef.current?.abort();
@@ -491,12 +602,15 @@ export function ShisoModal({
     const seq = seqRef.current + 1;
     seqRef.current = seq;
     if (requestedMessage === undefined) setDraft('');
+    if (!retry) setRetryMessage(null);
     setBusy(true);
     setStatus(null);
-    setEntries((prev) => [
-      ...prev,
-      { key: `u${seq}`, role: 'user' as const, text: message, tools: [] },
-    ]);
+    if (!retry) {
+      setEntries((prev) => [
+        ...prev,
+        { key: `u${seq}`, role: 'user' as const, text: message, tools: [] },
+      ]);
+    }
 
     if (creationMode) {
       const saveAuthorized = classifySaveIntent(message).authorized;
@@ -551,16 +665,18 @@ export function ShisoModal({
           tools: [`${result.provenance.providerId} · ${result.provenance.model}`, 'validated recipe draft'],
         }]);
         setStatus(null);
+        setRetryMessage(null);
       } catch (error) {
         if (seqRef.current !== seq) return;
-        const message = error instanceof CreateRecipeClientError && error.code === 'RECIPE_GENERATION_NOT_VERIFIED'
+        const failureMessage = error instanceof CreateRecipeClientError && error.code === 'RECIPE_GENERATION_NOT_VERIFIED'
           ? 'This selected model can return structured text but has not been verified for recipe creation. Verify recipe creation for this model in AI Settings or choose a verified text model. No fallback was used.'
           : error instanceof CreateRecipeClientError && error.code === 'UNSUPPORTED_CAPABILITY'
             ? 'The current AI selection is not enabled for structured recipe creation. Choose a compatible model or complete its recipe-generation verification in AI Settings. No fallback was used.'
             : error instanceof Error && error.message
               ? `${error.message} Your current draft was kept unchanged.`
               : 'Shiso could not create or refine the recipe draft. Your current draft was kept unchanged.';
-        setStatus(message);
+        setStatus(failureMessage);
+        setRetryMessage(message);
       } finally {
         if (seqRef.current === seq) setBusy(false);
       }
@@ -605,6 +721,8 @@ export function ShisoModal({
         },
         toolContext,
         signal: controller.signal,
+        retry,
+        ...(workingStateNote.length > 0 ? { workingStateNote } : {}),
       },
       conversation,
       message,
@@ -614,7 +732,11 @@ export function ShisoModal({
     if (seqRef.current !== seq) return;
     if (outcome.cancelled) {
       setBusy(false);
-      setStatus('This turn was cancelled.');
+      // A cancelled tool step may already have changed the working copy. Do not
+      // offer an automatic retry that could repeat it; the user can review the
+      // working recipe and send a fresh instruction.
+      setRetryMessage(null);
+      setStatus('This turn was cancelled. Your conversation is preserved. Review the working recipe before sending another instruction.');
       return;
     }
     setConversation(outcome.state);
@@ -641,8 +763,13 @@ export function ShisoModal({
         },
       ]);
       setStatus(null);
+      setRetryMessage(null);
     } else {
       setStatus(outcome.status ?? 'Shiso could not complete that request.');
+      // No successful mutation can be present on this failure path: a turn with
+      // a successful capability returns a deterministic report (ok=true). Retry
+      // therefore re-sends the user's retained message without repeating edits.
+      setRetryMessage(message);
     }
   }, [
     busy, conversation, draft, network, nutritionAvailable, nutritionRows, nutritionSummary,
@@ -650,7 +777,7 @@ export function ShisoModal({
     createdDraft, createdProvenance, onSaveCreatedDraft, createdTitle, createdDescription,
     createdServings, createdIngredients, createdSteps,
     editableCreatedDraft, saveCreatedDraftNow,
-    nutritionCoverage, effectiveNutritionSummary,
+    nutritionCoverage, effectiveNutritionSummary, workingStateNote, conversationLoading,
   ]);
 
   // The Advanced Nutrition "Analyze with Shiso" action is a trusted, explicit
@@ -796,6 +923,7 @@ export function ShisoModal({
                   : recipeContext === null
                   ? 'General conversation'
                   : `Context: ${recipeContext.title}`}
+                {settings !== undefined ? ' · kept on this device' : ''}
               </p>
             </div>
           </div>
@@ -856,10 +984,40 @@ export function ShisoModal({
             </div>
           )}
 
+          {conversationLoading && (
+            <p data-testid="shiso-conversation-restoring" role="status" className="text-xs text-gray-400">
+              Restoring this conversation…
+            </p>
+          )}
+
           {status !== null && !busy && (
-            <div className="flex items-start gap-2 text-xs text-amber-300/90 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
+            <div className="flex flex-wrap items-start gap-2 text-xs text-amber-300/90 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
               <CircleAlert className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-              <span>{status}</span>
+              <span className="min-w-0 flex-1">{status}</span>
+              {retryMessage !== null && (
+                <button
+                  type="button"
+                  data-testid="shiso-retry"
+                  onClick={() => void send(retryMessage, { retry: true })}
+                  className="rounded-lg border border-amber-400/40 bg-amber-500/15 px-2 py-1 text-[11px] font-semibold text-amber-100 hover:bg-amber-500/25"
+                >
+                  Retry message
+                </button>
+              )}
+            </div>
+          )}
+
+          {status === null && !busy && retryMessage !== null && (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-200/90">
+              <span>Your previous message did not finish. It is still here.</span>
+              <button
+                type="button"
+                data-testid="shiso-retry"
+                onClick={() => void send(retryMessage, { retry: true })}
+                className="rounded-lg border border-amber-400/40 bg-amber-500/15 px-2 py-1 text-[11px] font-semibold text-amber-100 hover:bg-amber-500/25"
+              >
+                Retry message
+              </button>
             </div>
           )}
 
@@ -1119,12 +1277,12 @@ export function ShisoModal({
               }}
               rows={2}
               placeholder={creationMode ? 'Describe the recipe, or request a change to this draft…' : 'Ask Shiso…'}
-              disabled={createdSaveBusy}
+              disabled={createdSaveBusy || conversationLoading}
               className="flex-1 px-3 py-2 text-sm bg-[#141414] border border-white/10 rounded-xl text-gray-200 placeholder:text-gray-600 focus:outline-none focus:border-amber-500 resize-none disabled:opacity-50"
             />
             <button
               type="submit"
-              disabled={createdSaveBusy || draft.trim().length === 0}
+              disabled={createdSaveBusy || conversationLoading || draft.trim().length === 0}
               className="px-3.5 py-2 bg-amber-500 hover:bg-amber-400 disabled:opacity-40 disabled:hover:bg-amber-500 text-black rounded-xl flex items-center gap-1.5 text-sm font-bold"
             >
               <Send className="w-3.5 h-3.5" />

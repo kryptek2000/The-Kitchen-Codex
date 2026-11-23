@@ -52,8 +52,25 @@ export const SHISO_LIMITS = Object.freeze({
    * for mixed investigations rather than a licence for unbounded exploration.
    */
   maxToolCallsPerTurn: 8,
-  /** Retained conversation messages (older ones are dropped, oldest first). */
+  /** Recent messages sent to the model in one bounded request. */
   maxHistoryMessages: 24,
+  /**
+   * Messages retained locally for the visible conversation. The model only
+   * receives the recent window above plus a bounded continuation summary.
+   */
+  maxStoredMessages: 120,
+  /** Older user statements retained in the bounded continuation context. */
+  maxContinuationUserMessages: 6,
+  /** Older assistant notes retained in the bounded continuation context. */
+  maxContinuationAssistantMessages: 4,
+  /** Per-message bound inside the continuation context. */
+  maxContinuationMessageChars: 200,
+  /** Verified findings retained in the bounded continuation context. */
+  maxContinuationFindings: 6,
+  /** Per-finding summary bound in the continuation context. */
+  maxContinuationFindingChars: 240,
+  /** Application-produced working-state note bound. */
+  maxContinuationWorkingStateChars: 400,
   /** Maximum user message length, in characters. */
   maxUserMessageChars: 4000,
   /** Maximum assistant reply length, in characters. */
@@ -140,6 +157,24 @@ export interface ShisoConversationMessage {
   readonly text: string;
   /** Set on assistant messages that ended a turn which produced proposals. */
   readonly proposalCount?: number;
+}
+
+/**
+ * SHISO-C1. Bounded continuation memory for material older than the recent
+ * model window. Each source is explicitly labelled so the model can distinguish
+ * user statements, earlier model prose, and verified application findings.
+ * It is never authority: findings remain application-produced summaries, and a
+ * prior assistant assertion is not proof that an action occurred.
+ */
+export interface ShisoConversationContinuation {
+  /** Earlier user-authored messages, oldest retained first. */
+  readonly earlier_user_messages: readonly string[];
+  /** Earlier Shiso replies (model-generated, not verified facts). */
+  readonly earlier_assistant_messages: readonly string[];
+  /** Application-produced verified capability summaries. */
+  readonly verified_findings: readonly ShisoCollectedFinding[];
+  /** Application-produced description of the current unsaved working state. */
+  readonly working_state?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -598,6 +633,8 @@ export interface ShisoTurnRequestBody {
   readonly turn_version: string;
   readonly user_message: string;
   readonly history: readonly ShisoConversationMessage[];
+  /** Bounded older-turn continuation context. */
+  readonly continuation?: ShisoConversationContinuation;
   readonly context: ShisoConversationContext;
   /** Present only when answering a previous tool request. */
   readonly observation?: ShisoObservation;

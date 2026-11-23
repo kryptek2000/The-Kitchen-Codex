@@ -28,6 +28,7 @@ import {
   type ShisoBoundProposal,
   type ShisoCollectedFinding,
   type ShisoConversationContext,
+  type ShisoConversationContinuation,
   type ShisoConversationMessage,
   type ShisoObservation,
   type ShisoProposal,
@@ -149,7 +150,7 @@ export function appendShisoMessage(
   const messages = [...state.messages, message];
   return {
     messages: Object.freeze(
-      messages.slice(Math.max(0, messages.length - SHISO_LIMITS.maxHistoryMessages)),
+      messages.slice(Math.max(0, messages.length - SHISO_LIMITS.maxStoredMessages)),
     ),
     proposals: state.proposals,
     findings: state.findings,
@@ -179,6 +180,54 @@ export interface ShisoTurnDeps {
   readonly context: ShisoConversationContext;
   readonly toolContext: ShisoToolContext;
   readonly signal?: AbortSignal;
+  /**
+   * SHISO-C1. A retry re-sends the user's already-retained message without
+   * appending it a second time. It is only offered after a failed turn that
+   * produced no successful mutation.
+   */
+  readonly retry?: boolean;
+  /** Application-produced note about unsaved working changes. */
+  readonly workingStateNote?: string;
+}
+
+/**
+ * Builds the bounded continuation memory sent alongside the recent history.
+ * It is deterministic (no extra provider call) and separates user statements,
+ * model-generated prose, and verified application findings.
+ */
+export function buildShisoContinuation(
+  state: ShisoConversationState,
+  workingStateNote?: string,
+): ShisoConversationContinuation | undefined {
+  const recentStart = Math.max(0, state.messages.length - SHISO_LIMITS.maxHistoryMessages);
+  const older = state.messages.slice(0, recentStart);
+  const earlierUserMessages = older
+    .filter((message) => message.role === 'user')
+    .slice(-SHISO_LIMITS.maxContinuationUserMessages)
+    .map((message) => message.text.slice(0, SHISO_LIMITS.maxContinuationMessageChars));
+  const earlierAssistantMessages = older
+    .filter((message) => message.role === 'assistant')
+    .slice(-SHISO_LIMITS.maxContinuationAssistantMessages)
+    .map((message) => message.text.slice(0, SHISO_LIMITS.maxContinuationMessageChars));
+  const verifiedFindings = state.findings.slice(-SHISO_LIMITS.maxContinuationFindings);
+  const workingState = workingStateNote?.trim().slice(0, SHISO_LIMITS.maxContinuationWorkingStateChars);
+  if (
+    earlierUserMessages.length === 0 &&
+    earlierAssistantMessages.length === 0 &&
+    verifiedFindings.length === 0 &&
+    !workingState
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    earlier_user_messages: Object.freeze(earlierUserMessages),
+    earlier_assistant_messages: Object.freeze(earlierAssistantMessages),
+    verified_findings: Object.freeze(verifiedFindings.map((finding) => Object.freeze({
+      ...finding,
+      summary: finding.summary.slice(0, SHISO_LIMITS.maxContinuationFindingChars),
+    }))),
+    ...(workingState ? { working_state: workingState } : {}),
+  });
 }
 
 export interface ShisoTurnOutcome {
@@ -321,7 +370,9 @@ export async function runShisoConversationTurn(
     };
   }
 
-  let working: ShisoConversationState = appendShisoMessage(state, { role: 'user', text: trimmed });
+  let working: ShisoConversationState = deps.retry === true
+    ? state
+    : appendShisoMessage(state, { role: 'user', text: trimmed });
   const toolsUsed: string[] = [];
   /** Verified findings gathered during THIS turn. */
   const collected: ShisoCollectedFinding[] = [];
@@ -646,10 +697,12 @@ export async function runShisoConversationTurn(
     }
     if (sendFinalize) finalizeSent = true;
 
+    const continuation = buildShisoContinuation(working, deps.workingStateNote);
     const body: ShisoTurnRequestBody = {
       turn_version: SHISO_TURN_CONTRACT_VERSION,
       user_message: trimmed,
       history: working.messages.slice(-SHISO_LIMITS.maxHistoryMessages),
+      ...(continuation !== undefined ? { continuation } : {}),
       context: boundContext(deps.context),
       ...(observation !== undefined ? { observation } : {}),
       ...(collected.length > 0 ? { collected: Object.freeze([...collected]) } : {}),
@@ -829,7 +882,7 @@ export async function runShisoConversationTurn(
       messages: Object.freeze([
         ...working.messages,
         { role: 'assistant' as const, text, proposalCount: bound.length },
-      ]).slice(-SHISO_LIMITS.maxHistoryMessages) as readonly ShisoConversationMessage[],
+      ]).slice(-SHISO_LIMITS.maxStoredMessages) as readonly ShisoConversationMessage[],
       proposals: Object.freeze([...working.proposals, ...bound]),
       findings: working.findings,
     };

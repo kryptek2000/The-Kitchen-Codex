@@ -426,6 +426,22 @@ and reports supplemented, remaining, and unknown values separately. Apply and
 Save remain separate explicit actions, and the SINC-2R4 branded-authentication
 boundary is unchanged. See `docs/SINC-4-Supplemental-Nutrients.md`.
 
+**SHISO-C1 — Unbroken Conversations** — Implemented in the SHISO-C1
+worktree; focused tests passed; owner acceptance pending. Conversation
+transcripts are retained locally through the existing SettingsAdapter (no cloud
+sync), scoped to the stable recipe identity or the global/create surface.
+Recipe A → B → A navigation switches transcripts without erasing either.
+Persisted state is bounded to 120 messages/entries and contains no provider
+credentials, save grants, or actionable proposals. The model receives the
+recent 24-message window plus a bounded continuation memory that explicitly
+separates earlier user statements, earlier model prose, and verified
+application findings. Provider failures retain the user message, verified
+findings, and an explicit Retry action without automatically repeating
+mutations; cancelled tool turns do not offer automatic retry. Conversation
+restoration performs no work on open. Existing recipe edit/save authorities and
+security boundaries are unchanged. See
+`docs/SHISO-C1-Unbroken-Conversations.md`.
+
 **SHISO-7 — Broader Kitchen Intelligence** — Future.
 Substitutions, leftovers, cooking assistance, timer chains, and future
 capabilities.
