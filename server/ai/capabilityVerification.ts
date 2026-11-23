@@ -534,6 +534,8 @@ export async function verifyOpenRouterModelCapability(
   // 4. EXACT credential identity (`openrouter` only). No aliasing / fallback.
   const source: CredentialSource = options.credentialSource ?? "server_environment";
   if (!isCredentialSource(source)) return fail("CREDENTIAL_SOURCE_INVALID", false);
+  // The native ChatGPT plan is not an OpenRouter capability credential.
+  if (source === "native_plan") return fail("CREDENTIAL_SOURCE_INVALID", false);
   if (source === "session_only" && !isSessionByokSupportedDeployment()) {
     return fail("SESSION_BYOK_UNAVAILABLE", false);
   }
@@ -768,6 +770,8 @@ export async function verifyOpenRouterRecipeGenerationCapability(
   // EXACT credential identity + source. No aliasing / fallback.
   const source: CredentialSource = options.credentialSource ?? "server_environment";
   if (!isCredentialSource(source)) return fail("CREDENTIAL_SOURCE_INVALID", false);
+  // The native ChatGPT plan is not an OpenRouter capability credential.
+  if (source === "native_plan") return fail("CREDENTIAL_SOURCE_INVALID", false);
   if (source === "session_only" && !isSessionByokSupportedDeployment()) {
     return fail("SESSION_BYOK_UNAVAILABLE", false);
   }

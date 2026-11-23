@@ -68,6 +68,7 @@ import { discoverKitchenRecipesOnServer } from "./kitchenDiscover.js";
 import { getAiProviderStatus } from "./ai/providerStatus.js";
 import { buildProviderCatalog } from "./ai/providerCatalog.js";
 import { refreshOpenRouterCatalog } from "./ai/openRouterCatalog.js";
+import { refreshChatGptPlanCatalog } from "./ai/chatGptPlanBridge.js";
 import { runConnectionTest } from "./ai/connectionTest.js";
 import {
   verifyOpenRouterModelCapability,
@@ -2393,7 +2394,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // building so the response reflects live truth when available and the safe
   // last-known/baseline truth otherwise. Never throws, never spends.
   app.get("/api/providers/catalog", requireAiAccessToken, async (_req, res) => {
-    await refreshOpenRouterCatalog();
+    await Promise.all([refreshOpenRouterCatalog(), refreshChatGptPlanCatalog()]);
     res.json({ catalog: buildProviderCatalog() });
   });
 

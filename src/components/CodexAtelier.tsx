@@ -9,6 +9,7 @@ import {
 import { NetworkAdapter } from '../application/adapters/NetworkAdapter';
 import { SettingsAdapter } from '../application/adapters/SettingsAdapter';
 import { ProviderSettings, ProviderStatusPanel, ProviderStatusLoading, ProviderStatusError } from '../application-ui/ProviderSettings';
+import { getCachedAiSelections, hydrateAiSelections, type SavedSelection } from '../application/aiSelection';
 import { fetchProviderStatus } from '../application-ui/providerStatus';
 import { fetchProviderCatalog } from '../application-ui/providerCatalog';
 import LivingLibrary from './LivingLibrary';
@@ -49,6 +50,7 @@ interface CodexAtelierProps {
 export function CodexAtelier({ network, settings, onTextAiRuntimeChanged }: CodexAtelierProps) {
   const [section, setSection] = useState<StudioSection>('overview');
   const [chatGptEnabled, setChatGptEnabled] = useState(false);
+  const [selectionVersion, setSelectionVersion] = useState(0);
 
   useEffect(() => {
     const bridge = getChatGptBridge();
@@ -144,7 +146,12 @@ export function CodexAtelier({ network, settings, onTextAiRuntimeChanged }: Code
       {/* Section content */}
       <div className="pt-2">
         {section === 'overview' && (
-          <AtelierOverview network={network} settings={settings} onNavigate={setSection} />
+          <AtelierOverview
+            network={network}
+            settings={settings}
+            onNavigate={setSection}
+            selectionVersion={selectionVersion}
+          />
         )}
         {section === 'providers' && (
           <ProviderSettings
@@ -163,7 +170,14 @@ export function CodexAtelier({ network, settings, onTextAiRuntimeChanged }: Code
             focus="image"
           />
         )}
-        {section === 'chatgpt' && <ChatGptSubscriptionPanel />}
+        {section === 'chatgpt' && (
+          <ChatGptSubscriptionPanel
+            network={network}
+            settings={settings}
+            onTextAiRuntimeChanged={onTextAiRuntimeChanged}
+            onSelectionChanged={() => setSelectionVersion((value) => value + 1)}
+          />
+        )}
       </div>
     </section>
   );
@@ -173,14 +187,30 @@ function AtelierOverview({
   network,
   settings,
   onNavigate,
+  selectionVersion,
 }: {
   network: NetworkAdapter;
   settings: SettingsAdapter;
   onNavigate: (s: StudioSection) => void;
+  selectionVersion: number;
 }) {
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [statuses, setStatuses] = useState<ProviderStatusView[]>([]);
   const [catalog, setCatalog] = useState<ProviderCatalogView | null>(null);
+  const [savedText, setSavedText] = useState<SavedSelection>(() => getCachedAiSelections().textAi);
+
+  useEffect(() => {
+    let alive = true;
+    void hydrateAiSelections(settings)
+      .then((selections) => {
+        if (alive) setSavedText(selections.textAi);
+      })
+      .catch(() => {
+        // A read failure is surfaced by the selection panel; this overview never
+        // pretends a default is active.
+      });
+    return () => { alive = false; };
+  }, [settings, selectionVersion]);
 
   const load = useCallback(async () => {
     setState('loading');
@@ -210,7 +240,17 @@ function AtelierOverview({
           .map((p) => p.providerId)
       ).size
     : 0;
-  const textAssignment = catalog
+  const userTextAssignment =
+    savedText.mode === 'user_selected' &&
+    savedText.providerId &&
+    (catalog === null || catalog.selection.userSelectionAllowed.text)
+      ? `${savedText.providerId === 'chatgpt-plan' ? 'ChatGPT plan' : savedText.providerId}${
+          savedText.modelId ? ` / ${savedText.modelId}` : ''
+        }`
+      : null;
+  const textAssignment = userTextAssignment
+    ? userTextAssignment
+    : catalog
     ? catalog.selection.text.selectedProviderId
       ? `${catalog.selection.text.selectedProviderId} / ${catalog.selection.text.selectedModelId ?? 'default'}`
       : 'Server default'
@@ -269,7 +309,7 @@ function AtelierOverview({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="rounded-2xl border border-[var(--color-rule,var(--bg-elevated))] bg-[var(--bg-surface,#141414)] p-5 sm:p-6 space-y-3">
               <div className="flex items-center justify-between gap-2">
-                <h3 className="font-serif text-[18px] text-[var(--text-primary,#F3F4F6)]">Text AI assignment</h3>
+                <h3 className="font-serif text-[18px] text-[var(--text-primary,#F3F4F6)]">Default Text AI</h3>
                 <span className="text-[10px] uppercase tracking-wide font-semibold text-[var(--text-muted,#6B7280)]">Text</span>
               </div>
               <p className="text-[14px] font-medium text-[var(--text-primary,#F3F4F6)] break-words">{textAssignment}</p>

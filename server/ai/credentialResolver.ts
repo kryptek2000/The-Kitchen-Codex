@@ -34,8 +34,8 @@ import { OpenAIImageProvider } from "./openAIImageProvider.js";
 import type { AiProvider } from "./types.js";
 import type { ImageProvider } from "./imageProvider.js";
 
-/** The two non-secret credential sources. */
-export type CredentialSource = "server_environment" | "session_only";
+/** The three non-secret credential sources. */
+export type CredentialSource = "server_environment" | "session_only" | "native_plan";
 
 /**
  * Bounded, provider-neutral credential failure codes (never secret-derived).
@@ -60,7 +60,7 @@ export type CredentialResolution =
 
 /** True when a value is one of the two allowed credential sources. */
 export function isCredentialSource(value: unknown): value is CredentialSource {
-  return value === "server_environment" || value === "session_only";
+  return value === "server_environment" || value === "session_only" || value === "native_plan";
 }
 
 /**
@@ -80,6 +80,8 @@ export function resolveCredential(providerId: string, source: CredentialSource):
     if (!secret) return { ok: false, code: "CREDENTIAL_SOURCE_UNAVAILABLE" };
     return { ok: true, lease: { providerId, source, secret } };
   }
+  // Native plan credentials live in the trusted Electron process, never in this
+  // server credential lease. No secret is resolved for this source.
   return { ok: false, code: "CREDENTIAL_SOURCE_INVALID" };
 }
 

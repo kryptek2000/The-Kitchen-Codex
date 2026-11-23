@@ -15,6 +15,19 @@ inventories. This document reconciles their intent without merging PR #11.
 
 ---
 
+## SHISO-C1.5 — ChatGPT Plan as Default Text AI (implemented, live acceptance pending)
+
+The native desktop can now use an eligible connected ChatGPT plan as the local
+Default Text AI. The choice is a non-secret SettingsAdapter preference, separate
+from `KITCHEN_CODEX_TEXT_PROVIDER`; a server-managed pin remains authoritative.
+SHISO conversation uses the existing validated JSON-text adapter through a
+loopback bridge to the trusted Electron session; structured nutrition, metadata, recipe generation, and web
+search are not claimed. A disconnected/expired/unentitled account fails closed
+with a reconnect state and never falls back to Gemini or a paid API provider.
+See [`SHISO-C1.5-ChatGPT-Plan-Default-Text-AI.md`](./SHISO-C1.5-ChatGPT-Plan-Default-Text-AI.md).
+
+---
+
 ## Authoritative product decision — November 21, 2026 — Nutrition Product Alignment
 
 This section is the CURRENT product authority for Basic and Advanced Nutrition.

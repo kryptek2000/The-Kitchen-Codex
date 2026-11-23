@@ -42,6 +42,13 @@ import {
   type RegisteredImageProvider,
 } from "./imageProviderRegistry.js";
 import { roleModelsForProvider, selectableTextModels } from "./roleModels.js";
+import {
+  CHATGPT_PLAN_PROVIDER_ID,
+  isChatGptPlanAvailable,
+  isChatGptPlanBridgeConfigured,
+  isValidChatGptPlanAccountKey,
+} from "./chatGptPlanBridge.js";
+import { createChatGptPlanProvider } from "./chatGptPlanProvider.js";
 import type { AiOperation } from "./operations.js";
 import { operationRequiredCapabilities } from "./operations.js";
 import type { AiProvider } from "./types.js";
@@ -74,6 +81,11 @@ export interface SelectedOperationMetadata {
    * `server_environment`.
    */
   credentialSource?: CredentialSource;
+  /**
+   * SHISO-C1.5: exact native ChatGPT account key (non-secret). Only meaningful
+   * with `native_plan` + the `chatgpt-plan` provider.
+   */
+  accountKey?: string;
   /**
    * v0.8.0: the cost class the user ACKNOWLEDGED when selecting this model
    * (non-secret). Used to detect a FREE -> PAID transition and fail closed.
@@ -124,6 +136,7 @@ export function coerceSelectionInput(input: SelectionInput): CoercedSelectionInp
         const metadata: SelectedOperationMetadata = { mode: "user_selected", providerId: input.providerId };
         if (input.modelId) metadata.modelId = input.modelId;
         if (input.credentialSource) metadata.credentialSource = input.credentialSource;
+        if (input.accountKey) metadata.accountKey = input.accountKey;
         if (input.selectedCostClass) metadata.selectedCostClass = input.selectedCostClass;
         return { invalid: false, explicit: true, metadata };
       }
@@ -177,6 +190,8 @@ export function normalizeOperationSelection(raw: unknown): SelectedOperationMeta
   if (row["mode"] === "user_selected" || row["mode"] === "server_default") out.mode = row["mode"];
   if (providerId) out.providerId = providerId;
   if (modelId) out.modelId = modelId;
+  const accountKey = typeof row["accountKey"] === "string" ? row["accountKey"].trim().slice(0, 128) : "";
+  if (accountKey) out.accountKey = accountKey;
   const costClass = row["selectedCostClass"];
   if (costClass === "free" || costClass === "budget" || costClass === "paid" || costClass === "variable") {
     out.selectedCostClass = costClass;
@@ -202,6 +217,13 @@ export function validateUserTextSelection(
     // env key. The provider must be structurally session-bindable; a missing
     // session key is handled later (fail closed, never env fallback).
     if (!supportsSessionBoundTextProvider(registered.provider.id)) return null;
+  } else if (credentialSource === "native_plan") {
+    // Native plan authority is the desktop bridge only. Never a server env key,
+    // never a session API key, and only the exact ChatGPT plan provider.
+    if (registered.provider.id !== CHATGPT_PLAN_PROVIDER_ID) return null;
+    if (!isChatGptPlanBridgeConfigured()) return null;
+    if (!isValidChatGptPlanAccountKey(requested.accountKey)) return null;
+    if (!isChatGptPlanAvailable(requested.accountKey)) return null;
   } else {
     if (registered.enabled === false) return null;
     if (!registered.provider.isAvailable()) return null;
@@ -333,7 +355,12 @@ export function resolveTextCandidateContext(
         ? [userSel.modelId]
         : modelsForProviderOnly(registered, operation);
       return {
-        candidates: buildTextCandidates(registered, models, userCredentialSource),
+        candidates: buildTextCandidates(
+          registered,
+          models,
+          userCredentialSource,
+          coerced.metadata?.accountKey,
+        ),
         source: "user_selected",
         credentialSource: userCredentialSource,
       };
@@ -391,7 +418,8 @@ function withDynamicSingleAttempt(candidate: AiCandidate): AiCandidate {
 function buildTextCandidates(
   registered: RegisteredProvider,
   models: string[],
-  credentialSource: CredentialSource
+  credentialSource: CredentialSource,
+  accountKey?: string
 ): AiCandidate[] {
   if (credentialSource === "session_only") {
     const bound = createSessionBoundTextProvider(registered.provider.id);
@@ -399,6 +427,21 @@ function buildTextCandidates(
     return models.map((model) =>
       withDynamicSingleAttempt({ provider: bound, model, credentialSource: "session_only" as const })
     );
+  }
+  if (credentialSource === "native_plan") {
+    const bound = createChatGptPlanProvider(accountKey);
+    if (!bound) return [];
+    return models.map((model) => ({
+      ...withDynamicSingleAttempt({
+        provider: bound,
+        model,
+        credentialSource: "native_plan" as const,
+      }),
+      // The native plan is an explicit user choice. A failure is terminal: there
+      // is no retry and no cross-provider or paid-API fallback.
+      singleAttempt: true,
+      terminalOnFailure: true,
+    }));
   }
   return models.map((model) =>
     withDynamicSingleAttempt({ provider: registered.provider, model, credentialSource: "server_environment" as const })
@@ -487,6 +530,9 @@ export function validateUserImageSelection(
   credentialSource: CredentialSource = "server_environment"
 ): { providerId: string; modelId?: string } | null {
   if (!requested?.providerId) return null;
+  // Native ChatGPT plan authority is TEXT-ONLY. It can never authorize an image
+  // provider selection.
+  if (credentialSource === "native_plan") return null;
   const registered = findRegisteredImageProvider(requested.providerId);
   if (!registered) return null;
   if (credentialSource === "session_only") {

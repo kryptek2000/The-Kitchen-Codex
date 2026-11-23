@@ -19,8 +19,11 @@ Node/Express production bundle and loads the existing React UI over loopback.
 - `security.cjs` — exact-origin and IPC sender policy.
 - `vaultState.cjs` — post-acceptance restart authority.
 - `chatgpt/` — optional Sign in with ChatGPT public-client OAuth, owner-only
-  credential storage, model discovery, and streaming Responses text. Disabled
-  unless `TKC_CHATGPT_SUBSCRIPTION=1`. See `docs/CHATGPT-SUBSCRIPTION.md`.
+  credential storage, model discovery, streaming Responses text, and the
+  loopback bridge used by the local server's native Default Text AI selection.
+  Disabled unless `TKC_CHATGPT_SUBSCRIPTION=1`. See
+  `docs/CHATGPT-SUBSCRIPTION.md` and
+  `docs/SHISO-C1.5-ChatGPT-Plan-Default-Text-AI.md`.
 - Managed Vault: `<Documents>/The Kitchen Codex/My Recipe Vault`
   (overridable only for isolated testing with `TKC_DESKTOP_DOCUMENTS_ROOT`).
 - No cloud sync, account, or remote privileged content.

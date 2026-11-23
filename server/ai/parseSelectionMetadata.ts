@@ -54,7 +54,9 @@ export type SelectionInvalidReason =
   | "default_with_ids"
   | "malformed_field"
   | "invalid_credential_source"
+  | "invalid_account_key"
   | "default_with_credential_source"
+  | "default_with_account_key"
   | "default_with_cost_class";
 
 /** The strict, discriminated selection intent. */
@@ -66,7 +68,9 @@ export type SelectionIntent =
       providerId: string;
       modelId?: string;
       /** BYOK-5C non-secret credential source (never a secret). */
-      credentialSource?: "server_environment" | "session_only";
+      credentialSource?: "server_environment" | "session_only" | "native_plan";
+      /** SHISO-C1.5 exact native ChatGPT account key (non-secret). */
+      accountKey?: string;
       /** v0.8.0 non-secret acknowledged cost class (FREE->PAID protection). */
       selectedCostClass?: "free" | "budget" | "paid" | "variable";
     }
@@ -121,15 +125,20 @@ function parseSelectionHeader(raw: string | string[] | undefined): SelectionInte
   // the wrong type is malformed and is never coerced.
   const providerPresent = Object.prototype.hasOwnProperty.call(row, "providerId");
   const modelPresent = Object.prototype.hasOwnProperty.call(row, "modelId");
+  const accountKeyPresent = Object.prototype.hasOwnProperty.call(row, "accountKey");
   if (providerPresent && typeof row["providerId"] !== "string") {
     return { kind: "INVALID", reason: "malformed_field" };
   }
   if (modelPresent && typeof row["modelId"] !== "string") {
     return { kind: "INVALID", reason: "malformed_field" };
   }
+  if (accountKeyPresent && typeof row["accountKey"] !== "string") {
+    return { kind: "INVALID", reason: "malformed_field" };
+  }
 
   const providerId = typeof row["providerId"] === "string" ? row["providerId"].trim() : "";
   const modelId = typeof row["modelId"] === "string" ? row["modelId"].trim() : "";
+  const accountKey = typeof row["accountKey"] === "string" ? row["accountKey"].trim() : "";
 
   // BYOK-5C credentialSource: optional, string, one of the two non-secret
   // sources. Present-but-malformed/unknown/empty is INVALID (fail closed).
@@ -138,12 +147,27 @@ function parseSelectionHeader(raw: string | string[] | undefined): SelectionInte
     return { kind: "INVALID", reason: "malformed_field" };
   }
   const rawCredentialSource = row["credentialSource"];
-  let credentialSource: "server_environment" | "session_only" | undefined;
+  let credentialSource: "server_environment" | "session_only" | "native_plan" | undefined;
   if (credentialPresent) {
-    if (rawCredentialSource !== "server_environment" && rawCredentialSource !== "session_only") {
+    if (
+      rawCredentialSource !== "server_environment" &&
+      rawCredentialSource !== "session_only" &&
+      rawCredentialSource !== "native_plan"
+    ) {
       return { kind: "INVALID", reason: "invalid_credential_source" };
     }
     credentialSource = rawCredentialSource;
+  }
+
+  // SHISO-C1.5 exact native account key: optional, non-secret, bounded, and only
+  // meaningful for the ChatGPT plan provider.
+  if (accountKeyPresent) {
+    if (!/^acct_[a-f0-9]{32}$/.test(accountKey)) {
+      return { kind: "INVALID", reason: "invalid_account_key" };
+    }
+    if (providerId !== "chatgpt-plan") {
+      return { kind: "INVALID", reason: "invalid_account_key" };
+    }
   }
 
   // v0.8.0 selectedCostClass: optional, one of the four non-secret cost classes.
@@ -163,6 +187,7 @@ function parseSelectionHeader(raw: string | string[] | undefined): SelectionInte
   if (mode === "server_default") {
     if (providerPresent || modelPresent) return { kind: "INVALID", reason: "default_with_ids" };
     if (credentialPresent) return { kind: "INVALID", reason: "default_with_credential_source" };
+    if (accountKeyPresent) return { kind: "INVALID", reason: "default_with_account_key" };
     if (costClassPresent) return { kind: "INVALID", reason: "default_with_cost_class" };
     return { kind: "EXPLICIT_DEFAULT" };
   }
@@ -188,8 +213,8 @@ function parseSelectionHeader(raw: string | string[] | undefined): SelectionInte
   if (modelPresent && !modelId) return { kind: "INVALID", reason: "empty_model" };
 
   return modelId
-    ? { kind: "EXPLICIT_SELECTED", providerId, modelId, ...(credentialSource ? { credentialSource } : {}), ...(selectedCostClass ? { selectedCostClass } : {}) }
-    : { kind: "EXPLICIT_SELECTED", providerId, ...(credentialSource ? { credentialSource } : {}), ...(selectedCostClass ? { selectedCostClass } : {}) };
+    ? { kind: "EXPLICIT_SELECTED", providerId, modelId, ...(credentialSource ? { credentialSource } : {}), ...(accountKey ? { accountKey } : {}), ...(selectedCostClass ? { selectedCostClass } : {}) }
+    : { kind: "EXPLICIT_SELECTED", providerId, ...(credentialSource ? { credentialSource } : {}), ...(accountKey ? { accountKey } : {}), ...(selectedCostClass ? { selectedCostClass } : {}) };
 }
 
 function headerValue(headers: SelectionHeaderSource, name: string): string | string[] | undefined {
@@ -217,6 +242,7 @@ export function selectionIntentToMetadata(intent: SelectionIntent): SelectedOper
   const out: SelectedOperationMetadata = { mode: "user_selected", providerId: intent.providerId };
   if (intent.modelId) out.modelId = intent.modelId;
   if (intent.credentialSource) out.credentialSource = intent.credentialSource;
+  if (intent.accountKey) out.accountKey = intent.accountKey;
   if (intent.selectedCostClass) out.selectedCostClass = intent.selectedCostClass;
   return out;
 }

@@ -592,8 +592,17 @@ function pumpVoiceQueue() {
 }
 
 function buildChildEnv(fingerprint: string) {
+  // Never pass the native ChatGPT bridge capability to the voice worker. It
+  // needs only its own model/cache configuration.
+  const {
+    TKC_CHATGPT_PLAN_BRIDGE_URL: _chatGptBridgeUrl,
+    TKC_CHATGPT_PLAN_BRIDGE_TOKEN: _chatGptBridgeToken,
+    ...baseEnv
+  } = process.env;
+  void _chatGptBridgeUrl;
+  void _chatGptBridgeToken;
   return {
-    ...process.env,
+    ...baseEnv,
     TKC_VOICE_CACHE_DIR: getVoiceCacheDir(),
     TKC_VOICE_MODEL_ID: HEART_MODEL_REPOSITORY,
     TKC_VOICE_MODEL_REVISION: HEART_MODEL_REVISION,
