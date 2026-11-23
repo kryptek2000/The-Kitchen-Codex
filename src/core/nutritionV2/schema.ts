@@ -1,4 +1,4 @@
-import type { AiNutrientContribution } from './aiContribution';
+import type { AiNutrientContribution, AiNutrientSupplement } from './aiContribution';
 /**
  * The Kitchen Codex — Advanced Nutrition v1: canonical schema types & bounds.
  *
@@ -57,14 +57,23 @@ export const CODEX_NUTRITION_SCHEMA_V3 = 3;
 export const CODEX_NUTRITION_SCHEMA_V4 = 4;
 /** Schema v5 stores validated ingredient-level AI nutrient contributions. */
 export const CODEX_NUTRITION_SCHEMA_V5 = 5;
+/**
+ * Schema v6 is the smallest truthful extension of v5: it adds separately
+ * attributed AI nutrient supplements for nutrients genuinely absent from a
+ * verified source-backed line. It never rewrites the source line or its
+ * verified values, and a v6 block may carry only supplements (no AI line
+ * contribution) when a source-backed recipe has no unresolved lines.
+ */
+export const CODEX_NUTRITION_SCHEMA_V6 = 6;
 export const CODEX_NUTRITION_BASIS_TOTAL = 'total';
 export const CODEX_NUTRITION_FRONTMATTER_KEY = 'codex_nutrition';
 
 /** Mixed authoritative sources; each contribution stays traceable. */
-export type NutritionSourceId = 'usda_fdc' | 'open_food_facts' | 'curated_reference' | 'user_manual' | 'ai_estimate';
+export type NutritionSourceId = 'usda_fdc' | 'usda_branded' | 'open_food_facts' | 'curated_reference' | 'user_manual' | 'ai_estimate';
 
 export const NUTRITION_SOURCE_IDS: ReadonlyArray<NutritionSourceId> = Object.freeze([
   'usda_fdc',
+  'usda_branded',
   'open_food_facts',
   'curated_reference',
   'user_manual',
@@ -78,6 +87,7 @@ export const NUTRITION_SOURCE_IDS: ReadonlyArray<NutritionSourceId> = Object.fre
  */
 export const DATASET_BACKED_SOURCE_IDS: ReadonlyArray<NutritionSourceId> = Object.freeze([
   'usda_fdc',
+  'usda_branded',
   'open_food_facts',
   'curated_reference',
 ]);
@@ -296,6 +306,28 @@ export interface CodexNutritionV5 extends Omit<CodexNutritionV4, 'schema'> {
   schema: 5;
   ai_contributions: AiNutrientContribution[];
 }
+export interface IngredientEvidenceV6 extends IngredientEvidenceV4 {
+  /**
+   * Authoritative per-line nutrient coverage from the Apply-time source
+   * preview. Required on every resolved source line whenever a v6 block carries
+   * supplements; decode and reopen use it to prove that a supplement does not
+   * conflict with a verified value (including an explicit zero).
+   */
+  readonly source_nutrients?: NutrientId[];
+}
+export interface CodexNutritionV6 extends Omit<CodexNutritionV4, 'schema' | 'ingredients'> {
+  schema: 6;
+  ingredients: IngredientEvidenceV6[];
+  /** Optional: a supplement-only v6 block is valid. */
+  ai_contributions?: AiNutrientContribution[];
+  /** Separately attributed estimates for nutrients absent from source lines. */
+  nutrient_supplements?: AiNutrientSupplement[];
+  /**
+   * Authoritative source-only subtotal per nutrient, copied from the Apply-time
+   * source preview. It is validation metadata, not a display total.
+   */
+  source_amounts?: Partial<Record<NutrientId, number>>;
+}
 
 /** Bounded opaque safe data for an unknown FUTURE schema value. */
 export interface OpaqueCodexNutrition {
@@ -311,6 +343,7 @@ export type AdvancedNutritionBlock =
   | CodexNutritionV3
   | CodexNutritionV4
   | CodexNutritionV5
+  | CodexNutritionV6
   | OpaqueCodexNutrition;
 
 export const MAX_SERVINGS = 1000;

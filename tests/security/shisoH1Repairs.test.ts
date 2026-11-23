@@ -452,9 +452,9 @@ describe('H-1 Scenario F — unsupported requests are refused truthfully', () =>
       expect(SHISO_TOOL_NAMES as readonly string[]).not.toContain(forbidden);
     }
     // Still a small, closed vocabulary (H-2 added the three authorized editing
-    // capabilities: apply_ingredient_edits, apply_nutrition_corrections,
-    // save_working_recipe).
-    expect(SHISO_TOOL_NAMES.length).toBe(11);
+    // capabilities; SINC-3 added complete_nutrition, which prepares proposals
+    // only and never applies or saves).
+    expect(SHISO_TOOL_NAMES.length).toBe(13);
   });
 
   it('the tool dispatcher still cannot reach the filesystem or network', () => {

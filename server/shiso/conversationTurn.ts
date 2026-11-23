@@ -69,6 +69,11 @@ const SYSTEM_PROMPT = [
   "  already implies the whole job: run the analysis, find what is unresolved, investigate",
   "  it, and — when the user asked you to FIX or APPLY — apply the supported corrections",
   "  and recalculate. Do it all in this conversation.",
+  "- When the user explicitly asks to RESOLVE, FINISH or COMPLETE the missing/unresolved",
+  "  nutrition (for example 'resolve the last two ingredients', 'finish the nutrition',",
+  "  'estimate whatever is missing'), call complete_nutrition IMMEDIATELY. That single",
+  "  capability runs the bounded source-first pipeline and prepares the review; do not",
+  "  merely suggest searches or tell the user to do it manually.",
   "- When the user asks you to FIX, CORRECT, CHANGE or UPDATE the recipe or its nutrition",
   "  ('fix this recipe', 'apply all supported fixes', 'change the chicken to turkey and",
   "  update the nutrition'), their instruction IS the authorization. Execute the supported",
@@ -176,9 +181,12 @@ const SYSTEM_PROMPT = [
   "- For 'needs_food_identity' with candidates but no usable portions: do NOT propose a",
   "  match; instead use 'clarification_required' and explain that choosing a candidate",
   "  would not resolve the amount.",
-  "- For missing weights or food matches, offer run_nutrition_analysis to estimate edible",
-  "  weights and nutrients with assumptions. Manual measurement is optional unless",
-  "  the uncertainty makes an estimate materially unreliable.",
+  "- For missing weights or food matches, call complete_nutrition when the user asks to",
+  "  resolve/finish/complete the nutrition, and run_nutrition_analysis for a plain",
+  "  analysis request. Both estimate edible weights and nutrients with assumptions;",
+  "  complete_nutrition also performs the bounded branded and external-research steps",
+  "  first. Manual measurement is optional unless the uncertainty makes an estimate",
+  "  materially unreliable.",
   "- When the user says 'apply all', 'provide and apply all', or similar, the supported",
   "  path is apply_nutrition_corrections: it applies every adequately supported correction",
   "  in ONE deterministic operation. Do NOT invent missing identities or quantities, and do",
@@ -193,8 +201,8 @@ const SYSTEM_PROMPT = [
   "- You cannot create new recipes, import recipes, delete recipes, or write to the vault",
   "  directly. You can edit an OPEN recipe's working copy and save it through the normal",
   "  save path with save_working_recipe, and only when the user asks you to save.",
-  "- Estimated weights are allowed through run_nutrition_analysis. Label them estimates,",
-  "  never authenticated USDA portions. Recipe text remains unchanged.",
+  "- Estimated weights are allowed through complete_nutrition and run_nutrition_analysis.",
+  "  Label them estimates, never authenticated USDA portions. Recipe text remains unchanged.",
   "- An AI suggestion is not a validated correction. Preparing accepted nutrition in",
   "  the review is not Apply to the working recipe, and Apply is not Save to Vault.",
   "  Never promise that a proposed correction will apply before the tool verifies it.",
@@ -216,11 +224,13 @@ const SYSTEM_PROMPT = [
   ...[
     "get_current_recipe        read the recipe the user is looking at (each ingredient carries its line_ref handle)",
     "get_nutrition_review      read the live Advanced Nutrition review state",
+    "get_branded_evidence      read accepted USDA Branded product evidence in the working review",
     "search_usda_foods         search the authenticated pinned USDA catalogue",
     "inspect_usda_food         read one authenticated record and its portions",
     "investigate_ingredient_amount   diagnose ONE unresolved ingredient line",
     "investigate_unresolved_ingredients   diagnose EVERY unresolved line in one step (use this for 'all'/'investigate these')",
     "run_nutrition_analysis    prepare source-backed and validated AI-estimated nutrition in the unsaved review",
+    "complete_nutrition        COMPLETE the missing nutrition: generic USDA first, then USDA Branded manufacturer evidence, then bounded external research, then validated AI estimates for what remains (unsaved review only)",
     "get_capability_status     say what is missing and the one action that fixes it",
     "apply_ingredient_edits    CHANGE ingredient names/amounts/units/preparation in the UNSAVED working recipe (line_ref + only the fields to change)",
     "apply_nutrition_corrections   FIX the nutrition review in one deterministic pass (authenticated matches/portions only) and recalculate",
@@ -229,8 +239,8 @@ const SYSTEM_PROMPT = [
   "",
   "TOOL ARGUMENTS — EXACT JSON KEYS (never invent key names)",
   "- A tool call is {\"kind\":\"tool_request\",\"tool\":\"<name>\",\"args\":{...}}.",
-  "- No arguments: get_current_recipe, get_nutrition_review, investigate_unresolved_ingredients,",
-  "  run_nutrition_analysis, get_capability_status, save_working_recipe.",
+  "- No arguments: get_current_recipe, get_nutrition_review, get_branded_evidence, investigate_unresolved_ingredients,",
+  "  run_nutrition_analysis, complete_nutrition, get_capability_status, save_working_recipe.",
   "- {\"tool\":\"investigate_ingredient_amount\",\"line_ref\":\"<from get_current_recipe>\"}",
   "- {\"tool\":\"search_usda_foods\",\"query\":\"...\"}",
   "- {\"tool\":\"inspect_usda_food\",\"fdc_id\":123}",
@@ -356,6 +366,8 @@ function salvageToolArgs(tool: ShisoToolName): ShisoToolArgs {
       return { tool };
     case 'get_nutrition_review':
       return { tool };
+    case 'get_branded_evidence':
+      return { tool };
     case 'search_usda_foods':
       // An empty query normalizes to `empty_query`, which the capability
       // reports as `catalog_search_empty` — it can never search everything.
@@ -367,6 +379,8 @@ function salvageToolArgs(tool: ShisoToolName): ShisoToolArgs {
     case 'investigate_unresolved_ingredients':
       return { tool };
     case 'run_nutrition_analysis':
+      return { tool };
+    case 'complete_nutrition':
       return { tool };
     case 'get_capability_status':
       return { tool };
@@ -423,6 +437,8 @@ function readToolArgs(tool: ShisoToolName, raw: unknown): ShisoToolArgs | null {
           ? { include_ingredients: rec['include_ingredients'] }
           : {}),
       };
+    case 'get_branded_evidence':
+      return { tool };
     case 'search_usda_foods': {
       const query = rec['query'];
       if (typeof query !== 'string') return null;
@@ -466,6 +482,8 @@ function readToolArgs(tool: ShisoToolName, raw: unknown): ShisoToolArgs | null {
       return { tool, ...(statuses !== undefined ? { statuses } : {}) };
     }
     case 'run_nutrition_analysis':
+      return { tool };
+    case 'complete_nutrition':
       return { tool };
     case 'get_capability_status':
       return { tool };

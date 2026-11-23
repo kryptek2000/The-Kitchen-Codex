@@ -3,13 +3,65 @@
  * and deliberately carry no USDA identity, FDC id, source release, or portion
  * authority. Callers must bind them to the current recipe line set before use.
  */
-import { NUTRIENT_IDS, NUTRIENT_REGISTRY, type NutrientId } from './nutrients';
+import { NUTRIENT_IDS, NUTRIENT_REGISTRY, isNutrientId, type NutrientId } from './nutrients';
 import { isValidNutrientAmount, type CanonicalUnit } from './units';
+import {
+  BRANDED_ASSERTION_VERSION,
+  brandedApplyAuthenticationMatches,
+  computeBrandedContributionDigest,
+  isBrandedApplyAuthentication,
+  type BrandedApplyAuthentication,
+} from './brandedEvidenceTrust';
 import type { AdvisoryNutritionPreview, NutrientTotalResult } from './calculation/types';
 
 export const AI_NUTRITION_CONTRIBUTION_VERSION = 'ai_nutrition_contribution_v1' as const;
 export const MAX_AI_NUTRITION_LINES = 200;
 export const MAX_AI_NUTRITION_ASSUMPTION_LENGTH = 500;
+
+/** The exact local target that was used to scale a branded product. */
+export interface AiBrandedTargetBinding {
+  readonly query: string;
+  readonly amount: number | null;
+  readonly unit: string | null;
+  readonly measurement_kind: 'mass' | 'volume' | 'count' | 'unknown';
+  readonly quantity_grams?: number;
+  readonly quantity_ml?: number;
+}
+
+/** A server-issued, ECDSA-signed assertion for one exact contribution. */
+export interface AiBrandedVerification {
+  readonly version: typeof BRANDED_ASSERTION_VERSION;
+  readonly key_id: string;
+  readonly signature: string;
+  readonly canonical_digest: string;
+  readonly recipe_digest: string;
+  readonly review_identity: string;
+  readonly issued_at: string;
+  readonly expires_at: string;
+}
+
+/**
+ * Exact USDA Branded provenance carried INSIDE the existing source-backed
+ * contribution. This is deliberately not a new nutrition engine: the record is
+ * external label evidence, not a member of the pinned generic USDA catalog.
+ */
+export interface AiUsdaBrandedProvenance {
+  readonly fdc_id: number;
+  readonly description: string;
+  readonly brand_owner?: string;
+  readonly brand_name?: string;
+  readonly serving_size?: number;
+  readonly serving_size_unit?: string;
+  readonly basis: 'per_serving_g' | 'per_serving_ml' | 'per_100_g' | 'unsupported';
+  readonly publication_date?: string;
+  readonly snapshot_digest: string;
+  /** Server-held source-snapshot handle. Required for trusted Apply. */
+  readonly evidence_id?: string;
+  /** Exact authored target used for deterministic scaling. */
+  readonly target?: AiBrandedTargetBinding;
+  /** Server-issued verification over the exact canonical contribution. */
+  readonly verification?: AiBrandedVerification;
+}
 
 export interface AiNutrientContribution {
   readonly line_ref: string;
@@ -21,6 +73,9 @@ export interface AiNutrientContribution {
   readonly exclusion_role: 'none' | 'cooking_wrapper';
   readonly exclusion_assumption: string;
   readonly classification: 'ai_estimate' | 'source_backed';
+  /** Present only for a validated USDA-hosted, manufacturer-supplied record. */
+  readonly source_kind?: 'usda_branded';
+  readonly usda_branded?: AiUsdaBrandedProvenance;
   readonly nutrients: Readonly<Partial<Record<NutrientId, { readonly amount: number; readonly unit: CanonicalUnit }>>>;
   readonly unknown_nutrients: readonly NutrientId[];
   readonly assumptions: readonly string[];
@@ -35,6 +90,10 @@ export interface AiContributionRecipeBinding {
   readonly line_text_by_ref?: Readonly<Record<string, string>>;
   readonly instructions?: readonly string[];
   readonly requireExclusionContext?: boolean;
+  /** Apply requires a per-Apply authenticated branded capability. */
+  readonly requireTrustedBranded?: boolean;
+  /** Minted only after the exact attached assertion is cryptographically verified. */
+  readonly brandedAuthentication?: BrandedApplyAuthentication;
 }
 
 const DEFINITIONS = new Map(Object.values(NUTRIENT_REGISTRY).map((item) => [item.id, item]));
@@ -76,6 +135,7 @@ export function validateAiNutrientContributions(
 ): { readonly ok: true; readonly contributions: readonly AiNutrientContribution[] } | { readonly ok: false; readonly code: string } {
   if (!boundedString(binding.recipe_digest, 128) || !Array.isArray(binding.line_refs) || binding.line_refs.length > MAX_AI_NUTRITION_LINES) return { ok: false, code: 'invalid_binding' };
   if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_AI_NUTRITION_LINES) return { ok: false, code: 'invalid_contributions' };
+  const requireTrustedBranded = binding.requireTrustedBranded !== false;
   const allowed = new Set(binding.line_refs);
   const seen = new Set<string>();
   const result: AiNutrientContribution[] = [];
@@ -133,20 +193,326 @@ export function validateAiNutrientContributions(
     }
     if (row.classification === 'source_backed' && sources.length === 0) return { ok: false, code: 'source_missing' };
     if (row.classification === 'ai_estimate' && sources.length > 0 && !row.assumptions.length) return { ok: false, code: 'estimate_assumption_missing' };
+
+    let usdaBranded: AiUsdaBrandedProvenance | undefined;
+    if (row.source_kind !== undefined) {
+      if (row.source_kind !== 'usda_branded' || row.classification !== 'source_backed') {
+        return { ok: false, code: 'invalid_branded_source' };
+      }
+      if (!row.usda_branded || typeof row.usda_branded !== 'object' || Array.isArray(row.usda_branded)) {
+        return { ok: false, code: 'invalid_branded_source' };
+      }
+      const branded = row.usda_branded as Record<string, unknown>;
+      const evidenceIdRaw = branded.evidence_id;
+      const targetRaw = branded.target;
+      const verificationRaw = branded.verification;
+      if (
+        typeof branded.fdc_id !== 'number' ||
+        !Number.isSafeInteger(branded.fdc_id) ||
+        branded.fdc_id <= 0 ||
+        !boundedString(branded.description, 500) ||
+        (branded.brand_owner !== undefined && !boundedString(branded.brand_owner, 200)) ||
+        (branded.brand_name !== undefined && !boundedString(branded.brand_name, 200)) ||
+        (branded.serving_size !== undefined &&
+          (typeof branded.serving_size !== 'number' || !Number.isFinite(branded.serving_size) || branded.serving_size <= 0 || branded.serving_size > 100_000)) ||
+        (branded.serving_size_unit !== undefined && !boundedString(branded.serving_size_unit, 30)) ||
+        (branded.basis !== 'per_serving_g' &&
+          branded.basis !== 'per_serving_ml' &&
+          branded.basis !== 'per_100_g' &&
+          branded.basis !== 'unsupported') ||
+        (branded.publication_date !== undefined && !boundedString(branded.publication_date, 40)) ||
+        typeof branded.snapshot_digest !== 'string' ||
+        !/^sha256:[0-9a-f]{64}$/.test(branded.snapshot_digest) ||
+        !boundedString(evidenceIdRaw, 80) ||
+        !targetRaw || typeof targetRaw !== 'object' || Array.isArray(targetRaw) ||
+        !verificationRaw || typeof verificationRaw !== 'object' || Array.isArray(verificationRaw)
+      ) {
+        return { ok: false, code: 'invalid_branded_source' };
+      }
+      const targetValue = targetRaw as Record<string, unknown>;
+      if (
+        !boundedString(targetValue.query, 120) ||
+        (targetValue.amount !== null && !isValidNutrientAmount(targetValue.amount)) ||
+        (targetValue.unit !== null && !boundedString(targetValue.unit, 30)) ||
+        (targetValue.measurement_kind !== 'mass' &&
+          targetValue.measurement_kind !== 'volume' &&
+          targetValue.measurement_kind !== 'count' &&
+          targetValue.measurement_kind !== 'unknown') ||
+        (targetValue.quantity_grams !== undefined &&
+          (typeof targetValue.quantity_grams !== 'number' || !Number.isFinite(targetValue.quantity_grams) || targetValue.quantity_grams <= 0 || targetValue.quantity_grams > 1_000_000)) ||
+        (targetValue.quantity_ml !== undefined &&
+          (typeof targetValue.quantity_ml !== 'number' || !Number.isFinite(targetValue.quantity_ml) || targetValue.quantity_ml <= 0 || targetValue.quantity_ml > 1_000_000))
+      ) {
+        return { ok: false, code: 'invalid_branded_target' };
+      }
+      const verificationValue = verificationRaw as Record<string, unknown>;
+      if (
+        verificationValue.version !== BRANDED_ASSERTION_VERSION ||
+        !boundedString(verificationValue.key_id, 64) ||
+        !boundedString(verificationValue.signature, 4096) ||
+        typeof verificationValue.canonical_digest !== 'string' ||
+        !/^sha256:[0-9a-f]{64}$/.test(verificationValue.canonical_digest) ||
+        typeof verificationValue.recipe_digest !== 'string' ||
+        !/^sha256:[0-9a-f]{64}$/.test(verificationValue.recipe_digest) ||
+        !boundedString(verificationValue.review_identity, 300) ||
+        !boundedString(verificationValue.issued_at, 40) ||
+        !boundedString(verificationValue.expires_at, 40)
+      ) {
+        return { ok: false, code: 'invalid_branded_verification' };
+      }
+      usdaBranded = Object.freeze({
+        fdc_id: branded.fdc_id,
+        description: branded.description,
+        ...(branded.brand_owner !== undefined ? { brand_owner: branded.brand_owner as string } : {}),
+        ...(branded.brand_name !== undefined ? { brand_name: branded.brand_name as string } : {}),
+        ...(branded.serving_size !== undefined ? { serving_size: branded.serving_size as number } : {}),
+        ...(branded.serving_size_unit !== undefined ? { serving_size_unit: branded.serving_size_unit as string } : {}),
+        basis: branded.basis,
+        ...(branded.publication_date !== undefined ? { publication_date: branded.publication_date as string } : {}),
+        snapshot_digest: branded.snapshot_digest,
+        evidence_id: evidenceIdRaw as string,
+        target: Object.freeze({
+          query: targetValue.query as string,
+          amount: targetValue.amount as number | null,
+          unit: targetValue.unit as string | null,
+          measurement_kind: targetValue.measurement_kind,
+          ...(targetValue.quantity_grams !== undefined ? { quantity_grams: targetValue.quantity_grams as number } : {}),
+          ...(targetValue.quantity_ml !== undefined ? { quantity_ml: targetValue.quantity_ml as number } : {}),
+        }),
+        verification: Object.freeze({
+          version: BRANDED_ASSERTION_VERSION,
+          key_id: verificationValue.key_id as string,
+          signature: verificationValue.signature as string,
+          canonical_digest: verificationValue.canonical_digest as string,
+          recipe_digest: verificationValue.recipe_digest as string,
+          review_identity: verificationValue.review_identity as string,
+          issued_at: verificationValue.issued_at as string,
+          expires_at: verificationValue.expires_at as string,
+        }),
+      });
+    } else if (row.usda_branded !== undefined) {
+      return { ok: false, code: 'invalid_branded_source' };
+    }
     seen.add(ref);
-    result.push(Object.freeze({
+    const contribution: AiNutrientContribution = Object.freeze({
       line_ref: ref, ingredient: row.ingredient, quantity_basis: row.quantity_basis,
       ...(row.weight_grams !== undefined ? { weight_grams: row.weight_grams as number } : {}),
       disposition,
       exclusion_role: exclusionRole,
       exclusion_assumption: exclusionAssumption,
-      classification: row.classification, nutrients: Object.freeze(nutrients),
+      classification: row.classification,
+      ...(usdaBranded !== undefined
+        ? { source_kind: 'usda_branded' as const, usda_branded: usdaBranded }
+        : {}),
+      nutrients: Object.freeze(nutrients),
       unknown_nutrients: Object.freeze([...new Set(row.unknown_nutrients as NutrientId[])]),
       assumptions: Object.freeze([...(row.assumptions as string[])]), confidence: row.confidence,
       sources: Object.freeze(sources),
-    }));
+    });
+    if (usdaBranded !== undefined) {
+      if (usdaBranded.verification !== undefined) {
+        if (computeBrandedContributionDigest(contribution) !== usdaBranded.verification.canonical_digest) {
+          return { ok: false, code: 'branded_evidence_tampered' };
+        }
+        if (usdaBranded.verification.recipe_digest !== binding.recipe_digest) {
+          return { ok: false, code: 'branded_evidence_context_mismatch' };
+        }
+      }
+      if (requireTrustedBranded) {
+        const authentication = binding.brandedAuthentication;
+        if (
+          !authentication ||
+          !isBrandedApplyAuthentication(authentication) ||
+          !brandedApplyAuthenticationMatches(authentication, contribution, binding.recipe_digest)
+        ) {
+          return { ok: false, code: 'branded_evidence_untrusted' };
+        }
+      }
+    }
+    result.push(contribution);
   }
   return { ok: true, contributions: Object.freeze(result) };
+}
+
+export const AI_NUTRIENT_SUPPLEMENT_VERSION = 'ai_nutrient_supplement_v1' as const;
+export const MAX_AI_NUTRIENT_SUPPLEMENTS = 200;
+
+/**
+ * A separately attributed AI estimate for ONE nutrient missing from an existing
+ * verified source-backed ingredient line. It never replaces the source line.
+ */
+export interface AiNutrientSupplement {
+  readonly supplement_version: typeof AI_NUTRIENT_SUPPLEMENT_VERSION;
+  readonly line_ref: string;
+  readonly ingredient: string;
+  readonly nutrient_id: NutrientId;
+  readonly amount: number;
+  readonly unit: CanonicalUnit;
+  readonly classification: 'ai_estimate';
+  readonly source_kind: 'ai_supplement';
+  readonly source_food_id: string;
+  readonly source_release: string;
+  readonly weight_grams?: number;
+  readonly quantity_basis: string;
+  readonly assumptions: readonly string[];
+  readonly confidence: 'low' | 'medium' | 'high';
+  readonly recipe_digest: string;
+  readonly review_identity: string;
+}
+
+export interface NutrientSupplementSourceBinding {
+  /**
+   * Nutrients the verified source genuinely contributes. Persisted v6 blocks
+   * carry this per line as `source_nutrients`; a supplement whose source line
+   * has no coverage is not verifiable and fails closed.
+   */
+  readonly nutrient_ids: readonly NutrientId[];
+  readonly source_food_id?: string;
+  readonly source_release?: string;
+  readonly weight_grams?: number;
+}
+
+export interface NutrientSupplementBinding {
+  readonly recipe_digest: string;
+  readonly review_identity?: string;
+  readonly line_text_by_ref?: Readonly<Record<string, string>>;
+  readonly sources_by_ref: ReadonlyMap<string, NutrientSupplementSourceBinding>;
+}
+
+export type NutrientSupplementValidation =
+  | { readonly ok: true; readonly supplements: readonly AiNutrientSupplement[] }
+  | { readonly ok: false; readonly code: string };
+
+/**
+ * Validates supplemental nutrient proposals against the CURRENT verified
+ * source lines. A supplement is allowed only when the source line genuinely
+ * lacks the nutrient. Duplicate line+nutrient supplements are rejected.
+ */
+export function validateAiNutrientSupplements(
+  raw: unknown,
+  binding: NutrientSupplementBinding,
+): NutrientSupplementValidation {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_AI_NUTRIENT_SUPPLEMENTS) {
+    return { ok: false, code: 'invalid_supplements' };
+  }
+  const out: AiNutrientSupplement[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return { ok: false, code: 'invalid_supplement' };
+    const row = item as Record<string, unknown>;
+    const lineRef = typeof row.line_ref === 'string' ? row.line_ref : '';
+    const source = binding.sources_by_ref.get(lineRef);
+    if (!lineRef || !source) return { ok: false, code: 'unknown_line_ref' };
+    const authored = binding.line_text_by_ref?.[lineRef];
+    if (authored !== undefined && row.ingredient !== authored.slice(0, 200)) return { ok: false, code: 'line_text_mismatch' };
+    if (typeof row.ingredient !== 'string' || row.ingredient.length === 0 || row.ingredient.length > 200) {
+      return { ok: false, code: 'invalid_ingredient' };
+    }
+    const nutrientId = row.nutrient_id;
+    if (typeof nutrientId !== 'string' || !isNutrientId(nutrientId)) return { ok: false, code: 'invalid_nutrient' };
+    const definition = NUTRIENT_REGISTRY[nutrientId as NutrientId];
+    if (row.unit !== definition.unit) return { ok: false, code: 'unit_mismatch' };
+    if (typeof row.amount !== 'number' || !Number.isFinite(row.amount) || row.amount <= 0) {
+      return { ok: false, code: 'invalid_amount' };
+    }
+    if (source.nutrient_ids.includes(nutrientId as NutrientId)) return { ok: false, code: 'source_already_has_nutrient' };
+    const key = `${lineRef}\u0000${nutrientId}`;
+    if (seen.has(key)) return { ok: false, code: 'duplicate_supplement' };
+    const sourceFoodId = row.source_food_id;
+    const sourceRelease = row.source_release;
+    if (typeof sourceFoodId !== 'string' || sourceFoodId.length === 0 || sourceFoodId.length > 120) {
+      return { ok: false, code: 'invalid_source_identity' };
+    }
+    if (source.source_food_id !== undefined && sourceFoodId !== source.source_food_id) {
+      return { ok: false, code: 'source_identity_mismatch' };
+    }
+    if (typeof sourceRelease !== 'string' || sourceRelease.length === 0 || sourceRelease.length > 64) {
+      return { ok: false, code: 'invalid_source_release' };
+    }
+    if (source.source_release !== undefined && sourceRelease !== source.source_release) {
+      return { ok: false, code: 'source_release_mismatch' };
+    }
+    if (row.weight_grams === undefined) {
+      // A source line with resolved grams MUST be bound to that weight basis;
+      // an unweighted supplement could otherwise claim a different quantity.
+      if (source.weight_grams !== undefined) return { ok: false, code: 'missing_weight' };
+    } else {
+      if (typeof row.weight_grams !== 'number' || !Number.isFinite(row.weight_grams) || row.weight_grams <= 0) {
+        return { ok: false, code: 'invalid_weight' };
+      }
+      if (source.weight_grams !== undefined && Math.abs(row.weight_grams - source.weight_grams) > 1e-6) {
+        return { ok: false, code: 'weight_mismatch' };
+      }
+    }
+    if (typeof row.quantity_basis !== 'string' || row.quantity_basis.length === 0 || row.quantity_basis.length > 200) {
+      return { ok: false, code: 'invalid_quantity_basis' };
+    }
+    if (!Array.isArray(row.assumptions) || row.assumptions.length === 0 || row.assumptions.length > 12) {
+      return { ok: false, code: 'invalid_assumptions' };
+    }
+    const assumptions: string[] = [];
+    for (const assumption of row.assumptions) {
+      if (typeof assumption !== 'string') return { ok: false, code: 'invalid_assumptions' };
+      const trimmed = assumption.trim();
+      if (trimmed.length === 0 || trimmed.length > 500) return { ok: false, code: 'invalid_assumptions' };
+      assumptions.push(trimmed);
+    }
+    if (row.confidence !== 'low' && row.confidence !== 'medium' && row.confidence !== 'high') {
+      return { ok: false, code: 'invalid_confidence' };
+    }
+    if (row.supplement_version !== AI_NUTRIENT_SUPPLEMENT_VERSION) {
+      return { ok: false, code: 'invalid_supplement_version' };
+    }
+    if (row.classification !== 'ai_estimate' || row.source_kind !== 'ai_supplement') {
+      return { ok: false, code: 'invalid_supplement_classification' };
+    }
+    if (row.recipe_digest !== binding.recipe_digest) return { ok: false, code: 'stale_recipe' };
+    if (typeof row.review_identity !== 'string' || row.review_identity.length === 0 || row.review_identity.length > 300) {
+      return { ok: false, code: 'invalid_review_identity' };
+    }
+    if (binding.review_identity !== undefined && row.review_identity !== binding.review_identity) {
+      return { ok: false, code: 'stale_review' };
+    }
+    seen.add(key);
+    out.push(Object.freeze({
+      supplement_version: AI_NUTRIENT_SUPPLEMENT_VERSION,
+      line_ref: lineRef,
+      ingredient: row.ingredient,
+      nutrient_id: nutrientId as NutrientId,
+      amount: row.amount,
+      unit: definition.unit,
+      classification: 'ai_estimate' as const,
+      source_kind: 'ai_supplement' as const,
+      source_food_id: sourceFoodId,
+      source_release: sourceRelease,
+      ...(row.weight_grams !== undefined ? { weight_grams: row.weight_grams as number } : {}),
+      quantity_basis: row.quantity_basis,
+      assumptions: Object.freeze(assumptions),
+      confidence: row.confidence,
+      recipe_digest: binding.recipe_digest,
+      review_identity: row.review_identity,
+    }));
+  }
+  return { ok: true, supplements: Object.freeze(out) };
+}
+
+/** Sums supplemental nutrient amounts by nutrient; no whole-line replacement. */
+export function sumNutrientSupplements(
+  supplements: readonly AiNutrientSupplement[],
+): Partial<Record<NutrientId, { readonly amount: number; readonly unit: CanonicalUnit; readonly covered_ingredient_count: number; readonly lines: ReadonlySet<string> }>> {
+  const sums: Partial<Record<NutrientId, { amount: number; unit: CanonicalUnit; lines: Set<string> }>> = {};
+  for (const supplement of supplements) {
+    const row = sums[supplement.nutrient_id] ?? { amount: 0, unit: supplement.unit, lines: new Set<string>() };
+    row.amount += supplement.amount;
+    row.lines.add(supplement.line_ref);
+    sums[supplement.nutrient_id] = row;
+  }
+  return Object.freeze(Object.fromEntries(Object.entries(sums).map(([id, value]) => [id, Object.freeze({
+    amount: Math.round(value.amount * 1_000_000) / 1_000_000,
+    unit: value.unit,
+    covered_ingredient_count: value.lines.size,
+    lines: value.lines,
+  })]))) as Partial<Record<NutrientId, { amount: number; unit: CanonicalUnit; covered_ingredient_count: number; lines: ReadonlySet<string> }>>;
 }
 
 /** Sums trusted line contributions; omitted nutrients stay unknown, explicit 0 stays known. */
@@ -186,35 +552,59 @@ export function aiNutrientPerServing(
 export function combineAiContributionsWithPreview(
   preview: AdvisoryNutritionPreview,
   contributions: readonly AiNutrientContribution[],
+  supplements: readonly AiNutrientSupplement[] = [],
 ): AdvisoryNutritionPreview {
   const sourceResolved = new Set(preview.ingredients.filter((row) => row.outcome === 'calculated').map((row) => row.line_ref));
+  const sourceByRef = new Map(preview.ingredients.filter((row) => row.outcome === 'calculated').map((row) => [row.line_ref, row]));
   const accepted = contributions.filter((row) => !sourceResolved.has(row.line_ref));
   const selected = accepted.filter((row) => hasUsableAiNutrientValue(row));
   const excludedRefs = new Set(accepted.filter((row) => row.disposition === 'excluded').map((row) => row.line_ref));
+  const supplementSeen = new Set<string>();
+  const safeSupplements = supplements.filter((supplement) => {
+    const source = sourceByRef.get(supplement.line_ref);
+    if (!source) return false;
+    if (source.contributing_nutrients.includes(supplement.nutrient_id)) return false;
+    const key = `${supplement.line_ref}\u0000${supplement.nutrient_id}`;
+    if (supplementSeen.has(key)) return false;
+    if (!Number.isFinite(supplement.amount) || supplement.amount <= 0) return false;
+    if (NUTRIENT_REGISTRY[supplement.nutrient_id]?.unit !== supplement.unit) return false;
+    supplementSeen.add(key);
+    return true;
+  });
   const contributionTotals = sumAiNutrientContributions(selected) as Record<string, { amount: number; unit: CanonicalUnit; covered_ingredient_count: number }>;
+  const supplementTotals = sumNutrientSupplements(safeSupplements) as Record<string, { amount: number; unit: CanonicalUnit; covered_ingredient_count: number }>;
+  const aiRefs = new Set(selected.map((row) => row.line_ref));
+  // The denominator for a nutrient the source never reports: every calculated
+  // source line plus every selected AI line plus every still-unresolved line
+  // that is not represented by an AI contribution. This mirrors the
+  // deterministic calculator's measurable-line denominator.
+  const measurableFallback = sourceResolved.size + selected.length + preview.unresolved.filter(
+    (row) => !aiRefs.has(row.line_ref) && !excludedRefs.has(row.line_ref),
+  ).length;
   const totals: Partial<Record<NutrientId, NutrientTotalResult>> = { ...preview.totals };
   for (const id of preview.nutrient_scope) {
     const ai = contributionTotals[id];
+    const supplement = supplementTotals[id];
     const base = preview.totals[id];
     const aiCovered = ai?.covered_ingredient_count ?? 0;
-    if (!base && !ai) continue;
+    const supplementCovered = supplement?.covered_ingredient_count ?? 0;
+    if (!base && !ai && !supplement) continue;
     // The deterministic preview's denominator already counts unresolved recipe
     // lines. An AI contribution changes their coverage disposition; it must not
     // append those same ingredient lines to the denominator a second time.
-    const measurable = base?.measurable_ingredient_count ?? aiCovered;
-    if (measurable === 0 && (base?.covered_ingredient_count ?? 0) + aiCovered === 0) continue;
-    const covered = (base?.covered_ingredient_count ?? 0) + aiCovered;
-    const amount = (base?.amount ?? 0) + (ai?.amount ?? 0);
+    const measurable = base?.measurable_ingredient_count ?? measurableFallback;
+    if (measurable === 0) continue;
+    const covered = (base?.covered_ingredient_count ?? 0) + aiCovered + supplementCovered;
+    const amount = (base?.amount ?? 0) + (ai?.amount ?? 0) + (supplement?.amount ?? 0);
     totals[id] = {
       amount: Math.round(amount * 1_000_000) / 1_000_000,
-      unit: base?.unit ?? ai?.unit ?? 'g',
+      unit: base?.unit ?? ai?.unit ?? supplement?.unit ?? 'g',
       covered_ingredient_count: covered,
       measurable_ingredient_count: measurable,
       coverage: measurable === 0 ? 0 : covered / measurable,
       status: measurable > 0 && covered === measurable ? 'complete' : 'partial',
     };
   }
-  const aiRefs = new Set(selected.map((row) => row.line_ref));
   const unresolved = preview.unresolved.filter((row) => !aiRefs.has(row.line_ref) && !excludedRefs.has(row.line_ref));
   const scopedNutrients = new Set(preview.nutrient_scope);
   const hasUnknownAiNutrients = selected.some((row) => row.unknown_nutrients.some((id) => scopedNutrients.has(id)));
@@ -229,6 +619,7 @@ export function combineAiContributionsWithPreview(
     ...preview,
     totals: Object.freeze(totals),
     ai_contributions: Object.freeze(accepted.filter((row) => selected.includes(row) || excludedRefs.has(row.line_ref))),
+    nutrient_supplements: Object.freeze(safeSupplements),
     unresolved: Object.freeze(unresolved),
     status,
   });

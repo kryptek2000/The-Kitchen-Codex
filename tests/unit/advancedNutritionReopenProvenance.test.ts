@@ -35,7 +35,7 @@ import type {
   Phase4State,
 } from '../../src/core/nutritionV2/phase4/types';
 import type { AiResolutionSuggestion } from '../../src/core/nutritionV2/aiResolution';
-import type { CodexNutritionV1, CodexNutritionV2, CodexNutritionV3, CodexNutritionV4, CodexNutritionV5 } from '../../src/core/nutritionV2/schema';
+import type { CodexNutritionV1, CodexNutritionV2, CodexNutritionV3, CodexNutritionV4, CodexNutritionV5, CodexNutritionV6 } from '../../src/core/nutritionV2/schema';
 import type { ObsidianRecipe } from '../../src/types';
 
 const SPECS = [
@@ -145,7 +145,7 @@ function applyReady(flowValue: Flow, state: Phase4State): Phase4State {
   } as Phase4State;
 }
 
-function authorize(flowValue: Flow, state: Phase4State): CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5 {
+function authorize(flowValue: Flow, state: Phase4State): CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5 | CodexNutritionV6 {
   const result = authorizeNutritionPersistence({
     session,
     recipe: flowValue.recipe,
@@ -162,7 +162,7 @@ function authorize(flowValue: Flow, state: Phase4State): CodexNutritionV1 | Code
 function reAuthorize(
   flowValue: Flow,
   state: Phase4State,
-  existingBlock: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5
+  existingBlock: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5 | CodexNutritionV6
 ): { code: string } {
   const result = authorizeNutritionPersistence({
     session,

@@ -23,7 +23,7 @@ import { deriveDailyValue } from '../calculation/dailyValues';
 import { derivePerServing, deriveRequestedServing } from '../calculation/servings';
 import { formatUnitLabel, NUTRIENT_GROUPS } from '../phase4/display';
 import type { BasisMode, DisplayNutrient, NutrientGroup } from '../phase4/types';
-import type { CodexNutritionV1, CodexNutritionV2, CodexNutritionV3, CodexNutritionV4, CodexNutritionV5 } from '../schema';
+import type { CodexNutritionV1, CodexNutritionV2, CodexNutritionV3, CodexNutritionV4, CodexNutritionV5, CodexNutritionV6 } from '../schema';
 import { hasUsableAiNutrientValue } from '../aiContribution';
 
 export const SAVED_REPORT_VERSION = 'usda_phase5c_saved_report_v1';
@@ -41,7 +41,10 @@ export interface SavedReportMeta {
   readonly computed_at: string;
   readonly ingredient_digest: string;
   readonly usda_release: string | undefined;
+  readonly usda_branded_release: string | undefined;
   readonly nutrient_scope_count: number;
+  /** Separately attributed AI supplements persisted in a v6 block. */
+  readonly supplement_count: number;
 }
 
 function scaleStored(
@@ -61,7 +64,7 @@ function scaleStored(
  * nutrient stays `missing`. Never tops up from legacy/simple nutrition.
  */
 export function deriveSavedReportNutrients(
-  block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5,
+  block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5 | CodexNutritionV6,
   basis: BasisMode,
   selectedServings: number
 ): ReadonlyArray<DisplayNutrient> {
@@ -109,9 +112,10 @@ export function deriveSavedReportNutrients(
 }
 
 /** Bounded, display-safe saved-report metadata. Never throws on a valid block. */
-export function savedReportMeta(block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5): SavedReportMeta {
+export function savedReportMeta(block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5 | CodexNutritionV6): SavedReportMeta {
   const resolvedRefs = new Set(block.ingredients.filter(entry => entry.resolved).map(entry => entry.line_ref));
-  const ai = block.schema === 5 ? block.ai_contributions : [];
+  const ai = block.schema === 5 ? block.ai_contributions : block.schema === 6 ? (block.ai_contributions ?? []) : [];
+  const supplementCount = block.schema === 6 ? (block.nutrient_supplements?.length ?? 0) : 0;
   const excludedRefs = new Set(ai.filter(entry => entry.disposition === 'excluded').map(entry => entry.line_ref));
   for (const entry of ai) if (entry.disposition !== 'excluded' && hasUsableAiNutrientValue(entry)) resolvedRefs.add(entry.line_ref);
   const unresolvedRefs = new Set(block.unresolved.map(entry => entry.line_ref));
@@ -134,7 +138,9 @@ export function savedReportMeta(block: CodexNutritionV1 | CodexNutritionV2 | Cod
     computed_at: block.computed_at,
     ingredient_digest: block.ingredient_digest,
     usda_release: block.source_releases.usda_fdc,
+    usda_branded_release: block.source_releases.usda_branded,
     nutrient_scope_count: block.nutrient_scope.length,
+    supplement_count: supplementCount,
   });
 }
 
@@ -152,7 +158,7 @@ export function savedReportGroups(): ReadonlyArray<NutrientGroup> {
  * `derivePerServing` math used everywhere else (no new rounding scheme).
  */
 export function deriveAdvancedCompactPerServing(
-  block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5
+  block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5 | CodexNutritionV6
 ): { calories?: number; protein?: number; carbohydrates?: number; fat?: number; fiber?: number; sodium?: number; servings: number } | undefined {
   if (block.status !== 'complete' || block.unresolved.length > 0) return undefined;
   const base = block.servings;

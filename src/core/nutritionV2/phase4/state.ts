@@ -315,7 +315,23 @@ export function phase4Reducer(state: Phase4State, action: Phase4Action): Phase4S
       if (state.recipeKey !== action.recipeKey || action.servings !== state.baseServings) return state;
       const allowed = new Set(state.rows.map((row) => row.line_ref));
       if (action.contributions.some((entry) => !allowed.has(entry.line_ref))) return state;
-      return withPreviewStale({ ...state, aiNutrition: { recipe_key: action.recipeKey, servings: action.servings, contributions: action.contributions } });
+      if (action.supplements?.some((entry) => !allowed.has(entry.line_ref))) return state;
+      const sameReview = state.aiNutrition?.recipe_key === action.recipeKey &&
+        state.aiNutrition?.servings === action.servings;
+      const supplements = action.supplements !== undefined
+        ? action.supplements
+        : sameReview
+          ? state.aiNutrition?.supplements
+          : undefined;
+      return withPreviewStale({
+        ...state,
+        aiNutrition: {
+          recipe_key: action.recipeKey,
+          servings: action.servings,
+          contributions: action.contributions,
+          ...(supplements !== undefined ? { supplements } : {}),
+        },
+      });
     }
 
     case 'clear_ai_nutrition':

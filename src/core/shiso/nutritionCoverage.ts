@@ -5,6 +5,9 @@
  */
 import { hasUsableAiNutrientValue, type AiNutrientContribution } from '../nutritionV2/aiContribution';
 import type { LiveRowState } from '../nutritionV2/phase4/liveRow';
+import { NUTRIENT_REGISTRY, type NutrientId } from '../nutritionV2/nutrients';
+import type { AdvisoryNutritionPreview } from '../nutritionV2/calculation/types';
+import { sumNutrientSupplements } from '../nutritionV2/aiContribution';
 
 export type EffectiveNutritionStatus =
   | 'source_backed'
@@ -29,6 +32,110 @@ export interface EffectiveNutritionLine {
   readonly unknown_nutrients: readonly string[];
   readonly resolved: boolean;
   readonly partial_known: boolean;
+}
+
+export interface ShisoNutrientGapLine {
+  readonly line_ref: string;
+  readonly label: string;
+  readonly fdc_id?: number;
+  readonly record_digest?: string;
+  readonly weight_grams?: number;
+  readonly source_release?: string;
+}
+
+/**
+ * Read-only whole-recipe nutrient coverage published by Advanced Nutrition.
+ * `derived_source_subtotal` is the existing engine total minus explicit AI
+ * contribution amounts; it is a display subtotal, not a second calculator.
+ */
+export interface ShisoNutrientCoverageEntry {
+  readonly id: NutrientId;
+  readonly label: string;
+  readonly unit: string;
+  readonly status: 'complete' | 'partial' | 'unknown';
+  readonly total_amount: number | null;
+  readonly ai_estimated_amount: number;
+  readonly derived_source_subtotal: number | null;
+  readonly covered_ingredient_count: number;
+  readonly measurable_ingredient_count: number;
+  /** Source-backed lines that do not contribute this nutrient and remain unsupplemented. */
+  readonly missing_source_lines: ReadonlyArray<ShisoNutrientGapLine>;
+  /** Source-backed lines whose missing nutrient is covered by an AI supplement. */
+  readonly supplemented_lines?: ReadonlyArray<ShisoNutrientGapLine>;
+  /** AI-estimated lines that do not contribute this nutrient. */
+  readonly missing_ai_lines: ReadonlyArray<ShisoNutrientGapLine>;
+  /** Explicit supplemental AI amount for this nutrient. */
+  readonly supplemental_estimated_amount?: number;
+}
+
+/**
+ * Maps the EXISTING calculated preview into a read-only whole-recipe nutrient
+ * coverage view. It does not calculate nutrients; it reports the preview's
+ * totals and `contributing_nutrients` plus the explicit AI contribution
+ * amounts/unknown lists.
+ */
+export function buildShisoNutrientCoverage(
+  preview: AdvisoryNutritionPreview | null | undefined,
+): ReadonlyArray<ShisoNutrientCoverageEntry> {
+  if (!preview) return [];
+  const ai = (preview.ai_contributions ?? []).filter((entry) => entry.disposition !== 'excluded');
+  const sourceIngredients = preview.ingredients.filter(
+    (entry) => entry.outcome === 'calculated' || entry.outcome === 'qualitative',
+  );
+  const supplements = preview.nutrient_supplements ?? [];
+  const supplementTotals = sumNutrientSupplements(supplements) as Record<string, {
+    amount: number;
+    covered_ingredient_count: number;
+    lines: ReadonlySet<string>;
+  }>;
+  return preview.nutrient_scope.flatMap((id) => {
+    const definition = NUTRIENT_REGISTRY[id];
+    if (!definition) return [];
+    const total = preview.totals[id];
+    const sourceGapCandidates = sourceIngredients
+      // Only calculated, USDA-identified lines can carry a source-bound
+      // supplement. A qualitative line has no nutrient record or mass basis.
+      .filter((entry) => entry.outcome === 'calculated' && entry.fdc_id !== undefined)
+      .filter((entry) => !entry.contributing_nutrients.includes(id))
+      .map((entry) => ({
+        line_ref: entry.line_ref,
+        label: entry.original_text.slice(0, 200),
+        ...(entry.fdc_id !== undefined ? { fdc_id: entry.fdc_id } : {}),
+        ...(entry.record_digest !== undefined ? { record_digest: entry.record_digest } : {}),
+        ...(entry.resolved_grams !== undefined ? { weight_grams: entry.resolved_grams } : {}),
+        source_release: preview.bundle_release,
+      }));
+    const supplement = supplementTotals[id];
+    const supplementedLines = sourceGapCandidates.filter((entry) => supplement?.lines.has(entry.line_ref));
+    const missingSourceLines = sourceGapCandidates.filter((entry) => !supplement?.lines.has(entry.line_ref));
+    const missingAiLines = ai
+      .filter((entry) => entry.nutrients[id] === undefined && entry.unknown_nutrients.includes(id))
+      .map((entry) => ({ line_ref: entry.line_ref, label: entry.ingredient.slice(0, 200) }));
+    const aiAmount = ai.reduce((sum, entry) => sum + (entry.nutrients[id]?.amount ?? 0), 0);
+    const supplementAmount = supplement?.amount ?? 0;
+    const roundedAi = Math.round(aiAmount * 1e6) / 1e6;
+    const roundedSupplement = Math.round(supplementAmount * 1e6) / 1e6;
+    const totalAmount = total?.amount ?? null;
+    return [{
+      id,
+      label: definition.label,
+      unit: total?.unit ?? definition.unit,
+      status: total ? total.status : 'unknown',
+      total_amount: totalAmount,
+      ai_estimated_amount: roundedAi,
+      supplemental_estimated_amount: roundedSupplement,
+      derived_source_subtotal:
+        totalAmount === null
+          ? null
+          : Math.max(0, Math.round((totalAmount - roundedAi - roundedSupplement) * 1e6) / 1e6),
+      covered_ingredient_count: total?.covered_ingredient_count ?? 0,
+      measurable_ingredient_count:
+        total?.measurable_ingredient_count ?? sourceIngredients.length + ai.length,
+      missing_source_lines: missingSourceLines,
+      supplemented_lines: supplementedLines,
+      missing_ai_lines: missingAiLines,
+    }];
+  });
 }
 
 export interface NutritionCoverage {

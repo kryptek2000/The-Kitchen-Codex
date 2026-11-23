@@ -116,6 +116,11 @@ import {
 import { AI_FIRST_GENERATE_ENABLED, resolveWithAiFirst } from './application/nutritionAiFirst';
 import { requestNutritionWebResearch } from './application/nutritionWebResearch';
 import {
+  requestUsdaBrandedFoodLookup,
+  verifyUsdaBrandedContributionsForApply,
+} from './application/nutritionBrandedFoods';
+import { brandedReviewIdentity } from './core/nutritionV2/brandedEvidenceTrust';
+import {
   NUTRITION_AI_REFRESHING_MESSAGE,
   UNAVAILABLE_EFFECTIVE_CAPABILITIES,
   nutritionAiUnavailableMessage,
@@ -195,6 +200,7 @@ import { createVoiceCache } from './application/voiceCache';
 import type {
   AdvancedNutritionAiResolveHandler,
   AdvancedNutritionResearchHandler,
+  AdvancedNutritionBrandedLookupHandler,
   AdvancedNutritionAiEstimateHandler,
   AdvancedNutritionRecipeContextReviewHandler,
   AdvancedNutritionApplyHandler,
@@ -2321,7 +2327,12 @@ export default function App() {
         ],
     [shisoWorkingForSelected],
   );
-  useEffect(() => {
+  // Publish the working-recipe summary in a LAYOUT effect so the visible
+  // Apply/Save banner reflects a just-applied Advanced Nutrition block in the
+  // SAME paint. A passive effect left a transient "saved" frame after Apply
+  // even though the block existed only in the working copy. This remains a
+  // display-order fix; it never writes or saves anything.
+  useLayoutEffect(() => {
     if (shisoWorkingForSelected === null) {
       publishWorkingRecipe(null);
       return;
@@ -2442,10 +2453,54 @@ export default function App() {
         message: 'Signature Collection originals are read-only. Save this recipe to My Vault before applying nutrition changes.',
       };
     }
+    // SINC-2R2: branded evidence is server-authenticated. The working review may
+    // contain a proposal, but Apply is the trust boundary: re-verify the exact
+    // contribution against the server-held source snapshot and the exact local
+    // target before any persistence authorization can run.
+    const brandedContributions = args.state.aiNutrition?.contributions.filter(
+      (entry) => entry.source_kind === 'usda_branded'
+    ) ?? [];
+    let applyState = args.state;
+    if (brandedContributions.length > 0) {
+      const recipeDigest = args.state.preview?.ingredient_digest;
+      const reviewIdentity = brandedReviewIdentity(
+        args.state.sessionIdentity ?? '',
+        args.state.recipeKey ?? '',
+        args.state.baseServings
+      );
+      if (!recipeDigest) {
+        return { ok: false, message: 'The branded evidence is not bound to a current recipe review. Recalculate and review again.' };
+      }
+      let verified: Awaited<ReturnType<typeof verifyUsdaBrandedContributionsForApply>>;
+      try {
+        verified = await verifyUsdaBrandedContributionsForApply({
+          network: networkAdapter,
+          contributions: brandedContributions,
+          recipeDigest,
+          reviewIdentity,
+        });
+      } catch {
+        return { ok: false, message: 'USDA Branded evidence could not be re-verified. Nothing was applied.' };
+      }
+      if (verified.ok !== true) {
+        return { ok: false, message: verified.message };
+      }
+      const verifiedByLine = new Map(verified.contributions.map((entry) => [entry.line_ref, entry]));
+      const contributions = args.state.aiNutrition!.contributions.map((entry) =>
+        entry.source_kind === 'usda_branded' ? verifiedByLine.get(entry.line_ref) ?? entry : entry
+      );
+      applyState = {
+        ...args.state,
+        aiNutrition: {
+          ...args.state.aiNutrition!,
+          contributions: Object.freeze(contributions),
+        },
+      };
+    }
     const result = await applyAdvancedNutrition({
       session: args.session,
       recipe: args.recipe,
-      state: args.state,
+      state: applyState,
       expectedMode: args.expectedMode,
       ...(args.reviewReasons !== undefined ? { reviewReasons: args.reviewReasons } : {}),
       write: async (updated: ObsidianRecipe) => {
@@ -2841,6 +2896,40 @@ export default function App() {
    * contribution against the exact requested lines. Evidence remains an OFFER
    * until the user accepts it in Advanced Nutrition.
    */
+  /**
+   * SINC-2 — explicit USDA Branded Foods lookup.
+   *
+   * Only the selected food term leaves the browser. The server owns the USDA
+   * key and returns validated source snapshots. Nothing is applied here.
+   */
+  const handleSearchBrandedFoods: AdvancedNutritionBrandedLookupHandler = async ({
+    lineRef,
+    query,
+    signal,
+  }) => {
+    const result = await requestUsdaBrandedFoodLookup({
+      network: networkAdapter,
+      lineRef,
+      query,
+      ...(signal !== undefined ? { signal } : {}),
+    });
+    if (result.ok !== true) {
+      return {
+        ok: false,
+        code: result.code,
+        message: result.message,
+        ...(result.retryAfterSeconds !== undefined ? { retryAfterSeconds: result.retryAfterSeconds } : {}),
+      };
+    }
+    return {
+      ok: true,
+      message: result.message,
+      candidates: result.candidates,
+      cacheStatus: result.cacheStatus,
+      retrievedAt: result.retrievedAt,
+    };
+  };
+
   const handleResearchAdvancedNutritionAi: AdvancedNutritionResearchHandler = async ({
     targets,
     lineRefs,
@@ -4164,6 +4253,7 @@ export default function App() {
               AI_FIRST_GENERATE_ENABLED ? handleResolveAdvancedNutritionAiFirst : undefined
             }
             onResearchAdvancedNutritionAi={handleResearchAdvancedNutritionAi}
+            onSearchBrandedFoods={handleSearchBrandedFoods}
             onEstimateMassesWithAi={handleEstimateMassesWithAi}
             onReviewRecipeContextWithAi={handleReviewRecipeContextWithAi}
             advancedNutritionAiAvailability={{

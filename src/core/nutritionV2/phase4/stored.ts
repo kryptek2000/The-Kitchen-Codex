@@ -25,7 +25,7 @@ export interface StoredNutrientValue {
 }
 
 export interface StoredAdvancedSummary {
-  readonly kind: 'none' | 'v1' | 'v2' | 'v3' | 'v4' | 'v5' | 'opaque';
+  readonly kind: 'none' | 'v1' | 'v2' | 'v3' | 'v4' | 'v5' | 'v6' | 'opaque';
   readonly status?: string;
   readonly servings?: number;
   /** Resolved measurable ingredient-line count of the saved block. */
@@ -92,7 +92,7 @@ export function summarizeStoredAdvanced(blockRaw: unknown): StoredAdvancedSummar
     ingredient_digest?: unknown;
   };
   if (candidate.kind === 'opaque') return opaque();
-  if ((candidate.schema !== 1 && candidate.schema !== 2 && candidate.schema !== 3 && candidate.schema !== 4 && candidate.schema !== 5) || candidate.basis !== 'total') {
+  if ((candidate.schema !== 1 && candidate.schema !== 2 && candidate.schema !== 3 && candidate.schema !== 4 && candidate.schema !== 5 && candidate.schema !== 6) || candidate.basis !== 'total') {
     return opaque();
   }
   if (candidate.nutrients === null || typeof candidate.nutrients !== 'object') return opaque();
@@ -113,7 +113,7 @@ export function summarizeStoredAdvanced(blockRaw: unknown): StoredAdvancedSummar
     ? candidate.ingredients.flatMap((entry: any) => typeof entry?.line_ref === 'string' && entry.resolved === true ? [entry.line_ref] : [])
     : []);
   const excludedRefs = new Set<string>();
-  const aiContributions = candidate.schema === 5 && Array.isArray(candidate.ai_contributions) ? candidate.ai_contributions : [];
+  const aiContributions = (candidate.schema === 5 || candidate.schema === 6) && Array.isArray(candidate.ai_contributions) ? candidate.ai_contributions : [];
   for (const entry of aiContributions as any[]) {
     if (!entry || typeof entry.line_ref !== 'string') continue;
     if (entry.disposition === 'excluded') excludedRefs.add(entry.line_ref);
@@ -132,7 +132,7 @@ export function summarizeStoredAdvanced(blockRaw: unknown): StoredAdvancedSummar
   const ingredientCount = new Set([...resolvedRefs, ...unresolvedRefs, ...excludedRefs]).size;
 
   return Object.freeze({
-    kind: candidate.schema === 5 ? 'v5' : candidate.schema === 4 ? 'v4' : candidate.schema === 3 ? 'v3' : candidate.schema === 2 ? 'v2' : 'v1',
+    kind: candidate.schema === 6 ? 'v6' : candidate.schema === 5 ? 'v5' : candidate.schema === 4 ? 'v4' : candidate.schema === 3 ? 'v3' : candidate.schema === 2 ? 'v2' : 'v1',
     status: typeof candidate.status === 'string' ? candidate.status : undefined,
     servings: isFiniteNonNegative(candidate.servings) ? candidate.servings : undefined,
     resolvedCount,

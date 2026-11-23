@@ -111,7 +111,7 @@ describe('SHISO universal provider dispatch', () => {
     expect(calls[0]).toMatchObject({ kind: 'text', model });
     expect(calls[0].prompt).toContain('Return exactly one JSON object');
     expect(calls[0].prompt).toContain('a missing USDA match or portion does not');
-    expect(calls[0].prompt).toContain('Estimated weights are allowed through run_nutrition_analysis');
+    expect(calls[0].prompt).toContain('Estimated weights are allowed through complete_nutrition and run_nutrition_analysis');
     expect(calls[0].prompt).not.toContain('Only the user can enter a weight');
   });
 

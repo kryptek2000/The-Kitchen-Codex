@@ -398,6 +398,34 @@ merged; Sid reported Cochinita Pibil analysis, Apply, Save and saved-report
 Reopen accepted. Source-backed and AI-estimated contributions remain distinct.
 Broader recipe coverage and provider/model compatibility still need acceptance.
 
+**SINC-3 — Intelligent Nutrition Completion** — Implemented in the SINC-2
+worktree; focused deterministic tests passed; independent acceptance pending.
+`complete_nutrition` runs one bounded source-first pass over the current
+unresolved review: existing deterministic USDA, then strong server-backed USDA
+Branded evidence, then bounded external research, then validated AI estimates.
+When ingredient coverage is already complete, it inspects the existing preview's
+whole-recipe 34-nutrient coverage, including source-backed line gaps such as
+niacin and added sugars. It fills only explicitly declared unknown nutrients on
+AI-estimated lines; source-backed gaps remain unknown because the per-line
+provenance model does not permit mixing AI estimates into verified USDA lines.
+It prepares proposals in the UNSAVED review only. Apply and Save remain separate
+explicit actions. It does not weaken the SINC-2R2 server-authenticated branded
+boundary. See `docs/SINC-3-SHISO-Nutrition-Completion.md`.
+
+**SINC-4 — Separately Attributed Supplemental Nutrients** — Implemented in the
+SINC-2 worktree; focused tests passed; independent acceptance pending.
+Adds schema v6 and a closed `AiNutrientSupplement` model for nutrients absent
+from a verified source-backed line. Each supplement is bound to the recipe
+digest, review identity, line ref, source food id, source release, resolved
+weight, nutrient id, amount/unit, classification, confidence, and assumptions.
+The source line and its verified values or explicit zeros are never rewritten;
+supplements are labeled as AI estimates, stored separately, and shown in a
+separate saved-report section. Explicit completion investigates the whole
+34-nutrient projection in one bounded provider pass, validates every proposal,
+and reports supplemented, remaining, and unknown values separately. Apply and
+Save remain separate explicit actions, and the SINC-2R4 branded-authentication
+boundary is unchanged. See `docs/SINC-4-Supplemental-Nutrients.md`.
+
 **SHISO-7 — Broader Kitchen Intelligence** — Future.
 Substitutions, leftovers, cooking assistance, timer chains, and future
 capabilities.
