@@ -3,7 +3,7 @@
 **Decision owner:** Sid Richmond (sole release/deployment authority)  
 **Approved:** October 14, 2026  
 **Product:** The Kitchen Codex  
-**Status:** Brand identity approved; website static introduction published; app animation still research/planning only  
+**Status:** Brand identity approved; website static introduction published; C1.7 flagship workspace and C1.8 state-driven companion animation implemented and merged via [PR #66](https://github.com/kryptek2000/The-Kitchen-Codex/pull/66); advanced expressive animation remains future
 **Relationship:** Companion to [Shiso Architecture and Roadmap](Shiso-Architecture-and-Roadmap.md), not a replacement for its conversation, nutrition, and product-capability phases.
 
 ## Decision
@@ -24,30 +24,60 @@ The approved **visual concept** is shown below. The linked image is a web-optimi
 - Feels intelligent, approachable, playful and distinctly culinary — **not** a generic robot or a cartoon chef.
 - Use the existing Kitchen Codex green, ink and warm-cream aesthetic; the mascot may glow more brightly **inside its own artwork**, never override application readability.
 
+## Delivered application baseline — C1.7 and C1.8
+
+The approved botanical identity is now integrated into the native SHISO workspace.
+Merged [PR #66](https://github.com/kryptek2000/The-Kitchen-Codex/pull/66) delivers
+the flagship conversation workspace and the first living-companion motion layer
+on `main` at merge commit `e0b309e545875a16397773c2d9c0fbd6e3bcaa4e`.
+
+The delivered baseline includes:
+
+- C1.7 flagship workspace: one authoritative conversation presentation shared by
+  compact and full-page views, conversation history controls, responsive layout,
+  anchored composer, approved SHISO artwork, and the existing explicit
+  Save-to-Vault authority.
+- C1.8 state-driven character presentation in the existing SHISO lifecycle:
+  `idle`, `thinking`, `working`, `success`, and `cancelled` states. The mapping
+  is presentational and is driven by actual request/tool/error/completion state;
+  it does not invent provider activity or speech.
+- CSS whole-character/ambient motion for the supplied flattened artwork, with
+  reduced-motion handling. Compact history/navigation avatars remain static.
+- Focused lifecycle and reduced-motion coverage in
+  `tests/unit/shisoC18Animation.test.tsx`; the merged PR's final CI was green.
+
+The flattened raster artwork is not treated as independently addressable eyes,
+mouth or limbs. Advanced facial animation, richer expression/pose layers,
+Codex Bloom, voice synchronization, and expanded character interactions remain
+future work.
+
 ## Planned phases and explicit gates
 
 | Phase | Status | Product deliverable | Exit gate |
 | --- | --- | --- | --- |
 | **M0 — Mascot Identity** | **APPROVED** | Canonical character concept, visual direction, brand ownership and master-source preservation | Sid's approval, October 14 |
 | **M1 — Static Introduction** | **PUBLISHED ON WEBSITE** | Web-optimized mascot in the website's existing Meet Shiso section; optional static character placement in the app chat once separately approved | Site/UX review, truthful copy, static accessibility, signed-off release |
-| **M2 — Animated Chat Companion** | **PLANNED** | State-driven lightweight avatar in the *one* SHISO conversation UI: idle, thinking, investigating, responding, success, clarification/error | SHISO functionality, reliability and latency meet human acceptance; no performance regression |
+| **M2 — Animated Chat Companion** | **IMPLEMENTED — C1.8 baseline** | State-driven lightweight avatar in the *one* SHISO conversation UI: idle, thinking, working, success, cancelled, with reduced-motion fallback | Merged PR #66 and green CI establish the delivered baseline; advanced expressive states and owner acceptance remain separate |
 | **M3 — Website Motion** | **PLANNED** | Optional subtle floating/blinking or state vignettes on the site, static fallback by default | Responsive/accessibility/performance review; Sid's website release approval |
 | **M4 — Full Mascot System** | **FUTURE** | Expression/pose library, onboarding, help, cooking-mode reactions, marketing assets and optional voice | Capability truth, performance, and separate product approvals |
 
-### M2 interaction and animation contract
+### M2 interaction and animation contract — delivered baseline plus future extensions
 
 SHISO is an interface representation of **real state**, not fake activity:
 
-- **Idle:** calm breathing/occasional blink when ready.
-- **Thinking:** restrained pulse after a user submits a turn; never imply tool activity that is not occurring.
-- **Investigating:** purposeful scan cues only while a verified USDA/application tool is executing.
-- **Responding:** subtle expression change while results are actually delivered.
-- **Success:** brief low-key reaction when an operation is confirmed by the authoritative app, not merely proposed by AI.
-- **Clarification / error:** recognizable still or curious state without alarming flashing or misleading success.
+- **Delivered idle:** gentle whole-character presence while the conversation is ready.
+- **Delivered thinking/working:** restrained activity after a real turn begins; working is distinguished by an actual tool-progress step and never by an artificial timer.
+- **Delivered success/cancelled:** brief completion or calm error/cancellation presentation, with no success animation after failure.
+- **Future extensions:** richer investigating/responding/clarification poses, facial expression layers and Codex Bloom remain future; no current state claims speech or lip synchronization.
 
 Prefer CSS transforms and a handful of optimized static/vector frames instead of heavyweight looping video. Always respect `prefers-reduced-motion`; provide a static fallback, descriptive labeling where semantically useful, and no flashing. Pause motion when the chat is hidden or offscreen. Avoid invasive attention cues.
 
-**Performance is a release gate.** Animation must not slow SHISO investigation, compete with USDA processing on Sid's hardware, block keyboard/chat interaction, or meaningfully increase CPU/memory. Measure real input latency, rendering cost, page weight and reduced-motion handling on desktop and mobile before launch.
+**Performance remains a release gate for future extensions.** The delivered
+baseline uses CSS transforms/opacity and existing application state; it must not
+slow SHISO investigation, compete with USDA processing, block keyboard/chat
+interaction, or imply unverified provider activity. Measure additional input
+latency, rendering cost, page weight and reduced-motion handling before adding
+new character systems.
 
 
 ### M2 research addendum — original stateful companion motion (October 15, 2026)
@@ -97,17 +127,29 @@ The avatar **reads** existing UI/application events and performs no provider, US
 
 A reported model success is **never** an animation success signal. Error and cancellation override success; a short transition prevents flicker between closely spaced tools. A pending edit is not a saved edit. Stop working motion when the operation ends, even when an AI response times out.
 
-**M2A — design/rig:** Create a coherent lightweight original SHISO part/expression sheet from approved artwork (faceplate, eyes, mouth, hood, body, leaf, recipe card/book). Preserve the original approved image as brand master. Ensure an attractive static fallback.
+**M2A — delivered static foundation / future rig:** The approved supplied raster
+artwork and static fallbacks are integrated. A layered face/expression sheet
+from the preserved brand master remains future work; the current flattened
+assets are not presented as independently animatable parts.
 
-**M2B — offline animation prototype:** Start with CSS opacity/transform for idle, thinking and respond, using existing motion utilities where practical. Compare with a Rive state machine only after testing actual asset weight and smoothness. No heavyweight always-playing MP4 loops or AI video-generation service required.
+**M2B — implemented:** CSS opacity/transform motion covers the delivered idle,
+thinking/working, success and cancelled states using the existing SHISO artwork.
+No heavyweight always-playing MP4 loop or AI video-generation service was added.
 
-**M2C — trusted event integration:** Once H-2 editing authority is independently audited and Sid accepts the real workflows, connect the display-only animation adapter to the existing SHISO chat/tool/edit/calculate/save results. Stub UI events in tests; no live Gemini calls required for animation tests.
+**M2C — implemented baseline:** The display-only animation adapter reads the
+existing SHISO chat/tool/error/completion lifecycle and does not invoke AI,
+USDA, filesystem or Vault operations. The implementation and tests use
+deterministic fixtures; no live provider acceptance is claimed.
 
 **M2D — Codex Bloom:** Add the signature celebration after everyday transitions are robust. Make it rare, optional, instantly interruptible, and honest about milestones.
 
 **Quality gates:** Animation cannot add a second SHISO runtime or change nutrition/edit authority, block keyboard or touch input, steal rendering resources from USDA/tool work, or increase interaction latency noticeably. Pause or unmount while chat/tab is hidden. Honor reduced motion with meaningful static state representations. Avoid rapid flashing. Measure CPU, memory, initial asset size, input latency and motion smoothness on modest hardware before release; do not assert unmeasured budget success.
 
-**Governance:** This is research and design documentation only, added to the existing draft PR #8; not a shipping implementation. Do not merge into main or touch Sid's local uncommitted H-2 work until explicit release approval.
+**Governance:** This document preserves the original research and design history
+while recording the delivered C1.7/C1.8 baseline. It is not authority to add
+new capabilities, change application behavior, use a live provider, or deploy.
+Future animation work still requires separate implementation, verification and
+release approval.
 
 
 ### Architecture and truth constraints
@@ -115,7 +157,7 @@ A reported model success is **never** an animation success signal. Error and can
 - SHISO remains *one* AI companion / conversation system with multiple contextual entry points. Do not build a second mascot chatbot, API provider stack, tool runner, memory store, nutrition engine, or credential path.
 - Animations consume current application state and MUST NOT directly invoke AI, USDA, or Vault operations. The character is a presentation layer, never a new authority.
 - The Kitchen Codex validates nutrition against authenticated USDA data and handles user confirmation and Apply. The mascot must not suggest an action completed when it only proposed one.
-- Treat image generation, recipe editing, broad Vault operations, meal planning and voice as future/unshipped SHISO capabilities until implemented and verified. The mascot/website should not advertise them as currently available.
+- Treat advanced expressive character interactions, Codex Bloom, image generation, broad Vault operations, meal planning and voice synchronization as future/unshipped SHISO capabilities until separately implemented and verified. The mascot/website should not advertise them as currently available.
 - During SHISO H-2 editing-authority audit and Sid's human acceptance tests, prioritize **smart, fast, useful functionality** ahead of mascot animation. Do not interrupt the current uncommitted SHISO implementation.
 
 ### Website integration
@@ -126,6 +168,9 @@ See website [Master Plan §22](https://github.com/kryptek2000/The-Kitchen-Codex-
 
 ### Governance / app roadmap reconciliation
 
-This file is an **additive plan on a separate review branch**. It intentionally does not overwrite the existing `Shiso-Architecture-and-Roadmap.md` being modified in Bunny's uncommitted H-1 work while Muse audits. After that audit and Sid's authorization, reconcile links and implementation status into the canonical SHISO roadmap. No app implementation or deployment is authorized by this mascot document.
+This file is an **additive plan and reconciliation record for documentation PR
+#8**. It preserves the historical design decisions and links the delivered
+C1.7/C1.8 baseline to the canonical SHISO roadmap. No app implementation,
+provider call or deployment is authorized by this mascot document.
 
 **Release approval:** Sid alone authorizes merging/deployment and accepts the final visual + animation behavior.
