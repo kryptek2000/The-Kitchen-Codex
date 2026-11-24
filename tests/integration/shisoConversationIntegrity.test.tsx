@@ -19,7 +19,7 @@ import {
   shisoConversationStorageKey,
 } from '../../src/application/shisoConversationPersistence';
 
-function OpenShiso({ source = 'global' }: { readonly source?: 'global' | 'recipe' }) {
+function OpenShiso({ source = 'global' }: { readonly source?: 'global' | 'recipe' | 'create' }) {
   const shiso = useShiso();
   useEffect(() => {
     shiso.open(source);
@@ -27,20 +27,69 @@ function OpenShiso({ source = 'global' }: { readonly source?: 'global' | 'recipe
   return null;
 }
 
-function renderApp(openGlobal = true) {
+function renderApp(openGlobal = true, source: 'global' | 'recipe' | 'create' = 'global') {
   return render(
     <ShisoEntryProvider>
-      {openGlobal && <OpenShiso />}
+      {openGlobal && <OpenShiso source={source} />}
       <App />
     </ShisoEntryProvider>,
   );
 }
 
 async function send(message: string) {
-  const composer = await screen.findByPlaceholderText('Ask Shiso…') as HTMLTextAreaElement;
+  const composer = await waitFor(() => {
+    const globalComposer = screen.queryByPlaceholderText('Ask Shiso…');
+    const createComposer = screen.queryByPlaceholderText('Describe the recipe, or request a change to this draft…');
+    if (globalComposer !== null) return globalComposer as HTMLTextAreaElement;
+    if (createComposer !== null) return createComposer as HTMLTextAreaElement;
+    throw new Error('SHISO composer is not mounted');
+  });
   fireEvent.change(composer, { target: { value: message } });
   fireEvent.click(screen.getByRole('button', { name: 'Send' }));
   await screen.findByText(`Reply: ${message}`);
+}
+
+async function sendCreate(message: string) {
+  const composer = await screen.findByPlaceholderText('Describe the recipe, or request a change to this draft…') as HTMLTextAreaElement;
+  fireEvent.change(composer, { target: { value: message } });
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+  await screen.findByTestId('shiso-created-recipe-draft');
+}
+
+function seedRecipeConversation(recipe: ReturnType<typeof getStarterVaultRecipes>[number], question: string, answer: string) {
+  const key = `recipe:${recipeIdentityOf(recipe)}`;
+  window.localStorage.setItem(shisoConversationStorageKey(key), JSON.stringify({
+    version: SHISO_CONVERSATION_STORAGE_VERSION,
+    conversationKey: key,
+    messages: [
+      { role: 'user', text: question },
+      { role: 'assistant', text: answer },
+    ],
+    entries: [
+      { key: 'u1', role: 'user', text: question, tools: [] },
+      { key: 'a1', role: 'assistant', text: answer, tools: [] },
+    ],
+    findings: [],
+    nextSeq: 2,
+    updatedAt: '2026-11-24T00:00:00.000Z',
+  }));
+}
+
+async function openRecipe(recipe: ReturnType<typeof getStarterVaultRecipes>[number]) {
+  if (screen.queryByRole('heading', { level: 1, name: recipe.title }) === null) {
+    const cardHeading = (await screen.findAllByRole('heading', { name: recipe.title }))
+      .find((heading) => heading.tagName.toLowerCase() === 'h3');
+    const recipeButton = cardHeading?.querySelector('button')
+      ?? screen.getByRole('button', { name: recipe.title });
+    fireEvent.click(recipeButton);
+  }
+  fireEvent.click(await screen.findByTestId('recipe-shiso-entry'));
+  await screen.findByText(new RegExp(`Context: ${recipe.title}`));
+}
+
+async function openFullWorkspace() {
+  fireEvent.click(await screen.findByRole('button', { name: 'Open full SHISO workspace' }));
+  await screen.findByRole('heading', { level: 1, name: /SHISO/ });
 }
 
 describe('PR #66 conversation integrity at the App composition boundary', () => {
@@ -49,6 +98,22 @@ describe('PR #66 conversation integrity at the App composition boundary', () => 
     window.history.replaceState(null, '', '#/');
     vi.spyOn(window, 'fetch').mockImplementation(async (_input, init) => {
       const body = typeof init?.body === 'string' ? JSON.parse(init.body) as { user_message?: string } : {};
+      if (String(_input).includes('/api/recipes/generate')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          json: async () => ({
+            draft: {
+              title: 'Disposable fixture recipe',
+              description: 'A deterministic test draft.',
+              ingredients: [{ name: 'water', amount: 1, unit: 'cup' }],
+              steps: [{ text: 'Stir and serve.' }],
+            },
+            provenance: { generated: true, providerId: 'fixture', model: 'fixture-model' },
+          }),
+        } as unknown as Response;
+      }
       const message = body.user_message ?? 'message';
       return {
         ok: true,
@@ -124,6 +189,97 @@ describe('PR #66 conversation integrity at the App composition boundary', () => 
       expect(screen.getByText('Reply: message after deletion')).toBeTruthy();
       expect(screen.queryByText('Reply: message to delete')).toBeNull();
     });
+  }, 30000);
+
+  it('B2: deleting an active recipe transcript creates a persistable recipe instance', async () => {
+    const recipe = getStarterVaultRecipes().find((item) => item.title === 'Classic Roman Carbonara');
+    expect(recipe).toBeTruthy();
+    seedRecipeConversation(recipe!, 'old recipe question', 'old recipe answer');
+
+    const first = renderApp(false);
+    await openRecipe(recipe!);
+    await openFullWorkspace();
+    fireEvent.click(await screen.findByRole('button', { name: /Delete .*Carbonara/ }));
+    fireEvent.click(await screen.findByTestId('shiso-history-delete-confirm'));
+    await waitFor(() => expect(screen.queryByText('old recipe question')).toBeNull());
+    await send('new recipe question');
+
+    first.unmount();
+    renderApp(false);
+    await openRecipe(recipe!);
+    await openFullWorkspace();
+    expect(await screen.findByText('new recipe question')).toBeTruthy();
+    expect(screen.getByText('Reply: new recipe question')).toBeTruthy();
+    expect(screen.queryByText('old recipe question')).toBeNull();
+  }, 30000);
+
+  it('B2: deleting an active create-context transcript creates a persistable create instance', async () => {
+    const first = renderApp(true, 'create');
+    await openFullWorkspace();
+    expect(await screen.findByRole('heading', { level: 1, name: 'Create with SHISO' })).toBeTruthy();
+    await sendCreate('old create question');
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete Recipe creation' }));
+    fireEvent.click(await screen.findByTestId('shiso-history-delete-confirm'));
+    await waitFor(() => expect(screen.queryByText('old create question')).toBeNull());
+    await sendCreate('new create question');
+
+    first.unmount();
+    renderApp(true, 'create');
+    await openFullWorkspace();
+    expect(await screen.findByText('new create question')).toBeTruthy();
+    await waitFor(() => expect(document.body.textContent ?? '').toContain('Disposable fixture recipe draft'));
+    expect(screen.queryByText('old create question')).toBeNull();
+  }, 30000);
+
+  it('B2: preserves a fresh global instance across recipe navigation and reload', async () => {
+    const recipe = getStarterVaultRecipes().find((item) => item.title === 'Classic Roman Carbonara');
+    expect(recipe).toBeTruthy();
+
+    const first = renderApp();
+    await send('global before delete');
+    await openFullWorkspace();
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete General conversation' }));
+    fireEvent.click(await screen.findByTestId('shiso-history-delete-confirm'));
+    await waitFor(() => expect(screen.queryByText('global before delete')).toBeNull());
+    await send('global fresh instance');
+    fireEvent.click(screen.getByRole('button', { name: 'Back to My Recipe Vault' }));
+    await waitFor(() => expect(screen.queryByRole('heading', { level: 1, name: /SHISO/ })).toBeNull());
+
+    await openRecipe(recipe!);
+    await openFullWorkspace();
+    fireEvent.click(screen.getByRole('button', { name: 'Back to My Recipe Vault' }));
+    await waitFor(() => expect(screen.queryByRole('heading', { level: 1, name: /SHISO/ })).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'Chat with SHISO' }));
+    await screen.findByRole('heading', { level: 1, name: /SHISO/ });
+    await send('global after roundtrip');
+
+    first.unmount();
+    renderApp();
+    await openFullWorkspace();
+    expect(await screen.findByText('global fresh instance')).toBeTruthy();
+    expect(screen.getByText('Reply: global after roundtrip')).toBeTruthy();
+  }, 30000);
+
+  it('B2: New conversation clears the displayed recipe transcript and persists in that recipe context', async () => {
+    const recipe = getStarterVaultRecipes().find((item) => item.title === 'Classic Roman Carbonara');
+    expect(recipe).toBeTruthy();
+    seedRecipeConversation(recipe!, 'existing recipe question', 'existing recipe answer');
+
+    const first = renderApp(false);
+    await openRecipe(recipe!);
+    await openFullWorkspace();
+    expect(await screen.findByText('existing recipe question')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'New conversation' }));
+    await waitFor(() => expect(screen.queryByText('existing recipe question')).toBeNull());
+    await send('fresh recipe session');
+
+    first.unmount();
+    renderApp(false);
+    await openRecipe(recipe!);
+    await openFullWorkspace();
+    expect(await screen.findByText('fresh recipe session')).toBeTruthy();
+    expect(screen.getByText('Reply: fresh recipe session')).toBeTruthy();
+    expect(screen.queryByText('existing recipe question')).toBeNull();
   }, 30000);
 
   it('B3: a recipe-scoped resume is released when the App context changes recipes', async () => {

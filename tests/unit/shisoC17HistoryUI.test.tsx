@@ -20,6 +20,7 @@ import {
   clearShisoConversation,
   loadShisoConversation,
   saveShisoConversation,
+  shisoConversationStorageKey,
 } from '../../src/application/shisoConversationPersistence';
 import type { ShisoConversationMeta } from '../../src/application/shisoConversationIndex';
 
@@ -269,5 +270,53 @@ describe('S4/S5 — visible Stop, Retry, and honest progress', () => {
       nextSeq: 1,
     });
     expect((await loadShisoConversation(settings, 'global:new'))?.messages[0]?.text).toBe('new message');
+  });
+
+  it('orders an in-flight stale save before deletion and keeps a fresh instance reusable', async () => {
+    const data = new Map<string, unknown>();
+    const gate = deferred<void>();
+    const deletedKey = 'recipe:Carbonara';
+    let delayNextWrite = true;
+    const settings = {
+      get: async <T,>(key: string): Promise<T | undefined> => data.get(key) as T | undefined,
+      set: async <T,>(key: string, value: T): Promise<void> => {
+        if (key === shisoConversationStorageKey(deletedKey) && delayNextWrite) {
+          delayNextWrite = false;
+          await gate.promise;
+        }
+        data.set(key, value);
+      },
+      remove: async (key: string): Promise<void> => { data.delete(key); },
+      keys: () => [...data.keys()],
+    } as SettingsAdapter;
+
+    const staleWrite = saveShisoConversation(settings, deletedKey, {
+      messages: [{ role: 'user', text: 'stale in-flight' }],
+      entries: [{ key: 'u1', role: 'user', text: 'stale in-flight', tools: [] }],
+      findings: [],
+      nextSeq: 1,
+    });
+    await Promise.resolve();
+    const deletion = clearShisoConversation(settings, deletedKey);
+    gate.resolve();
+    await Promise.all([staleWrite, deletion]);
+    expect(await loadShisoConversation(settings, deletedKey)).toBeNull();
+
+    await saveShisoConversation(settings, deletedKey, {
+      messages: [{ role: 'user', text: 'stale late' }],
+      entries: [{ key: 'u2', role: 'user', text: 'stale late', tools: [] }],
+      findings: [],
+      nextSeq: 2,
+    });
+    expect(await loadShisoConversation(settings, deletedKey)).toBeNull();
+
+    const freshKey = 'recipe:Carbonara::fresh-instance';
+    await saveShisoConversation(settings, freshKey, {
+      messages: [{ role: 'user', text: 'fresh survives' }],
+      entries: [{ key: 'u1', role: 'user', text: 'fresh survives', tools: [] }],
+      findings: [],
+      nextSeq: 1,
+    });
+    expect((await loadShisoConversation(settings, freshKey))?.messages[0]?.text).toBe('fresh survives');
   });
 });

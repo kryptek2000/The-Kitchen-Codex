@@ -327,6 +327,20 @@ function vaultSessionSupersededError(): Error {
  */
 type ShisoWorkingRecipeState = ShisoWorkingRecipeCore<ObsidianRecipe, ParsedIngredient>;
 
+function conversationKeyBelongsToContext(conversationKey: string, contextKey: string): boolean {
+  if (contextKey === 'global') {
+    // Preserve legacy named/global records, but never let a create or recipe
+    // instance leak into the global workspace.
+    return conversationKey === 'global'
+      || conversationKey.startsWith('global:')
+      || (!conversationKey.startsWith('recipe:') && !conversationKey.startsWith('create:'));
+  }
+  if (contextKey === 'create') {
+    return conversationKey === 'create' || conversationKey.startsWith('create:');
+  }
+  return conversationKey === contextKey || conversationKey.startsWith(`${contextKey}::`);
+}
+
 /**
  * Reads a connected vault handle through the application VaultAdapter
  * orchestration, then runs the legacy ASSET-ONLY pass (images) as a second,
@@ -826,24 +840,28 @@ export default function App() {
   const [grabberInitialUrl, setGrabberInitialUrl] = useState('');
 
   // A resumed recipe transcript is only valid while the matching recipe is
-  // the active SHISO context. Named/global conversations are not recipe-bound
-  // and may remain selected across recipe navigation.
+  // the active SHISO context. Global and creation conversations retain their
+  // instance pointer while another context is open, so returning to that
+  // context restores the same transcript instead of silently losing it.
   const shisoConversationContextKey = shiso.source === 'create'
     ? 'create'
     : recipeIdentityOf(selectedRecipe) === ''
       ? 'global'
       : `recipe:${recipeIdentityOf(selectedRecipe)}`;
   const activeOverrideMatchesContext = activeConversationKeyOverride !== null &&
-    (shisoConversationContextKey === 'global'
-      ? !activeConversationKeyOverride.startsWith('recipe:')
-      : activeConversationKeyOverride === shisoConversationContextKey);
+    conversationKeyBelongsToContext(activeConversationKeyOverride, shisoConversationContextKey);
   const activeConversationKeyForContext = activeOverrideMatchesContext ? activeConversationKeyOverride : null;
+  const shouldClearMismatchedRecipeOverride = shiso.isOpen
+    && shiso.source === 'recipe'
+    && activeConversationKeyOverride !== null
+    && activeConversationKeyOverride.startsWith('recipe:')
+    && !activeOverrideMatchesContext;
 
   useEffect(() => {
-    if (activeConversationKeyOverride === null || activeOverrideMatchesContext) return;
+    if (!shouldClearMismatchedRecipeOverride) return;
     setActiveConversationKeyOverride(null);
     void settingsAdapter.remove(SHISO_ACTIVE_CONVERSATION_KEY).catch(() => undefined);
-  }, [activeConversationKeyOverride, activeOverrideMatchesContext, settingsAdapter]);
+  }, [shouldClearMismatchedRecipeOverride, settingsAdapter]);
 
   useEffect(() => {
     let cancelled = false;
@@ -885,14 +903,14 @@ export default function App() {
 
   const handleNewConversation = useCallback(async () => {
     try {
-      const { key } = await createConversationRecord(settingsAdapter);
+      const { key } = await createConversationRecord(settingsAdapter, shisoConversationContextKey);
       setActiveConversationKeyOverride(key);
       rememberActiveConversation(key);
       await refreshConversations();
     } catch {
       // A failed metadata record must not disturb the active conversation.
     }
-  }, [settingsAdapter, refreshConversations]);
+  }, [settingsAdapter, refreshConversations, shisoConversationContextKey, rememberActiveConversation]);
 
   const handleResumeConversation = useCallback((key: string) => {
     setActiveConversationKeyOverride(key);
@@ -917,7 +935,7 @@ export default function App() {
       // by the persistence layer, so any late save cannot resurrect it, while
       // the new conversation remains eligible for normal persistence.
       if (deletingActiveConversation) {
-        const nextKey = defaultNewConversationKey();
+        const nextKey = defaultNewConversationKey(shisoConversationContextKey);
         setActiveConversationKeyOverride(nextKey);
         rememberActiveConversation(nextKey);
       } else if (key === activeConversationKeyOverride) {

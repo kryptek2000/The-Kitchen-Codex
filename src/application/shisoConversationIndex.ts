@@ -63,10 +63,21 @@ function redact(text: string): string {
 
 export function conversationSource(key: string): ShisoConversationSource {
   if (key === 'global') return 'global';
-  if (key === 'create') return 'create';
+  if (key === 'create' || key.startsWith('create:')) return 'create';
   if (key.startsWith('recipe:')) return 'recipe';
   if (key.startsWith('global:')) return 'named';
   return 'named';
+}
+
+/**
+ * Returns the recipe identity encoded in a recipe conversation key.
+ * Instance keys use `::` after the stable recipe context, so deleting one
+ * instance never makes that context key permanently unusable.
+ */
+export function conversationRecipeIdentity(key: string): string | null {
+  if (!key.startsWith('recipe:')) return null;
+  const identity = key.slice('recipe:'.length).split('::', 1)[0]?.trim() ?? '';
+  return identity.length > 0 ? identity : null;
 }
 
 export function decodeConversationStorageKey(storageKey: string): string | null {
@@ -144,10 +155,10 @@ export async function buildConversationIndex(settings: SettingsAdapter): Promise
       key,
       title: previous?.title ?? (conversationSource(key) === 'global' ? 'General conversation'
         : conversationSource(key) === 'create' ? 'Recipe creation'
-        : conversationSource(key) === 'recipe' ? bounded(key.slice('recipe:'.length), MAX_TITLE_CHARS) || 'Recipe conversation'
+        : conversationSource(key) === 'recipe' ? bounded(conversationRecipeIdentity(key), MAX_TITLE_CHARS) || 'Recipe conversation'
         : 'New conversation'),
       source: conversationSource(key),
-      recipeIdentity: key.startsWith('recipe:') ? key.slice('recipe:'.length) : null,
+      recipeIdentity: conversationRecipeIdentity(key),
       updatedAt: stored.updatedAt || previous?.updatedAt || '',
       preview: redact(firstUser).slice(0, MAX_PREVIEW_CHARS),
     }));
@@ -162,20 +173,25 @@ export async function buildConversationIndex(settings: SettingsAdapter): Promise
   return index;
 }
 
-export function defaultNewConversationKey(): string {
+export function defaultNewConversationKey(contextKey = 'global'): string {
   const random = Math.random().toString(36).slice(2, 10);
+  if (contextKey === 'create') return `create:${Date.now().toString(36)}-${random}`;
+  if (contextKey.startsWith('recipe:')) {
+    return `${contextKey}::${Date.now().toString(36)}-${random}`;
+  }
   return `global:${Date.now().toString(36)}-${random}`;
 }
 
 /** Adds a named conversation record. No transcript is created or rewritten. */
-export async function createConversationRecord(settings: SettingsAdapter): Promise<{ index: ShisoConversationIndex; key: string }> {
-  const key = defaultNewConversationKey();
+export async function createConversationRecord(settings: SettingsAdapter, contextKey = 'global'): Promise<{ index: ShisoConversationIndex; key: string }> {
+  const key = defaultNewConversationKey(contextKey);
+  const source = conversationSource(key);
   const index = await buildConversationIndex(settings);
   const meta: ShisoConversationMeta = Object.freeze({
     key,
-    title: 'New conversation',
-    source: 'named',
-    recipeIdentity: null,
+    title: source === 'create' ? 'Recipe creation' : source === 'recipe' ? 'Recipe conversation' : 'New conversation',
+    source,
+    recipeIdentity: conversationRecipeIdentity(key),
     updatedAt: new Date().toISOString(),
     preview: '',
   });
