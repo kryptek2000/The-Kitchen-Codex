@@ -1,10 +1,13 @@
 # Shiso — Architecture and Roadmap
 
-**Status — October 18, 2026:** Product direction reconciled against merged PR #12,
-`main` at `49fbfce80f39437120e57cee02df6c7363531320`.
-SHISO conversation, recipe creation/editing and nutrition implementation exist on
-main. Merged and CI-tested does not mean independently production deployed or
-accepted by Sid. See [acceptance status and evidence](./Shiso-Acceptance-Status.md).
+**Status — November 24, 2026:** Product direction reconciled against merged PRs
+#12 and #66, with `main` at
+`e0b309e545875a16397773c2d9c0fbd6e3bcaa4e`.
+SHISO conversation, recipe creation/editing, nutrition integration, the C1.7
+flagship workspace and the C1.8 state-driven companion baseline exist on main.
+Merged and CI-tested does not mean independently production deployed, live-provider
+accepted, or visually accepted by Sid. See
+[acceptance status and evidence](./Shiso-Acceptance-Status.md).
 The local C1 roadmap and draft PR #11 are historical inputs, not current release
 inventories. This document reconciles their intent without merging PR #11.
 
@@ -42,6 +45,35 @@ and
 [`SHISO-C1.6-F1-Draft-Presentation-and-Latency.md`](./SHISO-C1.6-F1-Draft-Presentation-and-Latency.md)
 for the Signature Edition draft editor, responsive layout, save-field
 preservation, bounded phase timing, and the catalog-freshness optimization.
+
+---
+
+## SHISO-C1.7 / C1.8 — Flagship Workspace and Living Companion (merged via PR #66)
+
+Merged [PR #66](https://github.com/kryptek2000/The-Kitchen-Codex/pull/66)
+delivers the approved SHISO flagship workspace and the first state-driven
+botanical companion motion baseline. The work preserves one authoritative
+conversation engine across compact and full-page presentations, the approved
+SHISO artwork, conversation history and responsive composer, explicit
+Save-to-Vault authorization, and the existing provider/entitlement boundaries.
+
+C1.8 maps actual SHISO lifecycle state to a presentational avatar contract:
+`idle`, `thinking`, `working`, `success`, and `cancelled`. CSS whole-character
+motion and ambient effects are applied selectively; compact history/navigation
+avatars remain static, and `prefers-reduced-motion` disables nonessential
+looping motion. A tool state is shown only for an actual tool-progress step.
+The supplied artwork is flattened raster art, so this baseline does not claim
+independent blinking, lip-sync or facial-part animation.
+
+Evidence includes the merged commit
+`e0b309e545875a16397773c2d9c0fbd6e3bcaa4e`, the PR's final 14/14 green CI
+checks, and focused C1.7/C1.8 tests including
+`tests/unit/shisoC18Animation.test.tsx`. No live-provider acceptance or owner
+visual acceptance is inferred from those checks. See the companion detail in
+[`Shiso-Mascot-and-Animation-Gameplan.md`](./Shiso-Mascot-and-Animation-Gameplan.md).
+
+Advanced expressive animation, layered facial/pose systems, Codex Bloom,
+voice synchronization and expanded character interactions remain future work.
 
 ---
 
@@ -472,6 +504,10 @@ restoration performs no work on open. Existing recipe edit/save authorities and
 security boundaries are unchanged. See
 `docs/SHISO-C1-Unbroken-Conversations.md`.
 
+**SHISO-C1.7 / C1.8 — Flagship Workspace + Living Companion** — Implemented
+and merged through PR #66. The delivered scope and acceptance boundaries are
+recorded above; future expressive character systems remain separate.
+
 **SHISO-7 — Broader Kitchen Intelligence** — Future.
 Substitutions, leftovers, cooking assistance, timer chains, and future
 capabilities.
@@ -539,7 +575,8 @@ agent platform as part of the remaining integrations.
    supported. Rescan after repair and report measured remaining issues.
 5. **Cross-feature workflows later.** Grounded search → recipe edits → nutrition;
    health scan → repair preview → confirmation → verified rescan. Broader kitchen
-   actions, safe external nutrition research and mascot animation remain future.
+   actions, safe external nutrition research and advanced expressive mascot
+   animation remain future; the C1.8 state-driven baseline is implemented.
 
 Keep one SHISO companion across all contexts. External research is not a verified
 capability; do not fabricate citations or imply a web lookup occurred. No roadmap
