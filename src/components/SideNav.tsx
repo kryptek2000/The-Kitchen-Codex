@@ -8,13 +8,12 @@ import {
   BrainCircuit,
   FolderOpen,
   Star,
-  MessageCircle,
   ChefHat,
-  Sparkles,
   Globe2,
   Plus,
 } from 'lucide-react';
 import { KitchenCodexMark } from './BrandMark';
+import { ShisoAvatar } from './ShisoAvatar';
 import { VaultSyncStatus } from '../types';
 import { describeVaultConnection } from '../core/vaultConnection';
 
@@ -38,6 +37,10 @@ interface SideNavProps {
   onOpenVaultIntelligence: () => void;
   legacyRecipeCount?: number;
   onShisoOpen: () => void;
+  /** C1.7: opens the full-page SHISO workspace. Falls back to compact chat. */
+  onOpenShisoWorkspace?: () => void;
+  /** Keeps the underlying primary navigation state truthful while SHISO is open. */
+  shisoActive?: boolean;
   onFavorites: () => void;
 }
 
@@ -60,11 +63,12 @@ export function SideNav({
   onOpenConnectVaultModal,
   onOpenNewRecipeModal,
   onOpenAskMyKitchen,
-  onOpenCreateForMe,
   onOpenRecipeGrabber,
   onOpenVaultIntelligence,
   legacyRecipeCount = 0,
   onShisoOpen,
+  onOpenShisoWorkspace,
+  shisoActive = false,
   onFavorites,
 }: SideNavProps) {
   // A remembered Vault that still needs the browser's permission must be
@@ -137,24 +141,21 @@ export function SideNav({
           <ShoppingCart className="h-5 w-5 shrink-0" strokeWidth={1.75} aria-hidden="true" /> Shopping List
         </button>
 
-        <div className="px-3 pb-1 pt-4 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary,#9CA3AF)]">Tools</div>
+        <div className="px-3 pb-1 pt-4 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary,#9CA3AF)]">AI &amp; Companion</div>
         <button id="nav-ai-studio" aria-current={activeTab === 'providers' ? 'page' : undefined} className={navItem(activeTab === 'providers')} onClick={() => setActiveTab('providers')}>
           <BrainCircuit className="h-5 w-5 shrink-0" strokeWidth={1.75} aria-hidden="true" /> AI Studio
         </button>
-        <button id="nav-themes" aria-current={activeTab === 'themes' ? 'page' : undefined} className={navItem(activeTab === 'themes')} onClick={() => setActiveTab('themes')}>
-          <Palette className="h-5 w-5 shrink-0" strokeWidth={1.75} aria-hidden="true" /> Themes
+        <button
+          id="nav-chat-with-shiso"
+          onClick={onOpenShisoWorkspace ?? onShisoOpen}
+          aria-label="Chat with SHISO"
+          aria-current={shisoActive ? 'page' : undefined}
+          className={navItem(shisoActive)}
+        >
+          <ShisoAvatar form="compact" state="idle" className="kc-shiso-nav-avatar" /> Chat with SHISO
         </button>
-        <button className={navItem(false)} onClick={onOpenConnectVaultModal}>
-          <FolderOpen className="h-5 w-5 shrink-0" strokeWidth={1.75} aria-hidden="true" /> Vault Settings
-        </button>
-        <button className={navItem(false)} onClick={onOpenNewRecipeModal}>
-          <Plus className="h-5 w-5 shrink-0 text-[var(--accent-text,#F59E0B)]" strokeWidth={1.75} aria-hidden="true" /> New Recipe
-        </button>
-        <button className={navItem(false)} onClick={onOpenCreateForMe}>
-          <Sparkles className="h-5 w-5 shrink-0" strokeWidth={1.75} aria-hidden="true" /> Create with SHISO
-        </button>
-        <button className={navItem(false)} onClick={onOpenRecipeGrabber}>
-          <Globe2 className="h-5 w-5 shrink-0" strokeWidth={1.75} aria-hidden="true" /> Grab from Web
+        <button className={navItem(false)} onClick={onOpenAskMyKitchen}>
+          <ChefHat className="h-5 w-5 shrink-0" strokeWidth={1.75} aria-hidden="true" /> Ask My Kitchen
         </button>
         <button className={navItem(false)} onClick={onOpenVaultIntelligence}>
           <BrainCircuit className="h-5 w-5 shrink-0" strokeWidth={1.75} aria-hidden="true" /> Vault Intelligence
@@ -165,18 +166,18 @@ export function SideNav({
           )}
         </button>
 
-        <div className="px-3 pb-1 pt-4 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary,#9CA3AF)]">Companion</div>
-        <button
-          onClick={onShisoOpen}
-          className="flex min-h-[44px] w-full items-center gap-3 rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-3 py-2 text-[15px] font-medium text-[var(--text-primary,#F3F4F6)] transition-colors duration-[140ms] hover:bg-[var(--bg-root,#0C0C0C)]"
-        >
-          <MessageCircle className="h-5 w-5 shrink-0" strokeWidth={1.75} aria-hidden="true" /> Chat with SHISO
+        <div className="px-3 pb-1 pt-4 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary,#9CA3AF)]">Tools</div>
+        <button id="nav-themes" aria-current={activeTab === 'themes' ? 'page' : undefined} className={navItem(activeTab === 'themes')} onClick={() => setActiveTab('themes')}>
+          <Palette className="h-5 w-5 shrink-0" strokeWidth={1.75} aria-hidden="true" /> Themes
         </button>
-        <button
-          onClick={onOpenAskMyKitchen}
-          className="flex min-h-[44px] w-full items-center gap-3 rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--accent-subtle,rgba(245,158,11,0.12))] px-3 py-2 text-[15px] font-medium text-[var(--text-primary,#F3F4F6)] transition-colors duration-[140ms] hover:bg-[var(--bg-elevated,#1E1E1E)]"
-        >
-          <ChefHat className="h-5 w-5 shrink-0" strokeWidth={1.75} aria-hidden="true" /> Ask My Kitchen
+        <button className={navItem(false)} onClick={onOpenConnectVaultModal}>
+          <FolderOpen className="h-5 w-5 shrink-0" strokeWidth={1.75} aria-hidden="true" /> Vault Settings
+        </button>
+        <button className={navItem(false)} onClick={onOpenNewRecipeModal}>
+          <Plus className="h-5 w-5 shrink-0 text-[var(--accent-text,#F59E0B)]" strokeWidth={1.75} aria-hidden="true" /> New Recipe
+        </button>
+        <button className={navItem(false)} onClick={onOpenRecipeGrabber}>
+          <Globe2 className="h-5 w-5 shrink-0" strokeWidth={1.75} aria-hidden="true" /> Grab from Web
         </button>
       </nav>
 

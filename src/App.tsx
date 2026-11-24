@@ -154,6 +154,18 @@ import { loadProductionAdvancedNutritionSession } from './browser/advancedNutrit
 import { useAdvancedNutritionBundle } from './application-ui/useAdvancedNutritionBundle';
 import { ShisoEntryProvider, useShiso } from './application-ui/shisoEntryPoints';
 import { ShisoModal } from './components/ShisoModal';
+import { ShisoWorkspace } from './components/ShisoWorkspace';
+import type { ShisoHistoryRailProps } from './components/ShisoHistoryRail';
+import {
+  buildConversationCorpus,
+  buildConversationIndex,
+  createConversationRecord,
+  deleteConversation,
+  renameConversation,
+  searchConversations,
+  type ShisoConversationCorpusEntry,
+  type ShisoConversationIndex,
+} from './application/shisoConversationIndex';
 import { applyShisoIngredientEdits } from './core/shiso/recipeEditing';
 import {
   extendWorkingRecipe,
@@ -608,6 +620,13 @@ export default function App() {
   // `ShisoEntryProvider` lives in main.tsx ABOVE this component, so the context
   // is available here as well as inside the recipe / nutrition surfaces.
   const shiso = useShiso();
+  const returnToRecipeVault = useCallback(() => {
+    setIsShisoWorkspaceOpen(false);
+    shiso.close();
+    setVaultView('all');
+    setActiveTab('grid');
+    setSelectedRecipe(null);
+  }, [shiso]);
 
   // Asset save dependencies, supplied BY the browser shell: the binary storage
   // boundary (BrowserAssetAdapter) + the fixed-purpose remote image downloader.
@@ -784,6 +803,20 @@ export default function App() {
   const [isAboutUpdatesOpen, setIsAboutUpdatesOpen] = useState(false);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isCreateForMeOpen, setIsCreateForMeOpen] = useState(false);
+  // C1.7 S2: full-page SHISO workspace. The compact modal and this workspace
+  // are mutually exclusive presentations of the SAME engine and entry context.
+  const [isShisoWorkspaceOpen, setIsShisoWorkspaceOpen] = useState(false);
+  // C1.7 S3/S4: metadata-only conversation history. The index is derived from
+  // read-only discovery of legacy transcripts; no transcript is rewritten.
+  const [conversationIndex, setConversationIndex] = useState<ShisoConversationIndex>({
+    version: 1,
+    conversations: [],
+    indexedAt: '',
+  });
+  const [conversationCorpus, setConversationCorpus] = useState<readonly ShisoConversationCorpusEntry[]>([]);
+  const [activeConversationKeyOverride, setActiveConversationKeyOverride] = useState<string | null>(null);
+  const [suppressedPersistKeys, setSuppressedPersistKeys] = useState<readonly string[]>([]);
+  const [historySearchQuery, setHistorySearchQuery] = useState('');
   const [isGrabberOpen, setIsGrabberOpen] = useState(false);
   const [isVaultIntelligenceOpen, setIsVaultIntelligenceOpen] = useState(false);
   const [isAskMyKitchenOpen, setIsAskMyKitchenOpen] = useState(false);
@@ -791,6 +824,80 @@ export default function App() {
   const [editingRecipe, setEditingRecipe] = useState<ObsidianRecipe | null>(null);
   const [isWindowDragging, setIsWindowDragging] = useState(false);
   const [grabberInitialUrl, setGrabberInitialUrl] = useState('');
+
+  // C1.7 S3/S4: metadata index + bounded search corpus. Both are rebuilt from
+  // the device-local transcripts through existing bounded loaders; nothing
+  // here writes a transcript or touches Vault authority.
+  const refreshConversations = useCallback(async () => {
+    try {
+      const next = await buildConversationIndex(settingsAdapter);
+      setConversationIndex(next);
+      setConversationCorpus(await buildConversationCorpus(settingsAdapter, next));
+    } catch {
+      // History is best-effort; a failure must never affect the chat engine.
+    }
+  }, [settingsAdapter]);
+
+  const handleConversationsChanged = useCallback(() => {
+    void refreshConversations();
+  }, [refreshConversations]);
+
+  useEffect(() => {
+    void refreshConversations();
+  }, [refreshConversations, shiso.isOpen, isShisoWorkspaceOpen]);
+
+  const handleNewConversation = useCallback(async () => {
+    try {
+      const { key } = await createConversationRecord(settingsAdapter);
+      setActiveConversationKeyOverride(key);
+      await refreshConversations();
+    } catch {
+      // A failed metadata record must not disturb the active conversation.
+    }
+  }, [settingsAdapter, refreshConversations]);
+
+  const handleResumeConversation = useCallback((key: string) => {
+    setActiveConversationKeyOverride(key);
+  }, []);
+
+  const handleRenameConversation = useCallback(async (key: string, title: string) => {
+    try {
+      setConversationIndex(await renameConversation(settingsAdapter, key, title));
+      await refreshConversations();
+    } catch {
+      // Rename failures leave the index unchanged.
+    }
+  }, [settingsAdapter, refreshConversations]);
+
+  const handleDeleteConversation = useCallback(async (key: string) => {
+    // Suppress late saves BEFORE clearing the transcript, otherwise a pending
+    // save could recreate the just-deleted conversation.
+    setSuppressedPersistKeys((previous) => previous.includes(key) ? previous : [...previous, key]);
+    try {
+      setConversationIndex(await deleteConversation(settingsAdapter, key));
+      if (activeConversationKeyOverride === key) setActiveConversationKeyOverride(null);
+      await refreshConversations();
+    } catch {
+      // Keep the suppression: a failed clear must not resurrect the transcript.
+    }
+  }, [settingsAdapter, refreshConversations, activeConversationKeyOverride]);
+
+  const historySearchResults = useMemo(
+    () => searchConversations(conversationCorpus, historySearchQuery),
+    [conversationCorpus, historySearchQuery],
+  );
+
+  const conversationHistoryProps: ShisoHistoryRailProps = {
+    conversations: conversationIndex.conversations,
+    activeKey: activeConversationKeyOverride,
+    searchQuery: historySearchQuery,
+    searchResults: historySearchResults,
+    onSearchChange: setHistorySearchQuery,
+    onNew: () => void handleNewConversation(),
+    onResume: handleResumeConversation,
+    onRename: (key, title) => void handleRenameConversation(key, title),
+    onDelete: (key) => void handleDeleteConversation(key),
+  };
 
   // Recheck the CURRENT handle permission whenever the Vault modal opens. This
   // covers a permission change made in browser UI while the app stayed open.
@@ -4023,6 +4130,11 @@ export default function App() {
         }}
         legacyRecipeCount={vaultHealthSummary.legacyCount + vaultHealthSummary.incompleteCount}
         onShisoOpen={() => shiso.open('global')}
+        onOpenShisoWorkspace={() => {
+          shiso.open('global');
+          setIsShisoWorkspaceOpen(true);
+        }}
+        shisoActive={isShisoWorkspaceOpen}
         vaultView={vaultView}
         setVaultView={setVaultView}
         onFavorites={() => {
@@ -4662,6 +4774,7 @@ export default function App() {
           setSelectedRecipe(null);
         }}
         onShiso={() => shiso.open('global')}
+        shisoActive={isShisoWorkspaceOpen}
         onMore={() => setIsMoreOpen(true)}
       />
 
@@ -4691,7 +4804,6 @@ export default function App() {
             {[
               { label: 'New Recipe Note', action: () => { setEditingRecipe(null); setIsEditorOpen(true); } },
               { label: 'Favorites', action: () => { setVaultView('favorites'); setActiveTab('grid'); } },
-              { label: 'Create with SHISO', action: () => setIsCreateForMeOpen(true) },
               { label: 'Grab from Web', action: () => setIsGrabberOpen(true) },
               { label: 'Vault Intelligence', action: () => { setVaultIntelligenceRecipeId(null); setIsVaultIntelligenceOpen(true); } },
               { label: 'Meal Planner', action: () => setActiveTab('mealplan') },
@@ -4863,8 +4975,13 @@ export default function App() {
       {/* SHISO — one conversational surface, opened from the global header,
           a recipe, or Advanced Nutrition. It holds no mutation authority. */}
       <ShisoModal
-        isOpen={shiso.isOpen}
+        isOpen={shiso.isOpen && !isShisoWorkspaceOpen}
         onClose={shiso.close}
+        onExpandToWorkspace={() => setIsShisoWorkspaceOpen(true)}
+        activeConversationKeyOverride={activeConversationKeyOverride}
+        suppressedPersistKeys={suppressedPersistKeys}
+        onConversationsChanged={handleConversationsChanged}
+        conversationHistory={conversationHistoryProps}
         network={networkAdapter}
         recipe={shiso.source === 'create' ? null : displayRecipe}
         nutritionSession={advancedNutritionBundle.session}
@@ -4874,6 +4991,33 @@ export default function App() {
           // the session when it is ready and the next Shiso turn observes it.
           advancedNutritionBundle.load();
         }}
+        nutritionRows={shiso.snapshot?.rows ?? []}
+        nutritionAiContributions={shiso.snapshot?.aiContributions ?? []}
+        nutritionReviewRows={shiso.snapshot?.reviewRows ?? []}
+        nutritionSummary={shiso.snapshot?.summary ?? null}
+        nutritionUnsaved={shiso.snapshot?.unsaved ?? false}
+        settings={settingsAdapter}
+        onSaveCreatedDraft={async (draft: GeneratedRecipeDraft, provenance: GeneratedRecipeProvenance) => {
+          const recipeToSave = generatedDraftToObsidianRecipe({ draft, provenance });
+          await handleSaveGeneratedRecipe(recipeToSave);
+        }}
+      />
+
+      {/* C1.7 S2: premium full-page presentation. Same props, same engine,
+          same entry context; only the surrounding chrome differs. */}
+      <ShisoWorkspace
+        isOpen={isShisoWorkspaceOpen}
+        onClose={() => { setIsShisoWorkspaceOpen(false); shiso.close(); }}
+        onReturnToCompact={() => setIsShisoWorkspaceOpen(false)}
+        onBackToVault={returnToRecipeVault}
+        activeConversationKeyOverride={activeConversationKeyOverride}
+        suppressedPersistKeys={suppressedPersistKeys}
+        onConversationsChanged={handleConversationsChanged}
+        conversationHistory={conversationHistoryProps}
+        network={networkAdapter}
+        recipe={shiso.source === 'create' ? null : displayRecipe}
+        nutritionSession={advancedNutritionBundle.session}
+        loadNutritionBundle={async () => { advancedNutritionBundle.load(); }}
         nutritionRows={shiso.snapshot?.rows ?? []}
         nutritionAiContributions={shiso.snapshot?.aiContributions ?? []}
         nutritionReviewRows={shiso.snapshot?.reviewRows ?? []}
