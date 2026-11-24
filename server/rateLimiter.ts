@@ -1,3 +1,4 @@
+import { rateLimit, MemoryStore, ipKeyGenerator, type IncrementResponse } from 'express-rate-limit';
 import type { Request, Response, NextFunction } from "express";
 
 interface RateLimitEntry {
@@ -6,6 +7,7 @@ interface RateLimitEntry {
 }
 
 const clientIpStore = new Map<string, RateLimitEntry>();
+const updateCheckClientStore = new Map<string, RateLimitEntry>();
 
 /**
  * Test seam: clears every rate-limit window. Never call from production code.
@@ -13,7 +15,50 @@ const clientIpStore = new Map<string, RateLimitEntry>();
  */
 export function resetRateLimitersForTests(): void {
   clientIpStore.clear();
+  updateCheckClientStore.clear();
+  void shisoConversationStore.resetAll();
+  void globalRequestStore.resetAll();
 }
+
+/**
+ * A process-wide, per-client ceiling for every HTTP request. The in-memory
+ * store expires inactive keys after the one-minute window; endpoint-specific
+ * limiters below remain in place and continue to impose their tighter budgets.
+ * Express's trusted-proxy configuration is applied before this middleware is
+ * mounted, and X-Forwarded-For is ignored unless an operator configures it.
+ */
+class BoundedRequestStore extends MemoryStore {
+  private readonly maxActiveClients = 50_000;
+
+  override async increment(key: string): Promise<IncrementResponse> {
+    const knownClient = this.current.has(key) || this.previous.has(key);
+    if (!knownClient && this.current.size + this.previous.size >= this.maxActiveClients) {
+      const now = Date.now();
+      for (const clients of [this.current, this.previous]) {
+        for (const [clientKey, client] of clients) {
+          if (client.resetTime.getTime() <= now) clients.delete(clientKey);
+        }
+      }
+      // Refuse new buckets when the bounded store is full. Returning an over-limit
+      // result makes express-rate-limit issue its normal 429 and Retry-After headers.
+      if (this.current.size + this.previous.size >= this.maxActiveClients) {
+        return { totalHits: 601, resetTime: new Date(now + 60_000) };
+      }
+    }
+    return super.increment(key);
+  }
+}
+
+const globalRequestStore = new BoundedRequestStore();
+export const globalRequestRateLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 600,
+  store: globalRequestStore,
+  keyGenerator: (req) => ipKeyGenerator(getClientIp(req)),
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please try again in a minute.' },
+});
 
 // Periodic cleanup every 5 minutes to prevent memory accumulation
 setInterval(() => {
@@ -226,6 +271,28 @@ export function nutritionInterpretRateLimiter(req: Request, res: Response, next:
  * interpretation, the legacy estimator, or the v4 resolution endpoint. The AI-1
  * interpretation limiter is untouched.
  */
+/**
+ * SHISO conversational turns. A conversation turn is the most frequent AI action
+ * in the product — a single user message may legitimately drive several tool
+ * steps — so it has its OWN bucket rather than borrowing the one-shot
+ * interpretation limiter, and it is more generous than it. It is still a real
+ * limit: the per-turn model/tool budgets bound each individual turn, and this
+ * bounds how many turns one client may start per window.
+ */
+const shisoConversationStore = new MemoryStore();
+export const shisoConversationRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: () => {
+    const parsed = parseInt(process.env.SHISO_CONVERSATION_RATE_LIMIT || '60', 10);
+    return Number.isNaN(parsed) || parsed <= 0 ? 60 : parsed;
+  },
+  store: shisoConversationStore,
+  keyGenerator: (req) => ipKeyGenerator(getClientIp(req)),
+  standardHeaders: 'draft-6',
+  legacyHeaders: false,
+  message: { error: 'Too many chat requests. Please slow down and try again shortly.' },
+});
+
 export function nutritionPlanRateLimiter(req: Request, res: Response, next: NextFunction) {
   const parsedLimit = parseInt(process.env.NUTRITION_PLAN_RATE_LIMIT || "12", 10);
   const maxRequestsPerWindow = isNaN(parsedLimit) || parsedLimit <= 0 ? 12 : parsedLimit;
@@ -915,6 +982,14 @@ export const sessionKeyStatusRateLimiter = sessionKeyRateLimiter(
   "Too many session key status requests. Please wait a moment before trying again."
 );
 
+/** Image-session bootstrap limiter (default 30/min per client). */
+export const imageSessionBootstrapRateLimiter = sessionKeyRateLimiter(
+  "IMAGE_SESSION_BOOTSTRAP_RATE_LIMIT",
+  30,
+  "imagesessionbootstrap",
+  "Too many image session requests. Please wait a moment before trying again."
+);
+
 /**
  * Explicit OpenRouter capability-verification limiter (v0.8.x). A verification
  * makes a real (free-gated) provider request, so it is tightly bounded to a few
@@ -939,3 +1014,110 @@ export const recipeVerifyRateLimiter = sessionKeyRateLimiter(
   "recipeverify",
   "Too many recipe verification requests. Please wait a moment before trying again."
 );
+
+/**
+ * Express middleware for rate limiting on the read-only update-check endpoint.
+ * Configurable via `UPDATE_CHECK_RATE_LIMIT` (default 20 requests per minute).
+ */
+const UPDATE_CHECK_MAX_CLIENTS = 5000;
+
+export function updateCheckRateLimiter(req: Request, res: Response, next: NextFunction) {
+  const parsedLimit = parseInt(process.env.UPDATE_CHECK_RATE_LIMIT || "20", 10);
+  const maxRequestsPerWindow = isNaN(parsedLimit) || parsedLimit <= 0 ? 20 : parsedLimit;
+  const windowMs = 60 * 1000;
+
+  const clientIp = getClientIp(req);
+  const now = Date.now();
+
+  // Expire stale entries before enforcing capacity.
+  for (const [key, entry] of updateCheckClientStore.entries()) {
+    if (entry.resetTime <= now) updateCheckClientStore.delete(key);
+  }
+
+  let entry = updateCheckClientStore.get(clientIp);
+
+  if (!entry || entry.resetTime <= now) {
+    if (updateCheckClientStore.size >= UPDATE_CHECK_MAX_CLIENTS) {
+      // Fail closed for new clients when the bounded store is full, preventing
+      // unbounded growth and bypass through eviction.
+      res.setHeader("RateLimit-Limit", maxRequestsPerWindow);
+      res.setHeader("RateLimit-Remaining", 0);
+      res.setHeader("RateLimit-Reset", 60);
+      res.setHeader("Retry-After", 60);
+      return res.status(429).json({
+        error: "Too many update check clients. Please try again later.",
+        retryAfterSeconds: 60,
+      });
+    }
+    entry = {
+      count: 1,
+      resetTime: now + windowMs,
+    };
+    updateCheckClientStore.set(clientIp, entry);
+  } else {
+    entry.count += 1;
+  }
+
+  const remaining = Math.max(0, maxRequestsPerWindow - entry.count);
+  const resetSeconds = Math.ceil((entry.resetTime - now) / 1000);
+
+  res.setHeader("RateLimit-Limit", maxRequestsPerWindow);
+  res.setHeader("RateLimit-Remaining", remaining);
+  res.setHeader("RateLimit-Reset", resetSeconds);
+
+  if (entry.count > maxRequestsPerWindow) {
+    res.setHeader("Retry-After", resetSeconds);
+    return res.status(429).json({
+      error: "Too many update check requests from your IP. Please try again in a minute.",
+      retryAfterSeconds: resetSeconds,
+    });
+  }
+
+  next();
+}
+
+/**
+ * Dedicated limiter for the explicit USDA Branded Foods lookup.
+ *
+ * A lookup can perform one official search plus up to three product-detail
+ * requests, so this bucket is deliberately tighter than ordinary AI endpoints.
+ * It is separate from every AI provider budget: a branded lookup does not call
+ * an AI model and must not consume the user's AI quota. Default 6 per minute;
+ * configurable via USDA_BRANDED_LOOKUP_RATE_LIMIT.
+ */
+export function usdaBrandedLookupRateLimiter(req: Request, res: Response, next: NextFunction) {
+  const parsedLimit = parseInt(process.env.USDA_BRANDED_LOOKUP_RATE_LIMIT || "6", 10);
+  const maxRequestsPerWindow = isNaN(parsedLimit) || parsedLimit <= 0 ? 6 : parsedLimit;
+  const windowMs = 60 * 1000;
+
+  const clientIp = getClientIp(req);
+  const now = Date.now();
+  const key = `usda_branded_${clientIp}`;
+  let entry = clientIpStore.get(key);
+
+  if (!entry || entry.resetTime <= now) {
+    entry = { count: 1, resetTime: now + windowMs };
+    clientIpStore.set(key, entry);
+  } else {
+    entry.count += 1;
+  }
+
+  const remaining = Math.max(0, maxRequestsPerWindow - entry.count);
+  const resetSeconds = Math.ceil((entry.resetTime - now) / 1000);
+
+  res.setHeader("RateLimit-Limit", maxRequestsPerWindow);
+  res.setHeader("RateLimit-Remaining", remaining);
+  res.setHeader("RateLimit-Reset", resetSeconds);
+
+  if (entry.count > maxRequestsPerWindow) {
+    res.setHeader("Retry-After", resetSeconds);
+    return res.status(429).json({
+      ok: false,
+      code: "USDA_BRANDED_LOOKUP_RATE_LIMITED",
+      error: "Too many USDA Branded Foods lookups. Please wait before trying again.",
+      retryAfterSeconds: resetSeconds,
+    });
+  }
+
+  next();
+}

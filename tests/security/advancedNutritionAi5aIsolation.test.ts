@@ -85,6 +85,20 @@ const AI5C_CLIENT_READER = 'src/application/nutritionProductAccess.ts';
 /** The AI-5C composition owner. Imports the reader, never the core contract. */
 const AI5C_COMPOSER = 'src/application/nutritionAiClientState.ts';
 
+/**
+ * The accepted ChatGPT session status is a desktop connection-state field, not a
+ * login or billing surface. Mask exactly this declaration, in exactly this file,
+ * before the blanket `signIn` pin runs. Any other `signIn` occurrence remains
+ * visible to the test, as does the same declaration in any other file.
+ */
+const CHATGPT_SESSION_STATUS_FILE = 'src/platform/desktop/desktopVault.ts';
+const CHATGPT_SESSION_STATUS_FIELD = 'signInRequiredAfterRestart: boolean;';
+
+function withoutChatGptSessionStatus(rel: string, source: string): string {
+  if (rel !== CHATGPT_SESSION_STATUS_FILE) return source;
+  return source.replace(CHATGPT_SESSION_STATUS_FIELD, '');
+}
+
 /** Live production surfaces that must remain completely unaware of AI-5A. */
 const LIVE_SURFACES: ReadonlyArray<string> = [
   'src/App.tsx',
@@ -490,7 +504,7 @@ describe('AI-5A isolation — product access is billing- and account-NEUTRAL', (
 
   it('no billing, account, login, license or entitlement-receipt surface exists', () => {
     for (const rel of [...walk(join(REPO, 'server')), ...walk(join(REPO, 'src'))]) {
-      const source = code(rel);
+      const source = withoutChatGptSessionStatus(rel, code(rel));
       for (const forbidden of [
         'createCheckoutSession',
         'createSubscription',
@@ -505,6 +519,30 @@ describe('AI-5A isolation — product access is billing- and account-NEUTRAL', (
         expect(source, `${rel} must not contain ${forbidden}`).not.toContain(forbidden);
       }
     }
+  });
+
+  it('the ChatGPT session-status exception is exact and file-scoped', () => {
+    expect(
+      withoutChatGptSessionStatus(CHATGPT_SESSION_STATUS_FILE, CHATGPT_SESSION_STATUS_FIELD)
+    ).not.toContain('signIn');
+
+    expect(
+      withoutChatGptSessionStatus(
+        CHATGPT_SESSION_STATUS_FILE,
+        `${CHATGPT_SESSION_STATUS_FIELD}\nsignIn();`
+      )
+    ).toContain('signIn');
+
+    expect(
+      withoutChatGptSessionStatus(
+        CHATGPT_SESSION_STATUS_FILE,
+        `${CHATGPT_SESSION_STATUS_FIELD}\n${CHATGPT_SESSION_STATUS_FIELD}`
+      )
+    ).toContain('signIn');
+
+    expect(
+      withoutChatGptSessionStatus('src/other.ts', CHATGPT_SESSION_STATUS_FIELD)
+    ).toContain('signIn');
   });
 
   it('the contract carries no quota, usage or cost accounting', () => {

@@ -65,8 +65,8 @@ describe("secret storage scope truth (v0.7 1D + BYOK-5A)", () => {
   it("the SecretAdapter contract exposes an allowlisted provider secret id type boundary", () => {
     // Compile-time contract check: the provider secret ids are provider-neutral,
     // never raw env-var names.
-    const ids = ["gemini_api_key", "openrouter_api_key", "deepseek_api_key"];
-    expect(ids).toHaveLength(3);
+    const ids = ["gemini_api_key", "openrouter_api_key", "deepseek_api_key", "openai_api_key"];
+    expect(ids).toHaveLength(4);
     expect(ids.every((id) => typeof id === "string")).toBe(true);
   });
 });

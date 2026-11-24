@@ -120,6 +120,7 @@ import {
   AI_RECIPE_CONTEXT_CONTRACT_VERSION,
   AI_RECIPE_CONTEXT_PROVENANCE_CLASS,
 } from '../src/core/nutritionV2/phase4/recipeContextContract.js';
+import { CULINARY_EXPERTISE_INSTRUCTIONS } from './ai/culinaryExpertise.js';
 
 // Same environment convention as the sibling AI-2B transport adapter: the
 // provider registry reads operator credentials through the allowlisted config
@@ -159,6 +160,7 @@ const REFUSED_REQUEST_KEYS = new Set(['context', 'envelope', 'recipe_context', '
  * as a structurally separate untrusted DATA block.
  */
 export const NUTRITION_RECIPE_CONTEXT_INSTRUCTIONS = [
+  ...CULINARY_EXPERTISE_INSTRUCTIONS,
   "You interpret the CONTEXT of a cooking recipe. You are an interpretation assistant ONLY.",
   "You do NOT calculate nutrition, do NOT choose foods from any database, do NOT estimate or output grams or weights, and do NOT invent measurements.",
   "You are given a CLOSED set of context targets. Each target has an opaque line_ref, its authored text, and optionally a short food phrase.",

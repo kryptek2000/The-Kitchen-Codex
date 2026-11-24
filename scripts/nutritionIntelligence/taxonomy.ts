@@ -997,6 +997,15 @@ export const AI6B1_EXPECTED_PRODUCTION_BASELINE: Ai6aProductionBaseline = Object
   legacy_authenticated_resolved: 44,
 });
 
+/** Current PR12 repair measurement; prior release records above remain immutable. */
+export const PR12_EXPECTED_PRODUCTION_BASELINE: Ai6aProductionBaseline = Object.freeze({
+  phase: 'PR12-CI-repair-v1',
+  historical_total: 97,
+  historical_authenticated_resolved: 51,
+  legacy_total: 91,
+  legacy_authenticated_resolved: 47,
+});
+
 /**
  * The historical subset denominators. These are corpus SHAPE facts (the load-bearing
  * 97-line benchmark denominator and its 91-line legacy subset) and are therefore

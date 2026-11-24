@@ -7,8 +7,8 @@
  * the effective image selection and the trusted pricing state, and the generate
  * route consumes that token atomically immediately before the sole provider call.
  *
- * BINDING: a token is bound to the requester identity (the existing trusted
- * client-IP policy), provider, exact model, credential source, cost class,
+ * BINDING: a token is bound to the requester identity (the server-verified
+ * image-session id), provider, exact model, credential source, cost class,
  * pricing fingerprint (when OpenRouter pricing exists), the SERVER-RECOMPUTED
  * canonical recipe binding, the explicit vault scope, issue/expiry time,
  * single-use state, and the authorization contract version. A client-supplied

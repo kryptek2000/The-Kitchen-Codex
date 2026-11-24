@@ -152,7 +152,7 @@ describe('Flag 1 — terminal verified-dynamic candidate is terminal for every f
     { name: 'QUOTA', expectedCode: 'QUOTA', make: (e) => new e.ProviderOperationError('QUOTA', 'quota exhausted', { providerId: 'openrouter', model: ID }) },
     { name: 'PROVIDER_ERROR', expectedCode: 'PROVIDER_ERROR', make: (e) => new e.ProviderOperationError('PROVIDER_ERROR', 'provider blew up', { providerId: 'openrouter', model: ID }) },
     { name: 'BLOCKED', expectedCode: 'BLOCKED', make: (e) => new e.ProviderOperationError('BLOCKED', 'safety blocked', { providerId: 'openrouter', model: ID }) },
-    { name: 'unknown raw transport error -> PROVIDER_ERROR', expectedCode: 'PROVIDER_ERROR', make: () => new Error('socket hang up') },
+    { name: 'unknown raw transport error -> NETWORK', expectedCode: 'NETWORK', make: () => new Error('socket hang up') },
   ];
 
   it.each(failureClasses)('$name terminates before the later curated candidate (one dynamic call, zero later calls)', async ({ expectedCode, make }) => {

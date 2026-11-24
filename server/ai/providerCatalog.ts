@@ -20,9 +20,10 @@
  *     `roleModelsForProvider`) — the exact same source connection-test,
  *     user-selection, and server-pin validation use. The catalog does NOT
  *     invent or probe for models.
- *   - Image visibility reflects the PRODUCTION image provider singleton
- *     (`GeminiImageProvider` + `DEFAULT_GEMINI_IMAGE_MODEL`). The
- *     `DeterministicImageProvider` test seam is never catalogued.
+ *   - Image visibility reflects the PRODUCTION image-provider registry
+ *     (`GeminiImageProvider`, `OpenRouterImageProvider`, and `OpenAIImageProvider`)
+ *     with their curated model sets. The `DeterministicImageProvider` test seam is
+ *     never catalogued.
  *   - Deterministic + network-free: no request executes, no remote connection,
  *     no provider introspection. `configured`/`enabled`/`available` mirror the
  *     provider-status semantics (see `server/ai/providerStatus.ts`).
@@ -42,6 +43,11 @@ import {
 } from "../platform/ServerEnvironmentSecretAdapter.js";
 import type { SecretStorageScope } from "../../src/application/adapters/SecretAdapter.js";
 import { roleModelsForProvider, curatedTextModels, selectableTextModels } from "./roleModels.js";
+import {
+  CHATGPT_PLAN_PROVIDER_ID,
+  isChatGptPlanBridgeConfigured,
+  chatGptPlanModelRows,
+} from "./chatGptPlanBridge.js";
 import { AI_OPERATIONS } from "./operations.js";
 import {
   getImageSelection,
@@ -316,6 +322,7 @@ function textSelectionExecutable(selection: ProviderSelectionState): boolean {
   return regs.some(
     (r) =>
       r.enabled !== false &&
+      r.defaultFallback !== false &&
       r.provider.isAvailable() &&
       curatedTextModels(r.provider.id).length > 0
   );
@@ -360,8 +367,13 @@ function primaryRoleModels(registered: RegisteredProvider): Set<string> {
 
 function textProviderRows(regs: RegisteredProvider[]): ProviderCatalogTextProvider[] {
   return regs.map((registered) => {
+    const isChatGptPlan = registered.provider.id === CHATGPT_PLAN_PROVIDER_ID;
     const secretId = providerSecretIdForProvider(registered.provider.id);
-    const configured = secretId ? Boolean(getServerSecretSync(secretId)) : false;
+    const configured = isChatGptPlan
+      ? isChatGptPlanBridgeConfigured()
+      : secretId
+      ? Boolean(getServerSecretSync(secretId))
+      : false;
     const enabled = registered.enabled !== false;
     const available = registered.provider.isAvailable();
     const primary = primaryRoleModels(registered);
@@ -372,7 +384,9 @@ function textProviderRows(regs: RegisteredProvider[]): ProviderCatalogTextProvid
       // capability verification is reflected without a catalog refetch. Image
       // executability stays the curated transport allowlist.
       const isImage = model.capabilities.imageGeneration;
-      const selectable = isImage ? model.executionCompatible : isSelectableOpenRouterTextModel(model);
+      const selectable = isImage
+        ? model.executionCompatible
+        : selectableTextModels(registered.provider.id).includes(model.modelId);
       const capabilityVerified = !isImage && isCapabilityVerifiedOpenRouterTextModel(model);
       const strictStructuredCandidate = !isImage && isOpenRouterStrictStructuredCandidate(model);
       const recipeGenerationVerified = !isImage && isOpenRouterRecipeGenerationAuthorized(model.modelId);
@@ -413,6 +427,15 @@ function textProviderRows(regs: RegisteredProvider[]): ProviderCatalogTextProvid
         const dyn = findOpenRouterCatalogModel(model);
         if (dyn) return toRow(dyn);
       }
+      if (isChatGptPlan) {
+        const live = chatGptPlanModelRows().find((row) => row.id === model);
+        return {
+          id: model,
+          default: primary.has(model),
+          capabilities: effectiveCapabilities(registered, model),
+          ...(live ? { displayName: live.name } : {}),
+        };
+      }
       return {
         id: model,
         default: primary.has(model),
@@ -424,8 +447,9 @@ function textProviderRows(regs: RegisteredProvider[]): ProviderCatalogTextProvid
     let discoveredModels: ProviderCatalogTextModel[] | undefined;
     if (isOpenRouter) {
       const snap = getOpenRouterCatalogSnapshot();
+      const selectableText = new Set(selectableTextModels(registered.provider.id));
       discoveredModels = snap.textModels
-        .filter((m) => isCompatibleOpenRouterTextModel(m) && !isSelectableOpenRouterTextModel(m))
+        .filter((m) => isCompatibleOpenRouterTextModel(m) && !selectableText.has(m.modelId))
         .slice(0, 250)
         .map(toRow);
     }
@@ -436,11 +460,17 @@ function textProviderRows(regs: RegisteredProvider[]): ProviderCatalogTextProvid
       configured,
       enabled,
       available,
-      storageScope: "server_environment",
+      // ChatGPT plan credentials are session-only in the trusted Electron
+      // process. No server environment key exists for it.
+      storageScope: isChatGptPlan ? "session_only" : "server_environment",
       supportsSecretWrites: false,
-      connectionTest: connectionTestKindForProvider(registered.provider.id, "text"),
-      selectable: enabled && available && models.length > 0,
-      sessionKeySupported: supportsSessionBoundTextProvider(registered.provider.id),
+      // The dedicated ChatGPT plan section owns its connection test. The generic
+      // provider probe is deliberately unavailable for this native-only provider.
+      connectionTest: isChatGptPlan ? "unavailable" : connectionTestKindForProvider(registered.provider.id, "text"),
+      // Selected through the dedicated ChatGPT plan panel, never the generic
+      // API-key provider picker. The server still validates the exact selection.
+      selectable: isChatGptPlan ? false : enabled && available && models.length > 0,
+      sessionKeySupported: isChatGptPlan ? false : supportsSessionBoundTextProvider(registered.provider.id),
       models,
       ...(discoveredModels ? { discoveredModels } : {}),
     };

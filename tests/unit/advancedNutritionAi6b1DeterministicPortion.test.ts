@@ -348,17 +348,17 @@ describe('AI-6B1 — recovery never borrows a portion across records or averages
 // ---------------------------------------------------------------------------
 
 describe('AI-6B1 — the count-portion contract version is bumped and binding', () => {
-  it('is v3, because requirement derivation materially changed', () => {
-    // AI-6B1 bumped v2 -> v3. The derived requirement feeds `candidates_digest`,
+  it('is v5, because requirement derivation materially changed', () => {
+    // PR12 bumps v4 -> v5. The derived requirement feeds `candidates_digest`,
     // so a persisted selection bound to the old requirement must not be honored
     // under the new version.
-    expect(COUNT_PORTION_VERSION).toBe('usda_count_portion_v3');
+    expect(COUNT_PORTION_VERSION).toBe('usda_count_portion_v5');
   });
 
-  it('fails a persisted SELECTION closed when its version is the old v2', () => {
-    // STALE-SELECTION PROOF. A selection persisted under v2 is rejected outright.
+  it('fails a persisted SELECTION closed when its version is the old v3', () => {
+    // STALE-SELECTION PROOF. A selection persisted under v4 is rejected outright.
     const stale = {
-      count_portion_version: 'usda_count_portion_v2',
+      count_portion_version: 'usda_count_portion_v4',
       calculation_version: 'usda_advisory_calc_v4',
       line_ref: 'x',
       ingredient_identity_digest: 'd',

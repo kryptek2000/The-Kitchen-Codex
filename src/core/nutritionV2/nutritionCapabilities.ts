@@ -7,15 +7,18 @@
  *
  * PERMANENT PRODUCT INVARIANTS
  * ----------------------------
- *  - Basic Nutrition is always available: deterministic analysis, manual
- *    food-match correction, manual total weight, verified source/count/
- *    household portions, deterministic math, provenance, Review, and Apply.
- *  - `manualEditing` is ALWAYS true, for every tier and every AI availability
- *    state. AI Advanced Nutrition must never remove or hide manual correction.
+ *  - Basic Nutrition is always available: deterministic generation, viewing,
+ *    partial/unknown disclosure, and the normal Nutrition & Macros card.
+ *  - The manual Advanced editing ENGINE is present in every build; PRODUCT
+ *    ENTITLEMENT to open the Advanced review workspace and change USDA
+ *    matches/portions/weights is decided by `nutritionProductAccess.ts`, never by
+ *    this operational resolver and never by provider readiness.
+ *  - `manualEditing` here therefore means "the deterministic editing engine is
+ *    available in this build", not "this user owns Advanced Nutrition".
  *  - Tier/capability is independent of billing. There is no pricing, checkout,
  *    subscription, account entitlement, or payment logic here.
  *  - `aiEstimation` is `'disabled'` for Basic Nutrition and `'available'`
-    for AI Advanced Nutrition (AI-3 activation).
+ *    for AI Advanced Nutrition (AI-3 activation).
  *
  * WHAT THIS IS — AND WHAT IT IS NOT (AI-5A cross-reference)
  * -----------------------------------------------------------
@@ -95,7 +98,11 @@ export function resolveNutritionCapabilities(
   });
 }
 
-/** Manual deterministic editing is a permanent invariant, in every tier. */
+/**
+ * True when the deterministic manual-editing ENGINE is present. Product
+ * entitlement to use the Advanced workspace is a separate decision owned by
+ * `isAdvancedNutritionEditingEntitled` in `nutritionProductAccess.ts`.
+ */
 export function isManualEditingAvailable(capabilities: NutritionCapabilities): boolean {
   return capabilities.manualEditing === true;
 }

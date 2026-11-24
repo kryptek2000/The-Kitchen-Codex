@@ -1,0 +1,616 @@
+{
+  "measurement_baseline": "pr12_ci_repair_v1",
+  "prior_baselines": {
+    "AI-6A": {
+      "historical_resolved": 46,
+      "legacy_resolved": 42
+    },
+    "AI-6B1": {
+      "historical_resolved": 48,
+      "legacy_resolved": 44
+    }
+  },
+  "production_baseline": {
+    "historical_resolved": 51,
+    "historical_total": 97,
+    "legacy_resolved": 47,
+    "legacy_total": 91,
+    "raw_matched": 99,
+    "authenticated_mass_resolved": 99,
+    "safe_resolved": 98,
+    "verified_correct_auto_identity": 45,
+    "verified_unsafe_auto_identity": 0,
+    "corpus_total": 207
+  },
+  "reviewed_transitions": [
+    {
+      "line": "1 lb pork shoulder",
+      "changes": {
+        "selected_fdc_id": [
+          167845,
+          null
+        ],
+        "mass_source": [
+          "direct_mass",
+          "none"
+        ],
+        "resolved_grams": [
+          453.59237,
+          null
+        ],
+        "terminal": [
+          "matched",
+          "review_suggested"
+        ],
+        "primary_blocker": [
+          "none_resolved",
+          "identity_needs_review"
+        ]
+      }
+    },
+    {
+      "line": "1/4-1/2 tsp chili flakes (optional)",
+      "changes": {
+        "terminal": [
+          "review_suggested",
+          "needs_match"
+        ]
+      }
+    },
+    {
+      "line": "4 tbsp unsalted butter",
+      "changes": {
+        "selected_fdc_id": [
+          789828,
+          173430
+        ],
+        "mass_source": [
+          "none",
+          "source_portion"
+        ],
+        "resolved_grams": [
+          null,
+          56.8
+        ],
+        "terminal": [
+          "needs_amount",
+          "matched"
+        ],
+        "primary_blocker": [
+          "compatible_candidate_not_selected",
+          "none_resolved"
+        ]
+      }
+    },
+    {
+      "line": "2 tbsp unsalted butter",
+      "changes": {
+        "selected_fdc_id": [
+          789828,
+          173430
+        ],
+        "mass_source": [
+          "none",
+          "source_portion"
+        ],
+        "resolved_grams": [
+          null,
+          28.4
+        ],
+        "terminal": [
+          "needs_amount",
+          "matched"
+        ],
+        "primary_blocker": [
+          "compatible_candidate_not_selected",
+          "none_resolved"
+        ]
+      }
+    },
+    {
+      "line": "1 yellow onion, diced",
+      "changes": {
+        "mass_source": [
+          "none",
+          "count_portion"
+        ],
+        "resolved_grams": [
+          null,
+          143
+        ],
+        "terminal": [
+          "needs_amount",
+          "matched"
+        ],
+        "primary_blocker": [
+          "selected_record_lacks_source_portion",
+          "none_resolved"
+        ]
+      }
+    },
+    {
+      "line": "1 stick unsalted butter",
+      "changes": {
+        "selected_fdc_id": [
+          789828,
+          173430
+        ],
+        "mass_source": [
+          "household_portion",
+          "count_portion"
+        ]
+      }
+    },
+    {
+      "line": "1 lemon",
+      "changes": {
+        "mass_source": [
+          "none",
+          "count_portion"
+        ],
+        "resolved_grams": [
+          null,
+          65
+        ],
+        "terminal": [
+          "needs_amount",
+          "matched"
+        ],
+        "primary_blocker": [
+          "selected_record_lacks_source_portion",
+          "none_resolved"
+        ]
+      }
+    },
+    {
+      "line": "1/4 teaspoon crushed red pepper flakes",
+      "changes": {
+        "terminal": [
+          "review_suggested",
+          "needs_match"
+        ],
+        "primary_blocker": [
+          "identity_needs_review",
+          "catalog_or_specificity_gap"
+        ]
+      }
+    },
+    {
+      "line": "2 sticks unsalted butter",
+      "changes": {
+        "selected_fdc_id": [
+          789828,
+          173430
+        ],
+        "mass_source": [
+          "household_portion",
+          "count_portion"
+        ]
+      }
+    },
+    {
+      "line": "1 sweet onion",
+      "changes": {
+        "mass_source": [
+          "none",
+          "count_portion"
+        ],
+        "resolved_grams": [
+          null,
+          331
+        ],
+        "terminal": [
+          "needs_amount",
+          "matched"
+        ],
+        "primary_blocker": [
+          "selected_record_lacks_source_portion",
+          "none_resolved"
+        ]
+      }
+    },
+    {
+      "line": "1 red onion",
+      "changes": {
+        "mass_source": [
+          "none",
+          "count_portion"
+        ],
+        "resolved_grams": [
+          null,
+          197
+        ],
+        "terminal": [
+          "needs_amount",
+          "matched"
+        ],
+        "primary_blocker": [
+          "selected_record_lacks_source_portion",
+          "none_resolved"
+        ]
+      }
+    },
+    {
+      "line": "tomato sauce with basil",
+      "changes": {
+        "terminal": [
+          "review_suggested",
+          "needs_match"
+        ]
+      }
+    },
+    {
+      "line": "1 whole chicken",
+      "changes": {
+        "terminal": [
+          "review_suggested",
+          "needs_match"
+        ],
+        "primary_blocker": [
+          "identity_needs_review",
+          "identity_unmatched"
+        ]
+      }
+    },
+    {
+      "line": "2 whole lemons",
+      "changes": {
+        "terminal": [
+          "review_suggested",
+          "needs_match"
+        ],
+        "primary_blocker": [
+          "identity_needs_review",
+          "identity_unmatched"
+        ]
+      }
+    }
+  ],
+  "audits": {
+    "portion": {
+      "disposition_counts": [
+        {
+          "key": "authority_absent",
+          "count": 27
+        },
+        {
+          "key": "authoritative_ambiguity",
+          "count": 2
+        },
+        {
+          "key": "parser_followup",
+          "count": 1
+        },
+        {
+          "key": "semantic_equivalence_not_authorized",
+          "count": 1
+        }
+      ],
+      "evidence_counts": [
+        {
+          "key": "package_net_mass_not_declared",
+          "count": 10
+        },
+        {
+          "key": "parser_dropped_authored_count_unit",
+          "count": 1
+        },
+        {
+          "key": "count_unit_equivalence_not_authorized",
+          "count": 1
+        },
+        {
+          "key": "materially_different_authenticated_masses",
+          "count": 2
+        },
+        {
+          "key": "selected_record_has_no_authenticated_item_mass",
+          "count": 8
+        },
+        {
+          "key": "size_specific_portion_absent",
+          "count": 4
+        },
+        {
+          "key": "household_registry_key_absent",
+          "count": 5
+        }
+      ],
+      "handoff_lane_counts": [
+        {
+          "key": "deterministic_parser",
+          "count": 1
+        },
+        {
+          "key": "intentional_human_review",
+          "count": 2
+        },
+        {
+          "key": "needs_recon",
+          "count": 28
+        }
+      ],
+      "ai3_eligibility_counts": [
+        {
+          "key": "eligible",
+          "count": 21
+        },
+        {
+          "key": "identity_unresolved",
+          "count": 2
+        },
+        {
+          "key": "parsed_container",
+          "count": 8
+        }
+      ]
+    },
+    "identity": {
+      "blocker_split": [
+        {
+          "key": "identity_needs_review",
+          "count": 24
+        },
+        {
+          "key": "identity_unmatched",
+          "count": 3
+        }
+      ],
+      "disposition_counts": [
+        {
+          "key": "normalization_or_tokenization_gap",
+          "count": 6
+        },
+        {
+          "key": "catalog_candidate_generation_gap",
+          "count": 6
+        },
+        {
+          "key": "ambiguous_identity_requires_review",
+          "count": 12
+        },
+        {
+          "key": "specificity_not_authorized",
+          "count": 2
+        },
+        {
+          "key": "branded_or_commercial_specificity_gap",
+          "count": 1
+        }
+      ],
+      "evidence_counts": [
+        {
+          "key": "multiple_plausible_candidates",
+          "count": 12
+        },
+        {
+          "key": "all_satisfying_candidates_forbidden",
+          "count": 1
+        },
+        {
+          "key": "quantity_token_absorbed_into_food_query",
+          "count": 1
+        },
+        {
+          "key": "container_noun_in_food_head",
+          "count": 3
+        },
+        {
+          "key": "declared_qualifier_token_in_food_head",
+          "count": 2
+        },
+        {
+          "key": "catalog_probe_finds_candidate_but_window_empty",
+          "count": 6
+        },
+        {
+          "key": "no_authorized_record_for_authored_specificity",
+          "count": 1
+        },
+        {
+          "key": "brand_token_in_authored_line",
+          "count": 1
+        }
+      ],
+      "handoff_lane_counts": [
+        {
+          "key": "deterministic_parser",
+          "count": 6
+        },
+        {
+          "key": "intentional_human_review",
+          "count": 15
+        },
+        {
+          "key": "needs_recon",
+          "count": 6
+        }
+      ],
+      "ai3_eligibility_counts": [
+        {
+          "key": "not_actionable",
+          "count": 27
+        }
+      ],
+      "identity_lane_constraint_counts": {
+        "expect_no_automatic": 2,
+        "forbidden_auto_fdcs": 0,
+        "forbidden_auto_description": 1
+      }
+    },
+    "ranking": {
+      "ranking_blocker_split": [
+        {
+          "key": "compatible_candidate_not_selected",
+          "count": 7
+        }
+      ],
+      "disposition_counts": [
+        {
+          "key": "alternate_identity_not_equivalent",
+          "count": 1
+        },
+        {
+          "key": "portion_compatibility_only_advantage",
+          "count": 2
+        },
+        {
+          "key": "corpus_constraint_blocks_rerank",
+          "count": 3
+        },
+        {
+          "key": "no_safe_general_ranking_rule",
+          "count": 1
+        }
+      ],
+      "evidence_counts": [
+        {
+          "key": "expected_candidate_supports_selected",
+          "count": 3
+        },
+        {
+          "key": "alternate_adds_unauthored_specificity",
+          "count": 2
+        },
+        {
+          "key": "alternate_contradicts_authored_state",
+          "count": 1
+        },
+        {
+          "key": "rule_would_break_known_good_identity_oracle",
+          "count": 1
+        }
+      ],
+      "semantic_parity_counts": [
+        {
+          "key": "same_semantic_identity",
+          "count": 3
+        },
+        {
+          "key": "selected_more_faithful",
+          "count": 1
+        },
+        {
+          "key": "materially_different",
+          "count": 2
+        },
+        {
+          "key": "ambiguous",
+          "count": 1
+        }
+      ],
+      "handoff_lane_counts": [
+        {
+          "key": "intentional_human_review",
+          "count": 1
+        },
+        {
+          "key": "needs_recon",
+          "count": 6
+        }
+      ],
+      "ai3_eligibility_counts": [
+        {
+          "key": "eligible",
+          "count": 7
+        }
+      ],
+      "ranking_lane_constraint_counts": {
+        "expected_auto_fdc": 3,
+        "baseline_auto_fdc": 0,
+        "expect_top_fdc": 0,
+        "expect_candidate_description": 0,
+        "expect_no_automatic": 0,
+        "forbidden_auto_fdcs": 0,
+        "forbidden_auto_description": 0,
+        "known_issue": 0
+      }
+    },
+    "catalog": {
+      "blocker_split": [
+        {
+          "key": "catalog_or_specificity_gap",
+          "count": 5
+        },
+        {
+          "key": "container_mass_absent",
+          "count": 1
+        }
+      ],
+      "disposition_counts": [
+        {
+          "key": "candidate_generation_handoff",
+          "count": 2
+        },
+        {
+          "key": "authenticated_catalog_absence",
+          "count": 1
+        },
+        {
+          "key": "branded_specificity_not_in_catalog",
+          "count": 1
+        },
+        {
+          "key": "generic_substitution_not_authorized",
+          "count": 1
+        },
+        {
+          "key": "container_net_mass_absent_from_authored_text",
+          "count": 1
+        }
+      ],
+      "evidence_counts": [
+        {
+          "key": "exact_authored_record_absent_from_bundle",
+          "count": 1
+        },
+        {
+          "key": "broader_generic_family_exists_but_not_equivalent",
+          "count": 1
+        },
+        {
+          "key": "repair_owned_by_tokenization_not_catalog_surface",
+          "count": 2
+        },
+        {
+          "key": "brand_record_absent_and_generic_not_equivalent",
+          "count": 1
+        },
+        {
+          "key": "authored_package_net_mass_absent",
+          "count": 1
+        }
+      ],
+      "handoff_lane_counts": [
+        {
+          "key": "deterministic_identity",
+          "count": 2
+        },
+        {
+          "key": "intentional_human_review",
+          "count": 2
+        },
+        {
+          "key": "needs_recon",
+          "count": 2
+        }
+      ],
+      "ai3_eligibility_counts": [
+        {
+          "key": "not_actionable",
+          "count": 6
+        }
+      ],
+      "catalog_lane_constraint_counts": {
+        "expected_auto_fdc": 0,
+        "baseline_auto_fdc": 0,
+        "expect_top_fdc": 0,
+        "expect_no_automatic": 0,
+        "forbidden_auto_fdcs": 0,
+        "forbidden_auto_description": 0,
+        "known_issue": 0,
+        "brand_specificity": 1
+      }
+    }
+  }
+}

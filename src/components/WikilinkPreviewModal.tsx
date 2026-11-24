@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { ObsidianRecipe, VaultNote } from '../types';
 import { getRecipeImage } from '../utils/imageHelper';
+import { useVaultAssetScope } from '../hooks/VaultAssetScopeContext';
 
 interface WikilinkPreviewModalProps {
   target: string | null;
@@ -42,14 +43,13 @@ export const WikilinkPreviewModal: React.FC<WikilinkPreviewModalProps> = ({
   onFilterByWikilink,
   onSaveNoteToVault,
 }) => {
+  const assetScope = useVaultAssetScope();
   const [activeTab, setActiveTab] = useState<'preview' | 'recipes' | 'raw'>('preview');
   const [isCreatingNote, setIsCreatingNote] = useState(false);
   const [createdFeedback, setCreatedFeedback] = useState(false);
 
-  if (!isOpen || !target) return null;
-
   // Clean target (e.g. remove path prefixes or .md extension)
-  const cleanTarget = target.trim().replace(/^Notes\//i, '').replace(/^Recipes\//i, '').replace(/\.md$/i, '');
+  const cleanTarget = (target || '').trim().replace(/^Notes\//i, '').replace(/^Recipes\//i, '').replace(/\.md$/i, '');
   const lowerTarget = cleanTarget.toLowerCase();
 
   // 1. Look for matching Vault Note
@@ -88,6 +88,8 @@ export const WikilinkPreviewModal: React.FC<WikilinkPreviewModalProps> = ({
       return hasWikilink || hasInMarkdown;
     });
   }, [recipes, matchedRecipe, lowerTarget]);
+
+  if (!isOpen || !target) return null;
 
   // Handle Quick Create Note in Vault
   const handleQuickCreateNote = async () => {
@@ -308,7 +310,7 @@ created: ${new Date().toISOString().split('T')[0]}
                 <div className="space-y-4">
                   <div className="flex gap-4 p-4 rounded-xl bg-[#0F0F0F] border border-white/5 items-center">
                     <img
-                      src={getRecipeImage(matchedRecipe)}
+                      src={getRecipeImage(matchedRecipe, assetScope)}
                       alt={matchedRecipe.title}
                       referrerPolicy="no-referrer"
                       className="w-20 h-20 rounded-lg object-cover border border-white/10 shrink-0"
@@ -400,7 +402,7 @@ created: ${new Date().toISOString().split('T')[0]}
                         className="flex items-center gap-2.5 p-2.5 rounded-xl bg-[#171717] hover:bg-[#1C1C1C] border border-white/5 hover:border-amber-500/30 cursor-pointer transition-all group"
                       >
                         <img
-                          src={getRecipeImage(rec)}
+                          src={getRecipeImage(rec, assetScope)}
                           alt={rec.title}
                           referrerPolicy="no-referrer"
                           className="w-12 h-12 rounded-lg object-cover border border-white/10 shrink-0"
@@ -444,7 +446,7 @@ created: ${new Date().toISOString().split('T')[0]}
                     >
                       <div className="flex items-center gap-3 min-w-0">
                         <img
-                          src={getRecipeImage(rec)}
+                          src={getRecipeImage(rec, assetScope)}
                           alt={rec.title}
                           referrerPolicy="no-referrer"
                           className="w-14 h-14 rounded-lg object-cover border border-white/10 shrink-0"

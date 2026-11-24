@@ -44,7 +44,7 @@
  * helpers used by the deterministic ranking and confidence contract.
  */
 
-export const QUERY_PROJECTION_VERSION = 'usda_query_projection_v10';
+export const QUERY_PROJECTION_VERSION = 'usda_query_projection_v15';
 
 /**
  * Optional, bounded Phase 1 metadata that a caller can supply when it already
@@ -140,6 +140,7 @@ export interface IngredientQueryProjection {
  * salted/unsalted, whole/skim, ...) are deliberately NOT in this set.
  */
 const PREPARATION_QUALIFIERS: ReadonlySet<string> = new Set([
+  'ripe',
   'sliced',
   'slice',
   'slices',
@@ -163,6 +164,7 @@ const PREPARATION_QUALIFIERS: ReadonlySet<string> = new Set([
   'seeded',
   'cored',
   'shucked',
+  'husked',
   'julienned',
   'cubed',
   'cubing',
@@ -171,11 +173,14 @@ const PREPARATION_QUALIFIERS: ReadonlySet<string> = new Set([
   'thawed',
   'defrosted',
   'fresh',
+  'toasted',
   'patted',
   'chilled',
   'chilling',
   'cold',
+  'cool',
   'cooled',
+  'warm',
   'warmed',
   'room',
   'temperature',
@@ -333,6 +338,17 @@ const NOISE_TOKENS: ReadonlySet<string> = new Set([
   'servings',
   'size',
   'count',
+  // Grammatical tails from ordinary recipe prose (`butter, at room
+  // temperature`, `butter, cold is fine`, `butter, until melted`). They never
+  // name a food, so they must not become the required matching anchor.
+  'at',
+  'is',
+  'if',
+  'until',
+  'when',
+  'the',
+  'temp',
+  'desired',
   // Bounded number words (`four loose 4-ounce balls`). Numeric digits are
   // handled separately by `extractNumericQualifiers`.
   'one',
@@ -350,11 +366,26 @@ const NOISE_TOKENS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Bounded cookware / trailing prose words recognized ONLY when they compose an
+ * otherwise non-identity trailing clause (`butter, for the pan`). They are not
+ * global identity noise because a food name can begin with `pan` (`pan dulce`).
+ */
+const TRAILING_PROSE_TOKENS: ReadonlySet<string> = new Set([
+  'pan',
+  'pot',
+  'skillet',
+  'dish',
+  'tray',
+  'bowl',
+  'greasing',
+]);
+
+/**
  * Nutritionally significant qualifiers. These are preserved as identity-adjacent
  * evidence (agreement/opposition) but are NOT the required anchor and NOT part
  * of core food identity.
  */
-const QUALIFIER_TOKENS: ReadonlySet<string> = new Set([
+export const QUALIFIER_TOKENS: ReadonlySet<string> = new Set([
   'salted',
   'unsalted',
   'raw',
@@ -400,6 +431,11 @@ const QUALIFIER_TOKENS: ReadonlySet<string> = new Set([
   'vegan',
   'vegetarian',
   'tofu',
+  // Oat processing changes the food form and should not silently collapse to
+  // generic/raw oats when the recipe explicitly asks for rolled/quick oats.
+  'rolled',
+  'quick',
+  'instant',
 ]);
 
 /**
@@ -847,6 +883,11 @@ const DESCRIPTOR_TOKENS: ReadonlySet<string> = new Set([
   'bone',
   'bones',
   'boneless',
+  // Plant-part descriptor (`Ginger root, raw`, `Beet root`), not a foreign
+  // compound food. It never becomes required identity and never establishes a
+  // match by itself.
+  'root',
+  'roots',
   'coating',
   'coated',
   'breaded',
@@ -878,9 +919,6 @@ const DESCRIPTOR_TOKENS: ReadonlySet<string> = new Set([
   'shelled',
   'unshelled',
   'cracked',
-  'rolled',
-  'quick',
-  'instant',
   'old',
   'fashioned',
   'style',
@@ -1380,10 +1418,14 @@ const STATE_CONTRADICTION_PAIRS: ReadonlyArray<
   Object.freeze([new Set(['raw', 'uncooked']), new Set(['cooked'])] as const),
   // Fresh <> dried (equivalence covers powdered/dry).
   Object.freeze([new Set(['fresh']), new Set(['dried'])] as const),
+  // Fresh <> ground (dried ground spices are not fresh produce).
+  Object.freeze([new Set(['fresh']), new Set(['ground'])] as const),
   // Fresh <> frozen.
   Object.freeze([new Set(['fresh']), new Set(['frozen'])] as const),
   // Canned <> raw/fresh.
   Object.freeze([new Set(['canned']), new Set(['raw', 'uncooked', 'fresh'])] as const),
+  // Pickled is a prepared preserve, not fresh/raw produce.
+  Object.freeze([new Set(['pickled']), new Set(['raw', 'uncooked', 'fresh'])] as const),
   // Drained <> undrained.
   Object.freeze([new Set(['drained']), new Set(['undrained'])] as const),
   // Ground <> whole (a committed form vs the whole food). `ground` is NOT
@@ -1512,6 +1554,69 @@ interface CulinaryAlias {
  * never authorize an automatic exact match.
  */
 const ALIASES: ReadonlyArray<CulinaryAlias> = Object.freeze([
+  // Cut/form wording and common market names are not food identity. These are
+  // directional, source-controlled culinary equivalences; they never rewrite a
+  // recipe and they never authorize an exact match by themselves.
+  Object.freeze({
+    id: 'broccoli_florets_to_flower_clusters',
+    from: Object.freeze(['broccoli', 'florets']),
+    to: Object.freeze(['broccoli', 'flower', 'clusters']),
+    anchors: Object.freeze([Object.freeze(['broccoli'])]),
+  }),
+  Object.freeze({
+    id: 'broccoli_floret_to_flower_clusters',
+    from: Object.freeze(['broccoli', 'floret']),
+    to: Object.freeze(['broccoli', 'flower', 'clusters']),
+    anchors: Object.freeze([Object.freeze(['broccoli'])]),
+  }),
+  Object.freeze({
+    id: 'sugar_snap_peas_to_edible_podded_peas',
+    from: Object.freeze(['sugar', 'snap', 'peas']),
+    to: Object.freeze(['peas', 'edible', 'podded']),
+    anchors: Object.freeze([Object.freeze(['peas'])]),
+  }),
+  Object.freeze({
+    id: 'sugar_snap_pea_to_edible_podded_peas',
+    from: Object.freeze(['sugar', 'snap', 'pea']),
+    to: Object.freeze(['peas', 'edible', 'podded']),
+    anchors: Object.freeze([Object.freeze(['peas'])]),
+  }),
+  Object.freeze({
+    id: 'snap_peas_to_edible_podded_peas',
+    from: Object.freeze(['snap', 'peas']),
+    to: Object.freeze(['peas', 'edible', 'podded']),
+    anchors: Object.freeze([Object.freeze(['peas'])]),
+  }),
+  Object.freeze({
+    id: 'cremini_to_crimini',
+    from: Object.freeze(['cremini']),
+    to: Object.freeze(['crimini']),
+    anchors: Object.freeze([Object.freeze(['mushroom', 'mushrooms'])]),
+  }),
+  Object.freeze({
+    id: 'scallions_to_green_onions',
+    from: Object.freeze(['scallions']),
+    to: Object.freeze(['green', 'onions']),
+    anchors: Object.freeze([Object.freeze(['onion', 'onions'])]),
+  }),
+  Object.freeze({
+    id: 'scallion_to_green_onion',
+    from: Object.freeze(['scallion']),
+    to: Object.freeze(['green', 'onion']),
+    anchors: Object.freeze([Object.freeze(['onion', 'onions'])]),
+  }),
+  Object.freeze({
+    id: 'dry_jasmine_rice_to_white_long_grain_raw_rice',
+    from: Object.freeze(['dry', 'jasmine', 'rice']),
+    to: Object.freeze(['white', 'long', 'grain', 'raw', 'rice']),
+    anchors: Object.freeze([Object.freeze(['rice'])]),
+  }),
+  Object.freeze({
+    id: 'jasmine_rice_to_white_long_grain_rice',
+    from: Object.freeze(['jasmine', 'rice']),
+    to: Object.freeze(['white', 'long', 'grain', 'rice']),
+    anchors: Object.freeze([Object.freeze(['rice'])]),
+  }),
   Object.freeze({
     id: 'burger_bun_to_hamburger_bun',
     from: Object.freeze(['burger', 'bun']),
@@ -1617,12 +1722,16 @@ function stripPreparationClauses(text: string): { text: string; notes: string[] 
     const segment = segments[i].trim();
     if (segment.length === 0) continue;
     const tokens = segment.toLowerCase().split(/\s+/).filter(Boolean);
+    const eggPreparation = /\b(?:egg|eggs|egg whites?|egg yolks?)\b/i.test(segments[0]);
     const allNoise = tokens.every(
       (token) =>
         PREPARATION_QUALIFIERS.has(token) ||
+        (token === 'separated' && eggPreparation) ||
         SIZE_QUALIFIERS.has(token) ||
         COUNT_NOISE.has(token) ||
         NOISE_TOKENS.has(token) ||
+        REFINEMENT_TOKENS.has(token) ||
+        TRAILING_PROSE_TOKENS.has(token) ||
         NUMERIC_TOKEN.test(token)
     );
     if (allNoise) notes.push(segment);
@@ -1721,7 +1830,7 @@ interface TokenRoles {
 }
 
 /** Assigns the closed semantic roles to one normalized token sequence. */
-function assignRoles(tokens: ReadonlyArray<string>): TokenRoles {
+function assignRoles(tokens: ReadonlyArray<string>, eggPreparation = false): TokenRoles {
   const sizeQualifiers: string[] = [];
   const preparationQualifiers: string[] = [];
   const qualifierTokens: string[] = [];
@@ -1737,6 +1846,7 @@ function assignRoles(tokens: ReadonlyArray<string>): TokenRoles {
       sizeQualifiers.push(token);
     } else if (
       PREPARATION_QUALIFIERS.has(token) ||
+      (token === 'separated' && eggPreparation) ||
       COUNT_NOISE.has(token) ||
       NOISE_TOKENS.has(token) ||
       GENERIC_TOKENS.has(token)
@@ -1818,7 +1928,7 @@ export function projectQueryText(
   text: string,
   context?: QueryProjectionContext
 ): IngredientQueryProjection {
-  const normalized = String(text).trim();
+  const normalized = String(text).trim().replace(/\bjuiced\b/g, 'juice');
   const measurementTokens: string[] = [];
 
   const withoutParens = stripParentheticals(normalized);
@@ -1849,7 +1959,7 @@ export function projectQueryText(
       : orInfo.branches.flat()
     : withoutNumeric;
 
-  const roles = assignRoles(roleSource);
+  const roles = assignRoles(roleSource, /\b(?:egg|eggs|egg whites?|egg yolks?)\b/i.test(withoutParens));
   const identityTokens = roles.identityTokens;
 
   // Contextual rule for `ground`: identity-bearing only when a meat species is
@@ -2071,6 +2181,17 @@ export function missingCoreTokenCount(
     if (!tokenInSet(candidateTokens, token)) missing += 1;
   }
   return missing;
+}
+
+/** Counts missing required food-head anchors without treating refinements such
+ * as long-grain as a different primary food (rice remains rice). */
+export function missingPrimaryIdentityAnchorCount(
+  candidateTokens: ReadonlyArray<string>,
+  projection: IngredientQueryProjection,
+): number {
+  return projection.anchor_groups.filter(
+    (group) => !group.accepted.some((token) => tokenInSet(candidateTokens, token)),
+  ).length;
 }
 
 /** Number of requested qualifier/form tokens present in the candidate. */
@@ -2362,6 +2483,24 @@ export function unrequestedMaterialVariantCount(
     if (requestedList.some((requestedToken) => tokensEquivalent(requestedToken, token))) continue;
     count += 1;
   }
+
+  // USDA meat records commonly split a cut into `separable lean only` and
+  // `separable lean and fat`. Treat that composition as material: a bare cut
+  // (or a query naming only one side) cannot silently inherit the other. An
+  // explicitly requested lean-only / lean-and-fat identity remains eligible.
+  const requestsLean = requested.has('lean') || projection.qualifier_tokens.includes('lean');
+  const requestsFat = requested.has('fat') || projection.qualifier_tokens.includes('fat');
+  const hasLean = candidateTokens.includes('lean');
+  const hasFat = candidateTokens.includes('fat');
+  const hasOnly = candidateTokens.includes('only');
+  const leanOnly = hasLean && hasOnly;
+  const leanAndFat = hasLean && hasFat;
+  const requestedRatio = projection.numeric_qualifiers;
+  const hasRequestedRatio = requestedRatio.length === 2 &&
+    requestedRatio.every(token => candidateTokens.includes(token));
+  if ((leanOnly || leanAndFat) && !requestsLean && !requestsFat && !hasRequestedRatio) count += 1;
+  if (leanOnly && requestsFat) count += 1;
+  if (leanAndFat && requestsLean && !requestsFat) count += 1;
   return count;
 }
 

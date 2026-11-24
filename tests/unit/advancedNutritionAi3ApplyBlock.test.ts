@@ -120,12 +120,12 @@ describe('AI-3 Slice E — Layer B: the application writer guard', () => {
     } as never;
   }
 
-  it('55. a DIRECT call with an active estimate fails closed', async () => {
+  it('55. a DIRECT call with an unauthenticated estimate fails closed', async () => {
     const write = vi.fn(async () => {});
     const result = await applyAdvancedNutrition(request(stateWithEstimate(), write));
     expect(result.ok).toBe(false);
     if (result.ok === false) {
-      expect(result.failure.code).toBe('ai_estimate_preview_only');
+      expect(result.failure.code).toBe('stale_authorization');
     }
   });
 
@@ -141,7 +141,7 @@ describe('AI-3 Slice E — Layer B: the application writer guard', () => {
     expect(readBack).not.toHaveBeenCalled();
   });
 
-  it('[AI3-M52-HIST] M52: the refusal happens BEFORE authorization, not after a failed write', async () => {
+  it('[AI3-M52-HIST] M52: invalid estimate state is refused by fresh authorization before a write', async () => {
     // A session that would otherwise refuse anyway. The estimate code must win,
     // proving the guard runs first and is not a side effect of authorization.
     const write = vi.fn(async () => {});
@@ -149,7 +149,7 @@ describe('AI-3 Slice E — Layer B: the application writer guard', () => {
     expect(result.ok).toBe(false);
     if (result.ok === false) {
       // NOT 'not_authorized' / 'unsafe_request': the estimate guard is first.
-      expect(result.failure.code).toBe('ai_estimate_preview_only');
+      expect(result.failure.code).toBe('stale_authorization');
     }
   });
 

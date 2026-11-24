@@ -1,3 +1,5 @@
+import { resolveNutritionCapabilities } from '../../src/core/nutritionV2/nutritionCapabilities';
+const AI_ADVANCED_CAPABILITIES = resolveNutritionCapabilities({aiConfigured:true,aiReachable:true});
 /**
  * The Kitchen Codex — application-layer AI-assisted USDA resolution flow.
  *
@@ -84,6 +86,100 @@ function fakeNetwork(impl: (path: string, body: unknown) => Promise<unknown>): N
 }
 
 describe('AI resolution — application request/response', () => {
+  it.each([[404, /restart/], [401, /authorization/], [429, /limit/], [503, /connection test/]])(
+    'reports actionable HTTP %s failure from the whole-recipe request without echoing server text', async (status, message) => {
+      const {adapted, rows}=buildRows(['1 cup Zzz']);
+      const network=fakeNetwork(async()=>({ok:false,status,data:{error:'PRIVATE PROVIDER DETAILS'}}));
+      const result=await resolveUnresolvedRowsWithAi({
+        network,session:SESSION,rows,adapted,capabilities:AI_ADVANCED_CAPABILITIES,
+        liveCanonicalInterpretation:true,
+        wholeRecipe:{recipe:{ingredients:[{name:'1 cup Zzz'}]},instructions:[],targets:rows.map(r=>({line_ref:r.line_ref}))},
+      });
+      expect(network.post).toHaveBeenCalledTimes(1);
+      expect(result.ok).toBe(false);
+      expect(result.message).toMatch(message as RegExp);
+      expect(result.message).not.toContain('PRIVATE');
+      expect(result.outcome.candidates).toHaveLength(0);
+    });
+
+  it('preserves bounded bridge diagnostics for the Generate feedback path', async () => {
+    const { adapted, rows } = buildRows(['1 cup Zzz']);
+    const ref = rows[0].line_ref;
+    const network = fakeNetwork(async (path) => {
+      expect(path).toBe('/api/nutrition/resolve-whole-recipe');
+      return {
+        ok: true,
+        status: 200,
+        data: {
+          ok: true,
+          contract_version: 'nutrition_ai_authenticated_advisory_suggestions_v1',
+          suggestions: [],
+          withheld: [{ line_ref: ref, reason: 'ambiguous' }],
+          contradicted: [ref],
+          inadaptable: [ref],
+        },
+      };
+    });
+    const result = await resolveUnresolvedRowsWithAi({
+      network,
+      session: SESSION,
+      rows,
+      adapted,
+      capabilities: AI_ADVANCED_CAPABILITIES,
+      liveCanonicalInterpretation: true,
+      wholeRecipe: {
+        recipe: { ingredients: [{ name: '1 cup Zzz' }] },
+        instructions: [],
+        targets: rows.map((row) => ({ line_ref: row.line_ref })),
+      },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.interpretedCount).toBe(0);
+    expect(result.withheld).toEqual([{ line_ref: ref, reason: 'ambiguous' }]);
+    expect(result.contradicted).toEqual([ref]);
+    expect(result.inadaptable).toEqual([ref]);
+  });
+
+  it('keeps a usable AI suggestion unresolved when the USDA catalog has no candidate', async () => {
+    const { adapted, rows } = buildRows(['1 cup Zzz']);
+    const ref = rows[0].line_ref;
+    const network = fakeNetwork(async () => ({
+      ok: true,
+      status: 200,
+      data: {
+        ok: true,
+        contract_version: 'nutrition_ai_authenticated_advisory_suggestions_v1',
+        suggestions: [
+          {
+            line_ref: ref,
+            interpreted_food_name: 'Definitely not a catalog food',
+            suggested_usda_queries: ['definitely not a catalog food'],
+          },
+        ],
+        withheld: [],
+        contradicted: [],
+        inadaptable: [],
+      },
+    }));
+    const result = await resolveUnresolvedRowsWithAi({
+      network,
+      session: SESSION,
+      rows,
+      adapted,
+      capabilities: AI_ADVANCED_CAPABILITIES,
+      liveCanonicalInterpretation: true,
+      wholeRecipe: {
+        recipe: { ingredients: [{ name: '1 cup Zzz' }] },
+        instructions: [],
+        targets: rows.map((row) => ({ line_ref: row.line_ref })),
+      },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.interpretedCount).toBe(1);
+    expect(result.outcome.candidates).toHaveLength(0);
+    expect(result.outcome.unresolved).toEqual([ref]);
+  });
+
   it('sends only bounded unresolved rows and accepts a valid advisory response', async () => {
     const { adapted, rows } = buildRows(['1 cup Zzz', '100 g Flour, wheat, white']);
     const zzzRow = rows.find((row) => /zzz/i.test(row.query));
@@ -190,7 +286,7 @@ describe('AI resolution — application request/response', () => {
     expect(result.ok).toBe(true);
     expect(result.outcome.candidates).toHaveLength(1);
     expect(result.outcome.candidates[0].fdc_id).toBe(6002);
-    expect(result.outcome.candidates[0].auto).toBe(true);
+    expect(result.outcome.candidates[0].auto).toBe(false);
     // No mass authority from AI.
     expect((result.outcome.candidates[0].choice as { record_digest?: string }).record_digest).toMatch(/^[0-9a-f]{64}$/);
   });

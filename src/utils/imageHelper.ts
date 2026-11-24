@@ -1,4 +1,7 @@
 import { syncResolveVaultAssetUrl, cleanImageReference, isImageFile } from './vaultAssets';
+import type { VaultAssetScope } from './vaultAssets';
+import { isBlobReference } from './assetProvenance';
+import { isApprovedStarterImagePath, isAppImagesNamespaceRef } from '../data/starterImageAssets';
 
 /**
  * The Kitchen Codex — Recipe image display helper (Phase 1).
@@ -34,6 +37,24 @@ export const DEFAULT_FOOD_IMAGES: Record<string, string> = {
 };
 
 /**
+ * True only for one exact, canonical app-owned Starter image path. The shared
+ * manifest is the single authority; prefixes, backslashes, encodings, query
+ * strings, fragments and unknown files are never accepted.
+ */
+export function isBundledStarterImageRef(ref?: string): boolean {
+  return isApprovedStarterImagePath(ref);
+}
+
+/**
+ * Resolves an app-owned bundled Starter image to its exact same-origin public
+ * URL. Returns null for every other reference, including Vault-local paths and
+ * remote URLs whose resolution belongs to the existing asset/session boundary.
+ */
+export function resolveBundledStarterImage(ref?: string): string | null {
+  return isApprovedStarterImagePath(ref) ? ref : null;
+}
+
+/**
  * Returns the display image for a recipe.
  *
  * TRUTHFUL BEHAVIOR (Phase 1): only an EXPLICIT recipe image (or a Markdown
@@ -48,30 +69,29 @@ export function getRecipeImage(recipe: {
   cuisine?: string;
   tags?: string[];
   rawMarkdown?: string;
-}): string {
+}, assetScope?: VaultAssetScope | null): string {
   // 1. Direct explicit image or vault asset path
   if (recipe.image && typeof recipe.image === 'string') {
+    // App-owned Starter images ship with the application and do not depend on
+    // a Vault scope or network access. Only exact manifest paths are accepted.
+    const bundled = resolveBundledStarterImage(recipe.image);
+    if (bundled) return bundled;
+    if (isAppImagesNamespaceRef(recipe.image)) return LOCAL_RECIPE_IMAGE_PLACEHOLDER;
+
     const clean = cleanImageReference(recipe.image);
     if (clean && clean !== 'undefined' && clean !== 'null') {
-      // If it's already an absolute URL or Blob URL, use directly
-      if (
-        clean.startsWith('http://') ||
-        clean.startsWith('https://') ||
-        clean.startsWith('data:') ||
-        clean.startsWith('blob:')
-      ) {
-        return clean;
-      }
+      // Remote/data references are session-independent. Blob URLs are accepted
+      // ONLY when the active scope owns them or they are a live temporary
+      // preview; unknown/foreign blobs must never be returned as current.
+      const resolvedDirect = syncResolveVaultAssetUrl(clean, assetScope);
+      if (resolvedDirect) return resolvedDirect;
+      if (isBlobReference(clean)) return LOCAL_RECIPE_IMAGE_PLACEHOLDER;
 
-      // Check if it resolves in the local Obsidian vault asset cache (e.g. Assets/Breakfast Burritos.jpg)
-      const vaultBlobUrl = syncResolveVaultAssetUrl(clean);
-      if (vaultBlobUrl) {
-        return vaultBlobUrl;
-      }
-
-      // If it has an image extension or is in Assets folder, return the cleaned reference
+      // Without a scope, preserve legacy/test display behavior. With an active
+      // scope, an unresolved Vault path is truthfully missing: show the local
+      // placeholder rather than a path that could be mistaken for another Vault.
       if (isImageFile(clean) || clean.toLowerCase().startsWith('assets/')) {
-        return clean;
+        return assetScope ? LOCAL_RECIPE_IMAGE_PLACEHOLDER : clean;
       }
     }
   }
@@ -82,7 +102,7 @@ export function getRecipeImage(recipe: {
     const wikilinkImgMatch = recipe.rawMarkdown.match(/!\[\[([^\]]+\.(?:jpg|jpeg|png|webp|avif|gif|svg))\]\]/i);
     if (wikilinkImgMatch && wikilinkImgMatch[1]) {
       const targetRef = cleanImageReference(wikilinkImgMatch[1]);
-      const resolved = syncResolveVaultAssetUrl(targetRef);
+      const resolved = syncResolveVaultAssetUrl(targetRef, assetScope);
       if (resolved) return resolved;
     }
 
@@ -93,7 +113,7 @@ export function getRecipeImage(recipe: {
       if (src.startsWith('http://') || src.startsWith('https://')) {
         return src;
       }
-      const resolved = syncResolveVaultAssetUrl(src);
+      const resolved = syncResolveVaultAssetUrl(src, assetScope);
       if (resolved) return resolved;
     }
 
@@ -104,7 +124,7 @@ export function getRecipeImage(recipe: {
       if (src.startsWith('http://') || src.startsWith('https://')) {
         return src;
       }
-      const resolved = syncResolveVaultAssetUrl(src);
+      const resolved = syncResolveVaultAssetUrl(src, assetScope);
       if (resolved) return resolved;
     }
   }

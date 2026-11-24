@@ -101,6 +101,9 @@ export function computeCanonicalRecordDigest(content: CanonicalUsdaFoodRecordCon
 
 function deepFreeze<T>(value: T): T {
   if (value && typeof value === 'object') {
+    // Records are re-validated by several independent authority boundaries.
+    // Re-walking an already frozen graph is pure overhead and cannot change it.
+    if (Object.isFrozen(value)) return value;
     for (const key of Object.keys(value as Record<string, unknown>)) {
       deepFreeze((value as Record<string, unknown>)[key]);
     }
@@ -109,13 +112,25 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
+/**
+ * Records that already passed the FULL canonical validation and were frozen.
+ * Re-validating the SAME immutable object at a later authority boundary adds no
+ * security; a fresh/mutable object never takes this path.
+ */
+const AUTHENTICATED_CANONICAL_RECORDS = new WeakSet<object>();
+
+function markAuthenticatedRecord(record: CanonicalUsdaFoodRecord): CanonicalUsdaFoodRecord {
+  AUTHENTICATED_CANONICAL_RECORDS.add(record as unknown as object);
+  return record;
+}
+
 /** Attaches the deterministic digest and deep-freezes the canonical record. */
 export function withCanonicalRecordDigest(content: CanonicalUsdaFoodRecordContent): CanonicalUsdaFoodRecord {
   const record: CanonicalUsdaFoodRecord = {
     ...content,
     record_digest: computeCanonicalRecordDigest(content),
   };
-  return deepFreeze(record);
+  return markAuthenticatedRecord(deepFreeze(record));
 }
 
 function validateNutrientEntry(
@@ -214,6 +229,14 @@ function validatePortionEntry(raw: unknown, diag: string[]): CanonicalPortionRec
  */
 export function validateCanonicalRecord(raw: unknown): CanonicalRecordValidation {
   try {
+    if (
+      typeof raw === 'object' &&
+      raw !== null &&
+      Object.isFrozen(raw) &&
+      AUTHENTICATED_CANONICAL_RECORDS.has(raw)
+    ) {
+      return { ok: true, record: raw as CanonicalUsdaFoodRecord };
+    }
     const materialized = toInertValue(raw);
     if (!materialized.ok) {
       return { ok: false, errors: [`unsafe_record:${(materialized as { ok: false; reason: string }).reason}`] };
@@ -311,7 +334,7 @@ export function validateCanonicalRecord(raw: unknown): CanonicalRecordValidation
     });
     if (expected !== record.record_digest) return { ok: false, errors: ['digest_mismatch'] };
 
-    return { ok: true, record: deepFreeze(record) };
+    return { ok: true, record: markAuthenticatedRecord(deepFreeze(record)) };
   } catch {
     return { ok: false, errors: ['validation_error'] };
   }

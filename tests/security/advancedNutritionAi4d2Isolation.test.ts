@@ -171,7 +171,9 @@ describe('AI-4D2 isolation — Phase 4 gains no AI-4 concept', () => {
     const actions = [...STATE_SOURCE.matchAll(/case '([a-z_]+)':/g)].map((match) => match[1]);
     expect(actions).toContain('clear_ai_estimate');
     expect(actions.filter((action) => action.includes('context'))).toEqual([]);
-    expect(actions.filter((action) => action.includes('accept'))).toEqual([]);
+    // Nutrient contributions have a separate, explicit acceptance action.
+    // Recipe-context AI-4 still gains no action or authority.
+    expect(actions.filter((action) => action.includes('accept'))).toEqual(['accept_ai_nutrition']);
     // The reducer's action vocabulary is unchanged by this phase.
     expect(new Set(actions).size).toBeGreaterThan(10);
   });

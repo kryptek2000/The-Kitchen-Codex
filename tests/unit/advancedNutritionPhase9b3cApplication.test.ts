@@ -50,7 +50,7 @@ import type { AiResolutionIssueKind } from '../../src/core/nutritionV2/aiResolut
 
 const BUNDLE_DIR = join(
   __dirname,
-  '../../data/advanced-nutrition/usda/usda_fdc_87c5408a3e98838944a87be74824761e'
+  '../../data/advanced-nutrition/usda/usda_fdc_1f3e3068a7ae0702f360d1caae40a628'
 );
 const AI_ENDPOINT_TOKEN = '9b3c-app-token';
 
@@ -277,7 +277,10 @@ function wholeRecipeSource() {
 describe('9B-3C — the existing AI action drives authenticated whole-recipe resolution', () => {
   it('one click -> whole recipe -> real wsem1 -> advisory -> REAL USDA candidate', async () => {
     const eggRef = adapted[0].line_ref as string;
-    expect(issueKinds[eggRef]).toBe('needs_match');
+    // The live deterministic matcher now resolves eggs, separated to the
+    // catalog's whole-egg identity. Its trusted classification correctly keeps
+    // it out of the semantic AI retargeting bridge.
+    expect(issueKinds[eggRef]).toBeUndefined();
 
     const result = await resolveUnresolvedRowsWithAi({
       network,

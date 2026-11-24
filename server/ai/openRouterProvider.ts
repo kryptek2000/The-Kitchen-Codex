@@ -23,9 +23,10 @@
 
 import { MODEL_CONFIG } from "../modelConfig.js";
 import { APPLICATION_VALIDATED_JSON_PROFILE, type OpenRouterProfile } from '../../src/core/ai/openRouterProfile.js';
-import { structuredRequestFields, completionContent, validatesAiSchema, readRuntimeCompletion, OPENROUTER_RUNTIME_TOKENS, type StreamResponse } from './openRouterOutput.js';
+import { structuredRequestFields, completionContent, readRuntimeCompletion, OPENROUTER_RUNTIME_TOKENS, type StreamResponse } from './openRouterOutput.js';
+import { toStrictJsonSchema, validatesAiSchema } from '../../src/core/ai/strictJsonSchema.js';
 import { getServerSecretSync } from "../platform/ServerEnvironmentSecretAdapter.js";
-import { ProviderOperationError, classifyProviderError } from "./providerErrors.js";
+import { ProviderOperationError, callerCancellationError, classifyProviderError, throwIfCallerCancelled, throwIfProviderRequestAborted } from "./providerErrors.js";
 import type {
   AiCapabilities,
   AiGenerateOptions,
@@ -42,67 +43,10 @@ export const OPENROUTER_CHAT_ENDPOINT = `${OPENROUTER_BASE_URL}/chat/completions
 const STRUCTURED_SCHEMA_NAME = "structured_output";
 
 /**
- * Maps the provider-neutral `AiJsonSchema` onto standard JSON Schema for
- * OpenRouter's `json_schema` structured-output format (OpenAI strict subset).
- *
- * OPENAI STRICT REQUIREMENTS (the reason this converter is non-trivial):
- *   - EVERY object node MUST supply `required`, and `required` MUST list EVERY
- *     key in `properties` (OpenAI rejects a schema whose `required` omits a
- *     property). A provider-neutral schema with NO `required` therefore cannot
- *     be emitted verbatim.
- *   - A provider-neutral OPTIONAL property must stay semantically optional. We
- *     make it NULLABLE instead of forcing the model to invent a value:
- *     `{ anyOf: [ <node>, { type: "null" } ] }` (the canonical OpenAI SDK shape
- *     for `Optional[...]`). This preserves optional semantics while satisfying
- *     the strict `required`-includes-every-key rule.
- *   - `additionalProperties: false` is mandatory on every object.
- *   - enums/descriptions/items are preserved; the recursion applies to nested
- *     objects and array items.
- *
- * Explicitly-required provider-neutral fields (`schema.required`) stay
- * non-nullable. The provider-neutral meaning is preserved; the sanitizer remains
- * the final authority and treats a model-emitted `null` as absent.
+ * Back-compat export. The strict-schema conversion now lives in the shared
+ * provider-neutral module so OpenAI and OpenRouter cannot drift.
  */
-export function toOpenRouterJsonSchema(schema: AiJsonSchema, optional = false): Record<string, unknown> {
-  const node = buildOpenRouterNode(schema);
-  if (!optional) return node;
-  // Nullable wrapper: the model MAY return null for an optional property.
-  return { anyOf: [node, { type: "null" }] };
-}
-
-/** Builds one strict JSON-Schema node (without the optional-null wrapper). */
-function buildOpenRouterNode(schema: AiJsonSchema): Record<string, unknown> {
-  const node: Record<string, unknown> = { type: schema.type };
-  if (typeof schema.description === "string" && schema.description.trim()) {
-    node.description = schema.description.trim();
-  }
-  switch (schema.type) {
-    case "string":
-      if (Array.isArray(schema.enum) && schema.enum.length) node.enum = schema.enum;
-      break;
-    case "array":
-      // Array items are always present within a present array (not optional).
-      node.items = toOpenRouterJsonSchema(schema.items);
-      break;
-    case "object": {
-      const requiredSet = new Set(Array.isArray(schema.required) ? schema.required : []);
-      const properties: Record<string, unknown> = {};
-      const allKeys: string[] = [];
-      for (const [key, child] of Object.entries(schema.properties)) {
-        allKeys.push(key);
-        // Optional (not explicitly required) -> nullable; required -> plain.
-        properties[key] = toOpenRouterJsonSchema(child, !requiredSet.has(key));
-      }
-      node.properties = properties;
-      node.additionalProperties = false;
-      // OpenAI strict: `required` must list EVERY property key.
-      node.required = allKeys;
-      break;
-    }
-    // number / integer / boolean: no extra members.
-  }
-  return node;
-}
+export const toOpenRouterJsonSchema = toStrictJsonSchema;
 
 /** Conservative provider baseline: unknown OpenRouter models claim nothing. */
 const OPENROUTER_BASELINE_CAPABILITIES: AiCapabilities = {
@@ -142,23 +86,22 @@ function defaultFetch(): OpenRouterFetchLike {
  * ONLY to `curated` execution; verified-dynamic execution keeps the bounded
  * 256 KiB streamed reader in `openRouterOutput.ts`.
  */
-async function asJson<T>(res: OpenRouterFetchResponse): Promise<T | undefined> {
+async function asJson<T>(res: OpenRouterFetchResponse, signal?: AbortSignal, timeoutSignal?: AbortSignal): Promise<T | undefined> {
   try {
     if (typeof res.json !== "function") return undefined;
     return (await res.json()) as T;
-  } catch {
+  } catch (error) {
+    if (timeoutSignal) throwIfProviderRequestAborted(signal, timeoutSignal, { providerId: "openrouter" });
+    throwIfCallerCancelled(signal, { providerId: "openrouter" });
+    const code = classifyProviderError(error);
+    if (code === "TIMEOUT" || code === "NETWORK") {
+      throw new ProviderOperationError(code, "OpenRouter response reading failed.", { providerId: "openrouter" }, error);
+    }
     return undefined;
   }
 }
 
 /** Baseline assistant-content extraction (curated path). */
-function extractContent(parsed: unknown): string {
-  const body = (parsed ?? {}) as { choices?: unknown };
-  const choices = Array.isArray(body.choices) ? body.choices : [];
-  const choice = choices[0] as { message?: { content?: unknown } } | undefined;
-  const content = choice?.message?.content;
-  return typeof content === "string" ? content.trim() : "";
-}
 
 /**
  * TRUSTED, server-derived execution context for an OpenRouter structured call.
@@ -172,7 +115,8 @@ function extractContent(parsed: unknown): string {
  */
 export type OpenRouterExecutionContext =
   | { source: "curated" }
-  | { source: "verified_dynamic"; profile: OpenRouterProfile };
+  | { source: "verified_dynamic"; profile: OpenRouterProfile }
+  | { source: "ordinary_free_text" };
 
 /** The one implemented provider: OpenRouter (OpenAI-compatible). */
 export class OpenRouterProvider implements AiProvider {
@@ -249,9 +193,11 @@ export class OpenRouterProvider implements AiProvider {
     options: AiGenerateOptions,
     schema?: AiJsonSchema
   ): Promise<string> {
+    throwIfCallerCancelled(options.signal, { providerId: this.id, model: options.model });
     // Dynamic import avoids the catalog/provider construction cycle. No await
     // between the final authorization check and dispatch below.
     const catalog = await import('./openRouterCatalog.js');
+    throwIfCallerCancelled(options.signal, { providerId: this.id, model: options.model });
     // TRUSTED server-side execution context. A verified-dynamic context requires a
     // CURRENT verification record; curated membership is a separate server-owned
     // signal. The model id is never compared to a hard-coded curated slug.
@@ -260,6 +206,8 @@ export class OpenRouterProvider implements AiProvider {
       ? { source: "verified_dynamic", profile: verifiedProfile }
       : catalog.isVerifiedStrictStructuredModel(options.model)
       ? { source: "curated" }
+      : !schema && catalog.openRouterConversationTextModelIds().includes(options.model)
+      ? { source: "ordinary_free_text" }
       : undefined;
     if (!execution || (execution.source === "verified_dynamic" && !schema)) {
       throw new ProviderOperationError('UNSUPPORTED_CAPABILITY', 'The selected free model is not currently verified.', {});
@@ -267,6 +215,15 @@ export class OpenRouterProvider implements AiProvider {
     const key = this.requireKey();
     const body = this.buildRequest(prompt, options, schema, execution);
 
+    const timeoutMs =
+      typeof options.timeoutMs === "number" &&
+      Number.isFinite(options.timeoutMs) &&
+      options.timeoutMs > 0 &&
+      options.timeoutMs <= 120_000
+        ? options.timeoutMs
+        : MODEL_CONFIG.requestTimeoutMs;
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
+    const providerSignal = options.signal ? AbortSignal.any([timeoutSignal, options.signal]) : timeoutSignal;
     let res: OpenRouterFetchResponse;
     try {
       res = await this.fetchFn(OPENROUTER_CHAT_ENDPOINT, {
@@ -277,9 +234,11 @@ export class OpenRouterProvider implements AiProvider {
         },
         body: JSON.stringify(body),
         redirect: 'error',
-        signal: AbortSignal.timeout(MODEL_CONFIG.requestTimeoutMs),
+        signal: providerSignal,
       });
     } catch (err) {
+      if (providerSignal.aborted) throwIfProviderRequestAborted(options.signal, timeoutSignal, { providerId: this.id, model: options.model });
+      if (options.signal?.aborted) throw callerCancellationError({ providerId: this.id, model: options.model }, err);
       // Transport-level failure / timeout. Connection failures map to UNAVAILABLE;
       // timeouts/aborts to TIMEOUT. Never leaks secrets.
       const code = classifyProviderError(err);
@@ -291,9 +250,10 @@ export class OpenRouterProvider implements AiProvider {
     }
 
     if (!res.ok) {
+      throwIfProviderRequestAborted(options.signal, timeoutSignal, { providerId: this.id, model: options.model });
       const error = Object.assign(new Error('OpenRouter request failed.'), { status: res.status });
       const code = classifyProviderError(error);
-      throw new ProviderOperationError(code, 'OpenRouter request failed.', {});
+      throw new ProviderOperationError(code, 'OpenRouter request failed.', { status: res.status });
     }
 
     if (execution.source === "verified_dynamic") {
@@ -303,22 +263,30 @@ export class OpenRouterProvider implements AiProvider {
       let parsed: unknown;
       try {
         parsed = await readRuntimeCompletion(res);
-      } catch {
+      } catch (error) {
+        if (providerSignal.aborted) throwIfProviderRequestAborted(options.signal, timeoutSignal, { providerId: this.id, model: options.model });
+        if (options.signal?.aborted) throw callerCancellationError({ providerId: this.id, model: options.model });
+        const code = classifyProviderError(error);
+        if (code === "TIMEOUT" || code === "NETWORK") {
+          throw new ProviderOperationError(code, "OpenRouter response reading failed.", { providerId: this.id, model: options.model }, error);
+        }
         throw new ProviderOperationError('INVALID_RESPONSE', 'OpenRouter returned an unreadable or oversized response.', {});
       }
+      throwIfProviderRequestAborted(options.signal, timeoutSignal, { providerId: this.id, model: options.model });
       const extracted = completionContent(parsed);
-      if (extracted.ok === false) throw new ProviderOperationError('INVALID_RESPONSE', 'OpenRouter did not return a complete supported answer.', {});
+      if (extracted.ok === false) throw new ProviderOperationError('INVALID_RESPONSE', 'OpenRouter did not return a complete supported answer.', { responseFailure: extracted.reason });
       return extracted.content;
     }
 
     // Curated/server-default execution: EXACT baseline (pre-Astra) reading with
     // NO streamed byte ceiling. The body is read EXACTLY once here.
-    const parsed = await asJson<unknown>(res);
-    const text = extractContent(parsed);
-    if (!text) {
-      throw new ProviderOperationError("INVALID_RESPONSE", "OpenRouter returned an empty response.", {});
+    const parsed = await asJson<unknown>(res, options.signal, timeoutSignal);
+    throwIfProviderRequestAborted(options.signal, timeoutSignal, { providerId: this.id, model: options.model });
+    const extracted = completionContent(parsed);
+    if (extracted.ok === false) {
+      throw new ProviderOperationError('INVALID_RESPONSE', 'OpenRouter did not return a complete supported answer.', { responseFailure: extracted.reason });
     }
-    return text;
+    return extracted.content;
   }
 
   async generate(prompt: string, options: AiGenerateOptions): Promise<string> {
@@ -331,13 +299,12 @@ export class OpenRouterProvider implements AiProvider {
     options: AiStructuredOptions
   ): Promise<T> {
     const text = await this.chat(prompt, options, schema);
-    try {
-      const parsed = JSON.parse(text);
-      if (!validatesAiSchema(parsed, schema)) throw new Error();
-      return parsed as T;
-    } catch (err) {
-      throw new ProviderOperationError("INVALID_RESPONSE", "OpenRouter returned invalid structured data.", {});
+    let parsed: unknown;
+    try { parsed = JSON.parse(text); } catch {
+      throw new ProviderOperationError("INVALID_RESPONSE", "OpenRouter returned invalid JSON.", { responseFailure: "malformed_json" });
     }
+    if (!validatesAiSchema(parsed, schema)) throw new ProviderOperationError("INVALID_RESPONSE", "OpenRouter returned invalid structured data.", { responseFailure: "schema_mismatch" });
+    return parsed as T;
   }
 }
 

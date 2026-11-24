@@ -90,6 +90,7 @@ import {
   qualifierAgreementCount,
   qualifierConflictCount,
   qualifierOppositionCount,
+  stateContradictionCount,
   queryRequestsNegation,
   refinementAgreementCount,
   tokensEquivalent,
@@ -196,6 +197,7 @@ interface Evaluated {
   readonly unrequestedCooking: number;
   readonly qualifierConflicts: number;
   readonly qualifierOpposition: number;
+  readonly stateContradiction: number;
   readonly qualifierAgreement: number;
   readonly missingQualifierTokens: number;
   readonly missingFormTokens: number;
@@ -230,6 +232,7 @@ const NO_MATCH: Evaluated = Object.freeze({
   unrequestedCooking: 0,
   qualifierConflicts: 0,
   qualifierOpposition: 0,
+  stateContradiction: 0,
   qualifierAgreement: 0,
   missingQualifierTokens: 0,
   missingFormTokens: 0,
@@ -253,6 +256,17 @@ function evaluate(
   entry: RankableEntry
 ): Evaluated {
   const candidateTokens = entry.normalized_tokens;
+  // Preparation overlap cannot establish food identity. Mechanically separated
+  // meat is a manufactured meat form, never a candidate for separated eggs.
+  if (candidateTokens.includes('mechanically') &&
+      !query.tokens.includes('mechanically')) return NO_MATCH;
+  if (candidateTokens.includes('juice') && !projection.form_tokens.includes('juice')) return NO_MATCH;
+  // Explicit material constraints are mandatory, including absence of a
+  // requested form. Do not offer contradictory raw/cooked, salt, or juice foods.
+  if (qualifierOppositionCount(candidateTokens, projection) > 0 ||
+      missingQualifierTokenCount(candidateTokens, projection) > 0 ||
+      missingFormTokenCount(candidateTokens, projection) > 0) return NO_MATCH;
+
   const identityTokens = projection.food_tokens;
 
   if (identityTokens.length === 0 || !anchorsSatisfied(projection, candidateTokens)) {
@@ -307,6 +321,7 @@ function evaluate(
     unrequestedCooking: unrequestedCookingMethodCount(candidateTokens, projection),
     qualifierConflicts: qualifierConflictCount(candidateTokens, projection),
     qualifierOpposition: qualifierOppositionCount(candidateTokens, projection),
+    stateContradiction: stateContradictionCount(candidateTokens, projection),
     qualifierAgreement,
     missingQualifierTokens: missingQualifierTokenCount(candidateTokens, projection),
     missingFormTokens: missingFormTokenCount(candidateTokens, projection),
@@ -361,6 +376,13 @@ function compareEvaluated(a: Evaluated, b: Evaluated): number {
   // `unsalted`) loses to one that does not.
   const oppositionDelta = a.qualifierOpposition - b.qualifierOpposition;
   if (oppositionDelta !== 0) return oppositionDelta;
+  // A requested physical state contradicted by the candidate (`fresh` vs
+  // `ground`, `raw` vs `cooked`, `dried` vs `fresh`) loses to a compatible or
+  // silent candidate. This is the SAME negative evidence used by automatic
+  // authority; ranking now agrees with it instead of leaving the contradicted
+  // record at the top of the review list.
+  const stateDelta = a.stateContradiction - b.stateContradiction;
+  if (stateDelta !== 0) return stateDelta;
   const agreementDelta = b.qualifierAgreement - a.qualifierAgreement;
   if (agreementDelta !== 0) return agreementDelta;
   // A requested qualifier/form that is simply absent is demoted after a

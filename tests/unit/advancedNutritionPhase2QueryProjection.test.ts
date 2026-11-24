@@ -80,9 +80,9 @@ function reviewWith(
 
 describe('phase 2 projection — versioned contract and determinism', () => {
   it('pins the Phase 2 projection contract version', () => {
-    expect(QUERY_PROJECTION_VERSION).toBe('usda_query_projection_v10');
-    expect(projectQueryText('black beans').version).toBe('usda_query_projection_v10');
-    expect(MATCH_CONFIDENCE_VERSION).toBe('usda_match_confidence_v13');
+    expect(QUERY_PROJECTION_VERSION).toBe('usda_query_projection_v15');
+    expect(projectQueryText('black beans').version).toBe('usda_query_projection_v15');
+    expect(MATCH_CONFIDENCE_VERSION).toBe('usda_match_confidence_v14');
   });
 
   it('is deterministic and never mutates its input or context', () => {
@@ -137,6 +137,27 @@ describe('phase 2 projection — closed descriptor roles', () => {
     const salt = projectQueryText('salt to taste');
     expect(salt.core_tokens).toEqual(['salt']);
     expect('qualitative_cue' in salt).toBe(false);
+  });
+
+  it('treats trailing temperature/doneness prose as a note, never food identity', () => {
+    for (const text of [
+      'butter, at room temperature',
+      'butter, at room temp',
+      'butter, cold is fine',
+      'butter, for the pan',
+      'butter, until melted',
+      'butter, if desired',
+    ]) {
+      const projection = projectQueryText(text);
+      expect(projection.core_tokens, text).toEqual(['butter']);
+      expect(projection.primary_identity_tokens, text).toEqual(['butter']);
+      expect(projection.notes.length, text).toBe(1);
+    }
+
+    // A trailing clause with real food identity is still retained.
+    expect(projectQueryText('butter, garlic').core_tokens).toEqual(['butter', 'garlic']);
+    // A food whose name begins with `pan` is not mistaken for cookware prose.
+    expect(projectQueryText('pan dulce').core_tokens).toEqual(['pan', 'dulce']);
   });
 
   it('retains an unknown descriptor as identity evidence', () => {
@@ -238,7 +259,46 @@ describe('phase 2 projection — state contradiction evidence', () => {
   it('never contradicts raw ground beef (ground <> raw is not an opposed pair)', () => {
     const groundBeef = explainCandidate('ground beef', candidate(9, 'Beef, ground, 80% lean meat / 20% fat, raw'));
     expect(groundBeef.state_contradiction).toBe(0);
-    expect(groundBeef.automatic_eligible).toBe(true);
+    // A raw state is not opposed to `ground`, but an unsolicited 80/20 ratio
+    // still cannot gain automatic authority from a generic `ground beef` query.
+    expect(groundBeef.automatic_eligible).toBe(false);
+  });
+});
+
+describe('phase 2 projection — general culinary form and market-name aliases', () => {
+  it('projects cut/form and common market names without inventing a food', () => {
+    const broccoli = projectQueryText('broccoli florets');
+    expect(broccoli.aliases).toContain('broccoli_florets_to_flower_clusters');
+    expect(broccoli.food_tokens).toEqual(expect.arrayContaining(['broccoli', 'flower', 'clusters']));
+
+    const snap = projectQueryText('sugar snap peas');
+    expect(snap.aliases).toContain('sugar_snap_peas_to_edible_podded_peas');
+    expect(snap.food_tokens).toEqual(expect.arrayContaining(['peas', 'edible', 'podded']));
+
+    const mushrooms = projectQueryText('cremini mushrooms');
+    expect(mushrooms.aliases).toContain('cremini_to_crimini');
+    expect(mushrooms.core_tokens).toContain('crimini');
+
+    const scallions = projectQueryText('scallions');
+    expect(scallions.aliases).toContain('scallions_to_green_onions');
+    expect(scallions.food_tokens).toEqual(expect.arrayContaining(['green', 'onions']));
+
+    const rice = projectQueryText('dry jasmine rice');
+    expect(rice.aliases).toContain('dry_jasmine_rice_to_white_long_grain_raw_rice');
+    expect(rice.food_tokens).toEqual(expect.arrayContaining(['white', 'long', 'grain', 'raw', 'rice']));
+  });
+
+  it('treats toasted as preparation and preserves the sesame-oil identity', () => {
+    const oil = projectQueryText('toasted sesame oil');
+    expect(oil.preparation_qualifiers).toContain('toasted');
+    expect(oil.food_tokens).toEqual(expect.arrayContaining(['sesame', 'oil']));
+    expect(oil.food_tokens).not.toContain('seeds');
+  });
+
+  it('demotes fresh/ground and fresh/pickled contradictions without opposing raw ground beef', () => {
+    expect(stateContradictionCount(['spices','ginger','ground'], projectQueryText('fresh ginger'))).toBe(1);
+    expect(stateContradictionCount(['beef','ground','raw'], projectQueryText('raw ground beef'))).toBe(0);
+    expect(stateContradictionCount(['ginger','root','pickled'], projectQueryText('fresh ginger'))).toBe(1);
   });
 });
 

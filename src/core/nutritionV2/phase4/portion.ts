@@ -10,7 +10,9 @@
  */
 
 import { CALCULATION_VERSION } from '../calculation/types';
-import { PORTION_SEMANTICS_VERSION } from '../calculation/portionSemantics';
+import { candidatePortionCompatibility, PORTION_SEMANTICS_VERSION } from '../calculation/portionSemantics';
+import { normalizeQuery } from '../matching/normalize';
+import { projectQueryText } from '../matching/query';
 import { hasDirectRecipeMass } from './rows';
 import {
   phase4Failure,
@@ -18,6 +20,95 @@ import {
   type Phase4Failure,
   type PortionChoice,
 } from './types';
+
+/**
+ * Deterministic automatic volume-portion resolution. Returns the lowest-index
+ * compatible authenticated source portion ONLY when every compatible portion
+ * resolves to the SAME authoritative mass for the ingredient's measurement.
+ * Differing authoritative gram weights are ambiguous and are NOT auto-chosen.
+ * Never averages, never guesses a density, never invents a conversion.
+ *
+ * Shared by the one-click deterministic analyzer and the AI-assisted identity
+ * path: when AI supplies a deterministic-accepted food for a volume line, the
+ * SAME authenticated portion rule may finish the mass instead of forcing a
+ * second per-ingredient choice. It binds no nutrition value itself.
+ */
+export function selectDeterministicVolumePortionIndex(
+  session: AdvancedNutritionSession,
+  fdcId: number,
+  milliliters: number | undefined,
+  requestedUnit: string | undefined,
+  queryText: string
+): number | undefined {
+  if (typeof milliliters !== 'number' || !Number.isFinite(milliliters) || milliliters <= 0) {
+    return undefined;
+  }
+  const review = session.reviewPortions(fdcId);
+  if (!review.ok) return undefined;
+  const compatible = review.review.candidates.filter(
+    (candidate) => candidatePortionCompatibility(candidate, 'volume') === 'compatible'
+  );
+  if (compatible.length === 0) return undefined;
+
+  const resolvedGrams = (candidate: (typeof compatible)[number]): number | undefined => {
+    if (
+      candidate.volume_ml === null ||
+      !Number.isFinite(candidate.volume_ml) ||
+      candidate.volume_ml <= 0 ||
+      !(candidate.gram_weight > 0)
+    ) {
+      return undefined;
+    }
+    const grams = (milliliters / candidate.volume_ml) * candidate.gram_weight;
+    if (!Number.isFinite(grams) || grams <= 0 || Object.is(grams, -0)) return undefined;
+    return grams;
+  };
+
+  const allEquivalent = (candidates: ReadonlyArray<(typeof compatible)[number]>): boolean => {
+    const values: number[] = [];
+    for (const candidate of candidates) {
+      const grams = resolvedGrams(candidate);
+      if (grams === undefined) return false;
+      values.push(grams);
+    }
+    const first = values[0];
+    return values.every((value) => Math.abs(value - first) <= 1e-9 * Math.max(1, Math.abs(first)));
+  };
+
+  // 1. Prefer the exact requested unit identity.
+  if (requestedUnit) {
+    const exactUnit = compatible.filter((candidate) => candidate.unit === requestedUnit);
+    if (exactUnit.length === 1) return exactUnit[0].index;
+    if (exactUnit.length > 1) {
+      // 1a. Narrow by a requested preparation/qualifier descriptor
+      //     (e.g. `tsp, ground` for `ground black pepper`).
+      const projection = projectQueryText(normalizeQuery(queryText).text);
+      const descriptorTokens = new Set([
+        ...projection.preparation_qualifiers,
+        ...projection.qualifier_tokens,
+      ]);
+      const descriptorMatches = exactUnit.filter(
+        (candidate) => candidate.descriptor !== null && descriptorTokens.has(candidate.descriptor)
+      );
+      if (descriptorMatches.length === 1) return descriptorMatches[0].index;
+      // Bounded default for measured spices: when the query did not request a
+      // preparation and exactly one exact-unit portion is the `ground` form, the
+      // ground form is the ordinary measured seasoning (e.g. `1/2 tsp black
+      // pepper` -> `1 tsp, ground`). This is deterministic, not arbitrary.
+      if (descriptorMatches.length === 0) {
+        const groundMatches = exactUnit.filter((candidate) => candidate.descriptor === 'ground');
+        if (groundMatches.length === 1) return groundMatches[0].index;
+      }
+      const pool = descriptorMatches.length > 0 ? descriptorMatches : exactUnit;
+      if (allEquivalent(pool)) return pool[0].index;
+      return undefined;
+    }
+  }
+
+  // 2. Otherwise, only a provably equivalent compatible set is auto-chosen.
+  if (allEquivalent(compatible)) return compatible[0].index;
+  return undefined;
+}
 
 export interface PortionChoiceParams {
   readonly lineRef: string;

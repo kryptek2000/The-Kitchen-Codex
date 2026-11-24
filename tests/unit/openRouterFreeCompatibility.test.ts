@@ -39,6 +39,30 @@ async function setup(profile = JSON_MODE as typeof JSON_MODE | typeof STRICT) {
 }
 
 describe('free OpenRouter explicit profile parity', () => {
+  it('allows a fresh, verified-free ordinary text model through plain text without claiming structured output', async () => {
+    const catalog = await import('../../server/ai/openRouterCatalog.js');
+    catalog.resetOpenRouterCatalogForTests();
+    await catalog.refreshOpenRouterCatalog({
+      force: true,
+      fetchFn: async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ data: [raw('0', ['max_tokens'])] }) }),
+    });
+    const { OpenRouterProvider } = await import('../../server/ai/openRouterProvider.js');
+    let requestBody: Record<string, unknown> | undefined;
+    const fetchFn = vi.fn(async (_url: string, init: RequestInit) => {
+      requestBody = JSON.parse(String(init.body)) as Record<string, unknown>;
+      return response('{"kind":"reply","text":"Hello"}');
+    });
+    const provider = new OpenRouterProvider({ credential: KEY, fetchFn: fetchFn as any });
+    expect(await provider.generate('conversation', { model: ID, temperature: 0 })).toContain('Hello');
+    expect(requestBody?.model).toBe(ID);
+    expect(requestBody?.response_format).toBeUndefined();
+    expect(catalog.openRouterDynamicCapabilities(ID)?.structuredOutput).toBe(false);
+    const roles = await import('../../server/ai/roleModels.js');
+    expect(roles.selectableTextModels('openrouter')).toContain(ID);
+    expect(roles.curatedTextModels('openrouter')).not.toContain(ID);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
   it.each([JSON_MODE, STRICT] as const)('records and executes %s with exact credentials, no fallback or retry', async profile => {
     const { catalog, store, probe, OpenRouterProvider } = await setup(profile);
     const record = store.getCapabilityVerification('openrouter', ID)!;

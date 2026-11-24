@@ -44,6 +44,18 @@ describe("imagePricingTruth — truthful cost classification", () => {
     expect(truth.label).not.toMatch(/zero/i);
   });
 
+  it("OpenAI image is VARIABLE and requires confirmation (account-determined, never zero)", async () => {
+    const { pricing } = await fresh();
+    for (const model of ["gpt-image-2.6-flare", "gpt-image-2.6-sunburst"]) {
+      const truth = pricing.imagePricingTruth("openai-image", model);
+      expect(truth.costClass).toBe("variable");
+      expect(truth.requiresConfirmation).toBe(true);
+      expect(truth.label).toMatch(/OpenAI account/i);
+      expect(truth.label).not.toMatch(/zero/i);
+      expect(truth.pricingFingerprint).toBeUndefined();
+    }
+  });
+
   it("OpenRouter image without fresh verified pricing is VARIABLE (never FREE)", async () => {
     const { pricing } = await fresh();
     const truth = pricing.imagePricingTruth("openrouter-image", "google/gemini-2.5-flash-image");

@@ -18,6 +18,7 @@ import type { VaultAdapter } from './adapters/VaultAdapter';
 import type { SettingsAdapter } from './adapters/SettingsAdapter';
 import type { NetworkAdapter } from './adapters/NetworkAdapter';
 import type { SecretAdapter } from './adapters/SecretAdapter';
+import type { AssetAdapter } from './adapters/AssetAdapter';
 
 /** The set of adapter instances the application can be composed with. */
 export interface AppAdapters {
@@ -29,6 +30,8 @@ export interface AppAdapters {
   network?: NetworkAdapter;
   /** Optional: secret-storage boundary. Truthful scope semantics per implementation. */
   secret?: SecretAdapter;
+  /** Optional: binary asset boundary for recipe image validation/writes. */
+  asset?: AssetAdapter;
 }
 
 /** The composed application services handed to orchestration/UI. */

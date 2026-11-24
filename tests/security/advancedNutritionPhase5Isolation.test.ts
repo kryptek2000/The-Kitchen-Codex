@@ -236,13 +236,18 @@ describe('phase 5A isolation — dependency graph direction', () => {
 });
 
 describe('phase 5A isolation — explicit Apply UI with no write authority', () => {
-  it('the Advanced Nutrition UI offers no Save/Persist/Write-to-Vault control', () => {
+  it('allows only the injected, explicit post-Apply Save control', () => {
     for (const { file, source } of COMPONENT_SOURCES) {
       const stripped = stripComments(source);
       // No forbidden control label in button text or aria-label. The single
       // explicit "Apply" control (Phase 5B) is allowed.
       const buttonTexts = [...stripped.matchAll(/<button[\s\S]*?<\/button>/g)].map((m) => m[0]);
       for (const button of buttonTexts) {
+        if (button.includes('data-testid="advanced-nutrition-save-working"')) {
+          expect(button).toContain('onClick={apply.onSave}');
+          expect(stripped).toContain("apply.status === 'success' && apply.onSave");
+          continue;
+        }
         expect(button, `${file} has a forbidden control`).not.toMatch(FORBIDDEN_CONTROL_LABELS);
       }
       expect(stripped).not.toMatch(/codex_nutrition/);

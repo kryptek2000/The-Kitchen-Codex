@@ -1,9 +1,12 @@
 # Shiso — Architecture and Roadmap
 
-**Status:** FORWARD-LOOKING PRODUCT / ARCHITECTURE DOCUMENT.
-**Not an implementation record.** No Shiso code exists. This document records a
-product decision and the planned program so that future work lands in one
-architecture instead of several competing ones.
+**Status — October 18, 2026:** Product direction reconciled against merged PR #12,
+`main` at `49fbfce80f39437120e57cee02df6c7363531320`.
+SHISO conversation, recipe creation/editing and nutrition implementation exist on
+main. Merged and CI-tested does not mean independently production deployed or
+accepted by Sid. See [acceptance status and evidence](./Shiso-Acceptance-Status.md).
+The local C1 roadmap and draft PR #11 are historical inputs, not current release
+inventories. This document reconciles their intent without merging PR #11.
 
 - Decision owner: Sid (sole release authority)
 - Document scope: product direction and phased program
@@ -12,13 +15,118 @@ architecture instead of several competing ones.
 
 ---
 
+## SHISO-C1.5 — ChatGPT Plan as Default Text AI (merged / installed via PR #64)
+
+The native desktop can now use an eligible connected ChatGPT plan as the local
+Default Text AI. The choice is a non-secret SettingsAdapter preference, separate
+from `KITCHEN_CODEX_TEXT_PROVIDER`; a server-managed pin remains authoritative.
+SHISO conversation uses the existing validated JSON-text adapter through a
+loopback bridge to the trusted Electron session; structured nutrition, metadata, recipe generation, and web
+search are not claimed. A disconnected/expired/unentitled account fails closed
+with a reconnect state and never falls back to Gemini or a paid API provider.
+See [`SHISO-C1.5-ChatGPT-Plan-Default-Text-AI.md`](./SHISO-C1.5-ChatGPT-Plan-Default-Text-AI.md).
+
+---
+
+## SHISO-C1.6 — ChatGPT-Powered Create for Me (implemented, integration pending; F1 presentation/latency)
+
+Create for Me can generate an editable recipe draft through the native ChatGPT
+plan Default Text AI. This is a dedicated plain-text strict-JSON adapter checked
+against the existing generated-recipe schema and normalization; general
+structured-output capability remains false. A server-managed pin still wins, the
+native response is bounded and fully validated, and a failure is terminal with
+no Gemini/API-key fallback. The result remains an unsaved Generated Draft until
+explicit Save. See
+[`SHISO-C1.6-ChatGPT-Create-for-Me.md`](./SHISO-C1.6-ChatGPT-Create-for-Me.md)
+and
+[`SHISO-C1.6-F1-Draft-Presentation-and-Latency.md`](./SHISO-C1.6-F1-Draft-Presentation-and-Latency.md)
+for the Signature Edition draft editor, responsive layout, save-field
+preservation, bounded phase timing, and the catalog-freshness optimization.
+
+---
+
+## Authoritative product decision — November 21, 2026 — Nutrition Product Alignment
+
+This section is the CURRENT product authority for Basic and Advanced Nutrition.
+It supersedes conflicting historical roadmap wording below, including earlier
+statements that manual USDA editing is always Basic or that Generate Nutrition
+automatically starts an AI pass. Historical implementation records are preserved
+as history; they are not rewritten.
+
+### Tier rules
+
+| | Basic Nutrition (free) | Advanced Nutrition (future paid) |
+|---|---|---|
+| Deterministic USDA generation | Yes | Yes |
+| Nutrition & Macros card, entire-recipe/per-serving | Yes | Yes |
+| Partial/unknown provenance disclosure | Yes | Yes |
+| Open the Advanced review/edit workspace | No | Yes |
+| Change USDA matches, source portions, or weights | No | Yes |
+| Apply/save an Advanced reviewed result | No | Yes |
+| AI nutrition assistance / estimates / external research | No | Yes |
+
+- A configured Gemini key or provider readiness does **not** create product
+  entitlement. Entitlement is the server-owned nutrition product tier
+  (`basic` / `ai_advanced`) resolved through the existing product-access
+  contract.
+- Basic generation is deterministic, local, and AI-free.
+- Basic users can view saved nutrition, including historical AI estimates, but
+  the displayed provenance is never relabelled and saved data is never silently
+  overwritten.
+
+### Generation and approval sequence
+
+1. **Generate Nutrition** — explicit user action. Load the authenticated USDA
+   catalog, run deterministic matching, resolve supported portions/quantities,
+   calculate, and disclose missing/partial coverage. **Zero AI provider calls.**
+   Basic displays the read-only result; Advanced opens the deterministic review
+   workspace.
+2. **Analyze with SHISO** — explicit Advanced-only action. Run the existing
+   AI-first whole-recipe interpretation, candidate evaluation, and local
+   deterministic verification. It is never automatic on Generate or on opening
+   a saved report.
+3. **User review** — verified USDA selections, source-backed contributions,
+   clearly labeled estimates, unresolved lines, and proposed changes remain
+   visible and reviewable.
+4. **Apply / Save** — explicit user approval only. Apply updates the authorized
+   working review; Save persists through the existing trusted Vault path. AI
+   results are never saved silently.
+
+### SHISO responsibilities
+
+For an entitled user, SHISO may intelligently propose the same operations the
+manual Advanced workflow permits: correct food identity, preparation/state
+interpretation, alternative USDA foods, authenticated portions, ingredient mass,
+quantity corrections, external evidence, defensible estimates, and a
+recalculated working review. The evidence hierarchy is:
+
+1. authenticated appropriate USDA data;
+2. verified external nutritional evidence;
+3. clearly labeled reasoned AI estimate with assumptions/uncertainty;
+4. unresolved when no defensible evidence or estimate exists.
+
+SHISO never fabricates USDA records, treats an estimate as sourced, bypasses
+deterministic verification, or applies/saves without user approval.
+
+### Remaining milestones
+
+- Full manual-operation parity for SHISO beyond the existing AI-first,
+  correction, research, and bounded-estimate ports.
+- Production per-account entitlement/billing/identity; deployment tier is
+  testing-only and is not a licensing system.
+- Continued first-Generate performance work; this pass removes the automatic AI
+  wait and prevents the long synchronous authentication freeze.
+
+---
+
 ## 1. One AI companion: Shiso
 
 The Kitchen Codex will have **ONE** AI companion, named **Shiso**.
 
 Shiso is the conversational AI intelligence surface for the product. Shiso
-understands intent, reasons over the user's kitchen, explains results, and
-proposes changes. It is an **orchestrator**, not an authority.
+understands intent, reasons over the user's kitchen, and prepares transparently
+attributed estimates and proposed changes. Application code retains validation,
+calculation, health scoring and persistence authority.
 
 Retired from the forward roadmap — do not build these as separate products:
 
@@ -62,8 +170,10 @@ context:
 | Global Shiso button | general conversation |
 | `Create with Shiso` | recipe-creation intent established |
 | recipe page → Shiso | that recipe supplied as scoped context |
-| meal planner → Shiso | current meal-plan context |
-| Ask My Kitchen | vault retrieval context |
+| meal planner → Shiso (future) | current meal-plan context |
+| Explore My Vault (future) | scoped Vault retrieval and grounded recipe results |
+| Vault Intelligence through Shiso (future) | actual scanner results and proposed repairs |
+| Nutrition with Shiso | recipe analysis and review in Advanced Nutrition |
 
 These are **contexts supplied to one conversation**, never separate assistants
 and never separate conversation engines. A user already in a general Shiso chat
@@ -77,65 +187,36 @@ Preferred product wording going forward:
 - `Chat with Shiso`
 - `Ask Shiso`
 - `Create with Shiso`
+- `Explore My Vault`
+- `Nutrition with Shiso` (inside Advanced Nutrition)
+- `Vault Intelligence` (retained dashboard)
 - `Shiso is thinking…`
 
 ---
 
-## 3. Shiso is an orchestrator; Kitchen Codex owns authority
+## 3. Shiso leads nutrition interpretation; Kitchen Codex protects state
 
-```
-User
-  |
-  v
-Shiso conversation
-  |
-  +--> recipe creation
-  +--> recipe search
-  +--> recipe editing
-  +--> Advanced Nutrition
-  +--> substitutions
-  +--> collections
-  +--> meal planning
-  +--> shopping lists
-  +--> cooking assistance
-  +--> timer chains
-  +--> future Kitchen Codex capabilities
-```
-
-**Shiso interprets intent. Existing and future Kitchen Codex systems perform
-authoritative operations.**
+**Decision update — October 16, 2026:** Shiso leads AI interpretation and estimation in Advanced Nutrition; Basic remains free and offline, with optional future SHISO enhancement. The USDA catalog, local parser, conventional portion data, and deterministic calculator are tools and evidence; missing an exact USDA household portion is not an automatic prohibition on a useful, clearly marked estimate.
 
 Shiso MAY:
 
-- propose a recipe title, ingredients, amounts, and instructions
-- reason conversationally about desired changes
-- revise its own prior proposal
-- explain and summarize deterministic results
-- ask a clarifying question
+- interpret recipes holistically, including food preparation, ingredient function, edible yield and whether an ingredient is consumed;
+- use the existing pinned USDA catalog and application calculation services;
+- consult reputable external ingredient/weight/nutrition references **when an authorized, safe web-retrieval capability is built and available**;
+- propose reasonable AI-estimated quantities, substitute reference foods, nutrient approximations and uncertainty bounds when authoritative records are incomplete;
+- combine known contributions into useful partial totals and label remaining unknown values;
+- execute scoped recipe edits through the existing authorized application action owner.
 
-Shiso MUST NOT:
+A nutrient line must always distinguish **source-backed**, **source-informed estimated amount**, **AI-supported estimate**, or **unknown**. Neither a generated value nor a web page becomes a fabricated USDA measurement; save provenance, assumptions and source pointers where applicable. AI estimation is a permitted approximate method, not a claim of laboratory precision.
 
-- write to the Vault or filesystem directly
-- assert nutrition values, grams, or nutrient figures as fact
-- select an FDC id or any database identity
-- bypass existing validation, entitlement, or Apply authority
+Kitchen Codex application owners retain authority over **input validation, arithmetic and serving conversions, stale-state checks, provenance representation, user entitlement/provider security, and explicit Apply/Save persistence**. Shiso cannot directly write Vault files, invent USDA record identifiers, silently treat incompatible units as equivalent, or bypass a user's save authorization. Lack of a precise source should not blank out available, correctly labeled contributions.
 
-Mutation path:
-
-```
-Shiso reasoning
-  -> structured recipe proposal
-  -> recipe validation
-  -> user confirmation where appropriate
-  -> existing recipe persistence authority
-```
-
----
+For recipes with insufficient evidence for a credible ingredient value, the result stays unknown; do not invent numbers just to report complete coverage. This is a safety and honesty standard, not an instruction to return an unusable page for an otherwise calculable recipe.
 
 ## 4. Recipe creation as a Shiso capability
 
 The product decision: the standalone AI recipe-generation capability keeps its
-capability but takes a new future product identity, **`Create with Shiso`**.
+capability but takes the product identity, **`Create with Shiso`**.
 
 Conceptually these coexist:
 
@@ -162,10 +243,15 @@ The conversation continues naturally; it does not terminate after one generated
 response. **One conversation model** (§6) applies — no separate conversation
 engines per feature.
 
-### 4.1 Current Create-for-me implementation inventory (recon only)
+### 4.1 Historical Create-for-me inventory (pre-PR #12)
 
-No behavior change was made. This records what exists today so the migration
-preserves what is sound.
+The following inventory records the earlier one-shot implementation and original
+migration plan, including historical line numbers. It is retained as design
+context, not a description of today's entry point. PR #12 implements **Create
+with Shiso** in `ShisoModal.tsx`, including prior-draft refinement, and retains
+the validated generator and application-owned saver. The historical assertions
+below about one-shot requests, UI labels and future migration do not describe
+that merged SHISO path. Current status and tests are in the acceptance record.
 
 **Surface**
 
@@ -241,7 +327,8 @@ the previous draft.
 
 `GeneratedRecipeDraft` has no nutrition, calorie, macro, or mass field, and the
 provider JSON schema exposes none, so the model *cannot* emit one. Nutrition is
-only ever produced afterwards by deterministic Advanced Nutrition.
+produced afterwards by the separate Advanced Nutrition workflow; current
+AI-supported estimates must retain the provenance rules in §3 and §5.
 
 **Migration strategy — extract, do not rewrite**
 
@@ -260,25 +347,13 @@ Do not put Shiso's name on working systems. Preserve good generation logic.
 
 ---
 
-## 5. Advanced Nutrition as a Shiso capability
+## 5. Basic and Advanced Nutrition as Shiso capabilities
 
-A Shiso-created recipe does **not** receive invented nutrition values.
+**Basic Nutrition (free):** One-click, fast nutrition essentials using the pinned USDA catalog and existing calculation tools without requiring a paid provider. Show sourced or clearly labeled estimated results, known partial subtotals, and the unknown-nutrient distinction. An optional future SHISO enhancement should not make free Basic wholly dependent on Gemini or paid APIs.
 
-```
-User: "Make it serve six and tell me the calories."
-Shiso    : understands the request.
-Scaling  : Kitchen Codex serving logic performs the scaling.
-Nutrition: Advanced Nutrition performs deterministic calculation.
-Shiso    : presents and explains the result.
-```
+**Advanced Nutrition (premium):** Shiso may infer portions, food identities, preparation and nutrient estimates from the whole recipe, existing data and—when implemented—safe external research. USDA evidence is preferred when applicable, but an incompatible or missing source portion is not a reason to withhold a defensible, labeled estimate. Recorded assumptions and provenance travel through review, Apply, Markdown, and reopening.
 
-Advanced Nutrition remains a **reusable authoritative capability** that Shiso
-may invoke. AI semantic reasoning never replaces USDA identity, mass
-authority, nutrient calculation, or Apply authorization. Shiso may ask
-explanatory and what-if questions over Advanced Nutrition results; the
-deterministic system recomputes and remains authoritative.
-
----
+Both use application-owned deterministic math and storage contracts to avoid inaccurate multiplication, incorrect raw/cooked equivalence or silent overwrite. AI may generate approximate nutrient figures, but not masquerade as an authoritative USDA value. The user chooses what to review, apply and save.
 
 ## 6. Scoped retrieval, context, and mutation model
 
@@ -303,63 +378,107 @@ rate-limiting infrastructure. No second AI brain, no second credential path.
 
 ---
 
-## 7. Entailment and safety invariants carried forward
+## 7. Safety, product truth, and transparency invariants
 
-These must hold for every Shiso capability:
-
-- Product entitlement is required for AI features, and entitlement alone never
-  creates fake capability: **entitled AND operationally ready**, never OR. A
-  BYOK key by itself grants no product entitlement.
-- AI output is never database, nutrition, mass, or persistence authority.
-- AI may not select an FDC id, grams, density, or nutrient values.
-- AI confidence never overrides deterministic ambiguity; genuine ambiguity
-  stays a user review.
-- Zero-fabrication, canonical schema, and Apply revalidation invariants are
-  unchanged.
-- Recipe text and instructions are untrusted **data**. A model may reason about
-  cooking instructions but must never obey instructions embedded in recipe
-  content.
-
----
+- Protect existing entitlement, provider readiness, API-key security, pricing consent, bounded calls and appropriate rate limits. A BYOK key alone does not invent product entitlement.
+- Shiso **may** suggest and calculate estimated masses and nutrients; each non-source estimate must be labeled and justified rather than authenticated as USDA.
+- Reject invented identifiers, false citations and internally inconsistent or incompatible units; avoid false precision. Whole-recipe semantic context and edible-yield assumptions matter.
+- Separate supported partial subtotals from complete recipe totals; represent unknown nutrient values as unknown, preserving genuine known zero.
+- Re-check freshness before Apply/Save. Maintain the corrected whole-recipe serving denominator and avoid double scaling.
+- All Vault writes and nutrition Apply paths stay with trusted application owners and explicit user authorization.
+- Recipe text, imported pages and web snippets are untrusted data, not instructions. Safe web research remains a separate capability with bounded fetches and SSRF protections.
+- Retain Basic Nutrition's free offline value. Advanced implementation is merged; Sid reported the Cochinita Pibil Analyze/Apply/Save/Reopen flow accepted, while broader recipe coverage and provider compatibility remain unaccepted. Safe web research remains future.
 
 ## 8. Phased program
 
-Numbering may be refined later; the architecture direction is what matters.
+Phase numbers describe capability scope, not release completion. Statuses below
+mean implementation on main; the scoped human acceptance Sid has reported, and
+remaining acceptance, are recorded in §11 and the linked acceptance record.
 
-**SHISO-0 — Architecture + Capability Inventory**
+**SHISO-0 — Architecture + Capability Inventory** — Inventory exists; this reconciliation updates its status.
 Inventory existing AI surfaces; inventory application authorities; identify
 duplicate AI flows; define read/propose/mutate boundaries; define reusable
 capability contracts. *(This document and the Create-for-me inventory in §4.1
 are SHISO-0 seeds.)*
 
-**SHISO-1 — Chat Foundation**
+**SHISO-1 — Chat Foundation** — Foundation merged; reliability acceptance pending.
 A single Shiso conversation surface; conversation/session model; provider
 abstraction; streaming if justified. No broad mutations yet.
 
-**SHISO-2 — Read-Only Kitchen Context**
-Recipe context, Vault search, collections lookup, nutrition report lookup,
-meal-plan inspection, shopping-list inspection. Read-only.
+**SHISO-2 — Read-Only Kitchen Context** — Partial: current recipe/nutrition reads merged; broader retrieval future.
+Current recipe and nutrition review context exist. Explore My Vault grounded
+search, collections, meal-plan and shopping-list inspection remain future.
+Existing legacy retrieval is reusable evidence, not completed SHISO integration.
 
-**SHISO-3 — Structured Capability Invocation**
+**SHISO-3 — Structured Capability Invocation** — Partial: bounded tools and authorized recipe/nutrition actions merged.
 Intent maps to a structured application capability. Existing systems remain
 authority. No free-form direct file/database mutation.
 
-**SHISO-4 — Create with Shiso**
-Migrate the current AI recipe generation into Shiso; conversational recipe
-refinement; reuse current generation capability where sound; validated save
-through the existing recipe persistence authority.
+**SHISO-4 — Create with Shiso** — Creation and refinement merged; Sid reported
+live generation, multi-turn refinement, Undo, explicit Save and Reopen accepted
+for the tested configuration. Preserve manual New Recipe and explicit Save;
+provider/model-wide compatibility is not implied.
 
-**SHISO-5 — User-Authorized Actions**
+**SHISO-5 — User-Authorized Actions** — Partial: recipe editing/save merged; broader kitchen mutations future.
 Recipe edits, collections, meal planner, shopping list, and other controlled
 mutations, each explicitly user-authorized.
 
-**SHISO-6 — Advanced Nutrition Integration**
-Shiso invokes completed Advanced Nutrition; explanations and what-if requests;
-deterministic recalculation remains authoritative.
+**SHISO-6 — Advanced Nutrition Integration** — Analysis/review integration
+merged; Sid reported Cochinita Pibil analysis, Apply, Save and saved-report
+Reopen accepted. Source-backed and AI-estimated contributions remain distinct.
+Broader recipe coverage and provider/model compatibility still need acceptance.
 
-**SHISO-7 — Broader Kitchen Intelligence**
+**SINC-3 — Intelligent Nutrition Completion** — Implemented in the SINC-2
+worktree; focused deterministic tests passed; independent acceptance pending.
+`complete_nutrition` runs one bounded source-first pass over the current
+unresolved review: existing deterministic USDA, then strong server-backed USDA
+Branded evidence, then bounded external research, then validated AI estimates.
+When ingredient coverage is already complete, it inspects the existing preview's
+whole-recipe 34-nutrient coverage, including source-backed line gaps such as
+niacin and added sugars. It fills only explicitly declared unknown nutrients on
+AI-estimated lines; source-backed gaps remain unknown because the per-line
+provenance model does not permit mixing AI estimates into verified USDA lines.
+It prepares proposals in the UNSAVED review only. Apply and Save remain separate
+explicit actions. It does not weaken the SINC-2R2 server-authenticated branded
+boundary. See `docs/SINC-3-SHISO-Nutrition-Completion.md`.
+
+**SINC-4 — Separately Attributed Supplemental Nutrients** — Implemented in the
+SINC-2 worktree; focused tests passed; independent acceptance pending.
+Adds schema v6 and a closed `AiNutrientSupplement` model for nutrients absent
+from a verified source-backed line. Each supplement is bound to the recipe
+digest, review identity, line ref, source food id, source release, resolved
+weight, nutrient id, amount/unit, classification, confidence, and assumptions.
+The source line and its verified values or explicit zeros are never rewritten;
+supplements are labeled as AI estimates, stored separately, and shown in a
+separate saved-report section. Explicit completion investigates the whole
+34-nutrient projection in one bounded provider pass, validates every proposal,
+and reports supplemented, remaining, and unknown values separately. Apply and
+Save remain separate explicit actions, and the SINC-2R4 branded-authentication
+boundary is unchanged. See `docs/SINC-4-Supplemental-Nutrients.md`.
+
+**SHISO-C1 — Unbroken Conversations** — Implemented in the SHISO-C1
+worktree; focused tests passed; owner acceptance pending. Conversation
+transcripts are retained locally through the existing SettingsAdapter (no cloud
+sync), scoped to the stable recipe identity or the global/create surface.
+Recipe A → B → A navigation switches transcripts without erasing either.
+Persisted state is bounded to 120 messages/entries and contains no provider
+credentials, save grants, or actionable proposals. The model receives the
+recent 24-message window plus a bounded continuation memory that explicitly
+separates earlier user statements, earlier model prose, and verified
+application findings. Provider failures retain the user message, verified
+findings, and an explicit Retry action without automatically repeating
+mutations; cancelled tool turns do not offer automatic retry. Conversation
+restoration performs no work on open. Existing recipe edit/save authorities and
+security boundaries are unchanged. See
+`docs/SHISO-C1-Unbroken-Conversations.md`.
+
+**SHISO-7 — Broader Kitchen Intelligence** — Future.
 Substitutions, leftovers, cooking assistance, timer chains, and future
 capabilities.
+
+**SHISO-8 — Vault Intelligence Integration** — Future.
+Retain the deterministic dashboard and Vault Health %. Add read-only explanation
+before previewable, explicitly authorized single-recipe and then batch repairs.
 
 ---
 
@@ -367,13 +486,12 @@ capabilities.
 
 Whole-recipe semantic understanding (the Phase 9B work) should live behind a
 **clean capability boundary** rather than being inseparable from one Advanced
-Nutrition modal button, so a future Shiso can reuse it.
+Nutrition modal button, so Shiso can reuse it across contexts.
 
 What this means in practice: **reusable intelligence yes, premature assistant
-platform no.** Build the capability so it can be invoked from more than one
-surface later — but do not build a generic agent framework, a Shiso UI, a
-conversation engine, a tool registry, or a persistence layer before the program
-above authorizes it.
+platform no.** Reuse the merged conversation, capability and persistence boundaries across
+surfaces. Do not build a second assistant engine, credential path or generic
+agent platform as part of the remaining integrations.
 
 ---
 
@@ -383,10 +501,53 @@ above authorizes it.
 | --- | --- |
 | Canonical recipe schema (v1) | Unchanged authority; Shiso proposes into it |
 | `markdownParser` / `vaultRecipe` | Deterministic persistence authority; Shiso never writes directly |
-| Advanced Nutrition (v0.9.0) | Authoritative capability; Shiso explains and requests |
-| USDA pinned bundle + matcher | Sole food-identity authority |
-| Mass / portion / calculation authority | Deterministic; never AI |
-| Ask My Kitchen / Ask This Recipe | Shipped capabilities, **retired from the forward roadmap**. Left in code unchanged; not future Shiso entry points |
-| Create for Me (one-shot) | Capability retained; becomes `Create with Shiso` at SHISO-4 |
+| Advanced Nutrition (merged; scoped Cochinita Pibil acceptance reported) | AI-led estimates and user review on top of provenance, calculation and explicit persistence controls; broader coverage acceptance remains |
+| USDA pinned bundle + matcher | Preferred source-backed identities and nutrient data; not a prohibition on labeled AI/source-informed estimates |
+| Mass / portion / calculation layer | Uses source-backed and openly estimated weights; application validates totals, assumptions and saved state |
+| Ask My Kitchen / Ask This Recipe | Keep working legacy pathways until parity; migrate real Vault search and recipe context into Shiso rather than maintaining separate AI assistants |
+| Create for Me (one-shot) | Retain validated generator and draft save; conversational Create with Shiso is merged; confirm parity before legacy removal |
 | `server/ai/*` provider abstraction | Reused; Shiso adds no second credential or selection path |
 | BYOK session keys | Reused where relevant; no new storage model |
+
+---
+
+## 11. Reconciled delivery plan and acceptance gates
+
+1. **Common SHISO reliability acceptance first.** Verify the
+   effective AI Settings provider/model across chat, Create with Shiso and
+   Nutrition with Shiso; credential expiry/replacement, cancellation, errors and
+   tool handoffs must be honest. No separate SHISO key, silent paid fallback or
+   hidden model switch. Reuse merged code; do not restart completed implementation.
+2. **Broaden nutrition acceptance beyond the reported Cochinita pass.** Keep
+   Basic free and offline with the pinned USDA catalog. Advanced Nutrition
+   contains Nutrition with Shiso, with **Analyze Recipe** and **Calculate
+   Without AI**. Verify representative identity, quantity, wrapper exclusion,
+   serving-basis and partial/unknown cases. Preserve provenance and stale-state
+   rejection; do not imply all recipes are covered because one end-to-end flow
+   passed.
+3. **Explore My Vault — future, grounded and read-only.** Scope deterministic
+   ingredient/tag/name search with real recipe names, links and counts; scoped
+   evidence supports conversational reasoning. Simple search need not call a
+   model. Preserve legacy Ask My Kitchen until parity and human acceptance;
+   do not claim existing legacy retrieval is already SHISO integration.
+4. **Vault Intelligence with Shiso — future integration.** Retain the existing
+   dashboard, deterministic scanner, Vault Health %, formatting checks and
+   metadata recovery. Explain actual scans first; never invent health scores,
+   counts or completed scans. Show unavailable/not scanned honestly. Then add
+   exact repair previews, explicit single-recipe authorization and separately
+   confirmed batch repairs, with stale-content checks and recovery where
+   supported. Rescan after repair and report measured remaining issues.
+5. **Cross-feature workflows later.** Grounded search → recipe edits → nutrition;
+   health scan → repair preview → confirmation → verified rescan. Broader kitchen
+   actions, safe external nutrition research and mascot animation remain future.
+
+Keep one SHISO companion across all contexts. External research is not a verified
+capability; do not fabricate citations or imply a web lookup occurred. No roadmap
+item authorizes a provider call, Vault write, feature change or deployment.
+
+**Release gates:** Green CI, separate security-backlog triage, remaining scoped
+human acceptance and Sid's explicit release approval. The
+[acceptance record](./Shiso-Acceptance-Status.md) separates reported passes from
+pending coverage and fixed PR findings from the dated open-alert snapshot.
+This roadmap reconciliation is proposed in PR #13 and remains subject to review
+and merge approval. It does not authorize feature implementation or deployment.

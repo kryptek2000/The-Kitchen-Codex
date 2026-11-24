@@ -75,7 +75,7 @@ import {
 } from './query';
 import type { IngredientReviewResult, RankedCandidate } from './types';
 
-export const MATCH_CONFIDENCE_VERSION = 'usda_match_confidence_v13';
+export const MATCH_CONFIDENCE_VERSION = 'usda_match_confidence_v14';
 
 export type MatchConfidence = 'high' | 'review' | 'unresolved';
 
@@ -315,7 +315,27 @@ export function explainCandidate(
   const unrequestedVariants = unrequestedMaterialVariantCount(tokens, projection);
   const unrequestedCooking = unrequestedCookingMethodCount(tokens, projection);
   const genericMarker = genericMarkerCount(tokens);
-  const exact = candidate.match_class === 'exact_phrase' || candidate.match_class === 'exact_token_multiset';
+  // A candidate can carry an exact class from a prior query review. Recheck it
+  // against the query passed to this explanation so stale/reused rows cannot
+  // bypass qualifier, form, or identity safeguards (for example, explaining a
+  // salted-butter row against an unsalted-butter query).
+  const exactClass = candidate.match_class === 'exact_phrase' || candidate.match_class === 'exact_token_multiset';
+  const exact = exactClass &&
+    missingCore === 0 &&
+    conflicts === 0 &&
+    opposition === 0 &&
+    stateContradiction === 0 &&
+    impliedStateMismatch === 0 &&
+    preparationFormContradiction === 0 &&
+    varietyContradiction === 0 &&
+    unrequestedSpecialty === 0 &&
+    missingQualifier === 0 &&
+    missingForm === 0 &&
+    unrequestedVariety === 0 &&
+    unrequestedForm === 0 &&
+    compound === 0 &&
+    unrequestedVariants === 0 &&
+    unrequestedCooking === 0;
   // The STRICT automatic-authority contract: no ordinary variety may be invented.
   const automaticEligible =
     exact ||

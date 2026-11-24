@@ -78,7 +78,7 @@ describe('phase 5B card — explicit Apply UX', () => {
     const handler = vi.fn<AdvancedNutritionApplyHandler>(async () => ({
       ok: true,
       mode: 'create',
-      message: 'Advanced Nutrition was saved to your recipe.',
+      message: 'Nutrition was applied to the working recipe. It is not saved to your Vault yet.',
     }));
     render(<AdvancedNutritionCard recipe={recipe()} session={genuineSession()} onApplyAdvancedNutrition={handler} />);
     const dialog = await openAndCalculate();
@@ -87,7 +87,7 @@ describe('phase 5B card — explicit Apply UX', () => {
     expect(applyButton.hasAttribute('disabled')).toBe(false);
     fireEvent.click(applyButton);
 
-    expect(await screen.findByText(/will add a saved Advanced Nutrition block/i)).toBeTruthy();
+    expect(await screen.findByText(/will add Advanced Nutrition to this working recipe/i)).toBeTruthy();
     const confirm = screen.getByRole('button', { name: /Confirm Apply/i });
     fireEvent.click(confirm);
     fireEvent.click(confirm);
@@ -95,15 +95,15 @@ describe('phase 5B card — explicit Apply UX', () => {
     await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
     const args = handler.mock.calls[0][0];
     expect(args.expectedMode).toBe('create');
-    expect(await screen.findByRole('status')).toBeTruthy();
-    expect(dialog.textContent).toMatch(/was saved to your recipe/i);
+    expect(await screen.findByText(/not saved to your Vault yet/i)).toBeTruthy();
+    expect(dialog.textContent).toMatch(/not saved to your Vault yet/i);
   });
 
   it('distinguishes replace and passes the replace expected mode', async () => {
     const handler = vi.fn<AdvancedNutritionApplyHandler>(async () => ({
       ok: true,
       mode: 'replace',
-      message: 'Advanced Nutrition was replaced and saved to your recipe.',
+      message: 'Nutrition was applied to the working recipe.',
     }));
     const stored = {
       schema: 1,
@@ -129,7 +129,7 @@ describe('phase 5B card — explicit Apply UX', () => {
     );
     await openAndCalculate();
     fireEvent.click(screen.getByRole('button', { name: /Apply and replace saved nutrition/i }));
-    expect(await screen.findByText(/will replace the existing saved Advanced Nutrition block/i)).toBeTruthy();
+    expect(await screen.findByText(/will replace the existing Advanced Nutrition block in this working recipe/i)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /Confirm Apply/i }));
     await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
     expect(handler.mock.calls[0][0].expectedMode).toBe('replace');

@@ -295,13 +295,12 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 function toInertValue(value: unknown, depth = 0, seen: Set<object> = new Set()): unknown {
   if (depth > MAX_INERT_DEPTH) return undefined;
   if (value === null) return null;
-  const kind = typeof value;
-  if (kind === 'string') {
-    return (value as string).length <= 4096 ? value : undefined;
+  if (typeof value === 'string') {
+    return value.length <= 4096 ? value : undefined;
   }
-  if (kind === 'number') return Number.isFinite(value) ? value : undefined;
-  if (kind === 'boolean') return value;
-  if (kind !== 'object') return undefined; // undefined, bigint, symbol, function
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (typeof value === 'boolean') return value;
+  if (typeof value !== 'object') return undefined; // undefined, bigint, symbol, function
   const object = value as object;
   if (seen.has(object)) return undefined; // cycle / shared alias
   seen.add(object);

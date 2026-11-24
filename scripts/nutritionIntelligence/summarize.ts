@@ -18,7 +18,7 @@ import {
   AI6A_ROADMAP_CRITERIA,
   AUTHENTICATED_MASS_SOURCES,
   AI6A_RELEASE_BASELINE,
-  AI6B1_EXPECTED_PRODUCTION_BASELINE,
+  PR12_EXPECTED_PRODUCTION_BASELINE,
   HISTORICAL_TOTAL,
   LEGACY_EXCLUDED_LINES,
   LEGACY_TOTAL,
@@ -701,7 +701,7 @@ function secondarySignalCounts(
  * Conformance + transition report for the historical/legacy denominators.
  *
  * CONFORMANCE is measured against the CURRENT authorized production baseline
- * (AI-6B1), so an explicitly authorized later phase that genuinely improves
+ * (PR12-CI-repair-v1), so an explicitly authorized later phase that genuinely improves
  * production resolution is not permanently reported as drift.
  *
  * The IMMUTABLE AI-6A release baseline is still reported alongside it, together
@@ -724,7 +724,7 @@ export function historicalBaselineCheck(aggregates: Ai6aAggregates): {
     readonly legacy_authenticated_resolved: number;
   };
 } {
-  const expected = AI6B1_EXPECTED_PRODUCTION_BASELINE;
+  const expected = PR12_EXPECTED_PRODUCTION_BASELINE;
   const observed = {
     historical_total: aggregates.historical_97.total,
     historical_authenticated_resolved: aggregates.historical_97.authenticated_resolved,

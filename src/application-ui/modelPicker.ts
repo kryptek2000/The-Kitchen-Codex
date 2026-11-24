@@ -117,6 +117,7 @@ export function modelBadges(model: SurfaceModelOption): string[] {
   if (model.pricingVerified === false) badges.push('Pricing unverified');
   if (model.capabilities?.reasoning) badges.push('Reasoning');
   if (model.structuredVerified) badges.push('Structured Output');
+  else if (model.capabilities?.structuredOutput === false) badges.push('General chat');
   if (model.capabilityVerified) badges.push('Verified');
   if (model.verifiedProfile) badges.push(openRouterProfileLabel(model.verifiedProfile));
   if (model.vision) badges.push('Vision');

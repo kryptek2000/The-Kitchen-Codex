@@ -607,7 +607,10 @@ export class WafProtectionError extends Error {
  * - Manual redirect handling with FULL re-validation and re-pinning of every
  *   redirect target (a redirect cannot smuggle in a second, unchecked hop)
  */
-export async function safeFetchHtml(initialUrl: string): Promise<{ html: string; finalUrl: string }> {
+export async function safeFetchHtml(
+  initialUrl: string,
+  options: { readonly requireHtmlContentType?: boolean; readonly signal?: AbortSignal } = {}
+): Promise<{ html: string; finalUrl: string }> {
   let currentUrl = initialUrl;
   let redirectsFollowed = 0;
 
@@ -616,7 +619,9 @@ export async function safeFetchHtml(initialUrl: string): Promise<{ html: string;
     const target = await validateAndPinUrl(currentUrl);
 
     // 2. Outbound request pinned to the validated IP, with timeout signal
-    const timeoutSignal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+    const timeoutSignal = options.signal
+      ? AbortSignal.any([AbortSignal.timeout(FETCH_TIMEOUT_MS), options.signal])
+      : AbortSignal.timeout(FETCH_TIMEOUT_MS);
 
     let response: IncomingMessage;
     try {
@@ -675,6 +680,14 @@ export async function safeFetchHtml(initialUrl: string): Promise<{ html: string;
       throw new Error(`Remote server responded with status HTTP ${status}.`);
     }
 
+    if (options.requireHtmlContentType === true) {
+      const contentType = normalizeHeader(response.headers["content-type"]);
+      if (!contentType || !/^(?:text\/html|application\/xhtml\+xml)\b/i.test(contentType)) {
+        response.destroy();
+        throw new Error("Remote source is not an HTML page.");
+      }
+    }
+
     // 4. Check Content-Length header if present
     const contentLength = normalizeHeader(response.headers["content-length"]);
     if (contentLength) {
@@ -709,18 +722,59 @@ export async function safeFetchHtml(initialUrl: string): Promise<{ html: string;
  * bounded body bytes, and a REQUIRED JSON content type before parsing. It never
  * returns raw upstream errors or bodies.
  */
+type SafeFetchJsonOptions = {
+  maxBytes?: number;
+  timeoutMs?: number;
+  /** When false, any 3xx response is rejected instead of followed. */
+  allowRedirects?: boolean;
+  signal?: AbortSignal;
+};
+
+type SafeFetchJsonError = Error & {
+  code?: string;
+  status?: number;
+  retryAfterSeconds?: number;
+};
+
+function safeFetchJsonError(message: string, code: string, status?: number, retryAfterSeconds?: number): SafeFetchJsonError {
+  const error = new Error(message) as SafeFetchJsonError;
+  error.code = code;
+  if (status !== undefined) error.status = status;
+  if (retryAfterSeconds !== undefined) error.retryAfterSeconds = retryAfterSeconds;
+  return error;
+}
+
+function combineAbortSignals(signals: ReadonlyArray<AbortSignal>): AbortSignal {
+  const anyFactory = (AbortSignal as unknown as { any?: (values: ReadonlyArray<AbortSignal>) => AbortSignal }).any;
+  if (typeof anyFactory === "function") return anyFactory(signals);
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  for (const signal of signals) {
+    if (signal.aborted) {
+      controller.abort();
+      break;
+    }
+    signal.addEventListener("abort", abort, { once: true });
+  }
+  return controller.signal;
+}
+
 export async function safeFetchJson<T = unknown>(
   initialUrl: string,
-  options: { maxBytes?: number; timeoutMs?: number } = {}
+  options: SafeFetchJsonOptions = {}
 ): Promise<T> {
   const maxBytes = options.maxBytes ?? MAX_BODY_BYTES;
   const timeoutMs = options.timeoutMs ?? FETCH_TIMEOUT_MS;
+  const allowRedirects = options.allowRedirects !== false;
   let currentUrl = initialUrl;
   let redirectsFollowed = 0;
 
   while (redirectsFollowed <= MAX_REDIRECTS) {
     const target = await validateAndPinUrl(currentUrl);
     const timeoutSignal = AbortSignal.timeout(timeoutMs);
+    const signal = options.signal !== undefined
+      ? combineAbortSignals([timeoutSignal, options.signal])
+      : timeoutSignal;
 
     let response: IncomingMessage;
     try {
@@ -729,14 +783,17 @@ export async function safeFetchJson<T = unknown>(
           Accept: "application/json",
           "User-Agent": "The-Kitchen-Codex/0.8 (representative-image-search)",
         },
-        signal: timeoutSignal,
+        signal,
         connectTimeoutMs: PER_ADDRESS_CONNECT_TIMEOUT_MS,
       });
     } catch (fetchErr: any) {
       if (isTimeoutError(fetchErr)) {
-        throw new Error("Metadata request timed out.");
+        throw safeFetchJsonError("Metadata request timed out.", "timeout");
       }
-      throw new Error("Metadata request failed.");
+      if (options.signal?.aborted) {
+        throw safeFetchJsonError("Metadata request was cancelled.", "cancelled");
+      }
+      throw safeFetchJsonError("Metadata request failed.", "network");
     }
 
     const status = response.statusCode ?? 0;
@@ -744,23 +801,33 @@ export async function safeFetchJson<T = unknown>(
     if (status >= 300 && status < 400) {
       const locationHeader = normalizeHeader(response.headers["location"]);
       response.destroy();
-      if (!locationHeader) throw new Error("Redirect location header missing.");
+      if (!allowRedirects) {
+        throw safeFetchJsonError("Redirects are not allowed for this request.", "redirect_not_allowed", status);
+      }
+      if (!locationHeader) throw safeFetchJsonError("Redirect location header missing.", "redirect", status);
       redirectsFollowed++;
-      if (redirectsFollowed > MAX_REDIRECTS) throw new Error("Too many redirects encountered.");
+      if (redirectsFollowed > MAX_REDIRECTS) throw safeFetchJsonError("Too many redirects encountered.", "redirect", status);
       currentUrl = new URL(locationHeader, target.url).toString();
       continue;
     }
 
     if (status < 200 || status >= 300) {
       response.destroy();
-      throw new Error("Metadata server returned an unexpected status.");
+      const retryAfterRaw = normalizeHeader(response.headers["retry-after"]);
+      const retryAfter = retryAfterRaw !== undefined && /^\d+$/.test(retryAfterRaw) ? Number.parseInt(retryAfterRaw, 10) : undefined;
+      throw safeFetchJsonError(
+        "Metadata server returned an unexpected status.",
+        "http_status",
+        status,
+        retryAfter !== undefined && Number.isSafeInteger(retryAfter) ? retryAfter : undefined
+      );
     }
 
     const rawContentType = normalizeHeader(response.headers["content-type"]);
     const mediaType = typeof rawContentType === "string" ? rawContentType.split(";")[0].trim().toLowerCase() : "";
     if (mediaType !== "application/json" && mediaType !== "application/ld+json") {
       response.destroy();
-      throw new Error("Metadata response was not JSON.");
+      throw safeFetchJsonError("Metadata response was not JSON.", "content_type");
     }
 
     const contentLength = normalizeHeader(response.headers["content-length"]);
@@ -768,7 +835,7 @@ export async function safeFetchJson<T = unknown>(
       const parsedLength = parseInt(contentLength, 10);
       if (!isNaN(parsedLength) && parsedLength > maxBytes) {
         response.destroy();
-        throw new Error("Metadata response exceeds the size limit.");
+        throw safeFetchJsonError("Metadata response exceeds the size limit.", "oversized");
       }
     }
 
@@ -776,11 +843,11 @@ export async function safeFetchJson<T = unknown>(
     try {
       return JSON.parse(fullBuffer.toString("utf-8")) as T;
     } catch {
-      throw new Error("Metadata response was not valid JSON.");
+      throw safeFetchJsonError("Metadata response was not valid JSON.", "invalid_json");
     }
   }
 
-  throw new Error("Exceeded maximum redirects.");
+  throw safeFetchJsonError("Exceeded maximum redirects.", "redirect");
 }
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB limit for food photography

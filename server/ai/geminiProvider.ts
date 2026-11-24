@@ -9,6 +9,7 @@
  * any model ID, thinking level, or the grounding-only URL contract.
  */
 
+import { ProviderOperationError, callerCancellationError, throwIfCallerCancelled } from "./providerErrors.js";
 import { ThinkingLevel, Type } from "@google/genai";
 import type { GoogleGenAI } from "@google/genai";
 import { createGeminiClientWithKey, getGemini } from "../geminiClient.js";
@@ -44,6 +45,11 @@ function geminiProviderOptions(options: { providerOptions?: Record<string, unkno
     if (typeof level === "string" && GEMINI_THINKING_LEVELS[level]) {
       out["thinkingConfig"] = { thinkingLevel: GEMINI_THINKING_LEVELS[level] };
     }
+  }
+  // SHISO's explicitly authorized controlled nutrition call must not be
+  // repeated by the Google SDK after a transient/HTTP failure.
+  if ((po as Record<string, unknown>)["singleRequest"] === true) {
+    out["httpOptions"] = { retryOptions: { attempts: 1 } };
   }
   return out;
 }
@@ -136,15 +142,21 @@ export class GeminiProvider implements AiProvider {
   }
 
   async generate(prompt: string, options: AiGenerateOptions): Promise<string> {
+    throwIfCallerCancelled(options.signal, { providerId: this.id, model: options.model });
     const gemini = this.client();
     const response = await gemini.models.generateContent({
       model: options.model,
       contents: prompt,
       config: {
         ...(typeof options.temperature === "number" ? { temperature: options.temperature } : {}),
+        ...(options.signal ? { abortSignal: options.signal } : {}),
         ...geminiProviderOptions(options),
       },
+    }).catch((error: unknown) => {
+      if (options.signal?.aborted) throw callerCancellationError({ providerId: this.id, model: options.model }, error);
+      throw error;
     });
+    throwIfCallerCancelled(options.signal, { providerId: this.id, model: options.model });
     const text = response.text?.trim();
     if (!text) throw new Error("Empty response returned from AI provider.");
     return text;
@@ -155,21 +167,40 @@ export class GeminiProvider implements AiProvider {
     schema: AiJsonSchema,
     options: AiStructuredOptions
   ): Promise<T> {
+    throwIfCallerCancelled(options.signal, { providerId: this.id, model: options.model });
     const gemini = this.client();
     const response = await gemini.models.generateContent({
       model: options.model,
       contents: prompt,
       config: {
         ...(typeof options.temperature === "number" ? { temperature: options.temperature } : {}),
+        ...(options.signal ? { abortSignal: options.signal } : {}),
         responseMimeType: "application/json",
         responseSchema: toGeminiSchema(schema),
+        // Server-owned operation-specific deadline. The SDK merges this with the
+        // client's default httpOptions and applies it to the ACTUAL HTTP attempt.
+        ...(typeof options.timeoutMs === "number" &&
+        Number.isFinite(options.timeoutMs) &&
+        options.timeoutMs > 0 &&
+        options.timeoutMs <= 120_000
+          ? { httpOptions: { timeout: options.timeoutMs } }
+          : {}),
         ...(options.webSearch === true ? { tools: [{ googleSearch: {} }] } : {}),
         ...geminiProviderOptions(options),
       },
+    }).catch((error: unknown) => {
+      if (options.signal?.aborted) throw callerCancellationError({ providerId: this.id, model: options.model }, error);
+      throw error;
     });
+    throwIfCallerCancelled(options.signal, { providerId: this.id, model: options.model });
     const text = response.text?.trim();
-    if (!text) throw new Error("Empty response returned from AI provider.");
-    return JSON.parse(text) as T;
+    if (response.candidates?.some(candidate => candidate.finishReason === 'MAX_TOKENS')) {
+      throw new ProviderOperationError('INVALID_RESPONSE', 'Gemini output was truncated.', { responseFailure: 'output_truncated' });
+    }
+    if (!text) throw new ProviderOperationError('INVALID_RESPONSE', 'Gemini returned no structured content.', { responseFailure: 'empty_response' });
+    try { return JSON.parse(text) as T; } catch {
+      throw new ProviderOperationError('INVALID_RESPONSE', 'Gemini returned invalid JSON.', { responseFailure: 'malformed_json' });
+    }
   }
 
   /**
@@ -186,6 +217,7 @@ export class GeminiProvider implements AiProvider {
       config: {
         ...(typeof options.temperature === "number" ? { temperature: options.temperature } : {}),
         tools: [{ googleSearch: {} }],
+        ...(options.signal ? { abortSignal: options.signal } : {}),
       },
     });
     const candidates = extractWebResultsFromGrounding(response);

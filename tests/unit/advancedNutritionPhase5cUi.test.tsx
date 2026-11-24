@@ -15,7 +15,8 @@ import { resolveRecipeNutritionPresentation } from '../../src/core/nutritionV2/p
 import { adaptRecipe } from '../../src/core/nutritionV2/phase4/adapt';
 import { parseIngredientLine } from '../../src/utils/markdownParser';
 import { DV_STANDARD_ID } from '../../src/core/nutritionV2/dailyValues';
-import type { CodexNutritionV1 } from '../../src/core/nutritionV2/schema';
+import type { CodexNutritionV1, CodexNutritionV6 } from '../../src/core/nutritionV2/schema';
+import { AI_NUTRIENT_SUPPLEMENT_VERSION } from '../../src/core/nutritionV2/aiContribution';
 import type { ObsidianRecipe } from '../../src/types';
 import type { NetworkAdapter } from '../../src/application/adapters/NetworkAdapter';
 
@@ -80,6 +81,60 @@ function advancedBlock(target: ObsidianRecipe, overrides: Partial<CodexNutrition
   };
 }
 
+/** A parsed v6 block whose supplement needs trusted source verification. */
+function v6SupplementBlock(target: ObsidianRecipe): CodexNutritionV6 {
+  const adaptation = adaptRecipe(target);
+  if (!adaptation.ok) throw new Error('adapt failed');
+  const line = adaptation.recipe.adapted[0]!;
+  return {
+    schema: 6,
+    basis: 'total',
+    servings: adaptation.recipe.base_servings,
+    status: 'complete',
+    computed_at: '2026-11-23T00:00:00.000Z',
+    ingredient_digest: `sha256:${'a'.repeat(64)}`,
+    dv_standard: DV_STANDARD_ID,
+    sources: ['usda_fdc', 'ai_estimate'],
+    source_releases: { usda_fdc: 'r' },
+    nutrient_scope: ['calories'],
+    nutrients: {
+      calories: { amount: 100, unit: 'kcal', status: 'complete', coverage: 1, covered_ingredient_count: 1, measurable_ingredient_count: 1 },
+    },
+    ingredients: [{
+      line_ref: line.line_ref,
+      source: 'usda_fdc',
+      source_food_id: '6001',
+      source_release: 'r',
+      match_status: 'confirmed',
+      resolved: true,
+      user_confirmed: true,
+      amount: { value: 100, unit: 'g' },
+      conversion_basis: 'direct_mass',
+      source_nutrients: [],
+    }],
+    unresolved: [],
+    source_amounts: {},
+    nutrient_supplements: [{
+      supplement_version: AI_NUTRIENT_SUPPLEMENT_VERSION,
+      line_ref: line.line_ref,
+      ingredient: line.ingredient.original,
+      nutrient_id: 'calories',
+      amount: 100,
+      unit: 'kcal',
+      classification: 'ai_estimate',
+      source_kind: 'ai_supplement',
+      source_food_id: '6001',
+      source_release: 'r',
+      weight_grams: 100,
+      quantity_basis: '100 g resolved source weight',
+      assumptions: ['Synthetic verification state fixture.'],
+      confidence: 'medium',
+      recipe_digest: `sha256:${'a'.repeat(64)}`,
+      review_identity: 'review_v1:test',
+    }],
+  };
+}
+
 /** A recognized but INCOMPLETE saved block (partial coverage / unresolved lines). */
 function partialBlock(target: ObsidianRecipe): CodexNutritionV1 {
   const block = advancedBlock(target, {
@@ -94,7 +149,7 @@ function partialBlock(target: ObsidianRecipe): CodexNutritionV1 {
   return {
     ...block,
     ingredients: block.ingredients.slice(0, 1),
-    unresolved: [{ line_ref: 'ing:1:unresolved', reason: 'no_match' }],
+    unresolved: [{ line_ref: block.ingredients[1].line_ref, reason: 'no_match' }],
   };
 }
 
@@ -127,6 +182,13 @@ function renderSection(r: ObsidianRecipe, onApply = vi.fn()) {
 afterEach(() => cleanup());
 
 describe('phase 5C — consolidated Nutrition UI', () => {
+  it('shows a verification-needed state for parsed v6 supplements and withholds their totals', () => {
+    const target = recipe([FLOUR]);
+    renderSection(recipe([FLOUR], { frontmatter: { codex_nutrition: v6SupplementBlock(target) } }));
+    expect(screen.getByTestId('advanced-supplement-verification-required')).toBeTruthy();
+    expect(screen.getByTestId('advanced-supplement-verification-required').textContent).toContain('need');
+  });
+
   it('legacy-only recipe shows the legacy fallback and keeps the Advanced upgrade affordance', () => {
     renderSection(recipe([FLOUR], { nutrition: { calories: 320 } as never }));
     expect(document.getElementById('recipe-nutrition-card')).toBeTruthy();
@@ -173,7 +235,7 @@ describe('phase 5C — consolidated Nutrition UI', () => {
     // CURRENT recipe scale (364 kcal for 2 saved servings -> 728 for the current
     // 4); legacy 100 is never silently substituted.
     const normal = document.getElementById('recipe-nutrition-card') as HTMLElement;
-    expect(normal.textContent).toMatch(/728/);
+    expect(normal.textContent).not.toMatch(/728/);
     expect(normal.textContent).not.toMatch(/\b100\b/);
   });
 
@@ -186,12 +248,12 @@ describe('phase 5C — consolidated Nutrition UI', () => {
     // The incomplete/partial state is explicit and prominent.
     expect(normal.textContent).toMatch(/Partial estimate/i);
     expect(normal.textContent).toMatch(/Advanced nutrition incomplete/i);
-    expect(normal.textContent).toMatch(/1 of 2 ingredient lines resolved/i);
-    expect(normal.textContent).toMatch(/unresolved ingredient line/i);
-    // The PARTIAL values over the resolved lines ARE shown (not hidden).
-    expect(normal.textContent).toMatch(/364/);
-    expect(normal.textContent).toMatch(/91\.3/);
-    expect(normal.textContent).toMatch(/11/);
+    expect(normal.textContent).toMatch(/1 of 2 ingredient lines accounted for/i);
+    expect(normal.textContent).toMatch(/full recipe totals are unknown/i);
+    // Persisted partial values appear as explicitly labelled subtotals.
+    expect(normal.textContent).toMatch(/Calories · subtotal364/);
+    expect(normal.textContent).toMatch(/Fat · subtotal91\.3/);
+    expect(normal.textContent).toMatch(/Sodium · subtotal11/);
     // No per-nutrient legacy top-up.
     expect(normal.textContent).not.toMatch(/320/);
     // The detailed partial values remain available inside the separate card.
@@ -226,7 +288,7 @@ describe('phase 5C — consolidated Nutrition UI', () => {
   it('reports an unknown future schema and keeps the legacy fallback clearly labelled', () => {
     renderSection(
       recipe([FLOUR], {
-        frontmatter: { codex_nutrition: { schema: 4, basis: 'total' } },
+        frontmatter: { codex_nutrition: { schema: 7, basis: 'total' } },
         nutrition: { calories: 100 } as never,
       })
     );

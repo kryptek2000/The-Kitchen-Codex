@@ -176,6 +176,17 @@ export class BrowserFsaVaultAdapter implements VaultAdapter {
     }
   }
 
+  async writeTextIfUnchanged(path: string, content: string, expected: string): Promise<void> {
+    const { parent, fileName } = await resolveFileTarget(this.root, path, false);
+    const fileHandle = await parent.getFileHandle(fileName);
+    const file = await fileHandle.getFile();
+    const current = await file.text();
+    if (current !== expected) {
+      throw new Error('The recipe changed on disk since it was opened. The save was not applied.');
+    }
+    await this.writeText(path, content);
+  }
+
   async delete(path: string): Promise<void> {
     const { parent, fileName } = await this.resolveFileOrThrow(path, false);
     try {

@@ -24,6 +24,18 @@ export {
   DEEPSEEK_PRO_MODEL,
 } from "./deepSeekProvider.js";
 export {
+  OpenAIProvider,
+  OPENAI_MODEL_CAPABILITIES,
+  OPENAI_DEFAULT_MODEL,
+  OPENAI_FALLBACK_MODEL,
+  OPENAI_MODELS,
+  OPENAI_API_BASE_URL,
+  OPENAI_RESPONSES_ENDPOINT,
+  OPENAI_TEXT_TIMEOUT_MS,
+  OPENAI_DEFAULT_MAX_OUTPUT_TOKENS,
+  OPENAI_MAX_OUTPUT_TOKENS,
+} from "./openAIProvider.js";
+export {
   getAiProvider,
   getDefaultAiProvider,
   getRegisteredProviders,

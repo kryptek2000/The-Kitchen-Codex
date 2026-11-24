@@ -45,6 +45,7 @@ import {
   type AdvancedNutritionSession,
   type AdaptedIngredient,
   type AiAmountResolveOutcome,
+  type AiFirstReview,
   type AiHouseholdResolveOutcome,
   type AiResolveOutcome,
   type LiveRowState,
@@ -89,6 +90,10 @@ export interface AuthenticatedAdvisoryRequestResult {
   readonly message?: string;
   readonly suggestions: ReadonlyArray<AiResolutionSuggestion>;
   readonly withheld: ReadonlyArray<AiAdvancedWithheldInterpretation>;
+  /** Bounded line refs whose AI quantity interpretation contradicted source. */
+  readonly contradicted: ReadonlyArray<string>;
+  /** Bounded line refs with no usable semantic identity/search wording. */
+  readonly inadaptable: ReadonlyArray<string>;
   readonly aiAttempted: boolean;
 }
 
@@ -104,6 +109,18 @@ export const NUTRITION_INTERPRET_ENDPOINT = '/api/nutrition/interpret-ingredient
 export const NUTRITION_AI_STATUS_ENDPOINT = '/api/providers';
 
 /** Fixed, bounded, user-facing messages (never raw provider/exception text). */
+export function nutritionResolutionFailureMessage(status?: number): string {
+  switch (status) {
+    case 404: return 'The running server does not support this nutrition request. Rebuild and restart the server, then reload the page.';
+    case 401: return 'Nutrition AI authorization expired or is missing. Recheck AI Settings.';
+    case 402: return 'Nutrition AI requires pricing approval for the selected model. Review AI Settings.';
+    case 403: return 'Nutrition AI is not permitted by the current access or model settings. Review AI Settings.';
+    case 429: return 'Nutrition AI reached a rate or quota limit. Try again later.';
+    case 503: return 'The selected AI could not complete nutrition interpretation. A connection test does not verify this task. You can continue with USDA search manually.';
+    default: return AI_RESOLUTION_UNAVAILABLE_MESSAGE;
+  }
+}
+
 export const AI_RESOLUTION_UNAVAILABLE_MESSAGE =
   'AI assistance is unavailable. You can continue with USDA search manually.';
 export const AI_RESOLUTION_INVALID_MESSAGE =
@@ -339,7 +356,7 @@ export async function requestAiAdvancedInterpretations(
   if (!response || response.ok !== true) {
     return {
       ok: false,
-      message: AI_RESOLUTION_UNAVAILABLE_MESSAGE,
+      message: nutritionResolutionFailureMessage(response?.status),
       interpretations: Object.freeze([]),
       authoritativeByLineRef,
       aiAttempted: true,
@@ -505,7 +522,24 @@ function canonicalRequestableRows(
 export function withholdBelowThresholdAutoAcceptance(input: {
   readonly outcome: AiResolveOutcome;
   readonly issueKinds?: Readonly<Record<string, AiResolutionIssueKind>>;
+  /**
+   * AN-ARCH-1 — explicit Generate orchestration only.
+   *
+   * The ordinary AI-help action keeps the conservative AI-1 rule: an AI
+   * agreement may never upgrade a `review_suggested` row into an automatic one.
+   * The ONE-ACTION Generate flow is different in a bounded, auditable way: the
+   * user asked for the complete Advanced Nutrition operation, and the AI's
+   * search phrase has ALREADY been independently accepted by the SAME
+   * deterministic confidence contract. In that mode the validated candidate may
+   * remain automatic (with `aiAssisted`/`aiAccepted` provenance, never
+   * `user_confirmed`); an invalid, contradictory, ambiguous or low-confidence
+   * proposal is still an offer or is absent entirely.
+   *
+   * Default/false preserves every existing caller and every historical test.
+   */
+  readonly acceptValidatedSemanticMatches?: boolean;
 }): AiResolveOutcome {
+  if (input.acceptValidatedSemanticMatches === true) return input.outcome;
   const kinds = input.issueKinds;
   if (kinds === undefined) return input.outcome;
   let downgraded = false;
@@ -568,12 +602,21 @@ export interface AiResolutionRunResult {
    * resolution (ambiguity, or authored alternatives). Audit/display only.
    */
   readonly withheld: ReadonlyArray<AiAdvancedWithheldInterpretation>;
+  /** Bounded source-contradicted amount interpretations (server advisory). */
+  readonly contradicted: ReadonlyArray<string>;
+  /** Bounded interpretations with no usable semantic identity/search wording. */
+  readonly inadaptable: ReadonlyArray<string>;
   /** Food-identity verification outcome (needs_match / review_suggested). */
   readonly outcome: AiResolveOutcome;
   /** Amount-interpretation verification outcome (needs_amount). */
   readonly amounts: AiAmountResolveOutcome;
   /** Verified-household verification outcome (needs_amount). */
   readonly households: AiHouseholdResolveOutcome;
+  /**
+   * AI-FIRST only: per-line model explanations for `needs_review` / `no_match`.
+   * Display-only; never authority and never part of the nutrition calculation.
+   */
+  readonly aiFirstReviews?: ReadonlyArray<AiFirstReview>;
 }
 
 export interface AiResolutionRunArgs extends AiResolutionRequestArgs {
@@ -619,6 +662,17 @@ export interface AiResolutionRunArgs extends AiResolutionRequestArgs {
    * would discard the instruction context SHISO reasons over.
    */
   readonly wholeRecipe?: WholeRecipeSemanticSource;
+  /**
+   * AN-ARCH-1 — set ONLY by the explicit Generate orchestration.
+   *
+   * It permits a DETERMINISTICALLY VALIDATED AI semantic match to remain
+   * automatic instead of always being downgraded to a per-row offer for a
+   * `review_suggested` line. It never lets AI author identity, mass or
+   * nutrients: the same catalog, source-constraint veto, confidence contract and
+   * calculator still decide. Default/false preserves the conservative AI-help
+   * behavior and every historical safety pin.
+   */
+  readonly acceptValidatedSemanticMatches?: boolean;
   /** Deterministic parse observations used to reconcile echoed amounts. */
   readonly authoritativeByLineRef?: ReadonlyMap<string, AiAdvancedAuthoritativeAmountObservation>;
 }
@@ -651,6 +705,8 @@ async function requestAuthenticatedWholeRecipeSuggestions(
       message: 'Nothing unresolved to interpret.',
       suggestions: Object.freeze([]),
       withheld: Object.freeze([]),
+      contradicted: Object.freeze([]),
+      inadaptable: Object.freeze([]),
       aiAttempted: false,
     };
   }
@@ -673,6 +729,8 @@ async function requestAuthenticatedWholeRecipeSuggestions(
       message: AI_RESOLUTION_UNAVAILABLE_MESSAGE,
       suggestions: Object.freeze([]),
       withheld: Object.freeze([]),
+      contradicted: Object.freeze([]),
+      inadaptable: Object.freeze([]),
       aiAttempted: true,
     };
   }
@@ -680,9 +738,11 @@ async function requestAuthenticatedWholeRecipeSuggestions(
   if (!response || response.ok !== true) {
     return {
       ok: false,
-      message: AI_RESOLUTION_UNAVAILABLE_MESSAGE,
+      message: nutritionResolutionFailureMessage(response?.status),
       suggestions: Object.freeze([]),
       withheld: Object.freeze([]),
+      contradicted: Object.freeze([]),
+      inadaptable: Object.freeze([]),
       aiAttempted: true,
     };
   }
@@ -700,6 +760,8 @@ async function requestAuthenticatedWholeRecipeSuggestions(
       message: AI_RESOLUTION_INVALID_MESSAGE,
       suggestions: Object.freeze([]),
       withheld: Object.freeze([]),
+      contradicted: Object.freeze([]),
+      inadaptable: Object.freeze([]),
       aiAttempted: true,
     };
   }
@@ -720,10 +782,22 @@ async function requestAuthenticatedWholeRecipeSuggestions(
     }
   }
 
+  const readLineRefs = (raw: unknown): ReadonlyArray<string> => {
+    if (!Array.isArray(raw)) return Object.freeze([]);
+    const refs: string[] = [];
+    for (const value of raw) {
+      if (typeof value !== 'string' || !allowedLineRefs.includes(value)) continue;
+      if (!refs.includes(value)) refs.push(value);
+    }
+    return Object.freeze(refs);
+  };
+
   return {
     ok: true,
     suggestions: sanitized.suggestions,
     withheld: Object.freeze(withheld),
+    contradicted: readLineRefs(response.data?.['contradicted']),
+    inadaptable: readLineRefs(response.data?.['inadaptable']),
     aiAttempted: true,
   };
 }
@@ -741,6 +815,8 @@ export async function resolveUnresolvedRowsWithAi(
       interpretedCount: 0,
       semanticInterpretedCount: 0,
       withheld: Object.freeze([]),
+      contradicted: Object.freeze([]),
+      inadaptable: Object.freeze([]),
       outcome: EMPTY_FOOD_OUTCOME,
       amounts: EMPTY_AMOUNT_OUTCOME,
       households: EMPTY_HOUSEHOLD_OUTCOME,
@@ -753,6 +829,8 @@ export async function resolveUnresolvedRowsWithAi(
   let suggestions: ReadonlyArray<AiResolutionSuggestion>;
   let aiAttempted: boolean;
   let withheld: ReadonlyArray<AiAdvancedWithheldInterpretation> = Object.freeze([]);
+  let contradicted: ReadonlyArray<string> = Object.freeze([]);
+  let inadaptable: ReadonlyArray<string> = Object.freeze([]);
   let semanticInterpretedCount = 0;
   if (wholeRecipePath) {
     // PHASE 9B-3C: ONE atomic request performs interpretation, receipt issuance,
@@ -769,6 +847,8 @@ export async function resolveUnresolvedRowsWithAi(
         interpretedCount: 0,
         semanticInterpretedCount: 0,
         withheld: Object.freeze([]),
+        contradicted: Object.freeze([]),
+        inadaptable: Object.freeze([]),
         outcome: EMPTY_FOOD_OUTCOME,
         amounts: EMPTY_AMOUNT_OUTCOME,
         households: EMPTY_HOUSEHOLD_OUTCOME,
@@ -776,6 +856,8 @@ export async function resolveUnresolvedRowsWithAi(
     }
     suggestions = live.suggestions;
     withheld = live.withheld;
+    contradicted = live.contradicted;
+    inadaptable = live.inadaptable;
     semanticInterpretedCount = live.suggestions.length;
     aiAttempted = true;
   } else if (canonicalInterpretationPath) {
@@ -797,6 +879,8 @@ export async function resolveUnresolvedRowsWithAi(
           interpretedCount: 0,
           semanticInterpretedCount: 0,
           withheld: Object.freeze([]),
+          contradicted: Object.freeze([]),
+          inadaptable: Object.freeze([]),
           outcome: EMPTY_FOOD_OUTCOME,
           amounts: EMPTY_AMOUNT_OUTCOME,
           households: EMPTY_HOUSEHOLD_OUTCOME,
@@ -823,6 +907,8 @@ export async function resolveUnresolvedRowsWithAi(
         interpretedCount: 0,
         semanticInterpretedCount: 0,
         withheld: Object.freeze([]),
+        contradicted: Object.freeze([]),
+        inadaptable: Object.freeze([]),
         outcome: EMPTY_FOOD_OUTCOME,
         amounts: EMPTY_AMOUNT_OUTCOME,
         households: EMPTY_HOUSEHOLD_OUTCOME,
@@ -841,6 +927,8 @@ export async function resolveUnresolvedRowsWithAi(
         interpretedCount: requested.suggestions.length,
         semanticInterpretedCount: 0,
         withheld: Object.freeze([]),
+        contradicted: Object.freeze([]),
+        inadaptable: Object.freeze([]),
         outcome: EMPTY_FOOD_OUTCOME,
         amounts: EMPTY_AMOUNT_OUTCOME,
         households: EMPTY_HOUSEHOLD_OUTCOME,
@@ -874,7 +962,13 @@ export async function resolveUnresolvedRowsWithAi(
   // AI-1: on the canonical semantic path, an AI-driven automatic acceptance may
   // never upgrade a row the DETERMINISTIC matcher classified `review_suggested`.
   const outcome = canonicalInterpretationPath
-    ? withholdBelowThresholdAutoAcceptance({ outcome: resolvedOutcome, issueKinds })
+    ? withholdBelowThresholdAutoAcceptance({
+        outcome: resolvedOutcome,
+        issueKinds,
+        ...(args.acceptValidatedSemanticMatches === true
+          ? { acceptValidatedSemanticMatches: true }
+          : {}),
+      })
     : resolvedOutcome;
   const amounts =
     amountSuggestions.length > 0 && args.liveRows !== undefined && args.state !== undefined
@@ -917,6 +1011,8 @@ export async function resolveUnresolvedRowsWithAi(
     interpretedCount: suggestions.length,
     semanticInterpretedCount,
     withheld,
+    contradicted,
+    inadaptable,
     outcome,
     amounts,
     households,

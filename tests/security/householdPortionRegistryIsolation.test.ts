@@ -1,3 +1,4 @@
+import { withoutTypeOnlyImports } from '../helpers/sourceAnalysis';
 /**
  * The Kitchen Codex — Household-Portion Registry Contract (registry-track Phase 4):
  * adversarial coverage plus security/isolation proof.
@@ -558,7 +559,7 @@ function collectTransitiveGraph(entries: ReadonlyArray<string>): Set<string> {
     visited.add(file);
     let source: string;
     try {
-      source = readFileSync(file, 'utf8');
+      source = withoutTypeOnlyImports(readFileSync(file, 'utf8'));
     } catch {
       continue;
     }
@@ -659,7 +660,7 @@ describe('household registry — consumer and barrel isolation', () => {
         if (file.startsWith(HOUSEHOLD_DIR)) continue;
         if (file.includes(`${'/'}tests${'/'}`)) continue;
         const rel = file.slice(ROOT.length + 1);
-        const source = readFileSync(file, 'utf8');
+        const source = withoutTypeOnlyImports(readFileSync(file, 'utf8'));
         let match: RegExpExecArray | null;
         importRe.lastIndex = 0;
         while ((match = importRe.exec(source)) !== null) {

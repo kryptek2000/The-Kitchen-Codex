@@ -17,11 +17,12 @@ const ENV_KEYS = [
   "GEMINI_API_KEY",
   "OPENROUTER_API_KEY",
   "DEEPSEEK_API_KEY",
+  "OPENAI_API_KEY",
   "KITCHEN_CODEX_TEXT_PROVIDER",
   "KITCHEN_CODEX_TEXT_MODEL",
 ] as const;
 
-const PROVIDERS = ["gemini", "openrouter", "deepseek"] as const;
+const PROVIDERS = ["gemini", "openrouter", "deepseek", "openai"] as const;
 
 async function fresh() {
   vi.resetModules();
@@ -31,6 +32,7 @@ async function fresh() {
   process.env.GEMINI_API_KEY = SENTINEL;
   process.env.OPENROUTER_API_KEY = SENTINEL;
   process.env.DEEPSEEK_API_KEY = SENTINEL;
+  process.env.OPENAI_API_KEY = SENTINEL;
   const roleModels = await import("../../server/ai/roleModels.js");
   const catalogMod = await import("../../server/ai/providerCatalog.js");
   const connectionTest = await import("../../server/ai/connectionTest.js");

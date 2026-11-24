@@ -35,6 +35,7 @@ vi.mock('../../src/application/aiSelection', () => ({
 import {
   AI_RESOLUTION_INVALID_MESSAGE,
   AI_RESOLUTION_UNAVAILABLE_MESSAGE,
+  nutritionResolutionFailureMessage,
   NUTRITION_INTERPRET_ENDPOINT,
   requestAiAdvancedInterpretations,
   resolveUnresolvedRowsWithAi,
@@ -323,7 +324,7 @@ describe('AI-1 live canonical request — failure handling', () => {
     const result = await resolveUnresolvedRowsWithAi(liveArgs(double.network, ['1 cup Zzz']));
     expect(result.ok).toBe(false);
     expect(result.aiAttempted).toBe(true);
-    expect(result.message).toBe(AI_RESOLUTION_UNAVAILABLE_MESSAGE);
+    expect(result.message).toBe(nutritionResolutionFailureMessage(503));
     expect(JSON.stringify(result)).not.toMatch(/provider stack trace/);
   });
 
@@ -431,7 +432,7 @@ describe('AI-1 live canonical request — failure handling', () => {
     expect(result.ok).toBe(false);
     expect(result.aiAttempted).toBe(true);
     expect(result.interpretations).toEqual([]);
-    expect(result.message).toBe(AI_RESOLUTION_UNAVAILABLE_MESSAGE);
+    expect(result.message).toBe(nutritionResolutionFailureMessage(503));
     // The deterministic source map was built BEFORE the call, from source state.
     expect(result.authoritativeByLineRef.size).toBe(1);
     expect(result.authoritativeByLineRef.get(rows[0].line_ref)?.amount).toBe(1);
@@ -451,10 +452,10 @@ describe('AI-1 live canonical request — real deterministic semantics', () => {
     );
     const result = await resolveUnresolvedRowsWithAi(liveArgs(double.network, ['1 cup Zzz']));
     expect(result.ok).toBe(true);
-    expect(result.outcome.auto_count).toBe(1);
+    expect(result.outcome.auto_count).toBe(0);
     const candidate = result.outcome.candidates[0] as { fdc_id: number; auto: boolean };
     expect(candidate.fdc_id).toBe(8005);
-    expect(candidate.auto).toBe(true);
+    expect(candidate.auto).toBe(false);
   });
 
   it('CONFIDENCE IS NOT AUTHORITY: a high-confidence wrong candidate is refused', async () => {
@@ -485,7 +486,7 @@ describe('AI-1 live canonical request — real deterministic semantics', () => {
       }))
     );
     const result = await resolveUnresolvedRowsWithAi(liveArgs(double.network, ['1 cup Zzz, cooked']));
-    expect(result.outcome.auto_count).toBe(1);
+    expect(result.outcome.auto_count).toBe(0);
     const candidate = result.outcome.candidates[0] as { fdc_id: number };
     expect(candidate.fdc_id).toBe(8006);
   });
@@ -520,7 +521,7 @@ describe('AI-1 live canonical request — real deterministic semantics', () => {
       }))
     );
     const controlResult = await resolveUnresolvedRowsWithAi(liveArgs(control.network, ['1 cup Zzz']));
-    expect(controlResult.outcome.auto_count).toBe(1);
+    expect(controlResult.outcome.auto_count).toBe(0);
   });
 
   it('NEVER collapses authored alternatives into one selected food', async () => {

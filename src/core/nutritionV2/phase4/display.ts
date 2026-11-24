@@ -168,7 +168,7 @@ export function deriveDisplayNutrients(
         unit: def.unit,
         unit_label: formatUnitLabel(def.unit),
         amount,
-        explicit_zero: amount === 0,
+        explicit_zero: amount === 0 && total.status === 'complete',
         coverage: total.status === 'complete' ? ('complete' as const) : ('partial' as const),
         covered_ingredient_count: total.covered_ingredient_count,
         measurable_ingredient_count: total.measurable_ingredient_count,
@@ -184,6 +184,79 @@ export function coverageSummary(preview: AdvisoryNutritionPreview): CoverageSumm
     status: preview.status,
     unresolved_count: preview.unresolved.length,
     total_ingredients: preview.ingredients.length,
+  });
+}
+
+/** How much of the recipe's energy evidence is actually available. */
+export type EnergyDisplayKind = 'complete' | 'partial_subtotal' | 'unavailable';
+
+/**
+ * The ONE energy-coverage presentation contract.
+ *
+ * A calorie number is a COMPLETE recipe total only when the whole recipe is
+ * resolved AND the calories nutrient covers every measurable line. A partial
+ * number remains visible as a labeled ENERGY SUBTOTAL; a missing number is shown
+ * as unavailable. A partial subtotal is never presented as complete recipe
+ * calories.
+ */
+export interface EnergyDisplay {
+  readonly kind: EnergyDisplayKind;
+  readonly label: 'Calories' | 'Energy subtotal' | 'Calories unavailable';
+  readonly amount: number | undefined;
+  readonly unit_label: 'kcal';
+  readonly unresolved_count: number;
+  readonly is_complete_recipe_calories: boolean;
+  readonly note: string;
+}
+
+/**
+ * Derives the energy display from the SAME scaled display row the UI renders.
+ * `preview` supplies whole-recipe completion and the unresolved line count.
+ */
+export function deriveEnergyDisplay(
+  calories: DisplayNutrient | undefined,
+  preview: Pick<AdvisoryNutritionPreview, 'status' | 'unresolved'>
+): EnergyDisplay {
+  const unresolved = preview.unresolved.length;
+  const amount = calories?.amount;
+  const complete =
+    preview.status === 'complete' &&
+    calories?.coverage === 'complete' &&
+    amount !== undefined;
+  if (complete) {
+    return Object.freeze({
+      kind: 'complete' as const,
+      label: 'Calories' as const,
+      amount,
+      unit_label: 'kcal' as const,
+      unresolved_count: 0,
+      is_complete_recipe_calories: true,
+      note: 'Complete recipe calories from every measured ingredient line.',
+    });
+  }
+  if (amount !== undefined) {
+    const lineWord = unresolved === 1 ? 'line' : 'lines';
+    return Object.freeze({
+      kind: 'partial_subtotal' as const,
+      label: 'Energy subtotal' as const,
+      amount,
+      unit_label: 'kcal' as const,
+      unresolved_count: unresolved,
+      is_complete_recipe_calories: false,
+      note:
+        unresolved > 0
+          ? `${unresolved} ingredient ${lineWord} unresolved; this is a known energy subtotal, not a complete recipe calorie total.`
+          : 'Some measured ingredients do not publish energy; this is a known energy subtotal, not a complete recipe calorie total.',
+    });
+  }
+  return Object.freeze({
+    kind: 'unavailable' as const,
+    label: 'Calories unavailable' as const,
+    amount: undefined,
+    unit_label: 'kcal' as const,
+    unresolved_count: unresolved,
+    is_complete_recipe_calories: false,
+    note: 'Energy evidence is insufficient for this recipe; no calorie total is shown.',
   });
 }
 

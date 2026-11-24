@@ -258,6 +258,41 @@ describe('phase 5A — valid authorization', () => {
     expect(validateCodexNutritionV1(candidate.block).ok).toBe(true);
   });
 
+  it('persists a needs_review distinction for an unresolved line without changing its reason or nutrition', () => {
+    const setup = calculatePreview(
+      SESSION,
+      recipeWith([structured(FLOUR_LINE), structured('1 cup sugar')]),
+      ['calories', 'protein', 'fat']
+    );
+    const unresolved = setup.preview.unresolved[0];
+    expect(unresolved).toBeDefined();
+    const baseline = candidateOf(authorize(setup));
+    const baselineReason = baseline.block.unresolved[0].reason;
+
+    const candidate = candidateOf(
+      authorize(setup, { reviewReasons: { [unresolved.line_ref]: 'needs_review' } })
+    );
+    const entry = candidate.block.unresolved.find((item) => item.line_ref === unresolved.line_ref);
+    expect(entry).toBeDefined();
+    expect(entry?.review_reason).toBe('needs_review');
+    // The deterministic reason and every nutrition value remain unchanged.
+    expect(entry?.reason).toBe(baselineReason);
+    expect(candidate.block.nutrients).toEqual(baseline.block.nutrients);
+    expect(validateCodexNutritionV1(candidate.block).ok).toBe(true);
+  });
+
+  it('rejects a reviewReasons entry that is not exactly needs_review', () => {
+    const setup = calculatePreview(
+      SESSION,
+      recipeWith([structured(FLOUR_LINE), structured('1 cup sugar')]),
+      ['calories', 'protein', 'fat']
+    );
+    const unresolved = setup.preview.unresolved[0];
+    expect(
+      failureCodeOf(authorize(setup, { reviewReasons: { [unresolved.line_ref]: 'no_match' } }))
+    ).toBe('invalid_request');
+  });
+
   it('a fully-resolved calculation is a schema-valid COMPLETE block even when a scoped nutrient is absent', () => {
     const setup = calculatePreview(SESSION, recipeWith([structured(FLOUR_LINE)]), ['calories', 'protein', 'fat']);
     expect(setup.preview.unresolved.length).toBe(0);
@@ -687,7 +722,7 @@ describe('phase 5A — schema gate', () => {
 
   it('fails closed on an opaque future schema and never drops its data', () => {
     const setup = calculatePreview(SESSION, recipeWith([structured(FLOUR_LINE)]), ['calories', 'protein']);
-    const future = { schema: 4, basis: 'total', futureField: { nested: [1, 2, 3] }, note: 'future' };
+    const future = { schema: 99, basis: 'total', futureField: { nested: [1, 2, 3] }, note: 'future' };
     const before = JSON.stringify(future);
     const result = authorize(setup, { existingBlock: future });
     expect(failureCodeOf(result)).toBe('unknown_future_schema');
@@ -1029,7 +1064,7 @@ describe('phase 5A — persistence identity cannot be replayed across authority'
     expect(create.identity.candidate_digest).toBe(replace.identity.candidate_digest);
     expect(create.identity).not.toEqual(replace.identity);
     // An opaque future block can never be replaced.
-    expect(failureCodeOf(authorize(setup, { existingBlock: { schema: 4, note: 'future' } }))).toBe(
+    expect(failureCodeOf(authorize(setup, { existingBlock: { schema: 99, note: 'future' } }))).toBe(
       'unknown_future_schema'
     );
   });

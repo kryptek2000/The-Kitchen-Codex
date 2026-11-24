@@ -34,6 +34,9 @@ import type {
   CodexNutritionV1,
   CodexNutritionV2,
   CodexNutritionV3,
+  CodexNutritionV4,
+  CodexNutritionV5,
+  CodexNutritionV6,
   HouseholdPortionEvidence,
   IngredientEvidenceV2,
 } from '../src/core/nutritionV2/schema';
@@ -42,7 +45,7 @@ import type { ObsidianRecipe } from '../src/types';
 const ROOT = resolve(import.meta.dirname, '..');
 const BUNDLE_DIR = join(
   ROOT,
-  'data/advanced-nutrition/usda/usda_fdc_87c5408a3e98838944a87be74824761e'
+  'data/advanced-nutrition/usda/usda_fdc_1f3e3068a7ae0702f360d1caae40a628'
 );
 
 let passed = 0;
@@ -157,7 +160,7 @@ async function main(): Promise<void> {
   record('the live summary counts the row as matched', summarizeLiveRows(live).matched === 1);
 
   // CLOSE WITHOUT APPLY: no persistence call is made, so no block exists.
-  let persistedBlock: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | undefined;
+  let persistedBlock: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5 | CodexNutritionV6 | undefined;
   record('closing without Apply persists nothing', persistedBlock === undefined);
 
   // EXPLICIT APPLY (authorization only; the vault write remains the app's job).

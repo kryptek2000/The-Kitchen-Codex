@@ -42,13 +42,14 @@ async function startApp(env: Record<string, string>) {
   const server = http.createServer(app);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const addr = server.address() as AddressInfo;
-  return { server, baseUrl: `http://127.0.0.1:${addr.port}` };
+  return { server, app, baseUrl: `http://127.0.0.1:${addr.port}` };
 }
 
 interface RecordedCall {
   url: string;
   method: string;
   body: any;
+  signal?: AbortSignal | null;
 }
 
 function stubOpenRouter(handler: (url: string, init?: RequestInit) => Promise<Response>) {
@@ -65,7 +66,7 @@ function stubOpenRouter(handler: (url: string, init?: RequestInit) => Promise<Re
           body = init.body;
         }
       }
-      calls.push({ url, method: (init?.method ?? 'GET') as string, body });
+      calls.push({ url, method: (init?.method ?? 'GET') as string, body, signal: init?.signal });
       return handler(url, init);
     }
     return original(input, init);
@@ -218,6 +219,34 @@ describe('POST verify-recipe route', () => {
 });
 
 describe('Create for Me — dynamic recipe authorization', () => {
+  it('refuses provider dispatch when the response is already destroyed before handler entry', async () => {
+    const { server, baseUrl, app } = await startApp({ OPENROUTER_API_KEY: SENTINEL, HOST: '127.0.0.1' });
+    const routeStack = ((app as any)._router?.stack ?? (app as any).router?.stack)
+      .find((layer: any) => layer.route?.path === '/api/recipes/generate').route.stack;
+    const cancellationLayer = routeStack[0];
+    const originalCancellationMiddleware = cancellationLayer.handle;
+    cancellationLayer.handle = function (req: any, res: any, next: any) {
+      return originalCancellationMiddleware.call(this, req, res, () => {
+        res.destroy();
+        next();
+      });
+    };
+    const stub = stubOpenRouter(async () => okRecipe());
+    try {
+      const request = fetch(`${baseUrl}/api/recipes/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: 'a quick pasta' }),
+      });
+      await expect(request).rejects.toBeTruthy();
+      expect(stub.runtimeCalls()).toHaveLength(0);
+    } finally {
+      cancellationLayer.handle = originalCancellationMiddleware;
+      stub.restore();
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+
   it('profile-only dynamic model => specific bounded message, ZERO runtime calls', async () => {
     const { server, baseUrl } = await startApp({ OPENROUTER_API_KEY: SENTINEL, HOST: '127.0.0.1' });
     const stub = stubOpenRouter(async () => okProfile());
@@ -263,8 +292,85 @@ describe('Create for Me — dynamic recipe authorization', () => {
       expect(res.json.draft.title).toBe('Test Toast');
       expect(res.json.provenance).toMatchObject({ generated: true, providerId: 'openrouter', model: ID });
       expect(stub.runtimeCalls()).toHaveLength(1);
+      expect(stub.runtimeCalls()[0]?.signal?.aborted).toBe(false); // normal response closure is not cancellation
     } finally {
       stub.restore();
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+
+  it('stops Create for Me provider work after a real client disconnect and does not write a closed response', async () => {
+    const { server, baseUrl, app } = await startApp({ OPENROUTER_API_KEY: SENTINEL, HOST: '127.0.0.1' });
+    let responseAttemptsAfterClose = 0;
+    const responsePrototype = app.response as any;
+    const requestPrototype = app.request as any;
+    const originalJson = responsePrototype.json;
+    const requestOnce = requestPrototype.once; const requestOff = requestPrototype.off;
+    const responseOnce = responsePrototype.once; const responseOff = responsePrototype.off;
+    let requestListenerAdded = 0; let requestListenerRemoved = 0;
+    let responseListenerAdded = 0; let responseListenerRemoved = 0;
+    requestPrototype.once = function (event: string, listener: (...args: unknown[]) => void) {
+      if (event === 'aborted' && listener.name === 'abortOnRequestAborted') requestListenerAdded += 1;
+      return requestOnce.call(this, event, listener);
+    };
+    requestPrototype.off = function (event: string, listener: (...args: unknown[]) => void) {
+      if (event === 'aborted' && listener.name === 'abortOnRequestAborted') requestListenerRemoved += 1;
+      return requestOff.call(this, event, listener);
+    };
+    responsePrototype.once = function (event: string, listener: (...args: unknown[]) => void) {
+      if (event === 'close' && listener.name === 'abortOnIncompleteResponseClose') responseListenerAdded += 1;
+      return responseOnce.call(this, event, listener);
+    };
+    responsePrototype.off = function (event: string, listener: (...args: unknown[]) => void) {
+      if (event === 'close' && listener.name === 'abortOnIncompleteResponseClose') responseListenerRemoved += 1;
+      return responseOff.call(this, event, listener);
+    };
+    responsePrototype.json = function (...args: unknown[]) {
+      if (this.destroyed) responseAttemptsAfterClose += 1;
+      return originalJson.apply(this, args);
+    };
+    const stub = stubOpenRouter(async (_url, init) => {
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : {};
+      const content = String(body?.messages?.[0]?.content ?? '');
+      if (content.startsWith('Return exactly this JSON object')) return okProfile();
+      if (content.includes('Invent one tiny recipe')) return okRecipe();
+      return new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (!signal || signal.aborted) {
+          reject(Object.assign(new Error('request aborted'), { name: 'AbortError' }));
+          return;
+        }
+        signal.addEventListener('abort', () => reject(Object.assign(new Error('request aborted'), { name: 'AbortError' })), { once: true });
+      });
+    });
+    try {
+      await primeCatalog([rawModel(ID, FREE)]);
+      await verifyProfile(baseUrl, ID);
+      await verifyRecipe(baseUrl, ID);
+      const before = stub.runtimeCalls().length;
+      const client = new AbortController();
+      const pending = fetch(`${baseUrl}/api/recipes/generate`, {
+        method: 'POST', signal: client.signal,
+        headers: { 'Content-Type': 'application/json', ...selectionHeader(ID, 'free') },
+        body: JSON.stringify({ prompt: 'a quick pasta' }),
+      });
+      await vi.waitFor(() => expect(stub.runtimeCalls()).toHaveLength(before + 1));
+      const providerSignal = stub.calls.at(-1)?.signal;
+      expect(providerSignal?.aborted).toBe(false);
+      client.abort();
+      await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+      await vi.waitFor(() => expect(providerSignal?.aborted).toBe(true));
+      expect(stub.runtimeCalls()).toHaveLength(before + 1); // no fallback/retry
+      expect(responseAttemptsAfterClose).toBe(0);
+      expect(requestListenerAdded).toBe(1);
+      expect(requestListenerRemoved).toBe(1);
+      expect(responseListenerAdded).toBe(1);
+      expect(responseListenerRemoved).toBe(1);
+    } finally {
+      stub.restore();
+      responsePrototype.json = originalJson;
+      requestPrototype.once = requestOnce; requestPrototype.off = requestOff;
+      responsePrototype.once = responseOnce; responsePrototype.off = responseOff;
       await new Promise<void>((r) => server.close(() => r()));
     }
   });

@@ -3,6 +3,7 @@ import { Image as ImageIcon, X, Check, AlertCircle, ExternalLink, Search } from 
 import type { RepresentativeImageCandidate } from '../core/representativeImage';
 import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
 import { validateGeneratedImage } from '../core/recipeImage';
+import { createTemporaryPreviewUrl, releaseTemporaryPreviewUrl } from '../utils/assetProvenance';
 
 /**
  * The Kitchen Codex — Representative Recipe Image chooser (Phase 1).
@@ -110,7 +111,7 @@ export const RepresentativeImageChooser: React.FC<RepresentativeImageChooserProp
     let cancelled = false;
     const created: string[] = [];
     // Revoke the previous generation before loading the new one.
-    for (const url of Object.values(thumbUrlsRef.current)) URL.revokeObjectURL(url);
+    for (const url of Object.values(thumbUrlsRef.current)) releaseTemporaryPreviewUrl(url);
     thumbUrlsRef.current = {};
     setThumbUrls({});
     setThumbFailed({});
@@ -132,7 +133,7 @@ export const RepresentativeImageChooser: React.FC<RepresentativeImageChooserProp
             failed[candidate.id] = true;
             continue;
           }
-          const url = URL.createObjectURL(new Blob([res.bytes.slice()], { type: validation.detectedMime }));
+          const url = createTemporaryPreviewUrl(new Blob([res.bytes.slice()], { type: validation.detectedMime }), 'representative-thumbnail');
           created.push(url);
           next[candidate.id] = url;
         } catch {
@@ -141,7 +142,7 @@ export const RepresentativeImageChooser: React.FC<RepresentativeImageChooserProp
         }
       }
       if (cancelled) {
-        for (const url of created) URL.revokeObjectURL(url);
+        for (const url of created) releaseTemporaryPreviewUrl(url);
         return;
       }
       // Commit: the ref now owns these URLs, so drop them from the pending
@@ -155,8 +156,8 @@ export const RepresentativeImageChooser: React.FC<RepresentativeImageChooserProp
     });
     return () => {
       cancelled = true;
-      for (const url of created) URL.revokeObjectURL(url);
-      for (const url of Object.values(thumbUrlsRef.current)) URL.revokeObjectURL(url);
+      for (const url of created) releaseTemporaryPreviewUrl(url);
+      for (const url of Object.values(thumbUrlsRef.current)) releaseTemporaryPreviewUrl(url);
       thumbUrlsRef.current = {};
     };
   }, [candidates, network]);

@@ -8,12 +8,14 @@ import {
   type AdvancedNutritionAiEstimateHandler,
   type AdvancedNutritionRecipeContextReviewHandler,
   type AdvancedNutritionAiResolveHandler,
+  type AdvancedNutritionResearchHandler,
+  type AdvancedNutritionBrandedLookupHandler,
   type AdvancedNutritionApplyHandler,
   type AdvancedNutritionBundleUiStatus,
   type AdvancedNutritionAiAvailability,
 } from './AdvancedNutritionCard';
 import type { AdvancedNutritionSession } from '../core/nutritionV2/phase4';
-import { deriveAdvancedCompactNutrition, type NutritionPresentation } from '../core/nutritionV2/phase5c';
+import { advancedPartialNutrients, deriveAdvancedCompactNutrition, type NutritionPresentation } from '../core/nutritionV2/phase5c';
 
 interface RecipeNutritionSectionProps {
   recipe: ObsidianRecipe;
@@ -21,6 +23,8 @@ interface RecipeNutritionSectionProps {
   presentation: NutritionPresentation;
   servings?: number;
   network: NetworkAdapter;
+  /** Built-in Signature originals are read-only; no calculation or save action. */
+  readOnly?: boolean;
   onUpdateNutrition?: (nutrition: RecipeNutrition) => Promise<boolean | void> | void;
   advancedNutritionSession?: AdvancedNutritionSession | null;
   advancedNutritionBundleStatus?: AdvancedNutritionBundleUiStatus;
@@ -30,6 +34,12 @@ interface RecipeNutritionSectionProps {
   onApplyAdvancedNutrition?: AdvancedNutritionApplyHandler;
   /** Optional AI-assisted USDA resolution port (injected by the shell). */
   onResolveAdvancedNutritionAi?: AdvancedNutritionAiResolveHandler;
+  /** Optional AI-FIRST Generate resolution port (injected by the shell). */
+  onResolveAdvancedNutritionAiFirst?: AdvancedNutritionAiResolveHandler;
+  /** Optional external nutrition research port (injected by the shell). */
+  onResearchAdvancedNutritionAi?: AdvancedNutritionResearchHandler;
+  /** Optional explicit USDA Branded Foods lookup port (injected by the shell). */
+  onSearchBrandedFoods?: AdvancedNutritionBrandedLookupHandler;
   /**
    * Optional AI-3 bounded mass-estimate port (injected by the shell).
    * Injection-only: this component never parses, hashes, calls a provider or
@@ -63,6 +73,7 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
   presentation,
   servings,
   network,
+  readOnly = false,
   onUpdateNutrition,
   advancedNutritionSession,
   advancedNutritionBundleStatus,
@@ -70,9 +81,32 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
   advancedNutritionAiAvailability,
   onApplyAdvancedNutrition,
   onResolveAdvancedNutritionAi,
+  onResolveAdvancedNutritionAiFirst,
+  onResearchAdvancedNutritionAi,
+  onSearchBrandedFoods,
   onEstimateMassesWithAi,
   onReviewRecipeContextWithAi,
 }) => {
+  if (readOnly) {
+    return (
+      <section id="recipe-nutrition-section" aria-label="Nutrition" className="space-y-3">
+        <div className="flex items-center gap-3">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary,#9CA3AF)]">
+            Nutrition
+          </span>
+          <span aria-hidden="true" className="h-px flex-1 bg-[var(--color-rule,var(--border-subtle,rgba(255,255,255,0.08)))]" />
+        </div>
+        <p
+          data-testid="builtin-nutrition-readonly"
+          className="rounded-xl border-l-[3px] border-l-[var(--accent-text,#F59E0B)] bg-[var(--bg-elevated,#1E1E1E)] px-3 py-2 text-[11px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]"
+        >
+          Nutrition calculation and editing are available in your saved personal copy. Save this
+          built-in recipe to My Vault first.
+        </p>
+      </section>
+    );
+  }
+
   const advancedPreferred = presentation.advanced_preferred;
   // Compact normal values derived from the saved Advanced block (single
   // authority). Undefined when no recognized Advanced result exists, in which
@@ -85,6 +119,9 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
       ? {
           resolved: presentation.advanced_resolved_count,
           total: presentation.advanced_ingredient_count,
+          unresolved: presentation.advanced_unresolved_count,
+          excluded: presentation.advanced_excluded_count,
+          stale: presentation.advanced_stale,
         }
       : undefined;
   const legacyVisible = onUpdateNutrition !== undefined;
@@ -92,18 +129,46 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
     presentation.kind === 'advanced_unsupported' || presentation.kind === 'advanced_invalid';
 
   return (
-    <section id="recipe-nutrition-section" aria-label="Nutrition" className="space-y-3">
+    <section
+      id="recipe-nutrition-section"
+      aria-label="Nutrition"
+      className="space-y-3"
+    >
+      <div className="flex items-center gap-3">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary,#9CA3AF)]">
+          Nutrition
+        </span>
+        <span aria-hidden="true" className="h-px flex-1 bg-[var(--color-rule,var(--border-subtle,rgba(255,255,255,0.08)))]" />
+      </div>
+
       {presentation.kind === 'advanced_stale' && (
         <div
           role="status"
-          className="p-3 rounded-xl bg-amber-950/30 border border-amber-800/40 text-[11px] text-amber-200 flex items-start gap-2"
+          className="flex items-start gap-2 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] border-l-[3px] border-l-[var(--accent-text,#F59E0B)] bg-[var(--bg-elevated,#1E1E1E)] p-3 text-[11px] leading-relaxed text-[var(--text-primary,#F3F4F6)]"
         >
-          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
           <span>
             Saved Advanced Nutrition may be out of date for the current recipe
             {presentation.stale_reasons.includes('servings_changed') ? ' (servings changed)' : ''}
-            {presentation.stale_reasons.includes('ingredients_changed') ? ' (ingredients changed)' : ''}.
+            {presentation.stale_reasons.includes('ingredients_changed') ? ' (ingredients changed)' : ''}
+            {presentation.stale_reasons.includes('quantity_conflict') ? ' (saved grams conflict with written ingredient weights)' : ''}.
             Recalculate and Apply to update it.
+          </span>
+        </div>
+      )}
+
+      {presentation.advanced_verification_required && (
+        <div
+          data-testid="advanced-supplement-verification-required"
+          role="status"
+          className="flex items-start gap-2 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] border-l-[3px] border-l-[var(--accent-text,#F59E0B)] bg-[var(--bg-elevated,#1E1E1E)] p-3 text-[11px] leading-relaxed text-[var(--text-primary,#F3F4F6)]"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
+          <span>
+            Saved Advanced Nutrition includes supplemental AI estimates that need
+            verification against the pinned USDA source. Open Advanced Nutrition to
+            verify them before using these totals; the saved values remain available
+            for review.
           </span>
         </div>
       )}
@@ -111,9 +176,9 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
       {presentation.kind === 'advanced_unsupported' && (
         <div
           role="status"
-          className="p-3 rounded-xl bg-amber-950/30 border border-amber-800/40 text-[11px] text-amber-200 flex items-start gap-2"
+          className="flex items-start gap-2 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] border-l-[3px] border-l-[var(--accent-text,#F59E0B)] bg-[var(--bg-elevated,#1E1E1E)] p-3 text-[11px] leading-relaxed text-[var(--text-primary,#F3F4F6)]"
         >
-          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
           <span>
             Saved Advanced Nutrition uses a newer format this version cannot read. It is preserved and
             will not be replaced.
@@ -124,9 +189,9 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
       {presentation.kind === 'advanced_invalid' && (
         <div
           role="status"
-          className="p-3 rounded-xl bg-amber-950/30 border border-amber-800/40 text-[11px] text-amber-200 flex items-start gap-2"
+          className="flex items-start gap-2 rounded-xl border border-[var(--border-subtle,rgba(255,255,255,0.08))] border-l-[3px] border-l-[var(--accent-text,#F59E0B)] bg-[var(--bg-elevated,#1E1E1E)] p-3 text-[11px] leading-relaxed text-[var(--text-primary,#F3F4F6)]"
         >
-          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent-text,#F59E0B)]" aria-hidden="true" />
           <span>
             Saved Advanced Nutrition data cannot be read safely. It is preserved and will not be
             replaced.
@@ -140,8 +205,8 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
       {legacyVisible && (
         <div className="space-y-2">
           {legacyFallbackNote && (
-            <p className="text-[10px] text-gray-500 flex items-center gap-1.5">
-              <Info className="w-3.5 h-3.5" />
+            <p className="flex items-center gap-1.5 text-[11px] text-[var(--text-secondary,#9CA3AF)]">
+              <Info className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
               <span>Legacy estimate — shown only because saved Advanced Nutrition is unavailable.</span>
             </p>
           )}
@@ -150,7 +215,24 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
             servings={servings}
             network={network}
             derivedNutrition={derivedNutrition}
-            derivedSourceLabel={derivedNutrition ? 'Advanced Nutrition · USDA reviewed' : undefined}
+            derivedPartialNutrients={advancedPartialNutrients(presentation)}
+            derivedSourceLabel={derivedNutrition ? (() => {
+              if (presentation.advanced?.schema === 5 || presentation.advanced?.schema === 6) {
+                const contributions = presentation.advanced.ai_contributions ?? [];
+                const hasBranded = contributions.some((line) => line.source_kind === 'usda_branded');
+                const hasAi = contributions.some((line) => line.classification === 'ai_estimate');
+                if (hasBranded && hasAi) return 'Advanced Nutrition · includes USDA Branded and AI estimates';
+                if (hasBranded) return 'Advanced Nutrition · includes USDA Branded evidence';
+                if (hasAi) return 'Advanced Nutrition · includes AI estimates';
+                if (presentation.advanced.schema === 6 && (presentation.advanced.nutrient_supplements?.length ?? 0) > 0) {
+                  return 'Advanced Nutrition · includes supplemental AI estimates';
+                }
+                return 'Advanced Nutrition · reviewed contributions';
+              }
+              return presentation.advanced?.schema === 4 && presentation.advanced.ingredients.some(e => e.quantity_estimate)
+                ? 'USDA nutrients · includes accepted quantity estimates'
+                : 'Advanced Nutrition · USDA reviewed';
+            })() : undefined}
             advancedIncomplete={advancedIncomplete}
             hideLegacyEstimator
             onUpdateNutrition={(nut) => onUpdateNutrition?.(nut)}
@@ -169,6 +251,9 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
         onApplyAdvancedNutrition={onApplyAdvancedNutrition}
         savedAdvancedBlock={presentation.advanced}
         onResolveWithAi={onResolveAdvancedNutritionAi}
+        onResolveWithAiFirst={onResolveAdvancedNutritionAiFirst}
+        onResearchNutritionWithAi={onResearchAdvancedNutritionAi}
+        onSearchBrandedFoods={onSearchBrandedFoods}
         onEstimateMassesWithAi={onEstimateMassesWithAi}
         onReviewRecipeContextWithAi={onReviewRecipeContextWithAi}
       />

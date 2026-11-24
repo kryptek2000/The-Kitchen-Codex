@@ -196,6 +196,47 @@ describe("BYOK-4 — ProviderSelectionPanel (interactive selection)", () => {
     expect(html).toContain('data-surface-test="image"');
   });
 
+  it("P2: OpenAI Image is selectable in the Image AI card with its two curated models", async () => {
+    const c = catalog({ text: true, image: true });
+    c.imageProviders.push({
+      providerId: "openai-image",
+      name: "OpenAI Image",
+      configured: true,
+      enabled: true,
+      available: true,
+      imageGeneration: true,
+      connectionTest: "credential_check",
+      selectable: true,
+      sessionKeySupported: true,
+      formats: ["image/png"],
+      maxBytes: 4 * 1024 * 1024,
+      models: [
+        { id: "gpt-image-2.6-flare", default: true },
+        { id: "gpt-image-2.6-sunburst", default: false },
+      ],
+    });
+    await saveAiSelection(
+      stubSettings(),
+      "image",
+      "user_selected",
+      "openai-image",
+      "gpt-image-2.6-flare",
+      "server_environment"
+    );
+    const html = render(
+      <ProviderSelectionPanel catalog={c} settings={stubSettings()} network={stubNetwork()} />
+    );
+    const imageCard = html.slice(html.indexOf('data-ai-surface-card="image"'));
+    expect(imageCard).toContain('value="openai-image"');
+    expect(imageCard).toContain("OpenAI Image");
+    expect(imageCard).toContain('data-surface-model-select="image"');
+    expect(imageCard).toContain("GPT Image 2.6 Flare");
+    expect(imageCard).toContain("GPT Image 2.6 Sunburst");
+    // Text selection is untouched by the image surface.
+    const textCard = html.slice(html.indexOf('data-ai-surface-card="text"'), html.indexOf('data-ai-surface-card="image"'));
+    expect(textCard).not.toContain('value="openai-image"');
+  });
+
   it("renders the truthful connection-test kind labels in the read-only catalog cards", () => {
     const html = render(
       <ProviderStatusPanel statuses={[]} catalog={catalog({ text: true, image: true })} onRefresh={() => {}} />
@@ -951,8 +992,15 @@ describe("BYOK-5F — AI Settings UX (friendly, advanced, credentials)", () => {
   it("friendly label helpers never leak internal ids/terminology as labels", () => {
     expect(friendlyProviderName("openrouter")).toBe("OpenRouter");
     expect(friendlyProviderName("openrouter-image")).toBe("OpenRouter Image");
+    expect(friendlyProviderName("openai")).toBe("OpenAI");
     expect(friendlyProviderName("unknown-provider")).toBe("unknown-provider");
     expect(friendlyModelName("openai/gpt-4o-mini")).toBe("GPT-4o Mini");
+    expect(friendlyModelName("gpt-6.1-terra")).toBe("GPT-6.1 Terra");
+    expect(friendlyModelName("gpt-6-luna")).toBe("GPT-6 Luna");
+    expect(friendlyModelName("gemini-nano-banana-2.1")).toBe("Nano Banana 2.1");
+    expect(friendlyModelName("gemini-3.1-flash-image")).toBe("Nano Banana 2");
+    expect(friendlyModelName("gemini-3.1-flash-lite-image")).toBe("Nano Banana 2 Lite");
+    expect(friendlyModelName("gemini-3-pro-image")).toBe("Nano Banana Pro");
     expect(friendlyModelName("google/gemini-2.5-flash-image")).toBe("Gemini 2.5 Flash Image");
     expect(credentialUsageLabel("session_only")).toBe("Using your temporary API key");
     expect(credentialUsageLabel("server_environment")).toBe("Using server API key");

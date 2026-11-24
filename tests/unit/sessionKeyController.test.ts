@@ -110,6 +110,18 @@ describe("BYOK-5E — cross-provider race protection (preserved)", () => {
     expect(c.getState().status).toBe("loading");
     expect(c.getState().apiKey).toBe("");
   });
+
+  it("unmount: a pending save after dispose() cannot mutate state", async () => {
+    const { network, pending } = makeNetwork();
+    const c = new SessionKeyController(network, PROVIDERS);
+    c.setApiKey(SENTINEL);
+    const save = c.save();
+    c.dispose();
+    settleAt(pending, 0, { providerId: "openrouter", storageScope: "session_only", configured: true, version: "V1" });
+    await save;
+    expect(c.getState().apiKey).toBe("");
+    expect(c.getState().notice).toBeUndefined();
+  });
 });
 
 describe("BYOK-5E — same-provider operation ordering (operation epoch)", () => {
@@ -182,6 +194,22 @@ describe("BYOK-5E — same-provider operation ordering (operation epoch)", () =>
     expect(c.getState().notice?.text).toContain("saved");
   });
 
+  it("D1. provider switch while save is pending invalidates the stale save", async () => {
+    const { network, pending } = makeNetwork();
+    const c = new SessionKeyController(network, PROVIDERS);
+    c.setApiKey("key-1");
+    const save = c.save(); // pending[0]
+    c.selectProvider("deepseek"); // pending[1] status for deepseek
+    settleAt(pending, 0, { providerId: "openrouter", storageScope: "session_only", configured: true, version: "V1" });
+    await save;
+    expect(c.getState().selectedProviderId).toBe("deepseek");
+    expect(c.getState().notice).toBeUndefined();
+    expect(c.getState().status).toBe("loading");
+    settleAt(pending, 1, B_EMPTY);
+    await flush();
+    expect(c.getState().status).toBe("not-configured");
+  });
+
   it("D2. SAVE #1 -> SAVE #2: a stale save #1 does NOT clear a key typed after #2 started", async () => {
     const { network, pending } = makeNetwork();
     const c = new SessionKeyController(network, PROVIDERS);
@@ -238,5 +266,51 @@ describe("BYOK-5F — Session API Key test stays session_only", () => {
     settleAt(pending, pending.indexOf(entry!), { ok: true, providerId: "openrouter", model: "openai/gpt-4o-mini", credentialSource: "session_only" });
     await p;
     expect(c.getState().testResult?.credentialSource).toBe("session_only");
+  });
+});
+
+describe("P2 — explicit OpenAI text/image session-key reuse", () => {
+  const IMAGE_PROVIDERS: SessionKeyProviderOption[] = [
+    { providerId: "openai-image", name: "OpenAI Image", kind: "image", models: [{ id: "gpt-image-2.6-flare", default: true }] },
+  ];
+
+  it("reuseFrom POSTs the exact pair, clears the typed key, and reports success", async () => {
+    const { network, pending } = makeNetwork();
+    const c = new SessionKeyController(network, IMAGE_PROVIDERS, { providerId: "openai-image", modelId: "gpt-image-2.6-flare" });
+    c.setApiKey("typed-but-not-saved");
+    const reuse = c.reuseFrom("openai");
+    const post = pending.find((x) => x.method === "POST" && x.path.endsWith("/session-key/reuse"));
+    expect(post?.body).toEqual({ fromProviderId: "openai", toProviderId: "openai-image" });
+    expect(JSON.stringify(post?.body)).not.toContain("typed-but-not-saved");
+    settleAt(pending, pending.indexOf(post!), {
+      providerId: "openai-image",
+      storageScope: "session_only",
+      configured: true,
+      expiresAt: "EXP",
+      version: "V-IMG",
+    });
+    await flush(); // success triggers a status read
+    settleAt(
+      pending,
+      pending.findIndex((x) => x.method === "GET" && x.path.includes("status")),
+      { providers: [{ providerId: "openai-image", storageScope: "session_only", configured: true, expiresAt: "EXP", version: "V-IMG" }] }
+    );
+    await reuse;
+    expect(c.getState().status).toBe("configured");
+    expect(c.getState().apiKey).toBe("");
+    expect(c.getState().notice?.kind).toBe("success");
+    expect(c.getState().reuseState).toBe("idle");
+  });
+
+  it("a missing source key yields a bounded, actionable error (never a fake success)", async () => {
+    const { network, pending } = makeNetwork();
+    const c = new SessionKeyController(network, IMAGE_PROVIDERS, { providerId: "openai-image" });
+    const reuse = c.reuseFrom("openai");
+    const post = pending.find((x) => x.method === "POST" && x.path.endsWith("/session-key/reuse"));
+    settleAt(pending, pending.indexOf(post!), { code: "SESSION_CREDENTIAL_MISSING", error: "missing" }, 409, false);
+    await reuse;
+    expect(c.getState().status).not.toBe("configured");
+    expect(c.getState().notice?.kind).toBe("error");
+    expect(c.getState().notice?.text).toMatch(/Text AI OpenAI/);
   });
 });

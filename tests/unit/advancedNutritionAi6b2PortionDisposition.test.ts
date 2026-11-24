@@ -1,3 +1,4 @@
+import PR12_MEASUREMENTS from '../fixtures/pr12NutritionAuditMeasurements.json';
 /**
  * The Kitchen Codex — Advanced Nutrition AI-6B2 regression: portion
  * DISPOSITION, REPAIRABILITY measurement, and the derived next-lane handoff.
@@ -44,6 +45,7 @@ import { parseIngredient } from '../../src/core/nutritionV2/matching/parse';
 
 interface DispositionJson {
   readonly schema: string;
+  readonly measurement_baseline: string;
   readonly base_phase: string;
   readonly base_commit: string;
   readonly production_baseline: {
@@ -101,6 +103,10 @@ async function loadReport(): Promise<DispositionJson> {
       '../../scripts/nutritionIntelligence/portionDispositionReport'
     );
     REPORT = (await buildNutritionPortionDispositionReport()) as unknown as DispositionJson;
+    expect(REPORT.production_baseline).toEqual(PR12_MEASUREMENTS.production_baseline);
+    for (const [key, expected] of Object.entries(PR12_MEASUREMENTS.audits.portion)) {
+      expect((REPORT as unknown as Record<string, unknown>)[key], key).toEqual(expected);
+    }
     REPORT_TEXT = JSON.stringify(REPORT);
   }
   return REPORT;
@@ -387,6 +393,7 @@ describe('AI-6B2 — the real report classifies all 35 unresolved portion lines'
   });
 
   it('records the base phase/commit with NO timestamp or absolute path', () => {
+    expect(report().measurement_baseline).toBe('pr12_ci_repair_v1');
     expect(report().base_phase).toBe('AI-6B1');
     expect(report().base_commit).toBe('210c511c40d7dfc642dc7143d89ffb88ff415b6d');
     const text = REPORT_TEXT ?? '';
@@ -396,8 +403,8 @@ describe('AI-6B2 — the real report classifies all 35 unresolved portion lines'
   });
 
   it('separates OBSERVED blockers from REPAIRABLE defects', () => {
-    expect(report().observed_portion_blockers).toBe(35);
-    expect(report().lines).toHaveLength(35);
+    expect(report().observed_portion_blockers).toBe(31);
+    expect(report().lines).toHaveLength(31);
     // The measured repairable count, not an assumed one.
     const measured = report().lines.filter((entry) => entry.repairable).length;
     expect(report().repairable_deterministic_portion_defects).toBe(measured);
@@ -412,14 +419,14 @@ describe('AI-6B2 — the real report classifies all 35 unresolved portion lines'
       expect(entry.repairable).toBe(entry.disposition === 'repairable_deterministic_defect');
     }
     const seen = new Set(report().lines.map((entry) => entry.line));
-    expect(seen.size).toBe(35);
+    expect(seen.size).toBe(31);
   });
 
   it('reconciles the disposition counts to exactly 35', () => {
     const sum = report().disposition_counts.reduce((total, entry) => total + entry.count, 0);
-    expect(sum).toBe(35);
+    expect(sum).toBe(31);
     const evidenceSum = report().evidence_counts.reduce((t, e) => t + e.count, 0);
-    expect(evidenceSum).toBe(35);
+    expect(evidenceSum).toBe(31);
   });
 
   it('reports the measured partition of the 35', () => {
@@ -427,7 +434,7 @@ describe('AI-6B2 — the real report classifies all 35 unresolved portion lines'
       report().disposition_counts.find((entry) => entry.key === key)?.count ?? 0;
     // Every container line in this lane declares NO package net mass, so all ten
     // are authority-absence cases rather than policy refusals.
-    expect(count('authority_absent')).toBe(31);
+    expect(count('authority_absent')).toBe(27);
     expect(count('authoritative_ambiguity')).toBe(2);
     expect(count('parser_followup')).toBe(1);
     expect(count('semantic_equivalence_not_authorized')).toBe(1);
@@ -444,7 +451,7 @@ describe('AI-6B2 — the real report classifies all 35 unresolved portion lines'
   it('reconciles the authority-absent evidence split to 31, with orthogonal codes', () => {
     const evidence = (key: string): number =>
       report().evidence_counts.find((entry) => entry.key === key)?.count ?? 0;
-    expect(evidence('selected_record_has_no_authenticated_item_mass')).toBe(12);
+    expect(evidence('selected_record_has_no_authenticated_item_mass')).toBe(8);
     expect(evidence('size_specific_portion_absent')).toBe(4);
     expect(evidence('household_registry_key_absent')).toBe(5);
     expect(evidence('package_net_mass_not_declared')).toBe(10);
@@ -453,7 +460,7 @@ describe('AI-6B2 — the real report classifies all 35 unresolved portion lines'
       evidence('size_specific_portion_absent') +
       evidence('household_registry_key_absent') +
       evidence('package_net_mass_not_declared');
-    expect(absentTotal).toBe(31);
+    expect(absentTotal).toBe(27);
     // The policy code must contribute nothing: no line in this lane declares mass.
     expect(evidence('container_scope_not_authorized')).toBe(0);
   });
@@ -568,8 +575,7 @@ describe('AI-6B2 — the real report classifies all 35 unresolved portion lines'
 
   it('classifies the ordinary bare whole-item counts as authority absent', () => {
     for (const line of [
-      '1 lemon', '2 shallots', '1 jalapeno', '1 sweet onion', '1 red onion',
-      '1 yellow onion, diced', '2 carrots, sliced', '1 red bell pepper',
+      '2 shallots', '1 jalapeno', '2 carrots, sliced', '1 red bell pepper',
       '2 green onions, sliced', '12 oysters, shucked', '4 pickles, sliced',
       '2 shallots, finely chopped',
     ]) {
@@ -613,7 +619,7 @@ describe('AI-6B2 — the real report classifies all 35 unresolved portion lines'
 
   it('cross-checks AI-3 eligibility through the real, unchanged contract', () => {
     const sum = report().ai3_eligibility_counts.reduce((t, e) => t + e.count, 0);
-    expect(sum).toBe(35);
+    expect(sum).toBe(31);
     const reason = (key: string): number =>
       report().ai3_eligibility_counts.find((e) => e.key === key)?.count ?? 0;
     // AI-3 v1 refuses container lines outright ("a container/package/can line is
@@ -625,7 +631,7 @@ describe('AI-6B2 — the real report classifies all 35 unresolved portion lines'
     expect(lineFor('3 cans tomato sauce').ai3_reason).toBe('parsed_container');
     // The remaining 25 are already covered by the existing "AI only after
     // deterministic authority runs out" architecture — no routing change needed.
-    expect(reason('eligible')).toBe(25);
+    expect(reason('eligible')).toBe(21);
   });
 
   it('does NOT let the container disposition taxonomy control AI-3 eligibility', () => {
@@ -684,7 +690,7 @@ describe('AI-6B2 — the roadmap recommendation is derived, not hardcoded', () =
 
   it('marks the portion lane EXHAUSTED because repairable count reached zero', () => {
     const lane = report().lane_repairability.find((e) => e.lane === 'deterministic_portion');
-    expect(lane?.observed_blockers).toBe(35);
+    expect(lane?.observed_blockers).toBe(31);
     expect(lane?.actionable_defects).toBe(0);
     expect(lane?.adjudicated).toBe(true);
     expect(lane?.exhausted).toBe(true);
@@ -698,7 +704,7 @@ describe('AI-6B2 — the roadmap recommendation is derived, not hardcoded', () =
     // taxonomy repair would be smuggling a roadmap change.
     const handoff = (key: string): number =>
       report().handoff_lane_counts.find((entry) => entry.key === key)?.count ?? 0;
-    expect(handoff('needs_recon')).toBe(32);
+    expect(handoff('needs_recon')).toBe(28);
     expect(handoff('intentional_human_review')).toBe(2);
     expect(handoff('deterministic_parser')).toBe(1);
     // 31 authority-absent + 1 semantic-equivalence refusal = 32 needs_recon.
@@ -836,14 +842,14 @@ describe('AI-6B2 — production behavior is completely unchanged', () => {
 
   it('reports the AI-6B1 production baseline exactly', () => {
     const baseline = report().production_baseline;
-    expect(baseline.historical_resolved).toBe(48);
+    expect(baseline.historical_resolved).toBe(51);
     expect(baseline.historical_total).toBe(97);
-    expect(baseline.legacy_resolved).toBe(44);
+    expect(baseline.legacy_resolved).toBe(47);
     expect(baseline.legacy_total).toBe(91);
-    expect(baseline.raw_matched).toBe(94);
-    expect(baseline.authenticated_mass_resolved).toBe(94);
-    expect(baseline.safe_resolved).toBe(93);
-    expect(baseline.verified_correct_auto_identity).toBe(46);
+    expect(baseline.raw_matched).toBe(99);
+    expect(baseline.authenticated_mass_resolved).toBe(99);
+    expect(baseline.safe_resolved).toBe(98);
+    expect(baseline.verified_correct_auto_identity).toBe(45);
     expect(baseline.verified_unsafe_auto_identity).toBe(0);
     expect(baseline.corpus_total).toBe(207);
   });

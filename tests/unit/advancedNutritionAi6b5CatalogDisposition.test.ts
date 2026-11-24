@@ -1,3 +1,4 @@
+import PR12_MEASUREMENTS from '../fixtures/pr12NutritionAuditMeasurements.json';
 /**
  * The Kitchen Codex — Advanced Nutrition AI-6B5 regression: CATALOG
  * disposition, REPAIRABILITY measurement, and the derived next-lane handoff.
@@ -102,6 +103,7 @@ interface LineJson {
 
 interface ReportJson {
   readonly schema: string;
+  readonly measurement_baseline: string;
   readonly base_phase: string;
   readonly base_commit: string;
   readonly production_baseline: {
@@ -163,6 +165,10 @@ async function loadReport(): Promise<ReportJson> {
       '../../scripts/nutritionIntelligence/catalogDispositionReport'
     );
     REPORT = (await buildNutritionCatalogDispositionReport()) as unknown as ReportJson;
+    expect(REPORT.production_baseline).toEqual(PR12_MEASUREMENTS.production_baseline);
+    for (const [key, expected] of Object.entries(PR12_MEASUREMENTS.audits.catalog)) {
+      expect((REPORT as unknown as Record<string, unknown>)[key], key).toEqual(expected);
+    }
     REPORT_TEXT = JSON.stringify(REPORT);
   }
   return REPORT;
@@ -424,19 +430,20 @@ describe('AI-6B5 — the five-line catalog census reconciles', () => {
   beforeAll(beforeAllLoad, 600000);
 
   // M10 TARGET: dropping a line must fail loudly.
-  it('M10 — exactly 5 blockers, split 4 specificity + 1 container mass', () => {
-    expect(report().observed_catalog_blockers).toBe(5);
-    expect(report().lines).toHaveLength(5);
+  it('M10 — exactly 6 blockers, split 5 specificity + 1 container mass', () => {
+    expect(report().observed_catalog_blockers).toBe(6);
+    expect(report().lines).toHaveLength(6);
     const split = Object.fromEntries(report().blocker_split.map((entry) => [entry.key, entry.count]));
-    expect(split.catalog_or_specificity_gap).toBe(4);
+    expect(split.catalog_or_specificity_gap).toBe(5);
     expect(split.container_mass_absent).toBe(1);
-    expect(report().blocker_split.reduce((sum, e) => sum + e.count, 0)).toBe(5);
+    expect(report().blocker_split.reduce((sum, e) => sum + e.count, 0)).toBe(6);
   });
 
   it('records each named line exactly once', () => {
     const texts = report().lines.map((line) => line.line);
-    expect(new Set(texts).size).toBe(5);
+    expect(new Set(texts).size).toBe(6);
     for (const expected of [
+      '1/4 teaspoon crushed red pepper flakes',
       '1 lb rigatoni',
       '2 cups breadcrumbs',
       '2 cups firmly packed breadcrumbs',
@@ -463,9 +470,9 @@ describe('AI-6B5 — the five-line catalog census reconciles', () => {
   });
 
   it('derives every count from the per-line records', () => {
-    expect(report().disposition_counts.reduce((s, e) => s + e.count, 0)).toBe(5);
-    expect(report().evidence_counts.reduce((s, e) => s + e.count, 0)).toBe(5);
-    expect(report().handoff_lane_counts.reduce((s, e) => s + e.count, 0)).toBe(5);
+    expect(report().disposition_counts.reduce((s, e) => s + e.count, 0)).toBe(6);
+    expect(report().evidence_counts.reduce((s, e) => s + e.count, 0)).toBe(6);
+    expect(report().handoff_lane_counts.reduce((s, e) => s + e.count, 0)).toBe(6);
     for (const entry of report().disposition_counts) {
       expect(report().lines.filter((l) => l.disposition === entry.key)).toHaveLength(entry.count);
     }
@@ -487,20 +494,21 @@ describe('AI-6B5 — the five-line catalog census reconciles', () => {
 
   it('freezes the production baseline', () => {
     const baseline = report().production_baseline;
-    expect(baseline.historical_resolved).toBe(48);
+    expect(baseline.historical_resolved).toBe(51);
     expect(baseline.historical_total).toBe(97);
-    expect(baseline.legacy_resolved).toBe(44);
+    expect(baseline.legacy_resolved).toBe(47);
     expect(baseline.legacy_total).toBe(91);
-    expect(baseline.raw_matched).toBe(94);
-    expect(baseline.authenticated_mass_resolved).toBe(94);
-    expect(baseline.safe_resolved).toBe(93);
-    expect(baseline.verified_correct_auto_identity).toBe(46);
+    expect(baseline.raw_matched).toBe(99);
+    expect(baseline.authenticated_mass_resolved).toBe(99);
+    expect(baseline.safe_resolved).toBe(98);
+    expect(baseline.verified_correct_auto_identity).toBe(45);
     expect(baseline.verified_unsafe_auto_identity).toBe(0);
     expect(baseline.corpus_total).toBe(207);
   });
 
   it('pins the base commit so later HEAD movement cannot perturb the artifact', () => {
     expect(report().base_commit).toBe('5ee912999fa2cf7bd83efc56a0fcfa89c2df258f');
+    expect(report().measurement_baseline).toBe('pr12_ci_repair_v1');
     expect(report().base_phase).toBe('AI-6B4');
     expect(report().schema).toBe(CATALOG_DISPOSITION_SCHEMA);
   });
@@ -644,21 +652,21 @@ describe('AI-6B5 — repairability is measured and the oracle is untouched', () 
 
   // M7 TARGET: the 46 known-good identities are never touched.
   it('M7 — leaves the known-good identity oracle at 46/46 with zero unsafe', () => {
-    expect(report().production_baseline.verified_correct_auto_identity).toBe(46);
+    expect(report().production_baseline.verified_correct_auto_identity).toBe(45);
     expect(report().production_baseline.verified_unsafe_auto_identity).toBe(0);
   });
 
   it('keeps catalog, identity, ranking and portion as distinct lanes', () => {
-    expect(report().observed_catalog_blockers).toBe(5);
-    expect(report().deterministic_portion_blockers).toBe(35);
+    expect(report().observed_catalog_blockers).toBe(6);
+    expect(report().deterministic_portion_blockers).toBe(31);
     expect(report().deterministic_identity_blockers).toBe(27);
-    expect(report().deterministic_ranking_blockers).toBe(9);
+    expect(report().deterministic_ranking_blockers).toBe(7);
     expect(
       report().observed_catalog_blockers +
         report().deterministic_identity_blockers +
         report().deterministic_ranking_blockers +
         report().deterministic_portion_blockers
-    ).toBe(76);
+    ).toBe(71);
     // Identity-lane and ranking-lane lines are NOT in the catalog census.
     for (const text of ['2 cloves', '3 stalks celery', '2 cups tomato sauce']) {
       expect(report().lines.some((l) => l.line === text), text).toBe(false);
@@ -666,7 +674,7 @@ describe('AI-6B5 — repairability is measured and the oracle is untouched', () 
   });
 
   it('reports AI-3 eligibility per line without changing it', () => {
-    expect(report().ai3_eligibility_counts.reduce((s, e) => s + e.count, 0)).toBe(5);
+    expect(report().ai3_eligibility_counts.reduce((s, e) => s + e.count, 0)).toBe(6);
     for (const line of report().lines) {
       // An unresolved catalog identity blocks estimation entirely: AI-6B5 must
       // not expand AI identity authority to cover any of them.
@@ -704,7 +712,7 @@ describe('AI-6B5 — the roadmap follows measured repairability', () => {
       expect(row?.exhausted, lane).toBe(true);
     }
     const catalog = report().lane_repairability.find((lane) => lane.lane === 'catalog_gap');
-    expect(catalog?.observed_blockers).toBe(5);
+    expect(catalog?.observed_blockers).toBe(6);
   });
 
   it('never reports an un-adjudicated lane as zero actionable', () => {

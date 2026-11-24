@@ -435,7 +435,11 @@ export async function resolveNutritionAiClientState(
  * The credential source selected for the TEXT surface, or `undefined` when no
  * user selection applies. NON-SECRET selection metadata only.
  */
-export function selectedTextCredentialSource(): 'server_environment' | 'session_only' | undefined {
+export function selectedTextCredentialSource():
+  | 'server_environment'
+  | 'session_only'
+  | 'native_plan'
+  | undefined {
   try {
     return getCachedAiSelections().textAi.credentialSource;
   } catch {
@@ -449,7 +453,8 @@ export function selectedTextCredentialSource(): 'server_environment' | 'session_
  * `session_only` selection — means readiness must come from session status.
  */
 function usesServerEnvironmentCredential(): boolean {
-  return selectedTextCredentialSource() !== 'session_only';
+  const source = selectedTextCredentialSource();
+  return source === 'server_environment' || source === undefined;
 }
 
 /**

@@ -26,6 +26,7 @@ import {
   NUTRITION_PRODUCT_ACCESS_VERSION,
   NUTRITION_PRODUCT_AI_FEATURES,
   NUTRITION_PRODUCT_TIERS,
+  isAdvancedNutritionEditingEntitled,
   isAiAdvancedProductAccess,
   isBasicProductAccess,
   isNutritionProductAccess,
@@ -36,6 +37,20 @@ import {
   type NutritionProductAiFeature,
   type NutritionProductTier,
 } from '../../src/core/nutritionV2/nutritionProductAccess';
+
+describe('Nutrition product alignment — manual Advanced editing entitlement', () => {
+  it('Basic owns deterministic generation/viewing but NOT Advanced editing', () => {
+    expect(isAdvancedNutritionEditingEntitled(BASIC_NUTRITION_PRODUCT_ACCESS)).toBe(false);
+  });
+
+  it('AI Advanced owns manual Advanced editing independently of provider readiness', () => {
+    expect(isAdvancedNutritionEditingEntitled(AI_ADVANCED_NUTRITION_PRODUCT_ACCESS)).toBe(true);
+    // Provider configuration is not even an input to this decision.
+    expect(isAdvancedNutritionEditingEntitled({ tier: 'ai_advanced' })).toBe(false);
+    expect(isAdvancedNutritionEditingEntitled(undefined)).toBe(false);
+    expect(isAdvancedNutritionEditingEntitled('ai_advanced')).toBe(false);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // 1. CLOSED VERSIONED CONTRACT

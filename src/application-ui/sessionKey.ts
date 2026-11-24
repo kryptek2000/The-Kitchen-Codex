@@ -12,6 +12,7 @@ import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
 /** Fixed application API paths (never caller-controlled). */
 export const SESSION_KEY_API_PATH = '/api/providers/session-key';
 export const SESSION_KEY_STATUS_API_PATH = '/api/providers/session-key/status';
+export const SESSION_KEY_REUSE_API_PATH = `${SESSION_KEY_API_PATH}/reuse`;
 export const PROVIDER_TEST_CONNECTION_API_PATH = '/api/providers/test-connection';
 
 export type CredentialSourceView = 'server_environment' | 'session_only';
@@ -165,6 +166,35 @@ export async function revokeSessionKey(
     return { ok: false, status: res.status, code: err.code, message: err.message };
   }
   return { ok: true, status: res.status };
+}
+
+/**
+ * P2: EXPLICITLY copy a live session key between an exact reviewed provider pair
+ * (OpenAI text <-> OpenAI image). The key never travels to the browser; the
+ * server copies it within its own memory store. Source and target remain separate
+ * entries with independent revoke. Never called automatically.
+ */
+export async function reuseSessionKey(
+  network: NetworkAdapter,
+  fromProviderId: string,
+  toProviderId: string,
+  expectedVersion?: string
+): Promise<SessionKeyMutationResult> {
+  if (!isValidProviderId(fromProviderId) || !isValidProviderId(toProviderId)) {
+    return { ok: false, status: 400, code: 'INVALID_REQUEST', message: 'Invalid provider id.' };
+  }
+  const body: { fromProviderId: string; toProviderId: string; expectedVersion?: string } = {
+    fromProviderId,
+    toProviderId,
+  };
+  if (expectedVersion) body.expectedVersion = expectedVersion;
+  const res = await network.post(SESSION_KEY_REUSE_API_PATH, body);
+  if (!res.ok) {
+    const err = boundedError(res.data);
+    return { ok: false, status: res.status, code: err.code, message: err.message };
+  }
+  const session = normalizeStatusRow(res.data) ?? undefined;
+  return { ok: true, status: res.status, session };
 }
 
 /**

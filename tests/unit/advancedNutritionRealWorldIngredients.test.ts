@@ -7,6 +7,7 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { gunzipSync } from 'node:zlib';
 import { join } from 'node:path';
 import { describe, it, expect, beforeAll } from 'vitest';
 
@@ -23,7 +24,7 @@ import type { Phase4Row, Phase4State } from '../../src/core/nutritionV2/phase4/t
 
 const BUNDLE_DIR = join(
   __dirname,
-  '../../data/advanced-nutrition/usda/usda_fdc_87c5408a3e98838944a87be74824761e'
+  '../../data/advanced-nutrition/usda/usda_fdc_1f3e3068a7ae0702f360d1caae40a628'
 );
 
 let session: AdvancedNutritionSession;
@@ -131,6 +132,33 @@ describe('canonicalization — preparation noise, modifiers, parentheticals', ()
   });
 });
 
+describe('light brown sugar identity and manual USDA discovery', () => {
+  it('keeps light brown sugar unresolved automatically while exposing the generic brown-sugar record to manual review', () => {
+    const { row } = analyzeLine('1 cup light brown sugar, packed');
+    expect(row.status).toBe('needs_match');
+    const manual = session.searchFoods('brown sugar', 10);
+    expect(manual.ok).toBe(true);
+    if (manual.ok) expect(manual.results.some((entry) => /sugars?, brown/i.test(entry.description))).toBe(true);
+    // The generic record does not prove the authored light subtype, so it must
+    // remain a user-visible choice rather than a silent automatic match.
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R4 — qualifier fallback regression
+describe('R4 qualifier fallback regression', () => {
+  it('exposes review candidates for over-narrowing preparation qualifiers without auto-authorizing them', () => {
+    for (const line of ['1 cup quick brown rice', '1 cup instant noodles', '1 cup instant quinoa']) {
+      const { row } = analyzeLine(line);
+      expect(row.candidates.length).toBeGreaterThan(0);
+      expect(row.selected_fdc_id).toBeUndefined();
+    }
+    const { row: oats } = analyzeLine('1 cup rolled oats');
+    expect(oats.candidates.length).toBeGreaterThan(0);
+    expect(oats.candidates.every((candidate) => /rolled/i.test(candidate.description))).toBe(true);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Acceptance matrix
 // ---------------------------------------------------------------------------
@@ -201,7 +229,8 @@ describe('real-world acceptance matrix', () => {
   it('I. 57 g unsalted butter -> unsalted butter, direct mass', () => {
     const { row } = analyzeLine('57 g unsalted butter, softened');
     expect(row.status).toBe('matched');
-    expect(row.selected_description).toMatch(/unsalted/i);
+    expect(row.selected_description).toMatch(/unsalted|without salt/i);
+    expect(row.selected_fdc_id).toBe(173430);
   });
 
   it('J. 113 g blue cheese -> blue cheese, direct mass', () => {
@@ -438,6 +467,101 @@ describe('manual USDA search', () => {
 // ---------------------------------------------------------------------------
 // Adversarial composed-food boundaries
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// SINC-1 owner acceptance fixture
+// ---------------------------------------------------------------------------
+
+describe('owner fixture — Gochujang Chicken Rice Bowls intelligent completion', () => {
+  const OWNER_LINES: ReadonlyArray<string> = [
+    '680 g raw boneless skinless chicken thighs',
+    '1 tbsp olive oil',
+    '1 medium yellow onion (150 g)',
+    '3 garlic cloves',
+    '1 tbsp minced fresh ginger',
+    '1 red bell pepper (150 g)',
+    '1 medium carrot (70 g)',
+    '100 g broccoli florets',
+    '100 g sugar snap peas',
+    '100 g cremini mushrooms',
+    '2 tbsp gochujang (Korean chili paste)',
+    '2 tbsp reduced-sodium soy sauce',
+    '1 tbsp rice vinegar',
+    '1 tbsp honey',
+    '1 tsp toasted sesame oil',
+    '200 g dry jasmine rice',
+    '1 tbsp sesame seeds',
+    '2 scallions (30 g)',
+  ];
+
+  it('resolves the defensible local USDA identities and leaves only true evidence gaps unresolved', () => {
+    const adapted = adaptLines(OWNER_LINES);
+    const analysis = analyzeRecipe(session, adapted, 4);
+    expect(analysis.rows).toHaveLength(18);
+    expect(analysis.summary.matched).toBe(16);
+    expect(analysis.summary.needs_match).toBe(2);
+    expect(analysis.preview?.totals.calories).toEqual(
+      expect.objectContaining({
+        covered_ingredient_count: 16,
+        measurable_ingredient_count: 18,
+        status: 'partial',
+      })
+    );
+    expect(analysis.preview?.totals.calories?.amount).toBeCloseTo(2300.723333, 5);
+
+    const byLine = new Map(analysis.rows.map((row) => [row.original_text, row]));
+    expect(byLine.get('1 tbsp minced fresh ginger')?.selected_description).toBe('Ginger root, raw');
+    expect(byLine.get('100 g broccoli florets')?.selected_description).toMatch(/Broccoli, flower clusters, raw/i);
+    expect(byLine.get('100 g sugar snap peas')?.selected_description).toBe('Peas, edible-podded, raw');
+    expect(byLine.get('100 g cremini mushrooms')?.selected_description).toMatch(/crimini/i);
+    expect(byLine.get('1 tsp toasted sesame oil')?.selected_description).toBe('Sesame oil');
+    expect(byLine.get('200 g dry jasmine rice')?.selected_description).toMatch(/Rice, white, long grain/i);
+    expect(byLine.get('200 g dry jasmine rice')?.selected_description).not.toMatch(/brown/i);
+    expect(byLine.get('2 scallions (30 g)')?.selected_description).toMatch(/onion/i);
+
+    // These two have no defensible pinned-USDA identity. They must remain
+    // unresolved rather than becoming a generic condiment or vinegar.
+    expect(byLine.get('2 tbsp gochujang (Korean chili paste)')?.status).toBe('needs_match');
+    expect(byLine.get('1 tbsp rice vinegar')?.status).toBe('needs_match');
+    expect(
+      analysis.rows.filter((row) => row.status === 'needs_match').map((row) => row.original_text).sort()
+    ).toEqual(['1 tbsp rice vinegar', '2 tbsp gochujang (Korean chili paste)']);
+    for (const row of analysis.rows) {
+      expect(row.selected_description ?? '').not.toMatch(/chili sauce|generic vinegar/i);
+    }
+  });
+
+  it('the four previously energy-less Foundation matches carry USDA food-specific kcal', () => {
+    const parsed = JSON.parse(
+      gunzipSync(readFileSync(join(BUNDLE_DIR, 'records.foundation.json.gz'))).toString('utf8')
+    ) as ReadonlyArray<Record<string, any>>;
+    const byFdc = new Map<number, Record<string, any>>(parsed.map((record) => [record.fdc_id, record]));
+
+    // These four matched Foundation records publish no 1008 "Energy" component.
+    // The pinned USDA download does publish 2048 "Energy (Atwater Specific
+    // Factors)", which is real USDA-calculated kcal, not 4/4/9 arithmetic.
+    const expected: ReadonlyArray<readonly [number, number]> = [
+      [2646171, 149],
+      [2258590, 27],
+      [2003601, 23.7],
+      [2512381, 370],
+    ];
+    for (const [fdcId, kcal] of expected) {
+      const record = byFdc.get(fdcId);
+      expect(record, String(fdcId)).toBeDefined();
+      expect(record?.nutrients.calories).toEqual(
+        expect.objectContaining({
+          nutrient_id: 'calories',
+          unit: 'kcal',
+          amount_per_100g: kcal,
+          usda_nutrient_id: 2048,
+          source_unit: 'KCAL',
+          converted: false,
+        })
+      );
+    }
+  });
+});
 
 describe('adversarial composed-food boundaries', () => {
   it('a composed hamburger cannot be selected for a plain burger bun', () => {

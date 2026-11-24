@@ -87,6 +87,7 @@
 import type { RequestHandler } from "express";
 
 import {
+  isAdvancedNutritionEditingEntitled,
   isNutritionProductFeatureEntitled,
   NUTRITION_PRODUCT_ACCESS_VERSION,
   type NutritionProductAiFeature,
@@ -103,6 +104,18 @@ export { NUTRITION_PRODUCT_TIER_ENV };
 
 /** The single bounded machine code for every non-entitled AI Advanced attempt. */
 export const NUTRITION_AI_NOT_ENTITLED_CODE = "NUTRITION_AI_NOT_ENTITLED";
+
+/** Dedicated code for an Advanced-only deterministic capability (no AI cost). */
+export const NUTRITION_ADVANCED_NOT_ENTITLED_CODE = "NUTRITION_ADVANCED_NOT_ENTITLED";
+
+function buildAdvancedNutritionNotEntitledBody(): Record<string, unknown> {
+  return {
+    ok: false,
+    code: NUTRITION_ADVANCED_NOT_ENTITLED_CODE,
+    error: "Advanced Nutrition is required.",
+    aiAttempted: false,
+  };
+}
 
 /**
  * AI-5C: the read-only product-access STATUS route.
@@ -337,6 +350,32 @@ export function requireNutritionProductFeature(
       return;
     }
     response.status(403).json(buildNutritionAiNotEntitledBody());
+  };
+}
+
+/**
+ * Advanced-only deterministic capability gate.
+ *
+ * Used by capabilities that belong to the Advanced review workspace but do not
+ * call an AI provider (for example, USDA Branded Foods lookup). It resolves the
+ * SAME server-owned product authority as the AI feature gates, but it does not
+ * consume an AI rate-limit or pricing budget. Basic callers receive a bounded
+ * 403 before any upstream request.
+ */
+export function requireAdvancedNutritionEditing(
+  authority: NutritionProductAccessAuthority
+): RequestHandler {
+  return async (request, response, next) => {
+    const decision = await invokeNutritionProductAccessAuthority(authority, request);
+    if (decision.status === "unavailable") {
+      response.status(503).json(buildNutritionProductAccessUnavailableBody());
+      return;
+    }
+    if (isAdvancedNutritionEditingEntitled(decision.access)) {
+      next();
+      return;
+    }
+    response.status(403).json(buildAdvancedNutritionNotEntitledBody());
   };
 }
 

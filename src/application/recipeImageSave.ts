@@ -45,8 +45,27 @@ import {
   isValidVaultSessionId,
 } from '../core/recipeImage';
 import { assessRecipeImageHealth } from '../core/recipeImage';
-import { parseObsidianRecipeMarkdown, serializeRecipeToObsidianMarkdown } from '../utils/markdownParser';
+import {
+  parseObsidianRecipeMarkdown,
+  serializeRecipePreservingContent,
+  serializeRecipeToObsidianMarkdown,
+} from '../utils/markdownParser';
 import { withGeneratedSaveLock } from './createForMe';
+import { validateRecipeAssetReferences } from '../utils/assetReferences';
+
+/**
+ * Minimal structural contract for the originating scope. Kept local so the
+ * application layer does not import the browser vault utility module directly.
+ */
+interface RecoveryAssetScope {
+  isActive(): boolean;
+  isAccepting(): boolean;
+  ownsUrl(url?: string): boolean;
+  registerAsset(
+    path: string,
+    file: Blob
+  ): { blobUrl?: string } | null;
+}
 
 /** SHA-256 hex of the FULL canonical Markdown text (platform-neutral WebCrypto). */
 export async function hashCanonicalMarkdown(markdown: string): Promise<string> {
@@ -96,6 +115,11 @@ export interface RecipeImagePreviewSource {
 export interface GeneratedImageSaveDeps {
   vault: VaultAdapter;
   asset: AssetAdapter;
+  /**
+   * The originating collection's asset scope. Registration happens only after
+   * the asset write is verified and the canonical Markdown write succeeds.
+   */
+  assetScope?: RecoveryAssetScope;
   previewSource: RecipeImagePreviewSource;
   /** Injectable clock for provenance timestamps (tests). */
   now?: () => Date;
@@ -126,6 +150,10 @@ export interface GeneratedImageSaveResult {
   provider: string;
   model: string;
   generatedAt: string;
+  /** Whether the written asset joined the originating Vault asset scope. */
+  registration?: 'registered' | 'failed' | 'skipped-inactive' | 'unavailable';
+  /** Scope-owned rendering URL when registration succeeded. */
+  blobUrl?: string;
 }
 
 /** Conflict/rejection reasons (stable, safe to surface; no secrets/prompt). */
@@ -136,7 +164,9 @@ export type RecipeImageSaveConflictReason =
   | 'VAULT_CHANGED'
   | 'RECIPE_CHANGED'
   | 'IMAGE_ALREADY_PRESENT'
-  | 'ASSET_PATH_EXHAUSTED';
+  | 'ASSET_PATH_EXHAUSTED'
+  | 'ASSET_WRITE_UNVERIFIED'
+  | 'ASSET_REFERENCE_INVALID';
 
 /**
  * A save rejection. Thrown BEFORE any vault mutation. Carries only a stable
@@ -282,22 +312,50 @@ export async function saveGeneratedRecipeImageToVault(
     // (exists() -> suffix -> re-check loop; never overwrite an existing asset).
     const safeTitle = sanitizeAssetTitle(input.recipeTitle);
     const ext = assetExtension(preview.contentType);
-    let assetPath: string | undefined;
-    for (let attempt = 0; attempt <= MAX_ASSET_COLLISION_ATTEMPTS; attempt++) {
-      const candidate = attempt === 0 ? `Assets/${safeTitle}.${ext}` : `Assets/${safeTitle} (${attempt}).${ext}`;
-      if (!(await asset.exists(candidate))) {
-        assetPath = candidate;
+    let chosenAssetPath: string | undefined;
+    for (let attempt = 0; attempt <= MAX_ASSET_COLLISION_ATTEMPTS; attempt += 1) {
+      const candidate = attempt === 0
+        ? `Assets/${safeTitle}.${ext}`
+        : `Assets/${safeTitle} (${attempt}).${ext}`;
+      if (await asset.exists(candidate)) continue;
+      try {
+        if (typeof asset.writeExclusive === 'function') {
+          await asset.writeExclusive(candidate, preview.bytes, byteValidation.detectedMime);
+        } else {
+          // Best available non-destructive path: reserve by existence recheck,
+          // then write. The AssetAdapter contract has no atomic cross-process
+          // create primitive; this residual race is documented.
+          await asset.write(candidate, preview.bytes, byteValidation.detectedMime);
+        }
+        chosenAssetPath = candidate;
         break;
-      }
-      if (attempt === MAX_ASSET_COLLISION_ATTEMPTS) {
-        throw new RecipeImageSaveConflictError('ASSET_PATH_EXHAUSTED', 'Could not find a free image file name.');
+      } catch (error) {
+        if ((error as any)?.name === 'AssetPathCollisionError' || (error as any)?.code === 'ASSET_PATH_COLLISION') {
+          continue;
+        }
+        throw error;
       }
     }
-    const chosenAssetPath = assetPath as string;
+    if (!chosenAssetPath) {
+      throw new RecipeImageSaveConflictError('ASSET_PATH_EXHAUSTED', 'Could not find a free image file name.');
+    }
     let savedGeneratedAt = (deps.now ?? (() => new Date()))().toISOString();
 
-    // (i) Write image bytes through the AssetAdapter (create-only; path is free).
-    await asset.write(chosenAssetPath, preview.bytes, byteValidation.detectedMime);
+    // (i2) Verify the exact bytes landed in the ORIGINATING destination before
+    // updating Markdown or publishing success.
+    if (typeof asset.read === 'function') {
+      const written = await asset.read(chosenAssetPath);
+      if (
+        !written ||
+        written.length !== preview.bytes.length ||
+        !written.every((byte, index) => byte === preview.bytes[index])
+      ) {
+        throw new RecipeImageSaveConflictError(
+          'ASSET_WRITE_UNVERIFIED',
+          'The generated image could not be verified in the active Vault. The recipe was not saved.'
+        );
+      }
+    }
 
     // (j) Update the canonical Markdown: image field + namespaced provenance.
     try {
@@ -319,19 +377,53 @@ export async function saveGeneratedRecipeImageToVault(
         generated_at: generatedAt,
       };
       recipe.frontmatter = nextFrontmatter;
-      const updatedMarkdown = serializeRecipeToObsidianMarkdown(recipe);
+      const referenceValidation = await validateRecipeAssetReferences(
+        { asset, assetScope: deps.assetScope },
+        recipe
+      );
+      if (!referenceValidation.ok) {
+        throw new RecipeImageSaveConflictError(
+          'ASSET_REFERENCE_INVALID',
+          referenceValidation.reason || 'The recipe contains an image reference that is not valid in the active Vault.'
+        );
+      }
+      const updatedMarkdown = serializeRecipePreservingContent(recipe);
       // (k) Write the Markdown through the canonical VaultAdapter path.
       await vault.writeText(input.recipePath, updatedMarkdown);
       savedGeneratedAt = generatedAt;
     } catch (markdownError) {
-      // (l) Orphan rollback: best-effort delete of the NEW asset only. Cleanup
-      // failure is logged safely and NEVER replaces the primary Markdown error.
+      // (l) Orphan rollback: preserve the asset unless ownership is proven.
+      // Byte equality alone cannot prove transaction ownership, so cleanup is
+      // reported as incomplete rather than deleting a possibly adopted file.
       try {
-        await asset.delete(chosenAssetPath);
+        console.warn('Image asset cleanup skipped: transaction ownership could not be proven. The asset was preserved.');
       } catch (cleanupError) {
         console.warn('Image asset cleanup after failed Markdown save did not complete.', cleanupError instanceof Error ? cleanupError.name : '');
       }
       throw markdownError;
+    }
+
+    // (l2) Join the ORIGINATING scope only after both verified writes succeeded.
+    // A stale/inactive scope refuses registration and is never reactivated; the
+    // canonical write remains in its original Vault and the caller's session
+    // authority decides whether UI state may be published.
+    let registration: GeneratedImageSaveResult['registration'] = 'unavailable';
+    let blobUrl: string | undefined;
+    if (deps.assetScope) {
+      if (!deps.assetScope.isActive() || !deps.assetScope.isAccepting()) {
+        registration = 'skipped-inactive';
+      } else {
+        const registered = deps.assetScope.registerAsset(
+          chosenAssetPath,
+          new Blob([preview.bytes as unknown as BlobPart], { type: byteValidation.detectedMime })
+        );
+        if (registered) {
+          registration = 'registered';
+          blobUrl = registered.blobUrl;
+        } else {
+          registration = 'failed';
+        }
+      }
     }
 
     // Preview-token lifecycle: after a SUCCESSFUL save the token is invalidated
@@ -352,6 +444,8 @@ export async function saveGeneratedRecipeImageToVault(
       provider: sanitizeProvenanceValue(preview.provider) || 'unknown',
       model: sanitizeProvenanceValue(preview.model) || 'unknown',
       generatedAt: savedGeneratedAt,
+      registration,
+      blobUrl,
     };
   });
 }

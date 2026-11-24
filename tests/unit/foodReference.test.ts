@@ -119,9 +119,6 @@ describe('adversarial false positives (must resolve to undefined)', () => {
     'coconut milk',
     'almond milk',
     'cream cheese',
-    'sour cream',
-    'chicken broth',
-    'chicken thigh',
     'garlic powder',
     'onion powder',
     'garlic salt',
@@ -148,8 +145,9 @@ describe('butter identity (salted vs unsalted)', () => {
     expect(findFoodReference('butter, salted')?.id).toBe('butter');
   });
 
-  it('unsalted butter is NOT aliased to salted butter (resolves undefined)', () => {
-    expect(findFoodReference('unsalted butter')).toBeUndefined();
+  it('unsalted butter resolves to its distinct low-sodium record', () => {
+    expect(findFoodReference('unsalted butter')?.id).toBe('butter_unsalted');
+    expect(findFoodReference('unsalted butter')?.nutritionPer100g.sodium).toBe(11);
   });
 
   it('distinct butter-like foods remain undefined', () => {
@@ -181,8 +179,8 @@ describe('density semantics', () => {
 
   it('density is intentionally omitted where ambiguous', () => {
     expect(getFoodDensity(food('onion'))).toBeUndefined();
-    expect(getFoodDensity(food('salt'))).toBeUndefined();
-    expect(getFoodDensity(food('brown_sugar'))).toBeUndefined();
+    expect(getFoodDensity(food('salt'))?.confidence).toBe('low');
+    expect(getFoodDensity(food('brown_sugar'))?.confidence).toBe('low');
     expect(getFoodDensity(food('chicken_breast'))).toBeUndefined();
     expect(getFoodDensity(food('parmesan_cheese'))).toBeUndefined();
   });
@@ -209,7 +207,8 @@ describe('count-weight semantics', () => {
   });
 
   it('count weight omitted where size-dependent', () => {
-    expect(getFoodCountWeight(food('onion'))).toBeUndefined();
+    expect(getFoodCountWeight(food('onion'))).toMatchObject({ gramsPerItem: 110, confidence: 'low' });
+    expect(getFoodCountWeight(food('onion'))?.note).toMatch(/medium|representative/i);
     expect(getFoodCountWeight(food('chicken_breast'))).toBeUndefined();
   });
 
@@ -502,6 +501,17 @@ describe('immutability: canonical reference data cannot be corrupted', () => {
     const freshEgg = food('egg');
     expect(freshEgg.countWeights?.egg).toBe(50);
     expect(findFoodReference('salted butter')?.id).toBe('butter');
-    expect(findFoodReference('unsalted butter')).toBeUndefined();
+    expect(findFoodReference('unsalted butter')?.id).toBe('butter_unsalted');
+    expect(findFoodReference('unsalted butter')?.nutritionPer100g.sodium).toBe(11);
   });
+});
+
+// New curated identities must never be aliases for a materially different food.
+it.each([
+  ['sour cream', 'sour_cream'],
+  ['chicken broth', 'chicken_broth'],
+  ['chicken thigh', 'chicken_thigh'],
+])('keeps the curated identity %s separate', (name, id) => {
+  expect(findFoodReference(name)?.id).toBe(id);
+  expect(findFoodReference(name)?.source).toBe('curated_local');
 });

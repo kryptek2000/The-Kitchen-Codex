@@ -55,6 +55,7 @@ import {
   type RecipeImageRecoverySupport,
   type RecipeImageRecoveryState,
 } from '../application/recipeImageRecovery';
+import { createTemporaryPreviewUrl, releaseTemporaryPreviewUrl } from '../utils/assetProvenance';
 
 interface VaultIntelligenceModalProps {
   isOpen: boolean;
@@ -432,6 +433,7 @@ export function VaultIntelligenceModal({
   const [imageRecoveryState, setImageRecoveryState] = useState<RecipeImageRecoveryState>({ phase: 'idle' });
   const imageControllerRef = useRef<RecipeImageRecoveryController | null>(null);
   const selectedRecipeIdRef = useRef<string | null>(selectedRecipeId);
+  const pendingImageSaveRecipeIdRef = useRef<string | null>(null);
   useEffect(() => {
     selectedRecipeIdRef.current = selectedRecipeId;
   }, [selectedRecipeId]);
@@ -448,7 +450,8 @@ export function VaultIntelligenceModal({
       support: imageRecovery,
       onState: setImageRecoveryState,
       onSaved: (result) => {
-        const recipeId = selectedRecipeIdRef.current;
+        const recipeId = pendingImageSaveRecipeIdRef.current;
+        pendingImageSaveRecipeIdRef.current = null;
         if (recipeId) onRecipeImageSaved?.(recipeId, result.imagePath);
       },
     });
@@ -480,7 +483,10 @@ export function VaultIntelligenceModal({
     if (selectedRecipe && imageControllerRef.current) void imageControllerRef.current.generate(selectedRecipe);
   }, [selectedRecipe]);
   const handleImageSave = useCallback(() => {
-    if (selectedRecipe && imageControllerRef.current) void imageControllerRef.current.save(selectedRecipe);
+    if (selectedRecipe && imageControllerRef.current) {
+      pendingImageSaveRecipeIdRef.current = selectedRecipe.id;
+      void imageControllerRef.current.save(selectedRecipe);
+    }
   }, [selectedRecipe]);
   const handleImageConfirm = useCallback(() => {
     if (selectedRecipe && imageControllerRef.current) void imageControllerRef.current.confirm(selectedRecipe);
@@ -514,9 +520,9 @@ export function VaultIntelligenceModal({
       const viaAdapter = await fetchGeneratedPreviewBytes(network, previewToken);
       if (cancelled) return;
       if (!viaAdapter) return; // fail closed: bounded placeholder stays
-      url = URL.createObjectURL(new Blob([viaAdapter.bytes.slice()], { type: viaAdapter.contentType }));
+      url = createTemporaryPreviewUrl(new Blob([viaAdapter.bytes.slice()], { type: viaAdapter.contentType }), 'vault-intelligence-preview');
       if (cancelled) {
-        URL.revokeObjectURL(url);
+        releaseTemporaryPreviewUrl(url);
         return;
       }
       setSecurePreviewUrl(url);
@@ -525,7 +531,7 @@ export function VaultIntelligenceModal({
     });
     return () => {
       cancelled = true;
-      if (url) URL.revokeObjectURL(url);
+      if (url) releaseTemporaryPreviewUrl(url);
     };
   }, [isOpen, network, previewToken]);
   // -------------------------------------------------------------------------
@@ -693,7 +699,7 @@ const res = await network.post<{ recovered?: any; error?: string }>(
     }
 
     setIsBatchRunning(false);
-    setSaveSuccessNotice(`Batch recovery finished! Updated ${updatedRecipes.length} recipe notes in your Obsidian vault.`);
+    setSaveSuccessNotice(`Batch recovery finished! Updated ${updatedRecipes.length} recipe notes in your vault.`);
   };
 
   const getStatusBadge = (status: MetadataHealthStatus) => {
@@ -764,7 +770,7 @@ const res = await network.post<{ recovered?: any; error?: string }>(
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-base font-serif font-bold text-white tracking-tight">
-                  Obsidian Vault Intelligence
+                  My Recipe Vault Intelligence
                 </h2>
                 <span className="text-[10px] uppercase font-bold tracking-widest px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400 border border-purple-500/20">
                   Legacy &amp; Metadata Recovery
@@ -950,7 +956,7 @@ const res = await network.post<{ recovered?: any; error?: string }>(
                     <Info className="w-4 h-4" />
                   </div>
                   <div className="text-xs text-gray-400">
-                    <span className="text-white font-medium">Obsidian Safe-Write Guarantee:</span> Metadata recovery only touches frontmatter keys you review and accept. Wikilinks, callouts, and raw note markdown are preserved with 100% fidelity.
+                    <span className="text-white font-medium">Vault Safe-Write Guarantee:</span> Metadata recovery only touches frontmatter keys you review and accept. Wikilinks, callouts, and raw note markdown are preserved with 100% fidelity.
                   </div>
                 </div>
 

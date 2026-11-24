@@ -86,6 +86,9 @@ import type {
   CodexNutritionV1,
   CodexNutritionV2,
   CodexNutritionV3,
+  CodexNutritionV4,
+  CodexNutritionV5,
+  CodexNutritionV6,
   HouseholdPortionEvidence,
   IngredientEvidenceV2,
 } from '../../src/core/nutritionV2/schema';
@@ -96,7 +99,7 @@ import type { ObsidianRecipe } from '../../src/types';
 
 const BUNDLE_DIR = join(
   dirname(fileURLToPath(import.meta.url)),
-  '../../data/advanced-nutrition/usda/usda_fdc_87c5408a3e98838944a87be74824761e'
+  '../../data/advanced-nutrition/usda/usda_fdc_1f3e3068a7ae0702f360d1caae40a628'
 );
 
 let session: AdvancedNutritionSession;
@@ -234,7 +237,7 @@ function lineInput(flowValue: Flow, householdSelection?: unknown): Record<string
 
 /** Version-neutral household evidence accessor for persisted-block assertions. */
 function persistedHousehold(
-  block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3,
+  block: CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5 | CodexNutritionV6,
   index = 0
 ): HouseholdPortionEvidence | undefined {
   const entry = block.ingredients[index] as IngredientEvidenceV2 | undefined;
@@ -261,47 +264,47 @@ interface RegistryOracleEntry {
  * production dataset and the resolver against these literals.
  */
 const REGISTRY_ORACLE: ReadonlyArray<RegistryOracleEntry> = Object.freeze([
-  { key: 'egg|item|jumbo|null', fdcIds: [171287], unit: 'item', size: 'jumbo', state: null, grams: 63, digest: '19dddec3084ffc9da83f93716d0c0b15022f7866e5795d0ca0497d026e5e0ec6' },
-  { key: 'egg|item|large|null', fdcIds: [171287], unit: 'item', size: 'large', state: null, grams: 50, digest: 'c84406093c55f00c27054aec3ff69f4ebb1d9dbb46e11138582ccf887062ac11' },
-  { key: 'egg|item|medium|null', fdcIds: [171287], unit: 'item', size: 'medium', state: null, grams: 44, digest: '1164793c9895b072af7a2eceeb6d95b4703fd18115f6b713256ab5421f9b7bab' },
-  { key: 'egg|item|small|null', fdcIds: [171287], unit: 'item', size: 'small', state: null, grams: 38, digest: '45ac67a3d675309131330d58edfda3d9f06bb2de7d4376ed09aef655da28d604' },
-  { key: 'egg|item|xl|null', fdcIds: [171287], unit: 'item', size: 'xl', state: null, grams: 56, digest: 'd9f939cf9e07f2a93b3fcf21988c4a53963976bdbf304a5e2c8163c7b0a703cd' },
-  { key: 'garlic|clove|null|null', fdcIds: [169230, 2709786], unit: 'clove', size: null, state: null, grams: 3, digest: '693c1f4116a201e61ede6c6543c0a932082e721124fe7fc66875e52348b5592c' },
-  { key: 'green bell pepper|item|large|null', fdcIds: [170427, 2258588], unit: 'item', size: 'large', state: null, grams: 164, digest: '5d23f9d25cdae270ad5147bb51c4dc13fc600b307856e5928e32e2c49dcdd324' },
-  { key: 'green bell pepper|item|medium|null', fdcIds: [170427, 2258588], unit: 'item', size: 'medium', state: null, grams: 119, digest: 'fbd2c3035565efe1f510e78869215cbf67fcd8d1a4d2970ea0a8a73da21fa525' },
-  { key: 'green bell pepper|item|small|null', fdcIds: [170427, 2258588], unit: 'item', size: 'small', state: null, grams: 74, digest: 'f16b7180cb8a71ad5e8f93df08b47e84e04d206ac78c8d262fb7a5f8429440e5' },
-  { key: 'green cabbage|head|large|null', fdcIds: [169975, 2346407], unit: 'head', size: 'large', state: null, grams: 1248, digest: 'b4bad0d52a258ca43c457a5b61fd6eba5385dbf04986402cff3d80dabfbf9ea6' },
-  { key: 'green cabbage|head|medium|null', fdcIds: [169975, 2346407], unit: 'head', size: 'medium', state: null, grams: 908, digest: 'd0e59f49310cd75e49bca5d45f8d219857bd1a2335144f9db33873b26788571b' },
-  { key: 'green cabbage|head|small|null', fdcIds: [169975, 2346407], unit: 'head', size: 'small', state: null, grams: 714, digest: 'd98a7e30be4c265b5dee324e7f5dd62ed1013b378fae050e086bbc65a585c17a' },
-  { key: 'peach|item|large|null', fdcIds: [169928, 2709249], unit: 'item', size: 'large', state: null, grams: 175, digest: 'e8c5c70316d47c2870d9ae904a97ddb0b9294f5561fe881a21f9dc98d79d7a39' },
-  { key: 'peach|item|medium|null', fdcIds: [169928, 2709249], unit: 'item', size: 'medium', state: null, grams: 150, digest: '14c9687e01d96e7aab2e7fc16b35481aeb745eae65e0b14f72bbcf0e1f602b18' },
-  { key: 'peach|item|small|null', fdcIds: [169928, 2709249], unit: 'item', size: 'small', state: null, grams: 130, digest: '13edfd8e0740f47c0ac51f648232d38257f2f0e7267821259fcdb10abd66539f' },
-  { key: 'red bell pepper|item|large|null', fdcIds: [170108, 2258590], unit: 'item', size: 'large', state: null, grams: 164, digest: '5f7b4fc30a185d3b3c6ea5da82e8d134c39c9aac71762e7ff031560053a491cb' },
-  { key: 'red bell pepper|item|medium|null', fdcIds: [170108, 2258590], unit: 'item', size: 'medium', state: null, grams: 119, digest: '4b7cde5511267ba06a11a68d6ed37febb7f17630140f3b2fd3b220d648ace02d' },
-  { key: 'red bell pepper|item|small|null', fdcIds: [170108, 2258590], unit: 'item', size: 'small', state: null, grams: 74, digest: '95705c2c881c21acc4ea0f17f7772117a22120e77ff3d5216df53bd65460a8ba' },
-  { key: 'red cabbage|head|large|null', fdcIds: [169977, 2346408], unit: 'head', size: 'large', state: null, grams: 1134, digest: '3503beb69508b821874c86a167a7ffca1440dfdf065dd059c7b073c4a44470fd' },
-  { key: 'red cabbage|head|medium|null', fdcIds: [169977, 2346408], unit: 'head', size: 'medium', state: null, grams: 839, digest: '46682c29f77298b2c8265d8ceff70f857bfe1228521a3b34ed7b937b0471990d' },
-  { key: 'red cabbage|head|small|null', fdcIds: [169977, 2346408], unit: 'head', size: 'small', state: null, grams: 567, digest: 'bf3d898d8e5ded13b5f71ac3b68d476af9b79205141ecbe0f5ff6e6e9c9f88bd' },
-  { key: 'tomato|item|large|null', fdcIds: [170457, 2709719], unit: 'item', size: 'large', state: null, grams: 182, digest: '7ac575b8f37553944b4ce98bec865cde114ded9921dfeb8046d8277b2cc8630a' },
-  { key: 'tomato|item|medium|null', fdcIds: [170457, 2709719], unit: 'item', size: 'medium', state: null, grams: 123, digest: 'f3e6148d03775cc5f4f1b6c3fd11c5c3873fc8b6d7494ac1687f1e90e2753bba' },
-  { key: 'tomato|item|small|null', fdcIds: [170457, 2709719], unit: 'item', size: 'small', state: null, grams: 91, digest: 'f54bee0df876bd22e32aac98fe38b8cf59007f9fd8547ae29e49839b8f4d9105' },
-  { key: 'unsalted butter|stick|null|null', fdcIds: [173430, 789828], unit: 'stick', size: null, state: null, grams: 113, digest: '3a51f63e644455964b2272777f6bf9d981cada02defba7c756ae5ce0f59e9fe7' },
-  { key: 'white mushroom|item|large|null', fdcIds: [169251, 2709793], unit: 'item', size: 'large', state: null, grams: 23, digest: '8928819e774d82d298ffc78cd9042fd580edac7ef1186671ffe8c1149e4cc4f3' },
-  { key: 'white mushroom|item|medium|null', fdcIds: [169251, 2709793], unit: 'item', size: 'medium', state: null, grams: 18, digest: 'a48f0b49f11f2b16ac06fa95e2f08d10c644b22f7809d547db44ea4a377517f5' },
-  { key: 'white mushroom|item|small|null', fdcIds: [169251, 2709793], unit: 'item', size: 'small', state: null, grams: 10, digest: 'e0949671c975d17551d4e33088b648ba01488def3cccfac52a268040b3a51f5d' },
-  { key: 'zucchini|item|large|null', fdcIds: [169291], unit: 'item', size: 'large', state: null, grams: 323, digest: '619228836600012d8e0916b0aa6422afee46fe09fd77e6952791f45ccc62be79' },
-  { key: 'zucchini|item|medium|null', fdcIds: [169291], unit: 'item', size: 'medium', state: null, grams: 196, digest: '01c3bb69acd3707afed48615542269b76f46233afeb299826f44c67dd8ea11a7' },
-  { key: 'zucchini|item|small|null', fdcIds: [169291], unit: 'item', size: 'small', state: null, grams: 118, digest: '4b6f3e8d0199865420af6c001bc81e243985fb2d10cbc5f0e25453e127ea04db' },
+  { key: 'egg|item|jumbo|null', fdcIds: [171287], unit: 'item', size: 'jumbo', state: null, grams: 63, digest: 'dc12189a974bbfca1939edfe1c80da954779af44e404317193ef1a3810ef8daa' },
+  { key: 'egg|item|large|null', fdcIds: [171287], unit: 'item', size: 'large', state: null, grams: 50, digest: 'fe32399b1fd9b2b349dc1d7ccbedbe96d4abb4ce9272ff0db692c811e3feee04' },
+  { key: 'egg|item|medium|null', fdcIds: [171287], unit: 'item', size: 'medium', state: null, grams: 44, digest: '4910b69014e2a9ae9c0ce6b5b49cec365bb3a44343082f59e77884de57fec2d3' },
+  { key: 'egg|item|small|null', fdcIds: [171287], unit: 'item', size: 'small', state: null, grams: 38, digest: '22de78298e5b416b06d2121c35979b89a579c9d2e7660e2557f7cf6b391a4b47' },
+  { key: 'egg|item|xl|null', fdcIds: [171287], unit: 'item', size: 'xl', state: null, grams: 56, digest: 'ea70815a7c704bbd12b8e2545f72d2a7fcf88d946f653486254caf2a8dfe3d2e' },
+  { key: 'garlic|clove|null|null', fdcIds: [169230, 2709786], unit: 'clove', size: null, state: null, grams: 3, digest: '3aff245abd3e2e5dd1c83c56ad9dabf56301686d97c8fa1ab7a956e34dd9279b' },
+  { key: 'green bell pepper|item|large|null', fdcIds: [170427, 2258588], unit: 'item', size: 'large', state: null, grams: 164, digest: 'a708944dae2e4187e1fd716bca59801d07bb18887788d6aba2b7c6f31bceb41a' },
+  { key: 'green bell pepper|item|medium|null', fdcIds: [170427, 2258588], unit: 'item', size: 'medium', state: null, grams: 119, digest: '1dd36e062c6b1ca329a32e5f5a5cfa0bc6e0f71c8d9075d60f7ade992f6883ba' },
+  { key: 'green bell pepper|item|small|null', fdcIds: [170427, 2258588], unit: 'item', size: 'small', state: null, grams: 74, digest: '269836a4a798250a430b56482219b5dc3703483bf95108aff1edd4238792d157' },
+  { key: 'green cabbage|head|large|null', fdcIds: [169975, 2346407], unit: 'head', size: 'large', state: null, grams: 1248, digest: 'c0758c3999828aa5abb340b23c59b675656213cc755d39535303dde902cd73fb' },
+  { key: 'green cabbage|head|medium|null', fdcIds: [169975, 2346407], unit: 'head', size: 'medium', state: null, grams: 908, digest: '7eea158a03f650165d24b37fe1984ba71782c61e2f4a7236dd282fb11efd402c' },
+  { key: 'green cabbage|head|small|null', fdcIds: [169975, 2346407], unit: 'head', size: 'small', state: null, grams: 714, digest: '330e49c94e4a66ef3602854eb035b981364ea5688fdf2fcf8ffd2242deb63934' },
+  { key: 'peach|item|large|null', fdcIds: [169928, 2709249], unit: 'item', size: 'large', state: null, grams: 175, digest: '994adff56dc90ba40379b8830f852915157745e1b0e16ebad261e8b9dce145f6' },
+  { key: 'peach|item|medium|null', fdcIds: [169928, 2709249], unit: 'item', size: 'medium', state: null, grams: 150, digest: '73a83948ee0f6f5ae3ef32aa0598f8d88a0d9786f69d3ee7f22f29694a081472' },
+  { key: 'peach|item|small|null', fdcIds: [169928, 2709249], unit: 'item', size: 'small', state: null, grams: 130, digest: 'de1ddcd03d142580bf340a8d7fb184ed3ea91cec7c9a4769d2dc2cbfd6e5fc87' },
+  { key: 'red bell pepper|item|large|null', fdcIds: [170108, 2258590], unit: 'item', size: 'large', state: null, grams: 164, digest: '7cfa38982c5714c880bc8f3567ca8ac74ed571e8c46224e10dcb4ffe81c0ca23' },
+  { key: 'red bell pepper|item|medium|null', fdcIds: [170108, 2258590], unit: 'item', size: 'medium', state: null, grams: 119, digest: '6b2ba9c2ce342734779e77f77e7d0bb927e26719a50599855e0bfa86ae8cf8b6' },
+  { key: 'red bell pepper|item|small|null', fdcIds: [170108, 2258590], unit: 'item', size: 'small', state: null, grams: 74, digest: '3d607c9a5260d8023a851c5798f39739bc4047b9dbae46961260bb5ec7eb4cc6' },
+  { key: 'red cabbage|head|large|null', fdcIds: [169977, 2346408], unit: 'head', size: 'large', state: null, grams: 1134, digest: '87da0992e9dbb5cd402de67a237fb055b91325d239be18758d666f97534a26f8' },
+  { key: 'red cabbage|head|medium|null', fdcIds: [169977, 2346408], unit: 'head', size: 'medium', state: null, grams: 839, digest: '8e04d7b03dc477a3362f5109bd99d7a6f72cfc60d13f5a88d3cff67a2d3c3d4c' },
+  { key: 'red cabbage|head|small|null', fdcIds: [169977, 2346408], unit: 'head', size: 'small', state: null, grams: 567, digest: 'f6a3a1bb188c42d41d0e5d160bb330d6ef1d7460fff7077e35c8132ed51a1fa5' },
+  { key: 'tomato|item|large|null', fdcIds: [170457, 2709719], unit: 'item', size: 'large', state: null, grams: 182, digest: 'cded8fb859fd9a2c79a4887d85646bb655dbda99425266272cf582a1896ea94b' },
+  { key: 'tomato|item|medium|null', fdcIds: [170457, 2709719], unit: 'item', size: 'medium', state: null, grams: 123, digest: '6f8d084d13590935aef129c4a99378f74d4f291db79b2d1905a6639f56c79fa1' },
+  { key: 'tomato|item|small|null', fdcIds: [170457, 2709719], unit: 'item', size: 'small', state: null, grams: 91, digest: '16181947f7d1f79e514905ad20e88edd736a136e76f3457544e6de174c74315f' },
+  { key: 'unsalted butter|stick|null|null', fdcIds: [173430, 789828], unit: 'stick', size: null, state: null, grams: 113, digest: '5984a1be57819691c64c59675bc6d577de104fdbce991bee6a8d09f8fbc8612e' },
+  { key: 'white mushroom|item|large|null', fdcIds: [169251, 2709793], unit: 'item', size: 'large', state: null, grams: 23, digest: '5a1ee20a7448e70ca47647d7fd4dec6f43d368cf5d0c51134bb0648e510131af' },
+  { key: 'white mushroom|item|medium|null', fdcIds: [169251, 2709793], unit: 'item', size: 'medium', state: null, grams: 18, digest: '916bfc82e4ee3803603886e0b04d3decb1d5691818e0d98be996ee96950ad300' },
+  { key: 'white mushroom|item|small|null', fdcIds: [169251, 2709793], unit: 'item', size: 'small', state: null, grams: 10, digest: '61dec073e8c27babff5a855a57dc5812152cc03b227899407bd456e91dcbb3a6' },
+  { key: 'zucchini|item|large|null', fdcIds: [169291], unit: 'item', size: 'large', state: null, grams: 323, digest: '90b9dda86feddaaed7dba3e1016d300d32797a4e6bb9a49b3a2de6aac513cdc7' },
+  { key: 'zucchini|item|medium|null', fdcIds: [169291], unit: 'item', size: 'medium', state: null, grams: 196, digest: 'ef4e9a153397ece020471489c961bbda31feeafad60639dbab7e3ccd5ac2ad17' },
+  { key: 'zucchini|item|small|null', fdcIds: [169291], unit: 'item', size: 'small', state: null, grams: 118, digest: '2e394ad8f08a611f5063304edf04d0eb0e6e9a6d04a05f17a27387c1a669362a' },
 ]);
 
 /** The fixed registry-lock identities, also hardcoded independently. */
 const REGISTRY_RELEASE_ORACLE = 'household_portion_initial_usda_v1';
 const REGISTRY_DIGEST_ORACLE =
-  '6ad593ef558ca9325197549f005da5b1eee822211f2ec6b5290f5c58fedc4ac4';
+  '096d10d1c79d1a2e8a1880c46e1daac800e0636299070ca45fa549bebbb7ac27';
 const PROVENANCE_DIGEST_ORACLE =
-  'adba614327f9cb078ffd35d6abade50b25de180b43f4b373eea6ab8825694b31';
+  '1f8db8ea18de0203ab44df400aec4058303395303ab95a433b70be8778cdf088';
 const AGGREGATE_RELEASE_DIGEST_ORACLE =
-  'f8fed2230ac210c8dc2548f3a300134091c3a490ac6eb68add2766ac9b85b256';
+  '062fcbf8ab724e73b7b73069a8fce9712b1bbbf9b68d00cb86dc926afa0a7d2e';
 
 /** Builds a CONTROLLED resolver input expressing one canonical key. */
 function controlledInput(entry: RegistryOracleEntry): Record<string, unknown> {
@@ -460,7 +463,7 @@ const REAL_LINE_EXPECTATIONS: ReadonlyArray<RealLineExpectation> = Object.freeze
   { line: '3 cloves garlic', classification: 'household_reachable', fdc: 169230, massSource: 'household_portion', grams: 9 },
   { line: '3 garlic cloves, minced', classification: 'household_reachable', fdc: 169230, massSource: 'household_portion', grams: 9 },
   { line: '2 medium tomatoes, sliced', classification: 'household_reachable', fdc: 2709719, massSource: 'household_portion', grams: 246 },
-  { line: '1 stick unsalted butter', classification: 'household_reachable', fdc: 789828, massSource: 'household_portion', grams: 113 },
+  { line: '1 stick unsalted butter', classification: 'shadowed_by_count_portion', fdc: 173430, massSource: 'count_portion', grams: 113 },
   { line: '1 large egg', classification: 'shadowed_by_count_portion', fdc: 2707152, massSource: 'count_portion', grams: 50 },
   { line: '1 medium white mushroom', classification: 'shadowed_by_count_portion', fdc: 169251, massSource: 'count_portion', grams: 18 },
   { line: '1 medium zucchini', classification: 'identity_review_blocked', fdc: null, massSource: null, grams: null },
@@ -570,7 +573,7 @@ describe('phase 6 — real pipeline reachability and precedence', () => {
     const measured: ReadonlyArray<[string, number, string]> = [
       ['3 cloves garlic, minced', 9, 'garlic|clove|null|null'],
       ['2 medium tomatoes, sliced', 246, 'tomato|item|medium|null'],
-      ['1 stick unsalted butter', 113, 'unsalted butter|stick|null|null'],
+      ['1 stick unsalted butter', 113, undefined],
     ];
     for (const [line, grams, key] of measured) {
       const value = flow(line);
@@ -578,7 +581,7 @@ describe('phase 6 — real pipeline reachability and precedence', () => {
       expect(calculated.ok, line).toBe(true);
       if (!calculated.ok) continue;
       const evidence = calculated.preview.ingredients[0];
-      expect(evidence.mass_source, line).toBe('household_portion');
+      expect(evidence.mass_source, line).toBe(key === undefined ? 'count_portion' : 'household_portion');
       expect(evidence.resolved_grams, line).toBe(grams);
       expect(evidence.household_record_key, line).toBe(key);
       // NUTRIENT AUTHORITY: household provenance authorizes ONLY the mass. The
@@ -1230,12 +1233,16 @@ describe('phase 6 — household-choice invalidation', () => {
     }
 
     // Unit/state edits that cannot bind fail closed with no mass at all.
-    for (const line of ['1 cup unsalted butter', '1 cooked stick unsalted butter']) {
+    for (const line of ['1 cooked stick unsalted butter']) {
       const value = flow(line);
       expect(value.analysis.householdPortions[value.lineRef], line).toBeUndefined();
       expect(value.analysis.preview?.ingredients[0].resolved_grams ?? null, line).toBeNull();
       expect(liveOf(value, value.state).resolved_grams, line).toBeUndefined();
     }
+    const sourceCup = flow('1 cup unsalted butter');
+    expect(sourceCup.analysis.householdPortions[sourceCup.lineRef]).toBeUndefined();
+    expect(sourceCup.analysis.preview?.ingredients[0].mass_source).toBe('source_portion');
+    expect(sourceCup.analysis.preview?.ingredients[0].resolved_grams).toBe(227);
     // TEST-STABILITY ONLY. Drives the full recipe-quantity/unit/size/state
     // edit-invalidation flow over the authenticated bundle. Measured 2730ms in
     // isolation and over Vitest's accidental 5000ms unit default under
@@ -1409,7 +1416,7 @@ function authorizeReady(flowValue: Flow, state: Phase4State): Phase4State {
   } as Phase4State;
 }
 
-function authorize(flowValue: Flow, state: Phase4State): CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 {
+function authorize(flowValue: Flow, state: Phase4State): CodexNutritionV1 | CodexNutritionV2 | CodexNutritionV3 | CodexNutritionV4 | CodexNutritionV5 | CodexNutritionV6 {
   const result = authorizeNutritionPersistence({
     session,
     recipe: flowValue.recipe,

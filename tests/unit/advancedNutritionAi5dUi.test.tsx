@@ -117,7 +117,7 @@ afterEach(() => cleanup());
 
 describe('AI-5D UI — explicit Retry is offered only where it can help', () => {
   it('offers Retry when the product is enabled but no provider is available', async () => {
-    renderCard({ available: false, reason: PROVIDER_REASON, canRetry: true, onRetry: () => {} });
+    renderCard({ available: false, reason: PROVIDER_REASON, canRetry: true, onRetry: () => {}, advancedEditingAccess: 'entitled' });
     await openEditor();
     expect(screen.getByTestId('advanced-nutrition-ai-unavailable').textContent).toContain(
       'is enabled',
@@ -125,22 +125,26 @@ describe('AI-5D UI — explicit Retry is offered only where it can help', () => 
     expect(screen.getByTestId('advanced-nutrition-ai-retry')).toBeTruthy();
   });
 
-  it('offers Retry when product access could not be verified', async () => {
-    renderCard({ available: false, reason: UNKNOWN_REASON, canRetry: true, onRetry: () => {} });
-    await openEditor();
-    expect(screen.getByTestId('advanced-nutrition-ai-unavailable').textContent).toContain(
-      "couldn't be verified",
-    );
-    expect(screen.getByTestId('advanced-nutrition-ai-retry')).toBeTruthy();
+  it('fails closed without opening Advanced when product access could not be verified', () => {
+    renderCard({
+      available: false,
+      reason: UNKNOWN_REASON,
+      canRetry: true,
+      onRetry: () => {},
+      advancedEditingAccess: 'unknown',
+    });
+    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
+    expect(screen.queryByRole('dialog', { name: 'Advanced Nutrition' })).toBeNull();
+    expect(screen.queryByTestId('advanced-nutrition-ai-retry')).toBeNull();
   });
 
-  it('does NOT offer Retry for a definitive Basic product answer', async () => {
+  it('does NOT offer Retry or Advanced editing for a definitive Basic product answer', () => {
     // Basic is a genuine product-policy answer, not a temporary provider failure.
-    renderCard({ available: false, reason: BASIC_REASON, canRetry: false });
-    await openEditor();
-    expect(screen.getByTestId('advanced-nutrition-ai-unavailable').textContent).toContain(
-      "isn't enabled for this deployment",
+    renderCard({ available: false, reason: BASIC_REASON, canRetry: false, advancedEditingAccess: 'basic' });
+    expect(screen.getByTestId('advanced-nutrition-basic-locked').textContent).toMatch(
+      /Basic Nutrition remains available/i,
     );
+    expect(screen.queryByTestId('advanced-nutrition-open')).toBeNull();
     expect(screen.queryByTestId('advanced-nutrition-ai-retry')).toBeNull();
   });
 
@@ -279,18 +283,34 @@ describe('AI-5D UI — refreshing fails closed with NEUTRAL copy', () => {
   });
 });
 
-describe('AI-5D UI — Basic/manual Nutrition is never gated', () => {
-  it.each([
-    ['provider unavailable', PROVIDER_REASON],
-    ['product unknown', UNKNOWN_REASON],
-    ['definitive basic', BASIC_REASON],
-  ] as const)('keeps deterministic analysis usable: %s', async (_label, reason) => {
-    renderCard({ available: false, reason, canRetry: true, onRetry: () => {} });
+describe('AI-5D UI — entitlement decides Advanced, readiness only decides AI', () => {
+  it('provider unavailable keeps entitled deterministic/manual Advanced Nutrition usable', async () => {
+    renderCard({
+      available: false,
+      reason: PROVIDER_REASON,
+      canRetry: true,
+      onRetry: () => {},
+      advancedEditingAccess: 'entitled',
+    });
     await openEditor();
-    const analyzer = screen.getByRole('button', { name: /Analyze/i }) as HTMLButtonElement;
+    const analyzer = screen.getByRole('button', { name: /Recalculate without AI/i }) as HTMLButtonElement;
     expect(analyzer).toBeTruthy();
     expect(analyzer.disabled).toBe(false);
     expect(screen.getByRole('dialog', { name: 'Advanced Nutrition' })).toBeTruthy();
+  });
+
+  it.each([
+    ['product unknown', UNKNOWN_REASON, 'unknown'],
+    ['definitive basic', BASIC_REASON, 'basic'],
+  ] as const)('does not open Advanced when entitlement is %s', async (_label, reason, access) => {
+    renderCard({ available: false, reason, canRetry: true, onRetry: () => {}, advancedEditingAccess: access });
+    if (access === 'basic') {
+      expect(screen.getByTestId('advanced-nutrition-basic-locked')).toBeTruthy();
+      expect(screen.queryByRole('button', { name: /Generate Nutrition/i })).toBeNull();
+    } else {
+      fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
+    }
+    expect(screen.queryByRole('dialog', { name: 'Advanced Nutrition' })).toBeNull();
   });
 
   it('keeps the manual correction path present while a refresh is in flight', async () => {
@@ -300,11 +320,12 @@ describe('AI-5D UI — Basic/manual Nutrition is never gated', () => {
       refreshing: true,
       canRetry: true,
       onRetry: () => {},
+      advancedEditingAccess: 'entitled',
     });
     await openEditor();
     // The whole deterministic working editor is still rendered and interactive.
-    expect(screen.getByRole('button', { name: /Analyze/i })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Calculate|Recalculate/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Recalculate without AI/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^(Calculate|Recalculate) Preview$/i })).toBeTruthy();
   });
 
   it('disables AI controls for a revoked-credential window with no stale execution', async () => {
@@ -315,6 +336,7 @@ describe('AI-5D UI — Basic/manual Nutrition is never gated', () => {
       reason: PROVIDER_REASON,
       canRetry: true,
       onRetry: () => {},
+      advancedEditingAccess: 'entitled',
     });
     await openEditor();
     const resolve = screen.getByTestId('advanced-nutrition-ai-resolve') as HTMLButtonElement;
@@ -325,21 +347,29 @@ describe('AI-5D UI — Basic/manual Nutrition is never gated', () => {
 
   it('emits no billing or upgrade language in any AI-5D state', async () => {
     const states: ReadonlyArray<AdvancedNutritionAiAvailability> = [
-      { available: false, reason: BASIC_REASON, canRetry: false },
-      { available: false, reason: PROVIDER_REASON, canRetry: true, onRetry: () => {} },
-      { available: false, reason: UNKNOWN_REASON, canRetry: true, onRetry: () => {} },
+      { available: false, reason: BASIC_REASON, canRetry: false, advancedEditingAccess: 'basic' },
+      { available: false, reason: PROVIDER_REASON, canRetry: true, onRetry: () => {}, advancedEditingAccess: 'entitled' },
+      { available: false, reason: UNKNOWN_REASON, canRetry: true, onRetry: () => {}, advancedEditingAccess: 'unknown' },
       {
         available: false,
         reason: NUTRITION_AI_REFRESHING_MESSAGE,
         refreshing: true,
         canRetry: true,
         onRetry: () => {},
+        advancedEditingAccess: 'entitled',
       },
     ];
     for (const state of states) {
       const { unmount } = renderCard(state);
-      await openEditor();
-      const text = (screen.getByRole('dialog', { name: 'Advanced Nutrition' }).textContent ?? '').toLowerCase();
+      if (state.advancedEditingAccess === 'entitled') {
+        await openEditor();
+      }
+      if (state.advancedEditingAccess === 'unknown') fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
+      const text = (state.advancedEditingAccess === 'entitled'
+        ? screen.getByRole('dialog', { name: 'Advanced Nutrition' }).textContent
+        : state.advancedEditingAccess === 'basic'
+          ? screen.getByTestId('advanced-nutrition-basic-locked').textContent
+          : screen.getByTestId('advanced-nutrition-open').textContent ?? '').toLowerCase();
       for (const banned of ['subscribe', 'upgrade', 'purchase', 'premium', 'trial', 'checkout', 'billing']) {
         expect(text, `state copy must not contain "${banned}"`).not.toContain(banned);
       }

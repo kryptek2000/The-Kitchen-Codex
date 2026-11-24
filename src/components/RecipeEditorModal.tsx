@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { hasPreferredAdvancedNutrition } from '../application/recipeNutritionPresentation';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   X,
   Save,
@@ -22,22 +23,26 @@ import {
 import { ObsidianRecipe, ParsedIngredient, RecipeStep, RecipeNutrition, RecoveredRecipeMetadata } from '../types';
 import {
   parseObsidianRecipeMarkdown,
+  serializeRecipePreservingContent,
   serializeRecipeToObsidianMarkdown,
 } from '../utils/markdownParser';
-import { saveImageToVaultAssets, saveImageToVaultAssetsCollisionSafe, vaultAssets, type SaveImageDeps } from '../utils/vaultAssets';
+import { saveImageToVaultAssets, saveImageToVaultAssetsCollisionSafe, type SaveImageDeps, type SessionAssetRunner } from '../utils/vaultAssets';
+import { validateRecipeAssetReferences } from '../utils/assetReferences';
 import { resolveNewRecipeVaultPath } from '../core/vaultPath';
 import { validateGeneratedImage } from '../core/recipeImage';
 import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
 import { buildAiSelectionRequestOptions } from '../application/aiSelection';
 import { useVaultImage } from '../hooks/useVaultImage';
+import { useVaultAssetScope } from '../hooks/VaultAssetScopeContext';
+import { createTemporaryPreviewUrl, getReferenceScheme, releaseTemporaryPreviewUrl } from '../utils/assetProvenance';
 import {
   canApplyNutritionEstimate,
-  evaluateMachineNutritionApplicability,
   type NutritionAssessment,
 } from '../core/nutritionSanity';
+import { calculateProductionBasicNutrition } from '../browser/basicNutrition';
 import {
   NUTRITION_INCOMPLETE_MESSAGE,
-  NUTRITION_AUTOSAVE_DISABLED_MESSAGE,
+  isPartialMachineNutrition,
 } from '../utils/nutrition';
 import { RecipeImageChooser, type AiImagePanelState, type RecipeImageChooserMode } from './RecipeImageChooser';
 import {
@@ -71,6 +76,10 @@ interface RecipeEditorModalProps {
   folderHandle?: any;
   /** Injected asset save dependencies (asset boundary + binary downloader) from the shell. */
   imageService?: SaveImageDeps;
+  /** Session-bound composite asset+recipe runner supplied by the App shell. */
+  runSessionAsset?: SessionAssetRunner;
+  /** Desktop shell hook: prepare a managed native Vault before the transaction. */
+  onBeforeSave?: () => Promise<void> | void;
   onSave: (recipe: ObsidianRecipe) => Promise<void> | void;
   /** App-backend API transport (injected by the bootstrap). */
   network: NetworkAdapter;
@@ -223,11 +232,14 @@ export function RecipeEditorModal({
   initialRecipe,
   folderHandle,
   imageService,
+  runSessionAsset,
+  onBeforeSave,
   network,
   onSave,
   onClose,
   onOpenAiSettings,
 }: RecipeEditorModalProps) {
+  const assetScope = useVaultAssetScope();
   const [activeTab, setActiveTab] = useState<'visual' | 'markdown'>('visual');
 
   // Form State
@@ -244,18 +256,75 @@ export function RecipeEditorModal({
   const [difficulty, setDifficulty] = useState<'Easy' | 'Medium' | 'Hard'>(
     initialRecipe?.difficulty || 'Easy'
   );
-  const [rating, setRating] = useState(initialRecipe?.rating || 5);
-  const [calories, setCalories] = useState(initialRecipe?.calories?.toString() || '');
-  const [protein, setProtein] = useState<string>(initialRecipe?.nutrition?.protein?.toString() || '');
-  const [carbs, setCarbs] = useState<string>(initialRecipe?.nutrition?.carbohydrates?.toString() || '');
-  const [fat, setFat] = useState<string>(initialRecipe?.nutrition?.fat?.toString() || '');
-  const [fiber, setFiber] = useState<string>(initialRecipe?.nutrition?.fiber?.toString() || '');
-  const [sodium, setSodium] = useState<string>(initialRecipe?.nutrition?.sodium?.toString() || '');
+  const [rating, setRating] = useState(initialRecipe?.rating ?? 5);
+  // Initialize per-serving nutrition fields from the recipe's nutrition block.
+  // If the block has a servings denominator, divide totals by servings to get per-serving.
+  // Legacy: if only `calories` (string) is present without nutrition block, treat as per-serving.
+  const initialServingsForNutrition = typeof initialRecipe?.nutrition?.servings === 'number'
+    ? initialRecipe.nutrition.servings
+    : 1;
+  const computePerServing = (total: number | undefined, servings: number, whole = false): string => {
+    if (total === undefined || total === null || servings <= 0) return '';
+    const val = total / servings;
+    // Calories & sodium: whole number; macros: 1 decimal.
+    if (whole) return String(Math.round(val));
+    return Number.isInteger(val) ? String(Math.round(val)) : String(Math.round(val * 10) / 10);
+  };
+  const [calories, setCalories] = useState(() =>
+    initialRecipe?.nutrition?.calories !== undefined
+      ? computePerServing(initialRecipe.nutrition.calories, initialServingsForNutrition, true)
+      : initialRecipe?.calories?.toString() || ''
+  );
+  const [protein, setProtein] = useState(() =>
+    initialRecipe?.nutrition?.protein !== undefined
+      ? computePerServing(initialRecipe.nutrition.protein, initialServingsForNutrition)
+      : ''
+  );
+  const [carbs, setCarbs] = useState(() =>
+    initialRecipe?.nutrition?.carbohydrates !== undefined
+      ? computePerServing(initialRecipe.nutrition.carbohydrates, initialServingsForNutrition)
+      : ''
+  );
+  const [fat, setFat] = useState(() =>
+    initialRecipe?.nutrition?.fat !== undefined
+      ? computePerServing(initialRecipe.nutrition.fat, initialServingsForNutrition)
+      : ''
+  );
+  const [fiber, setFiber] = useState(() =>
+    initialRecipe?.nutrition?.fiber !== undefined
+      ? computePerServing(initialRecipe.nutrition.fiber, initialServingsForNutrition)
+      : ''
+  );
+  const [sodium, setSodium] = useState(() =>
+    initialRecipe?.nutrition?.sodium !== undefined
+      ? computePerServing(initialRecipe.nutrition.sodium, initialServingsForNutrition, true)
+      : ''
+  );
+  // Initialize whole-recipe totals from the nutrition block (or legacy calories).
+  const initialTotals = React.useMemo((): Partial<RecipeNutrition> => {
+    if (initialRecipe?.nutrition) {
+      const base = initialRecipe.nutrition.servings;
+      const multiplier = typeof base === 'number' && base > 0 ? 1 : (Number(initialRecipe.servings) || 1);
+      return Object.fromEntries(Object.entries(initialRecipe.nutrition).map(([key, value]) =>
+        [key, ['calories', 'protein', 'carbohydrates', 'fat', 'fiber', 'sodium'].includes(key) && typeof value === 'number' ? value * multiplier : value]));
+    }
+    if (initialRecipe?.calories !== undefined && initialRecipe?.calories !== null) {
+      const cal = typeof initialRecipe.calories === 'number' ? initialRecipe.calories : parseFloat(String(initialRecipe.calories));
+      if (Number.isFinite(cal)) return { calories: cal * (Number(initialRecipe?.servings) || 1) };
+    }
+    return {};
+  }, [initialRecipe]);
   const [image, setImage] = useState(initialRecipe?.image || '');
   const [isEstimatingNutrition, setIsEstimatingNutrition] = useState(false);
   const [nutritionError, setNutritionError] = useState<string | null>(null);
   const [nutritionSuccess, setNutritionSuccess] = useState(false);
+  const [nutritionCoverageNote, setNutritionCoverageNote] = useState<string | null>(null);
   const [nutritionFromEstimate, setNutritionFromEstimate] = useState(false);
+  const [nutritionPartial, setNutritionPartial] = useState(false);
+  const [partialOverwriteApproved, setPartialOverwriteApproved] = useState(false);
+  const priorCompleteNutrition = !!initialRecipe && !isPartialMachineNutrition(initialRecipe.nutrition) &&
+    (!!initialRecipe.nutrition || (initialRecipe.calories !== undefined && initialRecipe.calories !== null && String(initialRecipe.calories).trim() !== ''));
+  const [nutritionIngredientKey, setNutritionIngredientKey] = useState<string | null>(null);
   const [nutritionDirty, setNutritionDirty] = useState(false);
   const [nutritionProvenance, setNutritionProvenance] = useState<
     Pick<RecipeNutrition, 'source' | 'confidence' | 'confidenceNote'>
@@ -264,10 +333,46 @@ export function RecipeEditorModal({
     confidence: initialRecipe?.nutrition?.confidence,
     confidenceNote: initialRecipe?.nutrition?.confidenceNote,
   }));
+  // WHOLE-RECIPE totals (source of truth). These are the total nutrients for
+  // the entire recipe batch. Per-serving display values are derived by dividing
+  // by the current `servings` value. When the user edits a per-serving field,
+  // the totals are updated (edited_value × current_servings). When servings
+  // changes, per-serving display is recomputed from totals (unless that field
+  // has been manually edited).
+  const [nutritionTotals, setNutritionTotals] = useState<Partial<RecipeNutrition>>(initialTotals);
+  // Legacy nutrition without its own denominator is per-serving data. If the
+  // recipe also has no serving count, the first count supplied establishes the
+  // batch total; after that, ordinary serving edits preserve the batch total.
+  const legacyNutritionNeedsServingBasis = useRef(
+    Object.keys(initialTotals).length > 0 &&
+      !(typeof initialRecipe?.nutrition?.servings === 'number' && initialRecipe.nutrition.servings > 0) &&
+      !(typeof initialRecipe?.servings === 'number' && initialRecipe.servings > 0)
+  );
+  // Track which per-serving fields have been manually edited since the last
+  // calculation or servings change. Only dirty fields are NOT recomputed when
+  // servings changes.
+  const [nutritionDirtyFields, setNutritionDirtyFields] = useState<Set<string>>(new Set());
   const [isSavingImageAsset, setIsSavingImageAsset] = useState(false);
   const [isAssetPickerOpen, setIsAssetPickerOpen] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleServingsChange = (value: string | number) => {
+    const nextServings = typeof value === 'number' ? value : parseFloat(value);
+    if (legacyNutritionNeedsServingBasis.current && Number.isFinite(nextServings) && nextServings > 0) {
+      // Preserve legacy per-serving values when the first serving count is
+      // recovered/entered, then establish exact whole-recipe totals once.
+      setNutritionTotals((current) => {
+        const nutrientKeys = ['calories', 'protein', 'carbohydrates', 'fat', 'fiber', 'sodium'];
+        return Object.fromEntries(Object.entries(current).map(([key, amount]) => [
+          key,
+          nutrientKeys.includes(key) && typeof amount === 'number' ? amount * nextServings : amount,
+        ]));
+      });
+      legacyNutritionNeedsServingBasis.current = false;
+    }
+    setServings(value);
+  };
 
   // Two-mode image chooser (Phase 2): Licensed Search (default, free) and
   // Generate with AI (explicit). Opening/switching/typing make ZERO provider calls.
@@ -357,9 +462,13 @@ export function RecipeEditorModal({
   });
 
   useEffect(() => {
+    // Do not revoke a preview while a Save transaction may still roll back to
+    // it. Successful saves release preview URLs explicitly; failed saves restore
+    // the still-live preview.
+    if (saveTransactionRef.current) return;
     for (const url of representativePreviewUrlsRef.current) {
       if (url !== image) {
-        URL.revokeObjectURL(url);
+        releaseTemporaryPreviewUrl(url);
         representativePreviewUrlsRef.current.delete(url);
       }
     }
@@ -373,7 +482,7 @@ export function RecipeEditorModal({
       aiRunRef.current += 1;
       previewRunRef.current += 1;
       representativeSearchGenRef.current += 1;
-      for (const url of representativePreviewUrlsRef.current) URL.revokeObjectURL(url);
+      for (const url of representativePreviewUrlsRef.current) releaseTemporaryPreviewUrl(url);
       representativePreviewUrlsRef.current.clear();
     },
     []
@@ -394,7 +503,7 @@ export function RecipeEditorModal({
     setAiPreview(null);
   };
 
-  const previewImageUrl = useVaultImage(image, folderHandle);
+  const previewImageUrl = useVaultImage(image, undefined, folderHandle);
 
   // Callout
   const [calloutTitle, setCalloutTitle] = useState(
@@ -455,28 +564,37 @@ export function RecipeEditorModal({
         text: l.replace(/^\d+\.\s*/, ''),
       }));
 
-    const parsedServings = typeof servings === 'number' ? servings : parseInt(String(servings), 10);
-    // Only a total-mode nutrition block carries a serving denominator. Legacy
-    // per-serving blocks (no explicit servings from the source) are preserved
-    // untouched. New estimates (or blocks that already declare servings) store
-    // the editor's current serving count as the denominator.
+    const parsedServings = typeof servings === 'number' ? servings : parseFloat(String(servings));
+    // The editor fields hold PER-SERVING values for the CURRENT `servings` value.
+    // On save, convert to WHOLE-RECIPE totals using the current parsedServings.
     const nutritionUsesServings =
-      nutritionFromEstimate || typeof initialRecipe?.nutrition?.servings === 'number';
-    const nutritionServings =
-      nutritionUsesServings && !isNaN(parsedServings) && parsedServings > 0
-        ? parsedServings
-        : typeof initialRecipe?.nutrition?.servings === 'number'
-        ? initialRecipe.nutrition.servings
-        : undefined;
+      nutritionFromEstimate || nutritionDirty || Object.keys(nutritionTotals).length > 0;
+    const nutritionServings = nutritionUsesServings && !isNaN(parsedServings) && parsedServings > 0
+      ? parsedServings
+      : undefined;
 
-    const parsedProtein = protein.trim() ? parseFloat(protein.trim()) : undefined;
-    const parsedCarbs = carbs.trim() ? parseFloat(carbs.trim()) : undefined;
-    const parsedFat = fat.trim() ? parseFloat(fat.trim()) : undefined;
-    const parsedFiber = fiber.trim() ? parseFloat(fiber.trim()) : undefined;
-    const parsedSodium = sodium.trim() ? parseFloat(sodium.trim()) : undefined;
-    const parsedCalNum = calories.trim() ? parseInt(calories.trim().replace(/\D/g, ''), 10) : undefined;
+    // Calories may be entered as a plain number or with a unit suffix ("520 kcal").
+    // Parse the numeric value WITHOUT stripping the decimal point (the old
+    // `replace(/\D/g,'')` turned "374.8" into "3748").
+    const parsedCalNum = (() => {
+      const raw = calories.trim();
+      if (!raw) return undefined;
+      const direct = parseFloat(raw);
+      if (Number.isFinite(direct)) return direct;
+      return undefined;
+    })();
 
-    const hasNutrition = parsedCalNum || parsedProtein || parsedCarbs || parsedFat || parsedFiber || parsedSodium;
+    // When nutritionUsesServings is true, the editor fields hold PER-SERVING values
+    // for the current `servings`. The saved nutrition block must store WHOLE-RECIPE
+    // totals with the current `servings` as the denominator.
+    const scaledProtein = nutritionTotals.protein;
+    const scaledCarbs = nutritionTotals.carbohydrates;
+    const scaledFat = nutritionTotals.fat;
+    const scaledFiber = nutritionTotals.fiber;
+    const scaledSodium = nutritionTotals.sodium;
+    const scaledCalNum = nutritionTotals.calories;
+
+    const hasNutrition = [scaledCalNum, scaledProtein, scaledCarbs, scaledFat, scaledFiber, scaledSodium].some(value => typeof value === 'number' && Number.isFinite(value));
 
     const partial: Partial<ObsidianRecipe> = {
       title: title || 'Untitled Recipe',
@@ -488,25 +606,41 @@ export function RecipeEditorModal({
       servings: !isNaN(parsedServings) && parsedServings > 0 ? parsedServings : undefined,
       difficulty,
       rating,
-      calories: calories.trim() || (parsedCalNum ? parsedCalNum.toString() : undefined),
+      // `isFavorite` is not edited by this modal. Carry it through the
+      // regenerated Markdown so an unrelated visual edit cannot silently turn a
+      // favorite off. Leave it absent for legacy/new recipes without a flag.
+      isFavorite: initialRecipe?.isFavorite,
+      // Legacy calories field: store PER-SERVING value (not scaled) for backward compatibility.
+      calories: calories.trim() || (parsedCalNum !== undefined ? parsedCalNum.toString() : undefined),
       nutrition: hasNutrition
         ? (() => {
             const prov = deriveNutritionProvenance(nutritionDirty, nutritionProvenance);
+            const persistedProvenance = nutritionPartial && nutritionFromEstimate
+              ? {
+                  source: 'offline_heuristic' as const,
+                  confidence: 'low' as const,
+                  confidenceNote: `${nutritionProvenance.confidenceNote ?? 'Pinned USDA estimate'} PARTIAL subtotal: unresolved ingredients are excluded; full recipe totals are unknown.`,
+                }
+              : prov;
             return {
-              calories: parsedCalNum,
-              protein: parsedProtein,
-              carbohydrates: parsedCarbs,
-              fat: parsedFat,
-              fiber: parsedFiber,
-              sodium: parsedSodium,
+              calories: scaledCalNum,
+              protein: scaledProtein,
+              carbohydrates: scaledCarbs,
+              fat: scaledFat,
+              fiber: scaledFiber,
+              sodium: scaledSodium,
               servings: nutritionServings,
-              source: prov.source,
-              confidence: prov.confidence,
-              confidenceNote: prov.confidenceNote,
+              source: persistedProvenance.source,
+              confidence: persistedProvenance.confidence,
+              confidenceNote: persistedProvenance.confidenceNote,
             };
           })()
         : undefined,
       image: (imageOverride ?? image) || undefined,
+      // Preserve the freeform intro/body prose. It may contain supported
+      // Markdown/Obsidian/HTML image references that must survive the visual
+      // save and reach destination validation rather than being silently lost.
+      description: initialRecipe?.description,
       callouts: calloutContent ? [{ type: 'tip', title: calloutTitle, content: calloutContent }] : [],
       ingredients: parsedIngs,
       instructions: parsedSteps,
@@ -534,10 +668,45 @@ export function RecipeEditorModal({
     return serializeRecipeToObsidianMarkdown(partial);
   };
 
+  // Recompute per-serving display values when servings changes.
+  // Only fields NOT manually edited (not in nutritionDirtyFields) are updated.
+  useEffect(() => {
+    const parsedServings = typeof servings === 'number' ? servings : parseFloat(String(servings));
+    if (!isNaN(parsedServings) && parsedServings > 0 && Object.keys(nutritionTotals).length > 0) {
+      const newCalories = nutritionTotals.calories !== undefined ? computePerServing(nutritionTotals.calories, parsedServings, true) : '';
+      const newProtein = nutritionTotals.protein !== undefined ? computePerServing(nutritionTotals.protein, parsedServings) : '';
+      const newCarbs = nutritionTotals.carbohydrates !== undefined ? computePerServing(nutritionTotals.carbohydrates, parsedServings) : '';
+      const newFat = nutritionTotals.fat !== undefined ? computePerServing(nutritionTotals.fat, parsedServings) : '';
+      const newFiber = nutritionTotals.fiber !== undefined ? computePerServing(nutritionTotals.fiber, parsedServings) : '';
+      const newSodium = nutritionTotals.sodium !== undefined ? computePerServing(nutritionTotals.sodium, parsedServings, true) : '';
+
+      if (!nutritionDirtyFields.has('calories')) setCalories(newCalories);
+      if (!nutritionDirtyFields.has('protein')) setProtein(newProtein);
+      if (!nutritionDirtyFields.has('carbs')) setCarbs(newCarbs);
+      if (!nutritionDirtyFields.has('fat')) setFat(newFat);
+      if (!nutritionDirtyFields.has('fiber')) setFiber(newFiber);
+      if (!nutritionDirtyFields.has('sodium')) setSodium(newSodium);
+    }
+    // Clear dirty fields when servings changes — the user gets fresh computed values.
+    // They can edit again if needed.
+    if (nutritionDirtyFields.size > 0) {
+      setNutritionDirtyFields(new Set());
+    }
+  }, [servings, nutritionTotals, nutritionDirtyFields]);
+
+  const currentNutritionInput = JSON.stringify([ingredientsText, servings]);
+  const nutritionInputRef = useRef(currentNutritionInput);
+  nutritionInputRef.current = currentNutritionInput;
+  const nutritionEstimateSeq = useRef(0);
+  useEffect(() => () => { nutritionEstimateSeq.current += 1; }, []);
+
   const handleEstimateNutrition = async () => {
+    const seq = ++nutritionEstimateSeq.current;
+    const inputKey = nutritionInputRef.current;
     setIsEstimatingNutrition(true);
     setNutritionError(null);
     setNutritionSuccess(false);
+    setNutritionCoverageNote(null);
 
     try {
       const lines = ingredientsText
@@ -546,58 +715,155 @@ export function RecipeEditorModal({
         .filter(Boolean);
 
       if (lines.length === 0) {
-        throw new Error('Please add ingredients before estimating nutrition.');
+        throw new Error('Please add ingredients before calculating nutrition.');
       }
 
-      const numServings = typeof servings === 'number' ? servings : parseInt(String(servings), 10) || 4;
+      // Preserve the authored serving count for disclosure purposes. Calculation
+      // falls back to the shared four-serving basis inside the nutrition engine.
+      const authoredServings = typeof servings === 'number'
+        ? servings
+        : (String(servings ?? '').trim() === '' ? undefined : parseFloat(String(servings)));
+      const numServings = Number.isFinite(authoredServings) && (authoredServings as number) > 0
+        ? (authoredServings as number)
+        : undefined;
 
-      const res = await network.post<{ success: boolean; nutrition?: any; error?: string }>(
-        '/api/estimate-nutrition',
-        {
-          title: title || 'Recipe',
-          servings: numServings,
-          ingredients: lines,
-        },
-        await buildAiSelectionRequestOptions()
-      );
-
-      const data = res.data;
-      if (!res.ok || !data?.success) {
-        throw new Error(data?.error || 'Failed to estimate nutrition.');
+      // ONE shared Basic Nutrition engine (the SAME service the main recipe page
+      // uses). Deterministic, local, no provider call: the pinned USDA
+      // catalog, shared parsing, applicable portions, and disclosed quantity
+      // estimates. Values populate the EDITABLE fields only — nothing is written
+      // to the Vault until the user explicitly saves the recipe.
+      const estimate = await calculateProductionBasicNutrition({ ingredients: lines, servings: numServings });
+      if (seq !== nutritionEstimateSeq.current || inputKey !== nutritionInputRef.current) return;
+      if (!estimate.ok) {
+        setNutritionTotals({});
+        setCalories(''); setProtein(''); setCarbs('');
+        setFat(''); setFiber(''); setSodium('');
+        setNutritionDirtyFields(new Set());
+        setNutritionFromEstimate(false);
+        setNutritionPartial(false);
+        setNutritionDirty(true);
+        setNutritionProvenance({});
+        setNutritionError(estimate.message ?? `Partial nutrition: ${estimate.coverage.resolved}/${estimate.coverage.total} lines resolved. Recipe totals are unknown. Review unresolved quantities in Advanced Nutrition.`);
+        return;
       }
 
-      if (data.nutrition) {
-        // FAIL CLOSED: never populate the editor from a machine-generated
-        // estimate unless the centralized applicability contract authorizes it.
-        const assessment = data.nutrition.assessment;
-        const rules = evaluateMachineNutritionApplicability(data.nutrition, assessment, numServings);
-        const gate = canApplyNutritionEstimate(data.nutrition, assessment, numServings);
-        if (!gate.ok) {
-          setNutritionError(rules.ok ? NUTRITION_AUTOSAVE_DISABLED_MESSAGE : NUTRITION_INCOMPLETE_MESSAGE);
-          return;
-        }
-        if (data.nutrition.calories !== undefined) setCalories(data.nutrition.calories.toString());
-        if (data.nutrition.protein !== undefined) setProtein(data.nutrition.protein.toString());
-        if (data.nutrition.carbohydrates !== undefined) setCarbs(data.nutrition.carbohydrates.toString());
-        if (data.nutrition.fat !== undefined) setFat(data.nutrition.fat.toString());
-        if (data.nutrition.fiber !== undefined) setFiber(data.nutrition.fiber.toString());
-        if (data.nutrition.sodium !== undefined) setSodium(data.nutrition.sodium.toString());
-        setNutritionFromEstimate(true);
-        setNutritionDirty(false);
-        setNutritionProvenance({
-          source: data.nutrition.source,
-          confidence: data.nutrition.confidence,
-          confidenceNote: data.nutrition.confidenceNote,
-        });
-        setNutritionSuccess(true);
-        setTimeout(() => setNutritionSuccess(false), 3000);
+      const partial = !estimate.coverage.complete;
+      const values = partial ? estimate.knownSubtotal : estimate.totals;
+      if (!values || !Object.values(values).some(value => typeof value === 'number' && Number.isFinite(value))) {
+        setNutritionError(estimate.message ?? 'No supported nutrition contribution could be calculated. Existing values were kept.');
+        return;
       }
+
+      // Store WHOLE-RECIPE totals as the source of truth.
+      // Per-serving display values are set from estimate.perServing.
+      const totals: Partial<RecipeNutrition> = {
+        ...(values.calories !== null ? { calories: values.calories } : {}),
+        ...(values.protein !== null ? { protein: values.protein } : {}),
+        ...(values.carbohydrates !== null ? { carbohydrates: values.carbohydrates } : {}),
+        ...(values.fat !== null ? { fat: values.fat } : {}),
+        ...(values.fiber !== null ? { fiber: values.fiber } : {}),
+        ...(values.sodium !== null ? { sodium: values.sodium } : {}),
+      };
+      setNutritionTotals(totals);
+      legacyNutritionNeedsServingBasis.current = false;
+      setNutritionDirtyFields(new Set()); // Clear dirty flags on new calculation
+
+      // Set per-serving editor fields from the estimate
+      const perServingBasis = estimate.baseServings > 0 ? estimate.baseServings : 4;
+      const perServing = (value: number | null | undefined, whole = false) => value == null ? '' : String(whole ? Math.round(value / perServingBasis) : Math.round((value / perServingBasis) * 10) / 10);
+      setCalories(perServing(values.calories, true));
+      setProtein(perServing(values.protein));
+      setCarbs(perServing(values.carbohydrates));
+      setFat(perServing(values.fat));
+      setFiber(perServing(values.fiber));
+      setSodium(perServing(values.sodium, true));
+      setNutritionIngredientKey(ingredientsText);
+      setNutritionFromEstimate(true);
+      setNutritionPartial(partial);
+      setPartialOverwriteApproved(false);
+      setNutritionDirty(false);
+      setNutritionProvenance({
+        source: estimate.source,
+        confidence: estimate.confidence === 'unknown' ? 'low' : estimate.confidence,
+        confidenceNote: estimate.confidenceNote,
+      });
+      if (Object.values(values).some(value => value === null)) setNutritionCoverageNote('Some nutrients have incomplete source coverage and remain unknown.');
+      if (partial) {
+        setNutritionCoverageNote(
+          `Partial estimate: ${estimate.coverage.resolved} of ${estimate.coverage.total} ingredient lines ` +
+            `matched the local food reference; unresolved lines contribute nothing.` +
+            (estimate.lines.filter((line) => line.status === 'unresolved').length > 0
+              ? ` Unresolved: ${estimate.lines
+                  .filter((line) => line.status === 'unresolved')
+                  .slice(0, 4)
+                  .map((line) => line.ingredient)
+                  .join('; ')}.`
+              : ''),
+        );
+      }
+      setNutritionSuccess(true);
+      setTimeout(() => setNutritionSuccess(false), 3000);
     } catch (err: any) {
-      setNutritionError(err.message || 'Error estimating nutrition.');
+      setNutritionError(err.message || 'Error calculating nutrition.');
     } finally {
       setIsEstimatingNutrition(false);
     }
   };
+
+  const handleNutritionChange = useCallback(
+    (fieldName: string, setter: (value: string) => void, value: string) => {
+      setter(value);
+      setNutritionDirty(true);
+      // Mark this field as manually edited so it won't be overwritten by servings change
+      setNutritionDirtyFields((prev) => new Set(prev).add(fieldName));
+      // Update whole-recipe totals from the edited per-serving value
+      const parsedServings = typeof servings === 'number' ? servings : parseFloat(String(servings));
+      if (!isNaN(parsedServings) && parsedServings > 0) {
+        const numValue = value.trim() ? parseFloat(value.trim()) : undefined;
+        if (numValue !== undefined && Number.isFinite(numValue)) {
+          setNutritionTotals((prev) => ({ ...prev, [fieldName === 'carbs' ? 'carbohydrates' : fieldName]: numValue * parsedServings }));
+        } else if (value.trim() === '') {
+          // User cleared the field - remove from totals
+          setNutritionTotals((prev) => {
+            const next = { ...prev };
+            delete next[fieldName === 'carbs' ? 'carbohydrates' : fieldName];
+            return next;
+          });
+        }
+      } else if (legacyNutritionNeedsServingBasis.current) {
+        // With no known serving count, retain the edited field as legacy
+        // per-serving data until the first serving count establishes a batch.
+        const numValue = value.trim() ? parseFloat(value.trim()) : undefined;
+        const key = fieldName === 'carbs' ? 'carbohydrates' : fieldName;
+        if (numValue !== undefined && Number.isFinite(numValue)) {
+          setNutritionTotals((prev) => ({ ...prev, [key]: numValue }));
+        } else if (value.trim() === '') {
+          setNutritionTotals((prev) => {
+            const next = { ...prev };
+            delete next[key];
+            return next;
+          });
+        }
+      } else {
+        // A manual per-serving value entered before the recipe has a serving
+        // denominator is retained as a legacy per-serving value. The first
+        // later serving count will establish whole-recipe totals exactly once.
+        const numValue = value.trim() ? parseFloat(value.trim()) : undefined;
+        const key = fieldName === 'carbs' ? 'carbohydrates' : fieldName;
+        if (numValue !== undefined && Number.isFinite(numValue)) {
+          legacyNutritionNeedsServingBasis.current = true;
+          setNutritionTotals((prev) => ({ ...prev, [key]: numValue }));
+        } else if (value.trim() === '') {
+          setNutritionTotals((prev) => {
+            const next = { ...prev };
+            delete next[key];
+            return next;
+          });
+        }
+      }
+    },
+    [servings],
+  );
 
   const [isRecoveringMetadata, setIsRecoveringMetadata] = useState(false);
   const [metadataRecoverySuccess, setMetadataRecoverySuccess] = useState<string | null>(null);
@@ -659,7 +925,7 @@ export function RecipeEditorModal({
       if (data?.recovered) {
         const rec = data.recovered;
         const recoverBaseServings =
-          typeof servings === 'number' ? servings : parseInt(String(servings), 10) || 4;
+          typeof servings === 'number' ? servings : parseFloat(String(servings)) || 4;
 
         // The planner routes recovered nutrition through the SAME centralized
         // applicability contract used by the estimator. Non-nutrition metadata
@@ -673,7 +939,7 @@ export function RecipeEditorModal({
 
         if (plan.updates.prepTime !== undefined) setPrepTime(plan.updates.prepTime);
         if (plan.updates.cookTime !== undefined) setCookTime(plan.updates.cookTime);
-        if (plan.updates.servings !== undefined) setServings(plan.updates.servings);
+        if (plan.updates.servings !== undefined) handleServingsChange(plan.updates.servings);
         if (plan.updates.category !== undefined) setCategory(plan.updates.category);
         if (plan.updates.cuisine !== undefined) setCuisine(plan.updates.cuisine);
         if (plan.updates.difficulty !== undefined) setDifficulty(plan.updates.difficulty);
@@ -841,9 +1107,9 @@ export function RecipeEditorModal({
       // it can be revoked after React stops using it (or on unmount). A late
       // (cancelled/unmounted) completion revokes its URL immediately instead of
       // leaking an untracked one.
-      const previewUrl = URL.createObjectURL(blob);
+      const previewUrl = createTemporaryPreviewUrl(blob, 'recipe-editor-representative');
       if (run !== previewRunRef.current || !mountedRef.current) {
-        URL.revokeObjectURL(previewUrl);
+        releaseTemporaryPreviewUrl(previewUrl);
         return;
       }
       setPendingImage({ kind: 'representative', blob, ext, provenance: selected.provenance });
@@ -915,7 +1181,7 @@ export function RecipeEditorModal({
     aiPreviewRef.current = null;
     if (!current) return;
     if (representativePreviewUrlsRef.current.has(current.previewUrl)) {
-      URL.revokeObjectURL(current.previewUrl);
+      releaseTemporaryPreviewUrl(current.previewUrl);
       representativePreviewUrlsRef.current.delete(current.previewUrl);
     }
     void network
@@ -945,10 +1211,10 @@ export function RecipeEditorModal({
           'IMAGE_PREVIEW_UNAVAILABLE'
         );
       }
-      const previewUrl = URL.createObjectURL(fetched.blob);
+      const previewUrl = createTemporaryPreviewUrl(fetched.blob, 'recipe-editor-ai');
       if (run !== aiRunRef.current || !mountedRef.current) {
         // Late (cancelled/unmounted) completion: never leak an untracked URL.
-        URL.revokeObjectURL(previewUrl);
+        releaseTemporaryPreviewUrl(previewUrl);
         return;
       }
       representativePreviewUrlsRef.current.add(previewUrl);
@@ -1066,9 +1332,10 @@ export function RecipeEditorModal({
   /** True for a transient preview reference that must never be persisted. */
   const isTransientImageRef = (value: unknown): boolean => {
     if (typeof value !== 'string' || !value) return false;
+    const scheme = getReferenceScheme(value);
     return (
-      value.startsWith('blob:') ||
-      value.startsWith('data:') ||
+      scheme === 'blob' ||
+      scheme === 'data' ||
       value.includes('/api/recipes/image/preview/')
     );
   };
@@ -1084,21 +1351,64 @@ export function RecipeEditorModal({
     onClose();
   };
 
+  const sessionAssetErrorMessage = (err: any, fallback: string): string =>
+    err?.name === 'VaultSessionSupersededError'
+      ? 'The Vault changed before the image could be saved. No asset was written to the new Vault.'
+      : err?.message || fallback;
+
+  /**
+   * Immediate image-picker writes (upload / save-remote) also run under the
+   * originating session lease. They are not allowed to resolve a destination
+   * from a newer rendered imageService.
+   */
+  const saveImmediateAsset = async (source: string | Blob, preferredExtension?: string) => {
+    if (runSessionAsset) {
+      return runSessionAsset((deps) =>
+        saveImageToVaultAssetsCollisionSafe(deps, title || 'Recipe', source, preferredExtension)
+      );
+    }
+    return saveImageToVaultAssetsCollisionSafe(
+      imageService ?? { folderHandle },
+      title || 'Recipe',
+      source,
+      preferredExtension
+    );
+  };
+
   const handleSave = async () => {
+    if (nutritionFromEstimate && nutritionPartial && priorCompleteNutrition && !partialOverwriteApproved) {
+      setSaveError('This calculation is partial. Review the coverage notice and confirm that you want to replace the existing complete nutrition with a labeled subtotal.');
+      return;
+    }
+    if (nutritionFromEstimate && nutritionIngredientKey !== ingredientsText) {
+      setSaveError('Ingredients changed after the nutrition calculation. Recalculate nutrition before saving this estimate.');
+      return;
+    }
     // Synchronous transaction lock (I1): two clicks can never enter the Asset
     // writer twice. Retry stays available: the lock releases on every path.
     if (saveTransactionRef.current) return;
     saveTransactionRef.current = true;
     setIsSaving(true);
     try {
-      return await handleSaveTransaction();
+      if (onBeforeSave) {
+        try {
+          await onBeforeSave();
+        } catch (error: any) {
+          setSaveError(error?.message || 'The desktop Recipe Vault could not be prepared. Your draft was kept.');
+          return;
+        }
+      }
+      if (runSessionAsset) {
+        return await runSessionAsset((deps) => handleSaveTransaction(deps));
+      }
+      return await handleSaveTransaction(imageService ?? { folderHandle });
     } finally {
       saveTransactionRef.current = false;
       if (mountedRef.current) setIsSaving(false);
     }
   };
 
-  const handleSaveTransaction = async () => {
+  const handleSaveTransaction = async (deps: SaveImageDeps) => {
     let finalRecipe: ObsidianRecipe;
     let imagePathOverride: string | undefined;
     // Set ONLY when THIS transaction created a new asset (B1 ownership proof).
@@ -1164,7 +1474,7 @@ export function RecipeEditorModal({
           throw new Error('invalid-preview-bytes');
         }
         const saved = await saveImageToVaultAssetsCollisionSafe(
-          imageService ?? { folderHandle },
+          deps,
           title || 'Recipe',
           pendingImage.blob,
           pendingImage.ext
@@ -1218,7 +1528,9 @@ export function RecipeEditorModal({
         delete fm['codex_generated_image'];
       }
       parsed.frontmatter = fm;
-      parsed.rawMarkdown = serializeRecipeToObsidianMarkdown(parsed);
+      // Preserve the user's exact raw body; the canonical writer merges managed
+      // frontmatter fields without regenerating custom sections.
+      parsed.rawMarkdown = rawMarkdown;
       finalRecipe = parsed;
     } else {
       const md = generateCurrentMarkdown(imagePathOverride, provenanceOverride, generatedOverride);
@@ -1229,6 +1541,20 @@ export function RecipeEditorModal({
         // Existing recipe: keep authoritative filePath. New recipe: connected root.
         initialRecipe?.filePath || resolveNewRecipeVaultPath(safeName)
       );
+      // Existing recipes retain their original body so unknown/custom sections
+      // survive an unrelated structured edit. New recipes use the generated md.
+      if (initialRecipe?.rawMarkdown) {
+        finalRecipe.rawMarkdown = initialRecipe.rawMarkdown;
+      }
+      if (initialRecipe) {
+        // Preserve the exact pre-edit favorite value (including a legacy absent
+        // value). This field is not edited by the visual form, so the save path
+        // must not reinterpret its omission as an intentional favorite removal.
+        // The write rebase still keeps a newer committed favorite/rating if one
+        // landed while this editor was open. The Raw Markdown tab is intentionally
+        // excluded: an explicit text edit there remains authoritative.
+        finalRecipe.isFavorite = initialRecipe.isFavorite;
+      }
     }
 
     if (initialRecipe?.id) {
@@ -1238,18 +1564,43 @@ export function RecipeEditorModal({
       finalRecipe.fileHandle = initialRecipe.fileHandle;
     }
 
+    // Production session-bound save: a Vault-local image must exist in the
+    // DESTINATION adapter. This blocks a stale A-only path from entering B.
+    if (runSessionAsset) {
+      const assetValidation = await validateRecipeAssetReferences(deps, finalRecipe);
+      if (!assetValidation.ok) {
+        setSaveError(assetValidation.reason || 'The active Vault could not verify this recipe image reference.');
+        return;
+      }
+    }
+
+    // Give downstream state the exact canonical text that the writer will
+    // persist (including the finalized Vault image path and preserved body).
+    finalRecipe.rawMarkdown = serializeRecipePreservingContent(finalRecipe);
+
     setSaveError(null);
     try {
       await onSave(finalRecipe);
+      // Success: release any preview URL that is no longer the active image.
+      for (const url of [...representativePreviewUrlsRef.current]) {
+        if (url !== finalRecipe.image) {
+          releaseTemporaryPreviewUrl(url);
+          representativePreviewUrlsRef.current.delete(url);
+        }
+      }
     } catch (err: any) {
-      let message: string = err?.message || 'Failed to save recipe to the vault.';
+      let message: string = err?.name === 'VaultSessionSupersededError'
+        ? 'The Vault changed before this recipe was saved. The recipe was not added to the new Vault.'
+        : err?.message || 'Failed to save recipe to the vault.';
       if (createdAssetPath) {
         // Roll back ONLY the asset proven to be created by THIS Save transaction
         // (B1). A pre-existing user asset is never deleted or modified.
-        const del = imageService?.asset?.delete;
+        const del = deps.asset?.delete;
+        let deleted = false;
         if (typeof del === 'function') {
           try {
-            await del.call(imageService!.asset, createdAssetPath);
+            await del.call(deps.asset, createdAssetPath);
+            deleted = true;
           } catch {
             message =
               'Recipe save failed. A newly created image asset may remain in Assets and may need to be removed manually.';
@@ -1257,6 +1608,9 @@ export function RecipeEditorModal({
         } else {
           message =
             'Recipe save failed. A newly created image asset may remain in Assets and may need to be removed manually.';
+        }
+        if (deleted && deps.assetScope) {
+          deps.assetScope.removeAsset(createdAssetPath);
         }
       }
       // Restore the COMPLETE pre-save snapshot (B3): image, both provenances,
@@ -1284,7 +1638,7 @@ export function RecipeEditorModal({
             </div>
             <div>
               <h2 className="text-base font-serif font-bold text-white">
-                {initialRecipe ? `Edit: ${initialRecipe.title}` : 'Create New Obsidian Recipe Note'}
+                {initialRecipe ? `Edit: ${initialRecipe.title}` : 'Create New Recipe Note'}
               </h2>
               <span className="text-xs text-gray-500 font-mono">
                 {initialRecipe ? initialRecipe.filePath : fileName}
@@ -1394,7 +1748,7 @@ export function RecipeEditorModal({
 
                 <div>
                   <label className="block font-medium text-gray-300 mb-1">
-                    Obsidian File Name
+                    Recipe File Name
                   </label>
                   <input
                     type="text"
@@ -1477,7 +1831,7 @@ export function RecipeEditorModal({
                   <input
                     type="number"
                     value={servings}
-                    onChange={(e) => setServings(e.target.value === '' ? '' : parseInt(e.target.value, 10))}
+                    onChange={(e) => handleServingsChange(e.target.value === '' ? '' : parseFloat(e.target.value))}
                     min={1}
                     placeholder="e.g. 4"
                     className="w-full bg-[#0C0C0C] border border-white/10 rounded-lg p-2 text-gray-300 font-mono focus:border-amber-500 focus:outline-none"
@@ -1485,11 +1839,11 @@ export function RecipeEditorModal({
                 </div>
 
                 <div>
-                  <label className="block font-medium text-gray-300 mb-1">Calories (kcal)</label>
+                  <label className="block font-medium text-gray-300 mb-1">{nutritionPartial ? 'Calories (kcal) · subtotal' : 'Calories (kcal)'}</label>
                   <input
                     type="text"
                     value={calories}
-                    onChange={(e) => { setCalories(e.target.value); setNutritionDirty(true); }}
+                    onChange={(e) => handleNutritionChange('calories', setCalories, e.target.value)}
                     placeholder="e.g. 520"
                     className="w-full bg-[#0C0C0C] border border-white/10 rounded-lg p-2 text-gray-300 font-mono focus:border-amber-500 focus:outline-none"
                   />
@@ -1523,10 +1877,16 @@ export function RecipeEditorModal({
                     className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 transition-colors disabled:opacity-50"
                   >
                     <Sparkles className={`w-3.5 h-3.5 ${isEstimatingNutrition ? 'animate-spin' : ''}`} />
-                    <span>{isEstimatingNutrition ? 'Analyzing Ingredients...' : 'Estimate Nutrition (AI)'}</span>
+                    <span>{isEstimatingNutrition ? 'Calculating…' : 'Calculate Basic Nutrition'}</span>
                   </button>
                 </div>
 
+                {initialRecipe && hasPreferredAdvancedNutrition(initialRecipe) && (
+                  <p className="text-[11px] text-amber-300">
+                    These are Basic nutrition fields. The recipe page uses the separately saved Advanced report.
+                    Review and recalculate Advanced Nutrition to update that report; saving these fields does not replace it.
+                  </p>
+                )}
                 {nutritionError && (
                   <p className="text-[11px] text-rose-300 bg-rose-950/40 p-2 rounded-lg border border-rose-800/40">
                     {nutritionError}
@@ -1534,61 +1894,78 @@ export function RecipeEditorModal({
                 )}
                 {nutritionSuccess && (
                   <p className="text-[11px] text-emerald-300 bg-emerald-950/40 p-2 rounded-lg border border-emerald-800/40">
-                    Nutrition &amp; macros successfully estimated and populated!
+                    Basic nutrition calculated and populated — these are estimates. Review or edit them; nothing is
+                    saved until you save the recipe.
+                  </p>
+                )}
+                {nutritionCoverageNote && (
+                  <p className="text-[11px] text-amber-300 bg-amber-950/40 p-2 rounded-lg border border-amber-800/40">
+                    {nutritionCoverageNote}
+                  </p>
+                )}
+                {nutritionFromEstimate && nutritionPartial && (
+                  <p data-testid="editor-basic-partial" className="text-[11px] text-amber-200 bg-amber-950/40 p-2 rounded-lg border border-amber-800/40">
+                    Partial subtotal: unresolved ingredients are excluded. These values are not full recipe totals.
+                    {priorCompleteNutrition && (
+                      <label className="mt-2 flex items-start gap-2">
+                        <input type="checkbox" checked={partialOverwriteApproved} onChange={(event) => setPartialOverwriteApproved(event.target.checked)} />
+                        <span>I understand this will replace the existing complete nutrition with the labeled partial subtotal.</span>
+                      </label>
+                    )}
                   </p>
                 )}
 
                 <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
                   <div>
-                    <label className="block text-[11px] text-gray-400 mb-1">Protein (g)</label>
+                    <label className="block text-[11px] text-gray-400 mb-1">{nutritionPartial ? 'Protein (g) · subtotal' : 'Protein (g)'}</label>
                     <input
                       type="number"
                       step="0.1"
                       value={protein}
-                      onChange={(e) => { setProtein(e.target.value); setNutritionDirty(true); }}
+                      onChange={(e) => handleNutritionChange('protein', setProtein, e.target.value)}
                       placeholder="e.g. 32"
                       className="w-full bg-[#0C0C0C] border border-white/10 rounded-lg p-2 text-emerald-400 font-mono focus:border-amber-500 focus:outline-none"
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] text-gray-400 mb-1">Carbs (g)</label>
+                    <label className="block text-[11px] text-gray-400 mb-1">{nutritionPartial ? 'Carbs (g) · subtotal' : 'Carbs (g)'}</label>
                     <input
                       type="number"
                       step="0.1"
                       value={carbs}
-                      onChange={(e) => { setCarbs(e.target.value); setNutritionDirty(true); }}
+                      onChange={(e) => handleNutritionChange('carbohydrates', setCarbs, e.target.value)}
                       placeholder="e.g. 45"
                       className="w-full bg-[#0C0C0C] border border-white/10 rounded-lg p-2 text-blue-400 font-mono focus:border-amber-500 focus:outline-none"
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] text-gray-400 mb-1">Fat (g)</label>
+                    <label className="block text-[11px] text-gray-400 mb-1">{nutritionPartial ? 'Fat (g) · subtotal' : 'Fat (g)'}</label>
                     <input
                       type="number"
                       step="0.1"
                       value={fat}
-                      onChange={(e) => { setFat(e.target.value); setNutritionDirty(true); }}
+                      onChange={(e) => handleNutritionChange('fat', setFat, e.target.value)}
                       placeholder="e.g. 18"
                       className="w-full bg-[#0C0C0C] border border-white/10 rounded-lg p-2 text-amber-400 font-mono focus:border-amber-500 focus:outline-none"
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] text-gray-400 mb-1">Fiber (g)</label>
+                    <label className="block text-[11px] text-gray-400 mb-1">{nutritionPartial ? 'Fiber (g) · subtotal' : 'Fiber (g)'}</label>
                     <input
                       type="number"
                       step="0.1"
                       value={fiber}
-                      onChange={(e) => { setFiber(e.target.value); setNutritionDirty(true); }}
+                      onChange={(e) => handleNutritionChange('fiber', setFiber, e.target.value)}
                       placeholder="e.g. 6"
                       className="w-full bg-[#0C0C0C] border border-white/10 rounded-lg p-2 text-purple-400 font-mono focus:border-amber-500 focus:outline-none"
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] text-gray-400 mb-1">Sodium (mg)</label>
+                    <label className="block text-[11px] text-gray-400 mb-1">{nutritionPartial ? 'Sodium (mg) · subtotal' : 'Sodium (mg)'}</label>
                     <input
                       type="number"
                       value={sodium}
-                      onChange={(e) => { setSodium(e.target.value); setNutritionDirty(true); }}
+                      onChange={(e) => handleNutritionChange('sodium', setSodium, e.target.value)}
                       placeholder="e.g. 580"
                       className="w-full bg-[#0C0C0C] border border-white/10 rounded-lg p-2 text-orange-400 font-mono focus:border-amber-500 focus:outline-none"
                     />
@@ -1609,7 +1986,7 @@ export function RecipeEditorModal({
                       className="px-2 py-1 bg-white/5 hover:bg-white/10 text-amber-300 border border-white/10 rounded-md flex items-center gap-1 transition-colors cursor-pointer"
                     >
                       <Folder className="w-3 h-3 text-amber-400" />
-                      <span>Vault Assets ({vaultAssets.getAll().length})</span>
+                      <span>Vault Assets ({(assetScope?.getAll() ?? []).length})</span>
                     </button>
                     <button
                       type="button"
@@ -1629,10 +2006,11 @@ export function RecipeEditorModal({
                         if (file) {
                           try {
                             setIsSavingImageAsset(true);
-                            const saved = await saveImageToVaultAssets(imageService ?? { folderHandle }, title || 'Recipe', file);
+                            const saved = await saveImmediateAsset(file);
+                            if (!saved.success) throw new Error(saved.error || 'Could not save image.');
                             setImageManually(saved.relativePath);
                           } catch (err: any) {
-                            console.error('Failed to upload image to vault Assets/:', err);
+                            setSaveError(sessionAssetErrorMessage(err, 'Failed to upload image to vault Assets/.'));
                           } finally {
                             setIsSavingImageAsset(false);
                             if (fileInputRef.current) fileInputRef.current.value = '';
@@ -1646,7 +2024,7 @@ export function RecipeEditorModal({
                 {isAssetPickerOpen && (
                   <div className="p-3 bg-[#0A0A0A] border border-amber-500/30 rounded-xl space-y-2 max-h-48 overflow-y-auto">
                     <div className="flex items-center justify-between text-xs text-amber-400 font-semibold pb-1 border-b border-white/5">
-                      <span>Select Image from Obsidian Assets</span>
+                      <span>Select Image from Vault Assets</span>
                       <button
                         type="button"
                         onClick={() => setIsAssetPickerOpen(false)}
@@ -1655,13 +2033,13 @@ export function RecipeEditorModal({
                         ✕
                       </button>
                     </div>
-                    {vaultAssets.getAll().length === 0 ? (
+                    {(assetScope?.getAll() ?? []).length === 0 ? (
                       <p className="text-xs text-gray-500 py-2 text-center">
                         No image assets currently cached in vault. Upload an image or add files to your vault's Assets/ folder.
                       </p>
                     ) : (
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
-                        {vaultAssets.getAll().map((item) => (
+                        {(assetScope?.getAll() ?? []).map((item) => (
                           <button
                             key={item.path}
                             type="button"
@@ -1705,10 +2083,11 @@ export function RecipeEditorModal({
                       onClick={async () => {
                         try {
                           setIsSavingImageAsset(true);
-                          const saved = await saveImageToVaultAssets(imageService ?? { folderHandle }, title || 'Recipe', image);
+                          const saved = await saveImmediateAsset(image);
+                          if (!saved.success) throw new Error(saved.error || 'Could not save image.');
                           setImageManually(saved.relativePath);
                         } catch (err: any) {
-                          console.error('Failed to download image to Assets/:', err);
+                          setSaveError(sessionAssetErrorMessage(err, 'Failed to download image to Assets/.'));
                         } finally {
                           setIsSavingImageAsset(false);
                         }

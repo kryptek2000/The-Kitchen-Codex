@@ -18,6 +18,7 @@
  */
 
 import type { ObsidianRecipe, VaultNote, MealPlanDay, ShoppingCategoryGroup } from '../types';
+import { normalizeMealPlanDays } from './mealPlan';
 
 type RecipeIdentity = Pick<ObsidianRecipe, 'filePath' | 'fileName' | 'id'>;
 
@@ -123,7 +124,7 @@ export function deriveVaultSnapshotState(
   return {
     recipes: scan.recipes,
     notes: scan.notes,
-    mealPlan: scan.mealPlan ?? [],
+    mealPlan: normalizeMealPlanDays(scan.mealPlan),
     shoppingList: scan.shoppingList ?? [],
     selectedRecipe: active.selectedRecipe ? reconcileActiveRecipe(active.selectedRecipe, scan.recipes) : null,
     cookingRecipe: active.cookingRecipe

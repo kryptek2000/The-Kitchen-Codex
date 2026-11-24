@@ -57,8 +57,8 @@ import {
 } from '../../src/application/nutritionAiResolve';
 
 const SPECS: ReadonlyArray<CalcRecordSpec> = [
-  { fdcId: 8003, dataType: 'fndds', description: 'Milk, whole', nutrients: { calories: 61 } },
-  { fdcId: 8004, dataType: 'fndds', description: 'Milk, skim', nutrients: { calories: 34 } },
+  { fdcId: 8003, dataType: 'fndds', description: 'Milk, whole, dried', nutrients: { calories: 61 } },
+  { fdcId: 8004, dataType: 'fndds', description: 'Milk, skim, dried', nutrients: { calories: 34 } },
   { fdcId: 8001, dataType: 'sr_legacy', description: 'Pepper, red, crushed', nutrients: { calories: 318 } },
   { fdcId: 8005, dataType: 'fndds', description: 'Mystery, raw', nutrients: { calories: 100 } },
 ];
@@ -70,7 +70,9 @@ const SESSION: AdvancedNutritionSession = SESSION_RESULT.session;
 
 const AI_CAPABILITIES = resolveNutritionCapabilities({ aiConfigured: true, aiReachable: true });
 
-const LINE = '1 cup skim milk powder';
+// The source does not request the only available dried variants. They remain
+// offered for review, and AI wording cannot elevate them to a user decision.
+const LINE = '1 cup milk';
 
 function structured(line: string): Record<string, unknown> {
   const parsed = parseIngredientLine(line);
@@ -261,7 +263,7 @@ describe('AI-1 review_suggested — no below-threshold laundering', () => {
     // The provider agrees with the deterministic below-threshold candidate and
     // supplies the exact wording the matcher WOULD accept automatically.
     const double = networkDouble((rows) =>
-      rows.map((row) => reading(String(row.line_ref), 'Milk, skim', ['milk skim']))
+      rows.map((row) => reading(String(row.line_ref), 'Milk, skim, dried', ['milk skim dried']))
     );
     const result = await resolveUnresolvedRowsWithAi(canonicalArgs(double, flowValue, flowValue.issueKinds));
 
@@ -278,7 +280,7 @@ describe('AI-1 review_suggested — no below-threshold laundering', () => {
   it('the guard is what prevents the upgrade (classification is load-bearing)', async () => {
     const flowValue = flow(LINE);
     const double = networkDouble((rows) =>
-      rows.map((row) => reading(String(row.line_ref), 'Milk, skim', ['milk skim']))
+      rows.map((row) => reading(String(row.line_ref), 'Milk, skim, dried', ['milk skim dried']))
     );
     // Same reading, same catalog, same matcher — only the TRUSTED classification
     // differs. Without the review_suggested classification the deterministic
@@ -299,7 +301,7 @@ describe('AI-1 review_suggested — no below-threshold laundering', () => {
     const flowValue = flow(LINE);
     const double = networkDouble((rows) =>
       rows.map((row) => ({
-        ...(reading(String(row.line_ref), 'Milk, skim', ['milk skim']) as Record<string, unknown>),
+        ...(reading(String(row.line_ref), 'Milk, skim, dried', ['milk skim dried']) as Record<string, unknown>),
         count_semantics: { noun: 'cup' },
       }))
     );
@@ -313,7 +315,7 @@ describe('AI-1 review_suggested — no below-threshold laundering', () => {
       line_ref: lineRef,
       query: 'milk skim',
       fdc_id: 8004,
-      description: 'Milk, skim',
+      description: 'Milk, skim, dried',
       record_digest: 'd',
       auto: true,
       choice: { kind: 'manual' as const, fdc_id: 8004, aiAssisted: true, aiAccepted: true },
@@ -378,7 +380,7 @@ describe('AI-1 review_suggested — source wording still outranks the provider',
   it('a high-confidence provider reading creates NO automatic acceptance for a below-threshold row', async () => {
     const flowValue = flow(LINE);
     const double = networkDouble((rows) =>
-      rows.map((row) => reading(String(row.line_ref), 'Milk, whole', ['whole milk'], 'high'))
+      rows.map((row) => reading(String(row.line_ref), 'Milk, whole, dried', ['whole milk dried'], 'high'))
     );
     const result = await resolveUnresolvedRowsWithAi(canonicalArgs(double, flowValue, flowValue.issueKinds));
 
@@ -415,7 +417,7 @@ describe('AI-1 review_suggested — source wording still outranks the provider',
   it('a semantically IMPROVED query must still pass every existing gate', async () => {
     const flowValue = flow(LINE);
     const double = networkDouble((rows) =>
-      rows.map((row) => reading(String(row.line_ref), 'Milk, skim', ['milk skim']))
+      rows.map((row) => reading(String(row.line_ref), 'Milk, skim, dried', ['milk skim dried']))
     );
     const result = await resolveUnresolvedRowsWithAi(canonicalArgs(double, flowValue, flowValue.issueKinds));
     // The deterministic pipeline still produced its own verification result for

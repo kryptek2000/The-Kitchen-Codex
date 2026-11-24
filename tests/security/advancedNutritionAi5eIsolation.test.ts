@@ -413,8 +413,10 @@ describe('AI-5E — AI-5A invariance', () => {
     ]) {
       expect(app).toContain(ungated);
     }
-    // The gate is registered on exactly six routes and nowhere else.
-    expect([...app.matchAll(/requireNutritionProductFeature\(/g)]).toHaveLength(8);
+    // The server now registers twelve paid nutrition gates, including SHISO's
+    // AI-first nutrition estimator and the AI-first candidate evaluation route;
+    // deterministic/manual routes remain free.
+    expect([...app.matchAll(/requireNutritionProductFeature\(/g)]).toHaveLength(12);
   });
 });
 

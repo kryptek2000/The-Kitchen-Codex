@@ -115,7 +115,7 @@ function fullEntitled(overrides: Partial<Phase8bObservation> = {}): Phase8bObser
     builtApp: true,
     recipe: { title: ACCEPTANCE_RECIPE_TITLE, servings: ACCEPTANCE_SERVINGS, ingredientCount: 9 },
     bundle: cleanBundle(),
-    review: { total: 9, matched: 6, needsAmount: 3, needsMatch: 0, reviewSuggested: 0, qualitative: 0 },
+    review: { total: 9, matched: 7, needsAmount: 2, needsMatch: 0, reviewSuggested: 0, qualitative: 0 },
     calculation: {
       previewRendered: true,
       nutrientTotalsPresent: true,
@@ -166,7 +166,7 @@ function basicControl(overrides: Partial<Phase8bObservation> = {}): Phase8bObser
     builtApp: true,
     recipe: null,
     bundle: cleanBundle(),
-    review: { total: 9, matched: 6, needsAmount: 3, needsMatch: 0, reviewSuggested: 0, qualitative: 0 },
+    review: { total: 9, matched: 7, needsAmount: 2, needsMatch: 0, reviewSuggested: 0, qualitative: 0 },
     calculation: { previewRendered: true, nutrientTotalsPresent: true, partialReportedTruthfully: true, previewDigest: '', applyEligible: true },
     entitlement: {
       productAccessTier: 'basic',
@@ -251,7 +251,7 @@ describe('Phase 8B acceptance fixture', () => {
 
 describe('Phase 8B pinned USDA expectations', () => {
   it('pins the bundle release and record count the proof runs against', () => {
-    expect(PINNED_BUNDLE_RELEASE).toBe('usda_fdc_87c5408a3e98838944a87be74824761e');
+    expect(PINNED_BUNDLE_RELEASE).toBe('usda_fdc_1f3e3068a7ae0702f360d1caae40a628');
     expect(PINNED_BUNDLE_RECORD_COUNT).toBe(13559);
   });
 
@@ -444,11 +444,27 @@ describe('M9 — the real browser step removed from CI', () => {
     expect(plugin).toBeGreaterThan(browser);
   });
 
-  it('keeps the plugin build after the full suite so plugin/main.js cannot pollute it', () => {
-    const suite = WORKFLOW.indexOf('run: bun run test\n');
+  it('runs test groups in separate jobs before the isolated plugin quality job', () => {
+    const fast = WORKFLOW.indexOf('fast-core:');
+    const heavy = WORKFLOW.indexOf('heavy-nutrition:');
+    const security = WORKFLOW.indexOf('security:');
+    const quality = WORKFLOW.indexOf('quality:');
     const plugin = WORKFLOW.indexOf('run: bun run build:plugin');
-    expect(suite).toBeGreaterThan(-1);
-    expect(plugin).toBeGreaterThan(suite);
+    expect(fast).toBeGreaterThan(-1);
+    expect(heavy).toBeGreaterThan(-1);
+    expect(security).toBeGreaterThan(-1);
+    expect(quality).toBeGreaterThan(Math.max(fast, heavy, security));
+    expect(plugin).toBeGreaterThan(quality);
+
+    // Test jobs use the coverage-checked plan; the quality job has no test
+    // runner step, so building plugin/main.js cannot pollute test collection.
+    expect(WORKFLOW).toContain('node scripts/ci/test-plan.mjs --check');
+    expect(WORKFLOW).toMatch(/--group fast/);
+    expect(WORKFLOW).toMatch(/--group heavy/);
+    expect(WORKFLOW).toMatch(/--group security/);
+    const qualityBlock = WORKFLOW.slice(quality, plugin);
+    expect(qualityBlock).not.toMatch(/bun x vitest run/);
+    expect(qualityBlock).not.toMatch(/run:\s*bun run test\s*\n/);
   });
 
   it('resolves a browser explicitly and fails the job when none exists', () => {

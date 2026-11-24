@@ -326,6 +326,7 @@ describe('AI-4C isolation — AI-3 authority and caps are untouched', () => {
       '../src/core/nutritionV2/nutritionCapabilities.js',
       '../src/core/nutritionV2/phase4/recipeContextContract.js',
       '../src/core/nutritionV2/schema.js',
+      './ai/culinaryExpertise.js',
       './ai/effectiveSelection.js',
       './ai/provider.js',
       './ai/providerErrors.js',

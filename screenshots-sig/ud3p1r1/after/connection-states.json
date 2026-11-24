@@ -1,0 +1,27 @@
+{
+  "reauthBefore": {
+    "stateLabel": "My Recipe Vault",
+    "chip": "Reconnect Vault",
+    "eyebrow": "Vault awaiting access",
+    "intro": "Your Vault is remembered, but the browser needs your permission before its recipes can be shown.",
+    "sidebar": "Reconnect “My Recipe Vault” · 9 sample recipes",
+    "scrollWidth": 1440,
+    "clientWidth": 1440
+  },
+  "reauthAfter": {
+    "stateLabel": "My Recipe Vault",
+    "chip": "Reconnect Vault",
+    "eyebrow": "Vault access denied",
+    "intro": "The browser refused access to your remembered Vault. Reconnect, or choose the folder again, to restore your own recipes.",
+    "sidebar": "Vault access denied · 9 sample recipes"
+  },
+  "denied": {
+    "stateLabel": "My Recipe Vault",
+    "chip": "Reconnect Vault",
+    "eyebrow": "Vault access denied",
+    "intro": "The browser refused access to your remembered Vault. Reconnect, or choose the folder again, to restore your own recipes.",
+    "sidebar": "Vault access denied · 9 sample recipes",
+    "scrollWidth": 1440,
+    "clientWidth": 1440
+  }
+}

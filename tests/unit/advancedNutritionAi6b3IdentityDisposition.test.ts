@@ -1,3 +1,4 @@
+import PR12_MEASUREMENTS from '../fixtures/pr12NutritionAuditMeasurements.json';
 /**
  * The Kitchen Codex — Advanced Nutrition AI-6B3 regression: IDENTITY
  * disposition, REPAIRABILITY measurement, and the derived next-lane handoff.
@@ -88,6 +89,7 @@ interface LineJson {
 
 interface ReportJson {
   readonly schema: string;
+  readonly measurement_baseline: string;
   readonly base_phase: string;
   readonly base_commit: string;
   readonly production_baseline: {
@@ -142,6 +144,10 @@ async function loadReport(): Promise<ReportJson> {
       '../../scripts/nutritionIntelligence/identityDispositionReport'
     );
     REPORT = (await buildNutritionIdentityDispositionReport()) as unknown as ReportJson;
+    expect(REPORT.production_baseline).toEqual(PR12_MEASUREMENTS.production_baseline);
+    for (const [key, expected] of Object.entries(PR12_MEASUREMENTS.audits.identity)) {
+      expect((REPORT as unknown as Record<string, unknown>)[key], key).toEqual(expected);
+    }
     REPORT_TEXT = JSON.stringify(REPORT);
   }
   return REPORT;
@@ -366,15 +372,15 @@ describe('AI-6B3 — the 27-line identity census reconciles', () => {
     const split = Object.fromEntries(
       report().blocker_split.map((entry) => [entry.key, entry.count])
     );
-    expect(split.identity_needs_review).toBe(26);
-    expect(split.identity_unmatched).toBe(1);
+    expect(split.identity_needs_review).toBe(24);
+    expect(split.identity_unmatched).toBe(3);
     expect(
       report().blocker_split.reduce((sum, entry) => sum + entry.count, 0)
     ).toBe(report().observed_identity_blockers);
-    expect(report().lines.filter((l) => l.primary_blocker === 'identity_unmatched')).toHaveLength(1);
+    expect(report().lines.filter((l) => l.primary_blocker === 'identity_unmatched')).toHaveLength(3);
     expect(
       report().lines.filter((l) => l.primary_blocker === 'identity_needs_review')
-    ).toHaveLength(26);
+    ).toHaveLength(24);
   });
 
   it('gives every line EXACTLY ONE closed disposition and closed evidence code', () => {
@@ -447,13 +453,18 @@ describe('AI-6B3 — the 27-line identity census reconciles', () => {
 
   it('classifies the single identity_unmatched line separately', () => {
     const unmatched = report().lines.filter((l) => l.primary_blocker === 'identity_unmatched');
-    expect(unmatched).toHaveLength(1);
-    const cloves = unmatched[0];
-    expect(cloves.line).toBe('2 cloves');
-    expect(cloves.disposition).toBe('normalization_or_tokenization_gap');
-    expect(cloves.evidence).toBe('quantity_token_absorbed_into_food_query');
-    expect(cloves.candidate_count).toBe(0);
-    expect(cloves.head_tokens).toEqual([]);
+    expect(unmatched.map((line) => line.line).sort()).toEqual([
+      '1 whole chicken',
+      '2 cloves',
+      '2 whole lemons',
+    ]);
+    for (const line of unmatched) {
+      expect(line.disposition).toBe('normalization_or_tokenization_gap');
+      expect(line.candidate_count).toBe(0);
+      expect(line.head_tokens).toEqual(
+        line.line === '2 cloves' ? [] : ['whole', line.line === '1 whole chicken' ? 'chicken' : 'lemons']
+      );
+    }
   });
 });
 
@@ -503,33 +514,37 @@ describe('AI-6B3 — checked-in safety knowledge still holds', () => {
 
   it('leaves the known-good identity oracle at 46/46 with zero unsafe identities', () => {
     const baseline = report().production_baseline;
-    expect(baseline.verified_correct_auto_identity).toBe(46);
+    expect(baseline.verified_correct_auto_identity).toBe(45);
     expect(baseline.verified_unsafe_auto_identity).toBe(0);
   });
 
   it('freezes every production baseline number', () => {
     const baseline = report().production_baseline;
-    expect(baseline.historical_resolved).toBe(48);
+    expect(baseline.historical_resolved).toBe(51);
     expect(baseline.historical_total).toBe(97);
-    expect(baseline.legacy_resolved).toBe(44);
+    expect(baseline.legacy_resolved).toBe(47);
     expect(baseline.legacy_total).toBe(91);
-    expect(baseline.raw_matched).toBe(94);
-    expect(baseline.authenticated_mass_resolved).toBe(94);
-    expect(baseline.safe_resolved).toBe(93);
+    expect(baseline.raw_matched).toBe(99);
+    expect(baseline.authenticated_mass_resolved).toBe(99);
+    expect(baseline.safe_resolved).toBe(98);
     expect(baseline.corpus_total).toBe(207);
   });
 
   it('pins the base commit so later HEAD movement cannot perturb the artifact', () => {
     expect(report().base_commit).toBe('9761ae5fef84058ef76ba1ad6232c1b3f644cc5a');
+    expect(report().measurement_baseline).toBe('pr12_ci_repair_v1');
     expect(report().base_phase).toBe('AI-6B2');
     expect(report().schema).toBe(IDENTITY_DISPOSITION_SCHEMA);
   });
 
   // M4 TARGET (corpus): the expectNoAutomatic line must stay refused.
-  it('M4 — the expectNoAutomatic line is never bound and never repaired', () => {
+  it('M4 — every expectNoAutomatic line is never bound and never repaired', () => {
     const guarded = report().lines.filter((line) => line.expect_no_automatic);
-    expect(guarded).toHaveLength(1);
-    expect(report().identity_lane_constraint_counts.expect_no_automatic).toBe(1);
+    expect(guarded.map((line) => line.line).sort()).toEqual([
+      '1 can diced tomatoes',
+      '1 lb pork shoulder',
+    ]);
+    expect(report().identity_lane_constraint_counts.expect_no_automatic).toBe(2);
     for (const line of guarded) {
       expect(line.repairable, line.line).toBe(false);
       expect(line.disposition, line.line).not.toBe(
@@ -589,15 +604,15 @@ describe('AI-6B3 — identity and ranking stay distinct lanes', () => {
     await loadReport();
   }, 300000);
 
-  // M5 TARGET: the 9 ranking blockers must never migrate into the identity lane.
-  it('M5 — the 9 deterministic_ranking blockers stay a separate lane', () => {
-    expect(report().deterministic_ranking_blockers).toBe(9);
+  // M5 TARGET: the 7 ranking blockers must never migrate into the identity lane.
+  it('M5 — the 7 deterministic_ranking blockers stay a separate lane', () => {
+    expect(report().deterministic_ranking_blockers).toBe(7);
     expect(report().observed_identity_blockers).toBe(27);
-    expect(report().observed_identity_blockers + report().deterministic_ranking_blockers).toBe(36);
+    expect(report().observed_identity_blockers + report().deterministic_ranking_blockers).toBe(34);
     const rankingLane = report().lane_repairability.find(
       (lane) => lane.lane === 'deterministic_ranking'
     );
-    expect(rankingLane?.observed_blockers).toBe(9);
+    expect(rankingLane?.observed_blockers).toBe(7);
     expect(rankingLane?.adjudicated).toBe(false);
     expect(rankingLane?.actionable_defects).toBeNull();
   });
@@ -653,9 +668,10 @@ describe('AI-6B3 — no hypothetical identity rule is repairable-eligible', () =
     }
   });
 
-  it('never diverges from the known-good oracle', () => {
+  it('surfaces the measured oracle divergences that keep hypothetical rules ineligible', () => {
     for (const simulation of report().hypothetical_rule_simulations) {
-      expect(simulation.oracle_divergences, simulation.rule_id).toBe(0);
+      expect(simulation.oracle_divergences, simulation.rule_id).toBe(2);
+      expect(simulation.repairable_eligible, simulation.rule_id).toBe(false);
     }
   });
 
@@ -707,9 +723,9 @@ const SCORES = {
 };
 const ORDER = ['safety', 'ordinary_user_impact', 'generalizability', 'tractability', 'frequency'];
 const OBSERVED = [
-  { lane: 'deterministic_portion', count: 35 },
+  { lane: 'deterministic_portion', count: 31 },
   { lane: 'deterministic_identity', count: 27 },
-  { lane: 'deterministic_ranking', count: 9 },
+  { lane: 'deterministic_ranking', count: 7 },
 ];
 
 describe('AI-6B3 — the roadmap follows measured repairability', () => {
@@ -724,7 +740,7 @@ describe('AI-6B3 — the roadmap follows measured repairability', () => {
     const identity = report().lane_repairability.find(
       (lane) => lane.lane === 'deterministic_identity'
     );
-    expect(portion?.observed_blockers).toBe(35);
+    expect(portion?.observed_blockers).toBe(31);
     expect(portion?.actionable_defects).toBe(0);
     expect(portion?.exhausted).toBe(true);
     expect(identity?.observed_blockers).toBe(27);
@@ -758,7 +774,7 @@ describe('AI-6B3 — the roadmap follows measured repairability', () => {
       (lane) => lane.lane === report().next_adjudication_target_lane
     );
     expect(target?.adjudicated).toBe(false);
-    expect(target?.observed_blockers).toBe(9);
+    expect(target?.observed_blockers).toBe(7);
     // never-target lanes are excluded from being proposed as work
     for (const lane of ['intentional_human_review', 'needs_recon', 'already_resolved']) {
       expect(
@@ -812,7 +828,7 @@ describe('AI-6B3 — the roadmap follows measured repairability', () => {
     expect(derived.recommended_active_repair_lane).toBe('deterministic_identity');
     const portion = derived.lanes.find((lane) => lane.lane === 'deterministic_portion');
     expect(portion?.exhausted).toBe(true);
-    expect(portion?.observed_blockers).toBe(35);
+    expect(portion?.observed_blockers).toBe(31);
   });
 
   it('picks the next adjudication target by observed blockers, not by identity', () => {

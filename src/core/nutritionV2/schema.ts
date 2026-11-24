@@ -1,3 +1,4 @@
+import type { AiNutrientContribution, AiNutrientSupplement } from './aiContribution';
 /**
  * The Kitchen Codex — Advanced Nutrition v1: canonical schema types & bounds.
  *
@@ -53,17 +54,30 @@ export const CODEX_NUTRITION_SCHEMA_V2 = 2;
  * on direct-mass lines and retain the v2 household meaning unchanged.
  */
 export const CODEX_NUTRITION_SCHEMA_V3 = 3;
+export const CODEX_NUTRITION_SCHEMA_V4 = 4;
+/** Schema v5 stores validated ingredient-level AI nutrient contributions. */
+export const CODEX_NUTRITION_SCHEMA_V5 = 5;
+/**
+ * Schema v6 is the smallest truthful extension of v5: it adds separately
+ * attributed AI nutrient supplements for nutrients genuinely absent from a
+ * verified source-backed line. It never rewrites the source line or its
+ * verified values, and a v6 block may carry only supplements (no AI line
+ * contribution) when a source-backed recipe has no unresolved lines.
+ */
+export const CODEX_NUTRITION_SCHEMA_V6 = 6;
 export const CODEX_NUTRITION_BASIS_TOTAL = 'total';
 export const CODEX_NUTRITION_FRONTMATTER_KEY = 'codex_nutrition';
 
 /** Mixed authoritative sources; each contribution stays traceable. */
-export type NutritionSourceId = 'usda_fdc' | 'open_food_facts' | 'curated_reference' | 'user_manual';
+export type NutritionSourceId = 'usda_fdc' | 'usda_branded' | 'open_food_facts' | 'curated_reference' | 'user_manual' | 'ai_estimate';
 
 export const NUTRITION_SOURCE_IDS: ReadonlyArray<NutritionSourceId> = Object.freeze([
   'usda_fdc',
+  'usda_branded',
   'open_food_facts',
   'curated_reference',
   'user_manual',
+  'ai_estimate',
 ]);
 
 /**
@@ -73,6 +87,7 @@ export const NUTRITION_SOURCE_IDS: ReadonlyArray<NutritionSourceId> = Object.fre
  */
 export const DATASET_BACKED_SOURCE_IDS: ReadonlyArray<NutritionSourceId> = Object.freeze([
   'usda_fdc',
+  'usda_branded',
   'open_food_facts',
   'curated_reference',
 ]);
@@ -186,13 +201,19 @@ export interface WrittenMassRangeEvidence {
 }
 
 /** Version-neutral read view of per-ingredient evidence. */
-export type AnyIngredientEvidence = IngredientEvidence | IngredientEvidenceV2 | IngredientEvidenceV3;
+export type AnyIngredientEvidence = IngredientEvidence | IngredientEvidenceV2 | IngredientEvidenceV3 | IngredientEvidenceV4;
 
 export type UnresolvedReason = 'no_match' | 'ambiguous' | 'no_mass' | 'no_nutrition' | 'qualitative';
 
 export interface UnresolvedIngredientRef {
   line_ref: string;
   reason: UnresolvedReason;
+  /**
+   * Display-only AI review classification for a line the model declined to
+   * select. Absent for deterministic/no-match lines. It never changes the
+   * unresolved `reason`, nutrient totals, matching, or authorization.
+   */
+  review_reason?: 'needs_review';
   /**
    * Optional USER-CONFIRMED reviewed FOOD IDENTITY for a line whose MASS is still
    * unresolved (e.g. the user selected `Broccoli, raw` but no authenticated
@@ -258,6 +279,56 @@ export interface CodexNutritionV3 extends Omit<CodexNutritionV1, 'schema' | 'ing
   ingredients: IngredientEvidenceV3[];
 }
 
+/** Explicitly accepted bounded quantity estimates remain distinct from portions. */
+export interface QuantityEstimateEvidence {
+  readonly lower_grams: number;
+  readonly upper_grams: number;
+  readonly representative_grams: number;
+  readonly representative_policy: 'midpoint';
+  readonly provenance: 'ai_estimate';
+}
+export interface IngredientEvidenceV4 extends Omit<IngredientEvidenceV3, 'conversion_basis'> {
+  conversion_basis?: IngredientEvidenceV3['conversion_basis'] | 'estimated_quantity';
+  quantity_estimate?: QuantityEstimateEvidence;
+  count_portion?: {
+    readonly unit: string | null;
+    readonly size: string | null;
+    readonly quantity: number;
+    readonly portion_amount: number;
+    readonly gram_weight: number;
+  };
+}
+export interface CodexNutritionV4 extends Omit<CodexNutritionV1, 'schema' | 'ingredients'> {
+  schema: 4;
+  ingredients: IngredientEvidenceV4[];
+}
+export interface CodexNutritionV5 extends Omit<CodexNutritionV4, 'schema'> {
+  schema: 5;
+  ai_contributions: AiNutrientContribution[];
+}
+export interface IngredientEvidenceV6 extends IngredientEvidenceV4 {
+  /**
+   * Authoritative per-line nutrient coverage from the Apply-time source
+   * preview. Required on every resolved source line whenever a v6 block carries
+   * supplements; decode and reopen use it to prove that a supplement does not
+   * conflict with a verified value (including an explicit zero).
+   */
+  readonly source_nutrients?: NutrientId[];
+}
+export interface CodexNutritionV6 extends Omit<CodexNutritionV4, 'schema' | 'ingredients'> {
+  schema: 6;
+  ingredients: IngredientEvidenceV6[];
+  /** Optional: a supplement-only v6 block is valid. */
+  ai_contributions?: AiNutrientContribution[];
+  /** Separately attributed estimates for nutrients absent from source lines. */
+  nutrient_supplements?: AiNutrientSupplement[];
+  /**
+   * Authoritative source-only subtotal per nutrient, copied from the Apply-time
+   * source preview. It is validation metadata, not a display total.
+   */
+  source_amounts?: Partial<Record<NutrientId, number>>;
+}
+
 /** Bounded opaque safe data for an unknown FUTURE schema value. */
 export interface OpaqueCodexNutrition {
   kind: 'opaque';
@@ -270,6 +341,9 @@ export type AdvancedNutritionBlock =
   | CodexNutritionV1
   | CodexNutritionV2
   | CodexNutritionV3
+  | CodexNutritionV4
+  | CodexNutritionV5
+  | CodexNutritionV6
   | OpaqueCodexNutrition;
 
 export const MAX_SERVINGS = 1000;
@@ -365,6 +439,7 @@ function getTextEncoder(): TextEncoder | null {
  * available (browser, Node, Obsidian/Electron) with a pure fallback.
  */
 export function utf8ByteLength(text: string): number {
+  if (typeof text !== 'string') throw new TypeError('UTF-8 input must be a string');
   const encoder = getTextEncoder();
   if (encoder) return encoder.encode(text).length;
   let bytes = 0;
@@ -484,12 +559,11 @@ function materialize(value: unknown, bounds: MaterializeBounds, limit: number): 
       if (!add(4)) return { ok: false, reason: 'oversized' };
       return { ok: true, value: null };
     }
-    const type = typeof current;
-    if (type === 'boolean') {
+    if (typeof current === 'boolean') {
       if (!add(current ? 4 : 5)) return { ok: false, reason: 'oversized' };
       return { ok: true, value: current };
     }
-    if (type === 'number') {
+    if (typeof current === 'number') {
       if (!Number.isFinite(current)) {
         if (!bounds.allowNonFinite) return { ok: false, reason: 'non_finite_number' };
         if (!add(4)) return { ok: false, reason: 'oversized' };
@@ -498,14 +572,14 @@ function materialize(value: unknown, bounds: MaterializeBounds, limit: number): 
       if (!add(String(current).length)) return { ok: false, reason: 'oversized' };
       return { ok: true, value: current };
     }
-    if (type === 'string') {
-      const text = current as string;
+    if (typeof current === 'string') {
+      const text = current;
       if (text.length > bounds.maxString) return { ok: false, reason: 'string_too_long' };
       const length = jsonStringByteLength(text, limit - bytes);
       if (length < 0 || !add(length)) return { ok: false, reason: 'oversized' };
       return { ok: true, value: text };
     }
-    if (type !== 'object') return { ok: false, reason: 'unsupported_type' };
+    if (typeof current !== 'object') return { ok: false, reason: 'unsupported_type' };
 
     const object = current as object;
     if (stack.has(object)) return { ok: false, reason: 'cycle' };

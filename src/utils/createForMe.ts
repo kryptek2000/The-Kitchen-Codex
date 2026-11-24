@@ -62,7 +62,8 @@ function splitTagList(value: string | undefined): string[] {
 /** Builds the bounded request the backend accepts (never whole-vault). */
 export function buildCreateRecipeRequest(
   prompt: string,
-  constraints: CreateForMeConstraintsInput = {}
+  constraints: CreateForMeConstraintsInput = {},
+  currentDraft?: GeneratedRecipeDraft,
 ): CreateRecipeRequest {
   const c: CreateRecipeRequest['constraints'] = {};
   if (typeof constraints.servings === 'number' && Number.isInteger(constraints.servings)) c!.servings = constraints.servings;
@@ -78,6 +79,7 @@ export function buildCreateRecipeRequest(
   return {
     prompt: prompt.trim(),
     ...(Object.keys(c ?? {}).length ? { constraints: c } : {}),
+    ...(currentDraft ? { currentDraft } : {}),
   };
 }
 
@@ -129,13 +131,15 @@ export function parseEditedDraftLines(
 export async function requestGeneratedRecipe(
   network: NetworkAdapter,
   prompt: string,
-  constraints: CreateForMeConstraintsInput = {}
+  constraints: CreateForMeConstraintsInput = {},
+  currentDraft?: GeneratedRecipeDraft,
+  signal?: AbortSignal,
 ): Promise<GeneratedRecipeClientResult> {
-  const body = buildCreateRecipeRequest(prompt, constraints);
+  const body = buildCreateRecipeRequest(prompt, constraints, currentDraft);
   const res: NetworkResponse<unknown> = await network.post<unknown, CreateRecipeRequest>(
     CREATE_RECIPE_PATH,
     body,
-    await buildAiSelectionRequestOptions()
+    { ...(await buildAiSelectionRequestOptions()), ...(signal ? { signal } : {}) }
   );
   if (!res.ok) {
     const data = (typeof res.data === 'object' && res.data !== null ? res.data : {}) as Record<string, string>;

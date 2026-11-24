@@ -9,6 +9,7 @@
  * The application and core layers must never import this platform module.
  */
 export { ObsidianVaultAdapter } from './ObsidianVaultAdapter';
+export { ObsidianAssetAdapter } from './ObsidianAssetAdapter';
 export { ObsidianSettingsAdapter } from './ObsidianSettingsAdapter';
 export type { SettingsStore } from './ObsidianSettingsAdapter';
 export { ObsidianSecretAdapter } from './ObsidianSecretAdapter';

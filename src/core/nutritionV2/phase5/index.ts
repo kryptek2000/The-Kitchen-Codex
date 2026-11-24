@@ -10,3 +10,7 @@
 
 export * from './types';
 export { authorizeNutritionPersistence } from './authorize';
+export {
+  authorizeNutritionPersistenceForApply,
+  previewNutritionApplyEligibility,
+} from './authorize';

@@ -1,0 +1,1418 @@
+// @vitest-environment jsdom
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
+import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-library/react';
+import React from 'react';
+
+import { CookingModeModal } from '../../src/components/CookingModeModal';
+import { createVoiceCache } from '../../src/application/voiceCache';
+import type { VoiceCacheService } from '../../src/application/voiceCache';
+
+vi.mock('canvas-confetti', () => ({ default: vi.fn() }));
+
+function createMockNetworkAdapter(): any {
+  return {
+    request: async (request: any) => {
+      const res = await (globalThis as any).fetch(request.path, {
+        method: request.method,
+        headers: request.headers,
+        body: request.body !== undefined ? JSON.stringify(request.body) : undefined,
+        signal: request.signal,
+      });
+      let data: unknown = undefined;
+      try { data = await res.json(); } catch { data = undefined; }
+      return { status: res.status, ok: res.ok, data };
+    },
+    get: async (path: string, options?: any) => {
+      const res = await (globalThis as any).fetch(path, { method: 'GET', headers: options?.headers, signal: options?.signal });
+      let data: unknown = undefined;
+      try { data = await res.json(); } catch { data = undefined; }
+      return { status: res.status, ok: res.ok, data };
+    },
+    post: async (path: string, body: any, options?: any) => {
+      const res = await (globalThis as any).fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(options?.headers || {}) },
+        body: JSON.stringify(body),
+        signal: options?.signal,
+      });
+      let data: unknown = undefined;
+      try { data = await res.json(); } catch { data = undefined; }
+      return { status: res.status, ok: res.ok, data };
+    },
+    getBytes: async (path: string, options?: any) => {
+      const res = await (globalThis as any).fetch(path, { method: 'GET', headers: options?.headers, signal: options?.signal });
+      const blob = await res.blob();
+      const buffer = await blob.arrayBuffer();
+      return { status: res.status, ok: res.ok, bytes: new Uint8Array(buffer), contentType: res.headers?.get?.('content-type') || undefined };
+    },
+    postBytes: async (path: string, body: any, options?: any) => {
+      const res = await (globalThis as any).fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(options?.headers || {}) },
+        body: JSON.stringify(body),
+        signal: options?.signal,
+      });
+      const blob = await res.blob();
+      const buffer = await blob.arrayBuffer();
+      return { status: res.status, ok: res.ok, bytes: new Uint8Array(buffer), contentType: res.headers?.get?.('content-type') || undefined };
+    },
+  } as any;
+}
+
+let testVoiceService: VoiceCacheService;
+
+beforeEach(() => {
+  testVoiceService = createVoiceCache(createMockNetworkAdapter());
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  window.localStorage?.clear();
+  testVoiceService?.dispose();
+});
+
+function installVoiceTestDoubles(available = true, playRejects = false) {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).includes('/api/voice/status')) {
+      return { ok: true, json: async () => ({ enabled: available }) } as Response;
+    }
+    void init;
+    return { ok: true, blob: async () => new Blob(['RIFF-test-audio'], { type: 'audio/wav' }) } as Response;
+  });
+  class TestAudio {
+    src = '';
+    paused = true;
+    onended: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    play = vi.fn(async () => {
+      if (playRejects) throw new Error('audio decode failed');
+      this.paused = false;
+    });
+    pause = vi.fn(() => { this.paused = true; });
+    removeAttribute = vi.fn(() => { this.src = ''; });
+    load = vi.fn();
+  }
+  const instances: InstanceType<typeof TestAudio>[] = [];
+  const OriginalAudio = TestAudio;
+  class TrackedAudio extends OriginalAudio {
+    constructor() {
+      super();
+      instances.push(this);
+    }
+  }
+  let urlSequence = 0;
+  const createdObjectUrls: string[] = [];
+  const revokedObjectUrls: string[] = [];
+  const createObjectURL = vi.fn(() => {
+    const url = `blob:test-audio-${++urlSequence}`;
+    createdObjectUrls.push(url);
+    return url;
+  });
+  const revokeObjectURL = vi.fn((url: string) => { revokedObjectUrls.push(url); });
+  vi.stubGlobal('fetch', fetchMock);
+  vi.stubGlobal('Audio', TrackedAudio);
+  vi.stubGlobal('URL', { ...URL, createObjectURL, revokeObjectURL });
+  return { fetchMock, TestAudio: TrackedAudio, instances, createdObjectUrls, revokedObjectUrls, createObjectURL, revokeObjectURL };
+}
+
+function makeRecipe(overrides: any = {}): any {
+  return {
+    id: 'r1',
+    title: 'Test Soup',
+    fileName: 'test.md',
+    filePath: 'test.md',
+    rawMarkdown: '',
+    tags: [],
+    category: 'Soup',
+    cuisine: 'Italian',
+    difficulty: 'Easy',
+    rating: 4,
+    ingredients: [
+      { original: '2 cups flour', amount: 2, unit: 'cups', name: 'flour' },
+      { original: '1 egg', amount: 1, unit: '', name: 'egg' },
+    ],
+    instructions: [
+      { stepNumber: 1, text: 'Mix the flour.', timerMinutes: 5 },
+      { stepNumber: 2, text: 'Add the egg and stir.' },
+      { stepNumber: 3, text: 'Serve hot.' },
+    ],
+    callouts: [],
+    dataviewFields: {},
+    wikilinks: [],
+    servings: 4,
+    ...overrides,
+  };
+}
+
+describe('CookingModeModal', () => {
+  it('renders the correct recipe title and step', () => {
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    expect(screen.getByText('Test Soup')).toBeTruthy();
+    expect(screen.getByText('Mix the flour.')).toBeTruthy();
+    expect(screen.getByText(/Step 1 of 3/)).toBeTruthy();
+    const progress = screen.getByRole('progressbar', { name: 'Cooking progress' });
+    expect(progress.getAttribute('aria-valuemin')).toBe('1');
+    expect(progress.getAttribute('aria-valuemax')).toBe('3');
+    expect(progress.getAttribute('aria-valuenow')).toBe('1');
+    expect(progress.getAttribute('aria-valuetext')).toBe('Step 1 of 3');
+  });
+
+  it('renders a complete long recipe title in the editorial header', () => {
+    const longTitle = 'Skillet Cornmeal Porridge with Orchard Apples and Brown Butter';
+    render(
+      <CookingModeModal
+        recipe={makeRecipe({ title: longTitle })}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    const title = screen.getByRole('heading', { name: longTitle });
+    expect(title).toBeTruthy();
+    expect(title.className).not.toContain('truncate');
+  });
+
+  it('navigates steps with next/prev', () => {
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    fireEvent.click(screen.getByText('Next Step'));
+    expect(screen.getByText('Add the egg and stir.')).toBeTruthy();
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('2');
+    fireEvent.click(screen.getByText('Previous'));
+    expect(screen.getByText('Mix the flour.')).toBeTruthy();
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('1');
+  });
+
+  it('does not generate native audio until opt-in, then reuses the prepared current step', async () => {
+    const { fetchMock } = installVoiceTestDoubles(true);
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/voice/status', expect.anything()));
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/voice/speak'))).toHaveLength(0);
+    expect(document.getElementById('natural-voice-readiness')?.textContent).toContain('Heart ready to prepare');
+
+    fireEvent.click(screen.getByRole('checkbox'));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/voice/speak'))).toHaveLength(1));
+    await waitFor(() => expect(document.getElementById('natural-voice-readiness')?.textContent).toContain('Heart ready'));
+
+    fireEvent.click(screen.getByLabelText('Read step aloud'));
+    await waitFor(() => expect(screen.getByLabelText('Stop reading step aloud')).toBeTruthy());
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/voice/speak'))).toHaveLength(1);
+  });
+
+  it('invalidates prepared audio on navigation and prepares the new current step', async () => {
+    const { fetchMock } = installVoiceTestDoubles(true);
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/voice/status', expect.anything()));
+    fireEvent.click(screen.getByRole('checkbox'));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/voice/speak'))).toHaveLength(1));
+    fireEvent.click(screen.getByText('Next Step'));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/voice/speak'))).toHaveLength(2));
+
+    const speakBodies = fetchMock.mock.calls
+      .filter(([input]) => String(input).includes('/api/voice/speak'))
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)));
+    expect(speakBodies[0].text).toContain('Mix the flour.');
+    expect(speakBodies[1].text).toContain('Add the egg and stir.');
+  });
+
+  it('prefetches at most the next step after current playback ends', async () => {
+    const { fetchMock, instances } = installVoiceTestDoubles(true);
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/voice/status', expect.anything()));
+    fireEvent.click(screen.getByRole('checkbox'));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/voice/speak'))).toHaveLength(1));
+    fireEvent.click(screen.getByLabelText('Read step aloud'));
+    await waitFor(() => expect(screen.getByLabelText('Stop reading step aloud')).toBeTruthy());
+    instances.at(-1)?.onended?.();
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/voice/speak'))).toHaveLength(2), { timeout: 2500 });
+    const speakBodies = fetchMock.mock.calls
+      .filter(([input]) => String(input).includes('/api/voice/speak'))
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)));
+    expect(speakBodies[1].text).toContain('Add the egg and stir.');
+  });
+
+  it('keeps native generation disabled when the runtime is unavailable', async () => {
+    const { fetchMock } = installVoiceTestDoubles(false);
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    const checkbox = screen.getByRole('checkbox') as HTMLInputElement;
+    await waitFor(() => expect(checkbox.disabled).toBe(true));
+    expect(document.getElementById('natural-voice-readiness')?.textContent).toContain('Heart unavailable');
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/voice/speak'))).toHaveLength(0);
+  });
+
+  it('preserves keyboard navigation outside interactive controls', () => {
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    const root = document.getElementById('fullscreen-cooking-mode')!;
+    root.focus();
+    fireEvent.keyDown(root, { key: 'ArrowRight' });
+    expect(screen.getByText('Add the egg and stir.')).toBeTruthy();
+    fireEvent.keyDown(root, { key: 'ArrowLeft' });
+    expect(screen.getByText('Mix the flour.')).toBeTruthy();
+    fireEvent.keyDown(root, { key: ' ' });
+    expect(screen.getByText('Add the egg and stir.')).toBeTruthy();
+
+    const nextButton = document.getElementById('cooking-next-step-btn')!;
+    nextButton.focus();
+    fireEvent.keyDown(nextButton, { key: 'ArrowRight' });
+    expect(screen.getByText('Add the egg and stir.')).toBeTruthy();
+  });
+
+  it('uses theme tokens and 48px primary navigation targets', () => {
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    const root = document.getElementById('fullscreen-cooking-mode')!;
+    expect(root.className).toContain('bg-[var(--bg-root,#0C0C0C)]');
+    expect(document.getElementById('cooking-prev-step-btn')!.className).toContain('min-h-[48px]');
+    expect(document.getElementById('cooking-next-step-btn')!.className).toContain('min-h-[48px]');
+  });
+
+  it('shows a clean finished state without duplicate footer navigation', () => {
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    const nextButton = document.getElementById('cooking-next-step-btn')!;
+    fireEvent.click(nextButton);
+    fireEvent.click(nextButton);
+    fireEvent.click(nextButton);
+
+    expect(screen.getByText('Bon Appétit! 🎉')).toBeTruthy();
+    expect(screen.getByText('Review Steps Again')).toBeTruthy();
+    expect(screen.getByText('Done Cooking')).toBeTruthy();
+    expect(document.getElementById('cooking-next-step-btn')).toBeNull();
+    expect(document.querySelector('#fullscreen-cooking-mode footer')).toBeNull();
+
+    fireEvent.click(screen.getByText('Review Steps Again'));
+    expect(screen.getByText('Mix the flour.')).toBeTruthy();
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('1');
+  });
+
+  it('closes via exit button', () => {
+    const onClose = vi.fn();
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={2}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={onClose}
+      />
+    );
+    fireEvent.click(screen.getByLabelText('Exit cooking mode'));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('scales ingredients and shows drawer', () => {
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={8}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        voiceService={testVoiceService}
+        onClose={() => {}}
+      />
+    );
+    fireEvent.click(screen.getByLabelText('Toggle ingredients list'));
+    expect(screen.getByText(/Ingredients \(8 servings\)/)).toBeTruthy();
+    expect(screen.getAllByText(/4 cups flour/).length).toBeGreaterThan(0);
+  });
+
+  it('timer control invokes onStartTimer', () => {
+    const onStart = vi.fn();
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={onStart}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    fireEvent.click(screen.getByText(/Start 5 min Timer/));
+    expect(onStart).toHaveBeenCalledWith('Test Soup', 5, 'Step 1: 5m', 'r1::step:1');
+  });
+
+  it('active timer renders and controls invoke callbacks', () => {
+    const onToggle = vi.fn();
+    const onDelete = vi.fn();
+    const timer: any = {
+      id: 't1',
+      recipeTitle: 'Test Soup',
+      label: 'Step 1: 5m',
+      totalSeconds: 300,
+      remainingSeconds: 240,
+      isRunning: true,
+      createdAt: Date.now(),
+      semanticKey: 'r1::step:1',
+      endsAt: Date.now() + 240000,
+    };
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[timer]}
+        onStartTimer={() => {}}
+        onToggleTimer={onToggle}
+        onDeleteTimer={onDelete}
+        onClose={() => {}}
+      />
+    );
+    expect(screen.getByText('4:00')).toBeTruthy();
+    fireEvent.click(screen.getByLabelText('Pause timer'));
+    expect(onToggle).toHaveBeenCalledWith('t1');
+    fireEvent.click(screen.getByLabelText('Dismiss timer'));
+    expect(onDelete).toHaveBeenCalledWith('t1');
+  });
+
+  it('handles missing optional data without crashing', () => {
+    render(
+      <CookingModeModal
+        recipe={makeRecipe({ ingredients: [], instructions: [], image: undefined, category: '', cuisine: '', totalTime: '', difficulty: 'Easy' })}
+        servings={1}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        voiceService={testVoiceService}
+        onClose={() => {}}
+      />
+    );
+    expect(screen.getByText('Test Soup')).toBeTruthy();
+  });
+
+  it('long instruction text is accessible', () => {
+    const longText = 'A'.repeat(300);
+    render(
+      <CookingModeModal
+        recipe={makeRecipe({ instructions: [{ stepNumber: 1, text: longText }] })}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    expect(screen.getByText(longText)).toBeTruthy();
+  });
+});
+
+describe('CookingModeModal correction pass', () => {
+  it('Escape closes the dialog', () => {
+    const onClose = vi.fn();
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={onClose}
+      />
+    );
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('initial focus enters the dialog', () => {
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    const root = document.getElementById('fullscreen-cooking-mode');
+    expect(root).toBeTruthy();
+    expect(root!.contains(document.activeElement)).toBe(true);
+  });
+
+  it('Tab is contained within the dialog', () => {
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    const root = document.getElementById('fullscreen-cooking-mode')!;
+    const focusable = Array.from(root.querySelectorAll('button:not([disabled])')) as HTMLElement[];
+    const last = focusable[focusable.length - 1];
+    last.focus();
+    fireEvent.keyDown(window, { key: 'Tab' });
+    // focus should wrap to first
+    expect(focusable[0]).toBe(document.activeElement);
+  });
+
+  it('renders inline emphasis without raw markers', () => {
+    render(
+      <CookingModeModal
+        recipe={makeRecipe({ instructions: [{ stepNumber: 1, text: '**Autolyse** the dough.' }] })}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    const root = document.getElementById('fullscreen-cooking-mode')!;
+    expect(root.textContent).toContain('Autolyse');
+    expect(root.textContent).not.toContain('**');
+    // original data unchanged
+    expect(makeRecipe().instructions[0].text).toBe('Mix the flour.');
+  });
+
+  it('treats HTML-like input as text', () => {
+    const payload = '<img src=x onerror=alert(1)>';
+    render(
+      <CookingModeModal
+        recipe={makeRecipe({ instructions: [{ stepNumber: 1, text: payload }] })}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    const root = document.getElementById('fullscreen-cooking-mode')!;
+    expect(root.textContent).toContain(payload);
+  });
+
+  it('empty instructions do not produce NaN progress', () => {
+    render(
+      <CookingModeModal
+        recipe={makeRecipe({ instructions: [] })}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    const bar = document.querySelector('#fullscreen-cooking-mode [style*="width"]') as HTMLElement;
+    // progress bar width should be a finite percentage, not NaN
+    expect(bar.style.width).not.toContain('NaN');
+  });
+
+  it('timer identity remains stable across step changes', () => {
+    const timer: any = {
+      id: 't1',
+      recipeTitle: 'Test Soup',
+      label: 'Step 1: 5m',
+      totalSeconds: 300,
+      remainingSeconds: 240,
+      isRunning: true,
+      createdAt: Date.now(),
+      semanticKey: 'r1::step:1',
+      endsAt: Date.now() + 240000,
+    };
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[timer]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    expect(screen.getByText('4:00')).toBeTruthy();
+    fireEvent.click(screen.getByText('Next Step'));
+    // timer for step1 no longer displayed (step2 has no timer), but no crash
+    expect(screen.getByText('Add the egg and stir.')).toBeTruthy();
+  });
+});
+
+import { createVaultAssetScope } from '../../src/utils/vaultAssets';
+import { VaultAssetScopeProvider } from '../../src/hooks/VaultAssetScopeContext';
+
+describe('CookingModeModal image compatibility', () => {
+  let scope: ReturnType<typeof createVaultAssetScope>;
+  beforeEach(() => { scope = createVaultAssetScope(1, { active: true }); });
+  afterEach(() => { scope.deactivate(); });
+
+  it('renders a safe remote recipe photograph', async () => {
+    render(
+      <CookingModeModal
+        recipe={makeRecipe({ image: 'https://example.com/bread.jpg' })}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    const img = document.querySelector('#fullscreen-cooking-mode [role="img"]') as HTMLElement;
+    expect(img).toBeTruthy();
+    expect(img.style.backgroundImage).toContain('https://example.com/bread.jpg');
+  });
+
+  it('renders an explicit Vault-relative image reference', async () => {
+    scope.registerAsset('Assets/My Bread.jpg', new File(['x'], 'My Bread.jpg', { type: 'image/jpeg' }));
+    render(
+      <VaultAssetScopeProvider scope={scope}>
+      <CookingModeModal
+        recipe={makeRecipe({ image: 'Assets/My Bread.jpg' })}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+      </VaultAssetScopeProvider>
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    const img = document.querySelector('#fullscreen-cooking-mode [role="img"]') as HTMLElement;
+    expect(img).toBeTruthy();
+    expect(img.style.backgroundImage).toMatch(/blob:/);
+  });
+
+  it('renders a Markdown image embed when supported', async () => {
+    scope.registerAsset('Assets/Bread.jpg', new File(['x'], 'Bread.jpg', { type: 'image/jpeg' }));
+    render(
+      <VaultAssetScopeProvider scope={scope}>
+      <CookingModeModal
+        recipe={makeRecipe({ rawMarkdown: '![Bread](Assets/Bread.jpg)' })}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+      </VaultAssetScopeProvider>
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    const img = document.querySelector('#fullscreen-cooking-mode [role="img"]') as HTMLElement;
+    expect(img).toBeTruthy();
+    expect(img.style.backgroundImage).toMatch(/blob:/);
+  });
+
+  it('renders an asynchronously resolved Vault asset', async () => {
+    const handle = { getFile: async () => new File(['x'], 'Async.jpg', { type: 'image/jpeg' }) };
+    scope.registerAsset('Assets/Async.jpg', handle);
+    render(
+      <VaultAssetScopeProvider scope={scope}>
+      <CookingModeModal
+        recipe={makeRecipe({ image: 'Assets/Async.jpg' })}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+      </VaultAssetScopeProvider>
+    );
+    // allow async resolution
+    await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 0));
+    const img = document.querySelector('#fullscreen-cooking-mode [role="img"]') as HTMLElement;
+    expect(img).toBeTruthy();
+    expect(img.style.backgroundImage).toMatch(/blob:/);
+  });
+
+  it('shows fallback when no explicit image', async () => {
+    render(
+      <CookingModeModal
+        recipe={makeRecipe({ image: undefined, rawMarkdown: '' })}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    const img = document.querySelector('#fullscreen-cooking-mode [role="img"]');
+    expect(img).toBeNull();
+  });
+
+  it('rejects unsafe URL schemes', async () => {
+    render(
+      <CookingModeModal
+        recipe={makeRecipe({ image: 'javascript:alert(1)' })}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    const img = document.querySelector('#fullscreen-cooking-mode [role="img"]');
+    expect(img).toBeNull();
+  });
+
+  it('fails safely for missing Vault references', async () => {
+    render(
+      <CookingModeModal
+        recipe={makeRecipe({ image: 'Assets/missing.jpg' })}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    const img = document.querySelector('#fullscreen-cooking-mode [role="img"]');
+    expect(img).toBeNull();
+  });
+});
+
+describe('CookingModeModal focus recovery', () => {
+  it('recovers focus into the dialog when it escapes', () => {
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    // Move focus outside the dialog.
+    document.body.focus();
+    fireEvent.keyDown(window, { key: 'Tab' });
+    const root = document.getElementById('fullscreen-cooking-mode')!;
+    expect(root.contains(document.activeElement)).toBe(true);
+  });
+});
+
+describe('CookingModeModal Slice 2', () => {
+  it('shows an active timer tray count', () => {
+    const timers = [
+      { id: 't1', recipeTitle: 'Test Soup', label: 'Step 1: 5m', totalSeconds: 300, remainingSeconds: 200, isRunning: true, createdAt: 1 },
+    ];
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={timers as any}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    expect(screen.getByLabelText('Active timers: 1')).toBeTruthy();
+  });
+
+  it('opens the timer tray to reveal active timers', () => {
+    const timers = [
+      { id: 't1', recipeTitle: 'Test Soup', label: 'Step 1: 5m', totalSeconds: 300, remainingSeconds: 200, isRunning: true, createdAt: 1 },
+    ];
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={timers as any}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    fireEvent.click(screen.getByLabelText('Active timers: 1'));
+    expect(screen.getByText('Step 1: 5m')).toBeTruthy();
+  });
+
+  it('opens the ingredient sheet', () => {
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    fireEvent.click(screen.getByLabelText('Toggle ingredients list'));
+    expect(screen.getByText('Ingredients (4 servings)')).toBeTruthy();
+  });
+});
+
+describe('CookingModeModal Slice 2-R1', () => {
+  it('exposes New Custom Timer in the timer tray', () => {
+    const timers = [
+      { id: 't1', recipeTitle: 'Test Soup', label: 'Step 1: 5m', totalSeconds: 300, remainingSeconds: 200, isRunning: true, createdAt: 1 },
+    ];
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={timers as any}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onAddCustomTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    fireEvent.click(screen.getByLabelText('Active timers: 1'));
+    expect(screen.getByText('New Custom Timer')).toBeTruthy();
+  });
+});
+
+describe('CookingModeModal zero-timer tray', () => {
+  it('allows opening the tray and creating a custom timer with zero timers', () => {
+    const onAdd = vi.fn();
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onAddCustomTimer={onAdd}
+        onClose={() => {}}
+      />
+    );
+    fireEvent.click(screen.getByLabelText('Active timers: 0'));
+    expect(screen.getByText('No active timers.')).toBeTruthy();
+    fireEvent.click(screen.getByText('New Custom Timer'));
+    expect(onAdd).toHaveBeenCalled();
+  });
+});
+
+describe('CookingModeModal Natural Voice identity', () => {
+  it('uses Heart when Natural Voice is enabled', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).includes('/api/voice/status')) {
+        return { ok: true, json: async () => ({ enabled: true, available: true, voices: ['af_bella', 'af_heart'] }) };
+      }
+      if (String(url).includes('/api/voice/speak')) {
+        return { ok: true, blob: async () => new Blob(['audio'], { type: 'audio/wav' }) };
+      }
+      return { ok: false, json: async () => ({}) };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    if (!URL.createObjectURL) URL.createObjectURL = () => 'blob:mock';
+    if (!URL.revokeObjectURL) URL.revokeObjectURL = () => {};
+    localStorage.setItem('tkc_natural_voice', '1');
+
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+
+    await new Promise((r) => setTimeout(r, 50));
+    fireEvent.click(screen.getByLabelText('Read step aloud'));
+
+    await new Promise((r) => setTimeout(r, 100));
+    const speakCall = fetchMock.mock.calls.find((c: any) => String(c[0]).includes('/api/voice/speak')) as any;
+    expect(speakCall).toBeTruthy();
+    expect(String((speakCall?.[1] as any)?.body || '')).toContain('af_heart');
+
+    vi.unstubAllGlobals();
+    localStorage.removeItem('tkc_natural_voice');
+  });
+});
+
+describe('CookingModeModal Heart fallback and observable speech errors', () => {
+  function installSystemSpeech() {
+    let lastUtterance: any = null;
+    const synth = {
+      getVoices: vi.fn(() => [{ lang: 'en-US', name: 'Test Voice' }]),
+      speak: vi.fn((utterance: any) => { lastUtterance = utterance; }),
+      cancel: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    };
+    class TestUtterance {
+      text: string;
+      rate = 1;
+      voice: any = null;
+      onstart: (() => void) | null = null;
+      onend: (() => void) | null = null;
+      onerror: ((event: any) => void) | null = null;
+      constructor(text: string) { this.text = text; }
+    }
+    vi.stubGlobal('speechSynthesis', synth);
+    vi.stubGlobal('SpeechSynthesisUtterance', TestUtterance);
+    return { synth, getLast: () => lastUtterance };
+  }
+
+  function installUnavailableHeartFetch(reason = 'Heart model assets are missing.') {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/api/voice/status')) {
+        return { ok: true, json: async () => ({ enabled: false, available: false, reason }) } as Response;
+      }
+      return { ok: false, json: async () => ({ error: 'unexpected' }) } as Response;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  it('explains the real Heart reason, enables system speech, and does not claim Heart readiness', async () => {
+    const reason = 'Heart model assets are missing.';
+    installUnavailableHeartFetch(reason);
+    const { synth, getLast } = installSystemSpeech();
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+
+    await waitFor(() => expect(screen.getByTestId('voice-status-detail').textContent).toContain(reason));
+    expect(screen.getByText(/Heart unavailable · System voice ready/i)).toBeTruthy();
+    expect((screen.getByRole('checkbox') as HTMLInputElement).disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Read step aloud' }));
+    await waitFor(() => expect(synth.speak).toHaveBeenCalledTimes(1));
+    expect(getLast().text).toContain('Mix the flour.');
+    expect(getLast().voice?.lang).toBe('en-US');
+    act(() => getLast().onstart?.());
+    expect(screen.getByRole('button', { name: 'Stop reading step aloud' })).toBeTruthy();
+    expect(screen.getByText('System voice speaking')).toBeTruthy();
+  });
+
+  it('makes system speech errors observable instead of silently stopping', async () => {
+    installUnavailableHeartFetch();
+    const { synth, getLast } = installSystemSpeech();
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    await waitFor(() => expect(screen.getByText(/System voice ready/i)).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'Read step aloud' }));
+    await waitFor(() => expect(synth.speak).toHaveBeenCalled());
+    act(() => getLast().onerror?.({ error: 'synthesis-failed' }));
+    await waitFor(() => expect(screen.getByTestId('voice-status-detail').textContent).toContain('synthesis-failed'));
+  });
+
+  it('reports that no system voice exists rather than pretending fallback will speak', async () => {
+    installUnavailableHeartFetch();
+    vi.stubGlobal('speechSynthesis', {
+      getVoices: vi.fn(() => []),
+      speak: vi.fn(),
+      cancel: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    });
+    vi.stubGlobal('SpeechSynthesisUtterance', class { constructor(public text: string) {} });
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    await waitFor(() => expect(screen.getByText(/System voice unavailable/i)).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'Read step aloud' }));
+    await waitFor(() => expect(screen.getByTestId('voice-status-detail').textContent).toContain('No system speech voice'));
+  });
+
+  it('falls back to system speech when native synthesis fails, with a visible reason', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/api/voice/status')) {
+        return { ok: true, json: async () => ({ enabled: true, available: true, reason: undefined }) } as Response;
+      }
+      if (String(input).includes('/api/voice/speak')) {
+        return { ok: false, status: 500, json: async () => ({ error: 'synthesis failed' }) } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { synth } = installSystemSpeech();
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    await waitFor(() => expect(screen.getByText('Heart ready to prepare')).toBeTruthy());
+    const checkbox = screen.getByRole('checkbox') as HTMLInputElement;
+    fireEvent.click(checkbox);
+    await waitFor(() => expect(checkbox.checked).toBe(true));
+    fireEvent.click(screen.getByRole('button', { name: 'Read step aloud' }));
+    await waitFor(() => expect(synth.speak).toHaveBeenCalledTimes(1), { timeout: 5000 });
+    await waitFor(() => {
+      expect(screen.getByTestId('voice-status-detail').textContent).toMatch(/Heart playback failed/i);
+    });
+  });
+});
+
+describe('CookingModeModal native audio object URL lifecycle', () => {
+  async function startNativePlayback(playRejects = false) {
+    const doubles = installVoiceTestDoubles(true, playRejects);
+    const view = render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    await waitFor(() => expect(document.getElementById('natural-voice-readiness')?.textContent).toContain('Heart ready to prepare'));
+    fireEvent.click(screen.getByRole('checkbox'));
+    await waitFor(() => expect(
+      doubles.fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/voice/speak'))
+    ).toHaveLength(1));
+    fireEvent.click(screen.getByLabelText('Read step aloud'));
+    if (!playRejects) {
+      await waitFor(() => expect(screen.getByLabelText('Stop reading step aloud')).toBeTruthy());
+    }
+    return { ...doubles, view };
+  }
+
+  it('releases the object URL when playback completes naturally', async () => {
+    const { createdObjectUrls, revokedObjectUrls, instances } = await startNativePlayback();
+    const url = createdObjectUrls.at(-1)!;
+    expect(revokedObjectUrls).not.toContain(url);
+    act(() => instances.at(-1)?.onended?.());
+    await waitFor(() => expect(revokedObjectUrls).toEqual([url]));
+    expect(screen.getByLabelText('Read step aloud')).toBeTruthy();
+  });
+
+  it('releases each URL exactly once across repeated Speak/Stop cycles', async () => {
+    const { createdObjectUrls, revokedObjectUrls } = await startNativePlayback();
+    const firstUrl = createdObjectUrls[0];
+    fireEvent.click(screen.getByLabelText('Stop reading step aloud'));
+    await waitFor(() => expect(revokedObjectUrls).toContain(firstUrl));
+
+    fireEvent.click(screen.getByLabelText('Read step aloud'));
+    await waitFor(() => expect(screen.getByLabelText('Stop reading step aloud')).toBeTruthy());
+    const secondUrl = createdObjectUrls.at(-1)!;
+    expect(secondUrl).not.toBe(firstUrl);
+    fireEvent.click(screen.getByLabelText('Stop reading step aloud'));
+    await waitFor(() => expect(revokedObjectUrls).toContain(secondUrl));
+
+    expect(revokedObjectUrls.filter((url) => url === firstUrl)).toHaveLength(1);
+    expect(revokedObjectUrls.filter((url) => url === secondUrl)).toHaveLength(1);
+  });
+
+  it('releases on step change, Stop, and unmount', async () => {
+    const { createdObjectUrls, revokedObjectUrls, view } = await startNativePlayback();
+    const firstUrl = createdObjectUrls.at(-1)!;
+    fireEvent.click(screen.getByText('Next Step'));
+    await waitFor(() => expect(revokedObjectUrls).toContain(firstUrl));
+
+    fireEvent.click(screen.getByLabelText('Read step aloud'));
+    await waitFor(() => expect(screen.getByLabelText('Stop reading step aloud')).toBeTruthy());
+    const secondUrl = createdObjectUrls.at(-1)!;
+    fireEvent.click(screen.getByLabelText('Stop reading step aloud'));
+    await waitFor(() => expect(revokedObjectUrls).toContain(secondUrl));
+
+    fireEvent.click(screen.getByLabelText('Read step aloud'));
+    await waitFor(() => expect(screen.getByLabelText('Stop reading step aloud')).toBeTruthy());
+    const thirdUrl = createdObjectUrls.at(-1)!;
+    view.unmount();
+    await waitFor(() => expect(revokedObjectUrls).toContain(thirdUrl));
+  });
+
+  it('never lets a stale ended callback revoke a newer playback URL', async () => {
+    const { createdObjectUrls, revokedObjectUrls, instances } = await startNativePlayback();
+    const firstUrl = createdObjectUrls.at(-1)!;
+    const staleEnded = instances.at(-1)?.onended;
+    expect(staleEnded).toBeTruthy();
+
+    fireEvent.click(screen.getByText('Next Step'));
+    await waitFor(() => expect(revokedObjectUrls).toContain(firstUrl));
+
+    fireEvent.click(screen.getByLabelText('Read step aloud'));
+    await waitFor(() => expect(screen.getByLabelText('Stop reading step aloud')).toBeTruthy());
+    const secondUrl = createdObjectUrls.at(-1)!;
+    act(() => staleEnded?.());
+    expect(revokedObjectUrls).not.toContain(secondUrl);
+    expect(screen.getByLabelText('Stop reading step aloud')).toBeTruthy();
+    fireEvent.click(screen.getByLabelText('Stop reading step aloud'));
+  });
+
+  it('releases the URL when playback fails, before system fallback', async () => {
+    const synth = {
+      getVoices: vi.fn(() => [{ lang: 'en-US', name: 'Test Voice' }]),
+      speak: vi.fn(),
+      cancel: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    };
+    class TestUtterance {
+      text: string;
+      rate = 1;
+      voice: any = null;
+      onstart: (() => void) | null = null;
+      onend: (() => void) | null = null;
+      onerror: ((event: any) => void) | null = null;
+      constructor(text: string) { this.text = text; }
+    }
+    vi.stubGlobal('speechSynthesis', synth);
+    vi.stubGlobal('SpeechSynthesisUtterance', TestUtterance);
+
+    const { createdObjectUrls, revokedObjectUrls, fetchMock } = await startNativePlayback(true);
+    await waitFor(() => expect(synth.speak).toHaveBeenCalledTimes(1));
+    const url = createdObjectUrls.at(-1)!;
+    expect(revokedObjectUrls).toContain(url);
+    await waitFor(() => expect(screen.getByTestId('voice-status-detail').textContent).toMatch(/Heart playback failed/i));
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/voice/speak')).length).toBeGreaterThan(0);
+  });
+
+  it('releases on an audio element error during playback', async () => {
+    const { createdObjectUrls, revokedObjectUrls, instances } = await startNativePlayback();
+    const url = createdObjectUrls.at(-1)!;
+    act(() => instances.at(-1)?.onerror?.());
+    await waitFor(() => expect(revokedObjectUrls).toContain(url));
+  });
+});
+
+describe('CookingModeModal speech normalization', () => {
+  it('sends clean speech text for Markdown instructions', async () => {
+    const recipe = makeRecipe();
+    recipe.instructions[0].text = '**Autolyse**: Mix flour and water.';
+    const { fetchMock } = installVoiceTestDoubles(true);
+    render(
+      <CookingModeModal
+        recipe={recipe}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/voice/status', expect.anything()));
+    fireEvent.click(screen.getByRole('checkbox'));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/voice/speak')).length).toBeGreaterThanOrEqual(1));
+    const speakCall = fetchMock.mock.calls.find((c: any) => String(c[0]).includes('/api/voice/speak')) as any;
+    const body = JSON.parse(String(speakCall?.[1]?.body || '{}'));
+    expect(body.text).toContain('Autolyse');
+    expect(body.text).not.toContain('**');
+  });
+});
+
+describe('CookingModeModal shared focus and rapid navigation', () => {
+  function installAbortTrackingDoubles() {
+    const speakCalls: Array<{ body: any; signal: AbortSignal; aborted: boolean }> = [];
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes('/api/voice/status')) {
+        return Promise.resolve({ ok: true, json: async () => ({ enabled: true, available: true }) } as Response);
+      }
+      if (String(input).includes('/api/voice/prioritize')) {
+        return Promise.resolve({ ok: true, json: async () => ({ found: true }) } as Response);
+      }
+      const entry = {
+        body: JSON.parse(String(init?.body || '{}')),
+        signal: init?.signal as AbortSignal,
+        aborted: false,
+      };
+      speakCalls.push(entry);
+      return new Promise((resolve, reject) => {
+        const onAbort = () => {
+          entry.aborted = true;
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+        };
+        entry.signal?.addEventListener('abort', onAbort, { once: true });
+        setTimeout(() => {
+          entry.signal?.removeEventListener('abort', onAbort);
+          if (!entry.signal?.aborted) {
+            resolve({ ok: true, blob: async () => new Blob(['RIFF-test-audio'], { type: 'audio/wav' }) } as Response);
+          }
+        }, 120);
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('URL', { ...URL, createObjectURL: vi.fn(() => 'blob:test-audio'), revokeObjectURL: vi.fn() });
+    return { fetchMock, speakCalls };
+  }
+
+  it('cancels obsolete current-step preparation during rapid navigation', async () => {
+    window.localStorage.setItem('tkc_natural_voice', '1');
+    const { speakCalls } = installAbortTrackingDoubles();
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    await waitFor(() => expect(speakCalls).toHaveLength(1));
+    expect(speakCalls[0].body.text).toContain('Mix the flour.');
+
+    fireEvent.click(screen.getByText('Next Step'));
+    await waitFor(() => expect(speakCalls).toHaveLength(2));
+    fireEvent.click(screen.getByText('Next Step'));
+    await waitFor(() => expect(speakCalls).toHaveLength(3));
+
+    expect(speakCalls[0].aborted).toBe(true);
+    expect(speakCalls[1].aborted).toBe(true);
+    expect(speakCalls[2].aborted).toBe(false);
+    expect(speakCalls[2].body.text).toContain('Serve hot.');
+    expect(speakCalls.filter((call) => call.body.text.includes('Serve hot.'))).toHaveLength(1);
+  });
+
+  it('cancels the previous recipe preparation and prepares the new recipe once', async () => {
+    window.localStorage.setItem('tkc_natural_voice', '1');
+    const { speakCalls } = installAbortTrackingDoubles();
+    const { rerender } = render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    await waitFor(() => expect(speakCalls).toHaveLength(1));
+    expect(speakCalls[0].body.text).toContain('Mix the flour.');
+
+    const nextRecipe = makeRecipe({
+      id: 'r2',
+      title: 'Second Soup',
+      fileName: 'second.md',
+      filePath: 'second.md',
+      instructions: [{ stepNumber: 1, text: 'Stir the new pot.' }],
+    });
+    rerender(
+      <CookingModeModal
+        recipe={nextRecipe}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    await waitFor(() => expect(speakCalls).toHaveLength(2));
+    expect(speakCalls[0].aborted).toBe(true);
+    expect(speakCalls[1].body.text).toContain('Stir the new pot.');
+    expect(speakCalls.filter((call) => call.body.text.includes('Stir the new pot.'))).toHaveLength(1);
+  });
+});
+
+describe('CookingModeModal responsive header', () => {
+  it('keeps the identity and controls separated below lg with wrapping controls', () => {
+    render(
+      <CookingModeModal
+        recipe={makeRecipe()}
+        servings={4}
+        voiceService={testVoiceService}
+        activeTimers={[]}
+        onStartTimer={() => {}}
+        onToggleTimer={() => {}}
+        onDeleteTimer={() => {}}
+        onClose={() => {}}
+      />
+    );
+    const header = document.querySelector('header');
+    expect(header).not.toBeNull();
+    const layout = header?.querySelector('div');
+    const layoutClass = layout?.className || '';
+    // Single-column below lg, two-column at lg: identity gets full width on
+    // small screens instead of being squeezed by the action controls.
+    expect(layoutClass).toContain('grid-cols-1');
+    expect(layoutClass).toContain('lg:grid-cols');
+    // Controls wrap rather than overflowing one row; Heart toggle and Speak remain mounted.
+    expect(screen.getByRole('checkbox')).toBeTruthy();
+    expect(screen.getByText('Heart Voice')).toBeTruthy();
+    expect(screen.getByLabelText('Read step aloud')).toBeTruthy();
+    expect(screen.getByLabelText('Exit cooking mode')).toBeTruthy();
+  });
+});

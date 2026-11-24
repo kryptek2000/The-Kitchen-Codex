@@ -176,6 +176,8 @@ describe('phase 2 matching — isolation and purity', () => {
         if (file.startsWith(MATCHING_DIR)) continue;
         if (file.startsWith(CALCULATION_DIR)) continue; // Phase 3 rebinds Phase 2
         if (file.startsWith(PHASE4_DIR)) continue; // the one allowed UI path
+        // Basic Nutrition uses the same authenticated analyzer, never a second matcher.
+        if (file === resolve(ROOT, 'src/application/catalogBasicNutrition.ts')) continue;
         if (file.startsWith(PHASE5C_DIR)) continue; // Phase 5C presentation selector (audited)
         const source = readFileSync(file, 'utf8');
         let match: RegExpExecArray | null;

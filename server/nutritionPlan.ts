@@ -54,6 +54,7 @@ import { normalizeProviderError } from "./ai/providerErrors.js";
 import type { AiJsonSchema } from "./ai/types.js";
 import type { SelectionInput } from "./ai/effectiveSelection.js";
 import { logModelAttempt } from "./providerDiagnostics.js";
+import { CULINARY_EXPERTISE_INSTRUCTIONS } from "./ai/culinaryExpertise.js";
 import {
   MAX_AI_ADVANCED_CANDIDATES,
   AI_ADVANCED_CANDIDATE_REF_PREFIX,
@@ -107,6 +108,7 @@ const MAX_LINE_REF_LENGTH = 200;
  * provider must never believe it owns nutrition or identity authority.
  */
 export const NUTRITION_PLAN_INSTRUCTIONS = [
+  ...CULINARY_EXPERTISE_INSTRUCTIONS,
   "You help a deterministic food system by choosing among a CLOSED candidate set.",
   "You are NOT a nutrition calculator, NOT a food-database lookup, and NOT a decision maker.",
   "For EACH line you are given: a PLANNING TARGET describing which food that line is about, and a list of candidates produced by deterministic code.",

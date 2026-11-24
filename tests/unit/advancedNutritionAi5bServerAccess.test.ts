@@ -466,10 +466,13 @@ describe('AI-5B — server-authority module design', () => {
     // so this boundary module remains the single gate/enforcement owner.
     expect(MODULE_CODE).not.toMatch(/app\.(get|post|use)\b/);
     expect(MODULE_CODE).not.toMatch(/function\s+(get|read|fetch)[A-Za-z]*ProductAccess/);
-    // The gate is the ONLY place that touches an Express response, and it does so
-    // exactly twice: the bounded 403 denial and the bounded 503 unavailability.
+    // TWO gates touch an Express response: the AI feature gate (bounded 403/503)
+    // and the SINC-2 Advanced-only deterministic gate (bounded 403/503). Each
+    // performs exactly one denial touch and one unavailability touch.
     const executable = MODULE_CODE.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-    expect((executable.match(/\bresponse\./g) ?? []).length).toBe(2);
+    expect((executable.match(/\bresponse\./g) ?? []).length).toBe(4);
+    expect(executable).toContain('isAdvancedNutritionEditingEntitled');
+    expect(executable).toContain('requireAdvancedNutritionEditing');
     expect(executable).not.toContain('fetch(');
     expect(executable).not.toContain('process.env');
   });
@@ -491,8 +494,9 @@ describe('AI-5B — server-authority module design', () => {
     ]) {
       expect(executable, `gate must not read ${forbidden}`).not.toContain(forbidden);
     }
-    // ...and it DOES forward the request to the authority exactly once per gate.
-    expect(executable.match(/invokeNutritionProductAccessAuthority\(/g)?.length).toBe(2);
+    // ...and it DOES forward the request to the authority exactly once per gate:
+    // the status decision helper, the AI feature gate, and the Advanced-only gate.
+    expect(executable.match(/invokeNutritionProductAccessAuthority\(/g)?.length).toBe(3);
   });
 
   it('the AI-5C status builder is a PURE projection and never authorizes', () => {

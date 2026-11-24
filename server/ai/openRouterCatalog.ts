@@ -787,6 +787,26 @@ export function openRouterSelectableTextModelIds(): string[] {
     .map((m) => m.modelId);
 }
 
+/**
+ * Free, currently price-verified OpenRouter models that can accept ordinary
+ * text-generation requests. This is the lower capability tier used by Shiso's
+ * validated JSON-over-text adapter; it does NOT claim schema-constrained output
+ * and is never used to satisfy specialized structured operations.
+ */
+export function openRouterConversationTextModelIds(): string[] {
+  const snapshot = getOpenRouterCatalogSnapshot();
+  if (!snapshot.pricingFresh) return [];
+  return snapshot.textModels
+    .filter((model) =>
+      isCompatibleOpenRouterTextModel(model) &&
+      !model.isRouter &&
+      model.isFree &&
+      model.pricingVerified &&
+      model.costClass === "free"
+    )
+    .map((model) => model.modelId);
+}
+
 /** All discovered compatible OpenRouter text model ids (informational). */
 export function openRouterTextModelIds(): string[] {
   return getOpenRouterCatalogSnapshot().textModels.map((m) => m.modelId);

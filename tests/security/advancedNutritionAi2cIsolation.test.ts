@@ -73,7 +73,10 @@ const FROZEN_AI0_AI2A: Record<string, string> = {
 const STABLE_AI2B: Record<string, string> = {
   'src/core/nutritionV2/aiAdvancedPlanWire.ts': '33c851752a4eb67aafab1f208efcd20a8671a7141724f91222e0402329e42c22',
   'src/core/nutritionV2/aiAdvancedPlanTarget.ts': '82d6c06d756a4cb02ea23a5cdc56fbd3f9801abd40c0cae4b172cf3e5f2be1e2',
-  'server/nutritionPlan.ts': '3ac9082dd2f98880f1a7991594aca9f529e031e1bd86d57d1c5a566189cb191b',
+  // CULINARY-IDENTITY-1: prompt-only shared culinary guidance was added to the
+  // AI-2B instruction block. The closed plan contract, authority boundaries and
+  // response handling are unchanged.
+  'server/nutritionPlan.ts': '583e394cbb6d3d8d8d92c27470bbb0ca46ab2e0a5d2cd896c6c8b0110210e7da',
   'src/application/nutritionAiPlan.ts': '7e8a6a372e2f00cba68686b32a73967141897c113dc308277d67bd80afa465b8',
 };
 
@@ -111,7 +114,10 @@ const THAWED_BY_AI3: Record<string, string> = {
  * the AI-3 precedent.
  */
 const THAWED_BY_9B4: Record<string, string> = {
-  'src/core/nutritionV2/aiAdvanced.ts': '7ac74d645b4db85e13d2a02478c7534359ef5a51f5b6bce69eeb81a3aaf50ed3',
+  // AN-SEM-1 (architect-authorized semantic-contract repair) changes the same
+  // already-thawed contract: meaningful-content schema/helpers and explicit
+  // non-resolution classification. No other frozen module is widened.
+  'src/core/nutritionV2/aiAdvanced.ts': 'c9c9778a82518c3b65381aa041f94e466091f8beb36392c77028c9f567afbd5f',
 };
 
 /**

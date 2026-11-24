@@ -6,7 +6,7 @@
  * `tests/unit/advancedNutritionPhase8bBrowserProofContract.test.ts`.
  *
  * The expected measurements below were MEASURED offline against the pinned
- * USDA bundle (`usda_fdc_87c5408a3e98838944a87be74824761e`, 13559 canonical
+ * USDA bundle (`usda_fdc_1f3e3068a7ae0702f360d1caae40a628`, 13559 canonical
  * records) through the real Phase 4 pipeline (parse -> review -> analyze ->
  * calculate -> live projection). They are not tuned: the fixture was chosen for
  * determinism and coverage, and the expectations follow from it.
@@ -78,7 +78,7 @@ export const ACCEPTANCE_INGREDIENT_LINES: ReadonlyArray<string> = [
 export const ACCEPTANCE_SERVINGS = 4;
 
 /** USDA bundle release the pinned expectations were measured against. */
-export const PINNED_BUNDLE_RELEASE = 'usda_fdc_87c5408a3e98838944a87be74824761e';
+export const PINNED_BUNDLE_RELEASE = 'usda_fdc_1f3e3068a7ae0702f360d1caae40a628';
 
 /** Canonical record count in the pinned bundle. */
 export const PINNED_BUNDLE_RECORD_COUNT = 13559;
@@ -119,17 +119,17 @@ export interface RecipeLevelExpectations {
  */
 export const RECIPE_LEVEL_EXPECTATIONS: RecipeLevelExpectations = {
   totalIngredientCount: 9,
-  matchedCount: 6,
-  needsAmountCount: 3,
+  matchedCount: 7,
+  needsAmountCount: 2,
   needsMatchCount: 0,
   reviewSuggestedCount: 0,
   qualitativeCount: 0,
-  actionableCount: 3,
+  actionableCount: 2,
   calculationStatus: 'partial',
   basis: 'total',
   nutrientScopeCount: 34,
   nutrientsWithTotals: 31,
-  unresolvedCount: 3,
+  unresolvedCount: 2,
   unresolvedOutcome: 'no_mass',
   advisoryOnly: true,
   applicationAuthorized: false,

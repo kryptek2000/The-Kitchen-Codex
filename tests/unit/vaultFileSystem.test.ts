@@ -13,7 +13,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { scanVaultDirectory } from '../../src/utils/vaultFileSystem';
-import { vaultAssets } from '../../src/utils/vaultAssets';
+import { createVaultAssetScope } from '../../src/utils/vaultAssets';
 
 const RECIPE_MD = `---
 title: "Lasagna"
@@ -82,8 +82,6 @@ function buildMock(files: Record<string, string | Blob>): MockDir {
 }
 
 describe('scanVaultDirectory (refactored, Phase 4C3A)', () => {
-  beforeEach(() => vaultAssets.clear());
-  afterEach(() => vaultAssets.clear());
 
   it('still attaches fileHandle to recipes/notes, indexes images, and preserves counts', async () => {
     const imageBlob = new Blob(['img-bytes'], { type: 'image/png' });
@@ -95,7 +93,8 @@ describe('scanVaultDirectory (refactored, Phase 4C3A)', () => {
       'Assets/photo.png': imageBlob,
     });
 
-    const result = await scanVaultDirectory(root);
+    const scope = createVaultAssetScope(1, { active: true });
+    const result = await scanVaultDirectory(root, scope);
 
     expect(result.recipes).toHaveLength(1);
     // Phase 4C3B: filePath is now canonicalized to a vault-root-relative path
@@ -114,6 +113,7 @@ describe('scanVaultDirectory (refactored, Phase 4C3A)', () => {
     expect(result.shoppingList?.[0].category).toBe('Produce');
 
     // Image indexing (browser responsibility) is unchanged.
-    expect(vaultAssets.get('Assets/photo.png')).toBeTruthy();
+    expect(scope.get('Assets/photo.png')).toBeTruthy();
+    scope.deactivate();
   });
 });

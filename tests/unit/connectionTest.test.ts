@@ -5,6 +5,7 @@ const ENV_KEYS = [
   "GEMINI_API_KEY",
   "OPENROUTER_API_KEY",
   "DEEPSEEK_API_KEY",
+  "OPENAI_API_KEY",
   "KITCHEN_CODEX_TEXT_PROVIDER",
   "KITCHEN_CODEX_TEXT_MODEL",
   "KITCHEN_CODEX_IMAGE_PROVIDER",
@@ -53,10 +54,15 @@ describe("BYOK-4 — connectionTestKindForProvider", () => {
     expect(connectionTest.connectionTestKindForProvider("gemini", "text")).toBe("unavailable");
     expect(connectionTest.connectionTestKindForProvider("openrouter", "text")).toBe("unavailable");
     expect(connectionTest.connectionTestKindForProvider("deepseek", "text")).toBe("unavailable");
+    expect(connectionTest.connectionTestKindForProvider("openai", "text")).toBe("unavailable");
 
     ({ connectionTest } = await freshModule({ GEMINI_API_KEY: SENTINEL }));
     expect(connectionTest.connectionTestKindForProvider("gemini", "text")).toBe("network_probe");
     expect(connectionTest.connectionTestKindForProvider("openrouter", "text")).toBe("unavailable");
+    expect(connectionTest.connectionTestKindForProvider("openai", "text")).toBe("unavailable");
+
+    ({ connectionTest } = await freshModule({ OPENAI_API_KEY: SENTINEL }));
+    expect(connectionTest.connectionTestKindForProvider("openai", "text")).toBe("network_probe");
   });
 
   it("image providers are credential_check when configured, unavailable otherwise", async () => {
@@ -105,7 +111,7 @@ describe("BYOK-4 — runConnectionTest bounded + fail-closed (no real network)",
       const result = await connectionTest.runConnectionTest({ providerId: "openrouter", kind: "text" });
       expect(result.ok).toBe(false);
       if (result.ok === false) {
-        expect(result.code).toBe("AUTH");
+        expect(result.code).toBe("AUTHENTICATION_FAILED");
         expect(result.model).toBe("openai/gpt-4o-mini");
         expect(result.credentialSource).toBe("server_environment");
         expect(JSON.stringify(result)).not.toContain(SENTINEL);
@@ -131,6 +137,90 @@ describe("BYOK-4 — runConnectionTest bounded + fail-closed (no real network)",
     expect(stub.calls).toHaveLength(1);
     expect(stub.calls[0].url).toContain("deepseek");
     expect(JSON.parse(stub.calls[0].body!).max_tokens).toBe(8);
+  });
+
+  it("OpenAI text probe uses the FIXED Responses endpoint with store:false and a tiny output cap", async () => {
+    const { connectionTest } = await freshModule({ OPENAI_API_KEY: SENTINEL });
+    const stub = stubFetch(
+      200,
+      JSON.stringify({
+        status: "completed",
+        output: [
+          {
+            type: "message",
+            content: [{ type: "output_text", text: "ok" }],
+          },
+        ],
+      })
+    );
+    try {
+      const result = await connectionTest.runConnectionTest({ providerId: "openai", kind: "text" });
+      expect(result.ok).toBe(true);
+      if (result.ok === true) {
+        expect(result.providerId).toBe("openai");
+        expect(result.model).toBe("gpt-6.1-terra");
+        expect(result.credentialSource).toBe("server_environment");
+      }
+    } finally {
+      stub.restore();
+    }
+    expect(stub.calls).toHaveLength(1);
+    expect(stub.calls[0].method).toBe("POST");
+    expect(stub.calls[0].url).toBe("https://api.openai.com/v1/responses");
+    const body = JSON.parse(stub.calls[0].body!);
+    expect(body.store).toBe(false);
+    expect(body.service_tier).toBe("default");
+    expect(body.max_output_tokens).toBe(16);
+    expect(body.reasoning).toEqual({ effort: "low" });
+    expect(JSON.stringify(body)).not.toContain(SENTINEL);
+  });
+
+  it("OpenAI probe maps 429 quota/rate errors and never returns the key", async () => {
+    const { connectionTest } = await freshModule({ OPENAI_API_KEY: SENTINEL });
+    const stub = stubFetch(429, JSON.stringify({ error: { code: "credit_balance_exhausted", message: SENTINEL } }));
+    try {
+      const result = await connectionTest.runConnectionTest({ providerId: "openai", kind: "text" });
+      expect(result.ok).toBe(false);
+      if (result.ok === false) {
+        expect(result.code).toBe("QUOTA_EXHAUSTED");
+        expect(JSON.stringify(result)).not.toContain(SENTINEL);
+      }
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it("OpenAI session-only connection test works without an operator key", async () => {
+    const { connectionTest } = await freshModule({});
+    const session = await import("../../server/ai/sessionSecrets.js");
+    session.setSessionSecret("openai", "sk-session-openai");
+    const stub = stubFetch(
+      200,
+      JSON.stringify({
+        status: "completed",
+        output: [
+          {
+            type: "message",
+            content: [{ type: "output_text", text: "ok" }],
+          },
+        ],
+      })
+    );
+    try {
+      const result = await connectionTest.runConnectionTest({
+        providerId: "openai",
+        kind: "text",
+        modelId: "gpt-6-luna",
+        credentialSource: "session_only",
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok === true) {
+        expect(result.credentialSource).toBe("session_only");
+        expect(result.model).toBe("gpt-6-luna");
+      }
+    } finally {
+      stub.restore();
+    }
   });
 
   it("HTTP 200 with an EMPTY/malformed chat body is NOT a success", async () => {
@@ -194,7 +284,7 @@ describe("BYOK-4 — Gemini probes use a fixed REST path with tiny requests", ()
       try {
         const result = await connectionTest.runConnectionTest({ providerId: "gemini", kind: "text" });
         expect(result.ok, body).toBe(false);
-        if (result.ok === false) expect(result.code, body).toBe("INVALID_RESPONSE");
+        if (result.ok === false) expect(result.code, body).toBe(["", "not json"].includes(body) ? "RESPONSE_PARSE_ERROR" : "INVALID_RESPONSE");
       } finally {
         stub.restore();
       }
@@ -219,6 +309,61 @@ describe("BYOK-4 — Gemini probes use a fixed REST path with tiny requests", ()
 // ---------------------------------------------------------------------------
 // OPENROUTER IMAGE CREDENTIAL: real /api/v1/key semantics (NOT /models)
 // ---------------------------------------------------------------------------
+
+describe("P2 — OpenAI image credential check", () => {
+  it("uses the FIXED /v1/models endpoint (no image generation) and succeeds on { data: [...] }", async () => {
+    const { connectionTest } = await freshModule({ OPENAI_API_KEY: SENTINEL });
+    const stub = stubFetch(200, JSON.stringify({ data: [{ id: "gpt-image-2.6-flare" }] }));
+    try {
+      const result = await connectionTest.runConnectionTest({ providerId: "openai-image", kind: "image" });
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.model).toBe("gpt-image-2.6-flare");
+      // No raw model list / account data is returned.
+      expect(JSON.stringify(result)).not.toContain('"data"');
+    } finally {
+      stub.restore();
+    }
+    expect(stub.calls).toHaveLength(1);
+    expect(stub.calls[0].method).toBe("GET");
+    expect(stub.calls[0].url).toBe("https://api.openai.com/v1/models");
+    expect(stub.calls[0].url).not.toContain("/images/generations");
+  });
+
+  it("a 401 fake key => AUTH failure; malformed bodies => INVALID_RESPONSE", async () => {
+    const { connectionTest } = await freshModule({ OPENAI_API_KEY: SENTINEL });
+    const unauthorized = stubFetch(401, JSON.stringify({ error: { message: "invalid api key" } }));
+    try {
+      const result = await connectionTest.runConnectionTest({ providerId: "openai-image", kind: "image" });
+      expect(result.ok).toBe(false);
+      if (result.ok === false) expect(result.code).toBe("AUTHENTICATION_FAILED");
+    } finally {
+      unauthorized.restore();
+    }
+    for (const body of ["", "not json", "{}", JSON.stringify({ data: null })]) {
+      const stub = stubFetch(200, body);
+      try {
+        const result = await connectionTest.runConnectionTest({ providerId: "openai-image", kind: "image" });
+        expect(result.ok, body).toBe(false);
+        if (result.ok === false) expect(result.code, body).toBe("INVALID_RESPONSE");
+      } finally {
+        stub.restore();
+      }
+    }
+  });
+
+  it("is unavailable without OPENAI_API_KEY and never probes", async () => {
+    const { connectionTest } = await freshModule({});
+    const stub = stubFetch(200, JSON.stringify({ data: [] }));
+    try {
+      const result = await connectionTest.runConnectionTest({ providerId: "openai-image", kind: "image" });
+      expect(result.ok).toBe(false);
+      if (result.ok === false) expect(result.code).toBe("UNAVAILABLE");
+    } finally {
+      stub.restore();
+    }
+    expect(stub.calls).toHaveLength(0);
+  });
+});
 
 describe("BYOK-4 — OpenRouter image credential check", () => {
   it("uses the FIXED /api/v1/key endpoint and succeeds on a valid minimal response", async () => {
@@ -246,7 +391,7 @@ describe("BYOK-4 — OpenRouter image credential check", () => {
     try {
       const result = await connectionTest.runConnectionTest({ providerId: "openrouter-image", kind: "image" });
       expect(result.ok).toBe(false);
-      if (result.ok === false) expect(result.code).toBe("AUTH");
+      if (result.ok === false) expect(result.code).toBe("AUTHENTICATION_FAILED");
     } finally {
       stub.restore();
     }
@@ -350,7 +495,7 @@ describe("BYOK-4 — universal probe response-byte bounds", () => {
     try {
       const result = await connectionTest.runConnectionTest({ providerId: "gemini", kind: "text" });
       expect(result.ok).toBe(false);
-      if (result.ok === false) expect(result.code).toBe("INVALID_RESPONSE");
+      if (result.ok === false) expect(result.code).toBe("RESPONSE_PARSE_ERROR");
       expect(wasCancelled()).toBe(true);
     } finally {
       globalThis.fetch = originalFetch;
@@ -367,7 +512,7 @@ describe("BYOK-4 — universal probe response-byte bounds", () => {
       const result = await connectionTest.runConnectionTest({ providerId: "gemini", kind: "text" });
       expect(result.ok).toBe(false);
       if (result.ok === false) {
-        expect(result.code).toBe("PROVIDER_ERROR");
+        expect(result.code).toBe("UPSTREAM_ERROR");
         expect(result.message.length).toBeLessThanOrEqual(120);
       }
       expect(wasCancelled()).toBe(true);

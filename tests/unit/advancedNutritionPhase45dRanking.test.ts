@@ -77,7 +77,7 @@ describe('phase 4.5d rank — contradictions', () => {
     const entries = [entry(1, 'Butter, unsalted'), entry(2, 'Butter, salted')];
     const result = ids('unsalted butter', entries);
     expect(result[0]).toBe(1);
-    expect(result).toContain(2);
+    expect(result).not.toContain(2); // explicit unsalted identity rejects salted butter
   });
 
   it('never rewards a forward-negated occurrence (`salt not added`)', () => {

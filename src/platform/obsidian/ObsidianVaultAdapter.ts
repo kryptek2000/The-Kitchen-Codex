@@ -116,6 +116,19 @@ export class ObsidianVaultAdapter implements VaultAdapter {
     await this.vault.create(target, content);
   }
 
+  async writeTextIfUnchanged(path: string, content: string, expected: string): Promise<void> {
+    const target = normalizeVaultRelativePath(path);
+    const existing = this.vault.getAbstractFileByPath(target);
+    if (!isFileLike(existing)) {
+      throw new Error(`Vault path "${target}" does not exist.`);
+    }
+    const current = await this.vault.read(existing as unknown as TFile);
+    if (current !== expected) {
+      throw new Error('The recipe changed on disk since it was opened. The save was not applied.');
+    }
+    await this.vault.modify(existing as unknown as TFile, content);
+  }
+
   async delete(path: string): Promise<void> {
     const file = this.resolveFile(path);
     await this.vault.delete(file as unknown as TFile);

@@ -84,6 +84,15 @@ describe("Create for Me — request validation (v0.7 2A)", () => {
     expect(validateCreateRecipeRequest({ prompt: "x", constraints: { maxTotalMinutes: 1 } }).ok).toBe(false);
     expect(validateCreateRecipeRequest({ prompt: "x", constraints: { dietary: Array.from({ length: 25 }, (_, i) => `d${i}`) } }).ok).toBe(false);
   });
+
+  it("accepts only a validated bounded current draft for same-recipe refinement", () => {
+    const currentDraft = { title: "Chicken Casserole", servings: 6, ingredients: [{ name: "chicken", amount: 2, unit: "lb" }], steps: [{ text: "Bake until done." }] };
+    const valid = validateCreateRecipeRequest({ prompt: "Make it dairy-free", currentDraft });
+    expect(valid.ok).toBe(true);
+    expect(valid.value?.currentDraft?.title).toBe("Chicken Casserole");
+    expect(validateCreateRecipeRequest({ prompt: "Change it", currentDraft: { title: "Bad", ingredients: [], steps: [] } }).ok).toBe(false);
+    expect(validateCreateRecipeRequest({ prompt: "Change it", currentDraft: { ...currentDraft, ingredients: Array.from({ length: 61 }, (_, i) => ({ name: `item ${i}` })) } }).ok).toBe(false);
+  });
 });
 
 describe("Create for Me — prompt construction (v0.7 2A)", () => {
@@ -98,6 +107,17 @@ describe("Create for Me — prompt construction (v0.7 2A)", () => {
     expect(prompt).toContain("- exclude ingredients: peanuts");
     // User content is clearly delimited and never mutated into output-rule changes.
     expect(prompt).toContain("below this delimiter is the user's freeform prompt");
+  });
+
+  it("binds a refinement to the validated existing draft and does not add nutrition fields", () => {
+    const prompt = buildCreateRecipePrompt({
+      prompt: "Add black beans and make it dairy-free",
+      currentDraft: { title: "Chicken Casserole", servings: 6, ingredients: [{ name: "chicken", amount: 2, unit: "lb" }], steps: [{ text: "Bake until done." }] },
+    });
+    expect(prompt).toContain("REFINEMENT CONTEXT");
+    expect(prompt).toContain('"title":"Chicken Casserole"');
+    expect(prompt).toContain("preserve this same recipe identity");
+    expect(prompt).toContain("Do not invent nutrition");
   });
 });
 
@@ -139,6 +159,48 @@ describe("Create for Me — provider capability selection (v0.7 2A)", () => {
 });
 
 describe("Create for Me — fallback (v0.7 2A)", () => {
+  it("does not begin recipe generation when the request is already cancelled", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    let providerCalls = 0;
+    const provider = fakeProvider('gemini', FULL, { onStructured: () => { providerCalls += 1; return OK_DRAFT; } });
+    await expect(generateRecipeDraftOnServer({ prompt: 'make dinner' }, {
+      registry: [desc(provider)], candidates: [{ provider, model: 'gemini-model' }], signal: controller.signal,
+    })).rejects.toMatchObject({ code: 'CANCELLED' });
+    expect(providerCalls).toBe(0);
+  });
+
+  it("cancels a pending candidate and never begins a fallback provider", async () => {
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    let resolveDraft!: (value: unknown) => void;
+    const pending = new Promise<unknown>((resolve) => { resolveDraft = resolve; });
+    const controller = new AbortController();
+    let fallbackCalls = 0;
+    const first: AiProvider = {
+      id: 'gemini', name: 'gemini', capabilities: FULL, isAvailable: () => true, testConnection: async () => true,
+      generate: async () => '',
+      generateStructured: async <T = unknown>(_prompt: string, _schema: AiJsonSchema, options: AiStructuredOptions): Promise<T> => {
+        expect(options.signal).toBe(controller.signal);
+        markStarted();
+        return await pending as T;
+      },
+    };
+    const second = fakeProvider('openrouter', FULL, { onStructured: () => { fallbackCalls += 1; return OK_DRAFT; } });
+    const candidates: AiCandidate[] = [
+      { provider: first, model: 'gemini-model' },
+      { provider: second, model: 'openrouter-model' },
+    ];
+    const running = generateRecipeDraftOnServer({ prompt: 'make dinner' }, {
+      registry: [desc(first), desc(second)], candidates, signal: controller.signal,
+    });
+    await started;
+    controller.abort();
+    resolveDraft(OK_DRAFT);
+    await expect(running).rejects.toMatchObject({ code: 'CANCELLED' });
+    expect(fallbackCalls).toBe(0);
+  });
+
   it("Gemini fallback-eligible failure -> curated OpenRouter success; DeepSeek never executed", async () => {
     const gem = fakeProvider("gemini", FULL, { onStructured: () => { throw new ProviderOperationError("QUOTA", "quota", { providerId: "gemini" }); } });
     const or = fakeProvider("openrouter", { ...NONE, structuredOutput: true, recipeGeneration: true }, { onStructured: () => OK_DRAFT });

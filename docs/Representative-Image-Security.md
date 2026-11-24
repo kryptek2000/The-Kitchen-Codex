@@ -8,7 +8,8 @@ Relevant implementation:
 
 - `src/core/representativeImage.ts` — platform-neutral core (license allowlist, query builder, candidate shapes)
 - `server/representativeImage.ts` — server-only search/selection/thumbnail authority
-- `server/app.ts` — route wiring + requester-identity derivation
+- `server/app.ts` — route wiring + image-session gate
+- `server/imageSessionAuthority.ts`, `server/imageSession.ts`, `server/imageSessionRoutes.ts` — server-issued image-session authority, cookie, and bootstrap/revoke routes
 - `src/components/RepresentativeImageChooser.tsx`, `src/components/RecipeEditorModal.tsx` — explicit UI
 
 ## Candidate authority
@@ -34,28 +35,42 @@ Relevant implementation:
   `CANDIDATE_NOT_FOUND` for all three, and the selection route returns `404` for
   found/expired/mismatched alike, so there is no existence oracle.
 
-## Requester scope
+## Requester scope (P2-R1)
 
-- Anonymous requester ownership is derived from the **trusted client IP returned by
-  the existing proxy policy** (`getClientIp`, which uses Express's `req.ip` and the
-  configured `trust proxy` setting — never a raw `X-Forwarded-For` header).
-- The IP is combined with a **process-random salt** (32 bytes, generated at
-  startup, held in memory only) and hashed with SHA-256 to produce the requester
-  scope.
-- The **raw IP and the hash are not persisted**.
-- **Users sharing the same NAT or trusted proxy-derived client IP share the same
-  anonymous requester scope.**
-- An **opaque candidate ID is still required**, so sharing an IP alone does not
-  reveal or enumerate candidates.
-- This design is appropriate for the current **local-first / single-user
-  deployment model**.
-- A **shared multi-user deployment should bind candidate authority to an
-  authenticated user/session or a separate anonymous browser session** rather than
-  relying only on client IP.
+- Candidate, thumbnail, generated-preview, and paid-confirmation ownership are
+  bound to a **server-issued opaque image session**, never to the source IP.
+- The session is issued by `POST /api/session/bootstrap` only after the
+  deployment and same-origin checks pass. The raw token is delivered **only** as
+  an `HttpOnly`, `SameSite=Strict`, `Path=/api` cookie; only its SHA-256 digest is
+  held in process memory. The server also mints an independent random
+  `sessionId`; downstream authorization/preview records use that id, never the
+  cookie value.
+- Sessions have an **absolute 8-hour TTL** and a **sliding 2-hour idle TTL**.
+  `DELETE /api/session` revokes the current session; restart revokes all.
+- **Same-IP clients no longer share a scope.** A second client on the same
+  loopback/NAT IP receives a different session and cannot consume the first
+  client's confirmation token or read/delete its preview, even with the exact
+  opaque token.
+- `AI_ENDPOINT_TOKEN`, when configured, is still required for bootstrap. It is a
+  shared operator bearer, **not** a user/session identity; the image session
+  supplies that separate identity. In production, the existing Electron desktop
+  access gate is also mandatory; a standalone loopback server without that
+  server-verified authority cannot bootstrap image sessions or use protected
+  image routes. Development-only loopback remains available for local work.
+- Bootstrap requires an exact same-origin `Origin`, a loopback `Host` header
+  (DNS-rebinding guard), and no cross-site fetch metadata. In production Electron,
+  the existing per-process desktop cookie gate is also enforced by the global
+  `/api` middleware.
+- **Hosted/multi-user configurations and production standalone loopback
+  configurations without the desktop gate fail closed**
+  (`IMAGE_SESSION_UNAVAILABLE`). Only the trusted Electron desktop deployment
+  is supported for production image sessions; development-only loopback remains
+  available for local work. A local OS process that can forge HTTP headers is
+  outside the browser isolation boundary, but cannot turn those headers into a
+  production image-session authority.
 - **Operators must configure the existing trusted-proxy policy correctly**
-  (`TRUST_PROXY`). **Untrusted forwarding headers must not be accepted as requester
-  identity**; when `TRUST_PROXY` is unset, Express uses the direct socket address
-  and ignores `X-Forwarded-For`.
+  (`TRUST_PROXY`). The image-session gate intentionally does not use
+  `X-Forwarded-For` as identity; IP remains only a rate-limit key.
 
 ## Privacy and fetching
 

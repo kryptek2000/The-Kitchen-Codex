@@ -134,7 +134,7 @@ function Harness({ initial, next }: { initial: ObsidianRecipe; next: CodexNutrit
   const [current, setCurrent] = useState<ObsidianRecipe>(initial);
   const onApply = vi.fn(async () => {
     setCurrent((prev) => withBlock(prev, next));
-    return { ok: true, mode: 'replace' as const, message: 'Advanced Nutrition was replaced and saved to your recipe.' };
+    return { ok: true, mode: 'replace' as const, message: 'Nutrition was applied to the working recipe. It is not saved to your Vault yet.' };
   });
   return (
     <RecipeNutritionSection
@@ -163,7 +163,7 @@ async function applyWorkingResult(): Promise<void> {
   });
   fireEvent.click(screen.getByRole('button', { name: /Apply and replace saved nutrition/i }));
   fireEvent.click(await screen.findByRole('button', { name: /Confirm Apply/i }));
-  await screen.findByText(/was replaced and saved to your recipe/i);
+  await screen.findByText(/not saved to your Vault yet/i);
   // The working modal stays open on success; close it to reveal the saved result.
   fireEvent.click(screen.getByLabelText('Close Advanced Nutrition'));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
@@ -215,7 +215,7 @@ describe('post-Apply live sync', () => {
 
     // B is THE saved result immediately: saved card, compact card, no A value.
     await waitFor(() => {
-      expect(document.getElementById('advanced-nutrition-card')?.textContent ?? '').toMatch(/Complete coverage/i);
+      expect(document.getElementById('advanced-nutrition-card')?.textContent ?? '').toMatch(/2 ingredient lines accounted for/i);
     });
     const sectionText = document.getElementById('recipe-nutrition-section')?.textContent ?? '';
     expect(sectionText).not.toMatch(/1300/);
@@ -374,7 +374,7 @@ describe('serving-scaled standard nutrition', () => {
     expect(stored.servings).toBe(8);
   });
 
-  it('shows PARTIAL saved values with a partial label at every serving scale', () => {
+  it('keeps incomplete recipe totals unknown at every serving scale', () => {
     const target = scaledRecipe(8);
     const partial = blockFor(target, {
       servings: 8,
@@ -386,7 +386,9 @@ describe('serving-scaled standard nutrition', () => {
       unresolved: [{ line_ref: 'ing:1:deadbeefdead', reason: 'no_match' }],
     });
     for (const servings of [2, 4, 8, 16]) {
-      const withSaved = withBlock(scaledRecipe(servings), partial);
+      // The recipe denominator and authored ingredients stay fixed; this loop
+      // changes only the display serving basis, as the UI control does.
+      const withSaved = withBlock(target, partial);
       render(
         <RecipeNutritionSection
           recipe={withSaved}
@@ -399,12 +401,13 @@ describe('serving-scaled standard nutrition', () => {
         />
       );
       const card = document.getElementById('recipe-nutrition-card') as HTMLElement;
-      // The partial state is explicit and prominent at every scale.
-      expect(card.textContent).toMatch(/Partial estimate/i);
+      // The stale evidence is rejected, so unknown values remain unknown at
+      // every display basis rather than exposing an unauthenticated subtotal.
       expect(card.textContent).toMatch(/Advanced nutrition incomplete/i);
-      // The partial values over the RESOLVED lines are shown and scale with servings.
-      const expected = 1364 * (servings / 8);
-      expect(card.textContent).toMatch(new RegExp(String(expected)));
+      expect(card.textContent).toMatch(/Totals are unknown/i);
+      // A subtotal must never be rendered as the entire recipe calorie total.
+      expect(card.textContent).not.toMatch(new RegExp(String(1364 * servings / 8)));
+      expect(card.textContent).toContain('—');
       cleanup();
     }
   });

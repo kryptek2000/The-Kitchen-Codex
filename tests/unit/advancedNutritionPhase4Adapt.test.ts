@@ -79,6 +79,12 @@ describe('phase 4 adapt — ordinary recipes', () => {
     expect(ingredient.amount).toBeNull();
   });
 
+  it('uses the same disclosed historical 4-serving basis when recipe yield is absent', () => {
+    const result = adaptRecipe({ title: 'Cookies', ingredients: [{ original: '2 eggs' }] });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.recipe.base_servings).toBe(4);
+  });
+
   it('keeps missing distinct from explicit zero and preserves -0 versus 0', () => {
     const missing = adaptRecipe({ ingredients: [{ original: 'A' }] });
     const zero = adaptRecipe({ ingredients: [{ original: 'A', amount: 0 }] });

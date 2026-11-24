@@ -39,6 +39,12 @@ export interface VaultAdapter {
   readText(path: string): Promise<string>;
   /** Writes raw Markdown text to a vault file, creating or overwriting it. */
   writeText(path: string, content: string): Promise<void>;
+  /**
+   * Optional conditional write. Commits `content` only when the current file
+   * content exactly equals `expected`. Implementations that cannot provide a
+   * genuine conditional update must omit this method; callers must fail closed.
+   */
+  writeTextIfUnchanged?(path: string, content: string, expected: string): Promise<void>;
   /** Deletes a vault file by path. */
   delete(path: string): Promise<void>;
   /** Returns whether a vault file exists at the given path. */

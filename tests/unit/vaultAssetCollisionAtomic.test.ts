@@ -43,6 +43,12 @@ function makeGatedStore(initial: Record<string, Uint8Array> = {}): GatedStore {
       if (writeCount === 1) await gate;
       files.set(path, data.slice());
     }),
+    writeExclusive: vi.fn(async (path: string, data: Uint8Array) => {
+      writeCount += 1;
+      if (writeCount === 1) await gate;
+      if (files.has(path)) throw new Error('EEXIST');
+      files.set(path, data.slice());
+    }),
     read: vi.fn(async (path: string) => files.get(path) ?? new Uint8Array()),
     delete: vi.fn(async (path: string) => {
       files.delete(path);
@@ -57,6 +63,10 @@ function makeStore(initial: Record<string, Uint8Array> = {}) {
   const asset = {
     exists: vi.fn(async (path: string) => files.has(path)),
     write: vi.fn(async (path: string, data: Uint8Array) => {
+      files.set(path, data.slice());
+    }),
+    writeExclusive: vi.fn(async (path: string, data: Uint8Array) => {
+      if (files.has(path)) throw new Error('EEXIST');
       files.set(path, data.slice());
     }),
     read: vi.fn(async (path: string) => files.get(path) ?? new Uint8Array()),
@@ -115,7 +125,7 @@ describe('atomic collision-safe allocation (AssetAdapter)', () => {
         if (files.has(path)) throw new AssetPathCollisionError(path);
         files.set(path, data.slice());
       }),
-      read: vi.fn(async () => new Uint8Array()),
+      read: vi.fn(async (path: string) => files.get(path) ?? new Uint8Array()),
       delete: vi.fn(async (path: string) => {
         files.delete(path);
       }),
@@ -143,7 +153,7 @@ describe('atomic collision-safe allocation (AssetAdapter)', () => {
         if (attempts === 1) throw new AssetPathCollisionError(path);
         files.set(path, data.slice());
       }),
-      read: vi.fn(async () => new Uint8Array()),
+      read: vi.fn(async (path: string) => files.get(path) ?? new Uint8Array()),
       delete: vi.fn(async (path: string) => {
         files.delete(path);
       }),
@@ -163,7 +173,11 @@ describe('atomic collision-safe allocation (AssetAdapter)', () => {
         if (fail) throw new Error('disk failure');
         files.set(path, data.slice());
       }),
-      read: vi.fn(async () => new Uint8Array()),
+      writeExclusive: vi.fn(async (path: string, data: Uint8Array) => {
+        if (fail) throw new Error('disk failure');
+        files.set(path, data.slice());
+      }),
+      read: vi.fn(async (path: string) => files.get(path) ?? new Uint8Array()),
       delete: vi.fn(async (path: string) => {
         files.delete(path);
       }),

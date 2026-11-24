@@ -34,7 +34,7 @@ import { RESOLUTION_COVERAGE_CORPUS } from '../fixtures/advancedNutritionResolut
 
 const BUNDLE_DIR = join(
   dirname(fileURLToPath(import.meta.url)),
-  '../../data/advanced-nutrition/usda/usda_fdc_87c5408a3e98838944a87be74824761e'
+  '../../data/advanced-nutrition/usda/usda_fdc_1f3e3068a7ae0702f360d1caae40a628'
 );
 
 let session: AdvancedNutritionSession;
@@ -142,11 +142,11 @@ describe('AI-0 benchmark foundation', () => {
     }
     const resolved = results.filter((result) => result.resolved).length;
     expect(results.length).toBe(97);
-    expect(resolved).toBe(48);
+    expect(resolved).toBe(51);
 
     const legacy = results.filter((result) => result.focus !== 'nutrient_annotation');
     expect(legacy.length).toBe(91);
-    expect(legacy.filter((result) => result.resolved).length).toBe(44);
+    expect(legacy.filter((result) => result.resolved).length).toBe(47);
   }, 180000);
 
   it('reports AI-Advanced buckets separately without inflating resolution credit', () => {
