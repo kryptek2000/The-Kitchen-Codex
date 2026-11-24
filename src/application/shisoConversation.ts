@@ -188,6 +188,18 @@ export interface ShisoTurnDeps {
   readonly retry?: boolean;
   /** Application-produced note about unsaved working changes. */
   readonly workingStateNote?: string;
+  /**
+   * C1.7 S5: optional, read-only progress notifications for REAL engine steps.
+   * No token-level or speculative updates; the UI must not imply streaming.
+   */
+  readonly onProgress?: (progress: ShisoTurnProgress) => void;
+}
+
+export interface ShisoTurnProgress {
+  readonly kind: 'provider' | 'tool';
+  readonly step: number;
+  readonly tool?: string;
+  readonly ok?: boolean;
 }
 
 /**
@@ -712,6 +724,9 @@ export async function runShisoConversationTurn(
     };
     observation = undefined;
 
+    // Only a real outbound provider call is reported here. There is no token
+    // stream and this is deliberately not presented as one.
+    deps.onProgress?.({ kind: 'provider', step: modelInvocations + 1 });
     let response: NetworkResponse<ShisoTurnResponse>;
     try {
       response = await deps.network.post<ShisoTurnResponse>(
@@ -829,6 +844,7 @@ export async function runShisoConversationTurn(
       if (executed.ok) retain(executed);
       observation = executed;
       toolsUsed.push(turn.tool);
+      deps.onProgress?.({ kind: 'tool', step: toolCalls, tool: turn.tool, ok: executed.ok });
       if (turn.tool === 'apply_nutrition_corrections' && executed.ok) {
         const before = executed.data['before_resolved_count'];
         const after = executed.data['resolved_count'];

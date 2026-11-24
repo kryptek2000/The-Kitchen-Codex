@@ -6,6 +6,7 @@ interface BottomNavProps {
   onVault: () => void;
   onStudio: () => void;
   onShiso: () => void;
+  shisoActive?: boolean;
   onMore: () => void;
 }
 
@@ -16,7 +17,7 @@ const item = (active: boolean) =>
       : 'text-[var(--text-secondary,#9CA3AF)] hover:text-[var(--text-primary,#F3F4F6)]'
   }`;
 
-export function BottomNav({ activeTab, onVault, onStudio, onShiso, onMore }: BottomNavProps) {
+export function BottomNav({ activeTab, onVault, onStudio, onShiso, shisoActive = false, onMore }: BottomNavProps) {
   return (
     <nav
       aria-label="Mobile primary"
@@ -28,7 +29,7 @@ export function BottomNav({ activeTab, onVault, onStudio, onShiso, onMore }: Bot
       <button type="button" aria-current={activeTab === 'providers' ? 'page' : undefined} className={item(activeTab === 'providers')} onClick={onStudio}>
         <BrainCircuit className="w-5 h-5" /> AI Studio
       </button>
-      <button type="button" className={item(false)} onClick={onShiso}>
+      <button type="button" aria-current={shisoActive ? 'page' : undefined} className={item(shisoActive)} onClick={onShiso}>
         <MessageCircle className="w-5 h-5" /> SHISO
       </button>
       <button type="button" aria-haspopup="dialog" className={item(false)} onClick={onMore}>

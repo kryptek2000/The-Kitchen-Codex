@@ -19,12 +19,26 @@ import { shisoNutritionFailureMessage } from '../application/shisoNutritionRespo
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Sparkles, Send, X, Wrench, CircleAlert, Undo2 } from 'lucide-react';
+import type { ReactNode } from 'react';
+import {
+  ArrowLeft,
+  Send,
+  X,
+  Wrench,
+  CircleAlert,
+  Undo2,
+  Maximize2,
+  Minimize2,
+  Square,
+  ChefHat,
+  MessageCircle,
+} from 'lucide-react';
 
 import {
   initialShisoConversation,
   runShisoConversationTurn,
   type ShisoConversationState,
+  type ShisoTurnProgress,
 } from '../application/shisoConversation';
 import type { ShisoToolContext } from '../application/shisoTools';
 import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
@@ -48,6 +62,12 @@ import { classifySaveIntent, recipeIdentityOf } from '../core/shiso/saveAuthoriz
 import { requestGeneratedRecipe, parseEditedDraftLines, CreateRecipeClientError } from '../utils/createForMe';
 import { normalizeGeneratedRecipeDraft, type GeneratedRecipeDraft, type GeneratedRecipeProvenance } from '../schema/generatedRecipe';
 import { GeneratedRecipePathCollisionError, GENERATED_RECIPE_COLLISION_MESSAGE } from '../application/createForMe';
+import { ShisoHistoryRail, type ShisoHistoryRailProps } from './ShisoHistoryRail';
+import { ShisoAvatar, type ShisoAvatarState } from './ShisoAvatar';
+import { resolveShisoAvatarState, resolveShisoAvatarVariant } from './shisoAnimation';
+import { ShisoMarkdown } from './ShisoMarkdown';
+import { SignatureRecipeCard } from './SignatureRecipeCard';
+import { KitchenCodexMark } from './BrandMark';
 
 export interface ShisoModalProps {
   readonly isOpen: boolean;
@@ -90,6 +110,23 @@ export interface ShisoModalProps {
   readonly settings?: SettingsAdapter;
   /** Save adapter for a newly generated draft; the application owns persistence. */
   readonly onSaveCreatedDraft?: (draft: GeneratedRecipeDraft, provenance: GeneratedRecipeProvenance) => Promise<void>;
+  /**
+   * C1.7 S2: presentation only. Both presentations render THIS SAME component —
+   * one engine, one conversation state, one save-authority lifecycle.
+   */
+  readonly presentation?: 'modal' | 'fullpage';
+  /** Shown in compact mode; moves the same engine into the full-page workspace. */
+  readonly onExpandToWorkspace?: () => void;
+  /** Shown in full-page mode; returns the same engine to the compact overlay. */
+  readonly onReturnToCompact?: () => void;
+  /** Full-page navigation back to the owning Recipe Vault surface. */
+  readonly onBackToVault?: () => void;
+  /** C1.7 S3: resume a different stored conversation in this same engine. */
+  readonly activeConversationKeyOverride?: string | null;
+  /** C1.7 S3: refresh metadata after a local conversation write. */
+  readonly onConversationsChanged?: () => void;
+  /** C1.7 S3: history rail state and actions; full-page presentation only. */
+  readonly conversationHistory?: ShisoHistoryRailProps;
 }
 
 interface TranscriptEntry {
@@ -129,12 +166,22 @@ export function ShisoModal({
   nutritionUnsaved,
   settings,
   onSaveCreatedDraft,
+  presentation = 'modal',
+  onExpandToWorkspace,
+  onReturnToCompact,
+  onBackToVault,
+  activeConversationKeyOverride = null,
+  onConversationsChanged,
+  conversationHistory,
 }: ShisoModalProps) {
   const [conversation, setConversation] = useState<ShisoConversationState>(initialShisoConversation);
   const [entries, setEntries] = useState<readonly TranscriptEntry[]>([]);
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
+  const [completionPulse, setCompletionPulse] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  // C1.7 S5: actual engine steps only. Never a token/speculative stream.
+  const [progressSteps, setProgressSteps] = useState<readonly ShisoTurnProgress[]>([]);
   const [retryMessage, setRetryMessage] = useState<string | null>(null);
   const [conversationLoading, setConversationLoading] = useState(settings !== undefined);
   const [appliedIds, setAppliedIds] = useState<ReadonlyArray<string>>([]);
@@ -170,6 +217,12 @@ export function ShisoModal({
   // closure of the ports — an edit applied mid-turn changes the recipe, and the
   // next tool in the SAME turn must see the new state.
   const shisoRef = useRef(shiso);
+
+  useEffect(() => {
+    if (!completionPulse) return;
+    const timeout = window.setTimeout(() => setCompletionPulse(false), 1050);
+    return () => window.clearTimeout(timeout);
+  }, [completionPulse]);
   shisoRef.current = shiso;
   // I-1: the identity is whatever the Advanced Nutrition OWNER published. It is
   // never defaulted or invented here — with no genuine session identity no
@@ -195,11 +248,12 @@ export function ShisoModal({
   // ACTIVE transcript without erasing the previous one. Live authority still
   // comes from the current recipe/context on every turn.
   const stableRecipeIdentity = recipeIdentityOf(recipe) || 'none';
-  const conversationKey = creationMode
+  const derivedConversationKey = creationMode
     ? 'create'
     : stableRecipeIdentity === 'none'
       ? 'global'
       : `recipe:${stableRecipeIdentity}`;
+  const conversationKey = activeConversationKeyOverride || derivedConversationKey;
 
   useEffect(() => {
     // A recipe/context switch supersedes the turn in flight and invalidates any
@@ -209,6 +263,7 @@ export function ShisoModal({
     activeTurnControllerRef.current = null;
     setBusy(false);
     setStatus(null);
+    setProgressSteps([]);
     setRetryMessage(null);
     setAppliedIds([]);
     setRejectedIds([]);
@@ -285,8 +340,8 @@ export function ShisoModal({
       entries,
       findings: conversation.findings,
       nextSeq: seqRef.current,
-    });
-  }, [conversation, entries, settings, conversationKey]);
+    }).then(() => onConversationsChanged?.());
+  }, [conversation, entries, settings, conversationKey, onConversationsChanged]);
 
   useEffect(() => () => {
     if (settings !== undefined && loadedConversationKeyRef.current === conversationKey) {
@@ -308,6 +363,7 @@ export function ShisoModal({
       seqRef.current += 1;
       setBusy(false);
       setStatus(null);
+      setProgressSteps([]);
       shisoRef.current.clearSaveAuthorization();
       if (settings !== undefined && loadedConversationKeyRef.current === conversationKey) {
         void saveShisoConversation(settings, conversationKey, {
@@ -603,8 +659,11 @@ export function ShisoModal({
     seqRef.current = seq;
     if (requestedMessage === undefined) setDraft('');
     if (!retry) setRetryMessage(null);
+    setCompletionPulse(false);
     setBusy(true);
     setStatus(null);
+    // C1.7 S5: clear prior steps; only real engine events repopulate them.
+    setProgressSteps([]);
     if (!retry) {
       setEntries((prev) => [
         ...prev,
@@ -618,6 +677,7 @@ export function ShisoModal({
         setStatus('Saving the reviewed recipe through the normal Vault path…');
         try {
           const saved = await saveCreatedDraftNow();
+          if (saved) setCompletionPulse(true);
           setEntries((prev) => [...prev, { key: `a${seq}`, role: 'assistant', text: saved ? 'The reviewed recipe was saved successfully. You can create another recipe whenever you are ready.' : 'The recipe was not saved. Your draft remains available for review.', tools: saved ? ['explicit recipe save'] : [] }]);
         } catch (error) {
           const message = error instanceof GeneratedRecipePathCollisionError
@@ -666,8 +726,10 @@ export function ShisoModal({
         }]);
         setStatus(null);
         setRetryMessage(null);
+        setCompletionPulse(true);
       } catch (error) {
         if (seqRef.current !== seq) return;
+        setCompletionPulse(false);
         const failureMessage = error instanceof CreateRecipeClientError && error.code === 'RECIPE_GENERATION_NOT_VERIFIED'
           ? 'This selected model can return structured text but has not been verified for recipe creation. Verify recipe creation for this model in AI Settings or choose a verified text model. No fallback was used.'
           : error instanceof CreateRecipeClientError && error.code === 'UNSUPPORTED_CAPABILITY'
@@ -723,6 +785,13 @@ export function ShisoModal({
         signal: controller.signal,
         retry,
         ...(workingStateNote.length > 0 ? { workingStateNote } : {}),
+        // Read-only, real-step notifications. A superseded turn's steps are
+        // ignored so a late callback cannot paint over the active turn.
+        onProgress: (progress) => {
+          if (seqRef.current === seq) {
+            setProgressSteps((prev) => [...prev, progress].slice(-12));
+          }
+        },
       },
       conversation,
       message,
@@ -732,6 +801,7 @@ export function ShisoModal({
     if (seqRef.current !== seq) return;
     if (outcome.cancelled) {
       setBusy(false);
+      setCompletionPulse(false);
       // A cancelled tool step may already have changed the working copy. Do not
       // offer an automatic retry that could repeat it; the user can review the
       // working recipe and send a fresh instruction.
@@ -764,7 +834,9 @@ export function ShisoModal({
       ]);
       setStatus(null);
       setRetryMessage(null);
+      setCompletionPulse(true);
     } else {
+      setCompletionPulse(false);
       setStatus(outcome.status ?? 'Shiso could not complete that request.');
       // No successful mutation can be present on this failure path: a turn with
       // a successful capability returns a deterministic report (ok=true). Retry
@@ -779,6 +851,26 @@ export function ShisoModal({
     editableCreatedDraft, saveCreatedDraftNow,
     nutritionCoverage, effectiveNutritionSummary, workingStateNote, conversationLoading,
   ]);
+
+  /**
+   * C1.7 S4: visible Stop reuses the SAME AbortController as the turn loop.
+   * It never forks a second engine or provider path: aborting makes the in-flight
+   * provider call/tool step report cancelled, which the turn loop already treats
+   * as terminal. A cancelled turn may have applied a tool step, so no automatic
+   * retry is offered; the user can resume or re-send deliberately.
+   */
+  const stop = useCallback(() => {
+    if (!activeTurnControllerRef.current) return;
+    activeTurnControllerRef.current.abort();
+    activeTurnControllerRef.current = null;
+    seqRef.current += 1;
+    setBusy(false);
+    setCompletionPulse(false);
+    setProgressSteps([]);
+    setStatus('This turn was stopped. Your conversation is preserved. Review the working recipe before sending another instruction.');
+    setRetryMessage(null);
+    shisoRef.current.clearSaveAuthorization();
+  }, []);
 
   // The Advanced Nutrition "Analyze with Shiso" action is a trusted, explicit
   // user request. Submit one whole-recipe task as soon as the shared SHISO
@@ -817,6 +909,7 @@ export function ShisoModal({
       ]);
       setStatus(null);
       setBusy(false);
+      if (result.ok) setCompletionPulse(true);
     })();
   }, [describeNutritionContributions, isOpen, shiso.nutritionAnalysisRequest, toolContext]);
 
@@ -889,7 +982,21 @@ export function ShisoModal({
 
   if (!isOpen) return null;
 
+  const isFullPage = presentation === 'fullpage';
   const recentProposals = conversation.proposals.slice(-12).reverse();
+  // S7: the avatar reflects only REAL engine state — a running turn, an actual
+  // tool step, or a reported failure. It never claims an invented activity.
+  const avatarState: ShisoAvatarState = resolveShisoAvatarState({
+    busy,
+    hasToolStep: progressSteps.some((step) => step.kind === 'tool'),
+    hasError: status !== null,
+    completed: completionPulse,
+  });
+  const avatarVariant = resolveShisoAvatarVariant(avatarState, busy);
+  // S6: the card is fed the CURRENT edited draft, so it never disagrees with
+  // the review fields or the explicit save path.
+  const recipeResultDraft = creationMode && createdDraft ? editableCreatedDraft() : null;
+  const backToVault = onBackToVault ?? onClose;
 
   /**
    * I-2: what the user is actually approving. Built ONLY from the authenticated
@@ -909,12 +1016,119 @@ export function ShisoModal({
     });
   };
 
+  /**
+   * C1.7 S3: the full-page presentation gains a history rail beside the SAME
+   * chat engine. The compact presentation keeps its original single-column DOM
+   * exactly; only the full-page shell adds the rail + main column.
+   */
+  const workspaceFrame = (children: ReactNode) => isFullPage ? (
+    <div className="kc-shiso-workspace-shell">
+      <aside className="kc-shiso-rail-shell">
+        <header className="kc-shiso-global-head">
+          <div className="kc-shiso-brand-lockup" aria-label="The Kitchen Codex">
+            <KitchenCodexMark size={34} variant="compact" decorative />
+            <span className="kc-shiso-brand-name">THE KITCHEN CODEX<sup>®</sup></span>
+          </div>
+        </header>
+        {conversationHistory !== undefined && <ShisoHistoryRail {...conversationHistory} />}
+      </aside>
+      <div className="kc-shiso-workspace-main">{children}</div>
+    </div>
+  ) : (
+    <div className="w-full max-w-3xl h-[85vh] bg-[#0C0C0C] border border-white/10 rounded-2xl flex flex-col overflow-hidden">{children}</div>
+  );
+
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="w-full max-w-3xl h-[85vh] bg-[#0C0C0C] border border-white/10 rounded-2xl flex flex-col overflow-hidden">
+    <div className={isFullPage
+      ? 'kc-shiso-workspace fixed inset-0 z-[60] bg-[var(--bg-root,#0C0C0C)]'
+      : 'fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4'}>
+      {workspaceFrame(<>
+        {isFullPage ? (
+          <header className="kc-shiso-conversation-head">
+            <span className="kc-shiso-conversation-avatar kc-shiso-workspace-mark"><ShisoAvatar form="full" state={avatarState} variant={avatarVariant} /></span>
+            <div className="kc-shiso-workspace-titles">
+              <p className="kc-shiso-eyebrow">The Kitchen Codex · Companion</p>
+              <h1 className="kc-shiso-workspace-title font-serif">{creationMode ? 'Create with SHISO' : 'Chat with SHISO'}</h1>
+              <p className="kc-shiso-workspace-context">
+                {creationMode
+                  ? 'Recipe creation · editable draft · nothing is saved until you choose'
+                  : recipeContext === null
+                  ? 'General conversation'
+                  : `Context: ${recipeContext.title}`}
+                {settings !== undefined ? ' · kept on this device' : ''}
+              </p>
+            </div>
+            <div className="kc-shiso-workspace-actions">
+              <button
+                type="button"
+                className="kc-shiso-back-to-vault"
+                onClick={backToVault}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    backToVault();
+                  }
+                }}
+                aria-label="Back to My Recipe Vault"
+                title="Back to My Recipe Vault"
+                data-testid="shiso-back-to-vault"
+              >
+                <ArrowLeft className="w-4 h-4" aria-hidden="true" />
+                <span>Back to My Recipe Vault</span>
+              </button>
+              {/* Same engine, same provider: switch the SHISO entry source in
+                  place. The separate Create with SHISO modal is untouched. */}
+              {creationMode ? (
+                <button
+                  type="button"
+                  onClick={() => shiso.open('global')}
+                  aria-label="Return to SHISO chat"
+                  title="Return to chat"
+                  className="kc-shiso-ws-create"
+                  data-testid="shiso-workspace-chat-entry"
+                >
+                  <MessageCircle className="w-4 h-4" aria-hidden="true" />
+                  <span className="kc-shiso-ws-create-label">Chat</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => shiso.open('create')}
+                  aria-label="Create a recipe with SHISO"
+                  title="Create a recipe with SHISO"
+                  className="kc-shiso-ws-create"
+                  data-testid="shiso-workspace-create-entry"
+                >
+                  <ChefHat className="w-4 h-4" aria-hidden="true" />
+                  <span className="kc-shiso-ws-create-label">Create recipe</span>
+                </button>
+              )}
+              {onReturnToCompact !== undefined && (
+                <button
+                  type="button"
+                  onClick={onReturnToCompact}
+                  aria-label="Return to compact chat"
+                  title="Compact chat"
+                  className="kc-shiso-ws-btn"
+                >
+                  <Minimize2 className="w-4 h-4" />
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label="Close SHISO workspace"
+                title="Close workspace"
+                className="kc-shiso-ws-btn"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </header>
+        ) : (
         <header className="flex items-center justify-between px-5 py-3 border-b border-white/10">
           <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-amber-400" />
+            <ShisoAvatar form="compact" state={avatarState} className="kc-shiso-compact-avatar" />
             <div>
               <h2 className="text-sm font-bold text-gray-100">{creationMode ? 'Create with Shiso' : 'Chat with Shiso'}</h2>
               <p className="text-[11px] text-gray-500">
@@ -927,20 +1141,36 @@ export function ShisoModal({
               </p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close Shiso"
-            className="p-1.5 rounded-lg text-gray-400 hover:text-gray-100 hover:bg-white/5"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-1">
+            {onExpandToWorkspace !== undefined && (
+              <button
+                type="button"
+                onClick={onExpandToWorkspace}
+                aria-label="Open full SHISO workspace"
+                title="Open full workspace"
+                className="p-1.5 rounded-lg text-gray-400 hover:text-gray-100 hover:bg-white/5"
+              >
+                <Maximize2 className="w-4 h-4" />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close Shiso"
+              className="p-1.5 rounded-lg text-gray-400 hover:text-gray-100 hover:bg-white/5"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </header>
+        )}
 
-        <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+        <div ref={scrollRef} className={isFullPage
+          ? 'kc-shiso-workspace-thread flex-1 overflow-y-auto'
+          : 'flex-1 overflow-y-auto px-5 py-4 space-y-4'}>
           {entries.length === 0 && (
-            <div className="text-center py-10">
-              <Sparkles className="w-8 h-8 text-amber-400/60 mx-auto mb-3" />
+            <div data-shiso-empty="true" className="text-center py-10">
+              <div className="kc-shiso-empty-avatar"><ShisoAvatar form="full" state="idle" variant="gesture" /></div>
               <p className="text-sm text-gray-300">{creationMode ? 'Tell Shiso what recipe you want to create.' : 'Ask Shiso about your recipes, nutrition or cooking.'}</p>
               <p className="text-xs text-gray-500 mt-2">
                 {creationMode ? 'You can refine the same draft over multiple turns, review and edit it, then save explicitly.' : 'Shiso looks things up in your authenticated data before answering.'}
@@ -951,13 +1181,14 @@ export function ShisoModal({
           {entries.map((entry) => (
             <div key={entry.key} className={entry.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
               <div
+                data-shiso-bubble={entry.role}
                 className={
                   entry.role === 'user'
                     ? 'max-w-[85%] px-3.5 py-2.5 rounded-2xl rounded-br-md bg-amber-500 text-black text-sm whitespace-pre-wrap'
                     : 'max-w-[90%] px-3.5 py-2.5 rounded-2xl rounded-bl-md bg-[#141414] border border-white/10 text-gray-200 text-sm whitespace-pre-wrap'
                 }
               >
-                {entry.text}
+                {entry.role === 'assistant' ? <ShisoMarkdown text={entry.text} /> : entry.text}
                 {entry.tools.length > 0 && (
                   <div className="mt-2 pt-2 border-t border-white/10 flex flex-wrap gap-1.5">
                     {entry.tools.map((tool) => (
@@ -975,11 +1206,44 @@ export function ShisoModal({
             </div>
           ))}
 
+          {/* S6: rich recipe results reuse the approved Signature Recipe Card
+              as-is. It is display-only; editing and save stay on the existing
+              review controls and explicit Vault path below. */}
+          {recipeResultDraft !== null && createdProvenance && (
+            <section data-testid="shiso-recipe-result" aria-label="Recipe result" className="kc-shiso-recipe-result">
+              <div className="kc-shiso-recipe-result-head">
+                <ShisoAvatar form="compact" state="success" className="shrink-0" />
+                <div className="min-w-0">
+                  <p className="kc-shiso-recipe-result-kicker">Recipe result · reviewed draft</p>
+                  <p className="kc-shiso-recipe-result-note">Read-only Signature Recipe Card. Nothing is saved until you choose Save to Vault.</p>
+                </div>
+              </div>
+              <SignatureRecipeCard draft={recipeResultDraft} provenance={createdProvenance} />
+            </section>
+          )}
+
           {busy && (
             <div className="flex justify-start">
-              <div role="status" aria-live="polite" data-testid="shiso-progress" className="px-3.5 py-2.5 rounded-2xl rounded-bl-md bg-[#141414] border border-amber-500/20 text-gray-300 text-sm">
-                <span className="font-semibold text-amber-200">{status ?? (creationMode ? 'Shiso is working on your recipe…' : 'Shiso is thinking…')}</span>
-                {!creationMode && <span className="block text-[11px] text-gray-400 mt-0.5">Using only the context and tools this request needs. Results are not saved.</span>}
+              <div role="status" aria-live="polite" data-testid="shiso-progress" data-shiso-bubble="progress" className="flex items-start gap-2.5 px-3.5 py-2.5 rounded-2xl rounded-bl-md bg-[#141414] border border-amber-500/20 text-gray-300 text-sm">
+                <ShisoAvatar form="compact" state={avatarState} className="kc-shiso-progress-avatar shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <span className="font-semibold text-amber-200">{status ?? (creationMode ? 'Shiso is working on your recipe…' : 'Shiso is thinking…')}</span>
+                  {progressSteps.length > 0 && (
+                    <ol data-testid="shiso-progress-steps" className="kc-shiso-progress-steps">
+                      {progressSteps.map((step, index) => (
+                        <li key={`${step.kind}-${step.step}-${index}`}>
+                          <span className="kc-shiso-progress-index" aria-hidden="true">{index + 1}</span>
+                          <span>
+                            {step.kind === 'provider'
+                              ? 'Provider request'
+                              : `Tool · ${(step.tool ?? 'tool').replace(/_/g, ' ')}${step.ok === true ? ' (succeeded)' : step.ok === false ? ' (failed)' : ''}`}
+                          </span>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                  {!creationMode && <span className="block text-[11px] text-gray-400 mt-0.5">Using only the context and tools this request needs. Results are not saved.</span>}
+                </div>
               </div>
             </div>
           )}
@@ -1047,7 +1311,7 @@ export function ShisoModal({
               </label>
               <p className="text-[10px] text-gray-500">Nutrition is not generated or verified here. The draft remains local until an explicit save.</p>
               <div className="flex flex-wrap items-center gap-2">
-                <button type="button" data-testid="shiso-created-save" disabled={createdSaveBusy || busy} onClick={() => void saveCreatedDraftNow()} className="rounded-lg bg-teal-500/20 border border-teal-400/40 px-3 py-1.5 text-xs font-semibold text-teal-100 disabled:opacity-40">{createdSaveBusy ? 'Saving…' : 'Save to Vault'}</button>
+                <button type="button" data-testid="shiso-created-save" disabled={createdSaveBusy || busy} onClick={() => void saveCreatedDraftNow()} className="kc-shiso-created-save rounded-lg px-3 py-1.5 text-xs font-semibold disabled:opacity-40">{createdSaveBusy ? 'Saving…' : 'Save to Vault'}</button>
                 <button type="button" disabled={!priorCreatedDraft || busy || createdSaveBusy} onClick={() => {
                   if (!priorCreatedDraft) return;
                   setCreatedDraft(priorCreatedDraft.draft);
@@ -1258,7 +1522,9 @@ export function ShisoModal({
           )}
         </div>
 
-        <footer className="border-t border-white/10 px-5 py-3">
+        <footer className={isFullPage
+          ? 'kc-shiso-workspace-composer border-t px-5 py-3'
+          : 'border-t border-white/10 px-5 py-3'}>
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -1275,11 +1541,23 @@ export function ShisoModal({
                   void send();
                 }
               }}
-              rows={2}
+              rows={1}
               placeholder={creationMode ? 'Describe the recipe, or request a change to this draft…' : 'Ask Shiso…'}
               disabled={createdSaveBusy || conversationLoading}
               className="flex-1 px-3 py-2 text-sm bg-[#141414] border border-white/10 rounded-xl text-gray-200 placeholder:text-gray-600 focus:outline-none focus:border-amber-500 resize-none disabled:opacity-50"
             />
+            {busy && (
+              <button
+                type="button"
+                data-testid="shiso-stop"
+                onClick={stop}
+                aria-label="Stop the current turn"
+                className="kc-shiso-stop px-3 py-2 rounded-xl flex items-center gap-1.5 text-sm font-semibold"
+              >
+                <Square className="w-3.5 h-3.5" />
+                Stop
+              </button>
+            )}
             <button
               type="submit"
               disabled={createdSaveBusy || conversationLoading || draft.trim().length === 0}
@@ -1295,7 +1573,7 @@ export function ShisoModal({
               : "Shiso can change this recipe's working copy and nutrition review. Nothing reaches your Vault until an explicit Save."}
           </p>
         </footer>
-      </div>
+      </>)}
     </div>
   );
 }
