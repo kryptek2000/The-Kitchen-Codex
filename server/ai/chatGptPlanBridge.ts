@@ -257,7 +257,17 @@ async function bridgeRequest(
  * from the provider catalog route: it never throws and never spends provider
  * usage. A disconnected or unentitled account yields an explicit empty cache.
  */
-export async function refreshChatGptPlanCatalog(): Promise<void> {
+export async function refreshChatGptPlanCatalog(options: { maxAgeMs?: number } = {}): Promise<void> {
+  const maxAgeMs = options.maxAgeMs;
+  if (
+    typeof maxAgeMs === 'number' &&
+    Number.isFinite(maxAgeMs) &&
+    maxAgeMs >= 0 &&
+    cache.fetchedAt > 0 &&
+    Date.now() - cache.fetchedAt <= maxAgeMs
+  ) {
+    return;
+  }
   if (!isChatGptPlanBridgeConfigured()) {
     cache = { models: [], connected: false, planEnabled: false, activeAccountKey: null, fetchedAt: 0 };
     return;

@@ -58,6 +58,26 @@ describe("generatedDraftToObsidianRecipe (v0.7 2A) — save adaptation", () => {
     expect(md).not.toContain("imported");
   });
 
+  it("preserves preparation, optional flags, and step timers through save", () => {
+    const input = draft();
+    input.ingredients = [
+      { amount: 4, unit: "", name: "chicken thighs", preparation: "boneless", optional: true },
+      { name: "salt" },
+    ];
+    input.steps = [
+      { text: "Sear the chicken.", timerMinutes: 10 },
+      { text: "Rest and serve." },
+    ];
+    const recipe = generatedDraftToObsidianRecipe({ draft: input, provenance: PROVENANCE });
+    expect(recipe.ingredients[0].note).toBe("boneless");
+    expect(recipe.instructions[0].timerMinutes).toBe(10);
+    const md = serializeRecipeToObsidianMarkdown(recipe);
+    expect(md).toContain("(optional)");
+    expect(md).toContain("boneless");
+    expect(md).toMatch(/10\s*(?:minutes|mins|min)/i);
+    expect(md).not.toContain("source: http");
+  });
+
   it("never generates ingredient wikilinks", () => {
     const recipe = generatedDraftToObsidianRecipe({ draft: draft(), provenance: PROVENANCE });
     for (const ing of recipe.ingredients) {

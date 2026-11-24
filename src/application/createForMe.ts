@@ -21,7 +21,7 @@ import type { GeneratedRecipeDraft, GeneratedRecipeProvenance } from '../schema/
 import { normalizeCanonicalRecipe } from '../schema/recipeValidator';
 import { canonicalToObsidianRecipe } from '../schema/legacyAdapter';
 import { resolveNewRecipeVaultPath, resolveRecipeVaultPath, toVaultRelativePath } from '../core/vaultPath';
-import { serializeRecipeToObsidianMarkdown } from '../utils/markdownParser';
+import { extractTimerMinutes, serializeRecipeToObsidianMarkdown } from '../utils/markdownParser';
 import { saveRecipeWithVaultAdapter } from './vaultRecipe';
 
 export interface GeneratedRecipeSaveInput {
@@ -79,6 +79,7 @@ export function generatedDraftToObsidianRecipe(input: GeneratedRecipeSaveInput):
         ing.unit || '',
         ing.name,
         ing.preparation || '',
+        ing.optional ? '(optional)' : '',
       ].filter(Boolean).join(' ');
       return {
         raw: parts.trim() || ing.name,
@@ -90,10 +91,24 @@ export function generatedDraftToObsidianRecipe(input: GeneratedRecipeSaveInput):
         optional: ing.optional ? true : undefined,
       };
     }),
-    instructions: draft.steps.map((step) => ({
-      text: step.text,
-      timerMinutes: step.timerMinutes ?? undefined,
-    })),
+    instructions: draft.steps.map((step) => {
+      const timer = step.timerMinutes;
+      let text = step.text.trim();
+      // The shared Markdown serializer stores instructions as prose, not a
+      // separate timer field. Preserve the generated timer by including it in the
+      // saved instruction only when the text does not already carry the same
+      // timer. This keeps the generated save path lossless without changing the
+      // general Recipe Editor or serializer.
+      if (timer !== undefined && timer !== null && Number.isFinite(timer) && timer > 0) {
+        if (extractTimerMinutes(text) !== timer) {
+          text = `${text.replace(/[.\s]+$/, '')} (${timer} min)`;
+        }
+      }
+      return {
+        text,
+        timerMinutes: timer ?? undefined,
+      };
+    }),
   });
 
   const recipe = canonicalToObsidianRecipe(canonical);

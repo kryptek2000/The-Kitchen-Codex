@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { renderToString } from "react-dom/server";
-import { CreateForMeModal, CreateForMeDraftView, CreateForMeError } from "../../src/components/CreateForMeModal.js";
+import { CreateForMeModal, CreateForMeDraftView, CreateForMeError, createForMeErrorMessage } from "../../src/components/CreateForMeModal.js";
+import { CreateRecipeClientError } from "../../src/utils/createForMe.js";
 import type { NetworkAdapter } from "../../src/application/adapters/NetworkAdapter.js";
 import type { GeneratedRecipeDraft } from "../../src/schema/generatedRecipe.js";
 
@@ -17,7 +18,7 @@ const draft: GeneratedRecipeDraft = {
 describe("Create for Me modal (v0.7 2A)", () => {
   it("initial state shows the prompt entry point and a Generate action, no key input", () => {
     const html = render(<CreateForMeModal isOpen network={{} as unknown as NetworkAdapter} onClose={() => {}} onSaveRecipe={async () => {}} />);
-    expect(html).toContain("Create for Me");
+    expect(html).toContain("Create with SHISO");
     expect(html).toContain("Prompt");
     expect(html).toContain("Generate");
     // Constraint inputs exist, but NEVER a password/secret/key field.
@@ -55,6 +56,27 @@ describe("Create for Me modal (v0.7 2A)", () => {
     expect(html).toContain("generate a recipe right now");
     expect(html).not.toContain("gemini-api-key");
     expect(html).not.toContain("Bearer");
+  });
+
+  it("renders specific native ChatGPT plan failure guidance", () => {
+    expect(
+      createForMeErrorMessage(
+        new CreateRecipeClientError(
+          503,
+          "ChatGPT plan is selected for recipe creation, but it is not connected or its plan usage is unavailable. No other provider was used.",
+          "CHATGPT_PLAN_UNAVAILABLE",
+        ),
+      ),
+    ).toMatch(/not connected/);
+    expect(
+      createForMeErrorMessage(
+        new CreateRecipeClientError(
+          502,
+          "ChatGPT plan returned a recipe draft that could not be validated. Nothing was saved; no other provider was used.",
+          "CHATGPT_PLAN_INVALID_RESPONSE",
+        ),
+      ),
+    ).toMatch(/could not be validated/);
   });
 
   it("renders the generating state text while a request is in flight", () => {

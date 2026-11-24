@@ -428,9 +428,9 @@ export function ChatGptSubscriptionPanel({
             OAuth runs in your system browser. Access, refresh, and ID tokens stay only in trusted
             Electron main-process memory for this session. They are never exposed to the React
             renderer, written to disk, or stored in the Recipe Vault. Sign-in is required again
-            after the application restarts. Plain-text ChatGPT plan requests and Shiso conversation
-            are supported; structured recipe and nutrition operations are not yet enabled for this
-            connection.
+            after the application restarts. Plain-text ChatGPT plan requests, Shiso conversation,
+            and Create for Me recipe drafts are supported. Structured nutrition, metadata recovery,
+            web search, and general structured-output operations are not enabled for this connection.
           </p>
         </div>
 

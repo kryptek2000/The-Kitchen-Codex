@@ -238,6 +238,50 @@ export function validateUserTextSelection(
   return modelId ? { providerId: registered.provider.id, modelId } : { providerId: registered.provider.id };
 }
 
+/**
+ * True when the request explicitly selects the native ChatGPT plan for the
+ * dedicated Create for Me plain-text adapter. A server-managed pin always wins;
+ * a disconnected/unavailable account is still considered "selected" so
+ * Create for Me can return a clear reconnect error instead of the generic
+ * no-capable-provider message.
+ */
+export function isNativePlanRecipeSelection(userSelection?: SelectionInput): boolean {
+  const coerced = coerceSelectionInput(userSelection);
+  const meta = coerced.metadata;
+  if (coerced.invalid || !coerced.explicit || !meta) return false;
+  if (meta.providerId !== CHATGPT_PLAN_PROVIDER_ID) return false;
+  if (meta.credentialSource !== "native_plan") return false;
+  if (!meta.modelId) return false;
+  return getTextSelection().selectionMode === "server_default";
+}
+
+/**
+ * Resolves the exact request-scoped native ChatGPT plan candidate for the
+ * dedicated Create for Me adapter. It reuses the same account/model validation as
+ * SHISO conversation and returns null when the account/model is unavailable.
+ * This does NOT advertise structured output or change the generic provider
+ * capability gates.
+ */
+export function resolveNativePlanRecipeCandidate(
+  userSelection?: SelectionInput,
+  regs: RegisteredProvider[] = getRegisteredProviders()
+): AiCandidate | null {
+  if (!isNativePlanRecipeSelection(userSelection)) return null;
+  const meta = coerceSelectionInput(userSelection).metadata;
+  if (!meta) return null;
+  const validated = validateUserTextSelection(meta, regs, "native_plan");
+  if (!validated?.modelId) return null;
+  const provider = createChatGptPlanProvider(meta.accountKey);
+  if (!provider) return null;
+  return {
+    provider,
+    model: validated.modelId,
+    credentialSource: "native_plan",
+    singleAttempt: true,
+    terminalOnFailure: true,
+  };
+}
+
 /** True when a user-selected TEXT (provider, modelId) satisfies an operation's capability. */
 export function userTextSelectionMatchesOperation(
   registered: RegisteredProvider,

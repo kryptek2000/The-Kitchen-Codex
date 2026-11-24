@@ -78,6 +78,8 @@ import {
 import {
   generateRecipeDraftOnServer,
   isRecipeGenerationNotVerifiedSelection,
+  ChatGptPlanRecipeUnavailableError,
+  ChatGptPlanRecipeInvalidDraftError,
   CreateRecipeValidationError,
 } from "./createRecipe.js";
 import {
@@ -2715,13 +2717,42 @@ export function createApp(opts: CreateAppOptions): express.Express {
         });
       }
 
-      const result = await generateRecipeDraftOnServer(req.body as any, { userSelection, signal: cancellation.signal });
+      const result = await generateRecipeDraftOnServer(req.body as any, {
+        userSelection,
+        signal: cancellation.signal,
+        // Bounded, non-sensitive phase timing for Create for Me. The callback
+        // receives durations/outcome/provider/model only — never prompts, recipe
+        // content, raw responses, tokens, or bridge secrets.
+        onTiming: (timing) => {
+          console.info(`[create-for-me] timing ${JSON.stringify(timing)}`);
+        },
+      });
       if (cancellation.signal.aborted || res.destroyed || res.writableEnded) return;
       return res.json(result);
     } catch (error: any) {
       if (cancellation.signal.aborted || res.destroyed || res.writableEnded) return;
       if (error instanceof CreateRecipeValidationError || error?.name === "CreateRecipeValidationError") {
         return res.status(400).json({ error: error?.message || "Invalid generation request.", code: "INVALID_REQUEST" });
+      }
+      if (
+        error instanceof ChatGptPlanRecipeUnavailableError ||
+        error?.code === "CHATGPT_PLAN_UNAVAILABLE"
+      ) {
+        return res.status(503).json({
+          error:
+            "ChatGPT plan is selected for recipe creation, but it is not connected or its plan usage is unavailable. Reconnect the account in AI Studio → ChatGPT plan. No other provider was used.",
+          code: "CHATGPT_PLAN_UNAVAILABLE",
+        });
+      }
+      if (
+        error instanceof ChatGptPlanRecipeInvalidDraftError ||
+        error?.code === "CHATGPT_PLAN_INVALID_RESPONSE"
+      ) {
+        return res.status(502).json({
+          error:
+            "ChatGPT plan returned a recipe draft that could not be validated. Nothing was saved; no other provider was used.",
+          code: "CHATGPT_PLAN_INVALID_RESPONSE",
+        });
       }
       if (error?.code === "UNSUPPORTED_CAPABILITY") {
         return res.status(503).json({

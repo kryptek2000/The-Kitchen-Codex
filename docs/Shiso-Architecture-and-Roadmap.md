@@ -15,7 +15,7 @@ inventories. This document reconciles their intent without merging PR #11.
 
 ---
 
-## SHISO-C1.5 — ChatGPT Plan as Default Text AI (implemented, live acceptance pending)
+## SHISO-C1.5 — ChatGPT Plan as Default Text AI (merged / installed via PR #64)
 
 The native desktop can now use an eligible connected ChatGPT plan as the local
 Default Text AI. The choice is a non-secret SettingsAdapter preference, separate
@@ -25,6 +25,23 @@ loopback bridge to the trusted Electron session; structured nutrition, metadata,
 search are not claimed. A disconnected/expired/unentitled account fails closed
 with a reconnect state and never falls back to Gemini or a paid API provider.
 See [`SHISO-C1.5-ChatGPT-Plan-Default-Text-AI.md`](./SHISO-C1.5-ChatGPT-Plan-Default-Text-AI.md).
+
+---
+
+## SHISO-C1.6 — ChatGPT-Powered Create for Me (implemented, integration pending; F1 presentation/latency)
+
+Create for Me can generate an editable recipe draft through the native ChatGPT
+plan Default Text AI. This is a dedicated plain-text strict-JSON adapter checked
+against the existing generated-recipe schema and normalization; general
+structured-output capability remains false. A server-managed pin still wins, the
+native response is bounded and fully validated, and a failure is terminal with
+no Gemini/API-key fallback. The result remains an unsaved Generated Draft until
+explicit Save. See
+[`SHISO-C1.6-ChatGPT-Create-for-Me.md`](./SHISO-C1.6-ChatGPT-Create-for-Me.md)
+and
+[`SHISO-C1.6-F1-Draft-Presentation-and-Latency.md`](./SHISO-C1.6-F1-Draft-Presentation-and-Latency.md)
+for the Signature Edition draft editor, responsive layout, save-field
+preservation, bounded phase timing, and the catalog-freshness optimization.
 
 ---
 
