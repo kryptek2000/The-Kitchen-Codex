@@ -183,8 +183,10 @@ describe('S2 — workspace and compact modal share one engine', () => {
     expect(workspace).toContain('presentation="fullpage"');
     expect(workspace).not.toMatch(/useState|runShisoConversationTurn|saveWorkingRecipe/);
     const app = readFileSync(join(root, 'src/App.tsx'), 'utf8');
-    expect(app).toContain('isOpen={shiso.isOpen && !isShisoWorkspaceOpen}');
-    expect(app).toContain('isOpen={isShisoWorkspaceOpen}');
+    expect(app).toContain('isOpen={shiso.isOpen}');
+    expect(app).toContain("presentation={isShisoWorkspaceOpen ? 'fullpage' : 'modal'}");
+    expect((app.match(/<ShisoModal\b/g) ?? []).length).toBe(1);
+    expect(app).not.toContain('<ShisoWorkspace');
     expect(app).toContain('onBackToVault={returnToRecipeVault}');
   });
 });

@@ -8,8 +8,6 @@
  */
 import { describe, it, expect, beforeAll, afterEach } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { useState } from 'react';
 
 import { ShisoModal, type ShisoModalProps } from '../../src/components/ShisoModal';
@@ -19,6 +17,7 @@ import { hydrateAiSelections } from '../../src/application/aiSelection';
 import type { NetworkAdapter } from '../../src/application/adapters/NetworkAdapter';
 import type { SettingsAdapter } from '../../src/application/adapters/SettingsAdapter';
 import {
+  clearShisoConversation,
   loadShisoConversation,
   saveShisoConversation,
 } from '../../src/application/shisoConversationPersistence';
@@ -244,11 +243,31 @@ describe('S4/S5 — visible Stop, Retry, and honest progress', () => {
     pending.resolve(reply('done'));
   });
 
-  it('guards every transcript save path with deletion suppression', () => {
-    const source = readFileSync(join(process.cwd(), 'src/components/ShisoModal.tsx'), 'utf8');
-    const saves = source.match(/saveShisoConversation\(/g) ?? [];
-    const guards = source.match(/suppressedPersistKeys\?\.includes\(/g) ?? [];
-    expect(saves.length).toBe(4);
-    expect(guards.length).toBeGreaterThanOrEqual(4);
+  it('tombstones deleted keys while allowing a new conversation to persist', async () => {
+    const settings = memorySettings();
+    await saveShisoConversation(settings, 'global:deleted', {
+      messages: [{ role: 'user', text: 'old message' }],
+      entries: [{ key: 'u1', role: 'user', text: 'old message', tools: [] }],
+      findings: [],
+      nextSeq: 1,
+    });
+
+    await clearShisoConversation(settings, 'global:deleted');
+    // This represents a late React persistence effect from the deleted surface.
+    await saveShisoConversation(settings, 'global:deleted', {
+      messages: [{ role: 'user', text: 'stale late write' }],
+      entries: [{ key: 'u2', role: 'user', text: 'stale late write', tools: [] }],
+      findings: [],
+      nextSeq: 2,
+    });
+    expect(await loadShisoConversation(settings, 'global:deleted')).toBeNull();
+
+    await saveShisoConversation(settings, 'global:new', {
+      messages: [{ role: 'user', text: 'new message' }],
+      entries: [{ key: 'u1', role: 'user', text: 'new message', tools: [] }],
+      findings: [],
+      nextSeq: 1,
+    });
+    expect((await loadShisoConversation(settings, 'global:new'))?.messages[0]?.text).toBe('new message');
   });
 });

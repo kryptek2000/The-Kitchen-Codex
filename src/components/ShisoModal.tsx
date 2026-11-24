@@ -123,8 +123,6 @@ export interface ShisoModalProps {
   readonly onBackToVault?: () => void;
   /** C1.7 S3: resume a different stored conversation in this same engine. */
   readonly activeConversationKeyOverride?: string | null;
-  /** C1.7 S3: keys already deleted must never be recreated by a late save. */
-  readonly suppressedPersistKeys?: readonly string[];
   /** C1.7 S3: refresh metadata after a local conversation write. */
   readonly onConversationsChanged?: () => void;
   /** C1.7 S3: history rail state and actions; full-page presentation only. */
@@ -173,7 +171,6 @@ export function ShisoModal({
   onReturnToCompact,
   onBackToVault,
   activeConversationKeyOverride = null,
-  suppressedPersistKeys,
   onConversationsChanged,
   conversationHistory,
 }: ShisoModalProps) {
@@ -275,7 +272,7 @@ export function ShisoModal({
     shisoRef.current.clearSaveAuthorization();
 
     const previousKey = loadedConversationKeyRef.current;
-    if (settings !== undefined && previousKey !== null && previousKey !== conversationKey && !suppressedPersistKeys?.includes(previousKey)) {
+    if (settings !== undefined && previousKey !== null && previousKey !== conversationKey) {
       void saveShisoConversation(settings, previousKey, {
         messages: conversationRef.current.messages,
         entries: entriesRef.current,
@@ -338,17 +335,16 @@ export function ShisoModal({
   // no credentials, save grants, or proposal capabilities.
   useEffect(() => {
     if (settings === undefined || loadedConversationKeyRef.current !== conversationKey) return;
-    if (suppressedPersistKeys?.includes(conversationKey)) return;
     void saveShisoConversation(settings, conversationKey, {
       messages: conversation.messages,
       entries,
       findings: conversation.findings,
       nextSeq: seqRef.current,
     }).then(() => onConversationsChanged?.());
-  }, [conversation, entries, settings, conversationKey, suppressedPersistKeys, onConversationsChanged]);
+  }, [conversation, entries, settings, conversationKey, onConversationsChanged]);
 
   useEffect(() => () => {
-    if (settings !== undefined && loadedConversationKeyRef.current === conversationKey && !suppressedPersistKeys?.includes(conversationKey)) {
+    if (settings !== undefined && loadedConversationKeyRef.current === conversationKey) {
       void saveShisoConversation(settings, conversationKey, {
         messages: conversationRef.current.messages,
         entries: entriesRef.current,
@@ -369,7 +365,7 @@ export function ShisoModal({
       setStatus(null);
       setProgressSteps([]);
       shisoRef.current.clearSaveAuthorization();
-      if (settings !== undefined && loadedConversationKeyRef.current === conversationKey && !suppressedPersistKeys?.includes(conversationKey)) {
+      if (settings !== undefined && loadedConversationKeyRef.current === conversationKey) {
         void saveShisoConversation(settings, conversationKey, {
           messages: conversationRef.current.messages,
           entries: entriesRef.current,
