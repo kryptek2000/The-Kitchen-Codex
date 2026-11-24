@@ -260,6 +260,41 @@ describe('PR #66 conversation integrity at the App composition boundary', () => 
     expect(screen.getByText('Reply: global after roundtrip')).toBeTruthy();
   }, 30000);
 
+  it('Note B: deleting a retained global conversation from a recipe rail replaces its active override', async () => {
+    const recipe = getStarterVaultRecipes().find((item) => item.title === 'Classic Roman Carbonara');
+    expect(recipe).toBeTruthy();
+
+    const first = renderApp();
+    await send('global conversation retained off context');
+    await openFullWorkspace();
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete General conversation' }));
+    fireEvent.click(await screen.findByTestId('shiso-history-delete-confirm'));
+    await waitFor(() => expect(screen.queryByText('global conversation retained off context')).toBeNull());
+    await send('global conversation to delete off context');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to My Recipe Vault' }));
+    await waitFor(() => expect(screen.queryByRole('heading', { level: 1, name: /SHISO/ })).toBeNull());
+    await openRecipe(recipe!);
+    await openFullWorkspace();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete New conversation' }));
+    fireEvent.click(await screen.findByTestId('shiso-history-delete-confirm'));
+    await waitFor(() => expect(screen.queryByText('global conversation to delete off context')).toBeNull());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to My Recipe Vault' }));
+    await waitFor(() => expect(screen.queryByRole('heading', { level: 1, name: /SHISO/ })).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'Chat with SHISO' }));
+    await screen.findByRole('heading', { level: 1, name: /SHISO/ });
+    await send('message after off-context deletion');
+
+    first.unmount();
+    renderApp();
+    await openFullWorkspace();
+    expect(await screen.findByText('message after off-context deletion')).toBeTruthy();
+    expect(screen.getByText('Reply: message after off-context deletion')).toBeTruthy();
+    expect(screen.queryByText('global conversation to delete off context')).toBeNull();
+  }, 30000);
+
   it('B2: New conversation clears the displayed recipe transcript and persists in that recipe context', async () => {
     const recipe = getStarterVaultRecipes().find((item) => item.title === 'Classic Roman Carbonara');
     expect(recipe).toBeTruthy();

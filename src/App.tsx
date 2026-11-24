@@ -341,6 +341,15 @@ function conversationKeyBelongsToContext(conversationKey: string, contextKey: st
   return conversationKey === contextKey || conversationKey.startsWith(`${contextKey}::`);
 }
 
+function conversationContextKey(conversationKey: string): string {
+  if (conversationKey === 'global' || conversationKey.startsWith('global:')) return 'global';
+  if (conversationKey === 'create' || conversationKey.startsWith('create:')) return 'create';
+  if (conversationKey.startsWith('recipe:')) {
+    return `recipe:${conversationKey.slice('recipe:'.length).split('::', 1)[0]}`;
+  }
+  return conversationKey;
+}
+
 /**
  * Reads a connected vault handle through the application VaultAdapter
  * orchestration, then runs the legacy ASSET-ONLY pass (images) as a second,
@@ -939,7 +948,12 @@ export default function App() {
         setActiveConversationKeyOverride(nextKey);
         rememberActiveConversation(nextKey);
       } else if (key === activeConversationKeyOverride) {
-        rememberActiveConversation(null);
+        // The deleted key may be retained for another context. Replace both
+        // pointer layers with a fresh key in that context so returning there
+        // cannot resume a tombstoned transcript or fall back to one.
+        const nextKey = defaultNewConversationKey(conversationContextKey(key));
+        setActiveConversationKeyOverride(nextKey);
+        rememberActiveConversation(nextKey);
       }
       await refreshConversations();
     } catch {
