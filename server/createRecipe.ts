@@ -8,11 +8,18 @@
  * an explicit request that returns a DRAFT.
  *
  * INVARIANTS:
- *   - Schema-constrained structured output ONLY. It NEVER falls back to plain
- *     text, json_object mode, regex extraction, or best-effort JSON parsing.
- *   - Candidate selection is capability-aware via the provider registry
- *     (requires structuredOutput + recipeGeneration); no provider is hard-coded
- *     and no capability downgrade is performed.
+ *   - Standard providers use schema-constrained structured output ONLY. They
+ *     NEVER fall back to plain text, json_object mode, regex extraction, or
+ *     best-effort JSON parsing.
+ *   - SHISO-C1.6 adds ONE explicit exception: the native ChatGPT plan, which
+ *     exposes no structured-output capability, uses a dedicated plain-text
+ *     adapter. It requests exactly one strict JSON object, bounds and parses it,
+ *     then validates the complete result through the SAME generated-recipe
+ *     schema/normalization before returning. It does not advertise general
+ *     structured output and never falls back.
+ *   - Candidate selection for standard providers remains capability-aware via
+ *     the provider registry (requires structuredOutput + recipeGeneration); no
+ *     provider is hard-coded and no capability downgrade is performed.
  *   - The generation prompt is TRANSIENT. It is never logged, persisted, placed
  *     in diagnostics, saved to Markdown/frontmatter, or returned to the UI.
  *   - The returned draft is normalized + revalidated before leaving the server
@@ -30,9 +37,17 @@ import { throwIfCallerCancelled } from "./ai/providerErrors.js";
 import type { AiCandidate, RegisteredProvider } from "./ai/provider.js";
 import { isOpenRouterRecipeGenerationAuthorized, verifiedOpenRouterProfile } from "./ai/openRouterCatalog.js";
 import { getRecipeGenerationVerification } from "./ai/capabilityVerificationStore.js";
-import { coerceSelectionInput } from "./ai/effectiveSelection.js";
+import {
+  coerceSelectionInput,
+  isNativePlanRecipeSelection,
+  resolveNativePlanRecipeCandidate,
+} from "./ai/effectiveSelection.js";
 import type { SelectionInput } from "./ai/effectiveSelection.js";
 import { culinaryExpertiseBlock } from "./ai/culinaryExpertise.js";
+import {
+  getChatGptPlanConnectionSnapshot,
+  refreshChatGptPlanCatalog,
+} from "./ai/chatGptPlanBridge.js";
 import {
   buildGeneratedRecipeSchema,
   normalizeGeneratedRecipeDraft,
@@ -62,6 +77,50 @@ export interface GeneratedRecipeResult {
   provenance: GeneratedRecipeProvenance;
 }
 
+/** Non-sensitive Create for Me phase timing. Never includes prompt/recipe content. */
+export type CreateRecipeTimingOutcome =
+  | "draft"
+  | "invalid_response"
+  | "unavailable"
+  | "cancelled"
+  | "unsupported"
+  | "provider_error";
+
+export interface CreateRecipeTiming {
+  totalMs: number;
+  validationMs: number;
+  catalogMs?: number;
+  catalogRefreshed?: boolean;
+  selectionMs?: number;
+  providerMs?: number;
+  parseMs?: number;
+  outcome: CreateRecipeTimingOutcome;
+  nativePlan: boolean;
+  providerId?: string;
+  model?: string;
+}
+
+/** Bounded ceiling for a native ChatGPT recipe response before JSON parsing. */
+export const MAX_NATIVE_PLAN_RECIPE_RESPONSE_CHARS = 200_000;
+
+/** The native ChatGPT plan session/model is unavailable; no fallback occurred. */
+export class ChatGptPlanRecipeUnavailableError extends Error {
+  readonly code = "CHATGPT_PLAN_UNAVAILABLE" as const;
+  constructor(message = "ChatGPT plan is selected for recipe creation, but it is not connected, its plan usage is unavailable, or the selected model is unavailable. Reconnect the account in AI Studio → ChatGPT plan. No other provider was used.") {
+    super(message);
+    this.name = "ChatGptPlanRecipeUnavailableError";
+  }
+}
+
+/** The native ChatGPT plan returned text that is not a valid recipe draft. */
+export class ChatGptPlanRecipeInvalidDraftError extends Error {
+  readonly code = "CHATGPT_PLAN_INVALID_RESPONSE" as const;
+  constructor(message = "ChatGPT plan returned a recipe draft that could not be validated. Nothing was saved; no other provider was used.") {
+    super(message);
+    this.name = "ChatGptPlanRecipeInvalidDraftError";
+  }
+}
+
 /** Test seam overrides (tests inject deterministic candidates/registry). */
 export interface CreateRecipeOverrides {
   candidates?: AiCandidate[];
@@ -70,6 +129,8 @@ export interface CreateRecipeOverrides {
   userSelection?: SelectionInput;
   /** Request-scoped client cancellation; never persisted or reused. */
   signal?: AbortSignal;
+  /** Optional server-side phase timing sink; never receives content/secrets. */
+  onTiming?: (timing: CreateRecipeTiming) => void;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -190,6 +251,124 @@ Rules:
 - The schema requires title, ingredients, and steps; provide those truthfully.`;
 
 /**
+ * Appends the dedicated native ChatGPT response contract and the complete
+ * existing generated-recipe schema to the standard prompt. The response remains
+ * plain text to the provider; the server parses and validates it strictly.
+ */
+export function buildNativePlanRecipePrompt(
+  req: CreateRecipeRequest,
+  schema: ReturnType<typeof buildGeneratedRecipeSchema>,
+): string {
+  return `${buildCreateRecipePrompt(req)}
+
+STRICT RESPONSE FORMAT:
+Return exactly ONE JSON object and no Markdown, code fence, prose, or commentary.
+The object MUST match this JSON schema exactly. Unknown fields are rejected.
+${JSON.stringify(schema)}`;
+}
+
+/**
+ * Parses the native ChatGPT plan's plain-text response with explicit bounds and
+ * full existing draft validation. No prose extraction, code-fence stripping, or
+ * best-effort repair is allowed.
+ */
+export function parseNativePlanRecipeDraft(text: unknown): GeneratedRecipeDraft {
+  if (typeof text !== "string") throw new ChatGptPlanRecipeInvalidDraftError();
+  const trimmed = text.trim();
+  if (!trimmed || trimmed.length > MAX_NATIVE_PLAN_RECIPE_RESPONSE_CHARS) {
+    throw new ChatGptPlanRecipeInvalidDraftError();
+  }
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    throw new ChatGptPlanRecipeInvalidDraftError();
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(trimmed);
+  } catch {
+    throw new ChatGptPlanRecipeInvalidDraftError();
+  }
+  try {
+    return normalizeGeneratedRecipeDraft(raw);
+  } catch {
+    throw new ChatGptPlanRecipeInvalidDraftError();
+  }
+}
+
+/**
+ * Runs the dedicated native ChatGPT plan recipe adapter. It is plain-text only:
+ * the request asks for strict JSON, the response is bounded/parsed/validated by
+ * the existing draft schema, and any failure is terminal. It never falls back.
+ */
+async function generateNativePlanRecipeDraft(
+  candidate: AiCandidate,
+  req: CreateRecipeRequest,
+  schema: ReturnType<typeof buildGeneratedRecipeSchema>,
+  signal?: AbortSignal,
+  phase: { providerMs?: number; parseMs?: number } = {},
+): Promise<GeneratedRecipeDraft> {
+  throwIfCallerCancelled(signal, { providerId: "chatgpt-plan", model: candidate.model });
+  let text: string;
+  const providerStarted = performance.now();
+  try {
+    text = await candidate.provider.generate(buildNativePlanRecipePrompt(req, schema), {
+      model: candidate.model,
+      temperature: 0.4,
+      ...(signal ? { signal } : {}),
+    });
+  } catch (error) {
+    phase.providerMs = performance.now() - providerStarted;
+    if (error instanceof ChatGptPlanRecipeInvalidDraftError) throw error;
+    if (error instanceof ProviderOperationError) {
+      if (error.code === "INVALID_RESPONSE") throw new ChatGptPlanRecipeInvalidDraftError();
+      if (error.code === "AUTH" || error.code === "UNAVAILABLE" || error.code === "UNSUPPORTED_CAPABILITY") {
+        throw new ChatGptPlanRecipeUnavailableError();
+      }
+    }
+    throw error;
+  }
+  phase.providerMs = performance.now() - providerStarted;
+  throwIfCallerCancelled(signal, { providerId: "chatgpt-plan", model: candidate.model });
+  const parseStarted = performance.now();
+  try {
+    return parseNativePlanRecipeDraft(text);
+  } finally {
+    phase.parseMs = performance.now() - parseStarted;
+  }
+}
+
+function classifyCreateRecipeTimingOutcome(error: unknown): CreateRecipeTimingOutcome {
+  if (error instanceof ChatGptPlanRecipeUnavailableError) return "unavailable";
+  if (error instanceof ChatGptPlanRecipeInvalidDraftError) return "invalid_response";
+  if (error instanceof ProviderOperationError) {
+    if (error.code === "CANCELLED") return "cancelled";
+    if (error.code === "UNSUPPORTED_CAPABILITY") return "unsupported";
+  }
+  return "provider_error";
+}
+
+function emitCreateRecipeTiming(
+  sink: CreateRecipeOverrides["onTiming"],
+  start: number,
+  timing: Omit<CreateRecipeTiming, "totalMs">,
+): void {
+  if (!sink) return;
+  try {
+    sink({
+      ...timing,
+      totalMs: Math.max(0, Math.round(performance.now() - start)),
+      validationMs: Math.max(0, Math.round(timing.validationMs)),
+      ...(timing.catalogMs !== undefined ? { catalogMs: Math.max(0, Math.round(timing.catalogMs)) } : {}),
+      ...(timing.catalogRefreshed !== undefined ? { catalogRefreshed: timing.catalogRefreshed } : {}),
+      ...(timing.selectionMs !== undefined ? { selectionMs: Math.max(0, Math.round(timing.selectionMs)) } : {}),
+      ...(timing.providerMs !== undefined ? { providerMs: Math.max(0, Math.round(timing.providerMs)) } : {}),
+      ...(timing.parseMs !== undefined ? { parseMs: Math.max(0, Math.round(timing.parseMs)) } : {}),
+    });
+  } catch {
+    // Timing must never affect generation or error handling.
+  }
+}
+
+/**
  * Builds the generation prompt: fixed system instructions + clearly delimited user
  * content + explicit constraints. The delimiter is for readability only — the real
  * integrity boundaries are the schema-constrained provider output and server-side
@@ -299,29 +478,113 @@ export async function generateRecipeDraftOnServer(
   requestInput: CreateRecipeRequest,
   overrides: CreateRecipeOverrides = {}
 ): Promise<GeneratedRecipeResult> {
+  const started = performance.now();
   const validated = validateCreateRecipeRequest(requestInput);
+  const validationMs = performance.now() - started;
   if (!validated.ok || !validated.value) {
     throw new CreateRecipeValidationError(validated.errors);
   }
   const req = validated.value;
-  const prompt = buildCreateRecipePrompt(req);
   const schema = buildGeneratedRecipeSchema();
-  const candidates = overrides.candidates ?? resolveRoleCandidates("createRecipe", undefined, overrides.userSelection);
-  const registry = overrides.registry;
   throwIfCallerCancelled(overrides.signal);
 
-  const { result, providerId, model } = await runWithAiFallback<GeneratedRecipeDraft>({
-    candidates,
-    requiredCapabilities: ["structuredOutput", "recipeGeneration"],
-    registry,
-    run: (candidate: AiCandidate) => generateDraftForCandidate(candidate, prompt, schema, overrides.signal),
-  });
-  throwIfCallerCancelled(overrides.signal, { providerId, model });
+  // SHISO-C1.6: the native ChatGPT plan uses a dedicated plain-text strict-JSON
+  // adapter. It is selected only by an explicit native-plan Text AI choice with
+  // no server-managed pin. The generic structured-output capability remains
+  // false; this path validates the complete result against the same schema and
+  // never falls back to another provider.
+  if (isNativePlanRecipeSelection(overrides.userSelection)) {
+    let catalogMs: number | undefined;
+    let catalogRefreshed: boolean | undefined;
+    let selectionMs: number | undefined;
+    const phase: { providerMs?: number; parseMs?: number } = {};
+    try {
+      // The native model/account truth is bridge-owned. Refresh immediately before
+      // validation so a cold/stale catalog can never make a connected account look
+      // unavailable (or authorize a disconnected one). A very recent catalog from
+      // the AI Studio panel is reused; the native execution path still performs its
+      // own account/model revalidation before inference.
+      const catalogBefore = getChatGptPlanConnectionSnapshot().fetchedAt;
+      const catalogStarted = performance.now();
+      await refreshChatGptPlanCatalog({ maxAgeMs: 15_000 });
+      catalogMs = performance.now() - catalogStarted;
+      catalogRefreshed = getChatGptPlanConnectionSnapshot().fetchedAt !== catalogBefore;
+      const selectionStarted = performance.now();
+      const nativeCandidate = resolveNativePlanRecipeCandidate(overrides.userSelection, overrides.registry);
+      selectionMs = performance.now() - selectionStarted;
+      if (!nativeCandidate) throw new ChatGptPlanRecipeUnavailableError();
+      const draft = await generateNativePlanRecipeDraft(
+        nativeCandidate,
+        req,
+        schema,
+        overrides.signal,
+        phase,
+      );
+      emitCreateRecipeTiming(overrides.onTiming, started, {
+        validationMs,
+        catalogMs,
+        catalogRefreshed,
+        selectionMs,
+        ...(phase.providerMs !== undefined ? { providerMs: phase.providerMs } : {}),
+        ...(phase.parseMs !== undefined ? { parseMs: phase.parseMs } : {}),
+        outcome: "draft",
+        nativePlan: true,
+        providerId: nativeCandidate.provider.id,
+        model: nativeCandidate.model,
+      });
+      return {
+        draft,
+        provenance: { generated: true, providerId: nativeCandidate.provider.id, model: nativeCandidate.model },
+      };
+    } catch (error) {
+      emitCreateRecipeTiming(overrides.onTiming, started, {
+        validationMs,
+        ...(catalogMs !== undefined ? { catalogMs } : {}),
+        ...(catalogRefreshed !== undefined ? { catalogRefreshed } : {}),
+        ...(selectionMs !== undefined ? { selectionMs } : {}),
+        ...(phase.providerMs !== undefined ? { providerMs: phase.providerMs } : {}),
+        ...(phase.parseMs !== undefined ? { parseMs: phase.parseMs } : {}),
+        outcome: classifyCreateRecipeTimingOutcome(error),
+        nativePlan: true,
+      });
+      throw error;
+    }
+  }
 
-  return {
-    draft: result,
-    provenance: { generated: true, providerId, model },
-  };
+  const prompt = buildCreateRecipePrompt(req);
+  const candidates = overrides.candidates ?? resolveRoleCandidates("createRecipe", undefined, overrides.userSelection);
+  const registry = overrides.registry;
+  const providerStarted = performance.now();
+
+  try {
+    const { result, providerId, model } = await runWithAiFallback<GeneratedRecipeDraft>({
+      candidates,
+      requiredCapabilities: ["structuredOutput", "recipeGeneration"],
+      registry,
+      run: (candidate: AiCandidate) => generateDraftForCandidate(candidate, prompt, schema, overrides.signal),
+    });
+    throwIfCallerCancelled(overrides.signal, { providerId, model });
+    emitCreateRecipeTiming(overrides.onTiming, started, {
+      validationMs,
+      providerMs: performance.now() - providerStarted,
+      outcome: "draft",
+      nativePlan: false,
+      providerId,
+      model,
+    });
+    return {
+      draft: result,
+      provenance: { generated: true, providerId, model },
+    };
+  } catch (error) {
+    emitCreateRecipeTiming(overrides.onTiming, started, {
+      validationMs,
+      providerMs: performance.now() - providerStarted,
+      outcome: classifyCreateRecipeTimingOutcome(error),
+      nativePlan: false,
+    });
+    throw error;
+  }
 }
 
 export type { GeneratedIngredient, GeneratedStep };

@@ -67,6 +67,40 @@ describe("GeneratedRecipeDraft — schema + validation (v0.7 Phase 2A)", () => {
     expect(v.errors.some((e) => e.includes("sourceUrl"))).toBe(true);
   });
 
+  it("rejects an unexpected property inside an ingredient object", () => {
+    const draft = validDraft({
+      ingredients: [{ name: "chicken", secretNote: "must not normalize away" }],
+    });
+    const v = validateGeneratedRecipeDraft(draft);
+    expect(v.passed).toBe(false);
+    expect(v.errors.some((e) => e.includes("secretNote") && e.includes("ingredients[0]"))).toBe(true);
+    expect(() => normalizeGeneratedRecipeDraft(draft)).toThrow(/secretNote/);
+  });
+
+  it("rejects an unexpected property inside a step object", () => {
+    const draft = validDraft({
+      steps: [{ text: "Cook the rice.", hidden: "must not normalize away" }],
+    });
+    const v = validateGeneratedRecipeDraft(draft);
+    expect(v.passed).toBe(false);
+    expect(v.errors.some((e) => e.includes("hidden") && e.includes("steps[0]"))).toBe(true);
+    expect(() => normalizeGeneratedRecipeDraft(draft)).toThrow(/hidden/);
+  });
+
+  it("preserves every legitimate ingredient and step field", () => {
+    const draft = validDraft({
+      ingredients: [
+        { amount: 2, unit: "cup", name: "rice", preparation: "rinsed", optional: true },
+      ],
+      steps: [{ text: "Cook the rice.", timerMinutes: 20 }],
+    });
+    expect(validateGeneratedRecipeDraft(draft).passed).toBe(true);
+    expect(normalizeGeneratedRecipeDraft(draft)).toMatchObject({
+      ingredients: [{ amount: 2, unit: "cup", name: "rice", preparation: "rinsed", optional: true }],
+      steps: [{ text: "Cook the rice.", timerMinutes: 20 }],
+    });
+  });
+
   it("rejects missing title", () => {
     expect(validateGeneratedRecipeDraft(validDraft({ title: "" })).passed).toBe(false);
   });

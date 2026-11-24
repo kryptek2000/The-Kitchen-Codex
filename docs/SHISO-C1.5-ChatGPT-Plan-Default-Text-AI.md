@@ -3,6 +3,8 @@
 **Status:** IMPLEMENTED / DETERMINISTIC TESTS PASSING / LIVE OWNER CONNECTION PENDING
 **Base:** `main` after PR #63 (`bc711e58fec875aab4986f95f1f42263f3c80c85`)
 **Scope:** native desktop Text AI selection and SHISO provider routing
+**Extended by:** SHISO-C1.6 — dedicated Create for Me plain-text recipe drafts
+([`SHISO-C1.6-ChatGPT-Create-for-Me.md`](./SHISO-C1.6-ChatGPT-Create-for-Me.md)).
 
 ---
 
@@ -62,7 +64,8 @@ Electron main process
 | Plain Responses text | **Supported** |
 | SHISO conversation (validated JSON-over-text decision) | **Supported** |
 | Structured output / `generateStructured` | **Not claimed** |
-| Recipe generation | **Not claimed** |
+| Create for Me recipe drafts | **Supported through the dedicated C1.6 plain-text adapter** |
+| General structured recipe generation | **Not claimed** |
 | Web search | **Not claimed** |
 | Image generation | **Separate; not routed here** |
 

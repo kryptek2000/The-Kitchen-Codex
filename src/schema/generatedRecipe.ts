@@ -205,9 +205,19 @@ export interface GeneratedRecipeValidation {
   errors: string[];
 }
 
+/** The only fields a generated ingredient object may carry. */
+const ALLOWED_INGREDIENT_FIELDS = new Set([
+  'amount', 'unit', 'name', 'preparation', 'optional',
+]);
+
+/** The only fields a generated step object may carry. */
+const ALLOWED_STEP_FIELDS = new Set(['text', 'timerMinutes']);
+
 /**
  * Validates raw provider output shape. Extra/unrecognized properties are rejected
- * (no shape drift), and required fields must be present and non-empty.
+ * at every level (no shape drift), and required fields must be present and
+ * non-empty. The nested-field checks are part of the authoritative validator
+ * used before normalization, so unexpected fields can never be silently dropped.
  */
 export function validateGeneratedRecipeDraft(raw: unknown): GeneratedRecipeValidation {
   const errors: string[] = [];
@@ -248,6 +258,11 @@ export function validateGeneratedRecipeDraft(raw: unknown): GeneratedRecipeValid
         return;
       }
       if (isPlainObject(ing)) {
+        for (const key of Object.keys(ing)) {
+          if (!ALLOWED_INGREDIENT_FIELDS.has(key)) {
+            errors.push(`Unexpected field "${key}" in ingredients[${i}]`);
+          }
+        }
         if (!isString(ing['name']) || !(ing['name'] as string).trim()) {
           errors.push(`ingredients[${i}].name is required`);
         }
@@ -264,8 +279,15 @@ export function validateGeneratedRecipeDraft(raw: unknown): GeneratedRecipeValid
         errors.push(`steps[${i}] must be a string or object`);
         return;
       }
-      if (isPlainObject(step) && (!isString(step['text']) || !(step['text'] as string).trim())) {
-        errors.push(`steps[${i}].text is required`);
+      if (isPlainObject(step)) {
+        for (const key of Object.keys(step)) {
+          if (!ALLOWED_STEP_FIELDS.has(key)) {
+            errors.push(`Unexpected field "${key}" in steps[${i}]`);
+          }
+        }
+        if (!isString(step['text']) || !(step['text'] as string).trim()) {
+          errors.push(`steps[${i}].text is required`);
+        }
       }
     });
   }

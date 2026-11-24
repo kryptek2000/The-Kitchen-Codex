@@ -177,10 +177,13 @@ The owner must personally complete browser authorization and plan consent.
   reaches the Electron session through a loopback bridge that never exposes an
   OAuth token. See
   [`SHISO-C1.5-ChatGPT-Plan-Default-Text-AI.md`](./SHISO-C1.5-ChatGPT-Plan-Default-Text-AI.md).
-- Plain Responses text and SHISO conversation are supported. Structured
-  recipe generation, structured nutrition, recipe interpretation, web search,
-  and Advanced Nutrition are **not** claimed as supported; their output
-  contracts still need separate validation.
+- Plain Responses text, SHISO conversation, and Create for Me are supported.
+  Create for Me uses a dedicated strict-JSON plain-text request, bounded parsing,
+  and the existing generated-recipe schema/normalization; it does not advertise
+  general structured-output capability. Structured nutrition, metadata recovery,
+  general structured recipe generation, web search, and Advanced Nutrition are
+  **not** claimed as supported; their output contracts still need separate
+  validation.
 - Image generation is excluded by the documented flow.
 - No live ChatGPT authorization or subscription usage was performed by the
   implementation/audit environment.
