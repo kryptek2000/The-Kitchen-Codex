@@ -23,7 +23,8 @@ export interface AdvancedNutritionBundleView {
   readonly session: AdvancedNutritionSession | null;
   /** Fixed, bounded failure code (never a raw error message). */
   readonly failureCode: string | null;
-  readonly load: () => void;
+  /** Resolves to the exact authenticated session installed by this load. */
+  readonly load: () => Promise<AdvancedNutritionSession | null>;
 }
 
 interface BundleState {
@@ -38,7 +39,7 @@ export function useAdvancedNutritionBundle(
   loader: () => Promise<RuntimeBundleResult>
 ): AdvancedNutritionBundleView {
   const [state, setState] = useState<BundleState>(IDLE_STATE);
-  const inFlight = useRef<Promise<void> | null>(null);
+  const inFlight = useRef<Promise<AdvancedNutritionSession | null> | null>(null);
   const generation = useRef(0);
   const mounted = useRef(true);
 
@@ -49,18 +50,18 @@ export function useAdvancedNutritionBundle(
     };
   }, []);
 
-  const load = useCallback(() => {
-    if (inFlight.current) return;
+  const load = useCallback((): Promise<AdvancedNutritionSession | null> => {
+    if (inFlight.current) return inFlight.current;
     const gen = generation.current + 1;
     generation.current = gen;
     setState({ status: 'loading', session: null, failureCode: null });
 
-    const promise: Promise<void> = loader()
+    const promise: Promise<AdvancedNutritionSession | null> = loader()
       .then((result) => {
-        if (gen !== generation.current || !mounted.current) return;
+        if (gen !== generation.current || !mounted.current) return null;
         if (result.ok) {
           setState({ status: 'ready', session: result.session, failureCode: null });
-          return;
+          return result.session;
         }
         const failure = (result as { readonly failure: { readonly code: string } }).failure;
         setState({
@@ -68,16 +69,19 @@ export function useAdvancedNutritionBundle(
           session: null,
           failureCode: failure.code,
         });
+        return null;
       })
       .catch(() => {
-        if (gen !== generation.current || !mounted.current) return;
+        if (gen !== generation.current || !mounted.current) return null;
         setState({ status: 'failed', session: null, failureCode: 'validation_error' });
+        return null;
       })
       .finally(() => {
         if (inFlight.current === promise) inFlight.current = null;
       });
 
     inFlight.current = promise;
+    return promise;
   }, [loader]);
 
   return {

@@ -94,8 +94,8 @@ describe('SHISO AI-estimated nutrition resolution', () => {
         nutrition: { available: true, summary: null, unresolvedCount: 0, needsAmountCount: 0, needsMatchCount: 0, unsavedWorkingReview: true },
         recipeKey: 'guacamole', sessionIdentity: 'session' },
     }, initialShisoConversation(), 'yes apply');
-    expect(result.message).toContain('No additional source corrections were applied');
-    expect(result.message).toContain('Nothing was saved to Vault');
+    expect(result.message).toContain('0 source corrections verified');
+    expect(result.message).toContain('No successful Vault-save observation was recorded');
     expect(result.message).not.toContain('I applied the two fixes');
     expect(tools.runAiNutrition).not.toHaveBeenCalled();
     expect(tools.applyIngredientEdits).not.toHaveBeenCalled();

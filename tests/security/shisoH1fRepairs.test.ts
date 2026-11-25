@@ -152,17 +152,33 @@ describe('H-1F Test A — nutrition from the recipe main page', () => {
   it('the analysis capability LOADS the catalogue through the existing controller', async () => {
     const f = makeFixture(session, ENCHILADAS);
     let loads = 0;
+    let liveSession: AdvancedNutritionSession | null = null;
+    const base = ctxFor(f, null);
     const obs = await executeShisoTool(
       { tool: 'run_nutrition_analysis' },
-      ctxFor(f, null, { loadBundle: async () => { loads += 1; } }),
+      {
+        ...base,
+        get session() { return liveSession; },
+        loadBundle: async () => { loads += 1; liveSession = session; },
+        runAnalysis: async () => ({
+          ok: true,
+          analyzed: true,
+          summary: '12 of 12 ingredient lines resolved',
+          matched: 12,
+          needs_amount: 0,
+          needs_match: 0,
+          total_lines: 12,
+          unresolved_line_refs: [],
+          preview_state: 'complete' as const,
+        }),
+      },
     );
     expect(loads).toBe(1);
     expect(obs.ok).toBe(true);
     if (!obs.ok) return;
-    expect(obs.data['started_bundle_load']).toBe(true);
-    expect(obs.data['analysis_ran']).toBe(false);
-    // It must NOT pretend nutrition exists.
-    expect(String(obs.data['honesty_note'])).toMatch(/no nutrition has been calculated/i);
+    expect(obs.data['analyzed']).toBe(true);
+    expect(obs.data['matched']).toBe(12);
+    expect(String(obs.data['honesty_note'])).toMatch(/source nutrition preview/i);
   });
 
   it('without a loader it still tells the user the single manual action', async () => {
@@ -444,7 +460,7 @@ describe('H-1F — security invariants', () => {
     // apply_nutrition_corrections, save_working_recipe). They still cannot reach
     // the filesystem, a shell, or the vault directly — every change is performed
     // by the application owner of that state.
-    expect(SHISO_TOOL_NAMES.length).toBe(13);
+    expect(SHISO_TOOL_NAMES.length).toBe(19);
     for (const forbidden of [
       'generate_image', 'create_image', 'edit_image', 'write_vault', 'save_recipe',
       'run_command', 'read_file', 'exec', 'spawn', 'apply_proposal', 'dispatch_action',

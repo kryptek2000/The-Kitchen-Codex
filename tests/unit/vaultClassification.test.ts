@@ -115,6 +115,37 @@ describe('vault markdown classification (Phase 4C3A)', () => {
     expect(result.note.title).toBe('Garlic Guide');
   });
 
+  it('classifies a title-only recipe without treating the fallback tag as sufficient', () => {
+    const result = classifyVaultMarkdown({
+      path: 'Existing Recipe.md',
+      name: 'Existing Recipe.md',
+      markdown: '# Existing Recipe\n',
+    });
+    expect(result.kind).toBe('recipe');
+    if (result.kind !== 'recipe') return;
+    expect(result.recipe.title).toBe('Existing Recipe');
+    expect(result.recipe.ingredients).toHaveLength(0);
+    expect(result.recipe.instructions).toHaveLength(0);
+  });
+
+  it('keeps an untagged plain Markdown note out of the recipe inventory', () => {
+    const result = classifyVaultMarkdown({
+      path: 'Notes/Plain.md',
+      name: 'Plain.md',
+      markdown: 'plain note\n',
+    });
+    expect(result.kind).toBe('note');
+  });
+
+  it('classifies a recipe-shaped frontmatter document before sections are added', () => {
+    const result = classifyVaultMarkdown({
+      path: 'Recipes/Carbonara.md',
+      name: 'Carbonara.md',
+      markdown: `---\ntitle: Carbonara\ncuisine: Italian\ncategory: Dinner\nservings: 4\n---\n`,
+    });
+    expect(result.kind).toBe('recipe');
+  });
+
   it('classifies Meal Plan.md exactly as before (never as a recipe)', () => {
     const result = classifyVaultMarkdown({ path: 'Meal Plan.md', name: 'Meal Plan.md', markdown: MEAL_PLAN_MD });
     expect(result.kind).toBe('mealPlan');

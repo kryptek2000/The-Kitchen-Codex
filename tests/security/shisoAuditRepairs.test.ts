@@ -234,11 +234,12 @@ describe('F-1 — the advertised capability surface is truthful', () => {
     // a faked household conversion, so the F-1 property is unchanged.
     expect(SHISO_TOOL_NAMES).toContain('apply_ingredient_edits');
     expect(SHISO_TOOL_NAMES).toContain('apply_nutrition_corrections');
+    expect(SHISO_TOOL_NAMES).toContain('apply_nutrition_review');
     expect(SHISO_TOOL_NAMES).toContain('save_working_recipe');
     // SINC-3 added complete_nutrition: an owner-delegated completion pipeline
     // that prepares proposals in the unsaved review and never applies or saves.
     expect(SHISO_TOOL_NAMES).toContain('complete_nutrition');
-    expect(SHISO_TOOL_NAMES).toHaveLength(13);
+    expect(SHISO_TOOL_NAMES).toHaveLength(19);
   });
 });
 

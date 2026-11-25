@@ -60,7 +60,7 @@ describe('phase 4.5B controller — lifecycle', () => {
   it('one explicit load starts loading and installs one session', async () => {
     const loader = vi.fn(async () => success());
     const { result } = renderHook(() => useAdvancedNutritionBundle(loader));
-    act(() => result.current.load());
+    act(() => { void result.current.load(); });
     expect(result.current.status).toBe('loading');
     await waitFor(() => expect(result.current.status).toBe('ready'));
     expect(result.current.session).not.toBeNull();
@@ -72,9 +72,9 @@ describe('phase 4.5B controller — lifecycle', () => {
     const loader = vi.fn(() => pending.promise);
     const { result } = renderHook(() => useAdvancedNutritionBundle(loader));
     act(() => {
-      result.current.load();
-      result.current.load();
-      result.current.load();
+      void result.current.load();
+      void result.current.load();
+      void result.current.load();
     });
     expect(loader).toHaveBeenCalledTimes(1);
     await act(async () => {
@@ -91,12 +91,12 @@ describe('phase 4.5B controller — lifecycle', () => {
       .mockResolvedValueOnce(failure('artifact_digest_mismatch'))
       .mockResolvedValueOnce(success());
     const { result } = renderHook(() => useAdvancedNutritionBundle(loader));
-    act(() => result.current.load());
+    act(() => { void result.current.load(); });
     await waitFor(() => expect(result.current.status).toBe('failed'));
     expect(result.current.session).toBeNull();
     expect(result.current.failureCode).toBe('artifact_digest_mismatch');
 
-    act(() => result.current.load());
+    act(() => { void result.current.load(); });
     await waitFor(() => expect(result.current.status).toBe('ready'));
     expect(result.current.session).not.toBeNull();
     expect(loader).toHaveBeenCalledTimes(2);
@@ -105,7 +105,7 @@ describe('phase 4.5B controller — lifecycle', () => {
   it('maps an unsupported runtime to the unsupported state', async () => {
     const loader = vi.fn(async () => failure('unsupported_runtime'));
     const { result } = renderHook(() => useAdvancedNutritionBundle(loader));
-    act(() => result.current.load());
+    act(() => { void result.current.load(); });
     await waitFor(() => expect(result.current.status).toBe('unsupported'));
     expect(result.current.session).toBeNull();
   });
@@ -115,7 +115,7 @@ describe('phase 4.5B controller — lifecycle', () => {
       throw new Error('boom');
     });
     const { result } = renderHook(() => useAdvancedNutritionBundle(loader));
-    act(() => result.current.load());
+    act(() => { void result.current.load(); });
     await waitFor(() => expect(result.current.status).toBe('failed'));
     expect(result.current.session).toBeNull();
     expect(result.current.failureCode).toBe('validation_error');
@@ -125,7 +125,7 @@ describe('phase 4.5B controller — lifecycle', () => {
     const pending = deferred<RuntimeBundleResult>();
     const loader = vi.fn(() => pending.promise);
     const { result, unmount } = renderHook(() => useAdvancedNutritionBundle(loader));
-    act(() => result.current.load());
+    act(() => { void result.current.load(); });
     unmount();
     await act(async () => {
       pending.resolve(success());
@@ -139,7 +139,7 @@ describe('phase 4.5B controller — lifecycle', () => {
     const loader = vi.fn(async () => success());
     const wrapper = ({ children }: { children: ReactNode }) => <StrictMode>{children}</StrictMode>;
     const { result } = renderHook(() => useAdvancedNutritionBundle(loader), { wrapper });
-    act(() => result.current.load());
+    act(() => { void result.current.load(); });
     await waitFor(() => expect(result.current.status).toBe('ready'));
     expect(loader).toHaveBeenCalledTimes(1);
   });

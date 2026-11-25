@@ -55,17 +55,68 @@ const SHOPPING_LIST_NAMES = [
   'shoppinglist.md',
 ] as const;
 
+/** Frontmatter fields that identify a recipe even before its sections are filled in. */
+const RECIPE_FRONTMATTER_KEYS = [
+  'cuisine',
+  'category',
+  'course',
+  'servings',
+  'difficulty',
+  'prep_time',
+  'prepTime',
+  'cook_time',
+  'cookTime',
+  'total_time',
+  'totalTime',
+  'calories',
+  'nutrition',
+  'rating',
+  'source',
+  'url',
+  'image',
+  'cover',
+  'thumbnail',
+  'heroImage',
+  'codex_nutrition',
+  'starter_id',
+  'starterId',
+] as const;
+
+function hasRecipeFrontmatter(recipe: ObsidianRecipe): boolean {
+  const frontmatter = recipe.frontmatter ?? {};
+  return RECIPE_FRONTMATTER_KEYS.some((key) => {
+    const value = frontmatter[key];
+    return value !== undefined && value !== null && value !== '';
+  });
+}
+
+function hasTitleHeading(recipe: ObsidianRecipe): boolean {
+  // A level-one title is the established minimal recipe form used by desktop
+  // onboarding and existing title-only Vault files. H2+ section headings do
+  // not qualify, so ordinary notes with no recipe shape stay notes.
+  return /^#\s+\S.*$/m.test(recipe.rawMarkdown);
+}
+
 /**
- * Recipe-vs-note heuristic, identical to the legacy scanner: a note is a recipe
- * (has ingredients/instructions) OR carries a recipe/food tag.
+ * Recipe-vs-note heuristic. The parser's `food/recipes` fallback is excluded
+ * as a signal by itself, while minimal recipe documents retain their identity
+ * through recipe frontmatter or a title heading.
  */
 function isRecipe(recipe: ObsidianRecipe): boolean {
+  // `food/recipes` is the parser's storage-namespace fallback when a note has
+  // no tags. It must not turn every untagged Markdown note into a recipe.
+  const semanticTags = recipe.tags.filter((tag) => tag.toLowerCase() !== 'food/recipes');
+  const hasSyntheticFallbackTag =
+    recipe.tags.length === 1 && recipe.tags[0].toLowerCase() === 'food/recipes';
+  const hasMinimalRecipeShape =
+    hasRecipeFrontmatter(recipe) || (hasSyntheticFallbackTag && hasTitleHeading(recipe));
   return (
     recipe.ingredients.length > 0 ||
     recipe.instructions.length > 0 ||
-    recipe.tags.some(
+    semanticTags.some(
       (t) => t.toLowerCase().includes('recipe') || t.toLowerCase().includes('food')
-    )
+    ) ||
+    hasMinimalRecipeShape
   );
 }
 

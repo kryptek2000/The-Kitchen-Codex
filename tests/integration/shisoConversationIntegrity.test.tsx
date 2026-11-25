@@ -20,10 +20,10 @@ import {
 } from '../../src/application/shisoConversationPersistence';
 
 function OpenShiso({ source = 'global' }: { readonly source?: 'global' | 'recipe' | 'create' }) {
-  const shiso = useShiso();
+  const { open } = useShiso();
   useEffect(() => {
-    shiso.open(source);
-  }, [shiso, source]);
+    open(source);
+  }, [open, source]);
   return null;
 }
 

@@ -79,6 +79,10 @@ export const SHISO_LIMITS = Object.freeze({
   maxContextChars: 12000,
   /** USDA catalog search result ceiling (the authority's own max is 100). */
   maxSearchResults: 20,
+  /** Maximum Vault recipes returned by one agent search. */
+  maxVaultSearchResults: 20,
+  /** Maximum recipe identity used by one Vault capability call. */
+  maxVaultRecipeIdChars: 240,
   /** Portion candidates returned per inspected record. */
   maxPortionCandidates: 25,
   /** Count-portion candidates returned per inspected record. */
@@ -183,6 +187,11 @@ export interface ShisoConversationContinuation {
 
 export const SHISO_TOOL_NAMES = Object.freeze([
   'get_current_recipe',
+  'get_vault_status',
+  'search_vault_recipes',
+  'get_vault_recipe',
+  'select_vault_recipe',
+  'load_usda_catalog',
   'get_nutrition_review',
   'get_branded_evidence',
   'search_usda_foods',
@@ -199,6 +208,7 @@ export const SHISO_TOOL_NAMES = Object.freeze([
   // vault directly and never carry nutrient/gram authority.
   'apply_ingredient_edits',
   'apply_nutrition_corrections',
+  'apply_nutrition_review',
   'save_working_recipe',
 ] as const);
 
@@ -213,6 +223,17 @@ export function isShisoToolName(value: unknown): value is ShisoToolName {
 /** Arguments are a closed per-tool union; unknown keys are refused whole. */
 export type ShisoToolArgs =
   | { readonly tool: 'get_current_recipe' }
+  | { readonly tool: 'get_vault_status' }
+  | {
+      /** Bounded read-only search over the active application's Vault snapshot. */
+      readonly tool: 'search_vault_recipes';
+      readonly query: string;
+      readonly field?: 'all' | 'title' | 'ingredient' | 'category' | 'metadata';
+      readonly limit?: number;
+    }
+  | { readonly tool: 'get_vault_recipe'; readonly recipe_id: string }
+  | { readonly tool: 'select_vault_recipe'; readonly recipe_id: string }
+  | { readonly tool: 'load_usda_catalog' }
   | { readonly tool: 'get_nutrition_review'; readonly include_ingredients?: boolean }
   | { readonly tool: 'get_branded_evidence' }
   | { readonly tool: 'search_usda_foods'; readonly query: string; readonly limit?: number }
@@ -292,6 +313,10 @@ export type ShisoToolArgs =
       readonly tool: 'apply_nutrition_corrections';
       /** Optional subset of ingredient lines. Absent = every actionable line. */
       readonly line_refs?: readonly string[];
+    }
+  | {
+      /** F3. Applies the application-owned SHISO review to the UNSAVED recipe. */
+      readonly tool: 'apply_nutrition_review';
     }
   | {
       /**
@@ -452,6 +477,9 @@ export type ShisoObservation = ShisoObservationOk | ShisoObservationFail;
 
 export type ShisoObservationFailureCode =
   | 'invalid_arguments'
+  | 'vault_unavailable'
+  | 'vault_recipe_not_found'
+  | 'vault_selection_rejected'
   | 'no_active_recipe'
   | 'no_nutrition_review'
   | 'unknown_line_ref'
@@ -577,8 +605,10 @@ export const SHISO_DECISION_SCHEMA: Readonly<Record<string, unknown>> = Object.f
       additionalProperties: false,
       properties: {
         query: { type: 'string' },
+        field: { type: 'string', enum: ['all', 'title', 'ingredient', 'category', 'metadata'] },
         limit: { type: 'integer' },
         fdc_id: { type: 'integer' },
+        recipe_id: { type: 'string' },
         line_ref: { type: 'string' },
         cursor: { type: 'string' },
         include_ingredients: { type: 'boolean' },

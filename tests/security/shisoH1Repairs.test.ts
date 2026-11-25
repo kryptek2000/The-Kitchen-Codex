@@ -454,7 +454,7 @@ describe('H-1 Scenario F — unsupported requests are refused truthfully', () =>
     // Still a small, closed vocabulary (H-2 added the three authorized editing
     // capabilities; SINC-3 added complete_nutrition, which prepares proposals
     // only and never applies or saves).
-    expect(SHISO_TOOL_NAMES.length).toBe(13);
+    expect(SHISO_TOOL_NAMES.length).toBe(19);
   });
 
   it('the tool dispatcher still cannot reach the filesystem or network', () => {
