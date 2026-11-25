@@ -175,7 +175,7 @@ function HostInner(props: {
         isOpen={shiso.isOpen}
         onClose={shiso.close}
         network={props.network}
-        recipe={{ title: 'SHISO Human Test — Separated Egg Batter', servings: 4, ingredients: LINES.map((l) => ({ name: l })), instructions: [] } as never}
+        recipe={{ title: 'SHISO Human Test — Separated Egg Batter', servings: 4, ingredients: LINES.map(structured), instructions: [] } as never}
         nutritionSession={session}
         nutritionRows={liveRows}
         nutritionReviewRows={reviewRows}
@@ -330,7 +330,7 @@ describe('SHISO-C1 — the user can actually reach acceptance', () => {
 
   it('SHISO investigates, proposes, and "Use this" reaches the authoritative applier', async () => {
     const { adapter, calls } = stubNetwork([
-      { ok: true, kind: 'tool_request', tool: 'investigate_ingredient_amount', args: { line_ref: butterRef }, model_invocations_used: 1, tool_calls_used: 0 },
+      { ok: true, kind: 'tool_request', tool: 'investigate_ingredient_amount', args: { tool: 'investigate_ingredient_amount', line_ref: butterRef }, model_invocations_used: 1, tool_calls_used: 0 },
       {
         ok: true,
         kind: 'reply',
