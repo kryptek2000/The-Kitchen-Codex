@@ -59,6 +59,13 @@ const SYSTEM_PROMPT = [
   "  a nutrient value.",
   "- You cannot see the recipe, the nutrition review or the USDA catalogue directly.",
   "  You see only what a tool returned.",
+  "- The active Vault is application data, not a filesystem you can browse.",
+  "  For recipe counts, searches, or recipe details, use get_vault_status,",
+  "  search_vault_recipes, and get_vault_recipe. Never infer a Vault count from",
+  "  the visible screen or from the built-in starter collection.",
+  "- After a search identifies the intended recipe, use select_vault_recipe to",
+  "  bind the next operation to that recipe. The application invalidates that",
+  "  selection when the active Vault changes.",
   "",
   "ACT WHEN THE USER ASKS — DO NOT ASK PERMISSION FOR WORK THEY ALREADY REQUESTED",
   "- If the user asks you to investigate, check, analyse, search, show, explain, compare",
@@ -83,7 +90,7 @@ const SYSTEM_PROMPT = [
   "  investigate_unresolved_ingredients ONCE rather than probing ingredients one at a",
   "  time. Prefer the batch tools whenever more than one ingredient is involved:",
   "  investigate_unresolved_ingredients for evidence, apply_nutrition_corrections to fix,",
-  "  apply_ingredient_edits for multiple recipe edits.",
+  "  apply_nutrition_review to apply the complete validated review, and apply_ingredient_edits for multiple recipe edits.",
   "- Only ask a question when the request is genuinely ambiguous about WHAT is wanted,",
   "  never about whether you are allowed to look something up or change what they asked",
   "  you to change.",
@@ -125,6 +132,10 @@ const SYSTEM_PROMPT = [
   "  when applied_count is 0, and never claim an ingredient was fixed unless it is in",
   "  `applied`. Never invent authenticated matches or portions — the application decides what",
   "  is supported and reports what is not.",
+  "- apply_nutrition_review: apply the complete application-owned Phase 4 review through",
+  "  the same trusted Apply authority used by Advanced Nutrition. It changes only the",
+  "  UNSAVED working recipe; it never saves to the Vault. Treat its observation as the",
+  "  only evidence that Apply succeeded.",
   "- save_working_recipe: saves the working copy through the normal recipe save. Call it",
   "  ONLY after the user explicitly authorizes saving ('save my changes', 'save it',",
   "  'yes save'). Never save spontaneously, and never call it just because edits exist.",
@@ -142,8 +153,9 @@ const SYSTEM_PROMPT = [
   "- USDA search requires the catalogue, but a missing USDA match or portion does not",
   "  prohibit a validated AI nutrition estimate. Use run_nutrition_analysis to prepare",
   "  estimates in the unsaved review, without editing recipe ingredient quantities.",
-  "- If Advanced Nutrition is not open or has no review, call get_capability_status ONCE if you have not",
-  "  already, then tell the user the single action that fixes it and stop.",
+  "- General SHISO owns a review after load_usda_catalog and run_nutrition_analysis; do not",
+  "  require the user to open the Advanced Nutrition screen. Call get_capability_status only",
+  "  when the application-owned review or authenticated catalogue genuinely is unavailable.",
   "- Never spend several turns rediscovering one missing prerequisite.",
   "",
   "SPEAK ABOUT INGREDIENTS BY NAME — NEVER BY INTERNAL ID",
@@ -188,7 +200,9 @@ const SYSTEM_PROMPT = [
   "  first. Manual measurement is optional unless the uncertainty makes an estimate",
   "  materially unreliable.",
   "- When the user says 'apply all', 'provide and apply all', or similar, the supported",
-  "  path is apply_nutrition_corrections: it applies every adequately supported correction",
+  "  path is apply_nutrition_review (or apply_nutrition_corrections for supported line fixes):",
+  "  apply_nutrition_review applies the validated review through the canonical authority, while",
+  "  apply_nutrition_corrections applies every adequately supported correction",
   "  in ONE deterministic operation. Do NOT invent missing identities or quantities, and do",
   "  not stall on a list of possibilities when the application can complete the work.",
   "- Proposals remain the right answer when the user should CHOOSE between options: they",
@@ -215,7 +229,7 @@ const SYSTEM_PROMPT = [
   "- Never state a gram weight, nutrient value, or food identity as fact unless a tool",
   "  result you were shown states it.",
   "- You edit ONLY through the edit capabilities: apply_ingredient_edits,",
-  "  apply_nutrition_corrections and save_working_recipe. You cannot write to the vault",
+  "  apply_nutrition_corrections, apply_nutrition_review and save_working_recipe. You cannot write to the vault",
   "  yourself; the application performs every change and every save.",
   "- If the authenticated data cannot answer the question, say exactly what is missing",
   "  and what the user could do instead. That is a good answer, not a failure.",
@@ -223,6 +237,11 @@ const SYSTEM_PROMPT = [
   "TOOLS",
   ...[
     "get_current_recipe        read the recipe the user is looking at (each ingredient carries its line_ref handle)",
+    "get_vault_status          read the authoritative active Vault recipe count and source",
+    "search_vault_recipes      search the active Vault by title, ingredient, category, or metadata",
+    "get_vault_recipe          retrieve a bounded recipe detail from the active Vault",
+    "select_vault_recipe       bind an authorized Vault recipe as the current SHISO subject",
+    "load_usda_catalog         ask the application to load its authenticated USDA catalog",
     "get_nutrition_review      read the live Advanced Nutrition review state",
     "get_branded_evidence      read accepted USDA Branded product evidence in the working review",
     "search_usda_foods         search the authenticated pinned USDA catalogue",
@@ -234,20 +253,25 @@ const SYSTEM_PROMPT = [
     "get_capability_status     say what is missing and the one action that fixes it",
     "apply_ingredient_edits    CHANGE ingredient names/amounts/units/preparation in the UNSAVED working recipe (line_ref + only the fields to change)",
     "apply_nutrition_corrections   FIX the nutrition review in one deterministic pass (authenticated matches/portions only) and recalculate",
+    "apply_nutrition_review    APPLY the complete validated nutrition review to the UNSAVED working recipe (never saves)",
     "save_working_recipe       SAVE the working recipe through the normal save path — only after the user explicitly asks to save",
   ].map((line) => `- ${line}`),
   "",
   "TOOL ARGUMENTS — EXACT JSON KEYS (never invent key names)",
   "- A tool call is {\"kind\":\"tool_request\",\"tool\":\"<name>\",\"args\":{...}}.",
   "- No arguments: get_current_recipe, get_nutrition_review, get_branded_evidence, investigate_unresolved_ingredients,",
-  "  run_nutrition_analysis, complete_nutrition, get_capability_status, save_working_recipe.",
+  "  get_vault_status, load_usda_catalog, run_nutrition_analysis, complete_nutrition, get_capability_status, apply_nutrition_review, save_working_recipe.",
   "- {\"tool\":\"investigate_ingredient_amount\",\"line_ref\":\"<from get_current_recipe>\"}",
   "- {\"tool\":\"search_usda_foods\",\"query\":\"...\"}",
   "- {\"tool\":\"inspect_usda_food\",\"fdc_id\":123}",
+  "- {\"tool\":\"search_vault_recipes\",\"query\":\"chicken\",\"field\":\"ingredient\"}",
+  "- {\"tool\":\"get_vault_recipe\",\"recipe_id\":\"<id from search_vault_recipes>\"}",
+  "- {\"tool\":\"select_vault_recipe\",\"recipe_id\":\"<id from search_vault_recipes>\"}",
   "- {\"tool\":\"apply_ingredient_edits\",\"edits\":[{\"line_ref\":\"<from get_current_recipe>\",\"new_name\":\"turkey\"}]}",
   "  Each edit object needs line_ref and AT LEAST ONE of: new_name (text), new_amount (number),",
   "  new_unit (text), new_preparation (text). Omit the fields you are not changing.",
   "- {\"tool\":\"apply_nutrition_corrections\"} (all actionable lines), optionally {\"line_refs\":[\"<ref>\"]}",
+  "- {\"tool\":\"apply_nutrition_review\"} (apply the current validated review; UNSAVED only)",
   "Copy line_ref values EXACTLY as get_current_recipe returned them. An edit with no edits array or",
   "no usable field is refused by the application and changes nothing.",
   "",
@@ -395,6 +419,16 @@ function salvageToolArgs(tool: ShisoToolName): ShisoToolArgs {
   switch (tool) {
     case 'get_current_recipe':
       return { tool };
+    case 'get_vault_status':
+      return { tool };
+    case 'search_vault_recipes':
+      return { tool, query: '', field: 'all', limit: 1 };
+    case 'get_vault_recipe':
+      return { tool, recipe_id: '' };
+    case 'select_vault_recipe':
+      return { tool, recipe_id: '' };
+    case 'load_usda_catalog':
+      return { tool };
     case 'get_nutrition_review':
       return { tool };
     case 'get_branded_evidence':
@@ -421,6 +455,8 @@ function salvageToolArgs(tool: ShisoToolName): ShisoToolArgs {
       // An explicitly EMPTY subset corrects nothing; it is never widened to
       // "apply everything" just because the request was malformed.
       return { tool, line_refs: [] };
+    case 'apply_nutrition_review':
+      return { tool };
     case 'save_working_recipe':
       return { tool };
     default:
@@ -460,6 +496,32 @@ function readToolArgs(tool: ShisoToolName, raw: unknown): ShisoToolArgs | null {
   const rec = (raw === null || typeof raw !== "object" || Array.isArray(raw) ? {} : raw) as Record<string, unknown>;
   switch (tool) {
     case 'get_current_recipe':
+      return { tool };
+    case 'get_vault_status':
+      return { tool };
+    case 'search_vault_recipes': {
+      const query = rec['query'];
+      if (typeof query !== 'string') return null;
+      const trimmed = query.trim().slice(0, 160);
+      if (trimmed.length === 0) return null;
+      const field = rec['field'];
+      const safeField = field === 'title' || field === 'ingredient' || field === 'category' || field === 'metadata'
+        ? field
+        : 'all';
+      const rawLimit = rec['limit'];
+      const limit = typeof rawLimit === 'number' && Number.isFinite(rawLimit)
+        ? Math.max(1, Math.min(SHISO_LIMITS.maxVaultSearchResults, Math.floor(rawLimit)))
+        : SHISO_LIMITS.maxVaultSearchResults;
+      return { tool, query: trimmed, field: safeField, limit };
+    }
+    case 'get_vault_recipe':
+    case 'select_vault_recipe': {
+      const recipeId = rec['recipe_id'];
+      if (typeof recipeId !== 'string') return null;
+      const trimmed = recipeId.trim().slice(0, SHISO_LIMITS.maxVaultRecipeIdChars);
+      return trimmed.length > 0 ? { tool, recipe_id: trimmed } : null;
+    }
+    case 'load_usda_catalog':
       return { tool };
     case 'get_nutrition_review':
       return {
@@ -581,6 +643,8 @@ function readToolArgs(tool: ShisoToolName, raw: unknown): ShisoToolArgs | null {
         .map((ref) => ref.trim().slice(0, 200));
       return lineRefs.length > 0 ? { tool, line_refs: lineRefs } : { tool };
     }
+    case 'apply_nutrition_review':
+      return { tool };
     case 'save_working_recipe':
       return { tool };
     default:

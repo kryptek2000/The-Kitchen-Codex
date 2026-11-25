@@ -60,10 +60,13 @@ const SHOPPING_LIST_NAMES = [
  * (has ingredients/instructions) OR carries a recipe/food tag.
  */
 function isRecipe(recipe: ObsidianRecipe): boolean {
+  // `food/recipes` is the parser's storage-namespace fallback when a note has
+  // no tags. It must not turn every untagged Markdown note into a recipe.
+  const semanticTags = recipe.tags.filter((tag) => tag.toLowerCase() !== 'food/recipes');
   return (
     recipe.ingredients.length > 0 ||
     recipe.instructions.length > 0 ||
-    recipe.tags.some(
+    semanticTags.some(
       (t) => t.toLowerCase().includes('recipe') || t.toLowerCase().includes('food')
     )
   );

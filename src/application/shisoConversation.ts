@@ -120,6 +120,14 @@ function requestsManualUsdaChoice(message: string): boolean {
   return /\b(?:use|choose|select)\b.{0,45}\bthis\s+(?:usda\s+)?(?:food|match|record)\b/i.test(message);
 }
 
+function requestsVaultCount(message: string): boolean {
+  const text = message.toLowerCase().replace(/[’']/g, '');
+  return (
+    /\bhow many\b.{0,40}\brecipes?\b/.test(text) && /\b(?:vault|saved|my)\b/.test(text) ||
+    /\b(?:recipe|recipes)\b.{0,20}\bcount\b/.test(text) && /\b(?:vault|saved|my)\b/.test(text)
+  );
+}
+
 export interface ShisoConversationState {
   readonly messages: readonly ShisoConversationMessage[];
   readonly proposals: readonly ShisoBoundProposal[];
@@ -399,10 +407,38 @@ export async function runShisoConversationTurn(
   /** Set the moment a capability reports a missing prerequisite. */
   let block: ShisoBlock | null = null;
 
+  // A Vault count is a deterministic read of the active application snapshot.
+  // It does not need a provider call and therefore cannot be confused with a
+  // stale screen count or a provider entitlement failure.
+  if (requestsVaultCount(trimmed) && deps.toolContext.vault !== undefined) {
+    if (deps.signal?.aborted) return cancelled(working, toolsUsed);
+    const result = await Promise.resolve(executeShisoTool({ tool: 'get_vault_status' }, deps.toolContext, deps.signal));
+    if (!result.ok) {
+      const failure = result as Extract<ShisoObservation, { ok: false }>;
+      return { ok: false, state: working, message: null, status: failure.message, toolsUsed };
+    }
+    if (deps.signal?.aborted) return cancelled(working, toolsUsed);
+    const count = typeof result.data['recipe_count'] === 'number' ? result.data['recipe_count'] : 0;
+    const next = recordFinding(appendShisoMessage(working, {
+      role: 'assistant',
+      text: `Your active Vault contains ${count} recipe${count === 1 ? '' : 's'}.`,
+      proposalCount: 0,
+    }), { tool: result.tool, ok: true, summary: result.summary });
+    return { ok: true, state: next, message: next.messages[next.messages.length - 1]?.text ?? null, status: null, toolsUsed: ['get_vault_status'] };
+  }
+
   // These phrases authorize preparing a nutrition estimate in the existing
   // unsaved Advanced Nutrition review. Route deterministically so they cannot
   // be misread as a recipe-edit command or spend an unnecessary chat turn.
-  if (requestsEstimatedNutrition(trimmed) && !classifySaveIntent(trimmed).authorized) {
+  // This shortcut is only valid when the application already owns an open
+  // review. From general SHISO chat, the same language must remain available to
+  // the capability workflow so SHISO can select the Vault recipe, load USDA,
+  // and initialize the review instead of failing with "no nutrition review".
+  if (
+    requestsEstimatedNutrition(trimmed) &&
+    deps.toolContext.nutrition !== null &&
+    !classifySaveIntent(trimmed).authorized
+  ) {
     if (deps.signal?.aborted) return cancelled(working, toolsUsed);
     let result: ShisoObservation;
     try {
@@ -486,7 +522,7 @@ export async function runShisoConversationTurn(
   // returns the real alternatives and leaves any choice to the established UI.
   if (
     requestsNutritionInvestigation(trimmed) &&
-    (deps.toolContext.nutrition !== null || /\b(?:nutrition|usda|ingredient)\b/i.test(trimmed)) &&
+    deps.toolContext.nutrition !== null &&
     !classifySaveIntent(trimmed).authorized
   ) {
     if (deps.signal?.aborted) return cancelled(working, toolsUsed);
@@ -622,6 +658,7 @@ export async function runShisoConversationTurn(
   const EDITING_TOOLS: ReadonlySet<string> = new Set([
     'apply_ingredient_edits',
     'apply_nutrition_corrections',
+    'apply_nutrition_review',
     'save_working_recipe',
   ]);
 
@@ -647,6 +684,37 @@ export async function runShisoConversationTurn(
         ? '\n\n**No recipe change was applied in this message.** No edit or save succeeded, so your working copy is exactly as it was.'
         : '';
     return `${lead}\n\n${body}${changeNote}`;
+  };
+
+  /**
+   * F4 — the model's final prose is never authoritative for an operation that
+   * had a failed tool observation.  Keep the failed observations alongside the
+   * successful findings and render a bounded, operation-specific account.  In
+   * particular, a failed Apply or Save must not be hidden by a provider reply
+   * such as "completed and saved".
+   */
+  const failedOperationReport = (): string | null => {
+    const failed = [...cache.values()].filter((item): item is Extract<ShisoObservation, { ok: false }> => !item.ok);
+    if (failed.length === 0) return null;
+    const failureLines = failed
+      .slice(-6)
+      .map((item, index) => `${index + 1}. **${item.tool}** — ${item.message}`)
+      .join('\n');
+    const successfulEditing = collected.filter((finding) => finding.ok && EDITING_TOOLS.has(finding.tool));
+    const attemptedEditing = toolsUsed.some((tool) => EDITING_TOOLS.has(tool));
+    const saveConfirmed = collected.some((finding) => finding.ok && finding.tool === 'save_working_recipe');
+    const applyConfirmed = collected.some((finding) => finding.ok && (finding.tool === 'apply_nutrition_corrections' || finding.tool === 'apply_nutrition_review'));
+    const stateLine = saveConfirmed
+      ? 'A successful Vault-save observation was recorded, but the failed steps above mean the overall request is only partially complete.'
+      : applyConfirmed
+        ? 'Apply was observed, but no successful Vault-save observation was recorded; nothing is confirmed as persisted.'
+        : attemptedEditing
+          ? 'No successful Apply or Vault-save observation was recorded; no recipe change is confirmed by this turn.'
+          : 'No write operation was attempted successfully in this turn.';
+    const successes = successfulEditing.length > 0
+      ? `\n\nSuccessful editing observations:\n${successfulEditing.map((finding, index) => `${index + 1}. **${finding.tool}** — ${finding.summary}`).join('\n')}`
+      : '';
+    return `I could not confirm the full requested operation. I will not report it as complete, applied, or saved.\n\nFailed observations:\n${failureLines}${successes}\n\n${stateLine}`;
   };
 
   /**
@@ -845,6 +913,15 @@ export async function runShisoConversationTurn(
       observation = executed;
       toolsUsed.push(turn.tool);
       deps.onProgress?.({ kind: 'tool', step: toolCalls, tool: turn.tool, ok: executed.ok });
+      // Selection and USDA loading are application-state transitions. Give the
+      // owning React composition one event-loop turn to commit the selected
+      // recipe/review owner before a following tool (for example
+      // run_nutrition_analysis) asks for its live ports. This is scheduling
+      // only: no timer drives capability work and no second nutrition engine is
+      // introduced.
+      if (executed.ok && (turn.tool === 'select_vault_recipe' || turn.tool === 'load_usda_catalog')) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      }
       if (turn.tool === 'apply_nutrition_corrections' && executed.ok) {
         const before = executed.data['before_resolved_count'];
         const after = executed.data['resolved_count'];
@@ -879,13 +956,22 @@ export async function runShisoConversationTurn(
     const correction = [...cache.values()].reverse().find((item) => item.tool === 'apply_nutrition_corrections');
     const correctionOnly = correction && !toolsUsed.some((tool) => tool === 'apply_ingredient_edits' || tool === 'save_working_recipe');
     const applyConfirmationWithoutAction = /^(?:yes[, ]*|please )?apply(?: (?:it|them|those|all|the corrections|the estimates|the changes))?[.!]?$/i.test(trimmed) && !toolsUsed.some(tool => EDITING_TOOLS.has(tool));
-    const text = applyConfirmationWithoutAction
+    const observedFailureText = failedOperationReport();
+    const appliedReview = [...cache.values()].reverse().find((item): item is Extract<ShisoObservation, { ok: true }> =>
+      item.ok && (item.tool === 'apply_nutrition_review' || item.tool === 'apply_nutrition_corrections'));
+    const saveObserved = [...cache.values()].some((finding): finding is Extract<ShisoObservation, { ok: true }> => finding.ok && finding.tool === 'save_working_recipe' && finding.data['saved'] === true);
+    const applyWithoutSaveText = appliedReview && !saveObserved && /\b(?:saved|persisted|written|vault)\b/i.test(turn.text ?? '')
+      ? `${appliedReview.summary} No successful Vault-save observation was recorded, so nothing is confirmed persisted.`
+      : null;
+    const text = observedFailureText
+      ?? applyWithoutSaveText
+      ?? (applyConfirmationWithoutAction
       ? 'No changes were applied to the working recipe in this turn. Suggestions are still pending. Review the accepted nutrition and use Apply; Save to Vault remains a separate action.'
       : correctionOnly
       ? correction.ok
         ? `${correction.summary} ${correction.data['applied_count'] === 0 ? 'No additional source corrections were applied. Suggestions are not validated changes; accepted AI estimates already in the review remain available.' : 'These corrections are in the unsaved review. Use Apply to update the working recipe.'} Nothing was saved to Vault.`
         : `${(correction as { message: string }).message} No nutrition correction was confirmed and nothing was saved.`
-      : typeof turn.text === 'string' ? turn.text : '';
+      : typeof turn.text === 'string' ? turn.text : '');
     if (text.length === 0) {
       return exhaustedReport('Shiso returned an empty reply.');
     }

@@ -48,6 +48,7 @@ import { sumNutrientSupplements, validateAiNutrientSupplements, type AiNutrientC
 import { NUTRIENT_REGISTRY, type NutrientId } from '../core/nutritionV2/nutrients';
 import { deriveNutritionCoverage, nutritionCoverageSummary, type EffectiveNutritionLine, type NutritionCoverage, type ShisoNutrientCoverageEntry } from '../core/shiso/nutritionCoverage';
 import type { ResearchTarget } from '../core/nutritionV2/aiResearch';
+import type { ShisoVaultCapability } from './shisoVaultCapabilities';
 
 export interface ShisoBrandedSearchOutcome {
   readonly ok: boolean;
@@ -78,6 +79,13 @@ export interface ShisoExternalResearchOutcome {
 
 /** Everything a capability may read. Supplied by the application, never the model. */
 export interface ShisoToolContext {
+  /** Application-owned, read-only Vault capabilities. Absent fails closed. */
+  readonly vault?: ShisoVaultCapability;
+  /** App-shell handoff that binds a selected capability recipe to the normal
+   * recipe/review owner. The capability itself remains read-only. */
+  readonly onVaultRecipeSelected?: ((recipeId: string) => void) | undefined;
+  /** Live status of the existing authenticated USDA bundle controller. */
+  readonly catalogueStatus?: 'idle' | 'loading' | 'ready' | 'failed' | 'unsupported';
   readonly session: AdvancedNutritionSession | null;
   readonly recipe: {
     readonly title: string;
@@ -85,6 +93,9 @@ export interface ShisoToolContext {
     readonly ingredients: ReadonlyArray<{
       readonly text: string;
       readonly name: string;
+      readonly amount?: number | null;
+      readonly unit?: string;
+      readonly preparation?: string;
       /** H-2 stable handle for edits; null when the recipe cannot be adapted. */
       readonly line_ref?: string | null;
     }>;
@@ -146,7 +157,7 @@ export interface ShisoToolContext {
    * page. Offering this lets SHISO clear the one genuine prerequisite itself
    * instead of failing and telling the user to go and do it.
    */
-  readonly loadBundle?: (() => Promise<void>) | undefined;
+  readonly loadBundle?: (() => Promise<AdvancedNutritionSession | null | void>) | undefined;
   /**
    * H-2. Applies structured ingredient edits to the UNSAVED working recipe
    * through the application's own editor/state owner. Registered by that owner;
@@ -165,6 +176,12 @@ export interface ShisoToolContext {
   readonly applyNutritionCorrections?:
     | ((lineRefs: readonly string[] | undefined) => Promise<ShisoNutritionCorrectionsOutcome>)
     | undefined;
+  /** F3. Applies the application-owned SHISO nutrition review to the unsaved recipe. */
+  readonly applyNutritionReview?: (() => Promise<{
+    readonly ok: boolean;
+    readonly applied: boolean;
+    readonly message: string;
+  }>) | undefined;
   /**
    * H-2. Persists the UNSAVED working recipe through the EXISTING application
    * save path. Registered by the application shell; it fails closed when there
@@ -193,13 +210,14 @@ function fail(
 // ---------------------------------------------------------------------------
 
 function getCurrentRecipe(ctx: ShisoToolContext): ShisoObservation {
-  if (ctx.recipe === null) {
+  const recipe = ctx.recipe ?? ctx.vault?.getSelectedRecipe();
+  if (recipe === null || recipe === undefined) {
     return fail('get_current_recipe', 'no_active_recipe', 'No recipe is currently open.');
   }
-  return ok('get_current_recipe', `${ctx.recipe.title} — ${ctx.recipe.ingredients.length} ingredients`, {
-    title: ctx.recipe.title,
-    servings: ctx.recipe.servings,
-    ingredients: ctx.recipe.ingredients.slice(0, 60).map((i) => ({
+  return ok('get_current_recipe', `${recipe.title} — ${recipe.ingredients.length} ingredients`, {
+    title: recipe.title,
+    servings: recipe.servings,
+    ingredients: recipe.ingredients.slice(0, 60).map((i) => ({
       text: i.text.slice(0, 200),
       name: i.name.slice(0, 120),
       // H-2: the stable handle an edit is addressed by. It is INTERNAL plumbing
@@ -207,8 +225,80 @@ function getCurrentRecipe(ctx: ShisoToolContext): ShisoObservation {
       // before any edit is applied; it is never shown to the user.
       line_ref: typeof i.line_ref === 'string' ? i.line_ref : null,
     })),
-    instructions: ctx.recipe.instructions.slice(0, 40).map((s) => ({ text: s.text.slice(0, 400) })),
+    instructions: recipe.instructions.slice(0, 40).map((s) => ({ text: s.text.slice(0, 400) })),
   });
+}
+
+function getVaultStatus(ctx: ShisoToolContext): ShisoObservation {
+  if (ctx.vault === undefined) return fail('get_vault_status', 'vault_unavailable', 'The active Vault capability is not available.');
+  const status = ctx.vault.getStatus();
+  return ok(
+    'get_vault_status',
+    `${status.recipe_count} recipes are available in the ${status.source === 'personal' ? 'connected personal' : status.source === 'imported' ? 'read-only imported' : 'built-in starter'} Vault.`,
+    status as unknown as Record<string, unknown>,
+  );
+}
+
+function searchVaultRecipes(
+  ctx: ShisoToolContext,
+  query: string,
+  field: 'all' | 'title' | 'ingredient' | 'category' | 'metadata',
+  limit: number,
+  signal?: AbortSignal,
+): ShisoObservation {
+  if (ctx.vault === undefined) return fail('search_vault_recipes', 'vault_unavailable', 'The active Vault capability is not available.');
+  const result = ctx.vault.searchRecipes({ query, field, limit }, signal);
+  if (result.results.length === 0) return fail('search_vault_recipes', 'record_not_found', `No recipes matched “${query.slice(0, 120)}”.`);
+  return ok('search_vault_recipes', `${result.total_matches} recipe${result.total_matches === 1 ? '' : 's'} matched “${query.slice(0, 120)}”.`, result as unknown as Record<string, unknown>);
+}
+
+function getVaultRecipe(ctx: ShisoToolContext, recipeId: string): ShisoObservation {
+  if (ctx.vault === undefined) return fail('get_vault_recipe', 'vault_unavailable', 'The active Vault capability is not available.');
+  const recipe = ctx.vault.getRecipe(recipeId);
+  if (recipe === null) return fail('get_vault_recipe', 'vault_recipe_not_found', 'That recipe is not present in the active Vault.');
+  return ok('get_vault_recipe', `${recipe.title} — ${recipe.ingredients.length} ingredients`, recipe as unknown as Record<string, unknown>);
+}
+
+function selectVaultRecipe(ctx: ShisoToolContext, recipeId: string): ShisoObservation {
+  if (ctx.vault === undefined) return fail('select_vault_recipe', 'vault_unavailable', 'The active Vault capability is not available.');
+  const selection = ctx.vault.selectRecipe(recipeId);
+  if (selection === null) return fail('select_vault_recipe', 'vault_selection_rejected', 'That recipe could not be selected from the active Vault.');
+  ctx.onVaultRecipeSelected?.(selection.recipe_id);
+  return ok('select_vault_recipe', `Selected ${selection.title} as the current SHISO recipe subject.`, selection as unknown as Record<string, unknown>);
+}
+
+async function loadUsdaCatalog(ctx: ShisoToolContext, signal?: AbortSignal): Promise<ShisoObservation> {
+  if (ctx.session !== null) {
+    return ok('load_usda_catalog', 'The authenticated USDA catalogue is already loaded and ready.', {
+      catalogue_loaded: true,
+      catalogue_status: 'ready',
+    });
+  }
+  if (ctx.loadBundle === undefined) {
+    return fail('load_usda_catalog', 'no_nutrition_review', 'The authenticated USDA catalogue loader is not available in this deployment.');
+  }
+  if (signal?.aborted) return fail('load_usda_catalog', 'analysis_unavailable', 'The USDA catalogue load was cancelled.');
+  try {
+    await ctx.loadBundle();
+  } catch {
+    return fail('load_usda_catalog', 'analysis_unavailable', 'The authenticated USDA catalogue could not be loaded.');
+  }
+  if (signal?.aborted) return fail('load_usda_catalog', 'analysis_unavailable', 'The USDA catalogue load was cancelled.');
+  // Prefer the exact session returned by the authenticated loader over the
+  // render-owned status. This keeps the next tool in the SAME conversation turn
+  // on the newly installed session, even before React commits a new render.
+  const currentSession = ctx.session;
+  const status = currentSession !== null ? 'ready' : (ctx.catalogueStatus ?? 'loading');
+  if (status === 'failed' || status === 'unsupported') {
+    return fail('load_usda_catalog', 'analysis_unavailable', `The authenticated USDA catalogue is ${status}.`);
+  }
+  return ok(
+    'load_usda_catalog',
+    status === 'ready'
+      ? 'The authenticated USDA catalogue is loaded and ready for food search.'
+      : 'The application started loading the authenticated USDA catalogue. It is not ready to search yet; SHISO will check its status on the next step.',
+    { catalogue_loaded: status === 'ready' || currentSession !== null, catalogue_status: status, load_started: true },
+  );
 }
 
 /** Refuse to answer from a review whose stable ingredient handles no longer match the open recipe. */
@@ -1797,21 +1887,15 @@ async function runNutritionAnalysis(ctx: ShisoToolContext, signal?: AbortSignal)
     try {
       await ctx.loadBundle();
     } catch {
-      // fall through to the honest "still not available" report below
     }
-    return ok(
-      'run_nutrition_analysis',
-      'The USDA catalogue was not loaded, so I have started loading it for you.',
-      {
-        started_bundle_load: true,
-        analysis_ran: false,
-        next_step:
-          'Open Advanced Nutrition for this recipe — loading the catalogue creates the review — ' +
-          'then ask me again and I will run the analysis and investigate everything unresolved.',
-        honesty_note:
-          'No nutrition has been calculated yet. Do not claim any totals until the analysis has actually run.',
-      },
-    );
+    if (signal?.aborted) return fail('run_nutrition_analysis', 'analysis_unavailable', 'The nutrition analysis was cancelled.');
+    if (ctx.session === null) {
+      return fail(
+        'run_nutrition_analysis',
+        'analysis_unavailable',
+        'The authenticated USDA catalogue could not be loaded, so nutrition analysis did not run.',
+      );
+    }
   }
 
   if (ctx.runAnalysis === undefined) {
@@ -2097,6 +2181,37 @@ async function applyNutritionCorrections(
 }
 
 /**
+ * F3. Applies the complete general-chat nutrition review through the shell's
+ * existing Phase 5B owner. The capability never persists a Vault write.
+ */
+async function applyNutritionReview(ctx: ShisoToolContext): Promise<ShisoObservation> {
+  if (ctx.recipe === null) {
+    return fail('apply_nutrition_review', 'no_active_recipe', 'No selected recipe is available for nutrition Apply.');
+  }
+  if (ctx.applyNutritionReview === undefined) {
+    return fail(
+      'apply_nutrition_review',
+      'no_analysis_owner',
+      'The application-owned nutrition review is not available for this recipe.',
+    );
+  }
+  let outcome: { readonly ok: boolean; readonly applied: boolean; readonly message: string };
+  try {
+    outcome = await ctx.applyNutritionReview();
+  } catch {
+    return fail('apply_nutrition_review', 'analysis_unavailable', 'The nutrition review could not be applied.');
+  }
+  if (!outcome.ok || !outcome.applied) {
+    return fail('apply_nutrition_review', 'analysis_unavailable', outcome.message);
+  }
+  return ok('apply_nutrition_review', outcome.message, {
+    applied: true,
+    working_unsaved: true,
+    honesty_note: 'The nutrition review is applied to the UNSAVED working recipe. Nothing is persisted until a separate authorized save succeeds.',
+  });
+}
+
+/**
  * H-2. Saves the UNSAVED working recipe through the EXISTING application save
  * path. This capability never writes anything itself: the application shell
  * owns persistence, and it fails closed when there is nothing unsaved. It is
@@ -2155,10 +2270,11 @@ async function saveWorkingRecipe(ctx: ShisoToolContext): Promise<ShisoObservatio
  * and the user was left with no idea what to do.
  */
 function getCapabilityStatus(ctx: ShisoToolContext): ShisoObservation {
-  const recipeOpen = ctx.recipe !== null;
+  const recipeOpen = ctx.recipe !== null || ctx.vault?.getSelectedRecipe() !== null;
   const bundleLoaded = ctx.session !== null;
   const reviewOpen = ctx.nutrition !== null;
   const analysisAvailable = ctx.runAnalysis !== undefined;
+  const vaultStatus = ctx.vault?.getStatus() ?? null;
 
   const blocked: string[] = [];
   if (!recipeOpen) blocked.push('no_recipe_open');
@@ -2173,8 +2289,12 @@ function getCapabilityStatus(ctx: ShisoToolContext): ShisoObservation {
         ready: true,
         recipe_open: true,
         catalogue_loaded: true,
+        catalogue_status: 'ready',
         review_open: true,
         analysis_available: analysisAvailable,
+        vault_available: vaultStatus !== null,
+        vault_source: vaultStatus?.source ?? null,
+        vault_recipe_count: vaultStatus?.recipe_count ?? null,
         blocked: [],
         recovery: null,
       },
@@ -2184,9 +2304,12 @@ function getCapabilityStatus(ctx: ShisoToolContext): ShisoObservation {
   // Exactly ONE recovery step, ordered by dependency, so the user is never told
   // to do three things when one unlocks the rest.
   const canLoadItself = !bundleLoaded && ctx.loadBundle !== undefined;
+  const recipeRecovery = ctx.vault !== undefined
+    ? 'search the active Vault and select the intended recipe with me; I do not need you to navigate to its recipe screen.'
+    : 'open a recipe first, then ask me again.';
   const recovery =
     !recipeOpen
-      ? 'Open a recipe first, then ask me again.'
+      ? recipeRecovery
       : !bundleLoaded
         ? canLoadItself
           ? 'say "generate nutrition" again and I will load the catalogue for you, then open Advanced Nutrition so the review initializes.'
@@ -2204,8 +2327,12 @@ function getCapabilityStatus(ctx: ShisoToolContext): ShisoObservation {
       ready: false,
       recipe_open: recipeOpen,
       catalogue_loaded: bundleLoaded,
+      catalogue_status: ctx.catalogueStatus ?? (bundleLoaded ? 'ready' : 'idle'),
       review_open: reviewOpen,
       analysis_available: analysisAvailable,
+      vault_available: vaultStatus !== null,
+      vault_source: vaultStatus?.source ?? null,
+      vault_recipe_count: vaultStatus?.recipe_count ?? null,
       shiso_can_load_bundle: canLoadItself,
       blocked,
       recovery,
@@ -2231,6 +2358,16 @@ export function executeShisoTool(
     switch (args.tool) {
       case 'get_current_recipe':
         return getCurrentRecipe(ctx);
+      case 'get_vault_status':
+        return getVaultStatus(ctx);
+      case 'search_vault_recipes':
+        return searchVaultRecipes(ctx, args.query, args.field ?? 'all', args.limit ?? SHISO_LIMITS.maxVaultSearchResults, signal);
+      case 'get_vault_recipe':
+        return getVaultRecipe(ctx, args.recipe_id);
+      case 'select_vault_recipe':
+        return selectVaultRecipe(ctx, args.recipe_id);
+      case 'load_usda_catalog':
+        return loadUsdaCatalog(ctx, signal);
       case 'get_nutrition_review':
         return getNutritionReview(ctx, args.include_ingredients === true);
       case 'get_branded_evidence':
@@ -2257,6 +2394,8 @@ export function executeShisoTool(
         return applyIngredientEdits(ctx, args.edits);
       case 'apply_nutrition_corrections':
         return applyNutritionCorrections(ctx, args.line_refs);
+      case 'apply_nutrition_review':
+        return applyNutritionReview(ctx);
       case 'save_working_recipe':
         return saveWorkingRecipe(ctx);
       default:

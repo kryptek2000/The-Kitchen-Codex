@@ -222,6 +222,21 @@ describe('H-2 save authorization — grant verification at the save owner', () =
     if (verdict.ok !== true) expect(verdict.reason).toBe('stale_recipe');
   });
 
+  it('refuses a grant after the active Vault identity changes', () => {
+    const state = issueSaveAuthorization({
+      state: INITIAL_SAVE_AUTHORIZATION_STATE,
+      authorized: true,
+      recipe_identity: 'vault-a/Recipes/Chicken.md',
+      turn: 7,
+    });
+    const decision = beginSaveAuthorization(state);
+    expect(decision.ok).toBe(true);
+    if (decision.ok) {
+      expect(verifySaveGrant(decision.grant, 'vault-a/Recipes/Chicken.md')).toMatchObject({ ok: true });
+      expect(verifySaveGrant(decision.grant, 'vault-b/Recipes/Chicken.md')).toMatchObject({ ok: false, reason: 'stale_recipe' });
+    }
+  });
+
   it('refuses an assistant grant with no recipe binding', () => {
     const verdict = verifySaveGrant(
       { authorized: true, via: 'assistant', recipe_identity: '', turn: 1 },
@@ -326,7 +341,8 @@ describe('H-2 save authorization — structural pins', () => {
     const modal = read('src/components/ShisoModal.tsx');
     expect(modal).toContain('classifySaveIntent(message)');
     expect(modal).toContain('issueSaveAuthorization');
-    expect(modal).toContain("recipeIdentityOf(recipe)");
+    expect(modal).toContain('getSaveAuthorizationRecipe');
+    expect(modal).toContain('recipeIdentityOf(authorizationRecipe)');
     // The assistant tool path explicitly marks itself as assistant-initiated.
     expect(modal).toContain("saveWorkingRecipe({ via: 'assistant' })");
     // The visible Save control is its own authorization.

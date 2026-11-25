@@ -109,6 +109,7 @@ import {
 } from './platform/desktop';
 import { saveGeneratedRecipeImageToVault, hashCanonicalMarkdown, type GeneratedImageSaveResult } from './application/recipeImageSave';
 import { hydrateAiSelections } from './application/aiSelection';
+import type { SettingsAdapter } from './application/adapters/SettingsAdapter';
 import {
   resolveUnresolvedRowsWithAi,
   type WholeRecipeSemanticSource,
@@ -154,6 +155,12 @@ import { loadProductionAdvancedNutritionSession } from './browser/advancedNutrit
 import { useAdvancedNutritionBundle } from './application-ui/useAdvancedNutritionBundle';
 import { ShisoEntryProvider, useShiso } from './application-ui/shisoEntryPoints';
 import { ShisoModal } from './components/ShisoModal';
+import { createShisoVaultCapability, type ShisoVaultCapability } from './application/shisoVaultCapabilities';
+import { createShisoNutritionReviewController, type ShisoNutritionReviewController } from './application/shisoNutritionReview';
+import { adaptRecipe, analyzeRecipe } from './core/nutritionV2/phase4';
+import type { ShisoToolContext } from './application/shisoTools';
+import type { NetworkAdapter } from './application/adapters/NetworkAdapter';
+import type { RuntimeBundleResult } from './core/nutritionV2/runtime';
 import type { ShisoHistoryRailProps } from './components/ShisoHistoryRail';
 import {
   buildConversationCorpus,
@@ -179,6 +186,7 @@ import {
   type ShisoSaveGrant,
 } from './core/shiso/saveAuthorization';
 import type {
+  ShisoAnalysisOutcome,
   ShisoIngredientEditArgs,
   ShisoRecipeEditOutcome,
   ShisoRecipeSaveOutcome,
@@ -373,7 +381,23 @@ async function loadVaultFromHandle(handle: any, assetScope: VaultAssetScope): Pr
   };
 }
 
-export default function App() {
+export interface AppProps {
+  /** Deterministic fixture seam; production composition leaves this undefined. */
+  readonly shisoVaultCapabilityOverride?: ShisoVaultCapability;
+  /** Deterministic provider transport seam; production composition leaves this undefined. */
+  readonly shisoNetworkAdapterOverride?: NetworkAdapter;
+  /** Deterministic authenticated USDA bundle seam; production uses the locked loader. */
+  readonly shisoNutritionBundleLoaderOverride?: () => Promise<RuntimeBundleResult>;
+  /** Deterministic settings seam for real-App capability tests; production leaves this undefined. */
+  readonly shisoSettingsAdapterOverride?: SettingsAdapter;
+}
+
+export default function App({
+  shisoVaultCapabilityOverride,
+  shisoNetworkAdapterOverride,
+  shisoNutritionBundleLoaderOverride,
+  shisoSettingsAdapterOverride,
+}: AppProps = {}) {
   // ONE Recipe Vault. Brand-new users see the nine application-owned starter
   // recipes as a read-only cookbook. Once a personal Vault is connected or
   // imported, the Vault view contains ONLY the user's personal recipes; starter
@@ -419,8 +443,11 @@ export default function App() {
   // module (the single place that news up concrete browser adapters; Phase 4D3C).
   // Settings/network are independent of a vault connection (built once); the
   // vault adapter is only constructible once a directory handle is connected.
-  const settingsAdapter = useMemo(() => createBrowserSettingsAdapter(), []);
-  const networkAdapter = useMemo(
+  const settingsAdapter = useMemo(
+    () => shisoSettingsAdapterOverride ?? createBrowserSettingsAdapter(),
+    [shisoSettingsAdapterOverride],
+  );
+  const productionNetworkAdapter = useMemo(
     () =>
       createBrowserNetworkAdapter({
         authorizationHeaders: getEndpointAccessHeaders,
@@ -428,6 +455,7 @@ export default function App() {
       }),
     []
   );
+  const networkAdapter = shisoNetworkAdapterOverride ?? productionNetworkAdapter;
   const voiceService = useMemo(() => createVoiceCache(networkAdapter), [networkAdapter]);
   // App-owned voice service lifecycle. The service is created once per App
   // instance and shared by Recipe Detail (prewarming) and Cooking Mode
@@ -639,7 +667,104 @@ export default function App() {
   // explicit "Open Advanced Nutrition" action begins authentication; the
   // resulting genuine Phase 4 session is retained in memory across recipe
   // navigation for the lifetime of the page and is never persisted.
-  const advancedNutritionBundle = useAdvancedNutritionBundle(loadProductionAdvancedNutritionSession);
+  const advancedNutritionBundle = useAdvancedNutritionBundle(
+    shisoNutritionBundleLoaderOverride ?? loadProductionAdvancedNutritionSession,
+  );
+
+  // F3: one application-owned review controller for a general SHISO turn. It
+  // holds the same Phase 4 state that Advanced Nutrition would expose, while
+  // the shell remains the only Apply/Save authority.
+  const shisoNutritionReviewRef = useRef<ShisoNutritionReviewController | null>(null);
+  const shisoSelectedRecipeForReviewRef = useRef<ObsidianRecipe | null>(null);
+  const ensureNutritionAccessForShisoRef = useRef<(() => Promise<void>) | null>(null);
+
+  // Global SHISO is intentionally available before a recipe screen or the
+  // Advanced Nutrition card is mounted. When it selects a Vault recipe and
+  // requests nutrition, use the same authenticated Phase 4 session and the
+  // same analyzer/calculator directly through an application-owned read port.
+  // The recipe-detail card remains the reducer/write owner whenever it exists.
+  const runIndependentShisoNutritionAnalysis = useCallback(async (
+    recipe: NonNullable<ShisoToolContext['recipe']>,
+    session: import('./core/nutritionV2/phase4').AdvancedNutritionSession,
+    signal?: AbortSignal,
+  ): Promise<ShisoAnalysisOutcome> => {
+    if (signal?.aborted) {
+      return {
+        ok: false,
+        analyzed: false,
+        summary: 'Nutrition analysis was cancelled.',
+        matched: 0,
+        needs_amount: 0,
+        needs_match: 0,
+        total_lines: 0,
+        unresolved_line_refs: [],
+        preview_state: 'absent',
+        message: 'Nutrition analysis was cancelled.',
+      };
+    }
+    const selectedOwner = shisoSelectedRecipeForReviewRef.current;
+    if (selectedOwner !== null) {
+      const controller = createShisoNutritionReviewController(selectedOwner, session);
+      if (controller !== null) {
+        shisoNutritionReviewRef.current = controller;
+        return controller.analyze(signal);
+      }
+    }
+    const adapted = adaptRecipe({
+      title: recipe.title,
+      servings: recipe.servings ?? 1,
+      ingredients: recipe.ingredients.map((ingredient) => ({
+        original: ingredient.text,
+        name: ingredient.name,
+        ...(ingredient.amount !== undefined ? { amount: ingredient.amount } : {}),
+        ...(ingredient.unit !== undefined ? { unit: ingredient.unit } : {}),
+        ...(ingredient.preparation !== undefined ? { note: ingredient.preparation } : {}),
+      })),
+    });
+    if (!adapted.ok) {
+      return {
+        ok: false,
+        analyzed: false,
+        summary: 'This recipe could not be read for nutrition analysis.',
+        matched: 0,
+        needs_amount: 0,
+        needs_match: 0,
+        total_lines: recipe.ingredients.length,
+        unresolved_line_refs: [],
+        preview_state: 'absent',
+        message: 'The recipe ingredients could not be adapted for the authenticated nutrition engine.',
+      };
+    }
+    const analysis = analyzeRecipe(session, adapted.recipe.adapted, adapted.recipe.base_servings);
+    if (signal?.aborted) {
+      return {
+        ok: false,
+        analyzed: false,
+        summary: 'Nutrition analysis was cancelled.',
+        matched: 0,
+        needs_amount: 0,
+        needs_match: 0,
+        total_lines: analysis.rows.length,
+        unresolved_line_refs: [],
+        preview_state: 'absent',
+        message: 'Nutrition analysis was cancelled.',
+      };
+    }
+    const unresolved = analysis.rows
+      .filter((row) => row.status === 'needs_amount' || row.status === 'needs_match' || row.status === 'unresolved')
+      .map((row) => row.line_ref);
+    return {
+      ok: true,
+      analyzed: true,
+      summary: `${analysis.summary.matched} of ${analysis.summary.total} ingredient lines resolved`,
+      matched: analysis.summary.matched,
+      needs_amount: analysis.summary.needs_amount,
+      needs_match: analysis.summary.needs_match + analysis.summary.unresolved,
+      total_lines: analysis.summary.total,
+      unresolved_line_refs: unresolved,
+      preview_state: unresolved.length === 0 ? 'complete' : 'partial',
+    };
+  }, []);
   // SHISO — one conversation, three entry points (global, recipe, nutrition).
   // `ShisoEntryProvider` lives in main.tsx ABOVE this component, so the context
   // is available here as well as inside the recipe / nutrition surfaces.
@@ -1050,12 +1175,16 @@ export default function App() {
     };
     if (preservedEditingRecipe) setEditingRecipe(preservedEditingRecipe);
     updateShisoWorkingRecipe(null);
+    shisoSelectedRecipeForReviewRef.current = null;
+    shisoNutritionReviewRef.current = null;
   }, [updateShisoWorkingRecipe]);
 
   // Applies a SUCCESSFUL canonical FSA snapshot. The caller must have installed
   // the matching session (inside `commitTransition`) before this runs.
   const commitVaultSnapshot = useCallback((result: LoadedVaultData, session: VaultSession, folderHandle: any) => {
     if (!vaultAuthority.isCurrent(session)) return false;
+    shisoSelectedRecipeForReviewRef.current = null;
+    shisoNutritionReviewRef.current = null;
     const next = deriveVaultSnapshotState(result, activeRefs.current);
     setPersonalRecipes(next.recipes);
     setHasPersonalVaultCollection(true);
@@ -2721,6 +2850,53 @@ export default function App() {
     return { ok: false, message: ADVANCED_NUTRITION_APPLY_UI_MESSAGE[failureCode] };
   };
 
+  const handleApplyAdvancedNutritionRef = useRef<AdvancedNutritionApplyHandler>(handleApplyAdvancedNutrition);
+  handleApplyAdvancedNutritionRef.current = handleApplyAdvancedNutrition;
+
+  // F3: general SHISO uses the exact same Phase 5B Apply authority as the
+  // visible Advanced Nutrition card. The controller is checked against the
+  // current selected recipe before use, so a navigation change cannot apply a
+  // stale review to another recipe.
+  const applyIndependentShisoNutritionReview = useCallback(async () => {
+    const controller = shisoNutritionReviewRef.current;
+    const currentRecipe = shisoSelectedRecipeForReviewRef.current;
+    if (controller === null || currentRecipe === null) {
+      return { ok: false, applied: false, message: 'No current SHISO nutrition review is available to apply.' };
+    }
+    if (!sameCanonicalRecipeIdentity(controller.recipe, currentRecipe)) {
+      return { ok: false, applied: false, message: 'The recipe changed while SHISO was calculating; no stale nutrition review was applied.' };
+    }
+    if (nutritionAiClientStateRef.current?.productAccessIsAiAdvanced !== true) {
+      await ensureNutritionAccessForShisoRef.current?.();
+    }
+    const result = await handleApplyAdvancedNutritionRef.current({
+      session: controller.session,
+      recipe: currentRecipe,
+      state: controller.getState(),
+      expectedMode: currentRecipe.codexNutrition ? 'replace' : 'create',
+    });
+    return { ok: result.ok, applied: result.ok, message: result.message };
+  }, []);
+
+  const getIndependentShisoNutritionSnapshot = useCallback(() => {
+    const controller = shisoNutritionReviewRef.current;
+    const currentRecipe = shisoSelectedRecipeForReviewRef.current;
+    return controller !== null && currentRecipe !== null && sameCanonicalRecipeIdentity(controller.recipe, currentRecipe)
+      ? controller.getSnapshot()
+      : null;
+  }, []);
+
+  const acceptIndependentShisoNutrition = useCallback((
+    contributions: readonly import('./core/nutritionV2/aiContribution').AiNutrientContribution[],
+    supplements?: readonly import('./core/nutritionV2/aiContribution').AiNutrientSupplement[],
+  ) => {
+    const controller = shisoNutritionReviewRef.current;
+    const currentRecipe = shisoSelectedRecipeForReviewRef.current;
+    return controller !== null && currentRecipe !== null && sameCanonicalRecipeIdentity(controller.recipe, currentRecipe)
+      ? controller.acceptAiNutrition(contributions, supplements)
+      : false;
+  }, []);
+
   // ==========================================================================
   // AI-5C — EFFECTIVE NUTRITION AI CLIENT STATE (the ONE shell decision owner)
   // ==========================================================================
@@ -2828,6 +3004,10 @@ export default function App() {
     },
     [networkAdapter, publishNutritionAiPresentation],
   );
+  ensureNutritionAccessForShisoRef.current = async () => {
+    if (nutritionAiClientStateRef.current?.productAccessIsAiAdvanced === true) return;
+    await runNutritionAiRefresh({ reuseProductAccess: false });
+  };
 
   /**
    * AI-5D IMMEDIATE INVALIDATION on a readiness-affecting change.
@@ -3406,10 +3586,14 @@ export default function App() {
   // Keep synchronous mirrors so toggles never read a stale closure.
   const recipesRef = useRef(recipes);
   const personalRecipesRef = useRef<ObsidianRecipe[]>(personalRecipes);
+  const notesRef = useRef<VaultNote[]>(notes);
   const starterOverridesRef = useRef<Record<string, Partial<ObsidianRecipe>>>({});
   useEffect(() => {
     personalRecipesRef.current = personalRecipes;
   }, [personalRecipes]);
+  useEffect(() => {
+    notesRef.current = notes;
+  }, [notes]);
   useEffect(() => {
     starterOverridesRef.current = starterOverrides;
   }, [starterOverrides]);
@@ -3419,7 +3603,96 @@ export default function App() {
   const selectedRecipeRef = useRef(selectedRecipe);
   useEffect(() => {
     selectedRecipeRef.current = selectedRecipe;
+    if (
+      selectedRecipe !== null &&
+      (shisoSelectedRecipeForReviewRef.current === null || !sameCanonicalRecipeIdentity(shisoSelectedRecipeForReviewRef.current, selectedRecipe))
+    ) {
+      shisoSelectedRecipeForReviewRef.current = selectedRecipe;
+      shisoNutritionReviewRef.current = null;
+    }
   }, [selectedRecipe]);
+
+  // Assistant Save authorization must use the live recipe authority, not the
+  // optional display recipe prop. General SHISO deliberately renders with a
+  // null recipe context while its Vault capability can select a recipe, and an
+  // unsaved working copy must remain bound to its original recipe identity.
+  const getShisoSaveAuthorizationRecipe = useCallback(() => {
+    const working = shisoWorkingRecipeRef.current;
+    return working?.base ?? shisoSelectedRecipeForReviewRef.current ?? selectedRecipeRef.current;
+  }, []);
+
+  // SHISO agent foundation: one application-owned, read-only Vault capability
+  // object. It reads the live App refs, so a Vault transition is immediately
+  // reflected and any retained recipe selection is invalidated by session id.
+  const shisoVaultCapabilities = useMemo(() => createShisoVaultCapability({
+    getRecipes: () => recipesRef.current,
+    getNoteCount: () => notesRef.current.length,
+    getIdentity: () => ({
+      id: `vault-session:${activeVaultRef.current.session.id}`,
+      source: activeVaultRef.current.session.kind === 'uploaded' || vaultStatus.accessType === 'uploaded_folder'
+        ? 'imported'
+        : vaultStatus.connectionState === 'connected' || vaultStatus.isConnected
+          ? 'personal'
+          : 'starter',
+    }),
+    onSelectRecipe: (recipe) => {
+      selectedRecipeRef.current = recipe;
+      shisoSelectedRecipeForReviewRef.current = recipe;
+      shisoNutritionReviewRef.current = null;
+      setSelectedRecipe(recipe);
+      setVaultView('all');
+    },
+  }), [vaultStatus.accessType, vaultStatus.connectionState, vaultStatus.isConnected]);
+  const handleShisoVaultRecipeSelected = useCallback((recipeId: string) => {
+    const selected = recipesRef.current.find((entry) => entry.id === recipeId) ?? (() => {
+      // The capability seam used by the real-App integration tests can
+      // represent a connected Vault before the gallery state has been
+      // hydrated. Reconstruct only the bounded application recipe projection
+      // so the normal RecipeDetail/AdvancedNutritionCard owner is mounted;
+      // this is never a filesystem read or a second nutrition engine. The
+      // production capability's source callback supplies the canonical object
+      // in the normal path.
+      const detail = (shisoVaultCapabilityOverride ?? shisoVaultCapabilities).getRecipe(recipeId);
+      if (detail === null) return undefined;
+      const difficulty = detail.difficulty === 'Medium' || detail.difficulty === 'Hard' ? detail.difficulty : 'Easy';
+      const rating = Number(detail.metadata['rating'] ?? 0);
+      return {
+        id: detail.id,
+        fileName: detail.file_name,
+        filePath: detail.file_path,
+        rawMarkdown: '',
+        title: detail.title,
+        tags: [...detail.tags],
+        category: detail.category,
+        cuisine: detail.cuisine,
+        ...(detail.servings !== null ? { servings: detail.servings } : {}),
+        ...(detail.description ? { description: detail.description } : {}),
+        ...(detail.metadata['prep_time'] ? { prepTime: detail.metadata['prep_time'] } : {}),
+        ...(detail.metadata['cook_time'] ? { cookTime: detail.metadata['cook_time'] } : {}),
+        ...(detail.metadata['total_time'] ? { totalTime: detail.metadata['total_time'] } : {}),
+        difficulty,
+        rating: Number.isFinite(rating) ? rating : 0,
+        ingredients: detail.ingredients.map((ingredient) => ({
+          original: ingredient.text,
+          name: ingredient.name,
+          ...(ingredient.amount !== undefined ? { amount: ingredient.amount } : {}),
+          ...(ingredient.unit !== undefined ? { unit: ingredient.unit } : {}),
+          ...(ingredient.preparation !== undefined ? { note: ingredient.preparation } : {}),
+        })),
+        instructions: detail.instructions.map((step, index) => ({ stepNumber: index + 1, text: step.text })),
+        callouts: [],
+        dataviewFields: { ...detail.metadata },
+        wikilinks: [],
+      } satisfies ObsidianRecipe;
+    })();
+    if (selected !== undefined) {
+      selectedRecipeRef.current = selected;
+      shisoSelectedRecipeForReviewRef.current = selected;
+      shisoNutritionReviewRef.current = null;
+      setSelectedRecipe(selected);
+      setVaultView('all');
+    }
+  }, [shisoVaultCapabilityOverride, shisoVaultCapabilities]);
   const favoriteOperationIdRef = useRef<Map<string, number>>(new Map());
   const ratingOperationIdRef = useRef<Map<string, number>>(new Map());
 
@@ -5065,14 +5338,27 @@ export default function App() {
         onConversationsChanged={handleConversationsChanged}
         conversationHistory={conversationHistoryProps}
         network={networkAdapter}
-        recipe={shiso.source === 'create' ? null : displayRecipe}
+        vaultCapabilities={shisoVaultCapabilityOverride ?? shisoVaultCapabilities}
+        onVaultRecipeSelected={handleShisoVaultRecipeSelected}
+        getSaveAuthorizationRecipe={getShisoSaveAuthorizationRecipe}
+        // General SHISO can select a Vault recipe during the same turn. Keep
+        // that selection inside the capability/review owner without changing
+        // the conversation context key from `global` to `recipe:*` halfway
+        // through the turn; recipe/nutrition entry points still receive their
+        // normal bound recipe context.
+        recipe={shiso.source === 'global' || shiso.source === 'create' ? null : displayRecipe}
         nutritionSession={advancedNutritionBundle.session}
+        nutritionBundleStatus={advancedNutritionBundle.status}
         loadNutritionBundle={async () => {
           // Calls the SAME controller the user's own "Load USDA data" button
           // calls. Deliberately no polling and no timer: the controller installs
           // the session when it is ready and the next Shiso turn observes it.
-          advancedNutritionBundle.load();
+          return advancedNutritionBundle.load();
         }}
+        runIndependentNutritionAnalysis={runIndependentShisoNutritionAnalysis}
+        getIndependentNutritionSnapshot={getIndependentShisoNutritionSnapshot}
+        acceptIndependentNutrition={acceptIndependentShisoNutrition}
+        applyIndependentNutritionReview={applyIndependentShisoNutritionReview}
         nutritionRows={shiso.snapshot?.rows ?? []}
         nutritionAiContributions={shiso.snapshot?.aiContributions ?? []}
         nutritionReviewRows={shiso.snapshot?.reviewRows ?? []}
