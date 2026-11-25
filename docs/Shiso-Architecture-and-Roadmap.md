@@ -2,7 +2,7 @@
 
 **Status — November 24, 2026:** Product direction reconciled against merged PRs
 #12 and #66, with `main` at
-`e0b309e545875a16397773c2d9c0fbd6e3bcaa4e`.
+`4bd252b63e8c792da632f27c09780416eea47eca` (the PR #8 documentation merge).
 SHISO conversation, recipe creation/editing, nutrition integration, the C1.7
 flagship workspace and the C1.8 state-driven companion baseline exist on main.
 Merged and CI-tested does not mean independently production deployed, live-provider
@@ -586,23 +586,44 @@ item authorizes a provider call, Vault write, feature change or deployment.
 human acceptance and Sid's explicit release approval. The
 [acceptance record](./Shiso-Acceptance-Status.md) separates reported passes from
 pending coverage and fixed PR findings from the dated open-alert snapshot.
-This roadmap reconciliation is proposed in PR #13 and remains subject to review
-and merge approval. It does not authorize feature implementation or deployment.
+This roadmap is maintained as the canonical product record. The AI Studio and
+model-catalog reconciliation in PR #15 remains subject to review and merge
+approval; it does not authorize feature implementation or deployment.
 
 ---
 
 ## 12. ASAP — AI Settings Studio redesign, complete OpenRouter models, and native OpenCode Go BYOK (October 19, 2026)
+
+### Status reconciliation against current `main`
+
+This section preserves the October 19 product brief while making delivery status
+explicit. Current `main` contains an AI Studio/Codex Atelier shell, server-owned
+provider status and catalog surfaces, a searchable Living Library, dynamic
+OpenRouter catalog metadata, and provider-specific image-generation paths. The
+evidence is in `src/components/CodexAtelier.tsx`,
+`src/components/LivingLibrary.tsx`, `src/application-ui/ProviderSettings.tsx`,
+`src/application-ui/ModelPicker.tsx`, `server/ai/providerCatalog.ts`, and
+`server/ai/openRouterCatalog.ts`, with focused tests beside those contracts.
+
+Native OpenCode Go BYOK is **not implemented on `main`**. The complete
+account-wide, searchable model marketplace described below is also **not yet
+implemented**: current discovery is bounded, execution compatibility remains
+provider/model-specific, and the existing picker still presents a bounded
+informational discovered-model view. Image metadata discovery and executable
+image generation are likewise separate concerns. Source presence and focused
+CI do not establish live-provider acceptance, universal model compatibility,
+owner visual acceptance, or deployment.
 
 **Owner's revised direction (supersedes the earlier §12 implementation-eligibility wording):**
 
 - **Build OpenCode Go as a native, first-class BYOK provider in The Kitchen Codex.** This is an implementation goal, not a speculative feasibility-only feature. The owner cites a working OpenCode Go integration in an Obsidian Copilot plugin as a precedent worth studying; determine the actual transport and authentication contract, rather than merely concluding "Go is for coding."
 - **Redesign the entire AI Settings interface.** Current UI typography is too small and the presentation is too generic. Deliver a distinct, approachable Kitchen Codex experience with readable fonts, strong hierarchy, useful controls, and polished responsive behavior.
 - **Fix incomplete OpenRouter model discovery, especially image-generation models.** Discover what is available separately from what the current adapter can safely execute, then expand proven execution support.
-- **ASAP means ahead of broader SHISO feature expansion** (Explore My Vault, Vault Intelligence tool expansion, animated mascot). Keep Beam's already-active SHISO H-1 recipe/nutrition repair isolated; do not clobber its workspace or combine unrelated commits.
+- **ASAP means ahead of broader SHISO feature expansion** (Explore My Vault, Vault Intelligence tool expansion, and advanced expressive companion work). Keep this provider/catalog program isolated from unrelated nutrition and SHISO changes.
 
 The implementation streams below can be parallelized safely: UI design and provider research may start immediately in separate branches; integration and source repairs must preserve the current validated main baseline.
 
-### P0-A — Native OpenCode Go integration (required product capability)
+### P0-A — Future: native OpenCode Go integration (required product capability)
 
 **User story:** In TKC AI Settings, I can select **OpenCode Go** alongside existing providers, supply *my own* Go API key or another explicitly supported credential, browse models available to my account, test the connection and deliberately use an eligible model for SHISO chat, recipe creation, nutrition interpretation and supported image capabilities. Unsupported capabilities are clearly marked, not simulated.
 
@@ -620,19 +641,21 @@ The implementation streams below can be parallelized safely: UI design and provi
 
 Vendor docs: https://dev.opencode.ai/v2/docs/console/go/
 
-### P0-B — The Kitchen Codex AI Studio: a MAGNIFICENT flagship interface (required)
+### P0-B — Partial: The Kitchen Codex AI Studio foundation; future flagship completion
 
 **Owner's explicit design bar, October 19:** *Magnificent. Not generic. Not tiny.*
 This is a major, differentiated product surface, not a font-size patch or a new
 coat of paint on `ProviderSettings.tsx`.
 
-**Source-derived implementation inventory:** The current AI Settings lives mainly
-in `src/application-ui/ProviderSettings.tsx` (roughly 1,735 lines),
+**Source-derived implementation inventory:** The current AI Settings behavior lives mainly
+in `src/application-ui/ProviderSettings.tsx`,
 `ModelPicker.tsx`, `SessionKeyPanel.tsx`, `modelPicker.ts`,
 `providerCatalog.ts` and the shared application theme tokens. Existing controls
 use 10–12px labels and a narrow searchable picker with only
-`discoveredModels.slice(0, 100)` informational text entries. Those are real
-limitations to address, not a design preference to retain.
+`discoveredModels.slice(0, 100)` informational text entries. The merged
+`CodexAtelier` shell and `LivingLibrary` make this a real AI Studio foundation,
+but these catalog and presentation limits remain open work rather than an
+owner-approved final flagship.
 
 #### Art direction and product character
 
@@ -743,7 +766,7 @@ with no cropped names or horizontal overflow; preserve fast model search.
 Codex**, feels genuinely premium, is comfortably readable, and makes configuring
 hundreds of AI models genuinely easier than competing provider settings UIs.
 
-### P0-C — OpenRouter and OpenCode Go: the FULL LIVE MODEL LIBRARY experience
+### P0-C — Partial: OpenRouter discovery; future complete live model library
 
 **Owner's acceptance standard, October 19:** *When I add my OpenRouter or
 OpenCode Go key in Hermes or Obsidian Copilot, I see a huge list of models.
@@ -758,14 +781,15 @@ if the provider API supplied an incomplete or truncated result.
 
 #### Provider discovery contracts
 
-- **OpenRouter:** Investigate why TKC's current
-  `server/ai/openRouterCatalog.ts` fetches `GET /api/v1/models` without
-  `output_modalities=all` even though the documented default is text output.
-  Use the dedicated `GET /api/v1/images/models` and real model/endpoint metadata
-  for image generators. Audit the existing 1,500-entry normalization cap,
-  filtering/deduplication, catalog cache, and display-only `slice(0, 100)`.
-  A static model allowlist must no longer determine which models users can
-  **see**. Investigate current availability/price before allowing paid usage.
+- **OpenRouter:** The current `server/ai/openRouterCatalog.ts` already provides
+  bounded, cached, secret-free discovery from `GET /api/v1/models`, normalizes
+  modality and pricing metadata, and exposes live/cached/fallback observability.
+  It still needs the complete discovery treatment: verify whether the provider's
+  dedicated `GET /api/v1/images/models` endpoint is required for image coverage,
+  revisit the 1,500-entry normalization cap and display-only `slice(0, 100)`, and
+  keep discovery distinct from the curated executable transport. A static model
+  allowlist must not determine which safe-to-display models users can see.
+  Investigate current availability/price before allowing paid usage.
 - **OpenCode Go:** On connect, fetch the full account-accessible inventory from
   the documented `https://opencode.ai/inference/go/v1/models`. Do not
   hard-code the current published lineup as the UI's only options. Refresh
@@ -843,9 +867,9 @@ Provider references:
 
 ### Sequencing, authorization and completion
 
-- **Immediately:** Complete Beam's isolated SHISO H-1 nutrition safety/integrity repair; AI Settings visual discovery/design and provider transport assessment may proceed in parallel without touching Beam's branch.
-- **ASAP next:** Deliver the OpenRouter catalog repair, approved AI Settings Studio redesign and native OpenCode Go provider through appropriately scoped implementation changes. Owners may choose split release branches if that keeps testing and rollback simple.
-- **Independent audit:** Muse Spark 1.3. GPT-6 coordinates architecture. Owner alone authorizes commit/push, merges, paid live calls, Vault mutations and deployment in the established TKC protocol.
+- **Current baseline:** Preserve the merged SHISO C1.7/C1.8 workspace, state-driven animation, and November nutrition decisions while this documentation separates delivered foundations from future provider work.
+- **Next implementation work:** Deliver the OpenRouter catalog completion, owner-approved AI Studio redesign, and native OpenCode Go provider through appropriately scoped implementation changes. Owners may choose split release branches if that keeps testing and rollback simple.
+- **Governance:** The owner alone authorizes commit/push, merges, paid live calls, Vault mutations and deployment in the established TKC protocol.
 - **Acceptance:** Focused regressions, security/provider tests, TypeScript, application and plugin builds, relevant browser checks, green GitHub CI and owner hands-on review. Do not change the app's working nutrition calculation or selection authority as collateral damage.
 
 This is a roadmap commitment and design/implementation brief, not a completed integration, authorization for provider usage, or deployment.
