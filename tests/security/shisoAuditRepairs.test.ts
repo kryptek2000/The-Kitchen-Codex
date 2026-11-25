@@ -228,13 +228,17 @@ describe('F-1 — the advertised capability surface is truthful', () => {
     // H-1F added get_capability_status: it reports the ONE missing prerequisite
     // instead of letting the model rediscover it across wasted turns.
     expect(SHISO_TOOL_NAMES).toContain('get_capability_status');
+    expect(SHISO_TOOL_NAMES).toContain('get_branded_evidence');
     // H-2 added three AUTHORIZED EDITING capabilities. They are owner-delegated
     // requests (the application owner performs every change and every save), not
     // a faked household conversion, so the F-1 property is unchanged.
     expect(SHISO_TOOL_NAMES).toContain('apply_ingredient_edits');
     expect(SHISO_TOOL_NAMES).toContain('apply_nutrition_corrections');
     expect(SHISO_TOOL_NAMES).toContain('save_working_recipe');
-    expect(SHISO_TOOL_NAMES).toHaveLength(11);
+    // SINC-3 added complete_nutrition: an owner-delegated completion pipeline
+    // that prepares proposals in the unsaved review and never applies or saves.
+    expect(SHISO_TOOL_NAMES).toContain('complete_nutrition');
+    expect(SHISO_TOOL_NAMES).toHaveLength(13);
   });
 });
 

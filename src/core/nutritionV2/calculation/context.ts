@@ -20,8 +20,15 @@ import { computeCanonicalContentDigest, validateManifest } from '../usda/manifes
 import { validateCanonicalRecord } from '../usda/record';
 import { isPlainObject, toInertValue } from '../schema';
 import { evaluateEligibility } from '../matching/eligibility';
-import { createReviewCatalog } from '../matching/review';
-import type { ReviewCatalog } from '../matching/types';
+import { confirmIngredientReview, createReviewCatalog, reviewIngredient } from '../matching/review';
+import type {
+  ConfirmationResult,
+  IngredientReviewResult,
+  ManualSearchOutcome,
+  NormalizedQuery,
+  ReviewCatalog,
+} from '../matching/types';
+import { phase2Failure } from '../matching/types';
 import type { CanonicalUsdaFoodRecord, UsdaDataType } from '../usda/types';
 import { runAdvisoryCalculation } from './calculate';
 import { buildPortionReview } from './mass';
@@ -166,6 +173,64 @@ export function calculateRecipeNutrition(contextRaw: unknown, requestRaw: unknow
 }
 
 /** Bounded canonical portion candidates for one matched food in a genuine context. */
+/**
+ * Review/semantic operations whose authority already lives in this genuine
+ * context. Exposing these wrappers lets the Phase 4 session reuse the ONE
+ * catalog created here instead of building and validating a second identical
+ * catalog (a measurable first-Generate freeze source). No catalog object, record
+ * index, or authority map is exposed.
+ */
+export function reviewIngredientInContext(
+  contextRaw: unknown,
+  raw: unknown
+): IngredientReviewResult {
+  const authority = resolveContextAuthority(contextRaw);
+  if (!authority) {
+    return Object.freeze({
+      outcome: 'invalid' as const,
+      line_ref: undefined,
+      original_text: undefined,
+      query: undefined,
+      normalized_query: undefined,
+      query_tokens: Object.freeze([] as string[]),
+      bundle_release: '',
+      catalog_digest: '',
+      normalization_version: '',
+      ranking_version: '',
+      result_limit: 0,
+      candidates: Object.freeze([]),
+      review_digest: undefined,
+      failure: phase2Failure('invalid_catalog'),
+    });
+  }
+  return reviewIngredient(authority.catalog, raw);
+}
+
+export function confirmIngredientInContext(
+  contextRaw: unknown,
+  reviewRaw: unknown,
+  selectionRaw: unknown
+): ConfirmationResult {
+  const authority = resolveContextAuthority(contextRaw);
+  if (!authority) {
+    return Object.freeze({
+      outcome: 'invalid' as const,
+      failure: phase2Failure('invalid_catalog'),
+    });
+  }
+  return confirmIngredientReview(authority.catalog, reviewRaw, selectionRaw);
+}
+
+export function manualSearchInContext(
+  contextRaw: unknown,
+  normalized: NormalizedQuery,
+  limit: number
+): ManualSearchOutcome {
+  const authority = resolveContextAuthority(contextRaw);
+  if (!authority) return Object.freeze({ hits: Object.freeze([]), total: 0 });
+  return authority.catalog.manualSearch(normalized, limit);
+}
+
 export function reviewFoodPortions(contextRaw: unknown, fdcIdRaw: unknown): PortionReviewResult {
   const authority = resolveContextAuthority(contextRaw);
   if (!authority) return { ok: false, failure: phase3Failure('invalid_context') };

@@ -17,8 +17,6 @@
  */
 
 import { parseIngredient } from '../matching/parse';
-import { normalizeQuery } from '../matching/normalize';
-import { projectQueryText } from '../matching/query';
 import {
   bestEffortPortionTieCandidates,
   classifyReviewConfidence,
@@ -29,7 +27,7 @@ import {
 import type { IngredientReviewResult } from '../matching/types';
 import { candidatePortionCompatibility } from '../calculation/portionSemantics';
 import type { AdvisoryNutritionPreview } from '../calculation/types';
-import { buildPortionChoice } from './portion';
+import { buildPortionChoice, selectDeterministicVolumePortionIndex } from './portion';
 import { buildHouseholdPortionChoice } from './householdPortion';
 import { buildCalculationRequest, buildReviewRows } from './rows';
 import type {
@@ -107,96 +105,6 @@ function reviewOf(row: Phase4Row): IngredientReviewResult | undefined {
 function selectionForAuto(review: IngredientReviewResult, fdcId: number): unknown {
   const digest = typeof review.review_digest === 'string' ? review.review_digest : '';
   return { kind: 'candidate', fdc_id: fdcId, review_digest: digest };
-}
-
-interface VolumePortionChoice {
-  readonly index: number;
-}
-
-/**
- * Deterministic automatic volume-portion resolution. Returns the lowest-index
- * compatible authenticated source portion ONLY when every compatible portion
- * resolves to the SAME authoritative mass for the ingredient's measurement.
- * Differing authoritative gram weights are ambiguous and are NOT auto-chosen.
- * Never averages, never guesses a density, never invents a conversion.
- */
-function selectDeterministicVolumePortion(
-  session: AdvancedNutritionSession,
-  fdcId: number,
-  measurementKind: string,
-  milliliters: number | undefined,
-  requestedUnit: string | undefined,
-  queryText: string
-): VolumePortionChoice | undefined {
-  if (measurementKind !== 'volume') return undefined;
-  if (typeof milliliters !== 'number' || !Number.isFinite(milliliters) || milliliters <= 0) {
-    return undefined;
-  }
-  const review = session.reviewPortions(fdcId);
-  if (!review.ok) return undefined;
-  const compatible = review.review.candidates.filter(
-    (candidate) => candidatePortionCompatibility(candidate, 'volume') === 'compatible'
-  );
-  if (compatible.length === 0) return undefined;
-
-  const resolvedGrams = (candidate: (typeof compatible)[number]): number | undefined => {
-    if (
-      candidate.volume_ml === null ||
-      !Number.isFinite(candidate.volume_ml) ||
-      candidate.volume_ml <= 0 ||
-      !(candidate.gram_weight > 0)
-    ) {
-      return undefined;
-    }
-    const grams = (milliliters / candidate.volume_ml) * candidate.gram_weight;
-    if (!Number.isFinite(grams) || grams <= 0 || Object.is(grams, -0)) return undefined;
-    return grams;
-  };
-
-  const allEquivalent = (candidates: ReadonlyArray<(typeof compatible)[number]>): boolean => {
-    const values: number[] = [];
-    for (const candidate of candidates) {
-      const grams = resolvedGrams(candidate);
-      if (grams === undefined) return false;
-      values.push(grams);
-    }
-    const first = values[0];
-    return values.every((value) => Math.abs(value - first) <= 1e-9 * Math.max(1, Math.abs(first)));
-  };
-
-  // 1. Prefer the exact requested unit identity.
-  if (requestedUnit) {
-    const exactUnit = compatible.filter((candidate) => candidate.unit === requestedUnit);
-    if (exactUnit.length === 1) return { index: exactUnit[0].index };
-    if (exactUnit.length > 1) {
-      // 1a. Narrow by a requested preparation/qualifier descriptor
-      //     (e.g. `tsp, ground` for `ground black pepper`).
-      const projection = projectQueryText(normalizeQuery(queryText).text);
-      const descriptorTokens = new Set([
-        ...projection.preparation_qualifiers,
-        ...projection.qualifier_tokens,
-      ]);
-      const descriptorMatches = exactUnit.filter(
-        (candidate) => candidate.descriptor !== null && descriptorTokens.has(candidate.descriptor)
-      );
-      if (descriptorMatches.length === 1) return { index: descriptorMatches[0].index };
-      // Bounded default for measured spices: when the query did not request a
-      // preparation and exactly one exact-unit portion is the `ground` form, the
-      // ground form is the ordinary measured seasoning (e.g. `1/2 tsp black
-      // pepper` -> `1 tsp, ground`). This is deterministic, not arbitrary.
-      if (descriptorMatches.length === 0) {
-        const groundMatches = exactUnit.filter((candidate) => candidate.descriptor === 'ground');
-        if (groundMatches.length === 1) return { index: groundMatches[0].index };
-      }
-      const pool = descriptorMatches.length > 0 ? descriptorMatches : exactUnit;
-      if (allEquivalent(pool)) return { index: pool[0].index };
-      return undefined;
-    }
-  }
-
-  // 2. Otherwise, only a provably equivalent compatible set is auto-chosen.
-  if (allEquivalent(compatible)) return { index: compatible[0].index };
-  return undefined;
 }
 
 /**
@@ -347,7 +255,25 @@ export function analyzeRecipe(
   adapted: ReadonlyArray<AdaptedIngredient>,
   baseServings = 1
 ): RecipeAnalysis {
-  const rows = buildReviewRows(session, adapted);
+  return analyzeRecipeFromRows(
+    session,
+    adapted,
+    buildReviewRows(session, adapted),
+    baseServings
+  );
+}
+
+/**
+ * Analyzes the SAME genuine Phase 4 rows already built by the caller. This
+ * avoids repeating the expensive catalog review when the card already owns the
+ * review rows, while preserving the identical analysis contract.
+ */
+export function analyzeRecipeFromRows(
+  session: AdvancedNutritionSession,
+  adapted: ReadonlyArray<AdaptedIngredient>,
+  rows: ReadonlyArray<Phase4Row>,
+  baseServings = 1
+): RecipeAnalysis {
   const adaptedByRef = new Map(adapted.map((entry) => [entry.line_ref, entry]));
 
   const matches: Record<string, MatchChoice> = {};
@@ -458,15 +384,14 @@ export function analyzeRecipe(
       !hasMassRange &&
       parsed.parsed.milliliters !== undefined
     ) {
-      const portion = selectDeterministicVolumePortion(
+      const portionIndex = selectDeterministicVolumePortionIndex(
         session,
         chosenFdcId,
-        measurementKind,
         parsed.parsed.milliliters,
         parsed.parsed.normalized_unit,
         row.query
       );
-      if (portion) {
+      if (portionIndex !== undefined) {
         const choice = buildPortionChoice(session, {
           lineRef: row.line_ref,
           ingredient: entry.ingredient,
@@ -474,7 +399,7 @@ export function analyzeRecipe(
           selection: row.outcome === 'review_required' ? selectionForAuto(review, chosenFdcId) : undefined,
           automaticSelection: row.outcome === 'review_required',
           fdcId: chosenFdcId,
-          portionIndex: portion.index,
+          portionIndex,
         });
         if (choice.ok) {
           portions[row.line_ref] = Object.freeze({ ...choice.choice, automatic: true });

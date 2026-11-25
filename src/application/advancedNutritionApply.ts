@@ -10,7 +10,7 @@
  * ----------
  * A caller-supplied `codex_nutrition` object, Phase 5A candidate, or Phase 5A
  * identity is NEVER authoritative. Immediately before the write, this module
- * re-runs `authorizeNutritionPersistence` from the current genuine Phase 4
+ * re-runs the per-Apply Phase 5 authorization from the current genuine Phase 4
  * session + current recipe + current reviewed state + current existing block.
  * Only the candidate returned by that fresh authorization is written. Any
  * authority mutation between an earlier UI eligibility check and Apply fails
@@ -39,7 +39,7 @@
 import { isPlainObject } from '../core/nutritionV2/schema';
 import { canonicalStringify, sha256Hex } from '../core/nutritionV2/usda/digest';
 import { decodeCodexNutrition, encodeCodexNutrition } from '../core/nutritionV2/validate';
-import { authorizeNutritionPersistence } from '../core/nutritionV2/phase5';
+import { authorizeNutritionPersistenceForApply } from '../core/nutritionV2/phase5';
 import {
   AI_ESTIMATE_APPLY_BLOCK_MESSAGE,
 } from '../core/nutritionV2/phase4/aiEstimateApplyGate';
@@ -144,6 +144,12 @@ export interface AdvancedNutritionApplyRequest {
    */
   readonly expectedMode?: unknown;
   /**
+   * Display-only AI review markers for unresolved lines. Apply forwards them to
+   * Phase 5A so a `needs_review` line is not persisted as `no_match`. They
+   * never influence matching, mass, nutrients, or authorization.
+   */
+  readonly reviewReasons?: unknown;
+  /**
    * TEST-ONLY timestamp seam forwarded to Phase 5A. The production UI NEVER
    * supplies this: Phase 5A owns the candidate `computed_at`.
    */
@@ -230,7 +236,7 @@ function verifyPersistedBlock(
 ): void {
   const parsed = parseObsidianRecipeMarkdown(markdown, recipe.fileName, recipe.filePath);
   const decoded = decodeCodexNutrition(parsed.codexNutrition);
-  if (decoded.kind !== 'v1' && decoded.kind !== 'v2' && (decoded.kind !== 'v3' && decoded.kind !== 'v4' && decoded.kind !== 'v5')) {
+  if (decoded.kind !== 'v1' && decoded.kind !== 'v2' && (decoded.kind !== 'v3' && decoded.kind !== 'v4' && decoded.kind !== 'v5' && decoded.kind !== 'v6')) {
     throw new Error('advanced_nutrition_verify');
   }
   const encoded = encodeCodexNutrition(decoded.value);
@@ -256,6 +262,7 @@ export async function applyAdvancedNutrition(requestRaw: unknown): Promise<Advan
     const stateField = ownField(requestRaw, 'state');
     const writeField = ownField(requestRaw, 'write');
     const readBackField = ownField(requestRaw, 'readBack');
+    const reviewReasonsField = ownField(requestRaw, 'reviewReasons');
     const computedAtField = ownField(requestRaw, 'computedAt');
 
     if (!sessionField.ok || !sessionField.present) return fail('unsafe_request');
@@ -267,6 +274,7 @@ export async function applyAdvancedNutrition(requestRaw: unknown): Promise<Advan
     if (readBackField.ok && readBackField.present && typeof readBackField.value !== 'function') {
       return fail('unsafe_request');
     }
+    if (!reviewReasonsField.ok) return fail('unsafe_request');
 
     const existing = readExistingBlock(recipeField.value);
     if (!existing.ok) return fail('unsafe_request');
@@ -277,7 +285,7 @@ export async function applyAdvancedNutrition(requestRaw: unknown): Promise<Advan
     if (decodedExisting.kind === 'opaque') return fail('unknown_future_schema');
     if (decodedExisting.kind === 'malformed') return fail('invalid_existing_block');
     const currentMode: 'create' | 'replace' =
-      decodedExisting.kind === 'v1' || decodedExisting.kind === 'v2' || (decodedExisting.kind === 'v3' || decodedExisting.kind === 'v4' || decodedExisting.kind === 'v5')
+      decodedExisting.kind === 'v1' || decodedExisting.kind === 'v2' || (decodedExisting.kind === 'v3' || decodedExisting.kind === 'v4' || decodedExisting.kind === 'v5' || decodedExisting.kind === 'v6')
         ? 'replace'
         : 'create';
 
@@ -289,11 +297,14 @@ export async function applyAdvancedNutrition(requestRaw: unknown): Promise<Advan
     }
 
     // --- IMMEDIATE PRE-WRITE RE-PROOF --------------------------------------
-    const authorization = authorizeNutritionPersistence({
+    const authorization = await authorizeNutritionPersistenceForApply({
       session: sessionField.value,
       recipe: recipeField.value,
       state: stateField.value,
       existingBlock: existing.value,
+      ...(reviewReasonsField.present && reviewReasonsField.value !== null && reviewReasonsField.value !== undefined
+        ? { reviewReasons: reviewReasonsField.value }
+        : {}),
       ...(computedAtField.ok && computedAtField.present ? { computedAt: computedAtField.value } : {}),
     });
     if (!authorization.ok) {

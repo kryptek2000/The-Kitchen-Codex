@@ -11,11 +11,12 @@ import { calculateBasicNutrition } from '../../src/application/basicNutrition';
 import { RecipeEditorModal } from '../../src/components/RecipeEditorModal';
 import { RecipeNutritionCard } from '../../src/components/RecipeNutritionCard';
 import { RecipeDetailView } from '../../src/components/RecipeDetailView';
+import { createVoiceCache } from '../../src/application/voiceCache';
 import { AdvancedNutritionSavedReport } from '../../src/components/AdvancedNutritionSavedReport';
 import { parseObsidianRecipeMarkdown, serializeRecipeToObsidianMarkdown } from '../../src/utils/markdownParser';
 import { isPartialMachineNutrition } from '../../src/utils/nutrition';
 import type { AdvancedNutritionSession } from '../../src/core/nutritionV2/phase4/types';
-import type { ObsidianRecipe } from '../../src/types';
+import type { ObsidianRecipe, RecipeNutrition } from '../../src/types';
 
 // jsdom uses a separate typed-array realm. Decode the exact locked gzip bytes
 // through Node's platform adapter; authentication and all nutrition code stay real.
@@ -80,7 +81,7 @@ describe('nutrition production UI integration',()=>{
  },30000);
  it('opens each recipe at the top without jumping during serving changes',()=>{
   const noop=()=>{};
-  const props={network,onBack:noop,onStartCooking:noop,onEditRecipe:noop,onAddToMealPlan:noop,onAddToShoppingList:noop,onStartTimer:noop};
+  const props={network,voiceService:createVoiceCache(network),onBack:noop,onStartCooking:noop,onEditRecipe:noop,onAddToMealPlan:noop,onAddToShoppingList:noop,onStartTimer:noop};
   const r=makeRecipe();const view=render(<RecipeDetailView {...props} recipe={r} />);
   expect(window.scrollTo).toHaveBeenCalledTimes(1);
   fireEvent.click(screen.getByTitle('Increase servings'));
@@ -124,7 +125,7 @@ describe('nutrition production UI integration',()=>{
   expect(onSave.mock.calls[1][0].nutrition.calories).toBe(estimate.totals.calories);
   view.unmount();
   const noop=()=>{};
-  render(<RecipeDetailView recipe={reopened} network={network} onBack={noop} onStartCooking={noop} onEditRecipe={noop} onAddToMealPlan={noop} onAddToShoppingList={noop} onStartTimer={noop} onUpdateNutrition={noop} />);
+  render(<RecipeDetailView recipe={reopened} network={network} voiceService={createVoiceCache(network)} onBack={noop} onStartCooking={noop} onEditRecipe={noop} onAddToMealPlan={noop} onAddToShoppingList={noop} onStartTimer={noop} onUpdateNutrition={noop} />);
   fireEvent.click(screen.getByTitle('Increase servings'));
   fireEvent.click(screen.getByTitle('Increase servings'));
   expect(screen.getByText('Scaled from 6 to 8 servings')).toBeTruthy();
@@ -134,6 +135,20 @@ describe('nutrition production UI integration',()=>{
   expect(screen.queryByText('Scaled from 6 to 8 servings')).toBeNull();
   expect(screen.getByText('4 eggs, separated')).toBeTruthy();
   expect(reopened.nutrition?.calories).toBe(estimate.totals.calories);
+ },30000);
+ it('discloses an assumed four-serving basis for recipes without authored yield',async()=>{
+  const initial=makeRecipe();initial.servings=undefined;const save=vi.fn(async (_nutrition: RecipeNutrition)=>true);
+  const view=render(<RecipeNutritionCard recipe={initial} network={network} onUpdateNutrition={save} />);
+  expect(screen.getByTestId('basic-assumed-serving-basis')).toBeTruthy();
+  fireEvent.click(screen.getByTestId('calculate-basic-nutrition-empty-btn'));
+  await screen.findByTestId('basic-nutrition-review',{}, {timeout:15000});
+  fireEvent.click(screen.getByTestId('save-nutrition-btn'));
+  await waitFor(()=>expect(save).toHaveBeenCalledTimes(1));
+  expect(save.mock.calls[0][0].confidenceNote).toMatch(/assumed 4-serving basis/);
+  view.unmount();
+  const authored=makeRecipe();
+  render(<RecipeNutritionCard recipe={authored} network={network} onUpdateNutrition={vi.fn()} />);
+  expect(screen.queryByTestId('basic-assumed-serving-basis')).toBeNull();
  },30000);
  it('preserves decimal legacy calories and manual edits as precise batch totals',async()=>{
   const r=makeRecipe();r.calories='374.8 kcal';r.nutrition=undefined;
@@ -188,5 +203,50 @@ describe('nutrition production UI integration',()=>{
   expect(screen.getByTestId('saved-basic-partial')).toBeTruthy();
   expect(screen.getByText('Calories · subtotal')).toBeTruthy();
   expect(screen.getByText(/^0$/)).toBeTruthy();
+ },30000);
+
+ it('owner Gochujang fixture: foundation energy coverage reaches the macro lines but stays a labeled subtotal',async()=>{
+  const ownerLines=[
+   '680 g raw boneless skinless chicken thighs',
+   '1 tbsp olive oil',
+   '1 medium yellow onion (150 g)',
+   '3 garlic cloves',
+   '1 tbsp minced fresh ginger',
+   '1 red bell pepper (150 g)',
+   '1 medium carrot (70 g)',
+   '100 g broccoli florets',
+   '100 g sugar snap peas',
+   '100 g cremini mushrooms',
+   '2 tbsp gochujang (Korean chili paste)',
+   '2 tbsp reduced-sodium soy sauce',
+   '1 tbsp rice vinegar',
+   '1 tbsp honey',
+   '1 tsp toasted sesame oil',
+   '200 g dry jasmine rice',
+   '1 tbsp sesame seeds',
+   '2 scallions (30 g)',
+  ];
+  const owner=parseObsidianRecipeMarkdown(`---\ntitle: Gochujang Chicken Rice Bowls\nservings: 4\n---\n# Gochujang Chicken Rice Bowls\n## Ingredients\n${ownerLines.map(l=>'- '+l).join('\n')}\n## Instructions\n1. Cook.`,'owner.md','Recipes/owner.md');
+  render(<RecipeNutritionCard recipe={owner} network={network} onUpdateNutrition={vi.fn()} />);
+  fireEvent.click(screen.getByTestId('calculate-basic-nutrition-empty-btn'));
+  const review=await screen.findByTestId('basic-nutrition-review',{}, {timeout:30000});
+  // Every matched Foundation record now publishes USDA food-specific energy,
+  // so energy covers the same 16 lines as the macros. The recipe still has two
+  // unresolved lines, so the number remains a labeled KNOWN SUBTOTAL, never a
+  // complete recipe calorie total.
+  expect(screen.getByTestId('basic-calorie-hero').textContent).toBe('2301');
+  expect(review.textContent).toContain('Calories · known subtotal');
+  expect(review.textContent).toContain('Known energy subtotal · covers 16 of 18 ingredient lines');
+  expect(screen.queryByTestId('basic-energy-incomplete')).toBeNull();
+  expect(review.textContent).toContain('158.5g');
+  expect(review.textContent).toContain('80.9g');
+  expect(review.textContent).toContain('covers 16/18 lines');
+  expect(screen.getByTestId('basic-macro-distribution')).toBeTruthy();
+  expect(screen.queryByTestId('basic-macro-incompatible')).toBeNull();
+  // Empty assumptions must never render an empty bullet.
+  fireEvent.click(screen.getByText(/Portion assumptions \(1\)/));
+  const assumptionItems=Array.from(review.querySelectorAll('details ul li'));
+  expect(assumptionItems.length).toBeGreaterThan(0);
+  for(const item of assumptionItems) expect((item.textContent ?? '').trim().length).toBeGreaterThan(0);
  },30000);
 });

@@ -122,6 +122,40 @@ describe("AiProvider foundation", () => {
     expect(seen.config.tools).toBeUndefined();
   });
 
+  it("forwards a server-owned per-request timeout to the actual Gemini HTTP config", async () => {
+    let seen: any;
+    mockGemini({
+      generateContent: async (params: any) => {
+        seen = params;
+        return { text: JSON.stringify({ ok: true }) };
+      },
+    });
+    const provider = new GeminiProvider();
+    await provider.generateStructured(
+      "timed",
+      { type: "object", properties: { ok: { type: "boolean" } } },
+      { model: "model-t", timeoutMs: 45_000 }
+    );
+    expect(seen.config.httpOptions).toEqual({ timeout: 45_000 });
+  });
+
+  it("leaves the ordinary provider default in place when no per-request timeout is supplied", async () => {
+    let seen: any;
+    mockGemini({
+      generateContent: async (params: any) => {
+        seen = params;
+        return { text: JSON.stringify({ ok: true }) };
+      },
+    });
+    const provider = new GeminiProvider();
+    await provider.generateStructured(
+      "default",
+      { type: "object", properties: { ok: { type: "boolean" } } },
+      { model: "model-d" }
+    );
+    expect(seen.config.httpOptions).toBeUndefined();
+  });
+
   it("webSearch option adds the Google-search grounding tool to structured calls", async () => {
     let seen: any;
     mockGemini({

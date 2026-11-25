@@ -1,34 +1,37 @@
-import React, { useRef } from 'react';
+import React, { useLayoutEffect, useRef } from 'react';
 import {
-  FolderOpen,
-  Upload,
-  Plus,
-  Search,
-  LayoutGrid,
-  Table,
-  CalendarDays,
-  ShoppingCart,
-  Palette,
-  SlidersHorizontal,
-  RefreshCw,
-  FolderCheck,
-  CheckCircle2,
+  AlertCircle,
   BookOpen,
-  Globe,
-  BrainCircuit,
+  CheckCircle2,
+  FolderCheck,
+  RefreshCw,
+  Settings2,
   Sparkles,
-  Wand2,
-  MessageCircle,
 } from 'lucide-react';
-import { useShiso } from '../application-ui/shisoEntryPoints';
 import { VaultSyncStatus } from '../types';
-import { APP_VERSION } from '../version';
 import { KitchenCodexMark } from './BrandMark';
+
+export type VaultCollectionView = 'all' | 'favorites';
 
 interface VaultHeaderProps {
   vaultStatus: VaultSyncStatus;
   activeTab: 'grid' | 'dataview' | 'mealplan' | 'shopping' | 'themes' | 'providers';
   setActiveTab: (tab: 'grid' | 'dataview' | 'mealplan' | 'shopping' | 'themes' | 'providers') => void;
+  /**
+   * The active collection view. When supplied, the header states the active
+   * collection and its own count instead of inferring a starter/personal label
+   * from connection state alone. This is the fix for the contradictory header
+   * shown on My Saved Recipes.
+   */
+  vaultView?: VaultCollectionView;
+  /** Total favorites in the combined collection (built-in + personal). */
+  favoriteCount?: number;
+  /**
+   * Search/filter state still travels through this component's public contract
+   * for compatibility. The daily-use command bar now lives in the Vault page
+   * introduction, immediately below the header, so the sticky header can stay
+   * a single truthful Vault-state line.
+   */
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   isFilterOpen: boolean;
@@ -42,313 +45,222 @@ interface VaultHeaderProps {
   onOpenCreateForMe: () => void;
   legacyRecipeCount?: number;
   onRefreshVault: () => void;
+  /** The recipe count of the single active Recipe Vault. */
+  recipeCount: number;
+  /** Non-recipe notes. Reported separately, never as recipes. */
+  noteCount: number;
+  /** Re-authorises a remembered Vault. Invoked from a user gesture. */
+  onReconnectVault: () => void;
 }
 
+/**
+ * Signature Edition Vault chrome.
+ *
+ * The header now does one job: state the truth about the active collection and
+ * keep creation/assistant/settings within thumb reach on small screens. The
+ * desktop page introduction below owns the title, primary action, search and
+ * filters, so the photographs begin much sooner.
+ */
 export function VaultHeader({
   vaultStatus,
   activeTab,
-  setActiveTab,
-  searchQuery,
-  setSearchQuery,
-  isFilterOpen,
-  setIsFilterOpen,
-  activeFilterCount,
+  vaultView,
+  favoriteCount,
   onOpenConnectVaultModal,
-  onOpenNewRecipeModal,
-  onOpenRecipeGrabber,
-  onOpenVaultIntelligence,
   onOpenAskMyKitchen,
-  onOpenCreateForMe,
-  legacyRecipeCount = 0,
   onRefreshVault,
+  recipeCount,
+  onReconnectVault,
 }: VaultHeaderProps) {
-  // SHISO global entry point. Read from context, not props, so every existing
-  // caller is unaffected and there is exactly one Shiso surface.
-  const shiso = useShiso();
-  return (
-    <header id="obsidian-vault-header" className="bg-[#141414] border-b border-white/5 sticky top-0 z-30 shadow-md">
-      {/* Top Vault Path & Quick Status Bar */}
-      <div className="bg-[#080808] text-gray-400 text-xs px-4 py-2 flex flex-wrap items-center justify-between gap-2 border-b border-white/5">
-        <div
-          onClick={onOpenConnectVaultModal}
-          className="flex items-center gap-2 min-w-0 cursor-pointer hover:opacity-90 transition-opacity"
-          title="Click to view Vault settings & connect folders"
-        >
-          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-400 border border-amber-500/20 font-mono text-[11px]">
-            <FolderCheck className="w-3.5 h-3.5 text-amber-400" />
-            <span className="font-semibold">Obsidian Vault</span>
-          </div>
-          <span className="text-gray-600 hidden sm:inline">/</span>
-          <span className="font-mono text-gray-300 truncate" title={vaultStatus.vaultPath}>
-            {vaultStatus.vaultPath}
-          </span>
-          <span className="text-gray-600">•</span>
-          <span className="text-gray-400 font-medium whitespace-nowrap">
-            {vaultStatus.fileCount} {vaultStatus.fileCount === 1 ? 'recipe note' : 'recipe notes'}
-          </span>
-        </div>
+  const fullPath = vaultStatus.vaultPath || '';
+  const pathSegments = fullPath.split(/[\\/]/).filter(Boolean);
+  const pathLabel = pathSegments.length ? pathSegments[pathSegments.length - 1] : fullPath;
+  const connectionState = vaultStatus.connectionState ?? (vaultStatus.isConnected ? 'connected' : 'starter');
+  const needsReconnect = connectionState === 'reauthorization_required' || connectionState === 'permission_denied';
+  const isLiveVault = vaultStatus.isConnected && vaultStatus.accessType === 'filesystem_api';
+  // A starter collection is never labelled with a folder path that could be
+  // mistaken for the owner's private Vault. Remembered Vaults are named
+  // explicitly so recovery is unambiguous. Files imported for this session are
+  // labelled as imported files, not as a live two-way Vault.
+  const stateLabel = needsReconnect
+    ? vaultStatus.rememberedVaultName || 'Remembered Vault'
+    : vaultStatus.isConnected
+      ? isLiveVault
+        ? pathLabel || 'Vault'
+        : 'Imported files'
+      : 'Starter Vault';
 
-        <div className="flex items-center gap-2">
-          {vaultStatus.isConnected ? (
+  // The active collection is the truthful label on a Library page. Connection
+  // state remains the separate chip on the right; it must not overwrite the
+  // collection label (the original defect showed “Signature Collection” while
+  // the active page was My Saved Recipes).
+  const viewAware = vaultView !== undefined && activeTab === 'grid';
+  const recipeNoun = recipeCount === 1 ? 'recipe' : 'recipes';
+  const favoriteTotal = favoriteCount ?? 0;
+  const isFavorites = viewAware && vaultView === 'favorites';
+  const collectionLabel = isFavorites ? 'Favorites' : 'My Recipe Vault';
+  const collectionShortLabel = isFavorites ? 'Favorites' : 'Vault';
+  const collectionCount = isFavorites
+    ? `${favoriteTotal} ${favoriteTotal === 1 ? 'favorite' : 'favorites'}`
+    : `${recipeCount} ${recipeNoun}`;
+  const fallbackLabel = stateLabel === 'Starter Vault' ? 'My Recipe Vault' : stateLabel;
+
+  // STICKY HEADER GEOMETRY — unchanged contract (UD-2A.1B R-1).
+  // The header is static below 768px and sticky from 768px up. Its measured
+  // height is published as `--kc-sticky-header-h`; index.css consumes it as
+  // `scroll-padding-top`. The compact Signature header is shorter, but the
+  // measurement remains content-driven and truthful.
+  const headerRef = useRef<HTMLElement | null>(null);
+
+  useLayoutEffect(() => {
+    const el = headerRef.current;
+    if (!el || typeof document === 'undefined') return;
+    const root = document.documentElement;
+    const publish = () => {
+      const isSticky = getComputedStyle(el).position === 'sticky';
+      const height = isSticky ? Math.ceil(el.getBoundingClientRect().height) : 0;
+      root.style.setProperty('--kc-sticky-header-h', `${height}px`);
+    };
+    publish();
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(publish) : null;
+    observer?.observe(el);
+    window.addEventListener('resize', publish);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', publish);
+      root.style.removeProperty('--kc-sticky-header-h');
+    };
+  }, []);
+
+  const StatusIcon = needsReconnect ? AlertCircle : vaultStatus.isConnected ? FolderCheck : BookOpen;
+
+  return (
+    <header
+      ref={headerRef}
+      id="obsidian-vault-header"
+      className="static z-30 border-b border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] shadow-sm md:sticky md:top-0"
+    >
+      {/* ONE truthful Vault-state line. No duplicate brand, no duplicate
+          connection control, no second search region. */}
+      <div
+        id="vault-status-strip"
+        className="flex flex-nowrap items-center justify-between gap-2 border-b border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-root,#0C0C0C)] px-3 text-sm text-[var(--text-secondary,#9CA3AF)] sm:px-4"
+      >
+        <button
+          onClick={onOpenConnectVaultModal}
+          className="flex min-h-[44px] min-w-0 flex-1 items-center gap-1.5 rounded-sm text-left transition-colors hover:text-[var(--text-primary,#F3F4F6)]"
+          title={fullPath ? `${fullPath} — open Vault settings` : 'Open Vault settings & connect folders'}
+        >
+          <StatusIcon
+            className="h-4 w-4 shrink-0 text-[var(--accent-text,#F59E0B)]"
+            strokeWidth={1.75}
+            aria-hidden="true"
+          />
+          <span
+            id="vault-collection-label"
+            aria-label={viewAware ? collectionLabel : undefined}
+            className="min-w-0 truncate text-[12px] font-medium tracking-[0.01em] text-[var(--text-secondary,#9CA3AF)]"
+          >
+            {viewAware ? (
+              <>
+                <span className="sm:hidden">{collectionShortLabel}</span>
+                <span className="hidden sm:inline">{collectionLabel}</span>
+              </>
+            ) : (
+              fallbackLabel
+            )}
+          </span>
+          <span className="hidden text-[var(--text-secondary,#9CA3AF)] sm:inline" aria-hidden="true">•</span>
+          <span
+            id="vault-recipe-count"
+            className="shrink-0 whitespace-nowrap text-[12px] font-medium text-[var(--text-secondary,#9CA3AF)]"
+          >
+            {collectionCount}
+          </span>
+        </button>
+
+        <div className="flex shrink-0 items-center gap-1">
+          {needsReconnect ? (
             <button
-              onClick={onOpenConnectVaultModal}
-              className="flex items-center gap-1 text-[11px] text-emerald-400 bg-emerald-950/40 px-2 py-0.5 rounded-md border border-emerald-800/40 hover:bg-emerald-950/70 transition-colors"
+              id="reconnect-vault-btn"
+              onClick={onReconnectVault}
+              className="flex min-h-[44px] items-center gap-1 rounded-sm border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--accent-subtle,rgba(245,158,11,0.12))] px-2.5 text-sm font-semibold text-[var(--text-primary,#F3F4F6)] transition-colors duration-[140ms] hover:bg-amber-500/20"
+              title={
+                connectionState === 'permission_denied'
+                  ? `Access to “${vaultStatus.rememberedVaultName || 'your Vault'}” was denied. Click to try again, or pick the folder again.`
+                  : `“${vaultStatus.rememberedVaultName || 'Your Vault'}” is remembered. Click to grant access and reconnect it.`
+              }
             >
-              <CheckCircle2 className="w-3 h-3" />
-              <span>Vault Linked ({vaultStatus.fileCount})</span>
+              <BookOpen className="h-4 w-4 shrink-0 text-[var(--accent-text,#F59E0B)]" strokeWidth={1.75} aria-hidden="true" />
+              <span className="whitespace-nowrap">Reconnect Vault</span>
+            </button>
+          ) : vaultStatus.isConnected ? (
+            <button
+              id="vault-linked-chip"
+              onClick={onOpenConnectVaultModal}
+              className="flex min-h-[44px] items-center gap-1 rounded-sm border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-elevated,#1E1E1E)] px-2.5 text-sm text-[var(--text-primary,#F3F4F6)] transition-colors duration-[140ms] hover:bg-[var(--bg-root,#0C0C0C)]"
+              title={isLiveVault ? 'Vault connected — open Vault settings' : 'Recipes loaded from files — open Vault settings'}
+            >
+              <CheckCircle2 className="h-4 w-4 shrink-0 text-[var(--accent-text,#F59E0B)]" strokeWidth={1.75} aria-hidden="true" />
+              <span className="whitespace-nowrap">{isLiveVault ? 'Vault Linked' : 'Recipes Loaded'}</span>
             </button>
           ) : (
             <button
+              id="connect-vault-chip"
               onClick={onOpenConnectVaultModal}
-              className="flex items-center gap-1 text-[11px] text-amber-300 bg-amber-950/40 px-2 py-0.5 rounded-md border border-amber-800/40 hover:bg-amber-950/70 transition-colors"
+              className="flex min-h-[44px] items-center gap-1 rounded-sm border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--accent-subtle,rgba(245,158,11,0.12))] px-2.5 text-sm font-semibold text-[var(--text-primary,#F3F4F6)] transition-colors duration-[140ms] hover:bg-amber-500/20"
+              title="Connect your recipe vault folder"
             >
-              <BookOpen className="w-3 h-3" />
-              <span>Starter Vault (8 Notes)</span>
+              <BookOpen className="h-4 w-4 shrink-0 text-[var(--accent-text,#F59E0B)]" strokeWidth={1.75} aria-hidden="true" />
+              <span className="whitespace-nowrap">Connect Vault</span>
             </button>
           )}
 
           <button
             id="refresh-vault-btn"
             onClick={onRefreshVault}
-            className="p-1 text-gray-400 hover:text-gray-100 hover:bg-white/5 rounded transition-colors"
+            className="flex h-11 w-11 items-center justify-center rounded-sm text-[var(--text-secondary,#9CA3AF)] transition-colors duration-[140ms] hover:bg-[var(--bg-elevated,#1E1E1E)] hover:text-[var(--text-primary,#F3F4F6)]"
             title="Reload vault markdown notes"
+            aria-label="Reload vault markdown notes"
           >
-            <RefreshCw className="w-3.5 h-3.5" />
+            <RefreshCw className="h-4 w-4" strokeWidth={1.75} />
           </button>
         </div>
       </div>
 
-      {/* Main Action Bar */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3.5 flex flex-col md:flex-row md:items-center justify-between gap-3">
-        {/* App Title & Branding */}
-        <div className="flex items-center gap-4">
-          <KitchenCodexMark size={74} decorative className="shrink-0" />
+      {/* Small-screen utility row. Desktop expresses the same actions in the
+          page introduction; only one set is visible at a time. */}
+      <div className="flex items-center justify-between gap-2 px-3 py-2.5 sm:px-4 lg:hidden">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <KitchenCodexMark size={64} decorative className="shrink-0" />
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h1 className="text-lg font-serif font-bold text-white tracking-tight leading-tight">The Kitchen Codex</h1>
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-medium">
-                {APP_VERSION}
-              </span>
+            <div className="truncate font-serif text-[15px] font-semibold leading-tight text-[var(--text-primary,#F3F4F6)] sm:text-lg">
+              The Kitchen Codex
             </div>
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
-              <span className="text-[10px] uppercase tracking-widest px-1.5 py-0.5 rounded bg-white/5 text-gray-400 border border-white/5 font-medium">
-                Obsidian Culinary Vault
-              </span>
-              <p className="text-xs text-gray-500 leading-tight">
-                Markdown-native kitchen companion &amp; culinary note system for Obsidian
-              </p>
+            <div className="mt-0.5 hidden text-[10px] uppercase tracking-[0.18em] text-[var(--text-secondary,#9CA3AF)] sm:block">
+              My Recipe Vault
             </div>
           </div>
         </div>
 
-        {/* Action Buttons */}
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Create with Shiso — the existing recipe-generation capability in the shared conversation. */}
-          <button
-            id="create-for-me-header-btn"
-            onClick={onOpenCreateForMe}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-violet-500/10 hover:bg-violet-500/20 text-violet-300 border border-violet-500/30 transition-colors shadow-xs"
-            title="Create and refine an AI-generated recipe draft with Shiso; save only when you choose"
-          >
-            <Wand2 className="w-4 h-4 text-violet-400" />
-            <span>Create with Shiso</span>
-          </button>
-
-          {/* Chat with Shiso Button — the global entry point to the single
-              Shiso conversation. */}
-          <button
-            id="shiso-header-btn"
-            data-testid="shiso-global-entry"
-            onClick={() => shiso.open('global')}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-teal-500/10 hover:bg-teal-500/20 text-teal-300 border border-teal-500/30 transition-colors shadow-xs"
-            title="Chat with Shiso about your recipes, nutrition and cooking"
-          >
-            <MessageCircle className="w-4 h-4 text-teal-400" />
-            <span>Chat with Shiso</span>
-          </button>
-
-          {/* Ask My Kitchen Button */}
+        <div className="flex shrink-0 items-center gap-1.5">
           <button
             id="ask-my-kitchen-header-btn"
             onClick={onOpenAskMyKitchen}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition-colors shadow-xs"
-            title="Ask a question and search your vault for matching recipes"
+            className="flex h-11 w-11 items-center justify-center rounded-sm border border-[var(--border-subtle,rgba(255,255,255,0.08))] text-[var(--text-primary,#F3F4F6)] transition-colors duration-[140ms] hover:bg-amber-500/20"
+            aria-label="Ask My Kitchen"
+            title="Ask My Kitchen"
           >
-            <Sparkles className="w-4 h-4 text-amber-400" />
-            <span>Ask My Kitchen</span>
+            <Sparkles className="h-5 w-5" strokeWidth={1.75} aria-hidden="true" />
           </button>
-
-          {/* Vault Intelligence Button */}
-          <button
-            id="vault-intelligence-header-btn"
-            onClick={onOpenVaultIntelligence}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 border border-purple-500/30 transition-colors shadow-xs"
-            title="Scan recipe metadata health, recover missing fields, and detect legacy formats"
-          >
-            <BrainCircuit className="w-4 h-4 text-purple-400" />
-            <span>Vault Intelligence</span>
-            {legacyRecipeCount > 0 && (
-              <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-purple-500 text-black font-bold">
-                {legacyRecipeCount}
-              </span>
-            )}
-          </button>
-
-          {/* Grab Recipe from Web Button */}
-          <button
-            id="grab-recipe-header-btn"
-            onClick={onOpenRecipeGrabber}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-sky-500/10 hover:bg-sky-500/20 text-sky-300 border border-sky-500/30 transition-colors shadow-xs"
-            title="Import & grab recipes directly from website URLs or text"
-          >
-            <Globe className="w-4 h-4 text-sky-400" />
-            <span>Grab from Web</span>
-          </button>
-
-          {/* Connect Vault Modal Button */}
           <button
             id="connect-local-vault-btn"
             onClick={onOpenConnectVaultModal}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition-colors shadow-xs"
-            title="Connect your Obsidian Vault folder, import .md files, or drop recipes"
+            className="hidden h-11 w-11 items-center justify-center rounded-sm border border-[var(--border-subtle,rgba(255,255,255,0.08))] text-[var(--text-primary,#F3F4F6)] transition-colors duration-[140ms] hover:bg-amber-500/20 sm:flex"
+            aria-label="Vault settings and connection"
+            title="Vault settings and connection"
           >
-            <FolderOpen className="w-4 h-4 text-amber-400" />
-            <span>Connect Vault</span>
-          </button>
-
-          {/* New Recipe Note Button */}
-          <button
-            id="create-new-recipe-btn"
-            onClick={onOpenNewRecipeModal}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-amber-500 hover:bg-amber-400 text-black shadow-md shadow-amber-500/20 transition-colors"
-          >
-            <Plus className="w-4 h-4" />
-            <span>New Recipe Note</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Navigation Tabs & Search Controls */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 pb-3 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-        {/* Navigation Tabs */}
-        <nav id="vault-view-tabs" className="flex items-center gap-1 bg-[#0C0C0C] p-1 rounded-xl border border-white/5 self-start">
-          <button
-            id="tab-recipe-cards"
-            onClick={() => setActiveTab('grid')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-              activeTab === 'grid'
-                ? 'bg-white/10 text-amber-400 font-semibold border border-white/10'
-                : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
-            }`}
-          >
-            <LayoutGrid className="w-3.5 h-3.5" />
-            <span>Recipe Gallery</span>
-          </button>
-
-          <button
-            id="tab-dataview-table"
-            onClick={() => setActiveTab('dataview')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-              activeTab === 'dataview'
-                ? 'bg-white/10 text-amber-400 font-semibold border border-white/10'
-                : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
-            }`}
-          >
-            <Table className="w-3.5 h-3.5" />
-            <span>Dataview Table</span>
-          </button>
-
-          <button
-            id="tab-meal-planner"
-            onClick={() => setActiveTab('mealplan')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-              activeTab === 'mealplan'
-                ? 'bg-white/10 text-amber-400 font-semibold border border-white/10'
-                : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
-            }`}
-          >
-            <CalendarDays className="w-3.5 h-3.5" />
-            <span>Meal Plan</span>
-          </button>
-
-          <button
-            id="tab-shopping-list"
-            onClick={() => setActiveTab('shopping')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-              activeTab === 'shopping'
-                ? 'bg-white/10 text-amber-400 font-semibold border border-white/10'
-                : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
-            }`}
-          >
-            <ShoppingCart className="w-3.5 h-3.5" />
-            <span>Shopping List</span>
-          </button>
-
-          <button
-            id="tab-themes"
-            onClick={() => setActiveTab('themes')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-              activeTab === 'themes'
-                ? 'bg-white/10 text-amber-400 font-semibold border border-white/10'
-                : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
-            }`}
-          >
-            <Palette className="w-3.5 h-3.5" />
-            <span>Themes</span>
-          </button>
-
-          <button
-            id="tab-providers"
-            onClick={() => setActiveTab('providers')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-              activeTab === 'providers'
-                ? 'bg-white/10 text-amber-400 font-semibold border border-white/10'
-                : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
-            }`}
-          >
-            <BrainCircuit className="w-3.5 h-3.5" />
-            <span>AI Settings</span>
-          </button>
-        </nav>
-
-        {/* Search & Filter Controls */}
-        <div className="flex items-center gap-2">
-          <div className="relative flex-1 sm:w-64">
-            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
-            <input
-              id="recipe-search-input"
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search recipes, tags, ingredients..."
-              className="w-full pl-9 pr-3 py-1.5 text-xs bg-[#0C0C0C] border border-white/10 rounded-lg text-gray-200 placeholder-gray-500 focus:outline-none focus:border-amber-500/60 focus:ring-1 focus:ring-amber-500/40 transition-all"
-            />
-            {searchQuery && (
-              <button
-                onClick={() => setSearchQuery('')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-gray-500 hover:text-gray-300"
-              >
-                ×
-              </button>
-            )}
-          </div>
-
-          <button
-            id="toggle-filters-btn"
-            onClick={() => setIsFilterOpen((prev) => !prev)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-all ${
-              isFilterOpen || activeFilterCount > 0
-                ? 'bg-amber-500/10 border-amber-500/30 text-amber-300 font-semibold'
-                : 'bg-white/5 border-white/10 text-gray-300 hover:bg-white/10'
-            }`}
-          >
-            <SlidersHorizontal className="w-3.5 h-3.5" />
-            <span>Filters</span>
-            {activeFilterCount > 0 && (
-              <span className="w-4 h-4 rounded-full bg-amber-500 text-black text-[10px] flex items-center justify-center font-bold">
-                {activeFilterCount}
-              </span>
-            )}
+            <Settings2 className="h-5 w-5" strokeWidth={1.75} aria-hidden="true" />
           </button>
         </div>
       </div>

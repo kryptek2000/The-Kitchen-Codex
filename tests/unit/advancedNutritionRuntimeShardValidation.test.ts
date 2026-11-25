@@ -54,7 +54,7 @@ type Rec = Record<string, any>;
 
 const BUNDLE_DIR = join(
   __dirname,
-  '../../data/advanced-nutrition/usda/usda_fdc_87c5408a3e98838944a87be74824761e'
+  '../../data/advanced-nutrition/usda/usda_fdc_1f3e3068a7ae0702f360d1caae40a628'
 );
 const DATA_TYPES: ReadonlyArray<UsdaDataType> = ['foundation', 'sr_legacy', 'fndds'];
 const FILENAMES: Record<UsdaDataType, string> = {

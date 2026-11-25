@@ -98,11 +98,20 @@ export function calculateCatalogBasicNutrition(input: BasicNutritionInput, sessi
   const totals = {} as Record<typeof KEYS[number], number | null>;
   const knownSubtotal = {} as Record<typeof KEYS[number], number | null>;
   const perServing = {} as Record<typeof KEYS[number], number | null>;
+  const nutrientCoverage = {} as Record<typeof KEYS[number], { status: 'complete' | 'partial' | 'missing'; covered: number; measurable: number }>;
+  const measurableCount = preview.ingredients.filter((entry) => !entry.qualitative).length;
   for (const key of KEYS) {
     const n = preview.totals[key];
     knownSubtotal[key] = n && n.covered_ingredient_count > 0 ? n.amount : null;
     totals[key] = n?.status === 'complete' ? n.amount : null;
     perServing[key] = totals[key] === null ? null : (roundNutritionForDisplay({ [key]: totals[key]! / servings })[key] ?? null);
+    nutrientCoverage[key] = n
+      ? {
+          status: n.status,
+          covered: n.covered_ingredient_count,
+          measurable: n.measurable_ingredient_count,
+        }
+      : { status: 'missing', covered: 0, measurable: measurableCount };
   }
   const missingNutrients = KEYS.filter(key => totals[key] === null);
   const lines: BasicNutritionLine[] = preview.ingredients.map((e, i) => {
@@ -125,13 +134,19 @@ export function calculateCatalogBasicNutrition(input: BasicNutritionInput, sessi
   const qualitative = lines.filter(l => l.status === 'qualitative').length;
   const unresolved = lines.length - resolved - qualitative;
   const complete = unresolved === 0 && resolved > 0;
-  const confidenceNote = `${resolved}/${lines.length - qualitative} measurable ingredient lines resolved using the pinned USDA catalog. ${complete ? 'Ingredient quantities covered.' : 'PARTIAL estimate: recipe totals are unknown; resolved contributions are only a subtotal.'} ${missingNutrients.length ? `Unknown nutrients: ${missingNutrients.join(', ')} (incomplete source coverage).` : ''} ${[...assumed.values()].join(' ')}`;
+  const servingsNote = typeof input.servings === 'number' && Number.isFinite(input.servings) && input.servings > 0
+    ? ''
+    : ' Servings were not authored; per-serving figures use an assumed 4-serving basis. Enter the recipe yield to replace this assumption.';
+  const confidenceNote = `${resolved}/${lines.length - qualitative} measurable ingredient lines resolved using the pinned USDA catalog. ${complete ? 'Ingredient quantities covered.' : 'PARTIAL estimate: recipe totals are unknown; resolved contributions are only a subtotal.'} ${missingNutrients.length ? `Unknown nutrients: ${missingNutrients.join(', ')} (incomplete source coverage).` : ''}${servingsNote} ${[...assumed.values()].join(' ')}`;
   return {
     ok: resolved > 0, message: resolved ? null : 'No ingredient contribution could be calculated. Review food identities and quantities.',
     source: 'offline_heuristic', confidence: assumed.size ? 'low' : 'medium', confidenceNote, baseServings: servings,
     totals: Object.freeze(totals), perServing: Object.freeze(perServing), knownSubtotal: Object.freeze(knownSubtotal),
     coverage: { total: lines.length, resolved, qualitative, unresolved, complete },
-    assumptions: [confidenceNote, ...assumed.values()], lines,
+    nutrientCoverage: Object.freeze(nutrientCoverage),
+    assumptions: [confidenceNote, ...assumed.values()]
+      .map((note) => note.trim())
+      .filter((note) => note.length > 0), lines,
   };
 }
 

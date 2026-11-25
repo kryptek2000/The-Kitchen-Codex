@@ -142,6 +142,15 @@ async function openAndAnalyze(): Promise<void> {
   await waitFor(() => expect(screen.getByTestId('advanced-nutrition-live-summary')).toBeTruthy());
 }
 
+/** Explicitly run the one AI-first workflow after the deterministic baseline. */
+async function analyzeWithShiso(): Promise<void> {
+  const button = (await screen.findByTestId(
+    'advanced-nutrition-analyze-with-shiso'
+  )) as HTMLButtonElement;
+  await waitFor(() => expect(button.disabled).toBe(false));
+  fireEvent.click(button);
+}
+
 function summaryText(): string {
   return screen.getByTestId('advanced-nutrition-live-summary').textContent ?? '';
 }
@@ -240,6 +249,8 @@ describe('unified AI exception eligibility — UI', () => {
     const handler = vi.fn(async () => ({ ok: true, outcome: EMPTY_FOOD, amounts: EMPTY_AMOUNTS }));
     render(<AdvancedNutritionCard recipe={recipe('3 garlic cloves, minced')} session={session} onResolveWithAi={handler} />);
     await openAndAnalyze();
+    // Generate is deterministic only. No AI call has happened yet.
+    expect(handler).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId('advanced-nutrition-edit'));
     fireEvent.click(await screen.findByTestId('advanced-nutrition-ai-help'));
     await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
@@ -249,6 +260,267 @@ describe('unified AI exception eligibility — UI', () => {
     }])[0];
     expect(args.rows).toHaveLength(1);
     expect(Object.values(args.issueKinds)).toEqual(['needs_amount']);
+  });
+});
+
+describe('AI-first needs_review — UI', () => {
+  it('shows the model explanation and opens the existing USDA search with a discovered query', async () => {
+    const legacy = vi.fn(async () => ({ ok: true, outcome: EMPTY_FOOD, amounts: EMPTY_AMOUNTS }));
+    const handler = vi.fn(async (args: {
+      rows: ReadonlyArray<Phase4Row>;
+    }) => {
+      const lineRef = args.rows[0].line_ref;
+      return {
+        ok: true,
+        outcome: { candidates: [], unresolved: [lineRef], auto_count: 0 },
+        amounts: EMPTY_AMOUNTS,
+        aiFirstReviews: [
+          {
+            line_ref: lineRef,
+            decision: 'needs_review' as const,
+            justification: 'The recipe does not specify salted or unsalted tomato puree.',
+            uncertainty: 'Salt level is ambiguous.',
+            candidate_query: 'Mystery raw',
+            candidate_count: 1,
+          },
+        ],
+      };
+    });
+    render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup Zzz')}
+        session={session}
+        onResolveWithAi={legacy}
+        onResolveWithAiFirst={handler}
+      />
+    );
+    await openAndAnalyze();
+    await analyzeWithShiso();
+    await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    fireEvent.click(await screen.findByTestId('advanced-nutrition-edit'));
+
+    const review = await screen.findByTestId('advanced-nutrition-ai-review');
+    expect(review.textContent).toContain('AI needs your review');
+    expect(review.textContent).toContain('salted or unsalted tomato puree');
+    expect(review.textContent).toContain('Salt level is ambiguous');
+    expect(review.textContent).toContain('Review 1 discovered USDA candidate');
+
+    fireEvent.click(screen.getByTestId('advanced-nutrition-ai-review-search'));
+    const input = (await screen.findByTestId('advanced-nutrition-search-input')) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe('Mystery raw'));
+    fireEvent.click(screen.getByTestId('advanced-nutrition-search-run'));
+    fireEvent.click(await screen.findByTestId('advanced-nutrition-use-usda-7002'));
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-testid="advanced-nutrition-row"]')?.textContent ?? ''
+      ).toContain('Mystery, raw')
+    );
+  });
+
+  it('discards a needs_review result that resolves after the recipe changed', async () => {
+    const legacy = vi.fn(async () => ({ ok: true, outcome: EMPTY_FOOD, amounts: EMPTY_AMOUNTS }));
+    let resolveHandler!: (value: unknown) => void;
+    const handler = vi.fn(
+      (): Promise<any> =>
+        new Promise((resolve) => {
+          resolveHandler = resolve;
+        })
+    );
+    const first = render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup Zzz', 'A')}
+        session={session}
+        onResolveWithAi={legacy}
+        onResolveWithAiFirst={handler}
+      />
+    );
+    await openAndAnalyze();
+    await analyzeWithShiso();
+    await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    const oldLineRef = (handler.mock.calls[0] as unknown as [{ rows: ReadonlyArray<Phase4Row> }])[0].rows[0].line_ref;
+
+    first.rerender(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup Qqq', 'B')}
+        session={session}
+        onResolveWithAi={legacy}
+        onResolveWithAiFirst={handler}
+      />
+    );
+    await act(async () => {
+      resolveHandler({
+        ok: true,
+        outcome: { candidates: [], unresolved: [oldLineRef], auto_count: 0 },
+        amounts: EMPTY_AMOUNTS,
+        aiFirstReviews: [
+          {
+            line_ref: oldLineRef,
+            decision: 'needs_review',
+            justification: 'Old recipe explanation.',
+            uncertainty: 'Old recipe uncertainty.',
+            candidate_query: 'Mystery raw',
+            candidate_count: 1,
+          },
+        ],
+      });
+      await Promise.resolve();
+    });
+    expect(screen.queryByTestId('advanced-nutrition-ai-review')).toBeNull();
+    expect(document.body.textContent).not.toContain('Old recipe explanation');
+  });
+
+  it('offers external research for a no_match line and accepts it only on explicit Use', async () => {
+    const legacy = vi.fn(async () => ({ ok: true, outcome: EMPTY_FOOD, amounts: EMPTY_AMOUNTS }));
+    let lineRef = '';
+    const aiFirst = vi.fn(async (args: { rows: ReadonlyArray<Phase4Row> }) => {
+      lineRef = args.rows[0].line_ref;
+      return {
+        ok: true,
+        outcome: { candidates: [], unresolved: [lineRef], auto_count: 0 },
+        amounts: EMPTY_AMOUNTS,
+        aiFirstReviews: [
+          {
+            line_ref: lineRef,
+            decision: 'no_match' as const,
+            justification: 'No local USDA record is a defensible match.',
+            uncertainty: 'External product evidence may help.',
+            candidate_count: 0,
+          },
+        ],
+      };
+    });
+    const research = vi.fn(async () => ({
+      ok: true,
+      message: 'Researched 1 unresolved ingredient from 1 external source. Review the evidence before using it.',
+      contributions: [
+        {
+          line_ref: lineRef,
+          ingredient: '1 cup Zzz',
+          quantity_basis: '100 g scaled from source per 100 g',
+          weight_grams: 100,
+          disposition: 'edible' as const,
+          exclusion_role: 'none' as const,
+          exclusion_assumption: '',
+          classification: 'source_backed' as const,
+          nutrients: { calories: { amount: 200, unit: 'kcal' as const }, protein: { amount: 5, unit: 'g' as const } },
+          unknown_nutrients: ['fat' as const],
+          assumptions: ['Label values scaled deterministically.'],
+          confidence: 'medium' as const,
+          sources: [{ title: 'Example label', url: 'https://example.com/label' }],
+        },
+      ],
+      offers: [
+        {
+          line_ref: lineRef,
+          ingredient: '1 cup Zzz',
+          source_title: 'Example label',
+          source_url: 'https://example.com/label',
+          quantity_basis: '100 g scaled from source per 100 g',
+          classification: 'source_backed' as const,
+          nutrients: { calories: { amount: 200, unit: 'kcal' }, protein: { amount: 5, unit: 'g' } },
+          limitations: ['Verify the exact product label.'],
+        },
+      ],
+      skipped: [],
+    }));
+    render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup Zzz')}
+        session={session}
+        onResolveWithAi={legacy}
+        onResolveWithAiFirst={aiFirst}
+        onResearchNutritionWithAi={research}
+      />
+    );
+    await openAndAnalyze();
+    await analyzeWithShiso();
+    await waitFor(() => expect(aiFirst).toHaveBeenCalledTimes(1));
+    fireEvent.click(
+      await screen.findByTestId(`advanced-nutrition-ai-research-target-${lineRef}`)
+    );
+    fireEvent.click(await screen.findByTestId('advanced-nutrition-ai-research'));
+    await waitFor(() => expect(research).toHaveBeenCalledTimes(1));
+    expect((research.mock.calls[0] as unknown as [{ targets: ReadonlyArray<{ line_ref: string; ambiguity: string }> }])[0].targets[0]).toMatchObject({
+      line_ref: lineRef,
+      ambiguity: 'missing_information',
+    });
+    const offers = await screen.findByTestId('advanced-nutrition-ai-research-offers');
+    expect(offers.textContent).toContain('External source-backed');
+    expect(offers.textContent).toContain('Example label');
+    expect(offers.textContent).toContain('calories: 200 kcal');
+    fireEvent.click(screen.getByTestId('advanced-nutrition-ai-research-use'));
+    await waitFor(() =>
+      expect(screen.getByTestId('advanced-nutrition-ai-research-message').textContent).toMatch(
+        /Researched nutrition was added/i
+      )
+    );
+  });
+
+  it('offers research for a needs_match line even when no AI-first review explanation exists', async () => {
+    const legacy = vi.fn(async () => ({ ok: true, outcome: EMPTY_FOOD, amounts: EMPTY_AMOUNTS }));
+    const research = vi.fn(async () => ({
+      ok: false,
+      code: 'unavailable',
+      message: 'No reliable external nutrition evidence was found.',
+      skipped: [],
+    }));
+    render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup Zzz')}
+        session={session}
+        onResolveWithAi={legacy}
+        onResearchNutritionWithAi={research}
+      />
+    );
+    await openAndAnalyze();
+    expect(legacy).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('checkbox', { name: /1 cup Zzz/i }));
+    fireEvent.click(await screen.findByTestId('advanced-nutrition-ai-research'));
+    await waitFor(() => expect(research).toHaveBeenCalledTimes(1));
+    expect((await screen.findByTestId('advanced-nutrition-ai-research-message')).textContent).toContain(
+      'No reliable external nutrition evidence'
+    );
+  });
+
+  it('passes the needs_review marker to explicit Apply without changing the selection', async () => {
+    const legacy = vi.fn(async () => ({ ok: true, outcome: EMPTY_FOOD, amounts: EMPTY_AMOUNTS }));
+    const applyHandler = vi.fn(async () => ({ ok: true, message: 'Applied.' }));
+    let lineRef = '';
+    const handler = vi.fn(async (args: { rows: ReadonlyArray<Phase4Row> }) => {
+      lineRef = args.rows[0].line_ref;
+      return {
+        ok: true,
+        outcome: { candidates: [], unresolved: [lineRef], auto_count: 0 },
+        amounts: EMPTY_AMOUNTS,
+        aiFirstReviews: [
+          {
+            line_ref: lineRef,
+            decision: 'needs_review' as const,
+            justification: 'Salt level is ambiguous.',
+            uncertainty: 'The recipe does not specify salted or unsalted.',
+            candidate_query: 'Mystery raw',
+            candidate_count: 1,
+          },
+        ],
+      };
+    });
+    render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup Zzz')}
+        session={session}
+        onResolveWithAi={legacy}
+        onResolveWithAiFirst={handler}
+        onApplyAdvancedNutrition={applyHandler}
+      />
+    );
+    await openAndAnalyze();
+    await analyzeWithShiso();
+    await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    fireEvent.click(await screen.findByRole('button', { name: /^Apply to recipe$/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Confirm Apply$/i }));
+    await waitFor(() => expect(applyHandler).toHaveBeenCalledTimes(1));
+    const args = (applyHandler.mock.calls[0] as unknown as [{ reviewReasons?: Record<string, string> }])[0];
+    expect(args.reviewReasons).toEqual({ [lineRef]: 'needs_review' });
   });
 });
 
@@ -475,6 +747,9 @@ describe('AI amount offers and post-result feedback — UI', () => {
     const handler = vi.fn(async () => ({ ok: true, outcome: EMPTY_FOOD, amounts: EMPTY_AMOUNTS }));
     render(<AdvancedNutritionCard recipe={recipe('3 garlic cloves, minced')} session={session} onResolveWithAi={handler} />);
     await openAndAnalyze();
+    // Generate is deterministic only; this test isolates the explicit control's
+    // synchronous re-entry guard.
+    expect(handler).not.toHaveBeenCalled();
     const button = screen.getByTestId('advanced-nutrition-ai-resolve');
     fireEvent.click(button);
     fireEvent.click(button);
@@ -584,5 +859,479 @@ describe('recipe-bound AI lifecycle — needs_amount', () => {
     expect(screen.queryByTestId('advanced-nutrition-ai-message')).toBeNull();
     await openAndAnalyze();
     expect(rowStatusText()).toBe('Needs amount');
+  });
+});
+
+describe('Generate — deterministic first, AI only on explicit SHISO action', () => {
+  const AVAILABLE = {
+    available: true,
+    reason: null,
+    refreshing: false,
+    canRetry: false,
+    advancedEditingAccess: 'entitled',
+  } as const;
+
+  it('Generate performs the deterministic baseline with ZERO AI provider calls', async () => {
+    const legacy = vi.fn(async () => ({
+      ok: true,
+      outcome: EMPTY_FOOD,
+      amounts: EMPTY_AMOUNTS,
+    }));
+    const aiFirst = vi.fn(async () => ({
+      ok: true,
+      outcome: EMPTY_FOOD,
+      amounts: EMPTY_AMOUNTS,
+    }));
+    render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup berries')}
+        session={session}
+        onResolveWithAi={legacy}
+        onResolveWithAiFirst={aiFirst}
+        advancedNutritionAiAvailability={AVAILABLE}
+      />
+    );
+    await openAndAnalyze();
+    expect(summaryText()).toMatch(/1 source review|0 source-backed/);
+    expect(legacy).not.toHaveBeenCalled();
+    expect(aiFirst).not.toHaveBeenCalled();
+  });
+
+  it('invokes the genuine AI-first whole-recipe port only after Analyze with SHISO', async () => {
+    const legacy = vi.fn(async () => ({
+      ok: true,
+      outcome: EMPTY_FOOD,
+      amounts: EMPTY_AMOUNTS,
+    }));
+    const aiFirst = vi.fn(async (_args: {
+      readonly rows: ReadonlyArray<Phase4Row>;
+      readonly adapted: ReadonlyArray<AdaptedIngredient>;
+      readonly issueKinds: Record<string, string>;
+      readonly recipe?: ObsidianRecipe;
+      readonly orchestration?: 'generate';
+    }) => ({
+      ok: true,
+      outcome: EMPTY_FOOD,
+      amounts: EMPTY_AMOUNTS,
+    }));
+    render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup berries')}
+        session={session}
+        onResolveWithAi={legacy}
+        onResolveWithAiFirst={aiFirst}
+        advancedNutritionAiAvailability={AVAILABLE}
+      />
+    );
+    await openAndAnalyze();
+    expect(aiFirst).not.toHaveBeenCalled();
+    await analyzeWithShiso();
+    await waitFor(() => expect(aiFirst).toHaveBeenCalledTimes(1));
+    const args = aiFirst.mock.calls[0][0] as {
+      rows: ReadonlyArray<Phase4Row>;
+      adapted: ReadonlyArray<AdaptedIngredient>;
+      issueKinds: Record<string, string>;
+      recipe?: ObsidianRecipe;
+      orchestration?: string;
+    };
+    expect(args.rows).toHaveLength(1);
+    expect(args.rows[0].original_text).toBe('1 cup berries');
+    expect(args.issueKinds[args.rows[0].line_ref]).toBe('review_suggested');
+    expect(args.recipe).toBeDefined();
+    expect(args.orchestration).toBe('generate');
+  });
+
+  it('does not ask AI when the deterministic baseline already resolved every line', async () => {
+    const handler = vi.fn(async () => ({
+      ok: true,
+      outcome: EMPTY_FOOD,
+      amounts: EMPTY_AMOUNTS,
+    }));
+    render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup Mystery, raw')}
+        session={session}
+        onResolveWithAi={handler}
+        onResolveWithAiFirst={handler}
+        advancedNutritionAiAvailability={AVAILABLE}
+      />
+    );
+    await openAndAnalyze();
+    expect(summaryText()).toMatch(/1 source-backed/);
+    expect(summaryText()).toMatch(/0 need attention/);
+    await analyzeWithShiso();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(handler).not.toHaveBeenCalled();
+    expect(screen.getByTestId('advanced-nutrition-generate-ai-status').textContent).toMatch(
+      /resolved every ingredient|No AI interpretation was needed/i
+    );
+  });
+
+  it('resolves the server-owned product tier once while access is unknown', () => {
+    const resolve = vi.fn();
+    render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup berries')}
+        session={session}
+        advancedNutritionAiAvailability={{
+          available: false,
+          reason: 'Checking AI availability…',
+          refreshing: false,
+          canRetry: false,
+          advancedEditingAccess: 'unknown',
+          onResolveAccess: resolve,
+        }}
+      />
+    );
+    expect(resolve).toHaveBeenCalledTimes(1);
+  });
+
+  it('Basic product access cannot mount the Advanced editing workspace', async () => {
+    const handler = vi.fn(async () => ({
+      ok: true,
+      outcome: EMPTY_FOOD,
+      amounts: EMPTY_AMOUNTS,
+    }));
+    render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup berries')}
+        session={session}
+        onResolveWithAi={handler}
+        onResolveWithAiFirst={handler}
+        advancedNutritionAiAvailability={{
+          available: false,
+          reason: 'AI Advanced Nutrition is not enabled for this deployment.',
+          refreshing: false,
+          canRetry: false,
+          advancedEditingAccess: 'basic',
+        }}
+      />
+    );
+    expect(screen.getByTestId('advanced-nutrition-basic-locked').textContent).toMatch(
+      /Basic Nutrition remains available/i
+    );
+    expect(screen.queryByTestId('advanced-nutrition-open')).toBeNull();
+    expect(handler).not.toHaveBeenCalled();
+  });
+});
+
+describe('Generate and explicit SHISO action — cold start, cancellation, feedback', () => {
+  const AVAILABLE = {
+    available: true,
+    reason: null,
+    refreshing: false,
+    canRetry: false,
+    advancedEditingAccess: 'entitled',
+  } as const;
+
+  function emptyHandler() {
+    return vi.fn(async (_args: {
+      readonly rows: ReadonlyArray<Phase4Row>;
+      readonly orchestration?: 'generate';
+    }) => ({
+      ok: true,
+      outcome: EMPTY_FOOD,
+      amounts: EMPTY_AMOUNTS,
+    }));
+  }
+
+  it('cold bundle initialization performs deterministic analysis with no AI, then one explicit SHISO call', async () => {
+    const handler = emptyHandler();
+    const load = vi.fn();
+    const target = recipe('1 cup berries', 'cold-start');
+    const first = render(
+      <AdvancedNutritionCard
+        recipe={target}
+        session={null}
+        onLoadBundle={load}
+        advancedNutritionAiAvailability={AVAILABLE}
+      />
+    );
+    fireEvent.click(screen.getByTestId('advanced-nutrition-open'));
+    expect(load).toHaveBeenCalledTimes(1);
+
+    first.rerender(
+      <AdvancedNutritionCard
+        recipe={target}
+        session={session}
+        onLoadBundle={load}
+        onResolveWithAi={handler}
+        onResolveWithAiFirst={handler}
+        advancedNutritionAiAvailability={AVAILABLE}
+      />
+    );
+    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await waitFor(() => expect(screen.getByTestId('advanced-nutrition-live-summary')).toBeTruthy());
+    expect(handler).not.toHaveBeenCalled();
+
+    await analyzeWithShiso();
+    await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    const call = handler.mock.calls[0][0] as { orchestration?: string };
+    expect(call.orchestration).toBe('generate');
+
+    first.rerender(
+      <AdvancedNutritionCard
+        recipe={target}
+        session={session}
+        onLoadBundle={load}
+        onResolveWithAi={handler}
+        onResolveWithAiFirst={handler}
+        advancedNutritionAiAvailability={AVAILABLE}
+      />
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels an in-flight explicit SHISO analysis when the editor closes', async () => {
+    let resolveHandler!: (value: unknown) => void;
+    const handler = vi.fn(
+      (): Promise<any> =>
+        new Promise((resolve) => {
+          resolveHandler = resolve;
+        })
+    );
+    render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup berries', 'close-explicit')}
+        session={session}
+        onResolveWithAi={handler}
+        onResolveWithAiFirst={handler}
+        advancedNutritionAiAvailability={AVAILABLE}
+      />
+    );
+    await openAndAnalyze();
+    await analyzeWithShiso();
+    await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByTestId('advanced-nutrition-close-without-saving'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await act(async () => {
+      resolveHandler({
+        ok: true,
+        outcome: EMPTY_FOOD,
+        amounts: EMPTY_AMOUNTS,
+        aiFirstReviews: [
+          {
+            line_ref: 'stale',
+            decision: 'needs_review',
+            justification: 'Late result must be discarded.',
+            uncertainty: '',
+            candidate_count: 0,
+          },
+        ],
+      });
+      await Promise.resolve();
+    });
+    expect(screen.queryByTestId('advanced-nutrition-generate-ai-status')).toBeNull();
+    expect(document.body.textContent).not.toContain('Late result must be discarded');
+  });
+
+  it.each([
+    ['503 service failure', 'The selected AI could not complete nutrition interpretation.'],
+    ['504 deadline failure', 'AI assistance failed or timed out. Deterministic partial nutrition remains available.'],
+  ])('shows visible failure feedback for an explicit %s with no retry', async (_label, failureMessage) => {
+    const handler = vi.fn(async () => ({
+      ok: false,
+      message: failureMessage,
+      outcome: EMPTY_FOOD,
+      amounts: EMPTY_AMOUNTS,
+    }));
+    render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup berries', 'failure')}
+        session={session}
+        onResolveWithAi={handler}
+        onResolveWithAiFirst={handler}
+        advancedNutritionAiAvailability={AVAILABLE}
+      />
+    );
+    await openAndAnalyze();
+    expect(handler).not.toHaveBeenCalled();
+    await analyzeWithShiso();
+    await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+
+    const feedback = await screen.findByTestId('advanced-nutrition-generate-ai-status');
+    expect(feedback.getAttribute('role')).toBe('alert');
+    expect(feedback.textContent).toMatch(failureMessage);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(summaryText()).toMatch(/1 source review/);
+  });
+
+  it('shows visible partial success feedback without hiding unresolved uncertainty', async () => {
+    const handler = vi.fn(async (args: { rows: ReadonlyArray<Phase4Row> }) => ({
+      ok: true,
+      interpretedCount: 1,
+      outcome: {
+        candidates: [],
+        unresolved: [args.rows[0].line_ref],
+        auto_count: 0,
+      },
+      amounts: EMPTY_AMOUNTS,
+      withheld: [],
+      contradicted: [],
+      inadaptable: [],
+    }));
+    render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup berries', 'partial-success')}
+        session={session}
+        onResolveWithAi={handler}
+        onResolveWithAiFirst={handler}
+        advancedNutritionAiAvailability={AVAILABLE}
+      />
+    );
+    await openAndAnalyze();
+    await analyzeWithShiso();
+    const feedback = await screen.findByTestId('advanced-nutrition-generate-ai-status');
+    await waitFor(() => expect(feedback.getAttribute('role')).toBe('status'));
+    expect(feedback.textContent).toMatch(/some lines still need review|complete/i);
+    expect(summaryText()).toMatch(/1 source review/);
+  });
+});
+
+describe('AN-SEM-1 — semantic outcome classification in Generate feedback', () => {
+  const AVAILABLE = {
+    available: true,
+    reason: null,
+    refreshing: false,
+    canRetry: false,
+    advancedEditingAccess: 'entitled',
+  } as const;
+
+  function diagnosticHandler(diagnostics: {
+    withheld?: ReadonlyArray<{ line_ref: string; reason: 'ambiguous' | 'alternatives' }>;
+    contradicted?: ReadonlyArray<string>;
+    inadaptable?: ReadonlyArray<string>;
+    interpretedCount?: number;
+    candidates?: number;
+  }) {
+    return vi.fn(async (args: { rows: ReadonlyArray<Phase4Row> }) => {
+      const ref = args.rows[0].line_ref;
+      return {
+        ok: true,
+        interpretedCount: diagnostics.interpretedCount ?? 0,
+        outcome: {
+          candidates:
+            (diagnostics.candidates ?? 0) > 0
+              ? [
+                  {
+                    line_ref: ref,
+                    query: 'mystery raw',
+                    fdc_id: 7002,
+                    description: 'Mystery, raw',
+                    record_digest: 'a'.repeat(64),
+                    auto: false,
+                    choice: {
+                      kind: 'manual' as const,
+                      fdc_id: 7002,
+                      review_digest:
+                        args.rows[0].review_digest ?? '',
+                      record_digest: 'a'.repeat(64),
+                      catalog_digest: session.metadata().catalog_digest,
+                      description: 'Mystery, raw',
+                      aiAssisted: true,
+                    },
+                  },
+                ]
+              : [],
+          unresolved: diagnostics.candidates === 0 ? [ref] : [],
+          auto_count: 0,
+        },
+        amounts: EMPTY_AMOUNTS,
+        withheld: diagnostics.withheld ?? [],
+        contradicted: diagnostics.contradicted ?? [],
+        inadaptable: diagnostics.inadaptable ?? [],
+      };
+    });
+  }
+
+  async function generateWith(
+    handler: ReturnType<typeof diagnosticHandler>,
+    id: string
+  ): Promise<HTMLElement> {
+    render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup berries', id)}
+        session={session}
+        onResolveWithAi={handler}
+        onResolveWithAiFirst={handler}
+        advancedNutritionAiAvailability={AVAILABLE}
+      />
+    );
+    await openAndAnalyze();
+    expect(handler).not.toHaveBeenCalled();
+    await analyzeWithShiso();
+    await waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    return screen.findByTestId('advanced-nutrition-generate-ai-status');
+  }
+
+  it('explains genuine ambiguity instead of reporting successful interpretation', async () => {
+    const handler = vi.fn(async (args: { rows: ReadonlyArray<Phase4Row> }) => ({
+      ok: true,
+      interpretedCount: 0,
+      outcome: { candidates: [], unresolved: [args.rows[0].line_ref], auto_count: 0 },
+      amounts: EMPTY_AMOUNTS,
+      withheld: [{ line_ref: args.rows[0].line_ref, reason: 'ambiguous' as const }],
+      contradicted: [],
+      inadaptable: [],
+    }));
+    const feedback = await generateWith(handler as never, 'semantic-ambiguous');
+    await waitFor(() => expect(feedback.textContent).toMatch(/insufficient interpretation/i));
+    expect(feedback.textContent).toMatch(/withheld as ambiguous/i);
+    expect(feedback.textContent).not.toMatch(/AI returned usable search wording/i);
+  });
+
+  it('explains explicit alternatives without choosing one', async () => {
+    const handler = vi.fn(async (args: { rows: ReadonlyArray<Phase4Row> }) => ({
+      ok: true,
+      interpretedCount: 0,
+      outcome: { candidates: [], unresolved: [args.rows[0].line_ref], auto_count: 0 },
+      amounts: EMPTY_AMOUNTS,
+      withheld: [{ line_ref: args.rows[0].line_ref, reason: 'alternatives' as const }],
+      contradicted: [],
+      inadaptable: [],
+    }));
+    const feedback = await generateWith(handler as never, 'semantic-alternatives');
+    await waitFor(() => expect(feedback.textContent).toMatch(/explicit alternative readings/i));
+  });
+
+  it('explains insufficient semantic information for an empty interpretation', async () => {
+    // Use a row-ref-aware empty classification, matching the server bridge.
+    const emptyHandler = vi.fn(async (args: { rows: ReadonlyArray<Phase4Row> }) => ({
+      ok: true,
+      interpretedCount: 0,
+      outcome: { candidates: [], unresolved: [args.rows[0].line_ref], auto_count: 0 },
+      amounts: EMPTY_AMOUNTS,
+      withheld: [],
+      contradicted: [],
+      inadaptable: [args.rows[0].line_ref],
+    }));
+    const feedback = await generateWith(emptyHandler as never, 'semantic-empty');
+    await waitFor(() => expect(feedback.textContent).toMatch(/insufficient interpretation/i));
+    expect(feedback.textContent).toMatch(/insufficient semantic information/i);
+    expect(feedback.textContent).not.toMatch(/AI returned usable search wording/i);
+  });
+
+  it('explains a source-contradicted quantity without applying it', async () => {
+    const contradictedHandler = vi.fn(async (args: { rows: ReadonlyArray<Phase4Row> }) => ({
+      ok: true,
+      interpretedCount: 0,
+      outcome: { candidates: [], unresolved: [args.rows[0].line_ref], auto_count: 0 },
+      amounts: EMPTY_AMOUNTS,
+      withheld: [],
+      contradicted: [args.rows[0].line_ref],
+      inadaptable: [],
+    }));
+    const feedback = await generateWith(contradictedHandler as never, 'semantic-contradicted');
+    await waitFor(() => expect(feedback.textContent).toMatch(/contradicted the authored quantity/i));
+  });
+
+  it('distinguishes usable AI wording that fails USDA validation', async () => {
+    const handler = diagnosticHandler({ interpretedCount: 1, candidates: 0 });
+    const feedback = await generateWith(handler, 'semantic-usda-fail');
+    await waitFor(() => expect(feedback.textContent).toMatch(/some lines still need review/i));
+    expect(feedback.textContent).toMatch(/no authenticated USDA candidate passed validation/i);
+    expect(feedback.textContent).toMatch(/AI returned usable search wording for 1 ingredient/i);
   });
 });

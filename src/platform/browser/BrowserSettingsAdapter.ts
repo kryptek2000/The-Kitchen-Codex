@@ -28,6 +28,9 @@ export interface StorageLike {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
   removeItem(key: string): void;
+  /** Optional enumeration surface (localStorage exposes length/key). */
+  readonly length?: number;
+  key?(index: number): string | null;
 }
 
 function noopStorage(): StorageLike {
@@ -70,5 +73,27 @@ export class BrowserSettingsAdapter implements SettingsAdapter {
 
   async remove(key: string): Promise<void> {
     this.storage.removeItem(key);
+  }
+
+  /**
+   * C1.7 S3: read-only key enumeration for safely DISCOVERING legacy SHISO
+   * conversation keys. It never reads values, rewrites transcripts, or exposes
+   * this surface through the SettingsAdapter contract.
+   */
+  keys(): string[] {
+    const result: string[] = [];
+    const storage = this.storage as StorageLike & { keys?: () => string[] };
+    if (typeof storage.keys === 'function') {
+      try { return storage.keys().filter((key) => typeof key === 'string'); } catch { return []; }
+    }
+    if (typeof storage.length === 'number' && typeof storage.key === 'function') {
+      for (let i = 0; i < storage.length; i += 1) {
+        try {
+          const key = storage.key(i);
+          if (key !== null && key !== undefined) result.push(key);
+        } catch { /* ignore inaccessible slots */ }
+      }
+    }
+    return result;
   }
 }

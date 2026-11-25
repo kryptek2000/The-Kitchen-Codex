@@ -43,6 +43,7 @@ import { resolveThinkingProviderOptions } from "./ai/thinkingPolicy.js";
 import type { AiJsonSchema } from "./ai/types.js";
 import type { SelectionInput } from "./ai/effectiveSelection.js";
 import { logModelAttempt } from "./providerDiagnostics.js";
+import { CULINARY_EXPERTISE_INSTRUCTIONS } from "./ai/culinaryExpertise.js";
 import {
   AI_ADVANCED_AMOUNT_KINDS,
   AI_ADVANCED_CONFIDENCE_VALUES,
@@ -81,6 +82,7 @@ export interface NutritionInterpretRequestRow {
  * contract rejects (no second vocabulary owner).
  */
 export const NUTRITION_INTERPRET_INSTRUCTIONS = [
+  ...CULINARY_EXPERTISE_INSTRUCTIONS,
   "You interpret recipe ingredient wording for a deterministic food-matching system.",
   "You are a SEMANTIC INTERPRETATION assistant. You are NOT a nutrition calculator, NOT a food-database lookup, and NOT a decision maker.",
   "For each ingredient, describe what the WORDS mean: the food identity wording, food-defining modifiers (e.g. skim, unsalted, whole, raw, cooked, ground, skinless, thin), aliases, preparation, physical state, qualifiers, the authored amount language, the unit wording, any count noun, size wording, household wording, alternatives, and ambiguity.",

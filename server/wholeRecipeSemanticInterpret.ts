@@ -82,6 +82,7 @@ import { resolveExecutableTextCandidates } from './ai/effectiveSelection.js';
 import { normalizeProviderError, ProviderOperationError } from './ai/providerErrors.js';
 import type { ProviderDiagnostic, ProviderErrorCode } from './ai/providerErrors.js';
 import { resolveThinkingProviderOptions } from './ai/thinkingPolicy.js';
+import { MODEL_CONFIG } from './modelConfig.js';
 import { logModelAttempt } from './providerDiagnostics.js';
 import type { AiJsonSchema } from './ai/types.js';
 import type { AiCandidate, RegisteredProvider } from './ai/providerRegistry.js';
@@ -108,6 +109,7 @@ import {
   type WholeRecipeSemanticOriginAuthority,
 } from './wholeRecipeSemanticOriginReceipt.js';
 import { getProcessSemanticOriginAuthority } from './wholeRecipeSemanticAuthority.js';
+import { CULINARY_EXPERTISE_INSTRUCTIONS } from './ai/culinaryExpertise.js';
 
 /** Diagnostic scope for the existing redacted provider-attempt logger. */
 const DIAGNOSTIC_SCOPE = 'wholeRecipeSemanticInterpret';
@@ -422,15 +424,22 @@ function logFallbackExhausted(error: unknown): void {
  * contract rejects (no second vocabulary owner).
  */
 export const WHOLE_RECIPE_SEMANTIC_INSTRUCTIONS: readonly string[] = Object.freeze([
+  ...CULINARY_EXPERTISE_INSTRUCTIONS,
   'You interpret recipe meaning for a deterministic food-matching system.',
   'You are a SEMANTIC INTERPRETATION assistant. You are NOT a nutrition calculator, NOT a food-database lookup, and NOT a decision maker.',
   'You receive the WHOLE recipe: every ingredient line and the complete instruction list. Read it AS A WHOLE, and use each ingredient line together with the instructions: the same word can mean different things in different recipes, so never judge a line in isolation.',
   'You are also given REQUESTED TARGETS, which are opaque line references. Return a semantic interpretation ONLY for those referenced lines. The other ingredients are context for your reasoning, NOT rows you may answer for: never return an interpretation for a line that is not a requested target, and never omit a requested target.',
   'For each requested line, describe what the WORDS mean in this recipe: the food identity wording, food-defining modifiers (e.g. whole, raw, cooked, ground, skinless), the preparation being performed, the physical state, any qualifiers, the authored amount language, the unit wording, any count noun and size wording, useful short generic search wordings, plausible alternatives, and genuine ambiguity.',
+  'Search wording must be specific enough for a food database. When a bare token is shared with other food families or is otherwise ambiguous, include the food family/category in the search phrase; never offer an isolated ambiguous token as the only search wording.',
+  'Prefer specific, commonly understood food descriptions over isolated words. Use ordinary food terminology only when it is genuinely equivalent to what the recipe means; never invent a food category, identity, or equivalence without support in the authored wording or recipe context.',
+  'An authored food may have a regional, branded, translated, or home-cooking name that is not a database description. In that case, provide the authored wording AND additional discovery hypotheses phrased as ordinary database-style food descriptions. A useful broader hypothesis may name the same food family with its form, processing, preparation, or composition. These are SEARCH HYPOTHESES, not assertions that a broader food is equivalent: never erase a food-defining modifier, and never claim equivalence the recipe does not support.',
+  'When the direct name may not be a database description, return more than one distinct search formulation when genuinely useful (for example, the authored name and a broader culinary description). Keep the set small, bounded, and deduplicated. When no defensible broader description exists, say so through ambiguity instead of inventing one.',
+  'Preserve relevant composition, processing, preparation, and state in the search wording. Return a small bounded set of distinct useful search phrases when more than one wording helps discovery; do not pad with unsupported synonyms or guesses.',
   'Distinguish FOOD IDENTITY from PREPARATION WORDING. Preparation describes what was done to the food; it does not replace what the food is.',
   'Use ordinary cooking knowledge. Ingredients may be separated, combined, recombined, retained, discarded, reserved, divided, transformed, or used as a cooking medium. Work out what actually ends up in the dish and what the recipe means by that line in this context.',
   'Preserve food-defining wording wherever it carries meaning, including in search_phrases.',
   'When the wording genuinely offers a choice, list BOTH readings in alternatives. When the wording is genuinely ambiguous, set ambiguity.ambiguous to true and give short reasons. Never invent a fact to avoid ambiguity, and never silently drop a requested line because it is hard.',
+  'Every target row MUST carry either a usable food identity/search phrase or an explicit non-resolution. If you cannot provide a usable food name or search phrase, set ambiguity.ambiguous to true with a short reason, or provide the explicit alternatives. Never return a target row containing only line_ref and empty/default fields.',
   'The recipe line is AUTHORITY for its own amount: never turn an exact authored quantity into a range, never collapse an authored range into a single scalar, and never invent a quantity for a line that has none.',
   `The amount interpretation kind must be exactly one of: ${AI_ADVANCED_AMOUNT_KINDS.join(', ')}.`,
   `The unit family must be exactly one of: ${AI_ADVANCED_UNIT_FAMILIES.join(', ')}.`,
@@ -524,6 +533,12 @@ export interface WholeRecipeSemanticOperationOptions {
   readonly authority?: WholeRecipeSemanticOriginAuthority;
   /** Non-secret client selection intent, honored by the existing selection owner. */
   readonly userSelection?: SelectionInput;
+  /**
+   * Caller cancellation owned by the HTTP route. It aborts the ACTUAL provider
+   * request promptly and is independent of the server-owned 45-second timeout.
+   * A cancellation is terminal and never triggers retry or fallback.
+   */
+  readonly signal?: AbortSignal;
 }
 
 // ---------------------------------------------------------------------------
@@ -709,6 +724,12 @@ export async function interpretWholeRecipeSemantics(
         candidate.provider.generateStructured(prompt, schema, {
           model: candidate.model,
           temperature: 0,
+          // Operation-specific server-owned deadline. Ordinary text operations
+          // retain MODEL_CONFIG.requestTimeoutMs.
+          timeoutMs: MODEL_CONFIG.wholeRecipeSemanticTimeoutMs,
+          // Caller cancellation is forwarded to the ACTUAL provider transport,
+          // independently of the trusted 45-second timeout above.
+          ...(options.signal !== undefined ? { signal: options.signal } : {}),
           // Phase 9B-P1: resolved from the EXECUTING candidate (see
           // `server/ai/thinkingPolicy.ts`). The 9B-2C smoke proved the primary
           // Gemini 3.7 Flash candidate rejects a hard-coded `MINIMAL` with HTTP

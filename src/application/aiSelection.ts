@@ -39,7 +39,7 @@ export type SavedSelectionMode = 'server_default' | 'user_selected';
  * BYOK-5C: WHOSE credential authorizes the selected provider/model. NON-SECRET
  * metadata only — no API key value is ever stored or transmitted here.
  */
-export type SavedCredentialSource = 'server_environment' | 'session_only';
+export type SavedCredentialSource = 'server_environment' | 'session_only' | 'native_plan';
 
 /** One surface's saved selection preference (non-secret, catalog-free ids). */
 export interface SavedSelection {
@@ -48,6 +48,11 @@ export interface SavedSelection {
   modelId?: string;
   /** Non-secret credential-source intent (separate from provider/model). */
   credentialSource?: SavedCredentialSource;
+  /**
+   * SHISO-C1.5: exact native ChatGPT account key (non-secret). Only meaningful
+   * for `chatgpt-plan` + `native_plan`; no token or email is stored.
+   */
+  accountKey?: string;
   /**
    * v0.8.0: the non-secret cost class the user ACKNOWLEDGED when selecting the
    * model. Used by the server to detect a FREE -> PAID transition and fail closed.
@@ -290,21 +295,32 @@ export function parseStoredSelection(raw: unknown): ParsedStoredSelection {
   const row = raw as Record<string, unknown>;
   const providerPresent = Object.prototype.hasOwnProperty.call(row, 'providerId');
   const modelPresent = Object.prototype.hasOwnProperty.call(row, 'modelId');
+  const accountKeyPresent = Object.prototype.hasOwnProperty.call(row, 'accountKey');
   if (providerPresent && typeof row.providerId !== 'string') return invalid;
   if (modelPresent && typeof row.modelId !== 'string') return invalid;
+  if (accountKeyPresent && typeof row.accountKey !== 'string') return invalid;
   const providerId = typeof row.providerId === 'string' ? row.providerId.trim() : '';
   const modelId = typeof row.modelId === 'string' ? row.modelId.trim() : '';
+  const accountKey = typeof row.accountKey === 'string' ? row.accountKey.trim() : '';
   // Reject oversized identifiers — never truncate them into valid values.
-  if (providerId.length > 64 || modelId.length > 128) return invalid;
+  if (providerId.length > 64 || modelId.length > 128 || accountKey.length > 128) return invalid;
 
   // BYOK-5C credentialSource: optional, valid value only. A malformed value is a
   // present-but-invalid explicit intent -> fail closed (never normalized away).
   const credentialPresent = Object.prototype.hasOwnProperty.call(row, 'credentialSource');
-  if (credentialPresent && row.credentialSource !== 'server_environment' && row.credentialSource !== 'session_only') {
+  if (
+    credentialPresent &&
+    row.credentialSource !== 'server_environment' &&
+    row.credentialSource !== 'session_only' &&
+    row.credentialSource !== 'native_plan'
+  ) {
     return invalid;
   }
   const credentialSource =
     credentialPresent ? (row.credentialSource as SavedCredentialSource) : undefined;
+
+  if (accountKeyPresent && !/^acct_[a-f0-9]{32}$/.test(accountKey)) return invalid;
+  if (accountKeyPresent && providerId !== 'chatgpt-plan') return invalid;
 
   // v0.8.0 selectedCostClass: optional, valid value only. A malformed value is a
   // present-but-invalid explicit intent -> fail closed.
@@ -321,8 +337,9 @@ export function parseStoredSelection(raw: unknown): ParsedStoredSelection {
   const selectedCostClass = costPresent ? (row.selectedCostClass as SavedCostClass) : undefined;
 
   if (row.mode === 'server_default') {
-    // server_default must not carry ids, a credential source, or a cost class.
-    if (providerPresent || modelPresent || credentialPresent || costPresent) return invalid;
+    // server_default must not carry ids, a credential source, an account, or a
+    // cost class.
+    if (providerPresent || modelPresent || credentialPresent || accountKeyPresent || costPresent) return invalid;
     return { status: 'default', selection: { mode: 'server_default' } };
   }
   if (row.mode === 'user_selected') {
@@ -331,6 +348,7 @@ export function parseStoredSelection(raw: unknown): ParsedStoredSelection {
     const selection: SavedSelection = { mode: 'user_selected', providerId };
     if (modelId) selection.modelId = modelId;
     if (credentialSource) selection.credentialSource = credentialSource;
+    if (accountKey) selection.accountKey = accountKey;
     if (selectedCostClass) selection.selectedCostClass = selectedCostClass;
     return { status: 'selected', selection };
   }
@@ -369,6 +387,14 @@ export function isSelectionValidAgainstCatalog(
   const provider = surface.find((p) => p.providerId === selection.providerId);
   if (!provider) return false;
 
+  if (selection.credentialSource === 'native_plan') {
+    // SHISO-C1.5: the saved preference remains meaningful while ChatGPT is
+    // disconnected so the user can reconnect the same account/model. Display
+    // validity is not execution authority: the server still fails closed when
+    // the bridge reports no live plan entitlement.
+    if (selection.providerId !== 'chatgpt-plan') return false;
+    return true;
+  }
   if (selection.credentialSource === 'session_only') {
     // BYOK-5F: a session_only selection is governed by SESSION availability, NOT
     // the operator environment key. The provider must be server-declared
@@ -481,7 +507,8 @@ export async function saveAiSelectionWithOutcome(
   providerId?: string,
   modelId?: string,
   credentialSource?: SavedCredentialSource,
-  selectedCostClass?: SavedCostClass
+  selectedCostClass?: SavedCostClass,
+  accountKey?: string
 ): Promise<AiSelectionMutationOutcome> {
   const parsed = parseStoredSelection(
     mode === 'user_selected'
@@ -494,6 +521,7 @@ export async function saveAiSelectionWithOutcome(
           // silently collapse the selection to server_default.
           ...(modelId ? { modelId } : {}),
           ...(credentialSource ? { credentialSource } : {}),
+          ...(accountKey ? { accountKey } : {}),
           ...(selectedCostClass ? { selectedCostClass } : {}),
         }
       : { mode: 'server_default' }
@@ -526,9 +554,10 @@ export async function saveAiSelection(
   providerId?: string,
   modelId?: string,
   credentialSource?: SavedCredentialSource,
-  selectedCostClass?: SavedCostClass
+  selectedCostClass?: SavedCostClass,
+  accountKey?: string
 ): Promise<SavedAiSelections> {
-  return (await saveAiSelectionWithOutcome(settings, kind, mode, providerId, modelId, credentialSource, selectedCostClass))
+  return (await saveAiSelectionWithOutcome(settings, kind, mode, providerId, modelId, credentialSource, selectedCostClass, accountKey))
     .selections;
 }
 
@@ -573,6 +602,7 @@ function selectionToHeaderValue(selection: SavedSelection): string | undefined {
     modelId?: string;
     credentialSource?: SavedCredentialSource;
     selectedCostClass?: SavedCostClass;
+    accountKey?: string;
   } = {
     mode: 'user_selected',
     providerId: selection.providerId,
@@ -580,6 +610,8 @@ function selectionToHeaderValue(selection: SavedSelection): string | undefined {
   if (selection.modelId) payload.modelId = selection.modelId;
   // NON-SECRET metadata only: WHOSE credential authorizes the request. No key.
   if (selection.credentialSource) payload.credentialSource = selection.credentialSource;
+  // SHISO-C1.5: exact non-secret native ChatGPT account identity.
+  if (selection.accountKey) payload.accountKey = selection.accountKey;
   // NON-SECRET cost acknowledgement (FREE -> PAID protection).
   if (selection.selectedCostClass) payload.selectedCostClass = selection.selectedCostClass;
   return JSON.stringify(payload);

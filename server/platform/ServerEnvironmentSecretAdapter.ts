@@ -35,6 +35,7 @@ export const SERVER_SECRET_ENV_ALLOWLIST: Record<ProviderSecretId, string> = {
   gemini_api_key: 'GEMINI_API_KEY',
   openrouter_api_key: 'OPENROUTER_API_KEY',
   deepseek_api_key: 'DEEPSEEK_API_KEY',
+  openai_api_key: 'OPENAI_API_KEY',
 };
 
 /**
@@ -47,9 +48,10 @@ export function serverSecretEnvName(id: ProviderSecretId): string | undefined {
 }
 
 /**
- * Maps a provider id (TEXT: gemini / openrouter / deepseek; IMAGE:
- * gemini-image / openrouter-image) to the provider-neutral secret id used by the
- * secret boundary, or `undefined` for providers with no operator secret.
+ * Maps a provider id (TEXT: gemini / openrouter / deepseek / openai; IMAGE:
+ * gemini-image / openrouter-image / openai-image) to the provider-neutral secret
+ * id used by the secret boundary, or `undefined` for providers with no operator
+ * secret.
  */
 export function providerSecretIdForProvider(providerId: string): ProviderSecretId | undefined {
   switch (providerId) {
@@ -61,6 +63,9 @@ export function providerSecretIdForProvider(providerId: string): ProviderSecretI
       return 'openrouter_api_key';
     case 'deepseek':
       return 'deepseek_api_key';
+    case 'openai':
+    case 'openai-image':
+      return 'openai_api_key';
     default:
       return undefined;
   }

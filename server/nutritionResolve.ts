@@ -23,6 +23,7 @@ import { normalizeProviderError } from "./ai/providerErrors.js";
 import type { AiJsonSchema } from "./ai/types.js";
 import type { SelectionInput } from "./ai/effectiveSelection.js";
 import { logModelAttempt } from "./providerDiagnostics.js";
+import { CULINARY_EXPERTISE_INSTRUCTIONS } from "./ai/culinaryExpertise.js";
 import {
   AI_RESOLUTION_ISSUE_KINDS,
   AI_RESOLUTION_VERSION,
@@ -56,6 +57,7 @@ const HOUSEHOLD_STATE_WORDS = HOUSEHOLD_STATES.join(", ");
 
 /** Instructions embedded in the prompt. Ingredient text is appended as DATA. */
 export const NUTRITION_RESOLVE_INSTRUCTIONS = [
+  ...CULINARY_EXPERTISE_INSTRUCTIONS,
   "You help interpret difficult recipe ingredient wording for a USDA food search.",
   "You are an INTERPRETATION ASSISTANT only. You are NOT a nutrition calculator.",
   "For each ingredient, return an interpreted food name and up to a few short USDA search phrases likely to match a generic USDA FoodData Central record.",

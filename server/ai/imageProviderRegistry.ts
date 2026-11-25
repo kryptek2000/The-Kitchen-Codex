@@ -13,12 +13,15 @@
  *     plus the FULL curated model set per provider,
  *   - per-provider image capabilities (formats, maxBytes) via `ImageProvider`.
  *
- * BYOK-2/BYOK-3 SCOPE:
+ * BYOK-2/BYOK-3/P2 SCOPE:
  *   - Production-registered image providers: `GeminiImageProvider`
- *     (`gemini-image`, proven SDK semantics) and `OpenRouterImageProvider`
- *     (`openrouter-image`, fixed OpenRouter `/images` endpoint). Registry ORDER
- *     is deterministic (Gemini first preserves zero-config behavior; OpenRouter
- *     second is INERT unless an `OPENROUTER_API_KEY` is configured).
+ *     (`gemini-image`, proven SDK semantics), `OpenRouterImageProvider`
+ *     (`openrouter-image`, fixed OpenRouter `/images` endpoint), and
+ *     `OpenAIImageProvider` (`openai-image`, fixed OpenAI `/v1/images/generations`
+ *     endpoint). Registry ORDER is deterministic (Gemini first preserves
+ *     zero-config behavior; OpenRouter second is INERT unless an
+ *     `OPENROUTER_API_KEY` is configured; OpenAI image is INERT unless an
+ *     `OPENAI_API_KEY` is configured).
  *   - `DeterministicImageProvider` remains an explicit TEST SEAM and is NEVER
  *     registered (it must never resolve through server-managed selection).
  *
@@ -27,12 +30,17 @@
  */
 
 import { getServerSecretSync } from "../platform/ServerEnvironmentSecretAdapter.js";
-import { GeminiImageProvider, DEFAULT_GEMINI_IMAGE_MODEL } from "./geminiImageProvider.js";
+import { GeminiImageProvider, DEFAULT_GEMINI_IMAGE_MODEL, GEMINI_IMAGE_MODELS } from "./geminiImageProvider.js";
 import {
   OpenRouterImageProvider,
   OPENROUTER_IMAGE_MODELS,
   OPENROUTER_IMAGE_DEFAULT_MODEL,
 } from "./openRouterImageProvider.js";
+import {
+  OpenAIImageProvider,
+  OPENAI_IMAGE_MODELS,
+  OPENAI_IMAGE_DEFAULT_MODEL,
+} from "./openAIImageProvider.js";
 import type { ImageProvider } from "./imageProvider.js";
 
 /** A registered image provider with its authoritative configuration truth. */
@@ -59,12 +67,18 @@ function openRouterImageConfigured(): boolean {
   return Boolean(getServerSecretSync("openrouter_api_key"));
 }
 
+/** True when an OpenAI key is present (image is opt-in / inert without one). */
+function openAIImageConfigured(): boolean {
+  return Boolean(getServerSecretSync("openai_api_key"));
+}
+
 function ensureImageRegistry(): RegisteredImageProvider[] {
   if (!imageRegistry) {
     imageRegistry = [
       {
         provider: new GeminiImageProvider(),
         defaultModel: DEFAULT_GEMINI_IMAGE_MODEL,
+        models: GEMINI_IMAGE_MODELS,
         enabled: true,
       },
       {
@@ -74,6 +88,13 @@ function ensureImageRegistry(): RegisteredImageProvider[] {
         // Same rule as the text registry: OpenRouter image is INERT (disabled)
         // unless its operator key is configured.
         enabled: openRouterImageConfigured(),
+      },
+      {
+        provider: new OpenAIImageProvider(),
+        defaultModel: OPENAI_IMAGE_DEFAULT_MODEL,
+        models: OPENAI_IMAGE_MODELS,
+        // Opt-in: OpenAI image is INERT (disabled) unless OPENAI_API_KEY exists.
+        enabled: openAIImageConfigured(),
       },
     ];
   }

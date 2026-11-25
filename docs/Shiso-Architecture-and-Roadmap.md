@@ -1,10 +1,13 @@
 # Shiso — Architecture and Roadmap
 
-**Status — October 18, 2026:** Product direction reconciled against merged PR #12,
-`main` at `49fbfce80f39437120e57cee02df6c7363531320`.
-SHISO conversation, recipe creation/editing and nutrition implementation exist on
-main. Merged and CI-tested does not mean independently production deployed or
-accepted by Sid. See [acceptance status and evidence](./Shiso-Acceptance-Status.md).
+**Status — November 24, 2026:** Product direction reconciled against merged PRs
+#12 and #66, with `main` at
+`e0b309e545875a16397773c2d9c0fbd6e3bcaa4e`.
+SHISO conversation, recipe creation/editing, nutrition integration, the C1.7
+flagship workspace and the C1.8 state-driven companion baseline exist on main.
+Merged and CI-tested does not mean independently production deployed, live-provider
+accepted, or visually accepted by Sid. See
+[acceptance status and evidence](./Shiso-Acceptance-Status.md).
 The local C1 roadmap and draft PR #11 are historical inputs, not current release
 inventories. This document reconciles their intent without merging PR #11.
 
@@ -12,6 +15,139 @@ inventories. This document reconciles their intent without merging PR #11.
 - Document scope: product direction and phased program
 - Relationship to Advanced Nutrition: see §10 and
   [`Advanced-Nutrition-Architecture.md`](./Advanced-Nutrition-Architecture.md)
+
+---
+
+## SHISO-C1.5 — ChatGPT Plan as Default Text AI (merged / installed via PR #64)
+
+The native desktop can now use an eligible connected ChatGPT plan as the local
+Default Text AI. The choice is a non-secret SettingsAdapter preference, separate
+from `KITCHEN_CODEX_TEXT_PROVIDER`; a server-managed pin remains authoritative.
+SHISO conversation uses the existing validated JSON-text adapter through a
+loopback bridge to the trusted Electron session; structured nutrition, metadata, recipe generation, and web
+search are not claimed. A disconnected/expired/unentitled account fails closed
+with a reconnect state and never falls back to Gemini or a paid API provider.
+See [`SHISO-C1.5-ChatGPT-Plan-Default-Text-AI.md`](./SHISO-C1.5-ChatGPT-Plan-Default-Text-AI.md).
+
+---
+
+## SHISO-C1.6 — ChatGPT-Powered Create for Me (implemented, integration pending; F1 presentation/latency)
+
+Create for Me can generate an editable recipe draft through the native ChatGPT
+plan Default Text AI. This is a dedicated plain-text strict-JSON adapter checked
+against the existing generated-recipe schema and normalization; general
+structured-output capability remains false. A server-managed pin still wins, the
+native response is bounded and fully validated, and a failure is terminal with
+no Gemini/API-key fallback. The result remains an unsaved Generated Draft until
+explicit Save. See
+[`SHISO-C1.6-ChatGPT-Create-for-Me.md`](./SHISO-C1.6-ChatGPT-Create-for-Me.md)
+and
+[`SHISO-C1.6-F1-Draft-Presentation-and-Latency.md`](./SHISO-C1.6-F1-Draft-Presentation-and-Latency.md)
+for the Signature Edition draft editor, responsive layout, save-field
+preservation, bounded phase timing, and the catalog-freshness optimization.
+
+---
+
+## SHISO-C1.7 / C1.8 — Flagship Workspace and Living Companion (merged via PR #66)
+
+Merged [PR #66](https://github.com/kryptek2000/The-Kitchen-Codex/pull/66)
+delivers the approved SHISO flagship workspace and the first state-driven
+botanical companion motion baseline. The work preserves one authoritative
+conversation engine across compact and full-page presentations, the approved
+SHISO artwork, conversation history and responsive composer, explicit
+Save-to-Vault authorization, and the existing provider/entitlement boundaries.
+
+C1.8 maps actual SHISO lifecycle state to a presentational avatar contract:
+`idle`, `thinking`, `working`, `success`, and `cancelled`. CSS whole-character
+motion and ambient effects are applied selectively; compact history/navigation
+avatars remain static, and `prefers-reduced-motion` disables nonessential
+looping motion. A tool state is shown only for an actual tool-progress step.
+The supplied artwork is flattened raster art, so this baseline does not claim
+independent blinking, lip-sync or facial-part animation.
+
+Evidence includes the merged commit
+`e0b309e545875a16397773c2d9c0fbd6e3bcaa4e`, the PR's final 14/14 green CI
+checks, and focused C1.7/C1.8 tests including
+`tests/unit/shisoC18Animation.test.tsx`. No live-provider acceptance or owner
+visual acceptance is inferred from those checks. See the companion detail in
+[`Shiso-Mascot-and-Animation-Gameplan.md`](./Shiso-Mascot-and-Animation-Gameplan.md).
+
+Advanced expressive animation, layered facial/pose systems, Codex Bloom,
+voice synchronization and expanded character interactions remain future work.
+
+---
+
+## Authoritative product decision — November 21, 2026 — Nutrition Product Alignment
+
+This section is the CURRENT product authority for Basic and Advanced Nutrition.
+It supersedes conflicting historical roadmap wording below, including earlier
+statements that manual USDA editing is always Basic or that Generate Nutrition
+automatically starts an AI pass. Historical implementation records are preserved
+as history; they are not rewritten.
+
+### Tier rules
+
+| | Basic Nutrition (free) | Advanced Nutrition (future paid) |
+|---|---|---|
+| Deterministic USDA generation | Yes | Yes |
+| Nutrition & Macros card, entire-recipe/per-serving | Yes | Yes |
+| Partial/unknown provenance disclosure | Yes | Yes |
+| Open the Advanced review/edit workspace | No | Yes |
+| Change USDA matches, source portions, or weights | No | Yes |
+| Apply/save an Advanced reviewed result | No | Yes |
+| AI nutrition assistance / estimates / external research | No | Yes |
+
+- A configured Gemini key or provider readiness does **not** create product
+  entitlement. Entitlement is the server-owned nutrition product tier
+  (`basic` / `ai_advanced`) resolved through the existing product-access
+  contract.
+- Basic generation is deterministic, local, and AI-free.
+- Basic users can view saved nutrition, including historical AI estimates, but
+  the displayed provenance is never relabelled and saved data is never silently
+  overwritten.
+
+### Generation and approval sequence
+
+1. **Generate Nutrition** — explicit user action. Load the authenticated USDA
+   catalog, run deterministic matching, resolve supported portions/quantities,
+   calculate, and disclose missing/partial coverage. **Zero AI provider calls.**
+   Basic displays the read-only result; Advanced opens the deterministic review
+   workspace.
+2. **Analyze with SHISO** — explicit Advanced-only action. Run the existing
+   AI-first whole-recipe interpretation, candidate evaluation, and local
+   deterministic verification. It is never automatic on Generate or on opening
+   a saved report.
+3. **User review** — verified USDA selections, source-backed contributions,
+   clearly labeled estimates, unresolved lines, and proposed changes remain
+   visible and reviewable.
+4. **Apply / Save** — explicit user approval only. Apply updates the authorized
+   working review; Save persists through the existing trusted Vault path. AI
+   results are never saved silently.
+
+### SHISO responsibilities
+
+For an entitled user, SHISO may intelligently propose the same operations the
+manual Advanced workflow permits: correct food identity, preparation/state
+interpretation, alternative USDA foods, authenticated portions, ingredient mass,
+quantity corrections, external evidence, defensible estimates, and a
+recalculated working review. The evidence hierarchy is:
+
+1. authenticated appropriate USDA data;
+2. verified external nutritional evidence;
+3. clearly labeled reasoned AI estimate with assumptions/uncertainty;
+4. unresolved when no defensible evidence or estimate exists.
+
+SHISO never fabricates USDA records, treats an estimate as sourced, bypasses
+deterministic verification, or applies/saves without user approval.
+
+### Remaining milestones
+
+- Full manual-operation parity for SHISO beyond the existing AI-first,
+  correction, research, and bounded-estimate ports.
+- Production per-account entitlement/billing/identity; deployment tier is
+  testing-only and is not a licensing system.
+- Continued first-Generate performance work; this pass removes the automatic AI
+  wait and prevents the long synchronous authentication freeze.
 
 ---
 
@@ -324,6 +460,54 @@ merged; Sid reported Cochinita Pibil analysis, Apply, Save and saved-report
 Reopen accepted. Source-backed and AI-estimated contributions remain distinct.
 Broader recipe coverage and provider/model compatibility still need acceptance.
 
+**SINC-3 — Intelligent Nutrition Completion** — Implemented in the SINC-2
+worktree; focused deterministic tests passed; independent acceptance pending.
+`complete_nutrition` runs one bounded source-first pass over the current
+unresolved review: existing deterministic USDA, then strong server-backed USDA
+Branded evidence, then bounded external research, then validated AI estimates.
+When ingredient coverage is already complete, it inspects the existing preview's
+whole-recipe 34-nutrient coverage, including source-backed line gaps such as
+niacin and added sugars. It fills only explicitly declared unknown nutrients on
+AI-estimated lines; source-backed gaps remain unknown because the per-line
+provenance model does not permit mixing AI estimates into verified USDA lines.
+It prepares proposals in the UNSAVED review only. Apply and Save remain separate
+explicit actions. It does not weaken the SINC-2R2 server-authenticated branded
+boundary. See `docs/SINC-3-SHISO-Nutrition-Completion.md`.
+
+**SINC-4 — Separately Attributed Supplemental Nutrients** — Implemented in the
+SINC-2 worktree; focused tests passed; independent acceptance pending.
+Adds schema v6 and a closed `AiNutrientSupplement` model for nutrients absent
+from a verified source-backed line. Each supplement is bound to the recipe
+digest, review identity, line ref, source food id, source release, resolved
+weight, nutrient id, amount/unit, classification, confidence, and assumptions.
+The source line and its verified values or explicit zeros are never rewritten;
+supplements are labeled as AI estimates, stored separately, and shown in a
+separate saved-report section. Explicit completion investigates the whole
+34-nutrient projection in one bounded provider pass, validates every proposal,
+and reports supplemented, remaining, and unknown values separately. Apply and
+Save remain separate explicit actions, and the SINC-2R4 branded-authentication
+boundary is unchanged. See `docs/SINC-4-Supplemental-Nutrients.md`.
+
+**SHISO-C1 — Unbroken Conversations** — Implemented in the SHISO-C1
+worktree; focused tests passed; owner acceptance pending. Conversation
+transcripts are retained locally through the existing SettingsAdapter (no cloud
+sync), scoped to the stable recipe identity or the global/create surface.
+Recipe A → B → A navigation switches transcripts without erasing either.
+Persisted state is bounded to 120 messages/entries and contains no provider
+credentials, save grants, or actionable proposals. The model receives the
+recent 24-message window plus a bounded continuation memory that explicitly
+separates earlier user statements, earlier model prose, and verified
+application findings. Provider failures retain the user message, verified
+findings, and an explicit Retry action without automatically repeating
+mutations; cancelled tool turns do not offer automatic retry. Conversation
+restoration performs no work on open. Existing recipe edit/save authorities and
+security boundaries are unchanged. See
+`docs/SHISO-C1-Unbroken-Conversations.md`.
+
+**SHISO-C1.7 / C1.8 — Flagship Workspace + Living Companion** — Implemented
+and merged through PR #66. The delivered scope and acceptance boundaries are
+recorded above; future expressive character systems remain separate.
+
 **SHISO-7 — Broader Kitchen Intelligence** — Future.
 Substitutions, leftovers, cooking assistance, timer chains, and future
 capabilities.
@@ -391,7 +575,8 @@ agent platform as part of the remaining integrations.
    supported. Rescan after repair and report measured remaining issues.
 5. **Cross-feature workflows later.** Grounded search → recipe edits → nutrition;
    health scan → repair preview → confirmation → verified rescan. Broader kitchen
-   actions, safe external nutrition research and mascot animation remain future.
+   actions, safe external nutrition research and advanced expressive mascot
+   animation remain future; the C1.8 state-driven baseline is implemented.
 
 Keep one SHISO companion across all contexts. External research is not a verified
 capability; do not fabricate citations or imply a web lookup occurred. No roadmap

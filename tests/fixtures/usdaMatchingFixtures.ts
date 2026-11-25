@@ -42,6 +42,8 @@ export interface MatchingRecordSpec {
   nutrientMapVersion?: string;
   /** Varies the canonical record digest without changing identity/description. */
   proteinAmount?: number;
+  /** Optional energy evidence used by partial-energy presentation tests. */
+  caloriesAmount?: number;
   /** Optional authenticated source portions (e.g. `1 cup = 122 g`). */
   portions?: ReadonlyArray<CanonicalPortionRecord>;
 }
@@ -98,6 +100,18 @@ export function makeCanonicalRecord(
         source_unit: 'G',
         converted: false,
       },
+      ...(spec.caloriesAmount !== undefined
+        ? {
+            calories: {
+              nutrient_id: 'calories' as const,
+              unit: 'kcal' as const,
+              amount_per_100g: spec.caloriesAmount,
+              usda_nutrient_id: 1008,
+              source_unit: 'KCAL',
+              converted: false,
+            },
+          }
+        : {}),
     },
     portions: spec.portions ?? [],
   };

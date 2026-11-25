@@ -8,11 +8,13 @@ import {
 import {
   fetchSessionKeyStatus,
   normalizeSessionKeyStatus,
+  reuseSessionKey,
   revokeSessionKey,
   saveSessionKey,
   testProviderConnection,
   SESSION_KEY_API_PATH,
   SESSION_KEY_STATUS_API_PATH,
+  SESSION_KEY_REUSE_API_PATH,
   PROVIDER_TEST_CONNECTION_API_PATH,
 } from "../../src/application-ui/sessionKey.js";
 import type { NetworkAdapter } from "../../src/application/adapters/NetworkAdapter.js";
@@ -23,6 +25,7 @@ const SENTINEL = "sk-or-v1-SUPER_SECRET_BYOK5E_SENTINEL";
 const PROVIDERS: SessionKeyProviderOption[] = [
   { providerId: "openrouter", name: "OpenRouter", kind: "text", models: [{ id: "openai/gpt-4o-mini", default: true }] },
   { providerId: "openrouter-image", name: "OpenRouter Image", kind: "image", models: [{ id: "google/gemini-2.5-flash-image", default: true }] },
+  { providerId: "openai-image", name: "OpenAI Image", kind: "image", models: [{ id: "gpt-image-2.6-flare", default: true }] },
 ];
 
 function baseProps(overrides: Partial<React.ComponentProps<typeof SessionKeyPanelView>> = {}) {
@@ -117,6 +120,51 @@ describe("BYOK-5E — SessionKeyPanelView (presentational)", () => {
     );
     expect(html).toContain("Session keys are supported for this image provider");
     expect(html).not.toContain("not enabled yet");
+  });
+
+  it("P2: offers an EXPLICIT OpenAI text-key reuse button only when the image key is absent", () => {
+    const reuseSource = { providerId: "openai", name: "Text AI OpenAI" };
+    const notConfigured = render(
+      <SessionKeyPanelView
+        {...baseProps({
+          selectedProviderId: "openai-image",
+          selectedModelId: "gpt-image-2.6-flare",
+          status: "not-configured",
+          reuseSource,
+          onReuse: () => {},
+        })}
+      />
+    );
+    expect(notConfigured).toContain('data-session-reuse="true"');
+    expect(notConfigured).toContain("Use the Text AI OpenAI session key");
+    expect(notConfigured).toContain("never sent back to the browser");
+
+    const configured = render(
+      <SessionKeyPanelView
+        {...baseProps({
+          selectedProviderId: "openai-image",
+          selectedModelId: "gpt-image-2.6-flare",
+          status: "configured",
+          reuseSource,
+          onReuse: () => {},
+        })}
+      />
+    );
+    expect(configured).not.toContain('data-session-reuse="true"');
+
+    const unavailable = render(
+      <SessionKeyPanelView
+        {...baseProps({
+          selectedProviderId: "openai-image",
+          selectedModelId: "gpt-image-2.6-flare",
+          status: "not-configured",
+          sessionByokSupported: false,
+          reuseSource,
+          onReuse: () => {},
+        })}
+      />
+    );
+    expect(unavailable).not.toContain('data-session-reuse="true"');
   });
 
   it("accessibly associates the Session API key label with the password input and marks async regions", () => {
@@ -217,6 +265,27 @@ describe("BYOK-5E — session-key client helpers", () => {
     expect(res.ok).toBe(true);
     expect(network.calls[0].method).toBe("DELETE");
     expect(network.calls[0].path).toBe(`${SESSION_KEY_API_PATH}/openrouter`);
+  });
+
+  it("P2: reuseSessionKey POSTs only the exact pair to the fixed reuse path (never a secret)", async () => {
+    const network = stubNetwork({
+      post: async () => ({
+        status: 200,
+        ok: true,
+        data: { providerId: "openai-image", storageScope: "session_only", configured: true, expiresAt: "x", version: "v2" },
+      }),
+    });
+    const res = await reuseSessionKey(network, "openai", "openai-image", "v1");
+    expect(res.ok).toBe(true);
+    expect(res.session?.providerId).toBe("openai-image");
+    expect(network.calls[0].path).toBe(SESSION_KEY_REUSE_API_PATH);
+    expect(network.calls[0].path).toBe("/api/providers/session-key/reuse");
+    expect(network.calls[0].body).toEqual({
+      fromProviderId: "openai",
+      toProviderId: "openai-image",
+      expectedVersion: "v1",
+    });
+    expect(JSON.stringify(res)).not.toContain("apiKey");
   });
 
   it("fetchSessionKeyStatus reads the fixed status path and normalizes non-secret rows", async () => {

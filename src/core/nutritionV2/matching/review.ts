@@ -52,7 +52,7 @@ import {
 } from '../usda/types';
 import { normalizeQuery, normalizeQueryChecked } from './normalize';
 import { parseIngredient } from './parse';
-import { QUERY_PROJECTION_VERSION } from './query';
+import { QUERY_PROJECTION_VERSION, QUALIFIER_TOKENS } from './query';
 import { searchManualCatalog, createManualSearchIndex, type ManualSearchIndex } from './manualSearch';
 import {
   ELIGIBILITY_POLICY_VERSION,
@@ -438,8 +438,27 @@ export function reviewIngredient(
   }
   const normalized = normalizedResult.query;
 
-  const candidates = catalog.search(normalized, limit);
-  const exactCount = catalog.exactPhraseCount(normalized);
+  let candidates = catalog.search(normalized, limit);
+  let exactCount = catalog.exactPhraseCount(normalized);
+  // Optional preparation qualifiers can over-narrow the catalog. When they
+  // eliminate every candidate, fall back to the safe unqualified candidate set
+  // for explicit review. The qualifier remains missing from those candidates,
+  // so they stay review-only and are never auto-approved.
+  // Only the optional preparation qualifiers that the audit identified as
+  // over-narrowing are eligible for this safe fallback. Dietary/state
+  // qualifiers such as unsalted/salted/raw/cooked remain strict.
+  const OPTIONAL_PREPARATION_FALLBACK_QUALIFIERS = new Set(['rolled', 'quick', 'instant']);
+  if (candidates.length === 0 && normalized.tokens.some((token) => OPTIONAL_PREPARATION_FALLBACK_QUALIFIERS.has(token))) {
+    const fallbackTokens = normalized.tokens.filter((token) => !OPTIONAL_PREPARATION_FALLBACK_QUALIFIERS.has(token));
+    if (fallbackTokens.length > 0 && fallbackTokens.length < normalized.tokens.length) {
+      const fallbackNormalized = { ...normalized, text: fallbackTokens.join(' '), tokens: Object.freeze([...fallbackTokens]) };
+      const fallbackCandidates = catalog.search(fallbackNormalized, limit);
+      if (fallbackCandidates.length > 0) {
+        candidates = fallbackCandidates;
+        exactCount = 0;
+      }
+    }
+  }
 
   const reviewDigest = computeReviewDigest({
     line_ref: parsed.line_ref,

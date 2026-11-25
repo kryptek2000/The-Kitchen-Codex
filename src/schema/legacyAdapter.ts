@@ -77,7 +77,9 @@ export function canonicalToObsidianRecipe(
     prepTime: canonical.timings.prepTimeDisplay,
     cookTime: canonical.timings.cookTimeDisplay,
     totalTime: canonical.timings.totalTimeDisplay,
-    servings: canonical.metadata.servings ?? undefined,
+    ...(typeof canonical.metadata.servings === 'number'
+      ? { servings: canonical.metadata.servings }
+      : {}),
     difficulty,
     rating: canonical.metadata.rating,
     calories: legacyCalories,

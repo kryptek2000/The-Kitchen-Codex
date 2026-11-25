@@ -23,14 +23,18 @@ import {
 import { ObsidianRecipe, ParsedIngredient, RecipeStep, RecipeNutrition, RecoveredRecipeMetadata } from '../types';
 import {
   parseObsidianRecipeMarkdown,
+  serializeRecipePreservingContent,
   serializeRecipeToObsidianMarkdown,
 } from '../utils/markdownParser';
-import { saveImageToVaultAssets, saveImageToVaultAssetsCollisionSafe, vaultAssets, type SaveImageDeps } from '../utils/vaultAssets';
+import { saveImageToVaultAssets, saveImageToVaultAssetsCollisionSafe, type SaveImageDeps, type SessionAssetRunner } from '../utils/vaultAssets';
+import { validateRecipeAssetReferences } from '../utils/assetReferences';
 import { resolveNewRecipeVaultPath } from '../core/vaultPath';
 import { validateGeneratedImage } from '../core/recipeImage';
 import type { NetworkAdapter } from '../application/adapters/NetworkAdapter';
 import { buildAiSelectionRequestOptions } from '../application/aiSelection';
 import { useVaultImage } from '../hooks/useVaultImage';
+import { useVaultAssetScope } from '../hooks/VaultAssetScopeContext';
+import { createTemporaryPreviewUrl, getReferenceScheme, releaseTemporaryPreviewUrl } from '../utils/assetProvenance';
 import {
   canApplyNutritionEstimate,
   type NutritionAssessment,
@@ -72,6 +76,10 @@ interface RecipeEditorModalProps {
   folderHandle?: any;
   /** Injected asset save dependencies (asset boundary + binary downloader) from the shell. */
   imageService?: SaveImageDeps;
+  /** Session-bound composite asset+recipe runner supplied by the App shell. */
+  runSessionAsset?: SessionAssetRunner;
+  /** Desktop shell hook: prepare a managed native Vault before the transaction. */
+  onBeforeSave?: () => Promise<void> | void;
   onSave: (recipe: ObsidianRecipe) => Promise<void> | void;
   /** App-backend API transport (injected by the bootstrap). */
   network: NetworkAdapter;
@@ -224,11 +232,14 @@ export function RecipeEditorModal({
   initialRecipe,
   folderHandle,
   imageService,
+  runSessionAsset,
+  onBeforeSave,
   network,
   onSave,
   onClose,
   onOpenAiSettings,
 }: RecipeEditorModalProps) {
+  const assetScope = useVaultAssetScope();
   const [activeTab, setActiveTab] = useState<'visual' | 'markdown'>('visual');
 
   // Form State
@@ -245,7 +256,7 @@ export function RecipeEditorModal({
   const [difficulty, setDifficulty] = useState<'Easy' | 'Medium' | 'Hard'>(
     initialRecipe?.difficulty || 'Easy'
   );
-  const [rating, setRating] = useState(initialRecipe?.rating || 5);
+  const [rating, setRating] = useState(initialRecipe?.rating ?? 5);
   // Initialize per-serving nutrition fields from the recipe's nutrition block.
   // If the block has a servings denominator, divide totals by servings to get per-serving.
   // Legacy: if only `calories` (string) is present without nutrition block, treat as per-serving.
@@ -451,9 +462,13 @@ export function RecipeEditorModal({
   });
 
   useEffect(() => {
+    // Do not revoke a preview while a Save transaction may still roll back to
+    // it. Successful saves release preview URLs explicitly; failed saves restore
+    // the still-live preview.
+    if (saveTransactionRef.current) return;
     for (const url of representativePreviewUrlsRef.current) {
       if (url !== image) {
-        URL.revokeObjectURL(url);
+        releaseTemporaryPreviewUrl(url);
         representativePreviewUrlsRef.current.delete(url);
       }
     }
@@ -467,7 +482,7 @@ export function RecipeEditorModal({
       aiRunRef.current += 1;
       previewRunRef.current += 1;
       representativeSearchGenRef.current += 1;
-      for (const url of representativePreviewUrlsRef.current) URL.revokeObjectURL(url);
+      for (const url of representativePreviewUrlsRef.current) releaseTemporaryPreviewUrl(url);
       representativePreviewUrlsRef.current.clear();
     },
     []
@@ -488,7 +503,7 @@ export function RecipeEditorModal({
     setAiPreview(null);
   };
 
-  const previewImageUrl = useVaultImage(image, folderHandle);
+  const previewImageUrl = useVaultImage(image, undefined, folderHandle);
 
   // Callout
   const [calloutTitle, setCalloutTitle] = useState(
@@ -591,6 +606,10 @@ export function RecipeEditorModal({
       servings: !isNaN(parsedServings) && parsedServings > 0 ? parsedServings : undefined,
       difficulty,
       rating,
+      // `isFavorite` is not edited by this modal. Carry it through the
+      // regenerated Markdown so an unrelated visual edit cannot silently turn a
+      // favorite off. Leave it absent for legacy/new recipes without a flag.
+      isFavorite: initialRecipe?.isFavorite,
       // Legacy calories field: store PER-SERVING value (not scaled) for backward compatibility.
       calories: calories.trim() || (parsedCalNum !== undefined ? parsedCalNum.toString() : undefined),
       nutrition: hasNutrition
@@ -618,6 +637,10 @@ export function RecipeEditorModal({
           })()
         : undefined,
       image: (imageOverride ?? image) || undefined,
+      // Preserve the freeform intro/body prose. It may contain supported
+      // Markdown/Obsidian/HTML image references that must survive the visual
+      // save and reach destination validation rather than being silently lost.
+      description: initialRecipe?.description,
       callouts: calloutContent ? [{ type: 'tip', title: calloutTitle, content: calloutContent }] : [],
       ingredients: parsedIngs,
       instructions: parsedSteps,
@@ -695,7 +718,14 @@ export function RecipeEditorModal({
         throw new Error('Please add ingredients before calculating nutrition.');
       }
 
-      const numServings = typeof servings === 'number' ? servings : parseFloat(String(servings)) || 4;
+      // Preserve the authored serving count for disclosure purposes. Calculation
+      // falls back to the shared four-serving basis inside the nutrition engine.
+      const authoredServings = typeof servings === 'number'
+        ? servings
+        : (String(servings ?? '').trim() === '' ? undefined : parseFloat(String(servings)));
+      const numServings = Number.isFinite(authoredServings) && (authoredServings as number) > 0
+        ? (authoredServings as number)
+        : undefined;
 
       // ONE shared Basic Nutrition engine (the SAME service the main recipe page
       // uses). Deterministic, local, no provider call: the pinned USDA
@@ -739,7 +769,8 @@ export function RecipeEditorModal({
       setNutritionDirtyFields(new Set()); // Clear dirty flags on new calculation
 
       // Set per-serving editor fields from the estimate
-      const perServing = (value: number | null | undefined, whole = false) => value == null ? '' : String(whole ? Math.round(value / numServings) : Math.round((value / numServings) * 10) / 10);
+      const perServingBasis = estimate.baseServings > 0 ? estimate.baseServings : 4;
+      const perServing = (value: number | null | undefined, whole = false) => value == null ? '' : String(whole ? Math.round(value / perServingBasis) : Math.round((value / perServingBasis) * 10) / 10);
       setCalories(perServing(values.calories, true));
       setProtein(perServing(values.protein));
       setCarbs(perServing(values.carbohydrates));
@@ -1076,9 +1107,9 @@ export function RecipeEditorModal({
       // it can be revoked after React stops using it (or on unmount). A late
       // (cancelled/unmounted) completion revokes its URL immediately instead of
       // leaking an untracked one.
-      const previewUrl = URL.createObjectURL(blob);
+      const previewUrl = createTemporaryPreviewUrl(blob, 'recipe-editor-representative');
       if (run !== previewRunRef.current || !mountedRef.current) {
-        URL.revokeObjectURL(previewUrl);
+        releaseTemporaryPreviewUrl(previewUrl);
         return;
       }
       setPendingImage({ kind: 'representative', blob, ext, provenance: selected.provenance });
@@ -1150,7 +1181,7 @@ export function RecipeEditorModal({
     aiPreviewRef.current = null;
     if (!current) return;
     if (representativePreviewUrlsRef.current.has(current.previewUrl)) {
-      URL.revokeObjectURL(current.previewUrl);
+      releaseTemporaryPreviewUrl(current.previewUrl);
       representativePreviewUrlsRef.current.delete(current.previewUrl);
     }
     void network
@@ -1180,10 +1211,10 @@ export function RecipeEditorModal({
           'IMAGE_PREVIEW_UNAVAILABLE'
         );
       }
-      const previewUrl = URL.createObjectURL(fetched.blob);
+      const previewUrl = createTemporaryPreviewUrl(fetched.blob, 'recipe-editor-ai');
       if (run !== aiRunRef.current || !mountedRef.current) {
         // Late (cancelled/unmounted) completion: never leak an untracked URL.
-        URL.revokeObjectURL(previewUrl);
+        releaseTemporaryPreviewUrl(previewUrl);
         return;
       }
       representativePreviewUrlsRef.current.add(previewUrl);
@@ -1301,9 +1332,10 @@ export function RecipeEditorModal({
   /** True for a transient preview reference that must never be persisted. */
   const isTransientImageRef = (value: unknown): boolean => {
     if (typeof value !== 'string' || !value) return false;
+    const scheme = getReferenceScheme(value);
     return (
-      value.startsWith('blob:') ||
-      value.startsWith('data:') ||
+      scheme === 'blob' ||
+      scheme === 'data' ||
       value.includes('/api/recipes/image/preview/')
     );
   };
@@ -1317,6 +1349,30 @@ export function RecipeEditorModal({
     previewRunRef.current += 1;
     representativeSearchGenRef.current += 1;
     onClose();
+  };
+
+  const sessionAssetErrorMessage = (err: any, fallback: string): string =>
+    err?.name === 'VaultSessionSupersededError'
+      ? 'The Vault changed before the image could be saved. No asset was written to the new Vault.'
+      : err?.message || fallback;
+
+  /**
+   * Immediate image-picker writes (upload / save-remote) also run under the
+   * originating session lease. They are not allowed to resolve a destination
+   * from a newer rendered imageService.
+   */
+  const saveImmediateAsset = async (source: string | Blob, preferredExtension?: string) => {
+    if (runSessionAsset) {
+      return runSessionAsset((deps) =>
+        saveImageToVaultAssetsCollisionSafe(deps, title || 'Recipe', source, preferredExtension)
+      );
+    }
+    return saveImageToVaultAssetsCollisionSafe(
+      imageService ?? { folderHandle },
+      title || 'Recipe',
+      source,
+      preferredExtension
+    );
   };
 
   const handleSave = async () => {
@@ -1334,14 +1390,25 @@ export function RecipeEditorModal({
     saveTransactionRef.current = true;
     setIsSaving(true);
     try {
-      return await handleSaveTransaction();
+      if (onBeforeSave) {
+        try {
+          await onBeforeSave();
+        } catch (error: any) {
+          setSaveError(error?.message || 'The desktop Recipe Vault could not be prepared. Your draft was kept.');
+          return;
+        }
+      }
+      if (runSessionAsset) {
+        return await runSessionAsset((deps) => handleSaveTransaction(deps));
+      }
+      return await handleSaveTransaction(imageService ?? { folderHandle });
     } finally {
       saveTransactionRef.current = false;
       if (mountedRef.current) setIsSaving(false);
     }
   };
 
-  const handleSaveTransaction = async () => {
+  const handleSaveTransaction = async (deps: SaveImageDeps) => {
     let finalRecipe: ObsidianRecipe;
     let imagePathOverride: string | undefined;
     // Set ONLY when THIS transaction created a new asset (B1 ownership proof).
@@ -1407,7 +1474,7 @@ export function RecipeEditorModal({
           throw new Error('invalid-preview-bytes');
         }
         const saved = await saveImageToVaultAssetsCollisionSafe(
-          imageService ?? { folderHandle },
+          deps,
           title || 'Recipe',
           pendingImage.blob,
           pendingImage.ext
@@ -1461,7 +1528,9 @@ export function RecipeEditorModal({
         delete fm['codex_generated_image'];
       }
       parsed.frontmatter = fm;
-      parsed.rawMarkdown = serializeRecipeToObsidianMarkdown(parsed);
+      // Preserve the user's exact raw body; the canonical writer merges managed
+      // frontmatter fields without regenerating custom sections.
+      parsed.rawMarkdown = rawMarkdown;
       finalRecipe = parsed;
     } else {
       const md = generateCurrentMarkdown(imagePathOverride, provenanceOverride, generatedOverride);
@@ -1472,6 +1541,20 @@ export function RecipeEditorModal({
         // Existing recipe: keep authoritative filePath. New recipe: connected root.
         initialRecipe?.filePath || resolveNewRecipeVaultPath(safeName)
       );
+      // Existing recipes retain their original body so unknown/custom sections
+      // survive an unrelated structured edit. New recipes use the generated md.
+      if (initialRecipe?.rawMarkdown) {
+        finalRecipe.rawMarkdown = initialRecipe.rawMarkdown;
+      }
+      if (initialRecipe) {
+        // Preserve the exact pre-edit favorite value (including a legacy absent
+        // value). This field is not edited by the visual form, so the save path
+        // must not reinterpret its omission as an intentional favorite removal.
+        // The write rebase still keeps a newer committed favorite/rating if one
+        // landed while this editor was open. The Raw Markdown tab is intentionally
+        // excluded: an explicit text edit there remains authoritative.
+        finalRecipe.isFavorite = initialRecipe.isFavorite;
+      }
     }
 
     if (initialRecipe?.id) {
@@ -1481,18 +1564,43 @@ export function RecipeEditorModal({
       finalRecipe.fileHandle = initialRecipe.fileHandle;
     }
 
+    // Production session-bound save: a Vault-local image must exist in the
+    // DESTINATION adapter. This blocks a stale A-only path from entering B.
+    if (runSessionAsset) {
+      const assetValidation = await validateRecipeAssetReferences(deps, finalRecipe);
+      if (!assetValidation.ok) {
+        setSaveError(assetValidation.reason || 'The active Vault could not verify this recipe image reference.');
+        return;
+      }
+    }
+
+    // Give downstream state the exact canonical text that the writer will
+    // persist (including the finalized Vault image path and preserved body).
+    finalRecipe.rawMarkdown = serializeRecipePreservingContent(finalRecipe);
+
     setSaveError(null);
     try {
       await onSave(finalRecipe);
+      // Success: release any preview URL that is no longer the active image.
+      for (const url of [...representativePreviewUrlsRef.current]) {
+        if (url !== finalRecipe.image) {
+          releaseTemporaryPreviewUrl(url);
+          representativePreviewUrlsRef.current.delete(url);
+        }
+      }
     } catch (err: any) {
-      let message: string = err?.message || 'Failed to save recipe to the vault.';
+      let message: string = err?.name === 'VaultSessionSupersededError'
+        ? 'The Vault changed before this recipe was saved. The recipe was not added to the new Vault.'
+        : err?.message || 'Failed to save recipe to the vault.';
       if (createdAssetPath) {
         // Roll back ONLY the asset proven to be created by THIS Save transaction
         // (B1). A pre-existing user asset is never deleted or modified.
-        const del = imageService?.asset?.delete;
+        const del = deps.asset?.delete;
+        let deleted = false;
         if (typeof del === 'function') {
           try {
-            await del.call(imageService!.asset, createdAssetPath);
+            await del.call(deps.asset, createdAssetPath);
+            deleted = true;
           } catch {
             message =
               'Recipe save failed. A newly created image asset may remain in Assets and may need to be removed manually.';
@@ -1500,6 +1608,9 @@ export function RecipeEditorModal({
         } else {
           message =
             'Recipe save failed. A newly created image asset may remain in Assets and may need to be removed manually.';
+        }
+        if (deleted && deps.assetScope) {
+          deps.assetScope.removeAsset(createdAssetPath);
         }
       }
       // Restore the COMPLETE pre-save snapshot (B3): image, both provenances,
@@ -1527,7 +1638,7 @@ export function RecipeEditorModal({
             </div>
             <div>
               <h2 className="text-base font-serif font-bold text-white">
-                {initialRecipe ? `Edit: ${initialRecipe.title}` : 'Create New Obsidian Recipe Note'}
+                {initialRecipe ? `Edit: ${initialRecipe.title}` : 'Create New Recipe Note'}
               </h2>
               <span className="text-xs text-gray-500 font-mono">
                 {initialRecipe ? initialRecipe.filePath : fileName}
@@ -1637,7 +1748,7 @@ export function RecipeEditorModal({
 
                 <div>
                   <label className="block font-medium text-gray-300 mb-1">
-                    Obsidian File Name
+                    Recipe File Name
                   </label>
                   <input
                     type="text"
@@ -1875,7 +1986,7 @@ export function RecipeEditorModal({
                       className="px-2 py-1 bg-white/5 hover:bg-white/10 text-amber-300 border border-white/10 rounded-md flex items-center gap-1 transition-colors cursor-pointer"
                     >
                       <Folder className="w-3 h-3 text-amber-400" />
-                      <span>Vault Assets ({vaultAssets.getAll().length})</span>
+                      <span>Vault Assets ({(assetScope?.getAll() ?? []).length})</span>
                     </button>
                     <button
                       type="button"
@@ -1895,10 +2006,11 @@ export function RecipeEditorModal({
                         if (file) {
                           try {
                             setIsSavingImageAsset(true);
-                            const saved = await saveImageToVaultAssets(imageService ?? { folderHandle }, title || 'Recipe', file);
+                            const saved = await saveImmediateAsset(file);
+                            if (!saved.success) throw new Error(saved.error || 'Could not save image.');
                             setImageManually(saved.relativePath);
                           } catch (err: any) {
-                            console.error('Failed to upload image to vault Assets/:', err);
+                            setSaveError(sessionAssetErrorMessage(err, 'Failed to upload image to vault Assets/.'));
                           } finally {
                             setIsSavingImageAsset(false);
                             if (fileInputRef.current) fileInputRef.current.value = '';
@@ -1912,7 +2024,7 @@ export function RecipeEditorModal({
                 {isAssetPickerOpen && (
                   <div className="p-3 bg-[#0A0A0A] border border-amber-500/30 rounded-xl space-y-2 max-h-48 overflow-y-auto">
                     <div className="flex items-center justify-between text-xs text-amber-400 font-semibold pb-1 border-b border-white/5">
-                      <span>Select Image from Obsidian Assets</span>
+                      <span>Select Image from Vault Assets</span>
                       <button
                         type="button"
                         onClick={() => setIsAssetPickerOpen(false)}
@@ -1921,13 +2033,13 @@ export function RecipeEditorModal({
                         ✕
                       </button>
                     </div>
-                    {vaultAssets.getAll().length === 0 ? (
+                    {(assetScope?.getAll() ?? []).length === 0 ? (
                       <p className="text-xs text-gray-500 py-2 text-center">
                         No image assets currently cached in vault. Upload an image or add files to your vault's Assets/ folder.
                       </p>
                     ) : (
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
-                        {vaultAssets.getAll().map((item) => (
+                        {(assetScope?.getAll() ?? []).map((item) => (
                           <button
                             key={item.path}
                             type="button"
@@ -1971,10 +2083,11 @@ export function RecipeEditorModal({
                       onClick={async () => {
                         try {
                           setIsSavingImageAsset(true);
-                          const saved = await saveImageToVaultAssets(imageService ?? { folderHandle }, title || 'Recipe', image);
+                          const saved = await saveImmediateAsset(image);
+                          if (!saved.success) throw new Error(saved.error || 'Could not save image.');
                           setImageManually(saved.relativePath);
                         } catch (err: any) {
-                          console.error('Failed to download image to Assets/:', err);
+                          setSaveError(sessionAssetErrorMessage(err, 'Failed to download image to Assets/.'));
                         } finally {
                           setIsSavingImageAsset(false);
                         }

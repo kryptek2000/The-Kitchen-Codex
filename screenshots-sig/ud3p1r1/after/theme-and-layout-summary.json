@@ -1,0 +1,401 @@
+{
+  "themes": {
+    "obsidian": {
+      "documentTheme": "obsidian",
+      "surfaces": {
+        "html": "rgb(12, 12, 12)",
+        "body": "rgb(12, 12, 12)",
+        "app": "rgb(12, 12, 12)"
+      },
+      "pairRatios": {
+        "pageTitle": 17.77,
+        "pageIntro": 7.7,
+        "heroKicker": 7.26,
+        "heroTitle": 16.74,
+        "heroTags": 7.26,
+        "heroMetaLabel": 7.26,
+        "heroMetaValue": 16.74,
+        "shelfTitle": 17.77,
+        "shelfCategory": 7.7,
+        "shelfTags": 7.7,
+        "shelfMetaLabel": 7.7,
+        "primaryButton": 9.11,
+        "secondaryButton": 16.74,
+        "searchText": 16.74,
+        "searchPlaceholder": 7.26,
+        "statusStrip": 7.7,
+        "sidebarNav": 17.16
+      },
+      "primaryAction": {
+        "fg": "rgb(12, 12, 12)",
+        "bg": "rgb(245, 158, 11)",
+        "ratio": 9.11
+      },
+      "heading": {
+        "fontFamily": "Fraunces, Georgia, Cambria, \"Times New Roman\", Times, serif",
+        "fontSize": "56px",
+        "color": "rgb(243, 244, 246)"
+      },
+      "metadataIconSizes": {
+        "hero": [
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "shelf": [
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "sidebar": [
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          }
+        ]
+      },
+      "touchTargetCount": 65,
+      "touchTargetViolations": [],
+      "overflow": {
+        "scrollWidth": 1440,
+        "clientWidth": 1440
+      }
+    },
+    "parchment": {
+      "documentTheme": "parchment",
+      "surfaces": {
+        "html": "rgb(246, 243, 235)",
+        "body": "rgb(246, 243, 235)",
+        "app": "rgb(246, 243, 235)"
+      },
+      "pairRatios": {
+        "pageTitle": 15.77,
+        "pageIntro": 6.88,
+        "heroKicker": 7.63,
+        "heroTitle": 17.49,
+        "heroTags": 7.63,
+        "heroMetaLabel": 7.63,
+        "heroMetaValue": 17.49,
+        "shelfTitle": 15.77,
+        "shelfCategory": 6.88,
+        "shelfTags": 6.88,
+        "shelfMetaLabel": 6.88,
+        "primaryButton": 5.18,
+        "secondaryButton": 17.49,
+        "searchText": 17.49,
+        "searchPlaceholder": 7.63,
+        "statusStrip": 6.88,
+        "sidebarNav": 16.78
+      },
+      "primaryAction": {
+        "fg": "rgb(255, 255, 255)",
+        "bg": "rgb(194, 65, 12)",
+        "ratio": 5.18
+      },
+      "heading": {
+        "fontFamily": "Fraunces, Georgia, Cambria, \"Times New Roman\", Times, serif",
+        "fontSize": "56px",
+        "color": "rgb(28, 25, 23)"
+      },
+      "metadataIconSizes": {
+        "hero": [
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "shelf": [
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "sidebar": [
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          }
+        ]
+      },
+      "touchTargetCount": 65,
+      "touchTargetViolations": [],
+      "overflow": {
+        "scrollWidth": 1440,
+        "clientWidth": 1440
+      }
+    },
+    "nordic": {
+      "documentTheme": "nordic",
+      "surfaces": {
+        "html": "rgb(10, 18, 15)",
+        "body": "rgb(10, 18, 15)",
+        "app": "rgb(10, 18, 15)"
+      },
+      "pairRatios": {
+        "pageTitle": 18.02,
+        "pageIntro": 14.8,
+        "heroKicker": 13.48,
+        "heroTitle": 16.41,
+        "heroTags": 13.48,
+        "heroMetaLabel": 13.48,
+        "heroMetaValue": 16.41,
+        "shelfTitle": 18.02,
+        "shelfCategory": 14.8,
+        "shelfTags": 14.8,
+        "shelfMetaLabel": 14.8,
+        "primaryButton": 7.48,
+        "secondaryButton": 16.41,
+        "searchText": 16.41,
+        "searchPlaceholder": 13.48,
+        "statusStrip": 14.8,
+        "sidebarNav": 17.33
+      },
+      "primaryAction": {
+        "fg": "rgb(10, 18, 15)",
+        "bg": "rgb(16, 185, 129)",
+        "ratio": 7.48
+      },
+      "heading": {
+        "fontFamily": "Fraunces, Georgia, Cambria, \"Times New Roman\", Times, serif",
+        "fontSize": "56px",
+        "color": "rgb(236, 253, 245)"
+      },
+      "metadataIconSizes": {
+        "hero": [
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "shelf": [
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "sidebar": [
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          }
+        ]
+      },
+      "touchTargetCount": 65,
+      "touchTargetViolations": [],
+      "overflow": {
+        "scrollWidth": 1440,
+        "clientWidth": 1440
+      }
+    },
+    "blood-moon": {
+      "documentTheme": "blood-moon",
+      "surfaces": {
+        "html": "rgb(11, 9, 10)",
+        "body": "rgb(11, 9, 10)",
+        "app": "rgb(11, 9, 10)"
+      },
+      "pairRatios": {
+        "pageTitle": 16.95,
+        "pageIntro": 7.28,
+        "heroKicker": 6.94,
+        "heroTitle": 16.15,
+        "heroTags": 6.94,
+        "heroMetaLabel": 6.94,
+        "heroMetaValue": 16.15,
+        "shelfTitle": 16.95,
+        "shelfCategory": 7.28,
+        "shelfTags": 7.28,
+        "shelfMetaLabel": 7.28,
+        "primaryButton": 6.17,
+        "secondaryButton": 16.15,
+        "searchText": 16.15,
+        "searchPlaceholder": 6.94,
+        "statusStrip": 7.28,
+        "sidebarNav": 16.73
+      },
+      "primaryAction": {
+        "fg": "rgb(255, 255, 255)",
+        "bg": "rgb(183, 42, 58)",
+        "ratio": 6.17
+      },
+      "heading": {
+        "fontFamily": "Fraunces, Georgia, Cambria, \"Times New Roman\", Times, serif",
+        "fontSize": "56px",
+        "color": "rgb(242, 236, 231)"
+      },
+      "metadataIconSizes": {
+        "hero": [
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "shelf": [
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "sidebar": [
+          {
+            "width": 20,
+            "height": 20
+          },
+          {
+            "width": 20,
+            "height": 20
+          }
+        ]
+      },
+      "touchTargetCount": 65,
+      "touchTargetViolations": [],
+      "overflow": {
+        "scrollWidth": 1440,
+        "clientWidth": 1440
+      }
+    }
+  },
+  "themeRootCause": {
+    "reportedDefect": "Dark page surface with a Warm Parchment-dark heading (and white cards with light text) after a partial theme application.",
+    "mechanism": "The theme was applied to two scopes: documentElement (html) and the App root. A partial/external theme change updated only html, so legacy hard-coded class remaps ([[data-theme=\"parchment\"] .bg-[#141414]]) turned cards white while the App root still declared the Obsidian semantic variables. The old heading also used text-white, which the Parchment remap turned dark.",
+    "exampleFailedPairs": [
+      {
+        "foreground": "#1C1917 (Parchment remapped text-white)",
+        "background": "#0C0C0C (Obsidian root retained by App root scope)",
+        "ratio": 1.1
+      },
+      {
+        "foreground": "#F3F4F6 (Obsidian text-primary retained by App root scope)",
+        "background": "#FFFFFF (Parchment remapped card surface)",
+        "ratio": 1.09
+      }
+    ],
+    "correction": [
+      "documentElement is the single theme scope; the App root no longer renders data-theme",
+      "theme is applied in useLayoutEffect before paint and native color-scheme follows the palette",
+      "title/hero/card foregrounds and surfaces use semantic roles",
+      "hard-coded body bg class removed; html/body/#root share var(--bg-root)",
+      "new --accent-contrast role is defined from each approved palette for filled actions"
+    ],
+    "currentPairsValidated": true,
+    "minimumValidatedContrast": 5.18
+  },
+  "stickyHeader": {
+    "1440": "46px published / sticky",
+    "768": "130px published / sticky",
+    "390": "0px published / static",
+    "360": "0px published / static"
+  },
+  "responsive": {
+    "360": {
+      "scrollWidth": 360,
+      "clientWidth": 360,
+      "headerHeight": 130,
+      "heroWidth": 328,
+      "heroPhotoHeight": 340,
+      "shelfUsesRows": true
+    },
+    "390": {
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "headerHeight": 130,
+      "heroWidth": 350,
+      "heroPhotoHeight": 340,
+      "shelfUsesRows": true
+    },
+    "768": {
+      "scrollWidth": 768,
+      "clientWidth": 768,
+      "headerHeight": 130,
+      "heroWidth": 704,
+      "heroPhotoHeight": 520,
+      "shelfUsesRows": false
+    },
+    "1024": {
+      "scrollWidth": 1024,
+      "clientWidth": 1024,
+      "headerHeight": 46,
+      "heroWidth": 752,
+      "heroPhotoHeight": 540,
+      "shelfUsesRows": false
+    }
+  }
+}

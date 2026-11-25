@@ -10,6 +10,7 @@ import type { SettingsAdapter } from '../../src/application/adapters/SettingsAda
 import type { VaultAdapter } from '../../src/application/adapters/VaultAdapter';
 import { generatedDraftToObsidianRecipe, saveGeneratedRecipeToVault } from '../../src/application/createForMe';
 import { parseObsidianRecipeMarkdown } from '../../src/utils/markdownParser';
+import { adaptRecipe } from '../../src/core/nutritionV2/phase4/adapt';
 
 beforeAll(async () => {
   const settings: Pick<SettingsAdapter, 'get'> = { get: async () => null };
@@ -66,6 +67,37 @@ async function send(text: string) {
 }
 
 describe('Create with Shiso', () => {
+  it('saves and reopens a generated cookie recipe with intact ingredient lines and a readable nutrition basis', () => {
+    const ingredients = [
+      { amount: 2.25, unit: 'cup', name: 'all-purpose flour' },
+      { amount: 1, unit: 'tsp', name: 'baking soda' },
+      { amount: 0.5, unit: 'tsp', name: 'salt' },
+      { amount: 1, unit: 'cup', name: 'unsalted butter' },
+      { amount: 0.75, unit: 'cup', name: 'granulated sugar' },
+      { amount: 0.75, unit: 'cup', name: 'brown sugar' },
+      { amount: 1, unit: 'tsp', name: 'vanilla extract' },
+      { amount: 2, name: 'eggs' },
+      { amount: 2, unit: 'cup', name: 'semi-sweet chocolate chips' },
+    ];
+    const saved = generatedDraftToObsidianRecipe({
+      draft: { title: 'Classic Golden Chocolate Chip Cookies', ingredients, steps: [{ text: 'Bake until golden.' }] },
+      provenance: { generated: true, providerId: 'fixture', model: 'fixture' },
+      now: () => new Date('2026-10-19T12:00:00Z'),
+    });
+    const reopened = parseObsidianRecipeMarkdown(saved.rawMarkdown ?? '', saved.fileName ?? 'cookies.md', saved.filePath ?? 'cookies.md');
+    const adapted = adaptRecipe(reopened);
+    expect(reopened.servings).toBeUndefined();
+    expect(Object.hasOwn(reopened, 'servings')).toBe(false);
+    expect(reopened.category).toBe('General');
+    expect(reopened.ingredients).toHaveLength(9);
+    expect(reopened.ingredients.map((line) => line.original)).toEqual([
+      '2.25 cup all-purpose flour', '1 tsp baking soda', '0.5 tsp salt',
+      '1 cup unsalted butter', '0.75 cup granulated sugar', '0.75 cup brown sugar',
+      '1 tsp vanilla extract', '2 eggs', '2 cup semi-sweet chocolate chips',
+    ]);
+    expect(adapted).toMatchObject({ ok: true, recipe: { base_servings: 4, adapted: expect.any(Array) } });
+  });
+
   it('extracts only explicit bounded serving counts from natural language', () => {
     expect(explicitServingCount('Create a casserole for six people.')).toBe(6);
     expect(explicitServingCount('Change it to eight servings.')).toBe(8);
@@ -118,6 +150,8 @@ describe('Create with Shiso', () => {
     expect(reopened.ingredients.some((ingredient) => ingredient.name.includes('black beans'))).toBe(true);
     expect(reopened.instructions.some((step) => step.text.includes('beans'))).toBe(true);
     expect(reopened.servings).toBe(8);
+    const nutritionAdaptation = adaptRecipe(reopened);
+    expect(nutritionAdaptation).toMatchObject({ ok: true, recipe: { base_servings: 8, adapted: expect.any(Array) } });
     expect(await screen.findByText(/saved successfully to the Vault/i)).toBeTruthy();
   });
 

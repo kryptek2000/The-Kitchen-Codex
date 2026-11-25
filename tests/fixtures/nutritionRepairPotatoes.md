@@ -37,7 +37,7 @@ codex_nutrition:
   sources:
     - usda_fdc
   source_releases:
-    usda_fdc: usda_fdc_87c5408a3e98838944a87be74824761e
+    usda_fdc: usda_fdc_1f3e3068a7ae0702f360d1caae40a628
   nutrient_scope:
     - calories
     - protein
@@ -295,7 +295,7 @@ codex_nutrition:
     - line_ref: ing:0:9fe6f954cfc3
       source: usda_fdc
       source_food_id: '168894'
-      source_release: usda_fdc_87c5408a3e98838944a87be74824761e
+      source_release: usda_fdc_1f3e3068a7ae0702f360d1caae40a628
       match_status: confirmed
       resolved: true
       user_confirmed: true
@@ -306,7 +306,7 @@ codex_nutrition:
     - line_ref: ing:1:8bcd78277923
       source: usda_fdc
       source_food_id: '172206'
-      source_release: usda_fdc_87c5408a3e98838944a87be74824761e
+      source_release: usda_fdc_1f3e3068a7ae0702f360d1caae40a628
       match_status: confirmed
       resolved: true
       user_confirmed: true
@@ -317,7 +317,7 @@ codex_nutrition:
     - line_ref: ing:2:7db33eee2b12
       source: usda_fdc
       source_food_id: '173468'
-      source_release: usda_fdc_87c5408a3e98838944a87be74824761e
+      source_release: usda_fdc_1f3e3068a7ae0702f360d1caae40a628
       match_status: confirmed
       resolved: true
       user_confirmed: true
@@ -328,7 +328,7 @@ codex_nutrition:
     - line_ref: ing:3:572c0f0781c8
       source: usda_fdc
       source_food_id: '2709799'
-      source_release: usda_fdc_87c5408a3e98838944a87be74824761e
+      source_release: usda_fdc_1f3e3068a7ae0702f360d1caae40a628
       match_status: confirmed
       resolved: true
       user_confirmed: true
@@ -339,7 +339,7 @@ codex_nutrition:
     - line_ref: ing:4:c9f8843518ae
       source: usda_fdc
       source_food_id: '170498'
-      source_release: usda_fdc_87c5408a3e98838944a87be74824761e
+      source_release: usda_fdc_1f3e3068a7ae0702f360d1caae40a628
       match_status: confirmed
       resolved: true
       user_confirmed: true
@@ -349,7 +349,7 @@ codex_nutrition:
     - line_ref: ing:5:06ac7a15f789
       source: usda_fdc
       source_food_id: '2710154'
-      source_release: usda_fdc_87c5408a3e98838944a87be74824761e
+      source_release: usda_fdc_1f3e3068a7ae0702f360d1caae40a628
       match_status: confirmed
       resolved: true
       user_confirmed: true

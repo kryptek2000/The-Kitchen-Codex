@@ -44,7 +44,7 @@ afterEach(() => {
 describe("BYOK-5A — session secret provider allowlist", () => {
   it("allows exactly the registered text + image provider execution ids", () => {
     const allowlist = sessionSecretProviderAllowlist();
-    for (const id of ["gemini", "openrouter", "deepseek", "gemini-image", "openrouter-image"]) {
+    for (const id of ["gemini", "openrouter", "deepseek", "openai", "gemini-image", "openrouter-image"]) {
       expect(allowlist).toContain(id);
       expect(isSessionSecretProviderAllowed(id)).toBe(true);
     }

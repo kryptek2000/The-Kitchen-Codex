@@ -3,6 +3,7 @@ import { resolveRoleCandidates, runWithAiFallback } from "./ai/provider.js";
 import type { AiJsonSchema, AiProvider } from "./ai/types.js";
 import type { SelectionInput } from "./ai/effectiveSelection.js";
 import { logModelAttempt } from "./providerDiagnostics.js";
+import { culinaryExpertiseBlock } from "./ai/culinaryExpertise.js";
 import {
   estimateDeterministicNutrition,
   type DeterministicNutritionResult,
@@ -265,7 +266,9 @@ async function aiEstimateNutrition(
   servings: number,
   cleanedIngredientLines: string[]
 ): Promise<NutritionEstimateResult> {
-  const prompt = `You are a certified culinary nutritional analysis engine for The Kitchen Codex.
+  const prompt = `${culinaryExpertiseBlock()}
+
+You are a culinary nutrition analysis assistant for The Kitchen Codex.
 Analyze the following recipe and its ingredients to calculate the estimated TOTAL nutritional content for the ENTIRE recipe batch, exactly as written. Do NOT divide by any number of servings.
 
 Recipe Title: ${recipeTitle}

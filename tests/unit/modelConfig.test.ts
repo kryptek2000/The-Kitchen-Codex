@@ -30,8 +30,24 @@ describe("MODEL_CONFIG", () => {
   });
 
   it("configures a sane, positive request timeout", () => {
-    expect(MODEL_CONFIG.requestTimeoutMs).toBeGreaterThan(0);
+    expect(MODEL_CONFIG.requestTimeoutMs).toBe(25_000);
     expect(MODEL_CONFIG.requestTimeoutMs).toBeLessThanOrEqual(120_000);
+  });
+
+  it("gives whole-recipe semantic interpretation its own bounded 45s deadline", () => {
+    expect(MODEL_CONFIG.wholeRecipeSemanticTimeoutMs).toBe(45_000);
+    expect(MODEL_CONFIG.wholeRecipeSemanticTimeoutMs).toBeGreaterThan(
+      MODEL_CONFIG.requestTimeoutMs
+    );
+    expect(MODEL_CONFIG.wholeRecipeSemanticTimeoutMs).toBeLessThanOrEqual(120_000);
+  });
+
+  it("gives AI-first candidate evaluation its own bounded 45s deadline", () => {
+    expect(MODEL_CONFIG.aiFirstCandidateEvaluationTimeoutMs).toBe(45_000);
+    expect(MODEL_CONFIG.aiFirstCandidateEvaluationTimeoutMs).toBeGreaterThan(
+      MODEL_CONFIG.requestTimeoutMs
+    );
+    expect(MODEL_CONFIG.aiFirstCandidateEvaluationTimeoutMs).toBeLessThanOrEqual(120_000);
   });
 
   it("contains no stale retired model identifiers", () => {

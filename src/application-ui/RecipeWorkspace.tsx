@@ -16,7 +16,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import type { ObsidianRecipe } from '../types';
 import type { AppServices } from '../application/createAppServices';
 import { loadVaultContent } from '../application/vaultContent';
-import { saveRecipeWithVaultAdapter } from '../application/vaultRecipe';
+import { saveValidatedRecipeWithVaultAdapter } from './recipePersistence';
 import { parseObsidianRecipeMarkdown } from '../utils/markdownParser';
 
 interface RecipeWorkspaceProps {
@@ -93,14 +93,21 @@ export function RecipeWorkspace({ services }: RecipeWorkspaceProps) {
       // SAME parser/serializer the browser app uses) and write via the adapter.
       const reparsed = parseObsidianRecipeMarkdown(editedMarkdown, selected.fileName, selected.filePath);
       const updated: ObsidianRecipe = { ...reparsed, id: selected.id, fileName: selected.fileName, filePath: selected.filePath };
-      await saveRecipeWithVaultAdapter(vault, updated);
+      const asset = services.adapters.asset;
+      if (!asset) {
+        throw new Error('Recipe saving is unavailable in this shell because image ownership cannot be verified.');
+      }
+      await saveValidatedRecipeWithVaultAdapter(vault, updated, {
+        asset,
+        expectedMarkdown: selected.rawMarkdown,
+      });
       await reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save recipe.');
     } finally {
       setSaving(false);
     }
-  }, [selected, editedMarkdown, vault, reload]);
+  }, [selected, editedMarkdown, vault, services.adapters.asset, reload]);
 
   if (view === 'loading') return <div style={LIST_STYLE}>Loading recipes…</div>;
   if (view === 'error') {

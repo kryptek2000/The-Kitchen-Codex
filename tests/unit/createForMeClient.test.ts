@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import type { NetworkAdapter, NetworkResponse } from "../../src/application/adapters/NetworkAdapter.js";
-import { hydrateAiSelections } from "../../src/application/aiSelection.js";
+import {
+  AI_SELECTION_SETTINGS_KEY,
+  hydrateAiSelections,
+  saveAiSelectionWithOutcome,
+  TEXT_SELECTION_HEADER,
+} from "../../src/application/aiSelection.js";
 
 // The application AI-selection layer fails closed until hydrated; hydrate the
 // shared module once so the client flow can build request options.
@@ -73,6 +78,43 @@ describe("create for me client logic (v0.7 2A)", () => {
     expect(result.provenance.providerId).toBe("gemini");
   });
 
+  it("attaches the native ChatGPT plan selection header to Create for Me", async () => {
+    const values = new Map<string, unknown>();
+    const settings = {
+      get: async (key: string) => values.get(key) as never,
+      set: async (key: string, value: unknown) => { values.set(key, value); },
+      remove: async (key: string) => { values.delete(key); },
+    };
+    await saveAiSelectionWithOutcome(
+      settings,
+      "text",
+      "user_selected",
+      "chatgpt-plan",
+      "gpt-plan-test",
+      "native_plan",
+      undefined,
+      "acct_0123456789abcdef0123456789abcdef",
+    );
+    let headers: Record<string, string> = {};
+    const network = {
+      post: async (_path: string, _body: unknown, options?: { headers?: Record<string, string> }) => {
+        headers = options?.headers ?? {};
+        return { status: 200, ok: true, data: { draft: DRAFT, provenance: { generated: true, providerId: "chatgpt-plan", model: "gpt-plan-test" } } };
+      },
+      get: async () => ({ status: 200, ok: true, data: undefined }),
+      request: async () => ({ status: 200, ok: true, data: undefined }),
+    } as unknown as NetworkAdapter;
+    await requestGeneratedRecipe(network, "a dinner", {});
+    expect(JSON.parse(headers[TEXT_SELECTION_HEADER])).toMatchObject({
+      mode: "user_selected",
+      providerId: "chatgpt-plan",
+      modelId: "gpt-plan-test",
+      credentialSource: "native_plan",
+      accountKey: "acct_0123456789abcdef0123456789abcdef",
+    });
+    expect(values.has(AI_SELECTION_SETTINGS_KEY)).toBe(true);
+  });
+
   it("sends the validated current draft on refinement through the same generation endpoint", async () => {
     let sentBody: any;
     const network = {
@@ -94,6 +136,42 @@ describe("create for me client logic (v0.7 2A)", () => {
       code: "UNSUPPORTED_CAPABILITY",
     });
     await expect(requestGeneratedRecipe(postNetwork(undefined, false, 500), "x", {})).rejects.toBeInstanceOf(CreateRecipeClientError);
+  });
+
+  it("preserves the native ChatGPT plan error codes and bounded messages", async () => {
+    await expect(
+      requestGeneratedRecipe(
+        postNetwork(
+          {
+            error:
+              "ChatGPT plan is selected for recipe creation, but it is not connected or its plan usage is unavailable. No other provider was used.",
+            code: "CHATGPT_PLAN_UNAVAILABLE",
+          },
+          false,
+          503,
+        ),
+        "x",
+        {},
+      ),
+    ).rejects.toMatchObject({
+      status: 503,
+      code: "CHATGPT_PLAN_UNAVAILABLE",
+      message: expect.stringMatching(/not connected/i),
+    });
+    await expect(
+      requestGeneratedRecipe(
+        postNetwork(
+          { error: "ChatGPT plan returned an invalid recipe draft.", code: "CHATGPT_PLAN_INVALID_RESPONSE" },
+          false,
+          502,
+        ),
+        "x",
+        {},
+      ),
+    ).rejects.toMatchObject({
+      status: 502,
+      code: "CHATGPT_PLAN_INVALID_RESPONSE",
+    });
   });
 
   it("throws on a malformed response (bad provenance / empty data)", async () => {

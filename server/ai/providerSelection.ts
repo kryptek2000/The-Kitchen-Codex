@@ -40,6 +40,7 @@ import {
   getRegisteredImageProviders,
 } from "./imageProviderRegistry.js";
 import type { ImageProvider } from "./imageProvider.js";
+import { CHATGPT_PLAN_PROVIDER_ID } from "./chatGptPlanBridge.js";
 
 /** The effective selection mode reported to catalog/UI (truth, non-secret). */
 export type SelectionMode = "server_default" | "server_managed";
@@ -96,7 +97,13 @@ export function getTextSelection(): ProviderSelectionState {
   const modelId = envValue(TEXT_MODEL_ENV);
   const curated = textCuratedModels(providerId);
   const modelValid = !modelId || curated.has(modelId);
-  const valid = Boolean(registered && registered.enabled !== false) && modelValid;
+  // The native ChatGPT plan is selectable ONLY through the exact desktop
+  // user-selection path. It is never a server-managed env pin, which would
+  // bypass the account-bound native credential source.
+  const valid =
+    providerId !== CHATGPT_PLAN_PROVIDER_ID &&
+    Boolean(registered && registered.enabled !== false) &&
+    modelValid;
   return {
     selectionMode: "server_managed",
     selectedProviderId: providerId,

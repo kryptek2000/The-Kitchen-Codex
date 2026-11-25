@@ -24,7 +24,7 @@ import type {
 } from '../calculation/types';
 import type { CountPortionReviewResult } from '../calculation/countPortion';
 import type { ConfirmationResult, IngredientReviewResult } from '../matching/types';
-import type { AiNutrientContribution } from '../aiContribution';
+import type { AiNutrientContribution, AiNutrientSupplement } from '../aiContribution';
 
 export const PHASE4_SESSION_VERSION = 'usda_phase4_session_v3';
 export const PHASE4_STATE_VERSION = 'usda_phase4_state_v5';
@@ -354,6 +354,18 @@ export interface MatchChoice {
    */
   readonly aiAccepted?: boolean;
   /**
+   * DISPLAY-ONLY provenance for the AI-first workflow: the model evaluated the
+   * ACTUAL bounded USDA candidate records and proposed this one, and local
+   * deterministic verification (record authenticity + source constraints)
+   * accepted it. It carries NO extra authority; the calculator re-authenticates
+   * the manual selection exactly like any other. Never persisted by Apply.
+   */
+  readonly aiFirst?: boolean;
+  /** DISPLAY-ONLY culinary comparison from the pass-2 decision. Never authority. */
+  readonly aiFirstJustification?: string;
+  /** DISPLAY-ONLY remaining difference/uncertainty from the pass-2 decision. */
+  readonly aiFirstUncertainty?: string;
+  /**
    * Display-only human-readable description for a manual selection. Never
    * authority; the calculation engine resolves the description from the
    * authenticated record it verifies.
@@ -518,7 +530,7 @@ export interface Phase4State {
   readonly householdPortions: Readonly<Record<string, HouseholdPortionChoice>>;
   /** BOUNDED AI mass estimates (AI-3, lowest mass authority). */
   readonly aiEstimates?: Readonly<Record<string, AiEstimateChoice>>;
-  readonly aiNutrition?: { readonly recipe_key: string; readonly servings: number; readonly contributions: ReadonlyArray<AiNutrientContribution> };
+  readonly aiNutrition?: { readonly recipe_key: string; readonly servings: number; readonly contributions: ReadonlyArray<AiNutrientContribution>; readonly supplements?: ReadonlyArray<AiNutrientSupplement> };
   readonly basis: BasisMode;
   readonly selectedServings: number;
   readonly preview: AdvisoryNutritionPreview | null;
@@ -553,7 +565,7 @@ export type Phase4Action =
       readonly choice: AiEstimateChoice;
     }
   | { readonly type: 'clear_ai_estimate'; readonly lineRef: string }
-  | { readonly type: 'accept_ai_nutrition'; readonly recipeKey: string; readonly servings: number; readonly contributions: ReadonlyArray<AiNutrientContribution> }
+  | { readonly type: 'accept_ai_nutrition'; readonly recipeKey: string; readonly servings: number; readonly contributions: ReadonlyArray<AiNutrientContribution>; readonly supplements?: ReadonlyArray<AiNutrientSupplement> }
   | { readonly type: 'clear_ai_nutrition' }
   | { readonly type: 'clear_user_mass'; readonly lineRef: string }
   | {
@@ -577,7 +589,7 @@ export type Phase4Action =
       readonly countPortions: Readonly<Record<string, CountPortionChoice>>;
       readonly userMasses: Readonly<Record<string, UserMassChoice>>;
       readonly householdPortions: Readonly<Record<string, HouseholdPortionChoice>>;
-      readonly aiNutrition?: { readonly recipe_key: string; readonly servings: number; readonly contributions: ReadonlyArray<AiNutrientContribution> };
+      readonly aiNutrition?: { readonly recipe_key: string; readonly servings: number; readonly contributions: ReadonlyArray<AiNutrientContribution>; readonly supplements?: ReadonlyArray<AiNutrientSupplement> };
     }
   | {
       /**

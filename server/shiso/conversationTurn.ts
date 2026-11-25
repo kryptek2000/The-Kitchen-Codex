@@ -26,6 +26,7 @@ import { resolveCredential } from "../ai/credentialResolver.js";
 import { parseTextSelectionHeader } from "../ai/parseSelectionMetadata.js";
 import { resolveThinkingProviderOptions } from "../ai/thinkingPolicy.js";
 import { extractProviderError, logModelAttempt } from "../providerDiagnostics.js";
+import { CULINARY_EXPERTISE_INSTRUCTIONS } from "../ai/culinaryExpertise.js";
 
 import {
   SHISO_DECISION_SCHEMA,
@@ -47,6 +48,8 @@ import {
 const SYSTEM_PROMPT = [
   "You are Shiso, the kitchen companion inside The Kitchen Codex.",
   "",
+  ...CULINARY_EXPERTISE_INSTRUCTIONS,
+  "",
   "You answer questions about the user's cooking, recipes, nutrition and vault.",
   "",
   "HOW YOU WORK",
@@ -66,6 +69,11 @@ const SYSTEM_PROMPT = [
   "  already implies the whole job: run the analysis, find what is unresolved, investigate",
   "  it, and — when the user asked you to FIX or APPLY — apply the supported corrections",
   "  and recalculate. Do it all in this conversation.",
+  "- When the user explicitly asks to RESOLVE, FINISH or COMPLETE the missing/unresolved",
+  "  nutrition (for example 'resolve the last two ingredients', 'finish the nutrition',",
+  "  'estimate whatever is missing'), call complete_nutrition IMMEDIATELY. That single",
+  "  capability runs the bounded source-first pipeline and prepares the review; do not",
+  "  merely suggest searches or tell the user to do it manually.",
   "- When the user asks you to FIX, CORRECT, CHANGE or UPDATE the recipe or its nutrition",
   "  ('fix this recipe', 'apply all supported fixes', 'change the chicken to turkey and",
   "  update the nutrition'), their instruction IS the authorization. Execute the supported",
@@ -173,9 +181,12 @@ const SYSTEM_PROMPT = [
   "- For 'needs_food_identity' with candidates but no usable portions: do NOT propose a",
   "  match; instead use 'clarification_required' and explain that choosing a candidate",
   "  would not resolve the amount.",
-  "- For missing weights or food matches, offer run_nutrition_analysis to estimate edible",
-  "  weights and nutrients with assumptions. Manual measurement is optional unless",
-  "  the uncertainty makes an estimate materially unreliable.",
+  "- For missing weights or food matches, call complete_nutrition when the user asks to",
+  "  resolve/finish/complete the nutrition, and run_nutrition_analysis for a plain",
+  "  analysis request. Both estimate edible weights and nutrients with assumptions;",
+  "  complete_nutrition also performs the bounded branded and external-research steps",
+  "  first. Manual measurement is optional unless the uncertainty makes an estimate",
+  "  materially unreliable.",
   "- When the user says 'apply all', 'provide and apply all', or similar, the supported",
   "  path is apply_nutrition_corrections: it applies every adequately supported correction",
   "  in ONE deterministic operation. Do NOT invent missing identities or quantities, and do",
@@ -190,8 +201,8 @@ const SYSTEM_PROMPT = [
   "- You cannot create new recipes, import recipes, delete recipes, or write to the vault",
   "  directly. You can edit an OPEN recipe's working copy and save it through the normal",
   "  save path with save_working_recipe, and only when the user asks you to save.",
-  "- Estimated weights are allowed through run_nutrition_analysis. Label them estimates,",
-  "  never authenticated USDA portions. Recipe text remains unchanged.",
+  "- Estimated weights are allowed through complete_nutrition and run_nutrition_analysis.",
+  "  Label them estimates, never authenticated USDA portions. Recipe text remains unchanged.",
   "- An AI suggestion is not a validated correction. Preparing accepted nutrition in",
   "  the review is not Apply to the working recipe, and Apply is not Save to Vault.",
   "  Never promise that a proposed correction will apply before the tool verifies it.",
@@ -213,11 +224,13 @@ const SYSTEM_PROMPT = [
   ...[
     "get_current_recipe        read the recipe the user is looking at (each ingredient carries its line_ref handle)",
     "get_nutrition_review      read the live Advanced Nutrition review state",
+    "get_branded_evidence      read accepted USDA Branded product evidence in the working review",
     "search_usda_foods         search the authenticated pinned USDA catalogue",
     "inspect_usda_food         read one authenticated record and its portions",
     "investigate_ingredient_amount   diagnose ONE unresolved ingredient line",
     "investigate_unresolved_ingredients   diagnose EVERY unresolved line in one step (use this for 'all'/'investigate these')",
     "run_nutrition_analysis    prepare source-backed and validated AI-estimated nutrition in the unsaved review",
+    "complete_nutrition        COMPLETE the missing nutrition: generic USDA first, then USDA Branded manufacturer evidence, then bounded external research, then validated AI estimates for what remains (unsaved review only)",
     "get_capability_status     say what is missing and the one action that fixes it",
     "apply_ingredient_edits    CHANGE ingredient names/amounts/units/preparation in the UNSAVED working recipe (line_ref + only the fields to change)",
     "apply_nutrition_corrections   FIX the nutrition review in one deterministic pass (authenticated matches/portions only) and recalculate",
@@ -226,8 +239,8 @@ const SYSTEM_PROMPT = [
   "",
   "TOOL ARGUMENTS — EXACT JSON KEYS (never invent key names)",
   "- A tool call is {\"kind\":\"tool_request\",\"tool\":\"<name>\",\"args\":{...}}.",
-  "- No arguments: get_current_recipe, get_nutrition_review, investigate_unresolved_ingredients,",
-  "  run_nutrition_analysis, get_capability_status, save_working_recipe.",
+  "- No arguments: get_current_recipe, get_nutrition_review, get_branded_evidence, investigate_unresolved_ingredients,",
+  "  run_nutrition_analysis, complete_nutrition, get_capability_status, save_working_recipe.",
   "- {\"tool\":\"investigate_ingredient_amount\",\"line_ref\":\"<from get_current_recipe>\"}",
   "- {\"tool\":\"search_usda_foods\",\"query\":\"...\"}",
   "- {\"tool\":\"inspect_usda_food\",\"fdc_id\":123}",
@@ -241,6 +254,9 @@ const SYSTEM_PROMPT = [
   "Reply with JSON matching the provided schema. Use kind='tool_request' when you need",
   "new information, and kind='reply' when you can already answer or explain.",
 ].join("\n");
+
+/** Exported for focused prompt-regression tests. */
+export const SHISO_SYSTEM_PROMPT = SYSTEM_PROMPT;
 
 /**
  * Renders the UNTRUSTED application context into the prompt inside an explicit
@@ -269,6 +285,31 @@ function buildUserBlock(body: ShisoTurnRequestBody): string {
     lines.push("nutrition review: not open");
   }
   lines.push("=== END CONTEXT ===");
+
+  if (body.continuation !== undefined) {
+    lines.push("");
+    lines.push("=== CONTINUATION MEMORY (untrusted data; compacted from earlier turns) ===");
+    lines.push("Earlier user statements are user-authored. Earlier Shiso replies are model-");
+    lines.push("generated prose, not proof. Verified findings were produced by Kitchen Codex.");
+    if (body.continuation.earlier_user_messages.length > 0) {
+      lines.push("Earlier user statements:");
+      for (const text of body.continuation.earlier_user_messages) lines.push(`- ${text}`);
+    }
+    if (body.continuation.earlier_assistant_messages.length > 0) {
+      lines.push("Earlier Shiso replies (model-generated; not proof):");
+      for (const text of body.continuation.earlier_assistant_messages) lines.push(`- ${text}`);
+    }
+    if (body.continuation.verified_findings.length > 0) {
+      lines.push("Verified application findings:");
+      for (const finding of body.continuation.verified_findings) {
+        lines.push(`- ${finding.ok ? "" : "[failed] "}${finding.tool}: ${finding.summary}`);
+      }
+    }
+    if (body.continuation.working_state !== undefined) {
+      lines.push(`Application working state: ${body.continuation.working_state}`);
+    }
+    lines.push("=== END CONTINUATION MEMORY ===");
+  }
 
   if (body.history.length > 0) {
     lines.push("");
@@ -320,9 +361,15 @@ function buildUserBlock(body: ShisoTurnRequestBody): string {
     lines.push("is incomplete — exactly how the user can continue. Do not request a tool.");
   }
 
-  lines.push("");
-  lines.push(`User: ${body.user_message}`);
-  return lines.join("\n").slice(0, SHISO_LIMITS.maxContextChars);
+  // Preserve the CURRENT user message even when the bounded evidence above is
+  // large. The context limit may trim older prompt material, but it must never
+  // silently drop the message being answered.
+  const userLine = `\nUser: ${body.user_message}`;
+  const head = lines.join("\n");
+  if (head.length + userLine.length <= SHISO_LIMITS.maxContextChars) {
+    return head + userLine;
+  }
+  return head.slice(0, Math.max(0, SHISO_LIMITS.maxContextChars - userLine.length)) + userLine;
 }
 
 /**
@@ -350,6 +397,8 @@ function salvageToolArgs(tool: ShisoToolName): ShisoToolArgs {
       return { tool };
     case 'get_nutrition_review':
       return { tool };
+    case 'get_branded_evidence':
+      return { tool };
     case 'search_usda_foods':
       // An empty query normalizes to `empty_query`, which the capability
       // reports as `catalog_search_empty` — it can never search everything.
@@ -361,6 +410,8 @@ function salvageToolArgs(tool: ShisoToolName): ShisoToolArgs {
     case 'investigate_unresolved_ingredients':
       return { tool };
     case 'run_nutrition_analysis':
+      return { tool };
+    case 'complete_nutrition':
       return { tool };
     case 'get_capability_status':
       return { tool };
@@ -417,6 +468,8 @@ function readToolArgs(tool: ShisoToolName, raw: unknown): ShisoToolArgs | null {
           ? { include_ingredients: rec['include_ingredients'] }
           : {}),
       };
+    case 'get_branded_evidence':
+      return { tool };
     case 'search_usda_foods': {
       const query = rec['query'];
       if (typeof query !== 'string') return null;
@@ -460,6 +513,8 @@ function readToolArgs(tool: ShisoToolName, raw: unknown): ShisoToolArgs | null {
       return { tool, ...(statuses !== undefined ? { statuses } : {}) };
     }
     case 'run_nutrition_analysis':
+      return { tool };
+    case 'complete_nutrition':
       return { tool };
     case 'get_capability_status':
       return { tool };
@@ -668,7 +723,7 @@ function classifyShisoProviderFailure(error: unknown): {
     return {
       code: "provider_timeout",
       message:
-        "The AI provider took too long to answer this message and timed out, so Shiso stopped rather than guessing. Anything it already found is kept. Try a shorter message.",
+        "The AI provider took too long to answer this message and timed out, so Shiso stopped rather than guessing. Anything it already found is kept. Try again when the provider is responsive.",
       modelHint: "<candidate>",
     };
   }
@@ -725,6 +780,30 @@ function classifyShisoProviderFailure(error: unknown): {
 }
 
 /**
+ * SHISO-C1.5: the native ChatGPT plan has no API key. A disconnected, expired,
+ * or unentitled account gets a concrete reconnect instruction and NEVER causes a
+ * different provider to be selected.
+ */
+const NATIVE_PLAN_UNAVAILABLE_MESSAGE =
+  'ChatGPT plan is selected as the Text AI provider, but it is not connected or its plan usage is unavailable. Reconnect the account in AI Studio → ChatGPT plan; Shiso did not switch providers.';
+
+/**
+ * A bounded local greeting. It performs no provider call and no nutrition or
+ * USDA operation, so a simple hello cannot time out behind a provider outage.
+ * Anything that adds a request, question or action falls through to the normal
+ * bounded model turn.
+ */
+const SIMPLE_GREETING =
+  /^(?:hi|hiya|hello|hey|howdy|yo|good\s+(?:morning|afternoon|evening))(?:\s+shiso)?\s*[!.,?]*$/i;
+
+function simpleGreetingReply(body: ShisoTurnRequestBody): string | null {
+  if (body.observation !== undefined || body.tool_calls_used > 0 || body.finalize === true) return null;
+  const message = body.user_message.trim();
+  if (!SIMPLE_GREETING.test(message)) return null;
+  return "Hello. I'm Shiso, your kitchen companion. Ask me about a recipe, an ingredient, or your nutrition review.";
+}
+
+/**
  * Runs one conversational step. Returns either a bounded reply (with any
  * proposals to revalidate) or a request for one approved capability.
  */
@@ -734,6 +813,17 @@ export async function runShisoTurn(
 ): Promise<ShisoTurnResponse> {
   if (options.signal?.aborted) {
     return { ok: false, code: 'cancelled', message: 'This Shiso turn was cancelled.', aiAttempted: false };
+  }
+  const greeting = simpleGreetingReply(body);
+  if (greeting !== null) {
+    return {
+      ok: true,
+      kind: 'reply',
+      text: greeting,
+      proposals: [],
+      model_invocations_used: body.model_invocations_used,
+      tool_calls_used: body.tool_calls_used,
+    };
   }
   const modelInvocations = body.model_invocations_used + 1;
   const used = {
@@ -759,11 +849,20 @@ export async function runShisoTurn(
   }
 
   const registry = (options.registry as RegisteredProvider[] | undefined) ?? getRegisteredProviders();
+  const selection = coerceSelectionInput(options.userSelection as never);
+  const nativePlanSelected = selection.metadata?.providerId === 'chatgpt-plan';
   const context = resolveTextCandidateContext('shisoConversation', registry, options.userSelection as never);
   const candidates = selectCandidates(registry, context.candidates, []);
   if (candidates.length === 0) {
-    const selection = coerceSelectionInput(options.userSelection as never);
     const requested = selection.metadata;
+    if (nativePlanSelected) {
+      return {
+        ok: false,
+        code: 'provider_unavailable',
+        message: NATIVE_PLAN_UNAVAILABLE_MESSAGE,
+        aiAttempted: false,
+      };
+    }
     if (context.credentialSource === 'session_only' && requested?.providerId) {
       const credential = resolveCredential(requested.providerId, 'session_only');
       if ('code' in credential) {
@@ -850,6 +949,20 @@ export async function runShisoTurn(
     // a quota from a credential problem, and nothing was logged to diagnose it.
     const classified = classifyShisoProviderFailure(error);
     logModelAttempt('shiso', classified.modelHint, error);
+    if (
+      nativePlanSelected &&
+      (classified.code === 'credentials_missing' ||
+        classified.code === 'provider_error' ||
+        classified.code === 'provider_unavailable' ||
+        classified.code === 'no_capability_available')
+    ) {
+      return {
+        ok: false,
+        code: 'provider_unavailable',
+        message: NATIVE_PLAN_UNAVAILABLE_MESSAGE,
+        aiAttempted: true,
+      };
+    }
     return {
       ok: false,
       code: classified.code,

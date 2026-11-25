@@ -55,7 +55,7 @@ const RECIPE = {
   ingredients: [structuredLine('3/4 cup cooked white rice')],
 } as never;
 
-const BUNDLE_DIR = join(process.cwd(), 'data/advanced-nutrition/usda/usda_fdc_87c5408a3e98838944a87be74824761e');
+const BUNDLE_DIR = join(process.cwd(), 'data/advanced-nutrition/usda/usda_fdc_1f3e3068a7ae0702f360d1caae40a628');
 const SESSION_RESULT = await composeAdvancedNutritionSessionFromBundle({
   files: USDA_BUNDLE_RELEASE_LOCK.artifact_filenames.map((name) => ({
     name,

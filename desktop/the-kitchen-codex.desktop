@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=The Kitchen Codex
+Comment=Local-first culinary recipe vault and kitchen companion
+Exec=TheKitchenCodex %U
+Icon=the-kitchen-codex
+Terminal=false
+Categories=Utility;Education;
+StartupWMClass=TheKitchenCodex

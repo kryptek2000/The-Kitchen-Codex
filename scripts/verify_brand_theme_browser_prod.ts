@@ -142,15 +142,79 @@ async function hoverBackground(cdp: Cdp, id: string): Promise<{ rest: string; ho
   return { rest, hov };
 }
 
-async function focusVisibleCheck(cdp: Cdp, prevId: string, id: string): Promise<{ focused: boolean; visible: boolean }> {
-  await evaluate(cdp, `document.getElementById(${JSON.stringify(prevId)}).focus()`);
+/**
+ * Reads the currently focused element's identity and its focus-ring state.
+ */
+async function readFocusState(cdp: Cdp): Promise<{ id: string; focusVisible: boolean; outlineWidth: string; outlineStyle: string }> {
+  return evaluate(cdp, `(() => {
+    const a = document.activeElement;
+    if (!a) return { id: '', focusVisible: false, outlineWidth: '0px', outlineStyle: 'none' };
+    const cs = getComputedStyle(a);
+    return {
+      id: a.id || '',
+      focusVisible: typeof a.matches === 'function' ? a.matches(':focus-visible') : false,
+      outlineWidth: cs.outlineWidth,
+      outlineStyle: cs.outlineStyle,
+    };
+  })()`);
+}
+
+/**
+ * Asserts the intended accessible navigation SEQUENCE rather than a brittle
+ * single-Tab neighbour relationship.
+ *
+ * The vault header's action group is ordered to match its visual reading
+ * order (Sol RV-2): New Recipe Note -> Ask My Kitchen -> Connect Vault.
+ * "New Recipe Note" is the primary creation action and was deliberately
+ * promoted into the brand row so that it is the only header action shown on
+ * the compact mobile layout, so it legitimately precedes the secondary
+ * actions in DOM order. Keyboard reachability, focus visibility and the
+ * reverse traversal are all asserted here, so the guarantee is strictly
+ * stronger than a single "one Tab from X lands on Y" check.
+ */
+async function focusSequenceCheck(
+  cdp: Cdp,
+  startId: string,
+  expectedIds: string[]
+): Promise<{ ok: boolean; actual: string[]; expected: string[]; ringMissing: string[] }> {
+  const actual: string[] = [];
+  const ringMissing: string[] = [];
+  await evaluate(cdp, `(() => { const el = document.getElementById(${JSON.stringify(startId)}); if (el) el.focus(); return true; })()`);
   await sleep(150);
-  await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
-  await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
-  await sleep(250);
-  const active = await evaluate(cdp, `document.activeElement ? document.activeElement.id : ''`);
-  const vis = await evaluate(cdp, `(() => { const el = document.getElementById(${JSON.stringify(id)}); return el ? el.matches(':focus-visible') : false; })()`);
-  return { focused: active === id, visible: vis === true };
+  for (let i = 0; i < expectedIds.length; i++) {
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+    await sleep(250);
+    const state = await readFocusState(cdp);
+    actual.push(state.id);
+    const ringed = state.focusVisible && parseFloat(state.outlineWidth) >= 2 && state.outlineStyle !== 'none';
+    if (!ringed) ringMissing.push(state.id || '(no id)');
+  }
+  return {
+    ok: actual.length === expectedIds.length && actual.every((v, i) => v === expectedIds[i]),
+    actual,
+    expected: expectedIds,
+    ringMissing,
+  };
+}
+
+/**
+ * Shift+Tab must traverse the same group in reverse.
+ */
+async function focusReverseCheck(cdp: Cdp, startId: string, expectedIds: string[]): Promise<{ ok: boolean; actual: string[] }> {
+  const actual: string[] = [];
+  await evaluate(cdp, `(() => { const el = document.getElementById(${JSON.stringify(startId)}); if (el) el.focus(); return true; })()`);
+  await sleep(150);
+  for (let i = 0; i < expectedIds.length; i++) {
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Shift', code: 'ShiftLeft', windowsVirtualKeyCode: 16, modifiers: 8 });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9, modifiers: 8 });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9, modifiers: 8 });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Shift', code: 'ShiftLeft', windowsVirtualKeyCode: 16 });
+    await sleep(250);
+    const state = await readFocusState(cdp);
+    actual.push(state.id);
+  }
+  return { ok: actual.length === expectedIds.length && actual.every((v, i) => v === expectedIds[i]), actual };
 }
 
 const THEME_EXPR = `document.documentElement.getAttribute('data-theme')`;
@@ -204,7 +268,7 @@ async function main(): Promise<void> {
 
     const url = `http://127.0.0.1:${APP_PORT}/`;
     await cdp.send('Page.navigate', { url });
-    await waitFor(cdp, `(document.body?document.body.innerText:'').includes('Recipe Gallery')`, 25000);
+    await waitFor(cdp, `document.querySelectorAll('[id^="recipe-card-"]').length > 0`, 25000);
     await sleep(400);
 
     // --- 1. Brand mark in the header --------------------------------------
@@ -241,7 +305,7 @@ async function main(): Promise<void> {
     );
 
     // --- 2. Theme picker exposes Blood Moon --------------------------------
-    await evaluate(cdp, `document.getElementById('tab-themes').click()`);
+    await evaluate(cdp, `document.getElementById('nav-themes').click()`);
     await waitFor(cdp, `!!document.getElementById('theme-card-blood-moon')`, 10000);
     const pickerText = await evaluate(cdp, `(document.body?document.body.innerText:'')`);
     record('theme picker lists The Blood Moon', pickerText.includes('The Blood Moon'));
@@ -275,9 +339,9 @@ async function main(): Promise<void> {
       {
         name: 'recipe gallery',
         step: async () => {
-          await evaluate(cdp, `document.getElementById('tab-recipe-cards').click()`);
+          await evaluate(cdp, `document.getElementById('nav-recipe-vault').click()`);
         },
-        waitText: 'Recipe Gallery',
+        waitText: 'Recipe Vault',
       },
       {
         name: 'recipe detail',
@@ -293,21 +357,21 @@ async function main(): Promise<void> {
       {
         name: 'meal planner',
         step: async () => {
-          await evaluate(cdp, `document.getElementById('tab-meal-planner').click()`);
+          await evaluate(cdp, `document.getElementById('nav-meal-planner').click()`);
         },
         waitText: 'Meal Plan',
       },
       {
         name: 'shopping list',
         step: async () => {
-          await evaluate(cdp, `document.getElementById('tab-shopping-list').click()`);
+          await evaluate(cdp, `document.getElementById('nav-shopping-list').click()`);
         },
         waitText: 'Shopping',
       },
       {
         name: 'themes',
         step: async () => {
-          await evaluate(cdp, `document.getElementById('tab-themes').click()`);
+          await evaluate(cdp, `document.getElementById('nav-themes').click()`);
         },
         waitText: 'Themes',
       },
@@ -330,15 +394,15 @@ async function main(): Promise<void> {
     await screenshot(cdp, '/tmp/kc-brand-bloodmoon-gallery.png');
 
     // --- 6. Persistence across reload -------------------------------------
-    await evaluate(cdp, `document.getElementById('tab-themes').click()`);
+    await evaluate(cdp, `document.getElementById('nav-themes').click()`);
     await sleep(300);
     await cdp.send('Page.navigate', { url });
-    await waitFor(cdp, `(document.body?document.body.innerText:'').includes('Recipe Gallery')`, 25000);
+    await waitFor(cdp, `!!document.getElementById('nav-recipe-vault')`, 25000);
     await waitFor(cdp, `${THEME_EXPR} === 'blood-moon'`, 10000);
     record('Blood Moon persists across reload', (await evaluate(cdp, THEME_EXPR)) === 'blood-moon');
 
     // --- 7. Switch away, reload, switch back ------------------------------
-    await evaluate(cdp, `document.getElementById('tab-themes').click()`);
+    await evaluate(cdp, `document.getElementById('nav-themes').click()`);
     await waitFor(cdp, `!!document.getElementById('theme-card-nordic')`, 10000);
     await evaluate(cdp, `document.getElementById('theme-card-nordic').click()`);
     await waitFor(cdp, `${THEME_EXPR} === 'nordic'`, 10000);
@@ -347,17 +411,17 @@ async function main(): Promise<void> {
     record('theme-color follows Nordic Sage when active', nordicMeta === '#0A120F', nordicMeta);
     await screenshot(cdp, '/tmp/kc-brand-header-nordic.png');
     await cdp.send('Page.navigate', { url });
-    await waitFor(cdp, `(document.body?document.body.innerText:'').includes('Recipe Gallery')`, 25000);
+    await waitFor(cdp, `!!document.getElementById('nav-recipe-vault')`, 25000);
     await waitFor(cdp, `${THEME_EXPR} === 'nordic'`, 10000);
     record('Nordic Sage persists across reload', (await evaluate(cdp, THEME_EXPR)) === 'nordic');
-    await evaluate(cdp, `document.getElementById('tab-themes').click()`);
+    await evaluate(cdp, `document.getElementById('nav-themes').click()`);
     await waitFor(cdp, `!!document.getElementById('theme-card-blood-moon')`, 10000);
     await evaluate(cdp, `document.getElementById('theme-card-blood-moon').click()`);
     await waitFor(cdp, `${THEME_EXPR} === 'blood-moon'`, 10000);
     record('switching back to Blood Moon works', (await evaluate(cdp, THEME_EXPR)) === 'blood-moon');
 
     // --- 7b. Brand readability on the light theme --------------------------
-    await evaluate(cdp, `document.getElementById('tab-themes').click()`);
+    await evaluate(cdp, `document.getElementById('nav-themes').click()`);
     await waitFor(cdp, `!!document.getElementById('theme-card-parchment')`, 10000);
     await evaluate(cdp, `document.getElementById('theme-card-parchment').click()`);
     await waitFor(cdp, `${THEME_EXPR} === 'parchment'`, 10000);
@@ -409,16 +473,40 @@ async function main(): Promise<void> {
     await screenshot(cdp, '/tmp/kc-brand-hover-connect.png');
 
     // --- 7e. Keyboard focus-visible -------------------------------------
+    // The header action group is asserted as an ordered SEQUENCE that matches
+    // the visual reading order, plus a focus ring on every stop and the
+    // reverse (Shift+Tab) traversal. This is strictly stronger than the
+    // previous single-Tab neighbour check, which broke whenever a control was
+    // inserted ahead of "Ask My Kitchen" — including the deliberate promotion
+    // of "New Recipe Note" into the brand row.
     await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 5, y: 5 });
     await sleep(150);
-    const askFocus = await focusVisibleCheck(cdp, 'create-for-me-header-btn', 'ask-my-kitchen-header-btn');
-    record('Ask My Kitchen is keyboard-focusable with focus-visible', askFocus.focused && askFocus.visible, JSON.stringify(askFocus));
-    const connectFocus = await focusVisibleCheck(cdp, 'grab-recipe-header-btn', 'connect-local-vault-btn');
-    record('Connect Vault is keyboard-focusable with focus-visible', connectFocus.focused && connectFocus.visible, JSON.stringify(connectFocus));
+    const HEADER_ACTION_ORDER = ['create-new-recipe-btn', 'ask-my-kitchen-header-btn', 'connect-local-vault-btn'];
+    const headerSeq = await focusSequenceCheck(cdp, 'refresh-vault-btn', HEADER_ACTION_ORDER);
+    record(
+      'header action group is keyboard-reachable in visual reading order',
+      headerSeq.ok,
+      JSON.stringify({ expected: headerSeq.expected, actual: headerSeq.actual })
+    );
+    record(
+      'every keyboard-focused header control renders a visible focus ring',
+      headerSeq.ringMissing.length === 0,
+      JSON.stringify(headerSeq.ringMissing)
+    );
+    const headerReverse = await focusReverseCheck(
+      cdp,
+      'connect-local-vault-btn',
+      ['ask-my-kitchen-header-btn', 'create-new-recipe-btn']
+    );
+    record(
+      'Shift+Tab traverses the header action group in reverse',
+      headerReverse.ok,
+      JSON.stringify(headerReverse.actual)
+    );
 
     // --- 7f. Hover states across the remaining themes -------------------
     for (const [themeId, label] of [['obsidian', 'Obsidian'], ['parchment', 'Parchment'], ['nordic', 'Nordic']] as const) {
-      await evaluate(cdp, `document.getElementById('tab-themes').click()`);
+      await evaluate(cdp, `document.getElementById('nav-themes').click()`);
       await waitFor(cdp, `!!document.getElementById('theme-card-${themeId}')`, 10000);
       await evaluate(cdp, `document.getElementById('theme-card-${themeId}').click()`);
       await waitFor(cdp, `${THEME_EXPR} === '${themeId}'`, 10000);
@@ -431,7 +519,7 @@ async function main(): Promise<void> {
       record(`Connect Vault brightens on hover (${label})`, !!cc && cc.rest !== cc.hov, JSON.stringify(cc));
     }
     // Restore Blood Moon for the narrow check.
-    await evaluate(cdp, `document.getElementById('tab-themes').click()`);
+    await evaluate(cdp, `document.getElementById('nav-themes').click()`);
     await waitFor(cdp, `!!document.getElementById('theme-card-blood-moon')`, 10000);
     await evaluate(cdp, `document.getElementById('theme-card-blood-moon').click()`);
     await waitFor(cdp, `${THEME_EXPR} === 'blood-moon'`, 10000);

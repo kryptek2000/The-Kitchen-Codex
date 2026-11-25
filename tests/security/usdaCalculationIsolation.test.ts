@@ -143,9 +143,12 @@ describe('phase 3 calculation — lexical authority encapsulation', () => {
     expect(Object.keys(contextModule).sort()).toEqual(
       [
         'calculateRecipeNutrition',
+        'confirmIngredientInContext',
         'createNutritionCalculationContext',
+        'manualSearchInContext',
         'reviewFoodCountPortions',
         'reviewFoodPortions',
+        'reviewIngredientInContext',
       ].sort()
     );
     for (const key of Object.keys(contextModule)) {

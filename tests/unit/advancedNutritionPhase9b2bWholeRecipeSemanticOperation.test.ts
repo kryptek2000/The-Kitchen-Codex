@@ -28,6 +28,7 @@ import { AI_ADVANCED_CONTRACT_VERSION, type AiAdvancedIngredientInterpretation }
 import { WHOLE_RECIPE_AI_INTERPRETATION_REQUEST_VERSION } from '../../src/core/nutritionV2/aiWholeRecipeInterpretation';
 import { adaptRecipe } from '../../src/core/nutritionV2/phase4/adapt';
 import { materializeWholeRecipeInterpretationContext } from '../../server/wholeRecipeInterpretRequest';
+import { MODEL_CONFIG } from '../../server/modelConfig';
 
 // ---------------------------------------------------------------------------
 // MOCK PROVIDER INFRASTRUCTURE
@@ -181,6 +182,19 @@ describe('9B-2B — exactly ONE semantic operation per explicit resolve', () => 
     );
     expectOk(result);
     expect(rec.prompts).toHaveLength(1);
+  });
+
+  it('passes the operation-specific 45s deadline to the provider request', async () => {
+    const rec = recorder();
+    const provider = mockProvider('provider-a', () => fullResponse([EGG_REFS[0]], ['whole egg']), rec);
+    const result = await interpretWholeRecipeSemantics(
+      eggRequest({ targets: [{ line_ref: EGG_REFS[0] }] }),
+      { candidates: [candidate(provider, 'model-a')], registry: registryFor(provider) }
+    );
+    expectOk(result);
+    expect(rec.options).toHaveLength(1);
+    expect(rec.options[0].timeoutMs).toBe(45_000);
+    expect(rec.options[0].timeoutMs).toBe(MODEL_CONFIG.wholeRecipeSemanticTimeoutMs);
   });
 
   it('runs one execution for 5 targets and sends every target together', async () => {

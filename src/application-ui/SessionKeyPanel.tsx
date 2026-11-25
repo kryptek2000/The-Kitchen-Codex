@@ -13,8 +13,12 @@
  *   - The server never returns the key, so the UI NEVER re-displays it (no masked
  *     fragment, prefix, suffix, or hash).
  *   - Session-only BYOK is enabled only when the SERVER reports it is supported.
- *   - Image providers: session credential VALIDATION is available, but session
- *     image GENERATION is not enabled yet — stated truthfully.
+ *   - Image providers: session credential validation AND session image generation
+ *     are supported for the registered image providers (Gemini, OpenRouter, and
+ *     OpenAI Image). Text and image ids remain separately scoped.
+ *   - P2: a user may EXPLICITLY reuse the already-saved OpenAI Text AI session key
+ *     for OpenAI Image (and vice versa). The copy happens server-side; the key
+ *     never returns to the browser and each provider keeps an independent entry.
  */
 
 import React, { useEffect, useRef, useState } from 'react';
@@ -56,6 +60,13 @@ export interface SessionKeyPanelViewProps {
   saveState: 'idle' | 'saving';
   revokeState: 'idle' | 'revoking';
   testState: 'idle' | 'testing';
+  /** P2: explicit cross-surface credential reuse (never automatic). */
+  reuseState?: 'idle' | 'reusing';
+  /**
+   * P2: when set and the target provider has no key, offer an EXPLICIT
+   * server-side copy from this already-configured related provider.
+   */
+  reuseSource?: { providerId: string; name: string };
   testResult?: ConnectionTestView;
   notice?: SessionKeyNotice;
   /**
@@ -70,6 +81,7 @@ export interface SessionKeyPanelViewProps {
   onSave: () => void;
   onRevoke: () => void;
   onTest: () => void;
+  onReuse?: () => void;
 }
 
 /** Presentational session-credentials card (no hooks). */
@@ -249,6 +261,29 @@ export function SessionKeyPanelView(props: SessionKeyPanelViewProps) {
               )}
             </div>
 
+            {/* P2: EXPLICIT reuse of an already-saved related session key. The
+                key never leaves server memory; source and target stay separately
+                revocable. Hidden when this provider already has its own key. */}
+            {!configured && !unavailable && props.reuseSource && props.onReuse && (
+              <div className="space-y-1 rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2">
+                <button
+                  type="button"
+                  data-session-reuse="true"
+                  onClick={props.onReuse}
+                  disabled={busy || props.reuseState === 'reusing'}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white/5 text-gray-200 hover:bg-white/10 border border-white/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {props.reuseState === 'reusing'
+                    ? 'Reusing…'
+                    : `Use the ${props.reuseSource.name} session key`}
+                </button>
+                <div className="text-[11px] text-gray-500">
+                  Copies the key already saved for {props.reuseSource.name} inside server memory. It is never sent
+                  back to the browser, and either provider can still be revoked separately.
+                </div>
+              </div>
+            )}
+
             {props.testResult && (
               <div
                 data-session-test-result={props.testResult.ok ? 'success' : 'failure'}
@@ -300,6 +335,7 @@ export function SessionKeyPanel({
   compact = false,
   lockedProviderId,
   lockedModelId,
+  reuseSource,
   onStatusChange,
 }: {
   network: NetworkAdapter;
@@ -315,10 +351,14 @@ export function SessionKeyPanel({
   lockedProviderId?: string;
   /** Compact mode: the card's currently selected model (drives Test Connection). */
   lockedModelId?: string;
+  /** P2: explicit server-side reuse source (OpenAI text <-> image). */
+  reuseSource?: { providerId: string; name: string };
   /** Notifies the parent card whether a session key is configured (non-secret). */
   onStatusChange?: (configured: boolean) => void;
 }) {
   const controllerRef = useRef<SessionKeyController | null>(null);
+  const controllerMountedRef = useRef(false);
+  const controllerDisposalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   if (controllerRef.current === null) {
     controllerRef.current = new SessionKeyController(
       network,
@@ -330,10 +370,27 @@ export function SessionKeyPanel({
   const [state, setState] = useState<SessionKeyState>(controller.getState());
 
   useEffect(() => {
+    controllerMountedRef.current = true;
+    if (controllerDisposalTimerRef.current) {
+      clearTimeout(controllerDisposalTimerRef.current);
+      controllerDisposalTimerRef.current = null;
+    }
     const unsubscribe = controller.subscribe(() => setState(controller.getState()));
     return () => {
+      controllerMountedRef.current = false;
       unsubscribe();
-      controller.dispose();
+      if (controllerDisposalTimerRef.current) {
+        clearTimeout(controllerDisposalTimerRef.current);
+      }
+      // StrictMode replays setup -> cleanup -> setup while preserving the ref.
+      // Defer disposal so the replay can cancel it; only a genuine unmount
+      // actually disposes the controller.
+      controllerDisposalTimerRef.current = setTimeout(() => {
+        controllerDisposalTimerRef.current = null;
+        if (!controllerMountedRef.current) {
+          controller.dispose();
+        }
+      }, 0);
     };
   }, [controller]);
 
@@ -372,6 +429,8 @@ export function SessionKeyPanel({
       saveState={state.saveState}
       revokeState={state.revokeState}
       testState={state.testState}
+      reuseState={state.reuseState}
+      reuseSource={reuseSource}
       testResult={state.testResult}
       notice={state.notice}
       onSelectProvider={(id) => controller.selectProvider(id)}
@@ -380,6 +439,7 @@ export function SessionKeyPanel({
       onSave={() => void controller.save()}
       onRevoke={() => void controller.revoke()}
       onTest={() => void controller.test()}
+      onReuse={reuseSource ? () => void controller.reuseFrom(reuseSource.providerId) : undefined}
     />
   );
 }

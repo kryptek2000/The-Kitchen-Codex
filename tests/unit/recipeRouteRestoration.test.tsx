@@ -11,9 +11,10 @@ import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
 import App from '../../src/App';
 import { buildGalleryRoute, buildRecipeRoute } from '../../src/utils/recipeRoute';
+import { getStarterVaultRecipes } from '../../src/data/starterVault';
 
-const RECIPE_ID = 'Classic Roman Carbonara.md';
 const RECIPE_TITLE = 'Classic Roman Carbonara';
+const RECIPE_ID = getStarterVaultRecipes().find((recipe) => recipe.title === RECIPE_TITLE)!.id;
 
 function setHash(hash: string) {
   window.history.replaceState(null, '', hash);

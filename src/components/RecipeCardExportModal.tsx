@@ -9,6 +9,7 @@ import { nutritionForServings, roundNutritionForDisplay, resolveNutritionBase } 
 import { downloadMarkdownFile } from '../utils/vaultFileSystem';
 import { getRecipeImage, DEFAULT_FOOD_IMAGES } from '../utils/imageHelper';
 import { useVaultImage } from '../hooks/useVaultImage';
+import { useVaultAssetScope } from '../hooks/VaultAssetScopeContext';
 import { normalizeCardColors } from '../utils/cardExportColors';
 import html2canvas from 'html2canvas';
 
@@ -47,7 +48,8 @@ export function RecipeCardExportModal({ recipe, currentServings: initialServings
   const cardNutrition = roundNutritionForDisplay(
     nutritionForServings(recipe.nutrition, resolveNutritionBase(recipe.nutrition), servings)
   );
-  const defaultImg = getRecipeImage(recipe);
+  const assetScope = useVaultAssetScope();
+  const defaultImg = getRecipeImage(recipe, assetScope);
   const reactiveVaultImage = useVaultImage(recipe.image, defaultImg);
   const imageUrl = imageError ? DEFAULT_FOOD_IMAGES.default : (reactiveVaultImage || defaultImg);
 

@@ -184,11 +184,12 @@ function makeRecipe(overrides: Partial<ObsidianRecipe> = {}): ObsidianRecipe {
 }
 
 function makeAsset() {
+  const files = new Map<string, Uint8Array>();
   return {
-    write: vi.fn(async () => {}),
-    exists: vi.fn(async () => false),
-    read: vi.fn(async () => new Uint8Array()),
-    delete: vi.fn(async () => {}),
+    write: vi.fn(async (path: string, bytes: Uint8Array) => { files.set(path, bytes.slice()); }),
+    exists: vi.fn(async (path: string) => files.has(path)),
+    read: vi.fn(async (path: string) => files.get(path) ?? new Uint8Array()),
+    delete: vi.fn(async (path: string) => { files.delete(path); }),
   } as unknown as AssetAdapter;
 }
 
@@ -723,6 +724,8 @@ describe('licensed representative images — protected selected-preview, free se
     const app = await readFile(join(process.cwd(), 'server/app.ts'), 'utf8');
     const thumbSection = app.slice(app.indexOf('/api/recipes/image/representative-thumbnail'));
     expect(thumbSection).toContain('requireAiAccessToken');
-    expect(thumbSection).toContain('representativeRequesterId');
+    // P2-R1: ownership is the server-verified image SESSION, not the client IP.
+    expect(thumbSection).toContain('imageSessionGate');
+    expect(thumbSection).toContain('imageRequesterId');
   });
 });

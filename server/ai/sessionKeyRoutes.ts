@@ -36,6 +36,7 @@ import {
   getSessionSecretStatus,
   isSessionSecretProviderAllowed,
   sessionSecretProviderAllowlist,
+  reuseSessionSecret,
   SessionSecretError,
   MAX_SESSION_SECRET_BYTES,
 } from "./sessionSecrets.js";
@@ -76,6 +77,11 @@ function mapSessionSecretError(res: Response, err: unknown) {
         return res.status(409).json({
           error: "The session key changed; refresh and try again.",
           code: "VERSION_CONFLICT",
+        });
+      case "SESSION_CREDENTIAL_MISSING":
+        return res.status(409).json({
+          error: "No session key is configured for the source provider.",
+          code: "SESSION_CREDENTIAL_MISSING",
         });
       default:
         return res.status(400).json({ error: "Invalid session key request.", code: "INVALID_REQUEST" });
@@ -171,6 +177,69 @@ export function registerSessionKeyRoutes(app: Express): void {
 
         const status = setSessionSecret(providerId, apiKey, expectedVersionValue);
         // Non-secret status only (providerId, storageScope, configured, expiresAt, version).
+        return res.json(status);
+      } catch (err) {
+        return mapSessionSecretError(res, err);
+      }
+    }
+  );
+
+  // --- POST explicit credential reuse (P2) -----------------------------------
+  // Copies a live session key between an EXACT reviewed provider pair (OpenAI
+  // text <-> OpenAI image). It is user-initiated only; separate entries remain
+  // independently revocable. The key never leaves server memory.
+  app.post(
+    "/api/providers/session-key/reuse",
+    requireAiAccessToken,
+    sessionKeySetRateLimiter,
+    parseSessionKeyBody,
+    (req: Request, res: Response) => {
+      if (!isSessionByokSupportedDeployment()) return sessionByokUnavailable(res);
+      try {
+        if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
+          return res.status(400).json({ error: "Invalid request payload.", code: "INVALID_REQUEST" });
+        }
+        const { fromProviderId, toProviderId, expectedVersion } = req.body as Record<string, unknown>;
+
+        // Exact ids only (no trim/case normalization); the pair allowlist below
+        // is authoritative.
+        if (typeof fromProviderId !== "string" || typeof toProviderId !== "string") {
+          return res.status(400).json({
+            error: '"fromProviderId" and "toProviderId" must be strings.',
+            code: "INVALID_REQUEST",
+          });
+        }
+        if (
+          fromProviderId.length === 0 ||
+          fromProviderId.length > PROVIDER_ID_MAX_LENGTH ||
+          toProviderId.length === 0 ||
+          toProviderId.length > PROVIDER_ID_MAX_LENGTH
+        ) {
+          return res.status(400).json({ error: "Invalid provider id.", code: "INVALID_REQUEST" });
+        }
+        if (
+          !isSessionSecretProviderAllowed(fromProviderId) ||
+          !isSessionSecretProviderAllowed(toProviderId)
+        ) {
+          return res.status(400).json({
+            error: "Session secrets are not allowed for this provider.",
+            code: "PROVIDER_NOT_ALLOWED",
+          });
+        }
+
+        let expectedVersionValue: string | undefined;
+        if (expectedVersion !== undefined) {
+          if (typeof expectedVersion !== "string") {
+            return res.status(400).json({ error: '"expectedVersion" must be a string.', code: "INVALID_REQUEST" });
+          }
+          if (expectedVersion.length === 0 || expectedVersion.length > EXPECTED_VERSION_MAX_LENGTH) {
+            return res.status(400).json({ error: '"expectedVersion" is invalid.', code: "INVALID_REQUEST" });
+          }
+          expectedVersionValue = expectedVersion;
+        }
+
+        const status = reuseSessionSecret(fromProviderId, toProviderId, expectedVersionValue);
+        // Non-secret status only (same shape as create/rotate).
         return res.json(status);
       } catch (err) {
         return mapSessionSecretError(res, err);

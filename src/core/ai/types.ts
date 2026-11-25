@@ -57,6 +57,12 @@ export interface AiGenerateOptions {
    */
   signal?: AbortSignal;
   /**
+   * Server-owned per-request deadline in milliseconds. When absent, adapters
+   * retain their existing configured default. It is set ONLY by trusted server
+   * operations, never from recipe data, client headers, or provider options.
+   */
+  timeoutMs?: number;
+  /**
    * Provider-specific options, allowlisted by each adapter. Adapters must only
    * read a FIXED set of safe keys and must NEVER blindly spread this object into
    * a request config. No secret-bearing fields are allowed.
@@ -86,6 +92,8 @@ export interface AiSearchOptions {
   /** Provider model id. REQUIRED (no silent role-model default). */
   model: string;
   temperature?: number;
+  /** Optional cancellation signal propagated to the provider transport. */
+  signal?: AbortSignal;
 }
 
 /**

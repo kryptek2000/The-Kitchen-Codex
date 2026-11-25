@@ -402,7 +402,7 @@ describe('AI-5B — composition ownership', () => {
     const gates = [...appSource.matchAll(/requireNutritionProductFeature\(([^,)]+)/g)].map((m) => m[1]);
     // The added whole-recipe SHISO estimator is an `ai_interpretation` gate,
     // reusing the existing feature and authority seam.
-    expect(gates.length).toBe(10);
+    expect(gates.length).toBe(12);
     expect(new Set(gates)).toEqual(new Set(['nutritionProductAccessAuthority']));
   });
 
@@ -525,6 +525,7 @@ describe('AI-5B — the AI-5A contract is consumed, not rewritten', () => {
       'NUTRITION_PRODUCT_ACCESS_VERSION',
       'NUTRITION_PRODUCT_AI_FEATURES',
       'NUTRITION_PRODUCT_TIERS',
+      'isAdvancedNutritionEditingEntitled',
       'isAiAdvancedProductAccess',
       'isBasicProductAccess',
       'isNutritionProductAccess',
@@ -689,13 +690,22 @@ describe('AI-5B — enforcement only', () => {
         'account_id',
         'userid',
         'trial',
-        'promo',
+        'promocode',
+        'promo_code',
+        'promotioncode',
+        'promotion_code',
+        'discountcode',
+        'discount_code',
+        'couponcode',
+        'coupon_code',
         'invoice',
         'jwt',
       ]) {
         expect(body, `${rel} must not implement ${forbidden}`).not.toContain(forbidden);
       }
     }
+    // Heart's foreground narration promotion is not billing/promotional machinery.
+    expect(code('server/app.ts')).toContain('promoteNativeVoiceRequest');
   });
 
   it('adds no product-access status endpoint', () => {

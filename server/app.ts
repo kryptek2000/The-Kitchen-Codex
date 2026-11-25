@@ -17,6 +17,14 @@ import { resolveIngredientFoodsOnServer } from "./nutritionResolve.js";
 import { interpretIngredientsOnServer } from "./nutritionInterpret.js";
 import { interpretWholeRecipeSemantics } from "./wholeRecipeSemanticInterpret.js";
 import { bridgeAuthenticatedSemanticsToAdvisorySuggestions } from "./wholeRecipeSemanticUsdaBridge.js";
+import { evaluateAiFirstCandidates } from "./aiFirstCandidateEvaluation.js";
+import { researchNutritionOnServer } from "./nutritionResearch.js";
+import { lookupUsdaBrandedFoods, verifyUsdaBrandedContributions } from "./usdaBrandedFoods.js";
+import {
+  readBrandedLookupRequest,
+  USDA_BRANDED_LOOKUP_RESPONSE_VERSION,
+  USDA_BRANDED_VERIFICATION_RESPONSE_VERSION,
+} from "../src/core/nutritionV2/brandedFoods.js";
 import { planIngredientsOnServer } from "./nutritionPlan.js";
 import { interpretRecipeContextOnServer } from "./nutritionContext.js";
 import { reconcileRecipeContextOnServer } from "./recipeContextReconcile.js";
@@ -26,6 +34,7 @@ import {
 } from "./recipeContextOriginReceipt.js";
 import { estimateMassOnServer } from "./nutritionEstimate.js";
 import { recoverRecipeMetadata } from "./metadataRecovery.js";
+import { synthesizeNativeVoice, isNativeVoiceEnabled, getNativeVoiceRuntimeStatus, promoteNativeVoiceRequest, getLastNativeVoiceTiming } from "./voiceNative.js";
 import {
   recipeImportRateLimiter,
   nutritionEstimateRateLimiter,
@@ -36,6 +45,7 @@ import {
   nutritionPlanRateLimiter,
   nutritionContextRateLimiter,
   nutritionContextReconcileRateLimiter,
+  usdaBrandedLookupRateLimiter,
   metadataRecoveryRateLimiter,
   kitchenInterpretRateLimiter,
   kitchenRankRateLimiter,
@@ -58,6 +68,7 @@ import { discoverKitchenRecipesOnServer } from "./kitchenDiscover.js";
 import { getAiProviderStatus } from "./ai/providerStatus.js";
 import { buildProviderCatalog } from "./ai/providerCatalog.js";
 import { refreshOpenRouterCatalog } from "./ai/openRouterCatalog.js";
+import { refreshChatGptPlanCatalog } from "./ai/chatGptPlanBridge.js";
 import { runConnectionTest } from "./ai/connectionTest.js";
 import {
   verifyOpenRouterModelCapability,
@@ -67,6 +78,8 @@ import {
 import {
   generateRecipeDraftOnServer,
   isRecipeGenerationNotVerifiedSelection,
+  ChatGptPlanRecipeUnavailableError,
+  ChatGptPlanRecipeInvalidDraftError,
   CreateRecipeValidationError,
 } from "./createRecipe.js";
 import {
@@ -96,9 +109,15 @@ import {
   PreviewStoreCapacityError,
   type ImagePreviewReservation,
 } from "./imagePreviewStore.js";
+import { ImageSessionAuthority } from "./imageSessionAuthority.js";
+import {
+  imageSessionIdFor,
+  isImageSessionDeploymentSupported,
+  requireImageSession,
+} from "./imageSession.js";
+import { registerImageSessionRoutes } from "./imageSessionRoutes.js";
 import { getCredentialGeneration } from "./ai/capabilityVerificationStore.js";
 import { buildRepresentativeImageQuery, sanitizeRepresentativeSearchTerms } from "../src/core/representativeImage.js";
-import { createHash, randomBytes as cryptoRandomBytes } from "node:crypto";
 import {
   RepresentativeImageCandidateStore,
   RepresentativeImageSelectionError,
@@ -126,6 +145,7 @@ import {
   buildNutritionProductAccessStatus,
   buildNutritionProductAccessUnavailableStatusBody,
   NUTRITION_PRODUCT_ACCESS_STATUS_ENDPOINT,
+  requireAdvancedNutritionEditing,
   requireNutritionProductFeature,
   resolveNutritionProductAccessDecision,
 } from "./nutritionProductAccess.js";
@@ -137,6 +157,9 @@ import { requireAiAccessToken } from "./aiEndpointAuth.js";
 import { registerSessionKeyRoutes } from "./ai/sessionKeyRoutes.js";
 import { createApiErrorHandler } from "./errorHandler.js";
 import { RELEASE_VERSION } from "../src/appVersion.js";
+import { BUILD_COMMIT, BUILD_TIME } from "./buildInfo.js";
+import { checkForUpdates, createUpdateCheckController } from "./updateCheck.js";
+import { updateCheckRateLimiter } from "./rateLimiter.js";
 
 export interface CreateAppOptions {
   isProduction: boolean;
@@ -153,6 +176,12 @@ export interface CreateAppOptions {
    * always constructs its own bounded store.
    */
   imagePreviewStore?: ImagePreviewStore;
+  /**
+   * TEST SEAM ONLY: overrides the in-memory image-session authority so expiry,
+   * revocation, and capacity behavior are exercisable deterministically. The
+   * production app always constructs its own authority.
+   */
+  imageSessionAuthority?: ImageSessionAuthority;
   /**
    * AI-5E SERVER-OWNED PRODUCT-ACCESS AUTHORITY — the ONE production entitlement seam.
    *
@@ -304,6 +333,19 @@ export function mapImageProviderErrorToHttp(error: unknown): {
       return { status: 502, error: "The image provider did not return an image for this recipe. Try generating again.", code: "IMAGE_PROVIDER_NO_IMAGE" };
     case "AUTH":
       return { status: 502, error: "Image generation could not be authorized. Please check the server configuration.", code: "IMAGE_PROVIDER_AUTH" };
+    case "ORG_VERIFICATION_REQUIRED":
+      return {
+        status: 403,
+        error:
+          "Your OpenAI organization must be verified before this image model can be used. Complete organization verification in your OpenAI account settings, then try again.",
+        code: "IMAGE_PROVIDER_ORGANIZATION_UNVERIFIED",
+      };
+    case "UNSUPPORTED_CAPABILITY":
+      return {
+        status: 400,
+        error: "The selected image model is not supported by this provider. Choose a supported model and try again.",
+        code: "IMAGE_PROVIDER_MODEL_UNSUPPORTED",
+      };
     default:
       return undefined;
   }
@@ -394,6 +436,21 @@ function cancellationFor(req: express.Request): RouteCancellation {
  */
 export function createApp(opts: CreateAppOptions): express.Express {
   const app = express();
+  const updateCheckController = createUpdateCheckController({
+    installed: { version: RELEASE_VERSION, commit: BUILD_COMMIT, buildTime: BUILD_TIME },
+  });
+  // P2-R2: per-client image-session authority. Process-memory only; restart
+  // revokes every session. Hosted/non-loopback deployments fail closed. In
+  // production, image sessions are supported only when the existing global
+  // desktop access gate has a server-held secret; standalone loopback mode is
+  // intentionally disabled because Host/Origin are not authentication.
+  const imageSessionAuthority = opts.imageSessionAuthority ?? new ImageSessionAuthority();
+  const imageSessionDeploymentSupported = isImageSessionDeploymentSupported(process.env, {
+    isProduction: opts.isProduction,
+  });
+  const imageSessionGate = requireImageSession(imageSessionAuthority, {
+    deploymentSupported: imageSessionDeploymentSupported,
+  });
 
   // AI-4E ORIGIN RECEIPT AUTHORITY — ONE instance for THIS application instance.
   //
@@ -427,6 +484,24 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // policy, and a production-only Content Security Policy).
   app.use(createSecurityMiddleware(opts.isProduction));
 
+  // Desktop-only loopback session boundary. The Electron main process sets an
+  // HttpOnly SameSite=Strict cookie in the application session; unrelated local
+  // processes that merely discover the loopback port do not possess it. Health
+  // remains available for supervised startup.
+  const desktopSessionToken = String(process.env.TKC_DESKTOP_SESSION_TOKEN || '').trim();
+  if (desktopSessionToken) {
+    app.use('/api', (req, res, next) => {
+      if (req.path === '/health') return next();
+      const cookie = String(req.headers.cookie || '');
+      const match = cookie.split(';').map((part) => part.trim()).find((part) => part.startsWith('tkc_desktop_session='));
+      const supplied = match ? decodeURIComponent(match.slice('tkc_desktop_session='.length)) : '';
+      if (!supplied || supplied !== desktopSessionToken) {
+        return res.status(403).json({ error: 'Desktop session required.' });
+      }
+      next();
+    });
+  }
+
   // Trust proxy configuration.
   //
   // X-Forwarded-For is client-supplied and must NOT be trusted by default, or a
@@ -445,19 +520,131 @@ export function createApp(opts: CreateAppOptions): express.Express {
 
   // Bound total request volume before route authentication and body parsing.
   // Narrower route limiters below remain active as an additional control.
-  app.use(globalRequestRateLimiter);
+  //
+  // In production, every request (including static assets and navigation) is
+  // subject to the global ceiling. In development, the Vite dev middleware
+  // serves a large number of module/asset requests per page load, and applying
+  // the global ceiling there produces false 429s during ordinary refreshes and
+  // testing. Development therefore applies the global ceiling only to API
+  // requests; endpoint-specific limiters below still protect sensitive
+  // operations. Production behavior is unchanged.
+  if (opts.isProduction) {
+    app.use(globalRequestRateLimiter);
+  } else {
+    app.use((req, res, next) => {
+      if (req.path.startsWith('/api')) {
+        return globalRequestRateLimiter(req, res, next);
+      }
+      next();
+    });
+  }
 
   // BYOK-5B session-key routes are registered BEFORE the global JSON parser so
   // their dedicated 8 KiB body ceiling is actually enforced (a second
   // `express.json()` after the global 2 MiB parser would be skipped).
   registerSessionKeyRoutes(app);
+  // P2-R1 image-session bootstrap/revoke. No request body is parsed here.
+  registerImageSessionRoutes(app, {
+    authority: imageSessionAuthority,
+    deploymentSupported: imageSessionDeploymentSupported,
+  });
 
   // Middleware for parsing JSON with request size bounds
   app.use(express.json({ limit: "2mb" }));
 
   // Health check endpoint
   app.get("/api/health", (req, res) => {
-    res.json({ status: "ok", version: RELEASE_VERSION, timestamp: new Date().toISOString() });
+    res.json({
+      status: "ok",
+      version: RELEASE_VERSION,
+      buildCommit: BUILD_COMMIT,
+      buildTime: BUILD_TIME,
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  // Read-only update check. Never installs, pulls, rebuilds, or restarts.
+  app.get("/api/update-check", updateCheckRateLimiter, async (req, res) => {
+    const channelRaw = String(req.query?.channel || "stable").toLowerCase();
+    if (channelRaw !== "stable" && channelRaw !== "development") {
+      res.status(400).json({ error: "Invalid update channel" });
+      return;
+    }
+    const channel = channelRaw === "development" ? "development" : "stable";
+    const result = await updateCheckController.check(channel);
+    res.json(result);
+  });
+
+  // Experimental native voice status (disabled by default).
+  app.get("/api/voice/status", (req, res) => {
+    const configured = isNativeVoiceEnabled();
+    if (!configured) {
+      return res.json({
+        enabled: false,
+        configured: false,
+        available: false,
+        reason: "Native voice is disabled.",
+        voices: ["af_bella", "af_heart"],
+      });
+    }
+    const runtime = getNativeVoiceRuntimeStatus();
+    res.json({
+      enabled: runtime.available,
+      configured,
+      available: runtime.available,
+      reason: runtime.reason,
+      voices: ["af_bella", "af_heart"],
+    });
+  });
+
+  // Promote an in-flight preparation to foreground priority without creating
+  // a second inference request. If the speak request has not arrived yet, the
+  // bridge remembers the request id so the subsequent enqueue starts first.
+  app.post("/api/voice/prioritize", requireAiAccessToken, (req, res) => {
+    if (!isNativeVoiceEnabled()) {
+      return res.status(503).json({ error: "Native voice is disabled." });
+    }
+    const requestId = typeof req.body?.requestId === "string" ? req.body.requestId.trim() : "";
+    if (!requestId || requestId.length > 200) {
+      return res.status(400).json({ error: "Invalid requestId" });
+    }
+    res.json(promoteNativeVoiceRequest(requestId));
+  });
+
+  // Experimental native voice synthesis (opt-in, same-origin, bounded).
+  app.post("/api/voice/speak", requireAiAccessToken, async (req, res) => {
+    if (!isNativeVoiceEnabled()) {
+      return res.status(503).json({ error: "Native voice is disabled." });
+    }
+    const { text, voice } = req.body || {};
+    if (typeof text !== "string" || text.length === 0 || text.length > 500) {
+      return res.status(400).json({ error: "Invalid text" });
+    }
+    if (!["af_bella", "af_heart"].includes(voice)) {
+      return res.status(400).json({ error: "Invalid voice" });
+    }
+    try {
+      const requestId = typeof req.get("X-TKC-Voice-Request") === "string" ? req.get("X-TKC-Voice-Request") : undefined;
+      const kind = typeof req.get("X-TKC-Voice-Kind") === "string" ? req.get("X-TKC-Voice-Kind") : undefined;
+      const voiceAbortController = new AbortController();
+      const abortVoice = () => voiceAbortController.abort();
+      req.once("aborted", abortVoice);
+      res.once("close", () => { if (!res.writableEnded) abortVoice(); });
+      try {
+        const buf = await synthesizeNativeVoice(text, voice, { requestId, kind, signal: voiceAbortController.signal });
+        if (process.env.TKC_VOICE_TIMING === "1") {
+          const timing = getLastNativeVoiceTiming();
+          if (timing) res.set("X-TKC-Voice-Timing", JSON.stringify(timing));
+        }
+        res.set("Content-Type", "audio/wav");
+        res.send(buf);
+      } finally {
+        req.removeListener("aborted", abortVoice);
+      }
+    } catch (err) {
+      if ((err as any)?.name === "AbortError") return;
+      res.status(500).json({ error: String((err as any)?.message || err) });
+    }
   });
 
   // Recipe Grabber Web Importer endpoint with rate limiting & input validation
@@ -955,7 +1142,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // about request validation and consumes no AI budget. Reusing
   // `nutritionInterpretRateLimiter` keeps both semantic transports in ONE
   // cost/rate category so route-switching cannot double the quota.
-  app.post("/api/nutrition/interpret-whole-recipe", requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccessAuthority, "ai_interpretation"), textPricingGuard, nutritionInterpretRateLimiter, async (req, res) => {
+  app.post("/api/nutrition/interpret-whole-recipe", routeCancellationMiddleware, requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccessAuthority, "ai_interpretation"), textPricingGuard, nutritionInterpretRateLimiter, async (req, res) => {
     const clientIp = getClientIp(req);
 
     // The response carries freshness-bound semantics, execution identity and an
@@ -963,6 +1150,9 @@ export function createApp(opts: CreateAppOptions): express.Express {
     res.setHeader("Cache-Control", "no-store");
 
     try {
+      const routeState = cancellationFor(req);
+      const cancellation = routeState.controller;
+      if (cancellation.signal.aborted || res.destroyed || res.writableEnded) return;
       // F-02 / §14: the route NEVER derives or trusts context. It passes the RAW
       // body straight through so the operation's CLOSED request sanitizer can SEE
       // and REFUSE forbidden or unknown fields. Rebuilding only recipe /
@@ -970,10 +1160,14 @@ export function createApp(opts: CreateAppOptions): express.Express {
       // `context_binding`, `provider_context`, `operation_id`, `origin_receipt`,
       // fdc_id, ... — turning a refusal into a silent success.
       const userSelection = parseTextSelectionHeader(req.headers);
-      // The ONLY server option the route may supply is the strictly-parsed,
-      // non-secret provider selection. The internal `registry` / `candidates` /
-      // `authority` test seams are NOT reachable from HTTP.
-      const result = await interpretWholeRecipeSemantics(req.body, { userSelection });
+      // The ONLY server options the route may supply are the strictly-parsed,
+      // non-secret provider selection and the route-owned abort signal. The
+      // internal `registry` / `candidates` / `authority` test seams are NOT
+      // reachable from HTTP.
+      const result = await interpretWholeRecipeSemantics(req.body, {
+        userSelection,
+        signal: cancellation.signal,
+      });
 
       if (result.ok !== true) {
         const failure = result as {
@@ -1177,6 +1371,310 @@ export function createApp(opts: CreateAppOptions): express.Express {
       });
     }
   });
+
+  // AI-FIRST ADVANCED NUTRITION — candidate evaluation (pass 2 of Generate).
+  //
+  // The browser owns the authenticated USDA catalog. It sends the authored recipe
+  // source plus bounded, opaque candidate DESCRIPTIONS it discovered locally. The
+  // server re-derives the recipe context itself, runs ONE structured provider
+  // operation, and returns one bounded decision per target. No FDC id, record
+  // digest, gram weight, nutrient, portion, Apply token, provider id or model id
+  // crosses the public boundary.
+  //
+  // Middleware order is the SAME released nutrition-AI order: auth -> product
+  // feature gate -> pricing guard -> shared semantic limiter.
+  app.post("/api/nutrition/evaluate-candidates", routeCancellationMiddleware, requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccessAuthority, "ai_interpretation"), textPricingGuard, nutritionInterpretRateLimiter, async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    try {
+      const routeState = cancellationFor(req);
+      const cancellation = routeState.controller;
+      if (cancellation.signal.aborted || res.destroyed || res.writableEnded) return;
+      const userSelection = parseTextSelectionHeader(req.headers);
+      const result = await evaluateAiFirstCandidates(req.body, {
+        userSelection,
+        signal: cancellation.signal,
+      });
+      if (result.ok !== true) {
+        if (result.code === "invalid_request") {
+          return res.status(400).json({
+            ok: false,
+            code: "INVALID_AI_FIRST_CANDIDATE_REQUEST",
+            error: "Invalid AI-first candidate evaluation request.",
+            aiAttempted: false,
+          });
+        }
+        return res.status(503).json({
+          ok: false,
+          code: "AI_FIRST_CANDIDATE_EVALUATION_UNAVAILABLE",
+          error:
+            "AI candidate evaluation is unavailable. The deterministic review and manual USDA search remain available.",
+          aiAttempted: result.aiAttempted === true,
+        });
+      }
+      return res.status(200).json({
+        ok: true,
+        contract_version: result.contract_version,
+        decisions: result.decisions,
+        aiAttempted: true,
+      });
+    } catch {
+      return res.status(500).json({
+        ok: false,
+        code: "AI_FIRST_CANDIDATE_EVALUATION_INTERNAL_ERROR",
+        error: "An unexpected error occurred during AI candidate evaluation.",
+        aiAttempted: false,
+      });
+    }
+  });
+
+  // AI NUTRITION RESEARCH — bounded external evidence for locally unresolved foods.
+  //
+  // The route is a TRANSPORT. The operation owns provider selection, grounded
+  // search, SSRF-safe retrieval, extraction, and deterministic scaling. A search
+  // URL is never evidence until the server retrieves and inspects the page.
+  app.post("/api/nutrition/research-ingredients", routeCancellationMiddleware, requireAiAccessToken, requireNutritionProductFeature(nutritionProductAccessAuthority, "ai_interpretation"), textPricingGuard, nutritionInterpretRateLimiter, async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    try {
+      const routeState = cancellationFor(req);
+      const cancellation = routeState.controller;
+      if (cancellation.signal.aborted || res.destroyed || res.writableEnded) return;
+      const userSelection = parseTextSelectionHeader(req.headers);
+      const result = await researchNutritionOnServer(req.body, userSelection, cancellation.signal);
+      if (result.ok !== true) {
+        if (result.code === "invalid_request") {
+          return res.status(400).json({
+            ok: false,
+            code: "INVALID_NUTRITION_RESEARCH_REQUEST",
+            error: "Invalid nutrition research request.",
+            aiAttempted: false,
+          });
+        }
+        if (result.code === "no_supported_evidence") {
+          return res.status(200).json({
+            ok: false,
+            code: "NO_SUPPORTED_RESEARCH_EVIDENCE",
+            error: "No reliable external nutrition evidence could be verified for the unresolved ingredients.",
+            aiAttempted: result.aiAttempted === true,
+            skipped: result.skipped ?? [],
+          });
+        }
+        return res.status(503).json({
+          ok: false,
+          code: result.code === "web_unavailable"
+            ? "WEB_RESEARCH_UNAVAILABLE"
+            : "NUTRITION_RESEARCH_UNAVAILABLE",
+          error: result.code === "web_unavailable"
+            ? "The selected AI provider does not support grounded web research."
+            : "Nutrition research is unavailable. The deterministic review and manual USDA search remain available.",
+          aiAttempted: result.aiAttempted === true,
+          skipped: result.skipped ?? [],
+        });
+      }
+      return res.status(200).json({
+        ok: true,
+        request_version: result.request_version,
+        recipe_digest: result.recipe_digest,
+        contributions: result.contributions,
+        evidence: result.evidence,
+        skipped: result.skipped,
+        sources: result.sources,
+        aiAttempted: true,
+      });
+    } catch {
+      return res.status(500).json({
+        ok: false,
+        code: "NUTRITION_RESEARCH_INTERNAL_ERROR",
+        error: "An unexpected error occurred during nutrition research.",
+        aiAttempted: false,
+      });
+    }
+  });
+
+  // USDA BRANDED FOODS — explicit Advanced-only external lookup.
+  //
+  // This is NOT an AI route and NOT Basic Nutrition. The user explicitly asks
+  // for manufacturer-supplied USDA records for one selected food term. The
+  // server reads the key from its own environment, contacts only the fixed
+  // official origin, rejects redirects, keeps at most three validated records,
+  // and returns canonical source snapshots. Nothing is applied or saved here.
+  //
+  // Gate order: route cancellation -> endpoint auth -> Advanced entitlement ->
+  // dedicated lookup limiter -> handler. A Basic caller costs ZERO upstream
+  // requests. No recipe, Vault content, or quantity is sent to USDA.
+  app.post(
+    "/api/nutrition/branded-foods/search",
+    routeCancellationMiddleware,
+    requireAiAccessToken,
+    requireAdvancedNutritionEditing(nutritionProductAccessAuthority),
+    usdaBrandedLookupRateLimiter,
+    async (req, res) => {
+      res.setHeader("Cache-Control", "no-store");
+      const request = readBrandedLookupRequest(req.body);
+      if (!request) {
+        return res.status(400).json({
+          ok: false,
+          code: "USDA_BRANDED_LOOKUP_INVALID_REQUEST",
+          error: "Invalid USDA Branded Foods lookup request.",
+          aiAttempted: false,
+        });
+      }
+      const routeState = cancellationFor(req);
+      const cancellation = routeState.controller;
+      if (cancellation.signal.aborted || res.destroyed || res.writableEnded) return;
+
+      const result = await lookupUsdaBrandedFoods(request.query, { signal: cancellation.signal });
+      if (cancellation.signal.aborted || res.destroyed || res.writableEnded) return;
+
+      if (result.ok !== true) {
+        if (result.code === "invalid_request") {
+          return res.status(400).json({
+            ok: false,
+            code: "USDA_BRANDED_LOOKUP_INVALID_REQUEST",
+            error: "Invalid USDA Branded Foods lookup request.",
+            aiAttempted: false,
+          });
+        }
+        if (result.code === "not_configured") {
+          return res.status(503).json({
+            ok: false,
+            code: "USDA_BRANDED_LOOKUP_NOT_CONFIGURED",
+            error: "USDA Branded Foods lookup is not configured on this server.",
+            aiAttempted: false,
+          });
+        }
+        if (result.code === "rate_limited") {
+          const retryAfter = result.retry_after_seconds;
+          if (retryAfter !== undefined) res.setHeader("Retry-After", String(retryAfter));
+          return res.status(429).json({
+            ok: false,
+            code: "USDA_BRANDED_LOOKUP_RATE_LIMITED",
+            error: "USDA Branded Foods lookup is temporarily rate limited. Please wait before trying again.",
+            aiAttempted: false,
+            ...(retryAfter !== undefined ? { retryAfterSeconds: retryAfter } : {}),
+          });
+        }
+        if (result.code === "timeout") {
+          return res.status(504).json({
+            ok: false,
+            code: "USDA_BRANDED_LOOKUP_TIMEOUT",
+            error: "USDA Branded Foods lookup timed out. The ingredient remains unresolved.",
+            aiAttempted: false,
+          });
+        }
+        if (result.code === "not_found") {
+          return res.status(404).json({
+            ok: false,
+            code: "USDA_BRANDED_LOOKUP_NOT_FOUND",
+            error: "No USDA Branded Foods record was found for that request.",
+            aiAttempted: false,
+          });
+        }
+        return res.status(503).json({
+          ok: false,
+          code: result.code === "auth_failed"
+            ? "USDA_BRANDED_LOOKUP_AUTH_FAILED"
+            : result.code === "invalid_response"
+              ? "USDA_BRANDED_LOOKUP_INVALID_RESPONSE"
+              : "USDA_BRANDED_LOOKUP_UNAVAILABLE",
+          error: result.code === "auth_failed"
+            ? "USDA Branded Foods lookup is not authorized by the server configuration."
+            : result.code === "invalid_response"
+              ? "USDA Branded Foods returned an unusable response. The ingredient remains unresolved."
+              : "USDA Branded Foods lookup is temporarily unavailable. The ingredient remains unresolved.",
+          aiAttempted: false,
+        });
+      }
+
+      return res.status(200).json({
+        ok: true,
+        request_version: USDA_BRANDED_LOOKUP_RESPONSE_VERSION,
+        line_ref: request.line_ref,
+        query: result.query,
+        total_hits: result.total_hits,
+        candidates: result.candidates,
+        cache_status: result.cache_status,
+        retrieved_at: result.retrieved_at,
+        signing_public_key: result.signing_public_key,
+        signing_key_id: result.signing_key_id,
+        limitations: [
+          "USDA Branded Foods are manufacturer-supplied label records, not analytically measured generic foods.",
+          "A branded product is a representative estimate unless the authored ingredient names the brand.",
+          "USDA is not sent the recipe, the Vault, or the recipe quantity.",
+        ],
+      });
+    }
+  );
+
+  // USDA BRANDED FOODS — server-authoritative verification at Apply.
+  //
+  // The client may have shown a branded contribution in the working review, but
+  // it cannot make it trusted. This route looks up the SERVER-HELD verified source
+  // snapshot, deterministically recomputes the contribution from that snapshot
+  // and the exact local target, and rejects any mismatch. On success it returns a
+  // fresh verification bound to the canonical contribution digest. No USDA call
+  // and no browser nutrient value is trusted here.
+  app.post(
+    "/api/nutrition/branded-foods/verify",
+    routeCancellationMiddleware,
+    requireAiAccessToken,
+    requireAdvancedNutritionEditing(nutritionProductAccessAuthority),
+    usdaBrandedLookupRateLimiter,
+    async (req, res) => {
+      res.setHeader("Cache-Control", "no-store");
+      const routeState = cancellationFor(req);
+      const cancellation = routeState.controller;
+      if (cancellation.signal.aborted || res.destroyed || res.writableEnded) return;
+      const result = verifyUsdaBrandedContributions(req.body);
+      if (cancellation.signal.aborted || res.destroyed || res.writableEnded) return;
+      if (result.ok !== true) {
+        if (result.code === "invalid_request") {
+          return res.status(400).json({
+            ok: false,
+            code: "USDA_BRANDED_VERIFICATION_INVALID_REQUEST",
+            error: "Invalid USDA Branded Foods verification request.",
+            aiAttempted: false,
+          });
+        }
+        if (result.code === "not_configured") {
+          return res.status(503).json({
+            ok: false,
+            code: "USDA_BRANDED_VERIFICATION_NOT_CONFIGURED",
+            error: "USDA Branded Foods signing is not configured on this server. Branded Apply is unavailable.",
+            aiAttempted: false,
+          });
+        }
+        if (result.code === "evidence_expired") {
+          return res.status(409).json({
+            ok: false,
+            code: "USDA_BRANDED_VERIFICATION_EXPIRED",
+            error: "The USDA Branded Foods source evidence is no longer available. Search again before applying.",
+            aiAttempted: false,
+          });
+        }
+        if (result.code === "evidence_mismatch") {
+          return res.status(409).json({
+            ok: false,
+            code: "USDA_BRANDED_VERIFICATION_EVIDENCE_MISMATCH",
+            error: "The USDA Branded Foods evidence changed and was not applied. Review the product again.",
+            aiAttempted: false,
+          });
+        }
+        return res.status(422).json({
+          ok: false,
+          code: "USDA_BRANDED_VERIFICATION_UNSUPPORTED_TARGET",
+          error: "This branded product cannot be scaled for the current ingredient quantity.",
+          aiAttempted: false,
+        });
+      }
+      return res.status(200).json({
+        ok: true,
+        request_version: USDA_BRANDED_VERIFICATION_RESPONSE_VERSION,
+        signing_public_key: result.signing_public_key,
+        signing_key_id: result.signing_key_id,
+        items: result.items,
+      });
+    }
+  );
 
   // SHISO — the conversational companion.
   //
@@ -1898,7 +2396,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // building so the response reflects live truth when available and the safe
   // last-known/baseline truth otherwise. Never throws, never spends.
   app.get("/api/providers/catalog", requireAiAccessToken, async (_req, res) => {
-    await refreshOpenRouterCatalog();
+    await Promise.all([refreshOpenRouterCatalog(), refreshChatGptPlanCatalog()]);
     res.json({ catalog: buildProviderCatalog() });
   });
 
@@ -2157,19 +2655,17 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // Server-owned representative-image candidate authority (Phase 1): opaque ids,
   // short TTL, bounded count, bound to a SERVER-DERIVED requester identity.
   const representativeImageCandidates = new RepresentativeImageCandidateStore();
-  // Process-random, in-memory salt for requester-id hashing (never persisted).
-  // LIMITATION: requester scope is the trusted client IP (per the configured
-  // proxy policy), so users behind the SAME NAT/proxy-derived IP SHARE a scope.
-  // Appropriate for local-first/single-user use; a shared multi-user deployment
-  // must bind authority to an authenticated user/session instead. See
-  // docs/Representative-Image-Security.md ("Requester scope").
-  const representativeRequesterSalt = cryptoRandomBytes(32);
-  const representativeRequesterId = (req: import("express").Request): string =>
-    createHash("sha256")
-      .update(representativeRequesterSalt)
-      .update(":")
-      .update(getClientIp(req))
-      .digest("hex");
+  // P2-R1: image authority is the SERVER-VERIFIED session id, never the client
+  // IP. Two clients sharing an IP now have independent authorization/preview
+  // scopes. The image-session middleware is applied to every image route below.
+  const imageRequesterId = (req: import("express").Request): string => {
+    const sessionId = imageSessionIdFor(req);
+    if (!sessionId) {
+      // Programming error: an image route was registered without the gate.
+      throw new Error("Image session middleware was not applied to this route.");
+    }
+    return sessionId;
+  };
   // Bounded thumbnail byte cache (strict memory limit; short TTL). Keyed by
   // REQUESTER + candidate so a cache hit can never bypass requester ownership.
   const REPRESENTATIVE_THUMB_CACHE_MAX_ENTRIES = 48;
@@ -2221,13 +2717,42 @@ export function createApp(opts: CreateAppOptions): express.Express {
         });
       }
 
-      const result = await generateRecipeDraftOnServer(req.body as any, { userSelection, signal: cancellation.signal });
+      const result = await generateRecipeDraftOnServer(req.body as any, {
+        userSelection,
+        signal: cancellation.signal,
+        // Bounded, non-sensitive phase timing for Create for Me. The callback
+        // receives durations/outcome/provider/model only — never prompts, recipe
+        // content, raw responses, tokens, or bridge secrets.
+        onTiming: (timing) => {
+          console.info(`[create-for-me] timing ${JSON.stringify(timing)}`);
+        },
+      });
       if (cancellation.signal.aborted || res.destroyed || res.writableEnded) return;
       return res.json(result);
     } catch (error: any) {
       if (cancellation.signal.aborted || res.destroyed || res.writableEnded) return;
       if (error instanceof CreateRecipeValidationError || error?.name === "CreateRecipeValidationError") {
         return res.status(400).json({ error: error?.message || "Invalid generation request.", code: "INVALID_REQUEST" });
+      }
+      if (
+        error instanceof ChatGptPlanRecipeUnavailableError ||
+        error?.code === "CHATGPT_PLAN_UNAVAILABLE"
+      ) {
+        return res.status(503).json({
+          error:
+            "ChatGPT plan is selected for recipe creation, but it is not connected or its plan usage is unavailable. Reconnect the account in AI Studio → ChatGPT plan. No other provider was used.",
+          code: "CHATGPT_PLAN_UNAVAILABLE",
+        });
+      }
+      if (
+        error instanceof ChatGptPlanRecipeInvalidDraftError ||
+        error?.code === "CHATGPT_PLAN_INVALID_RESPONSE"
+      ) {
+        return res.status(502).json({
+          error:
+            "ChatGPT plan returned a recipe draft that could not be validated. Nothing was saved; no other provider was used.",
+          code: "CHATGPT_PLAN_INVALID_RESPONSE",
+        });
       }
       if (error?.code === "UNSUPPORTED_CAPABILITY") {
         return res.status(503).json({
@@ -2247,7 +2772,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // issues an opaque, single-use confirmation token ONLY for a paid/variable
   // model. Makes ZERO provider inference calls. Gated + rate-limited like the
   // generation route.
-  app.post("/api/recipes/image/quote", requireAiAccessToken, imageGenerateRateLimiter, async (req, res) => {
+  app.post("/api/recipes/image/quote", requireAiAccessToken, imageSessionGate, imageGenerateRateLimiter, async (req, res) => {
     try {
       if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
         return res.status(400).json({ error: "Invalid request payload.", code: "INVALID_REQUEST" });
@@ -2311,7 +2836,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
         // Verified zero price: explicit generation may skip confirmation.
         return res.json(base);
       }
-      const issued = imageGenerationAuthorizations.issue(representativeRequesterId(req), {
+      const issued = imageGenerationAuthorizations.issue(imageRequesterId(req), {
         providerId: imageProvider.id,
         modelId: model,
         credentialSource,
@@ -2355,7 +2880,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // invalid/incapable EXPLICIT user pick ALSO FAILS CLOSED (no provider
   // resolves, ZERO execution) — it never falls back to Gemini or any other
   // provider.
-  app.post("/api/recipes/image/generate", requireAiAccessToken, imageGenerateRateLimiter, async (req, res) => {
+  app.post("/api/recipes/image/generate", routeCancellationMiddleware, requireAiAccessToken, imageSessionGate, imageGenerateRateLimiter, async (req, res) => {
     // Capacity reservation for this in-flight generation. It is released on every
     // path that does not commit it, so a failed/aborted call never leaks capacity.
     let reservation: ImagePreviewReservation | undefined;
@@ -2419,7 +2944,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
       // The reservation is requester-scoped: per-requester and global reservation
       // bounds both apply.
       try {
-        reservation = imagePreviewStore.reserve(MAX_GENERATED_IMAGE_BYTES, representativeRequesterId(req));
+        reservation = imagePreviewStore.reserve(MAX_GENERATED_IMAGE_BYTES, imageRequesterId(req));
       } catch (capacityError: any) {
         if (
           capacityError instanceof PreviewStoreCapacityError ||
@@ -2462,7 +2987,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
         const generateScope = imageVaultScope(validatedRequest.value.vaultSessionId);
         const consumed = imageGenerationAuthorizations.consume(
           rawToken,
-          representativeRequesterId(req),
+          imageRequesterId(req),
           {
             providerId: imageProvider.id,
             modelId: model,
@@ -2489,9 +3014,11 @@ export function createApp(opts: CreateAppOptions): express.Express {
         req.body,
         imageProvider,
         imagePreviewStore,
-        imageModelOverride,
+        // P2: forward the request-disconnect cancellation signal so a departed
+        // client stops the provider call instead of letting it run to timeout.
+        { ...imageModelOverride, signal: cancellationFor(req).controller.signal },
         reservation,
-        representativeRequesterId(req)
+        imageRequesterId(req)
       );
       return res.json(result);
     } catch (error: any) {
@@ -2524,15 +3051,14 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // Streams a transient generated-image preview by opaque token. Multi-read until
   // the token expires; exact safe Content-Type (never caller-supplied MIME);
   // Cache-Control: no-store + nosniff; unknown/expired/foreign-requester tokens
-  // are 404. Records are requester-bound at insert: token possession alone never
-  // crosses requester boundaries (the client-IP/shared-NAT limitation still
-  // applies: co-located requesters share an identity by design).
-  app.get("/api/recipes/image/preview/:token", requireAiAccessToken, imagePreviewRateLimiter, (req, res) => {
+  // are 404. Records are image-SESSION-bound at insert: token possession alone
+  // never crosses session boundaries, even when two clients share one IP.
+  app.get("/api/recipes/image/preview/:token", requireAiAccessToken, imageSessionGate, imagePreviewRateLimiter, (req, res) => {
     const token = String(req.params?.token ?? "");
     if (!token || token.length > 512) {
       return res.status(404).json({ error: "Preview not found." });
     }
-    const record = imagePreviewStore.get(token, representativeRequesterId(req));
+    const record = imagePreviewStore.get(token, imageRequesterId(req));
     if (!record) {
       // Unknown, expired, and foreign-requester tokens are all inaccessible; no
       // state oracle is exposed, so inaccessible previews always return 404.
@@ -2552,12 +3078,12 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // never distinguishes unknown vs removed vs expired vs foreign-requester (no
   // existence oracle). A foreign requester cannot invalidate another requester's
   // record. Gated + rate-limited like the other preview operations.
-  app.delete("/api/recipes/image/preview/:token", requireAiAccessToken, imagePreviewRateLimiter, (req, res) => {
+  app.delete("/api/recipes/image/preview/:token", requireAiAccessToken, imageSessionGate, imagePreviewRateLimiter, (req, res) => {
     const token = String(req.params?.token ?? "");
     if (!token || token.length > 512) {
       return res.status(404).json({ error: "Preview not found." });
     }
-    imagePreviewStore.remove(token, representativeRequesterId(req));
+    imagePreviewStore.remove(token, imageRequesterId(req));
     return res.status(200).json({ ok: true });
   });
 
@@ -2566,7 +3092,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // only approved-license Openverse/Wikimedia candidates are returned. Bounded
   // metadata fetch through the hardened SSRF JSON path; never returns raw
   // upstream errors. Gated + rate-limited; no AI, no generation.
-  app.post("/api/recipes/image/find-representative", requireAiAccessToken, representativeImageSearchRateLimiter, async (req, res) => {
+  app.post("/api/recipes/image/find-representative", requireAiAccessToken, imageSessionGate, representativeImageSearchRateLimiter, async (req, res) => {
     try {
       if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
         return res.status(400).json({ error: "Invalid request payload.", code: "INVALID_REQUEST" });
@@ -2591,7 +3117,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
           code: "IMAGE_QUERY_UNSAFE",
         });
       }
-      const requesterId = representativeRequesterId(req);
+      const requesterId = imageRequesterId(req);
       const found = await searchRepresentativeImages(query);
       const candidates = representativeImageCandidates.insertAll(requesterId, found);
       // The public response contains NO external thumbnail/full-resolution URL.
@@ -2612,10 +3138,11 @@ export function createApp(opts: CreateAppOptions): express.Express {
   app.get(
     "/api/recipes/image/representative-thumbnail/:candidateId",
     requireAiAccessToken,
+    imageSessionGate,
     representativeImageThumbnailRateLimiter,
     async (req, res) => {
       const candidateId = String(req.params?.candidateId ?? "");
-      const requesterId = representativeRequesterId(req);
+      const requesterId = imageRequesterId(req);
       // OWNERSHIP + EXPIRY ARE CHECKED BEFORE ANY CACHE HIT. A cached byte
       // response must never bypass `store.get(candidateId, requesterId)`.
       const owned = representativeImageCandidates.get(candidateId, requesterId);
@@ -2660,7 +3187,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
   // stored remote URL through the hardened SSRF image path, validates the bytes,
   // CONSUMES the candidate, and stores a short-lived preview token carrying the
   // representative provenance.
-  app.post("/api/recipes/image/select-representative", requireAiAccessToken, representativeImageSelectRateLimiter, async (req, res) => {
+  app.post("/api/recipes/image/select-representative", requireAiAccessToken, imageSessionGate, representativeImageSelectRateLimiter, async (req, res) => {
     try {
       if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
         return res.status(400).json({ error: "Invalid request payload.", code: "INVALID_REQUEST" });
@@ -2668,7 +3195,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
       const candidateId = (req.body as Record<string, unknown>)['candidateId'];
       const selected = await selectRepresentativeImage(candidateId, {
         store: representativeImageCandidates,
-        requesterId: representativeRequesterId(req),
+        requesterId: imageRequesterId(req),
       });
       const metadata = imagePreviewStore.insert({
         bytes: selected.bytes,
@@ -2676,7 +3203,7 @@ export function createApp(opts: CreateAppOptions): express.Express {
         provider: "representative",
         model: selected.provenance.source,
         provenance: selected.provenance,
-      }, representativeRequesterId(req));
+      }, imageRequesterId(req));
       return res.json({
         token: metadata.token,
         contentType: metadata.contentType,

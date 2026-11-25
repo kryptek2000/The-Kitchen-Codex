@@ -4,10 +4,13 @@ import {
   GeminiProvider,
   OpenRouterProvider,
   DeepSeekProvider,
+  OpenAIProvider,
   OPENROUTER_MODEL_CAPABILITIES,
   OPENROUTER_STRUCTURED_MODEL,
   DEEPSEEK_MODEL_CAPABILITIES,
   DEEPSEEK_FLASH_MODEL,
+  OPENAI_MODEL_CAPABILITIES,
+  OPENAI_DEFAULT_MODEL,
   getRegisteredProviders,
   getAiProvider,
   getDefaultAiProvider,
@@ -48,16 +51,21 @@ const candidate = (provider: AiProvider, model = "m"): AiCandidate => ({ provide
 describe("provider registry + capability selection (v0.7 1A)", () => {
   it("registers Gemini as the default provider (zero-config compatibility)", () => {
     const reg = getRegisteredProviders();
-    // Gemini + OpenRouter + DeepSeek are registered; provider ORDER is the
-    // selection order (Gemini -> OpenRouter -> DeepSeek).
-    expect(reg).toHaveLength(3);
+    // Gemini + OpenRouter + DeepSeek + OpenAI are registered; provider ORDER is
+    // the selection order (Gemini -> OpenRouter -> DeepSeek -> OpenAI). OpenAI
+    // is opt-in and excluded from the implicit server-default chain, but remains
+    // explicitly selectable.
+    expect(reg).toHaveLength(4);
     expect(reg[0].provider).toBeInstanceOf(GeminiProvider);
     expect(reg[1].provider.id).toBe("openrouter");
     expect(reg[2].provider.id).toBe("deepseek");
+    expect(reg[3].provider).toBeInstanceOf(OpenAIProvider);
+    expect(reg[3].defaultFallback).toBe(false);
     expect(getDefaultAiProvider()).toBe(reg[0].provider);
     expect(getAiProvider("gemini")).toBeInstanceOf(GeminiProvider);
     expect(getAiProvider("openrouter")).toBeDefined();
     expect(getAiProvider("deepseek")).toBeInstanceOf(DeepSeekProvider);
+    expect(getAiProvider("openai")).toBeInstanceOf(OpenAIProvider);
   });
 
   it("a per-model override can WIDEN a capability for a specific model", () => {
@@ -202,5 +210,69 @@ describe("provider registry + capability selection (v0.7 1A)", () => {
     const regs = [{ provider: ds, defaultCapabilities: { ...ds.capabilities }, modelCapabilities: DEEPSEEK_MODEL_CAPABILITIES }];
     const out = selectCandidates(regs, [{ provider: ds, model: DEEPSEEK_FLASH_MODEL }], ["webSearch"]);
     expect(out).toHaveLength(0);
+  });
+
+  it("OpenAI baseline is conservative and curated models gain only structured/recipe/reasoning", () => {
+    const openai = new OpenAIProvider();
+    expect(openai.capabilities).toEqual({
+      reasoning: false,
+      structuredOutput: false,
+      recipeGeneration: false,
+      webSearch: false,
+    });
+    const reg = {
+      provider: openai,
+      defaultCapabilities: { ...openai.capabilities },
+      modelCapabilities: OPENAI_MODEL_CAPABILITIES,
+    };
+    expect(effectiveCapabilities(reg, OPENAI_DEFAULT_MODEL)).toEqual({
+      reasoning: true,
+      structuredOutput: true,
+      recipeGeneration: true,
+      webSearch: false,
+    });
+    expect(effectiveCapabilities(reg, "gpt-6.1-sol").structuredOutput).toBe(false);
+    expect(effectiveCapabilities(reg, "gpt-6-luna").structuredOutput).toBe(true);
+  });
+
+  it("OpenAI is excluded from the implicit server-default chain", async () => {
+    const { resolveTextCandidateContext } = await import("../../server/ai/effectiveSelection.js");
+    const regs: RegisteredProvider[] = [
+      {
+        provider: fakeProvider("gemini", caps()),
+        defaultCapabilities: caps(),
+        enabled: true,
+      },
+      {
+        provider: fakeProvider("openai", caps({ webSearch: false })),
+        defaultCapabilities: caps({ webSearch: false }),
+        enabled: true,
+        defaultFallback: false,
+      },
+    ];
+    const context = resolveTextCandidateContext("createRecipe", regs, undefined);
+    expect(context.source).toBe("server_default");
+    expect(context.candidates.map((c) => c.provider.id)).toEqual(["gemini", "gemini"]);
+  });
+
+  it("OpenAI remains explicitly selectable even though it is not a default fallback", async () => {
+    const { resolveTextCandidateContext } = await import("../../server/ai/effectiveSelection.js");
+    const openai = fakeProvider("openai", caps({ webSearch: false }));
+    const regs: RegisteredProvider[] = [
+      {
+        provider: openai,
+        defaultCapabilities: caps({ webSearch: false }),
+        modelCapabilities: { "gpt-6.1-terra": { structuredOutput: true, recipeGeneration: true } },
+        enabled: true,
+        defaultFallback: false,
+      },
+    ];
+    const context = resolveTextCandidateContext("createRecipe", regs, {
+      mode: "user_selected",
+      providerId: "openai",
+      modelId: "gpt-6.1-terra",
+    });
+    expect(context.source).toBe("user_selected");
+    expect(context.candidates.map((c) => c.provider.id)).toEqual(["openai"]);
   });
 });

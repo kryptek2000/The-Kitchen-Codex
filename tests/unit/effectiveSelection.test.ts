@@ -5,6 +5,7 @@ const SENTINEL = "SUPER_SECRET_BYOK4_SENTINEL";
 const ENV_KEYS = [
   "GEMINI_API_KEY",
   "OPENROUTER_API_KEY",
+  "OPENAI_API_KEY",
   "DEEPSEEK_API_KEY",
   "KITCHEN_CODEX_TEXT_PROVIDER",
   "KITCHEN_CODEX_TEXT_MODEL",
@@ -308,6 +309,52 @@ describe("BYOK-4 — resolveEffectiveImageSelection fail-closed", () => {
       credentialSource: "session_only",
     });
     // Never silently falls back to the operator environment credential.
+    expect(result.provider).toBeNull();
+  });
+
+  it("P2: EXPLICIT openai-image selection without OPENAI_API_KEY fails closed (never Gemini-image)", async () => {
+    const { effectiveSelection } = await freshModule({ GEMINI_API_KEY: SENTINEL });
+    const result = effectiveSelection.resolveEffectiveImageSelection({
+      mode: "user_selected",
+      providerId: "openai-image",
+      modelId: "gpt-image-2.6-flare",
+    });
+    expect(result.source).toBe("user_selected");
+    expect(result.provider).toBeNull();
+  });
+
+  it("P2: VALID openai-image selection with its operator key resolves to the exact model", async () => {
+    const { effectiveSelection } = await freshModule({ OPENAI_API_KEY: SENTINEL });
+    const result = effectiveSelection.resolveEffectiveImageSelection({
+      mode: "user_selected",
+      providerId: "openai-image",
+      modelId: "gpt-image-2.6-sunburst",
+    });
+    expect(result.source).toBe("user_selected");
+    expect(result.provider?.id).toBe("openai-image");
+    expect(result.model).toBe("gpt-image-2.6-sunburst");
+    expect(result.credentialSource).toBe("server_environment");
+  });
+
+  it("P2: an UNCURATED openai-image model fails closed", async () => {
+    const { effectiveSelection } = await freshModule({ OPENAI_API_KEY: SENTINEL });
+    for (const modelId of ["dall-e-3", "gpt-image-1", "gpt-image-2.6-flare-2026-01-01"]) {
+      const result = effectiveSelection.resolveEffectiveImageSelection({
+        mode: "user_selected",
+        providerId: "openai-image",
+        modelId,
+      });
+      expect(result.provider, modelId).toBeNull();
+    }
+  });
+
+  it("P2: openai-image + session_only with no stored image key fails closed", async () => {
+    const { effectiveSelection } = await freshModule({ OPENAI_API_KEY: SENTINEL });
+    const result = effectiveSelection.resolveEffectiveImageSelection({
+      kind: "EXPLICIT_SELECTED",
+      providerId: "openai-image",
+      credentialSource: "session_only",
+    });
     expect(result.provider).toBeNull();
   });
 });

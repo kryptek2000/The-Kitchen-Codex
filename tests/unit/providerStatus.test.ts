@@ -5,7 +5,7 @@ const SENTINEL = "SUPER_SECRET_PHASE1D_SENTINEL";
 
 async function freshStatus(env: Record<string, string>): Promise<ProviderStatus[]> {
   vi.resetModules();
-  for (const k of ["GEMINI_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY"]) delete process.env[k];
+  for (const k of ["GEMINI_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY"]) delete process.env[k];
   Object.assign(process.env, env);
   const mod = await import("../../server/ai/providerStatus.js");
   return mod.getAiProviderStatus();
@@ -13,14 +13,14 @@ async function freshStatus(env: Record<string, string>): Promise<ProviderStatus[
 
 afterEach(() => {
   vi.unstubAllEnvs();
-  for (const k of ["GEMINI_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY"]) delete process.env[k];
+  for (const k of ["GEMINI_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY"]) delete process.env[k];
   vi.resetModules();
 });
 
 describe("provider status (v0.7 1D) — boolean/capability metadata only", () => {
-  it("preserves registry order Gemini -> OpenRouter -> DeepSeek", async () => {
-    const status = await freshStatus({ DEEPSEEK_API_KEY: SENTINEL, OPENROUTER_API_KEY: SENTINEL, GEMINI_API_KEY: SENTINEL });
-    expect(status.map((s) => s.providerId)).toEqual(["gemini", "openrouter", "deepseek"]);
+  it("preserves registry order Gemini -> OpenRouter -> DeepSeek -> OpenAI", async () => {
+    const status = await freshStatus({ DEEPSEEK_API_KEY: SENTINEL, OPENROUTER_API_KEY: SENTINEL, GEMINI_API_KEY: SENTINEL, OPENAI_API_KEY: SENTINEL });
+    expect(status.map((s) => s.providerId)).toEqual(["gemini", "openrouter", "deepseek", "openai"]);
   });
 
   it("none configured => Gemini enabled-but-unavailable; OpenRouter/DeepSeek inert", async () => {
@@ -29,6 +29,7 @@ describe("provider status (v0.7 1D) — boolean/capability metadata only", () =>
     expect(byId["gemini"]).toMatchObject({ configured: false, enabled: true, available: false });
     expect(byId["openrouter"]).toMatchObject({ configured: false, enabled: false, available: false });
     expect(byId["deepseek"]).toMatchObject({ configured: false, enabled: false, available: false });
+    expect(byId["openai"]).toMatchObject({ configured: false, enabled: false, available: false });
   });
 
   it("Gemini only => configured/available; OpenRouter & DeepSeek not configured", async () => {
@@ -37,6 +38,7 @@ describe("provider status (v0.7 1D) — boolean/capability metadata only", () =>
     expect(byId["gemini"]).toMatchObject({ configured: true, enabled: true, available: true });
     expect(byId["openrouter"]).toMatchObject({ configured: false, enabled: false, available: false });
     expect(byId["deepseek"]).toMatchObject({ configured: false, enabled: false, available: false });
+    expect(byId["openai"]).toMatchObject({ configured: false, enabled: false, available: false });
   });
 
   it("Gemini + OpenRouter => both available; DeepSeek still inert", async () => {
@@ -45,18 +47,19 @@ describe("provider status (v0.7 1D) — boolean/capability metadata only", () =>
     expect(byId["gemini"]).toMatchObject({ configured: true, enabled: true, available: true });
     expect(byId["openrouter"]).toMatchObject({ configured: true, enabled: true, available: true });
     expect(byId["deepseek"]).toMatchObject({ configured: false, enabled: false, available: false });
+    expect(byId["openai"]).toMatchObject({ configured: false, enabled: false, available: false });
   });
 
-  it("all three configured => all configured/enabled/available", async () => {
-    const status = await freshStatus({ GEMINI_API_KEY: SENTINEL, OPENROUTER_API_KEY: SENTINEL, DEEPSEEK_API_KEY: SENTINEL });
+  it("all four configured => all configured/enabled/available", async () => {
+    const status = await freshStatus({ GEMINI_API_KEY: SENTINEL, OPENROUTER_API_KEY: SENTINEL, DEEPSEEK_API_KEY: SENTINEL, OPENAI_API_KEY: SENTINEL });
     const byId = Object.fromEntries(status.map((s) => [s.providerId, s]));
-    for (const id of ["gemini", "openrouter", "deepseek"]) {
+    for (const id of ["gemini", "openrouter", "deepseek", "openai"]) {
       expect(byId[id]).toMatchObject({ configured: true, enabled: true, available: true });
     }
   });
 
   it("runtime signals are strict booleans", async () => {
-    const status = await freshStatus({ GEMINI_API_KEY: SENTINEL, OPENROUTER_API_KEY: SENTINEL, DEEPSEEK_API_KEY: SENTINEL });
+    const status = await freshStatus({ GEMINI_API_KEY: SENTINEL, OPENROUTER_API_KEY: SENTINEL, DEEPSEEK_API_KEY: SENTINEL, OPENAI_API_KEY: SENTINEL });
     for (const s of status) {
       expect(typeof s.configured).toBe("boolean");
       expect(typeof s.enabled).toBe("boolean");
@@ -67,7 +70,7 @@ describe("provider status (v0.7 1D) — boolean/capability metadata only", () =>
   });
 
   it("capabilities are the registry-owned UNION (baseline + curated model overrides)", async () => {
-    const status = await freshStatus({ GEMINI_API_KEY: SENTINEL, OPENROUTER_API_KEY: SENTINEL, DEEPSEEK_API_KEY: SENTINEL });
+    const status = await freshStatus({ GEMINI_API_KEY: SENTINEL, OPENROUTER_API_KEY: SENTINEL, DEEPSEEK_API_KEY: SENTINEL, OPENAI_API_KEY: SENTINEL });
     const byId = Object.fromEntries(status.map((s) => [s.providerId, s]));
     // Gemini: full baseline (unchanged).
     expect(byId["gemini"].capabilities).toEqual({
@@ -92,6 +95,14 @@ describe("provider status (v0.7 1D) — boolean/capability metadata only", () =>
       recipeGeneration: false,
       webSearch: false,
     });
+    // OpenAI: curated Terra/Luna grant reasoning, structured output, and recipe
+    // generation; webSearch stays false until a trusted adapter exists.
+    expect(byId["openai"].capabilities).toEqual({
+      reasoning: true,
+      structuredOutput: true,
+      recipeGeneration: true,
+      webSearch: false,
+    });
   });
 
   it("capability union never fabricates support for an uncapable provider", async () => {
@@ -108,7 +119,7 @@ describe("provider status (v0.7 1D) — boolean/capability metadata only", () =>
 
   it("NEVER leaks a secret value or a masked substring in the status object", async () => {
     const longSecret = `${SENTINEL}-abcdef1234567890`;
-    const status = await freshStatus({ GEMINI_API_KEY: longSecret, OPENROUTER_API_KEY: longSecret, DEEPSEEK_API_KEY: longSecret });
+    const status = await freshStatus({ GEMINI_API_KEY: longSecret, OPENROUTER_API_KEY: longSecret, DEEPSEEK_API_KEY: longSecret, OPENAI_API_KEY: longSecret });
     const json = JSON.stringify(status);
     expect(json).not.toContain(longSecret);
     expect(json).not.toContain(SENTINEL);

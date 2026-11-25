@@ -26,11 +26,13 @@ import { validateManifest } from '../usda/manifest';
 import {
   createNutritionCalculationContext,
   calculateRecipeNutrition,
+  confirmIngredientInContext,
+  manualSearchInContext,
   reviewFoodPortions,
   reviewFoodCountPortions,
+  reviewIngredientInContext,
 } from '../calculation/context';
 import { isValidStrictServingCount } from '../calculation/servings';
-import { confirmIngredientReview, createReviewCatalog, reviewIngredient } from '../matching/review';
 import { normalizeQuery, normalizeQueryChecked } from '../matching/normalize';
 import { parseIngredient } from '../matching/parse';
 import { projectQueryText } from '../matching/query';
@@ -41,7 +43,7 @@ import {
   type CountPortionReviewResult,
 } from '../calculation/countPortion';
 import { phase2Failure, MAX_INGREDIENT_TEXT_LENGTH } from '../matching/types';
-import type { ConfirmationResult, IngredientReviewResult, ReviewCatalog } from '../matching/types';
+import type { ConfirmationResult, IngredientReviewResult } from '../matching/types';
 import type {
   AdvisoryNutritionPreview,
   CalculationResult,
@@ -70,7 +72,6 @@ import {
 interface SessionAuthority {
   readonly metadata: Phase4SessionMetadata;
   readonly context: NutritionCalculationContext;
-  readonly catalog: ReviewCatalog;
 }
 
 const SESSION_AUTHORITY = new WeakMap<object, SessionAuthority>();
@@ -109,7 +110,7 @@ function searchFoodsInAuthority(
   const normalizedResult = normalizeQueryChecked(bounded);
   if (!normalizedResult.ok) return { ok: false, failure: phase4Failure('invalid_request') };
   const limit = clampManualSearchLimit(rawLimit);
-  const outcome = authority.catalog.manualSearch(normalizedResult.query, limit);
+  const outcome = manualSearchInContext(authority.context, normalizedResult.query, limit);
   const results: FoodSearchResult[] = [];
   for (const hit of outcome.hits) {
     let hasPortion = false;
@@ -187,23 +188,12 @@ export function createAdvancedNutritionSession(
     return { ok: false, failure: phase4Failure('invalid_session') };
   }
   const context = contextResult.context;
-
-  // A genuine Phase 2 catalog created from the SAME manifest and records.
-  const catalogResult = createReviewCatalog(manifestRaw, recordsRaw);
-  if (!catalogResult.ok) {
-    return { ok: false, failure: phase4Failure('invalid_session') };
-  }
-  const catalog = catalogResult.catalog;
+  // The calculation context already owns ONE genuine Phase 2 catalog created
+  // from the SAME manifest and records. Reusing it through the context's bounded
+  // review wrappers avoids constructing/validating a second identical catalog on
+  // every first Generate (a measured freeze source) without exposing authority.
 
   const contextMetadata = context.metadata();
-  const catalogMetadata = catalog.metadata();
-  if (catalogMetadata.catalog_digest !== contextMetadata.catalog_digest) {
-    return { ok: false, failure: phase4Failure('invalid_session') };
-  }
-  if (catalogMetadata.bundle_release !== contextMetadata.bundle_release) {
-    return { ok: false, failure: phase4Failure('invalid_session') };
-  }
-
   const metadata: Phase4SessionMetadata = Object.freeze({
     session_version: PHASE4_SESSION_VERSION,
     context_version: contextMetadata.context_version,
@@ -226,7 +216,7 @@ export function createAdvancedNutritionSession(
     reviewIngredient(this: AdvancedNutritionSession, raw: unknown): IngredientReviewResult {
       const authority = resolveSessionAuthority(this);
       if (!authority) return invalidReviewResult();
-      return reviewIngredient(authority.catalog, raw);
+      return reviewIngredientInContext(authority.context, raw);
     },
     reviewPortions(this: AdvancedNutritionSession, fdcId: unknown): PortionReviewResult {
       const authority = resolveSessionAuthority(this);
@@ -273,7 +263,7 @@ export function createAdvancedNutritionSession(
       if (!authority) {
         return Object.freeze({ outcome: 'invalid' as const, failure: phase2Failure('invalid_catalog') });
       }
-      return confirmIngredientReview(authority.catalog, review, selection);
+      return confirmIngredientInContext(authority.context, review, selection);
     },
     calculate(this: AdvancedNutritionSession, request: unknown): CalculationResult {
       const authority = resolveSessionAuthority(this);
@@ -295,7 +285,7 @@ export function createAdvancedNutritionSession(
     },
   } as AdvancedNutritionSession;
 
-  registerSessionAuthority(session, Object.freeze({ metadata, context, catalog }));
+  registerSessionAuthority(session, Object.freeze({ metadata, context }));
 
   return { ok: true, session: Object.freeze(session) };
 }
@@ -526,7 +516,7 @@ export function confirmAdvancedNutritionMatch(
     return Object.freeze({ outcome: 'invalid' as const, failure: phase2Failure('invalid_catalog') });
   }
   try {
-    return confirmIngredientReview(authority.catalog, reviewRaw, selectionRaw);
+    return confirmIngredientInContext(authority.context, reviewRaw, selectionRaw);
   } catch {
     return Object.freeze({ outcome: 'invalid' as const, failure: phase2Failure('invalid_catalog') });
   }

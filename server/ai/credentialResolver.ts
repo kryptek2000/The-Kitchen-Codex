@@ -27,13 +27,15 @@ import { getSessionSecret } from "./sessionSecrets.js";
 import { GeminiProvider } from "./geminiProvider.js";
 import { OpenRouterProvider } from "./openRouterProvider.js";
 import { DeepSeekProvider } from "./deepSeekProvider.js";
+import { OpenAIProvider } from "./openAIProvider.js";
 import { GeminiImageProvider } from "./geminiImageProvider.js";
 import { OpenRouterImageProvider } from "./openRouterImageProvider.js";
+import { OpenAIImageProvider } from "./openAIImageProvider.js";
 import type { AiProvider } from "./types.js";
 import type { ImageProvider } from "./imageProvider.js";
 
-/** The two non-secret credential sources. */
-export type CredentialSource = "server_environment" | "session_only";
+/** The three non-secret credential sources. */
+export type CredentialSource = "server_environment" | "session_only" | "native_plan";
 
 /**
  * Bounded, provider-neutral credential failure codes (never secret-derived).
@@ -58,7 +60,7 @@ export type CredentialResolution =
 
 /** True when a value is one of the two allowed credential sources. */
 export function isCredentialSource(value: unknown): value is CredentialSource {
-  return value === "server_environment" || value === "session_only";
+  return value === "server_environment" || value === "session_only" || value === "native_plan";
 }
 
 /**
@@ -78,6 +80,8 @@ export function resolveCredential(providerId: string, source: CredentialSource):
     if (!secret) return { ok: false, code: "CREDENTIAL_SOURCE_UNAVAILABLE" };
     return { ok: true, lease: { providerId, source, secret } };
   }
+  // Native plan credentials live in the trusted Electron process, never in this
+  // server credential lease. No secret is resolved for this source.
   return { ok: false, code: "CREDENTIAL_SOURCE_INVALID" };
 }
 
@@ -98,6 +102,8 @@ export function createCredentialBoundTextProvider(
       return new OpenRouterProvider({ credential });
     case "deepseek":
       return new DeepSeekProvider({ credential });
+    case "openai":
+      return new OpenAIProvider({ credential });
     default:
       return null;
   }
@@ -105,7 +111,12 @@ export function createCredentialBoundTextProvider(
 
 /** True when a session credential can be safely bound to a TEXT provider. */
 export function supportsSessionBoundTextProvider(providerId: string): boolean {
-  return providerId === "gemini" || providerId === "openrouter" || providerId === "deepseek";
+  return (
+    providerId === "gemini" ||
+    providerId === "openrouter" ||
+    providerId === "deepseek" ||
+    providerId === "openai"
+  );
 }
 
 /**
@@ -121,9 +132,10 @@ export function createSessionBoundTextProvider(providerId: string): AiProvider |
 
 /**
  * BYOK-5F: builds a REQUEST-SCOPED IMAGE provider bound to an explicit session
- * credential. Exact image execution IDs only (`gemini-image` / `openrouter-image`);
- * text IDs are rejected. Returns `null` for an unsupported id so the caller fails
- * closed rather than falling back to the environment credential.
+ * credential. Exact image execution IDs only (`gemini-image` /
+ * `openrouter-image` / `openai-image`); text IDs are rejected. Returns `null`
+ * for an unsupported id so the caller fails closed rather than falling back to
+ * the environment credential.
  */
 export function createCredentialBoundImageProvider(
   providerId: string,
@@ -134,6 +146,8 @@ export function createCredentialBoundImageProvider(
       return new GeminiImageProvider({ credential });
     case "openrouter-image":
       return new OpenRouterImageProvider({ credential });
+    case "openai-image":
+      return new OpenAIImageProvider({ credential });
     default:
       return null;
   }
@@ -141,7 +155,7 @@ export function createCredentialBoundImageProvider(
 
 /** True when a session credential can be safely bound to an IMAGE provider. */
 export function supportsSessionBoundImageProvider(providerId: string): boolean {
-  return providerId === "gemini-image" || providerId === "openrouter-image";
+  return providerId === "gemini-image" || providerId === "openrouter-image" || providerId === "openai-image";
 }
 
 /**

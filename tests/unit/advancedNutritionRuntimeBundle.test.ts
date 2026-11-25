@@ -36,7 +36,7 @@ import type { UsdaDataType } from '../../src/core/nutritionV2/usda/types';
 const LOCK = USDA_BUNDLE_RELEASE_LOCK;
 const BUNDLE_DIR = join(
   __dirname,
-  '../../data/advanced-nutrition/usda/usda_fdc_87c5408a3e98838944a87be74824761e'
+  '../../data/advanced-nutrition/usda/usda_fdc_1f3e3068a7ae0702f360d1caae40a628'
 );
 
 type Rec = Record<string, any>;
@@ -78,13 +78,13 @@ describe('phase 4.5B — the exact checked-in bundle authenticates', () => {
     expect(loaded.ok).toBe(true);
     if (!loaded.ok) return;
     const metadata = loaded.session.metadata();
-    expect(metadata.bundle_release).toBe('usda_fdc_87c5408a3e98838944a87be74824761e');
+    expect(metadata.bundle_release).toBe('usda_fdc_1f3e3068a7ae0702f360d1caae40a628');
     // The complete authenticated source is 13,559 records; the home-recipe
     // eligible catalog excludes restaurant/fast-food records (Phase 4.5D).
     expect(metadata.source_record_count).toBe(13559);
     expect(metadata.record_count).toBe(12924);
     expect(metadata.excluded_record_count).toBe(13559 - 12924);
-    expect(metadata.nutrient_map_version).toBe('usda_fdc_nutrient_map_v2');
+    expect(metadata.nutrient_map_version).toBe('usda_fdc_nutrient_map_v3');
     expect([...metadata.data_types].sort()).toEqual(['fndds', 'foundation', 'sr_legacy']);
     expect(loaded.attribution).toBe(LOCK.attribution);
     expect(loaded.metadata.bundle_release).toBe(LOCK.bundle_release);
@@ -302,7 +302,7 @@ describe('phase 4.5B — bounded gzip decoding', () => {
   it('decodes the real foundation shard exactly', async () => {
     const bytes = new Uint8Array(readFileSync(join(BUNDLE_DIR, SHARD_FILENAMES.foundation)));
     const decoded = await decodeBoundedGzip(bytes, 4 * 1024 * 1024);
-    expect(decoded.length).toBe(958025);
+    expect(decoded.length).toBe(984248);
   });
 
   it('rejects decompression beyond the incremental bound', async () => {

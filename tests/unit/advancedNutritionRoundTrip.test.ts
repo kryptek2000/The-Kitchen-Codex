@@ -181,13 +181,13 @@ describe('recognized schema v5 — AI contribution round-trip', () => {
 
 describe('unknown future schema — opaque, never interpreted', () => {
   it('2. safely round-trips an unknown future schema as bounded opaque data', () => {
-    const future = { schema: 6, basis: 'total', futureField: { nested: [1, 2, 3] }, note: 'future' };
+    const future = { schema: 7, basis: 'total', futureField: { nested: [1, 2, 3] }, note: 'future' };
     const md = serializeRecipeToObsidianMarkdown({
       ...baseRecipe(),
       frontmatter: { codex_nutrition: future },
     });
     const parsed = parseObsidianRecipeMarkdown(md, 'r1.md', 'r1.md');
-    expect(parsed.codexNutrition).toMatchObject({ kind: 'opaque', schema: 6 });
+    expect(parsed.codexNutrition).toMatchObject({ kind: 'opaque', schema: 7 });
     expect((parsed.codexNutrition as { data: Record<string, unknown> }).data.note).toBe('future');
 
     const reparsed = parseObsidianRecipeMarkdown(

@@ -23,7 +23,7 @@ import {
   type GeneratedImageMime,
 } from "../src/core/recipeImage.js";
 import { createHash } from "node:crypto";
-import { ProviderOperationError } from "./ai/providerErrors.js";
+import { ProviderOperationError, throwIfCallerCancelled } from "./ai/providerErrors.js";
 import { ImageValidationError, type ImageProvider } from "./ai/imageProvider.js";
 import type { ImagePreviewReservation, ImagePreviewStore } from "./imagePreviewStore.js";
 
@@ -232,7 +232,11 @@ export async function generateRecipeImagePreview(
   requestInput: unknown,
   provider: ImageProvider,
   store: ImagePreviewStore,
-  overrides: { model?: string } = {},
+  overrides: {
+    model?: string;
+    /** P2: caller cancellation forwarded to the provider (optional). */
+    signal?: AbortSignal;
+  } = {},
   /**
    * Optional capacity reservation taken by the caller BEFORE the provider call.
    * When present, the validated bytes COMMIT the reservation (releasing unused
@@ -256,11 +260,19 @@ export async function generateRecipeImagePreview(
 
   let generated;
   try {
-    generated = await provider.generateImage(prompt, { model, prompt });
+    generated = await provider.generateImage(prompt, {
+      model,
+      prompt,
+      ...(overrides.signal ? { signal: overrides.signal } : {}),
+    });
   } catch (err) {
     if (err instanceof ProviderOperationError) throw err;
     throw new ProviderOperationError("PROVIDER_ERROR", "Image generation failed.", { providerId: provider.id, model }, err);
   }
+
+  // P2: a request cancelled while the provider was finishing must not commit a
+  // preview the client can never use (the caller releases its reservation).
+  throwIfCallerCancelled(overrides.signal, { providerId: provider.id, model });
 
   // Untrusted bytes -> shared validation boundary (MIME/signature agreement, bounds).
   const validation = validateGeneratedImage({ bytes: generated.bytes, contentType: generated.contentType });

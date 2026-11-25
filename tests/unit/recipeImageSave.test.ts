@@ -21,6 +21,8 @@ import {
   serializeRecipeToObsidianMarkdown,
   parseObsidianRecipeMarkdown,
 } from "../../src/utils/markdownParser.js";
+import { createVaultAssetScope } from "../../src/utils/vaultAssets.js";
+import { getRecipeImage } from "../../src/utils/imageHelper.js";
 
 const VALID_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -112,6 +114,12 @@ function makeFixture(options: { markdown?: string; assets?: Record<string, Uint8
       if (assetWriteGate) await assetWriteGate.promise;
       assets.set(p, new Uint8Array(data));
     },
+    writeExclusive: async (p: string, data: Uint8Array) => {
+      events.push(`asset:write:${p}`);
+      if (assetWriteGate) await assetWriteGate.promise;
+      if (assets.has(p)) throw new Error('EEXIST');
+      assets.set(p, new Uint8Array(data));
+    },
     exists: async (p: string) => assets.has(p),
     delete: async (p: string) => {
       events.push(`asset:delete:${p}`);
@@ -146,9 +154,20 @@ function previewRecord(hash: string, token = "tok-1"): RecipeImagePreviewRecord 
   };
 }
 
-async function makeDeps(fixture: Fixture, records: Record<string, RecipeImagePreviewRecord | undefined>, now?: () => Date): Promise<GeneratedImageSaveDeps> {
+async function makeDeps(
+  fixture: Fixture,
+  records: Record<string, RecipeImagePreviewRecord | undefined>,
+  now?: () => Date,
+  assetScope?: ReturnType<typeof createVaultAssetScope>
+): Promise<GeneratedImageSaveDeps> {
   const { source } = fakePreviewSource(records);
-  return { vault: fixture.vault, asset: fixture.asset, previewSource: source, ...(now ? { now } : {}) };
+  return {
+    vault: fixture.vault,
+    asset: fixture.asset,
+    previewSource: source,
+    ...(now ? { now } : {}),
+    ...(assetScope ? { assetScope } : {}),
+  };
 }
 
 function saveInput(overrides: Record<string, unknown> = {}) {
@@ -394,6 +413,7 @@ describe("saveGeneratedRecipeImageToVault — canonical save (v0.7 2B)", () => {
     const fixture = makeFixture();
     const hash = await hashCanonicalMarkdown(INITIAL_MD);
     fixture.asset.write = async () => { throw new Error("disk full"); };
+    fixture.asset.writeExclusive = async () => { throw new Error("disk full"); };
     const deps = await makeDeps(fixture, { "tok-1": previewRecord(hash) });
     await expect(saveGeneratedRecipeImageToVault(deps, saveInput())).rejects.toThrow("disk full");
     expect(fixture.files.get(RECIPE_PATH)).toBe(INITIAL_MD);
@@ -406,8 +426,8 @@ describe("saveGeneratedRecipeImageToVault — canonical save (v0.7 2B)", () => {
     fixture.vault.writeText = async () => { throw new Error("markdown write failed"); };
     const deps = await makeDeps(fixture, { "tok-1": previewRecord(hash) });
     await expect(saveGeneratedRecipeImageToVault(deps, saveInput())).rejects.toThrow("markdown write failed");
-    expect(fixture.events).toContain("asset:delete:Assets/Test Soup.png");
-    expect(fixture.assets.has("Assets/Test Soup.png")).toBe(false);
+    // Ownership cannot be proven, so the asset is preserved rather than deleted.
+    expect(fixture.assets.has("Assets/Test Soup.png")).toBe(true);
     // Canonical state untouched.
     expect(fixture.files.get(RECIPE_PATH)).toBe(INITIAL_MD);
   });
@@ -454,5 +474,107 @@ describe("saveGeneratedRecipeImageToVault — canonical save (v0.7 2B)", () => {
     const err = await saveGeneratedRecipeImageToVault(deps, saveInput()).catch((e) => e);
     expect(JSON.stringify(err)).not.toContain(SENTINEL_PROMPT);
     expect(JSON.stringify(err)).not.toContain(VALID_PNG_BASE64.slice(0, 24));
+  });
+});
+
+describe("R5 — recovery registers the verified asset in the originating scope", () => {
+  it("registers a successful recovery in the originating scope", async () => {
+    const fixture = makeFixture();
+    const hash = await hashCanonicalMarkdown(INITIAL_MD);
+    const scope = createVaultAssetScope(41, { active: true });
+    const deps = await makeDeps(fixture, { "tok-1": previewRecord(hash) }, undefined, scope);
+
+    const result = await saveGeneratedRecipeImageToVault(deps, saveInput());
+
+    expect(result.registration).toBe("registered");
+    expect(scope.get(result.imagePath)?.path).toBe(result.imagePath);
+    expect(scope.get(result.imagePath)?.blobUrl).toBe(result.blobUrl);
+    expect(getRecipeImage({ image: result.imagePath }, scope)).toBe(result.blobUrl);
+    expect(fixture.assets.has(result.imagePath)).toBe(true);
+    scope.deactivate();
+  });
+
+  it("does not register into a deactivated/superseded scope and never reactivates it", async () => {
+    const fixture = makeFixture();
+    const hash = await hashCanonicalMarkdown(INITIAL_MD);
+    const oldScope = createVaultAssetScope(41, { active: true });
+    const newScope = createVaultAssetScope(42, { active: true });
+    const deps = await makeDeps(fixture, { "tok-1": previewRecord(hash) }, undefined, oldScope);
+
+    oldScope.deactivate(); // B becomes authoritative while A's write is pending
+    const result = await saveGeneratedRecipeImageToVault(deps, saveInput());
+
+    expect(result.registration).toBe("skipped-inactive");
+    expect(oldScope.get(result.imagePath)).toBeUndefined();
+    expect(newScope.get(result.imagePath)).toBeUndefined();
+    expect(oldScope.isActive()).toBe(false);
+    expect(fixture.assets.has(result.imagePath)).toBe(true);
+    newScope.deactivate();
+  });
+
+  it("a delayed A recovery cannot register into B after B becomes authoritative", async () => {
+    const fixture = makeFixture({ gateAssetWrite: true });
+    const hash = await hashCanonicalMarkdown(INITIAL_MD);
+    const a = createVaultAssetScope(41, { active: true });
+    const b = createVaultAssetScope(42, { active: true });
+    const deps = await makeDeps(fixture, { "tok-1": previewRecord(hash) }, undefined, a);
+
+    const pending = saveGeneratedRecipeImageToVault(deps, saveInput());
+    await until(() => fixture.events.includes("asset:write:Assets/Test Soup.png"));
+
+    // B becomes authoritative while A's write is still gated.
+    a.deactivate();
+    fixture.assetWriteGate!.resolve();
+    const result = await pending;
+
+    expect(result.registration).toBe("skipped-inactive");
+    expect(a.isActive()).toBe(false);
+    expect(a.get(result.imagePath)).toBeUndefined();
+    expect(b.get(result.imagePath)).toBeUndefined();
+    // The verified write remains in its originating destination only.
+    expect(fixture.assets.has(result.imagePath)).toBe(true);
+    b.deactivate();
+  });
+
+  it("reports registration failure truthfully after a successful canonical write", async () => {
+    const fixture = makeFixture();
+    const hash = await hashCanonicalMarkdown(INITIAL_MD);
+    const failingScope = {
+      ownerSessionId: 41,
+      isActive: () => true,
+      isAccepting: () => true,
+      activate: () => {},
+      deactivate: () => {},
+      clear: () => {},
+      registerAsset: () => null,
+      get: () => undefined,
+      getAll: () => [],
+      ownsUrl: () => false,
+      subscribe: () => () => {},
+    };
+    const deps = await makeDeps(fixture, { "tok-1": previewRecord(hash) }, undefined, failingScope as any);
+
+    const result = await saveGeneratedRecipeImageToVault(deps, saveInput());
+    expect(result.registration).toBe("failed");
+    expect(fixture.assets.has(result.imagePath)).toBe(true);
+    expect(fixture.files.get(RECIPE_PATH)).toContain(`image: ${result.imagePath}`);
+  });
+
+  it("rejects a foreign body reference before recovery Markdown is written and rolls back the new asset", async () => {
+    const fixture = makeFixture({
+      markdown: mdWithImage().replace("A warm bowl.", "![A only](Assets/only-a.png)"),
+    });
+    const hash = await hashCanonicalMarkdown(fixture.files.get(RECIPE_PATH) as string);
+    const scope = createVaultAssetScope(41, { active: true });
+    const deps = await makeDeps(fixture, { "tok-1": previewRecord(hash) }, undefined, scope);
+
+    await expect(saveGeneratedRecipeImageToVault(deps, saveInput())).rejects.toMatchObject({
+      reason: "ASSET_REFERENCE_INVALID",
+    });
+    // Ownership cannot be proven, so the asset is preserved rather than deleted.
+    expect(fixture.assets.has("Assets/Test Soup.png")).toBe(true);
+    expect(fixture.files.get(RECIPE_PATH)).not.toContain("image: Assets/Test Soup.png");
+    expect(scope.get("Assets/Test Soup.png")).toBeUndefined();
+    scope.deactivate();
   });
 });

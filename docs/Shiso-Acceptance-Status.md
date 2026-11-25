@@ -1,9 +1,9 @@
 # SHISO — implementation, acceptance and release status
 
-Evidence reviewed October 18, 2026. Baseline:
-`49fbfce80f39437120e57cee02df6c7363531320` (local HEAD/main/origin/main and
-GitHub main agree). This is a documentation reconciliation, not a release or a
-new execution of application tests. Sid retains sole release authority.
+Evidence reviewed November 24, 2026. Baseline:
+`e0b309e545875a16397773c2d9c0fbd6e3bcaa4e` (merged PR #66 on GitHub main).
+This is a documentation reconciliation, not a release or a new execution of
+application tests. Sid retains sole release authority.
 
 ## Source reconciliation
 
@@ -13,6 +13,7 @@ new execution of application tests. Sid retains sole release authority.
 | B: protected local modified roadmap | C1 ownership boundaries, real recipe/nutrition context, proposal review | “UNCOMMITTED”, five-tool inventory, no recipe editing/Create, and “shipped” language cannot describe current deployment status |
 | C: [draft PR #11](https://github.com/kryptek2000/The-Kitchen-Codex/pull/11), `8de8b9c5b465704740cb184a9e9d826b4b2a7966` | AI-first nutrition, free Basic, unified terminology, Explore My Vault and retained Vault Intelligence direction | “Uncommitted” implementation reports and future-only creation/UI consolidation |
 | [Merged PR #12](https://github.com/kryptek2000/The-Kitchen-Codex/pull/12) | Implementation and subsequent fixes merged at the baseline above | Its original PR body still says draft/unmerged; live PR metadata and merge commit supersede that text |
+| [Merged PR #66](https://github.com/kryptek2000/The-Kitchen-Codex/pull/66) | C1.7 flagship SHISO workspace, approved botanical artwork integration, C1.8 state-driven companion animation, and final conversation-integrity repairs | Green CI and independent PASS WITH NOTES do not establish live-provider or owner-visual acceptance |
 
 PR #11 remains open, draft and unmerged on `docs/shiso-ai-first-nutrition-20261016`.
 PR #13 is the replacement documentation PR and supersedes the intended
@@ -34,6 +35,7 @@ release, universal provider support, complete phase delivery or user acceptance.
 | Free Basic Nutrition | `src/application/catalogBasicNutrition.ts`, `src/browser/basicNutrition.ts`; `tests/unit/basicNutritionServingsFix.test.tsx` | Local pinned USDA calculation, disclosed quantity assumptions and partial subtotals; no paid provider dependency; incomplete source coverage remains visible |
 | Advanced Nutrition / Nutrition with Shiso | `src/components/AdvancedNutritionModal.tsx`, `server/shiso/aiNutrition.ts`, `src/core/shiso/nutritionCorrections.ts`; `tests/unit/shisoEstimatedNutrition.test.ts`, `tests/unit/shisoNutritionAcceptanceRepair.test.ts` | Sid reported Cochinita Pibil AI analysis, Apply, Save and saved-report Reopen acceptance. Broader recipes, provider compatibility and edge-case coverage remain to be accepted |
 | Provider selection and boundary protection | `server/ai/*`, `server/shiso/turnRequest.ts`; `tests/unit/shisoUniversalProvider.test.ts`, `tests/security/pr12HttpBoundaries.test.ts` | Tests cover native structured output, malformed JSON, expired credentials, entitlement/auth/rate limits; not proof that every provider/model works live |
+| C1.7 flagship workspace and C1.8 Living Companion baseline | `src/components/ShisoModal.tsx`, `src/components/ShisoAvatar.tsx`, `src/components/shisoAnimation.ts`, `src/application-ui/shisoEntryPoints.tsx`; `tests/unit/shisoC17FoundationBaseline.test.tsx`, `tests/unit/shisoC18Animation.test.tsx`; [merged PR #66](https://github.com/kryptek2000/The-Kitchen-Codex/pull/66) | 14/14 CI checks and final independent audit passed with notes; no live-provider acceptance or owner visual acceptance is claimed here; advanced expressive animation remains future |
 | Explore My Vault | Existing legacy retrieval is reusable; no Vault-search tool in the merged SHISO vocabulary | Future grounded read-only integration, including real links and deterministic membership |
 | Vault Intelligence through Shiso | Existing deterministic dashboard/scanner/repair owners are retained | Future SHISO integration: actual scan explanation, then previewed single and separately authorized batch repairs |
 
@@ -45,6 +47,13 @@ completed successfully for the exact baseline: lockfile check, TypeScript,
 proof (**76 passed, 0 failed**), plugin build and isolation (**16 passed, 0 failed**).
 [Post-merge CodeQL run 39124844437](https://github.com/kryptek2000/The-Kitchen-Codex/actions/runs/39124844437)
 also completed successfully. Green scanning does not mean no open alerts.
+
+For the later C1.7/C1.8 merge, [PR #66](https://github.com/kryptek2000/The-Kitchen-Codex/pull/66)
+closed with the final independent audit verdict **PASS WITH NOTES** and 14/14
+green CI checks on its final repair head. The audit verified the C1.7 workspace,
+C1.8 lifecycle mapping, reduced-motion contract, conversation-integrity repairs,
+and preserved Save-to-Vault authorization. It did not perform live provider
+calls or owner visual acceptance; those boundaries remain explicit.
 
 The browser proof (`scripts/verify_advanced_nutrition_browser_prod.ts`) drives the
 built app and production server in headless Chrome with a fixture imported via

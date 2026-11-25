@@ -1,0 +1,18 @@
+export {
+  DesktopDirectoryHandle,
+  DesktopFileHandle,
+  beginDesktopInitialization,
+  completeDesktopInitialization,
+  createDesktopDirectoryHandle,
+  ensureDesktopManagedVault,
+  getDesktopBridge,
+  getDesktopVaultInfo,
+  installDesktopRuntime,
+  isDesktopDirectoryHandle,
+  isDesktopRuntime,
+  openDesktopVaultFolder,
+  seedStarterCopies,
+  setDesktopActiveVault,
+  type DesktopBridge,
+  type DesktopVaultInfo,
+} from './desktopVault';

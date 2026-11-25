@@ -35,7 +35,8 @@ import type {
   ShisoRecipeSaveOutcome,
 } from '../core/shiso/protocol';
 import type { ShisoApplyResult } from '../core/shiso/proposalActions';
-import type { AiNutrientContribution } from '../core/nutritionV2/aiContribution';
+import type { AiNutrientContribution, AiNutrientSupplement } from '../core/nutritionV2/aiContribution';
+import type { ShisoNutrientCoverageEntry } from '../core/shiso/nutritionCoverage';
 
 export interface ShisoNutritionAnalysisOutcome {
   readonly ok: boolean;
@@ -60,6 +61,18 @@ export interface ShisoNutritionSnapshot {
   readonly reviewRows: readonly Phase4Row[];
   /** AI contributions explicitly accepted into this exact unsaved review. */
   readonly aiContributions?: readonly AiNutrientContribution[];
+  /** Canonical ingredient digest of the open review, when available. */
+  readonly recipeDigest?: string | null;
+  /** Current review/session identity (same canonical binding as Apply). */
+  readonly reviewIdentity?: string;
+  /** Line refs the Advanced Nutrition owner currently permits for external research. */
+  readonly researchEligibleRefs?: readonly string[];
+  /** Line refs the Advanced Nutrition owner currently permits for branded lookup. */
+  readonly brandedEligibleRefs?: readonly string[];
+  /** Whole-recipe 34-nutrient coverage from the existing calculated preview. */
+  readonly nutrientCoverage?: readonly ShisoNutrientCoverageEntry[];
+  /** Accepted supplemental AI estimates for source-backed nutrient gaps. */
+  readonly nutrientSupplements?: readonly AiNutrientSupplement[];
 }
 
 /**
@@ -190,9 +203,9 @@ export interface ShisoEntryPoints {
   readonly registerCorrectionsApplier: (
     applier: (lineRefs?: readonly string[]) => Promise<ShisoNutritionCorrectionsOutcome>,
   ) => () => void;
-  readonly acceptAiNutrition: (contributions: readonly AiNutrientContribution[]) => boolean;
+  readonly acceptAiNutrition: (contributions: readonly AiNutrientContribution[], supplements?: readonly AiNutrientSupplement[]) => boolean;
   readonly canAcceptAiNutrition: boolean;
-  readonly registerAiNutritionApplier: (applier: (contributions: readonly AiNutrientContribution[]) => boolean) => () => void;
+  readonly registerAiNutritionApplier: (applier: (contributions: readonly AiNutrientContribution[], supplements?: readonly AiNutrientSupplement[]) => boolean) => () => void;
 }
 
 const INERT: ShisoEntryPoints = {
@@ -267,7 +280,7 @@ export function ShisoEntryProvider({ children }: { readonly children: ReactNode 
   const [correctionsApplier, setCorrectionsApplier] = useState<
     ((lineRefs?: readonly string[]) => Promise<ShisoNutritionCorrectionsOutcome>) | null
   >(null);
-  const [aiNutritionApplier, setAiNutritionApplier] = useState<((contributions: readonly AiNutrientContribution[]) => boolean) | null>(null);
+  const [aiNutritionApplier, setAiNutritionApplier] = useState<((contributions: readonly AiNutrientContribution[], supplements?: readonly AiNutrientSupplement[]) => boolean) | null>(null);
   const [workingRecipe, setWorkingRecipe] = useState<ShisoWorkingRecipeSummary | null>(null);
   /**
    * H-2 SECURITY — the single-slot, per-turn save authorization. It lives in a
@@ -328,11 +341,11 @@ export function ShisoEntryProvider({ children }: { readonly children: ReactNode 
     },
     [],
   );
-  const registerAiNutritionApplier = useCallback((next: (contributions: readonly AiNutrientContribution[]) => boolean) => {
+  const registerAiNutritionApplier = useCallback((next: (contributions: readonly AiNutrientContribution[], supplements?: readonly AiNutrientSupplement[]) => boolean) => {
     setAiNutritionApplier(() => next);
     return () => setAiNutritionApplier(null);
   }, []);
-  const acceptAiNutrition = useCallback((contributions: readonly AiNutrientContribution[]) => aiNutritionApplier?.(contributions) ?? false, [aiNutritionApplier]);
+  const acceptAiNutrition = useCallback((contributions: readonly AiNutrientContribution[], supplements?: readonly AiNutrientSupplement[]) => aiNutritionApplier?.(contributions, supplements) ?? false, [aiNutritionApplier]);
   const runAnalysis = useCallback(async (): Promise<ShisoAnalysisOutcome> => {
     if (analysisApplier === null) {
       return {

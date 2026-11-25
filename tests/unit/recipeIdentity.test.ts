@@ -147,10 +147,33 @@ describe("deriveVaultSnapshotState (v0.7 canonical integrity)", () => {
     expect(removed.cookingRecipe).toBeNull();
   });
 
-  it("absence of Meal Plan.md / Shopping List.md yields clean empty state (not old vault values)", () => {
+  it("absence of Meal Plan.md yields a complete empty week; Shopping List stays clean", () => {
     const result = deriveVaultSnapshotState({ recipes: [], notes: [], mealPlan: undefined, shoppingList: undefined }, noActive);
-    expect(result.mealPlan).toEqual([]);
+    expect(result.mealPlan.map((day) => day.dayName)).toEqual([
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday',
+    ]);
     expect(result.shoppingList).toEqual([]);
+  });
+
+  it("a partial Meal Plan preserves saved days and fills the rest of the week", () => {
+    const result = deriveVaultSnapshotState({
+      recipes: [],
+      notes: [],
+      mealPlan: [{ dayName: "Wednesday", dinner: { recipeTitle: "Soup" } }],
+      shoppingList: [],
+    }, noActive);
+    expect(result.mealPlan).toHaveLength(7);
+    expect(result.mealPlan[2]).toMatchObject({
+      dayName: "Wednesday",
+      dinner: { recipeTitle: "Soup" },
+    });
+    expect(result.mealPlan[0]).toEqual({ dayName: "Monday" });
   });
 
   it("refreshes editingRecipe base object (editor edits live in modal local state, so it is safe)", () => {

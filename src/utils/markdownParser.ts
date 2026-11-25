@@ -134,6 +134,20 @@ export function cleanRecipeTitle(raw: any, fileName?: string): string {
 }
 
 /**
+ * Coerces a loosely-typed frontmatter value into a strict boolean favorite flag.
+ * Absence / null / empty / unrecognized values are treated as `false`.
+ */
+function parseBooleanLike(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    return normalized === 'true' || normalized === 'yes' || normalized === '1' || normalized === 'on';
+  }
+  return value !== null && value !== undefined && value !== '';
+}
+
+/**
  * Helper to find field value across multiple potential keys in an object (case-insensitive, ignoring underscores and hyphens)
  */
 function findFlexibleKey(obj: Record<string, any>, candidateKeys: string[]): any {
@@ -600,7 +614,9 @@ export function parseObsidianRecipeMarkdown(
 
   // 7. Cuisine & Category (Case-insensitive lookup across frontmatter and dataview inline fields)
   const cuisine = findFlexibleKey(frontmatter, ['cuisine']) || findFlexibleKey(dataviewFields, ['cuisine']) || 'General';
-  const category = findFlexibleKey(frontmatter, ['category', 'course']) || findFlexibleKey(dataviewFields, ['category', 'course']) || 'Main Course';
+  // Missing metadata is genuinely unknown. Defaulting every recipe to Main
+  // Course mislabels generated desserts and baked goods after a save/reopen.
+  const category = findFlexibleKey(frontmatter, ['category', 'course']) || findFlexibleKey(dataviewFields, ['category', 'course']) || 'General';
 
   // 8. Timings, Servings & Calories (Strict extraction without fake fallback values)
   const prepTime = extractPrepTime(frontmatter, dataviewFields, content);
@@ -661,12 +677,27 @@ export function parseObsidianRecipeMarkdown(
   const rawDifficulty = findFlexibleKey(frontmatter, ['difficulty']) || findFlexibleKey(dataviewFields, ['difficulty']);
   const difficulty = (rawDifficulty || 'Medium') as 'Easy' | 'Medium' | 'Hard';
   const rawRating = findFlexibleKey(frontmatter, ['rating']) ?? findFlexibleKey(dataviewFields, ['rating']);
-  const rating =
-    typeof rawRating === 'number'
-      ? Math.min(5, Math.max(1, rawRating))
-      : typeof rawRating === 'string'
-      ? Math.min(5, Math.max(1, parseFloat(rawRating) || 5))
-      : 5;
+  let rating: number;
+  if (rawRating === undefined || rawRating === null || rawRating === '') {
+    rating = 0;
+  } else if (typeof rawRating === 'number') {
+    rating = rawRating === 0 ? 0 : Math.min(5, Math.max(1, rawRating));
+  } else if (typeof rawRating === 'string') {
+    const trimmed = rawRating.trim();
+    if (trimmed === '0') {
+      rating = 0;
+    } else {
+      const parsed = parseFloat(trimmed);
+      rating = Number.isFinite(parsed) && parsed > 0 ? Math.min(5, Math.max(1, parsed)) : 5;
+    }
+  } else {
+    rating = 0;
+  }
+  const rawFavorite =
+    findFlexibleKey(frontmatter, ['isFavorite', 'favorite', 'favourite', 'starred', 'star']) ??
+    findFlexibleKey(dataviewFields, ['isFavorite', 'favorite', 'favourite', 'starred', 'star']);
+  const isFavorite = parseBooleanLike(rawFavorite);
+
   const source = findFlexibleKey(frontmatter, ['source', 'url']) || findFlexibleKey(dataviewFields, ['source', 'url']);
   const rawImage =
     findFlexibleKey(frontmatter, ['image', 'cover', 'thumbnail', 'photo', 'heroImage', 'banner']) ||
@@ -765,6 +796,35 @@ export function parseObsidianRecipeMarkdown(
 
   const id = filePath || fileName.replace(/\.md$/i, '').toLowerCase().replace(/[^a-z0-9]+/g, '-');
 
+  const ratingExplicit =
+    Object.prototype.hasOwnProperty.call(frontmatter || {}, 'rating') ||
+    Object.prototype.hasOwnProperty.call(dataviewFields || {}, 'rating');
+
+  const rawRatingSource = findFlexibleKey(frontmatter, ['rating_source', 'ratingSource', 'ratingSource']) ??
+    findFlexibleKey(dataviewFields, ['rating_source', 'ratingSource']);
+  const ratingSource =
+    rawRatingSource === 'imported' || rawRatingSource === 'personal'
+      ? rawRatingSource
+      : undefined;
+
+  // Signature Starter provenance. A saved personal copy keeps `starter_id` so
+  // duplicate detection and future collection updates never mistake it for the
+  // built-in original or overwrite the user's customized copy.
+  const rawStarterId = findFlexibleKey(frontmatter, ['starter_id', 'starterId']);
+  const starterId =
+    typeof rawStarterId === 'string' && rawStarterId.trim() ? rawStarterId.trim().slice(0, 120) : undefined;
+  const rawStarterVersion = findFlexibleKey(frontmatter, ['starter_version', 'starterVersion']);
+  const starterVersionNumber =
+    typeof rawStarterVersion === 'number'
+      ? rawStarterVersion
+      : typeof rawStarterVersion === 'string'
+        ? Number.parseInt(rawStarterVersion, 10)
+        : undefined;
+  const starterVersion =
+    typeof starterVersionNumber === 'number' && Number.isFinite(starterVersionNumber) && starterVersionNumber > 0
+      ? Math.trunc(starterVersionNumber)
+      : undefined;
+
   const rawParsedRecipe: ObsidianRecipe = {
     id,
     fileName,
@@ -777,9 +837,10 @@ export function parseObsidianRecipeMarkdown(
     prepTime,
     cookTime,
     totalTime,
-    servings,
+    ...(typeof servings === 'number' ? { servings } : {}),
     difficulty,
     rating,
+    isFavorite,
     calories,
     nutrition,
     source,
@@ -810,11 +871,15 @@ export function parseObsidianRecipeMarkdown(
   if (
     decodedAdvanced.kind === 'v1' ||
     decodedAdvanced.kind === 'v2' ||
-    (decodedAdvanced.kind === 'v3' || decodedAdvanced.kind === 'v4' || decodedAdvanced.kind === 'v5') ||
+    (decodedAdvanced.kind === 'v3' || decodedAdvanced.kind === 'v4' || decodedAdvanced.kind === 'v5' || decodedAdvanced.kind === 'v6') ||
     decodedAdvanced.kind === 'opaque'
   ) {
     parsed.codexNutrition = decodedAdvanced.value;
   }
+  parsed.ratingExplicit = ratingExplicit;
+  parsed.ratingSource = ratingSource;
+  if (starterId) parsed.starterId = starterId;
+  if (starterVersion) parsed.starterVersion = starterVersion;
   return parsed;
 }
 
@@ -998,7 +1063,7 @@ function applyAdvancedNutritionRoundTrip(
   const inert = materialized.value;
 
   const decoded = decodeCodexNutrition(inert);
-  if (decoded.kind === 'v1' || decoded.kind === 'v2' || (decoded.kind === 'v3' || decoded.kind === 'v4' || decoded.kind === 'v5') || decoded.kind === 'opaque') {
+  if (decoded.kind === 'v1' || decoded.kind === 'v2' || (decoded.kind === 'v3' || decoded.kind === 'v4' || decoded.kind === 'v5' || decoded.kind === 'v6') || decoded.kind === 'opaque') {
     try {
       frontmatterObj[key] = encodeCodexNutrition(decoded.value);
       return;
@@ -1024,6 +1089,8 @@ export function serializeRecipeToObsidianMarkdown(recipe: Partial<ObsidianRecipe
     try {
       const canonical = obsidianToCanonicalRecipe(recipe as ObsidianRecipe);
       recipeToSerialize = canonicalToObsidianRecipe(canonical, recipe.fileHandle);
+      recipeToSerialize.ratingExplicit = recipe.ratingExplicit;
+      recipeToSerialize.ratingSource = recipe.ratingSource;
     } catch {
       recipeToSerialize = recipe;
     }
@@ -1059,8 +1126,35 @@ export function serializeRecipeToObsidianMarkdown(recipe: Partial<ObsidianRecipe
   if (recipeToSerialize.difficulty && (recipeToSerialize.frontmatter?.difficulty !== undefined || !recipeToSerialize.frontmatter)) {
     frontmatterObj.difficulty = recipeToSerialize.difficulty;
   }
-  if (recipeToSerialize.rating !== undefined && (recipeToSerialize.frontmatter?.rating !== undefined || !recipeToSerialize.frontmatter)) {
-    frontmatterObj.rating = recipeToSerialize.rating;
+  if (recipeToSerialize.rating !== undefined) {
+    // An explicit user/imported rating is always durable, including an explicit
+    // 5 or 0. A non-explicit legacy/default rating is only written when the
+    // source already carried a rating field, so an unrelated save cannot
+    // materialize a fabricated five-star rating.
+    const ratingExplicit =
+      (recipe as any).ratingExplicit === true ||
+      recipeToSerialize.ratingExplicit === true ||
+      recipe.frontmatter?.rating !== undefined ||
+      recipeToSerialize.frontmatter?.rating !== undefined;
+    const shouldWriteRating =
+      ratingExplicit ||
+      recipeToSerialize.rating !== 5 ||
+      !recipeToSerialize.frontmatter;
+    if (shouldWriteRating) {
+      frontmatterObj.rating = recipeToSerialize.rating;
+    }
+  }
+  if (recipe.ratingSource === 'imported' || recipe.ratingSource === 'personal' || recipeToSerialize.ratingSource === 'imported' || recipeToSerialize.ratingSource === 'personal') {
+    const source = recipe.ratingSource || recipeToSerialize.ratingSource;
+    if (source) frontmatterObj.rating_source = source;
+  }
+
+  // Favorite flag: canonical field name is `isFavorite`. Clean any legacy/alias
+  // keys (favorite, favourite, starred, star) so a single authoritative field
+  // survives the write.
+  if (recipeToSerialize.isFavorite !== undefined) {
+    cleanAlternateFrontmatterKeys(frontmatterObj, 'isFavorite', ['isFavorite', 'favorite', 'favourite', 'starred', 'star']);
+    frontmatterObj.isFavorite = Boolean(recipeToSerialize.isFavorite);
   }
 
   // Timings: Persist prep_time, cook_time, total_time when present and clean alternate alias keys to avoid duplicate frontmatter fields
@@ -1202,6 +1296,286 @@ export function serializeRecipeToObsidianMarkdown(recipe: Partial<ObsidianRecipe
   }
 
   return md;
+}
+
+
+type PreservedSectionType = 'ingredients' | 'instructions' | 'notes';
+
+interface PreservedBodySection {
+  type: PreservedSectionType | null;
+  start: number;
+  end: number;
+  text: string;
+}
+
+interface ParsedBody {
+  introEnd: number;
+  sections: PreservedBodySection[];
+}
+
+function classifyPreservedHeading(heading: string): PreservedSectionType | null {
+  const lower = heading.toLowerCase();
+  if (lower.includes('ingredient')) return 'ingredients';
+  if (
+    lower.includes('instruction') ||
+    lower.includes('direction') ||
+    lower.includes('method') ||
+    lower.includes('step')
+  ) {
+    return 'instructions';
+  }
+  if (
+    lower.includes('note') ||
+    lower.includes('variation') ||
+    lower.includes('tip') ||
+    lower.includes('storage')
+  ) {
+    return 'notes';
+  }
+  return null;
+}
+
+function parsePreservedBody(body: string): ParsedBody {
+  const lines = body.split('\n');
+  const starts: { index: number; type: PreservedSectionType | null }[] = [];
+  let offset = 0;
+  for (const line of lines) {
+    const heading = line.match(/^##\s+(.+?)\s*$/);
+    if (heading) starts.push({ index: offset, type: classifyPreservedHeading(heading[1]) });
+    offset += line.length + 1;
+  }
+  const sections: PreservedBodySection[] = [];
+  for (let i = 0; i < starts.length; i += 1) {
+    const start = starts[i].index;
+    const end = i + 1 < starts.length ? starts[i + 1].index : body.length;
+    sections.push({ type: starts[i].type, start, end, text: body.slice(start, end) });
+  }
+  return {
+    introEnd: starts.length > 0 ? starts[0].index : body.length,
+    sections,
+  };
+}
+
+function knownBlocks(body: string): Record<PreservedSectionType, string> {
+  const parsed = parsePreservedBody(body);
+  const result: Record<PreservedSectionType, string> = {
+    ingredients: '',
+    instructions: '',
+    notes: '',
+  };
+  for (const section of parsed.sections) {
+    if (section.type && !result[section.type]) result[section.type] = section.text;
+  }
+  return result;
+}
+
+function calloutBlocks(body: string): string[] {
+  const blocks: string[] = [];
+  const lines = body.split('\n');
+  let current: string[] | null = null;
+  for (const line of lines) {
+    if (/^>\s*\[!/.test(line)) {
+      if (current) blocks.push(current.join('\n').trimEnd());
+      current = [line];
+    } else if (current && /^>/.test(line)) {
+      current.push(line);
+    } else if (current) {
+      blocks.push(current.join('\n').trimEnd());
+      current = null;
+    }
+  }
+  if (current) blocks.push(current.join('\n').trimEnd());
+  return blocks;
+}
+
+function normalizedLines(value: string, newline: string): string {
+  return value.replace(/\r?\n/g, newline);
+}
+
+function structuredParts(markdown: string): { frontmatter: string; body: string } | null {
+  const match = markdown.match(/^---\s*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n)?/);
+  if (match) {
+    return { frontmatter: markdown.slice(0, match[0].length), body: markdown.slice(match[0].length) };
+  }
+  if (markdown.trim()) {
+    return { frontmatter: '', body: markdown };
+  }
+  return null;
+}
+
+function replaceLeadingTitle(body: string, title: string, _newline: string): string {
+  return body.replace(/^([^\S\r\n]*)# [^\r\n]*/m, (_match, indent: string) => `${indent}# ${title}`);
+}
+
+function replaceDescriptionIntro(
+  body: string,
+  description: string,
+  title: string,
+  newline: string
+): string {
+  const parsed = parsePreservedBody(body);
+  const intro = body.slice(0, parsed.introEnd);
+  const h1 = intro.match(/^([^\S\r\n]*)#[^\r\n]*/m);
+  const beforeH1 = h1 && typeof h1.index === 'number' ? intro.slice(0, h1.index) : intro;
+  const heading = h1
+    ? h1[0].replace(/#[^\r\n]*/, `# ${title}`)
+    : `# ${title}`;
+  const cleanDescription = (description ?? '').trim();
+  const rebuilt = `${beforeH1}${heading}${newline}${newline}${cleanDescription ? `${cleanDescription}${newline}${newline}` : ''}`;
+  return rebuilt + body.slice(parsed.introEnd);
+}
+
+function insertOrReplaceSection(
+  body: string,
+  type: PreservedSectionType,
+  desiredBlock: string,
+  newline: string,
+  baselineBlock?: string
+): string {
+  const parsed = parsePreservedBody(body);
+  const existingIndex = parsed.sections.findIndex((section) => section.type === type);
+  if (existingIndex >= 0) {
+    const section = parsed.sections[existingIndex];
+    let trailing = '';
+    const baselineTrimmed = (baselineBlock || '').trimEnd();
+    if (baselineTrimmed && section.text.startsWith(baselineTrimmed)) {
+      trailing = section.text.slice(baselineTrimmed.length);
+    }
+    if (!desiredBlock) {
+      const before = body.slice(0, section.start);
+      const after = body.slice(section.end);
+      return before + after;
+    }
+    const replacement = normalizedLines(desiredBlock.trimEnd(), newline) + trailing;
+    const suffix = body.slice(section.end).replace(/^\r?\n/, '');
+    // Keep a block boundary before the next custom/unknown section. Without
+    // this, a replacement that ends without a newline can concatenate the next
+    // heading onto the edited text, making that section disappear on re-parse.
+    const separator =
+      suffix && replacement && !replacement.endsWith('\n') && !suffix.startsWith('\n')
+        ? newline + newline
+        : '';
+    return (
+      body.slice(0, section.start) +
+      replacement +
+      separator +
+      suffix
+    );
+  }
+  if (!desiredBlock) return body;
+  const order: PreservedSectionType[] = ['ingredients', 'instructions', 'notes'];
+  const desiredOrder = order.indexOf(type);
+  const next = parsed.sections.find(
+    (section) => section.type !== null && order.indexOf(section.type) > desiredOrder
+  );
+  const block = normalizedLines(desiredBlock.trimEnd(), newline) + newline + newline;
+  if (next) return body.slice(0, next.start) + block + body.slice(next.start);
+  return body.trimEnd() + newline + newline + block;
+}
+
+function replaceCallouts(body: string, desiredCallouts: string[], newline: string): string {
+  if (desiredCallouts.length === 0) {
+    // Remove only recognized callout blocks; never touch ordinary blockquotes.
+    return body.replace(/^>\s*\[![^\n]*\n(?:>.*\n?)*/gm, '').replace(/\n{3,}/g, `${newline}${newline}`);
+  }
+  const desired = desiredCallouts.map((block) => normalizedLines(block, newline)).join(`${newline}${newline}`);
+  const first = body.match(/^>\s*\[![^\n]*/m);
+  if (!first || typeof first.index !== 'number') {
+    const parsed = parsePreservedBody(body);
+    return body.slice(0, parsed.introEnd) + desired + newline + newline + body.slice(parsed.introEnd);
+  }
+  // Replace the complete callout region starting at the first callout.
+  const before = body.slice(0, first.index);
+  const afterStart = body.slice(first.index).search(/\n(?!#)(?!>)/);
+  const after = afterStart >= 0 ? body.slice(first.index + afterStart) : '';
+  return before + desired + newline + newline + after.replace(/^\r?\n+/, '');
+}
+
+/**
+ * R6 — canonical serialization that preserves owner-authored Markdown.
+ *
+ * Frontmatter is re-serialized through the canonical serializer (unknown keys
+ * are carried through). The original body is retained byte-for-byte unless a
+ * supported structured body field actually changed; in that case only the
+ * corresponding supported section is patched. Unknown headings, prose and
+ * embedded image content are never regenerated from a reduced template.
+ */
+export function serializeRecipePreservingContent(recipe: Partial<ObsidianRecipe>): string {
+  const raw = typeof recipe.rawMarkdown === 'string' ? recipe.rawMarkdown : '';
+  const title = recipe.title?.trim() || 'Untitled Recipe';
+  const safeFileName = recipe.fileName || `${title.replace(/[/\\?%*:|"<>]/g, '-')}.md`;
+  // Parse the raw document BEFORE generating structured frontmatter so a
+  // partial recipe object without `frontmatter` still carries custom metadata.
+  const baseline = raw.trim()
+    ? parseObsidianRecipeMarkdown(
+        raw,
+        safeFileName,
+        recipe.filePath || recipe.fileName || safeFileName
+      )
+    : null;
+  const structuredSource: Partial<ObsidianRecipe> =
+    baseline && recipe.frontmatter === undefined
+      ? { ...recipe, frontmatter: baseline.frontmatter }
+      : recipe;
+  const structured = serializeRecipeToObsidianMarkdown(structuredSource);
+  if (!baseline) return structured;
+
+  const rawParts = structuredParts(raw);
+  const structuredDoc = structuredParts(structured);
+  if (!rawParts || !structuredDoc) return structured;
+
+  const newline = raw.includes('\r\n') ? '\r\n' : '\n';
+  const frontmatter = normalizedLines(structuredDoc.frontmatter, newline);
+
+  const desiredBlocks = knownBlocks(structuredDoc.body);
+  const baselineStructured = serializeRecipeToObsidianMarkdown(baseline);
+  const baselineBlocks = knownBlocks(baselineStructured);
+  const desiredCallouts = calloutBlocks(structuredDoc.body);
+  const baselineCallouts = calloutBlocks(baselineStructured);
+  // An ABSENT structured field means "not edited / not loaded", not an
+  // intentional deletion. Only an explicitly supplied value may change body
+  // content. This keeps plugin/partial recipe objects and raw-only callers from
+  // erasing prose they never expressed an opinion about.
+  const descriptionChanged =
+    recipe.description !== undefined &&
+    (recipe.description ?? '').trim() !== (baseline.description ?? '').trim();
+  const calloutsChanged =
+    recipe.callouts !== undefined &&
+    desiredCallouts.join('\n') !== baselineCallouts.join('\n');
+  const sectionChanged = (['ingredients', 'instructions', 'notes'] as const).some((type) => {
+    const present =
+      type === 'ingredients'
+        ? recipe.ingredients !== undefined
+        : type === 'instructions'
+          ? recipe.instructions !== undefined
+          : recipe.notes !== undefined;
+    return present && desiredBlocks[type] !== baselineBlocks[type];
+  });
+
+  let body = rawParts.body;
+  if (descriptionChanged) {
+    body = replaceDescriptionIntro(body, recipe.description ?? '', title, newline);
+  } else {
+    body = replaceLeadingTitle(body, title, newline);
+  }
+
+  if (sectionChanged) {
+    for (const type of ['ingredients', 'instructions', 'notes'] as const) {
+      const present =
+        type === 'ingredients'
+          ? recipe.ingredients !== undefined
+          : type === 'instructions'
+            ? recipe.instructions !== undefined
+            : recipe.notes !== undefined;
+      if (!present || desiredBlocks[type] === baselineBlocks[type]) continue;
+      body = insertOrReplaceSection(body, type, desiredBlocks[type], newline, baselineBlocks[type]);
+    }
+  }
+  if (calloutsChanged) {
+    body = replaceCallouts(body, desiredCallouts, newline);
+  }
+
+  return frontmatter + body;
 }
 
 /**

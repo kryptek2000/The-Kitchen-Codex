@@ -27,7 +27,9 @@ export type ProviderErrorCode =
   | "INVALID_RESPONSE"
   | "PROVIDER_ERROR"
   | "NO_IMAGE"
-  | "BLOCKED";
+  | "BLOCKED"
+  /** P2: the provider account/organization must complete verification first. */
+  | "ORG_VERIFICATION_REQUIRED";
 
 /** Errors that are eligible for automatic fallback to the next capable candidate. */
 export const FALLBACK_ELIGIBLE_ERROR_CODES: ReadonlySet<ProviderErrorCode> = new Set([

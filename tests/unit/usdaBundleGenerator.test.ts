@@ -37,7 +37,7 @@ function skeleton(): UsdaBundleManifest {
     canonical_record_count: 1,
     rejected_record_count: 0,
     canonical_content_digest: '0'.repeat(64),
-    nutrient_map_version: 'usda_fdc_nutrient_map_v2',
+    nutrient_map_version: 'usda_fdc_nutrient_map_v3',
     canonicalization_version: 'usda_canonical_v1',
     attribution:
       'U.S. Department of Agriculture, Agricultural Research Service. FoodData Central, 2019. fdc.nal.usda.gov.',
@@ -46,7 +46,7 @@ function skeleton(): UsdaBundleManifest {
 
 describe('phase 4.5A generator identity', () => {
   it('derives a stable release id from the pinned inputs', () => {
-    expect(deriveBundleReleaseId(skeleton())).toBe('usda_fdc_87c5408a3e98838944a87be74824761e');
+    expect(deriveBundleReleaseId(skeleton())).toBe('usda_fdc_1f3e3068a7ae0702f360d1caae40a628');
   });
 
   it('changes the release when the generator schema changes', () => {

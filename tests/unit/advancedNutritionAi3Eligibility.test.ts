@@ -38,7 +38,7 @@ import { RESOLUTION_COVERAGE_CORPUS } from '../fixtures/advancedNutritionResolut
 import type { Phase4State } from '../../src/core/nutritionV2/phase4/types';
 
 const LINE = 'ing:0:elig';
-const BUNDLE_DIR = join(process.cwd(), 'data/advanced-nutrition/usda/usda_fdc_87c5408a3e98838944a87be74824761e');
+const BUNDLE_DIR = join(process.cwd(), 'data/advanced-nutrition/usda/usda_fdc_1f3e3068a7ae0702f360d1caae40a628');
 
 function stateWithMatch(over: Partial<Phase4State> = {}): Phase4State {
   return {
