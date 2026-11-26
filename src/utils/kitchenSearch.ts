@@ -76,6 +76,13 @@ export interface SearchableRecipe {
   rating?: number;
   servings?: number;
   isFavorite?: boolean;
+  /** Optional persisted macro summary used only by higher-level dietary ranking. */
+  nutrition?: {
+    carbohydrates?: number;
+    servings?: number;
+    source?: string;
+    confidence?: string;
+  };
   ingredients: IngredientLike[];
 }
 

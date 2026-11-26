@@ -404,6 +404,57 @@ describe('SHISO agent foundation Vault capability', () => {
     expect(capability.getSelectedRecipe()?.id).toBe('nutrition-fixture');
   }, 60000);
 
+  it('runs the exact Mandu nutrition request from general chat without opening Advanced Nutrition', async () => {
+    await hydrateAiSelections(deterministicSettings);
+    const recipe = { ...nutritionRecipe(), title: 'Crispy Kimchi and Pork Mandu' };
+    const { manifest, records } = buildMatchingBundle([
+      { fdcId: 7001, dataType: 'foundation', description: 'Butter, unsalted' },
+      { fdcId: 7002, dataType: 'foundation', description: 'Salt, table' },
+    ]);
+    const created = createAdvancedNutritionSession(manifest, records);
+    if (!created.ok) throw new Error('fixture USDA session failed');
+    const loader = vi.fn(async (): Promise<RuntimeBundleResult> => ({
+      ok: true,
+      session: created.session,
+      metadata: created.session.metadata(),
+      attribution: USDA_ATTRIBUTION,
+    }));
+    const { capability } = capabilityFor([recipe]);
+    const network = scriptedNetwork([
+      { ok: true, kind: 'tool_request', tool: 'search_vault_recipes', args: { tool: 'search_vault_recipes', query: 'Crispy Kimchi and Pork Mandu', field: 'title', limit: 20 } },
+      { ok: true, kind: 'tool_request', tool: 'select_vault_recipe', args: { tool: 'select_vault_recipe', recipe_id: 'nutrition-fixture' } },
+      { ok: true, kind: 'tool_request', tool: 'complete_nutrition', args: { tool: 'complete_nutrition' } },
+      { ok: true, kind: 'reply', text: 'Mandu nutrition was analyzed from the authenticated USDA catalog; nothing was saved.', proposals: [] },
+    ]);
+
+    render(
+      <ShisoEntryProvider>
+        <OpenGlobal />
+        <App
+          shisoVaultCapabilityOverride={capability}
+          shisoNetworkAdapterOverride={network}
+          shisoNutritionBundleLoaderOverride={loader}
+          shisoSettingsAdapterOverride={deterministicSettings}
+        />
+      </ShisoEntryProvider>,
+    );
+
+    const composer = await screen.findByPlaceholderText('Ask Shiso…') as HTMLTextAreaElement;
+    fireEvent.change(composer, {
+      target: {
+        value: 'Analyze the nutrition for this Mandu recipe. Use USDA wherever possible, use reasonable estimated weights and AI estimates for anything unresolved, and show me the complete results. Do not save any changes yet.',
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Mandu nutrition was analyzed from the authenticated USDA catalog; nothing was saved.')).toBeTruthy();
+    }, { timeout: 30000 });
+    expect(loader).toHaveBeenCalledTimes(1);
+    expect(capability.getSelectedRecipe()?.title).toBe('Crispy Kimchi and Pork Mandu');
+    expect(document.body.textContent).not.toContain('Open Advanced Nutrition');
+  }, 60000);
+
   it('runs general SHISO through USDA, the shared review owner, and canonical Apply without opening Advanced Nutrition', async () => {
     await hydrateAiSelections(deterministicSettings);
     const recipe = { ...nutritionRecipe(), builtInId: undefined };

@@ -46,10 +46,12 @@ import {
   type RecipeRelationshipIndex,
 } from './recipeRelationships';
 import type { KitchenAnswer, KitchenAnswerItem } from './kitchenAnswer';
+import { deriveAdvancedCompactNutrition, resolveRecipeNutritionPresentation } from '../core/nutritionV2/phase5c/presentation';
 
 export const MAX_KITCHEN_CANDIDATES = 20;
 export const DEFAULT_RANKED_RESULTS = 6;
 export const MAX_RANKED_RESULTS = 12;
+export const LOW_CARB_MAX_GRAMS_PER_SERVING = 20;
 
 const MAX_ID_LEN = 200;
 const MAX_STRING_LEN = 120;
@@ -82,6 +84,10 @@ export interface KitchenCandidateEvidence {
   similarityScore?: number;
   matchedConstraints?: string[];
   matchedPreferences?: string[];
+  /** Stored carbohydrate evidence, normalized to one serving when available. */
+  carbohydratesPerServing?: number;
+  /** True only when the current recipe has a complete, trusted nutrition block. */
+  carbohydratesVerified?: boolean;
 }
 
 /** A deterministic ranking output entry. `reasons` are grounded in evidence. */
@@ -181,6 +187,9 @@ export function sanitizeCandidateEvidence(raw: unknown): KitchenCandidateEvidenc
   if (tags && tags.length) evidence.tags = tags;
   if (matched && matched.length) evidence.matchedConstraints = matched;
   if (prefs && prefs.length) evidence.matchedPreferences = prefs;
+  const carbohydratesPerServing = toFiniteNonNegative(raw['carbohydratesPerServing']);
+  if (carbohydratesPerServing !== undefined) evidence.carbohydratesPerServing = carbohydratesPerServing;
+  if (raw['carbohydratesVerified'] === true) evidence.carbohydratesVerified = true;
   const difficulty = trimString(raw['difficulty'], MAX_STRING_LEN);
   if (difficulty) evidence.difficulty = difficulty;
   const sim = clampOne(raw['similarityScore']);
@@ -227,6 +236,59 @@ function buildCandidateQuery(intent: KitchenIntent, resolved: ResolvedKitchenCon
   return query;
 }
 
+function recipeCarbohydrateEvidence(recipe: SearchableRecipe): {
+  readonly gramsPerServing: number;
+  readonly verified: boolean;
+} | undefined {
+  // Advanced Nutrition is the preferred, current application-owned source. Its
+  // stored values are whole-recipe totals, so normalize using the authenticated
+  // block denominator before ranking.
+  try {
+    const presentation = resolveRecipeNutritionPresentation(recipe);
+    const advanced = deriveAdvancedCompactNutrition(presentation);
+    if (presentation.advanced_preferred && advanced !== undefined && typeof advanced.carbohydrates === 'number' && Number.isFinite(advanced.carbohydrates)) {
+      const servings = typeof advanced.servings === 'number' && advanced.servings > 0 ? advanced.servings : 1;
+      return {
+        gramsPerServing: Math.max(0, advanced.carbohydrates / servings),
+        verified: presentation.advanced_complete && presentation.stale_reasons.length === 0 && !presentation.advanced_verification_required,
+      };
+    }
+  } catch {
+    // Missing or malformed nutrition is evidence of uncertainty, never a reason
+    // to fail recipe retrieval.
+  }
+
+  const legacy = recipe.nutrition;
+  if (legacy === undefined || typeof legacy.carbohydrates !== 'number' || !Number.isFinite(legacy.carbohydrates)) return undefined;
+  const servings = typeof legacy.servings === 'number' && legacy.servings > 0 ? legacy.servings : 1;
+  return {
+    gramsPerServing: Math.max(0, legacy.carbohydrates / servings),
+    // The deterministic database path is an established, application-assigned
+    // provenance contract. Other legacy blocks remain contextual only.
+    verified: legacy.source === 'database' && legacy.confidence === 'high',
+  };
+}
+
+export function isLowCarbPreference(intent: KitchenIntent): boolean {
+  return (intent.preferences?.dietary ?? []).some((value) => /\b(?:low[ -]?carb|keto(?:genic)?)\b/i.test(value));
+}
+
+function lowCarbCandidates(
+  intent: KitchenIntent,
+  candidates: KitchenCandidateEvidence[],
+): KitchenCandidateEvidence[] {
+  if (!isLowCarbPreference(intent)) return candidates;
+  const verifiedLow = candidates.filter((candidate) =>
+    candidate.carbohydratesVerified === true &&
+    candidate.carbohydratesPerServing !== undefined &&
+    candidate.carbohydratesPerServing <= LOW_CARB_MAX_GRAMS_PER_SERVING
+  );
+  if (verifiedLow.length > 0) return verifiedLow;
+  // If no current verified match exists, only retain uncertain candidates. A
+  // known high-carbohydrate recipe is not allowed to masquerade as low-carb.
+  return candidates.filter((candidate) => candidate.carbohydratesVerified !== true);
+}
+
 function toCandidateEvidence(result: KitchenSearchResult): KitchenCandidateEvidence | undefined {
   const recipeId = result.recipeIdentity;
   if (!recipeId) return undefined;
@@ -255,6 +317,12 @@ function toCandidateEvidence(result: KitchenSearchResult): KitchenCandidateEvide
   const cuisine = String(recipe.cuisine ?? '').trim();
   if (cuisine) evidence.cuisine = [cuisine.slice(0, MAX_STRING_LEN)];
   if (recipe.difficulty) evidence.difficulty = String(recipe.difficulty).slice(0, MAX_STRING_LEN);
+
+  const carbohydrateEvidence = recipeCarbohydrateEvidence(recipe);
+  if (carbohydrateEvidence !== undefined) {
+    evidence.carbohydratesPerServing = carbohydrateEvidence.gramsPerServing;
+    if (carbohydrateEvidence.verified) evidence.carbohydratesVerified = true;
+  }
 
   const ingredientKeys = (recipe.ingredients ?? [])
     .map((i) => normalizeIngredientIdentity(i))
@@ -300,7 +368,7 @@ export function buildKitchenCandidates(
     if (!evidence) continue;
     out.push(evidence);
   }
-  return out;
+  return lowCarbCandidates(intent, out);
 }
 
 /** The count a candidate's matchedConstraints uses for its base score. */
@@ -402,6 +470,26 @@ function computePreferenceContribution(
     if (tagSet.has(w) || ingredientSet.has(w)) {
       score += 0.7;
       const reason = capitalize(w);
+      if (!reasons.includes(reason)) reasons.push(reason);
+    }
+  }
+
+  if (isLowCarbPreference(intent)) {
+    if (evidence.carbohydratesVerified === true && evidence.carbohydratesPerServing !== undefined) {
+      if (evidence.carbohydratesPerServing <= LOW_CARB_MAX_GRAMS_PER_SERVING) {
+        score += 2;
+        const reason = `Verified low-carb: ${evidence.carbohydratesPerServing.toFixed(1)} g carbohydrates per serving`;
+        if (!reasons.includes(reason)) reasons.push(reason);
+      } else {
+        score -= 2;
+        const reason = `Above the ${LOW_CARB_MAX_GRAMS_PER_SERVING} g low-carb target`;
+        if (!reasons.includes(reason)) reasons.push(reason);
+      }
+    } else {
+      score -= 0.1;
+      const reason = evidence.carbohydratesPerServing === undefined
+        ? 'Carbohydrate data unavailable; not confirmed low-carb'
+        : 'Carbohydrate record is unverified; not confirmed low-carb';
       if (!reasons.includes(reason)) reasons.push(reason);
     }
   }
@@ -655,7 +743,7 @@ function countSummary(count: number): string {
 export function buildGroundedKitchenAnswer(
   selected: RankedKitchenCandidate[],
   candidates: KitchenCandidateEvidence[],
-  opts: { resultCount?: number; source?: KitchenAnswer['source']; fallbackTitles?: Map<string, string> } = {}
+  opts: { resultCount?: number; source?: KitchenAnswer['source']; fallbackTitles?: Map<string, string>; summaryNote?: string } = {}
 ): KitchenAnswer {
   const evidenceById = new Map(candidates.map((c) => [c.recipeId, c]));
   const titles = opts.fallbackTitles ?? new Map<string, string>();
@@ -663,7 +751,7 @@ export function buildGroundedKitchenAnswer(
     return {
       ok: true,
       noMatches: true,
-      summary: countSummary(0),
+      summary: [countSummary(0), opts.summaryNote].filter(Boolean).join(' '),
       items: [],
       source: opts.source ?? 'deterministic',
     };
@@ -677,10 +765,29 @@ export function buildGroundedKitchenAnswer(
   return {
     ok: true,
     noMatches: false,
-    summary: countSummary(items.length),
+    summary: [countSummary(items.length), opts.summaryNote].filter(Boolean).join(' '),
     items,
     source: opts.source ?? 'deterministic',
   };
+}
+
+/**
+ * Returns the user-facing qualification for a low-carb result set. The answer
+ * layer uses this in addition to per-recipe reasons so an uncertain result can
+ * never be read as a verified dietary recommendation.
+ */
+export function lowCarbQualificationNote(
+  candidates: readonly KitchenCandidateEvidence[],
+  selectedCount: number,
+): string {
+  if (selectedCount === 0) {
+    return `I did not present a recipe as low-carb because the Vault has no current verified match at or below ${LOW_CARB_MAX_GRAMS_PER_SERVING} g of carbohydrates per serving.`;
+  }
+  const verified = candidates.filter((candidate) => candidate.carbohydratesVerified === true);
+  if (verified.length > 0) {
+    return `These results meet the stored nutrition target of at or below ${LOW_CARB_MAX_GRAMS_PER_SERVING} g of carbohydrates per serving.`;
+  }
+  return 'Carbohydrate totals are unavailable or not verified for the current recipes, so these are ingredient matches only—not confirmed low-carb recommendations.';
 }
 
 // ---------------------------------------------------------------------------

@@ -1464,16 +1464,57 @@ function brandedLookupFailureMessage(search: ShisoBrandedSearchOutcome): string 
 }
 
 async function completeNutrition(ctx: ShisoToolContext, signal?: AbortSignal): Promise<ShisoObservation> {
-  const nutrition = ctx.nutrition;
-  if (ctx.recipe === null) {
+  const recipe = ctx.recipe;
+  if (recipe === null) {
     return fail('complete_nutrition', 'no_active_recipe', 'No recipe is currently open, so there is no nutrition to complete.');
   }
+
+  // H-3B: general SHISO is allowed to initialize the application-owned review
+  // itself. The review remains the same Phase 4 owner used by the visible
+  // Advanced Nutrition surface; this only removes the accidental dependency on
+  // that surface having been mounted first.
+  let nutrition = ctx.nutrition;
+  let initializedAnalysis: ShisoAnalysisOutcome | undefined;
   if (nutrition === null) {
-    return fail(
-      'complete_nutrition',
-      'no_nutrition_review',
-      'Advanced Nutrition is not open for this recipe. Open it first; loading the catalogue creates the review.',
-    );
+    if (ctx.session === null && ctx.loadBundle !== undefined) {
+      try {
+        await ctx.loadBundle();
+      } catch {
+        return fail('complete_nutrition', 'analysis_unavailable', 'The authenticated USDA catalogue could not be loaded, so nutrition completion did not run.');
+      }
+      if (signal?.aborted) return fail('complete_nutrition', 'analysis_unavailable', 'The nutrition completion was cancelled.');
+    }
+    if (ctx.session === null) {
+      return fail(
+        'complete_nutrition',
+        'no_nutrition_review',
+        'The authenticated USDA catalogue is not available, so no nutrition review could be initialized.',
+      );
+    }
+    if (ctx.runAnalysis === undefined) {
+      return fail(
+        'complete_nutrition',
+        'no_analysis_owner',
+        'The application-owned nutrition review is not available for this recipe.',
+      );
+    }
+    try {
+      initializedAnalysis = await ctx.runAnalysis(signal);
+    } catch {
+      return fail('complete_nutrition', 'analysis_unavailable', 'The source nutrition analysis could not be completed.');
+    }
+    if (signal?.aborted) return fail('complete_nutrition', 'analysis_unavailable', 'The nutrition completion was cancelled.');
+    if (!initializedAnalysis.ok) {
+      return fail('complete_nutrition', 'analysis_unavailable', initializedAnalysis.message ?? 'The source nutrition analysis could not be completed.');
+    }
+    nutrition = ctx.nutrition;
+    if (nutrition === null) {
+      return fail(
+        'complete_nutrition',
+        'no_nutrition_review',
+        'The application could not publish the initialized nutrition review, so no values were accepted.',
+      );
+    }
   }
   if (!nutritionMatchesActiveRecipe(ctx)) {
     return fail(
@@ -1577,11 +1618,13 @@ async function completeNutrition(ctx: ShisoToolContext, signal?: AbortSignal): P
     );
   }
 
-  let analysis: ShisoAnalysisOutcome;
-  try {
-    analysis = await ctx.runAnalysis(signal);
-  } catch {
-    return fail('complete_nutrition', 'analysis_unavailable', 'The source nutrition analysis could not be completed.');
+  let analysis = initializedAnalysis;
+  if (analysis === undefined) {
+    try {
+      analysis = await ctx.runAnalysis(signal);
+    } catch {
+      return fail('complete_nutrition', 'analysis_unavailable', 'The source nutrition analysis could not be completed.');
+    }
   }
   if (signal?.aborted) {
     return fail('complete_nutrition', 'analysis_unavailable', 'The nutrition completion was cancelled.');

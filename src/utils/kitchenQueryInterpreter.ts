@@ -766,6 +766,16 @@ const SIMILAR_CUE = /\b(similar to|like this|something like this|recipes? like t
 const ONLINE_CUE = /\b(online|on the web|from the web|on the internet|internet)\b/i;
 const WEB_VERB_CUE = /\b(find|look|search|get|pick|show|browse|discover)\b/i;
 const MEAL_SUGGESTION_CUE = /\b(today|tonight|what should i (make|cook|eat|have)|what can i (make|cook|eat|have)|i'?m hungry|im hungry|for (dinner|lunch|breakfast|dessert|brunch)|this week|tonight)\b/i;
+const LOW_CARB_CUE = /\b(?:low[ -]?carb|keto(?:genic)?)\b/i;
+
+function preserveExplicitDietaryCues(question: string, intent: KitchenIntent): KitchenIntent {
+  if (!LOW_CARB_CUE.test(question)) return intent;
+  const dietary = Array.from(new Set([...(intent.preferences?.dietary ?? []), 'low-carb']));
+  return {
+    ...intent,
+    preferences: { ...intent.preferences, dietary },
+  };
+}
 
 /**
  * Produces a `KitchenIntent` from the existing deterministic fallback. Hard
@@ -782,6 +792,8 @@ export function deterministicKitchenIntent(question: string): KitchenIntent {
   let source: KitchenSource = 'vault';
   let references: KitchenIntentReference | undefined;
   const preferences: KitchenIntentPreferences = {};
+
+  if (LOW_CARB_CUE.test(lower)) preferences.dietary = ['low-carb'];
 
   if (SIMILAR_CUE.test(lower)) {
     intent = 'similar_recipe';
@@ -843,7 +855,7 @@ export async function interpretKitchenIntent(
       const raw = await deps.aiInterpret(text);
       const intent = sanitizeKitchenIntent(raw);
       if (intent && isMeaningfulKitchenIntent(intent)) {
-        return { ok: true, intent, source: 'ai', aiAttempted, aiFailed: false };
+        return { ok: true, intent: preserveExplicitDietaryCues(text, intent), source: 'ai', aiAttempted, aiFailed: false };
       }
       aiFailed = true;
     } catch {

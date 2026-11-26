@@ -11,6 +11,7 @@ import {
   sanitizeAiRankedCandidates,
   bindAiRankingToEvidence,
   buildGroundedKitchenAnswer,
+  lowCarbQualificationNote,
   buildRankPrompt,
   rankKitchenCandidates,
   sanitizeCandidateEvidence,
@@ -390,6 +391,49 @@ describe('O: ranking reasons are grounded in evidence', () => {
       expect(reason.length).toBeGreaterThan(0);
       expect(reason.length).toBeLessThanOrEqual(220);
     }
+  });
+});
+
+describe('O2: dietary restrictions are grounded in carbohydrate evidence', () => {
+  it('keeps verified low-carb recipes and excludes verified high-carb recipes', () => {
+    const recipes = [
+      r({
+        id: 'low',
+        title: 'Chicken Cheese Bowl',
+        ingredients: [ing('chicken'), ing('cheese')],
+        nutrition: { carbohydrates: 12, servings: 1, source: 'database', confidence: 'high' },
+      }),
+      r({
+        id: 'high',
+        title: 'Chicken Cheese Pasta',
+        ingredients: [ing('chicken'), ing('cheese'), ing('pasta')],
+        nutrition: { carbohydrates: 48, servings: 1, source: 'database', confidence: 'high' },
+      }),
+    ];
+    const intent = mkIntent({
+      intent: 'find_recipes',
+      constraints: { includeIngredients: ['chicken', 'cheese'] },
+      preferences: { dietary: ['low-carb'] },
+    });
+    const candidates = buildKitchenCandidates(intent, recipes, EMPTY_CTX);
+    expect(candidates.map((candidate) => candidate.recipeId)).toEqual(['low']);
+    const ranked = deterministicRankKitchenCandidates(intent, candidates, EMPTY_CTX);
+    expect(ranked[0]?.reasons.some((reason) => reason.includes('Verified low-carb'))).toBe(true);
+    expect(lowCarbQualificationNote(candidates, ranked.length)).toContain('stored nutrition target');
+  });
+
+  it('keeps uncertain ingredient matches but explicitly declines to call them low-carb', () => {
+    const recipes = [r({ id: 'unknown', title: 'Chicken Cheese Bake', ingredients: [ing('chicken'), ing('cheese')] })];
+    const intent = mkIntent({
+      intent: 'find_recipes',
+      constraints: { includeIngredients: ['chicken', 'cheese'] },
+      preferences: { dietary: ['low-carb'] },
+    });
+    const candidates = buildKitchenCandidates(intent, recipes, EMPTY_CTX);
+    const ranked = deterministicRankKitchenCandidates(intent, candidates, EMPTY_CTX);
+    expect(candidates).toHaveLength(1);
+    expect(ranked[0]?.reasons).toContain('Carbohydrate data unavailable; not confirmed low-carb');
+    expect(lowCarbQualificationNote(candidates, ranked.length)).toContain('not confirmed low-carb');
   });
 });
 

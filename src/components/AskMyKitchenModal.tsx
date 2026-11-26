@@ -18,6 +18,8 @@ import { buildRecipeRelationshipIndex } from '../utils/recipeRelationships';
 import {
   buildGroundedKitchenAnswer,
   buildKitchenCandidates,
+  isLowCarbPreference,
+  lowCarbQualificationNote,
   rankKitchenCandidates,
   sanitizeAiRankedCandidates,
 } from '../utils/kitchenRanking';
@@ -407,7 +409,12 @@ export function AskMyKitchenModal({
       if (tokenRef.current !== token) return;
 
       // C) Build a grounded answer from the SELECTED candidates + evidence.
-      const answer = buildGroundedKitchenAnswer(selected, candidates, { source });
+      const answer = buildGroundedKitchenAnswer(selected, candidates, {
+        source,
+        ...(isLowCarbPreference(prepared.intent)
+          ? { summaryNote: lowCarbQualificationNote(candidates, selected.length) }
+          : {}),
+      });
       setAnswer(answer);
       setStatus(answer.noMatches ? 'noMatches' : 'success');
 

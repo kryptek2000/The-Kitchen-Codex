@@ -92,6 +92,11 @@ async function openFullWorkspace() {
   await screen.findByRole('heading', { level: 1, name: /SHISO/ });
 }
 
+async function openGlobalWorkspaceFromVault() {
+  fireEvent.click(await screen.findByRole('button', { name: 'Chat with SHISO' }));
+  await screen.findByRole('heading', { level: 1, name: 'Chat with SHISO' });
+}
+
 describe('PR #66 conversation integrity at the App composition boundary', () => {
   beforeEach(() => {
     window.localStorage.clear();
@@ -363,5 +368,71 @@ describe('PR #66 conversation integrity at the App composition boundary', () => 
     expect(await screen.findByText(/Context: Artisan Sourdough Boule/)).toBeTruthy();
     expect(screen.getByText('Question from recipe B')).toBeTruthy();
     expect(screen.queryByText('Question from recipe A')).toBeNull();
+  }, 30000);
+
+  it('H-3A: rehydrates a recipe transcript when the same history item is selected across presentations', async () => {
+    const recipe = getStarterVaultRecipes().find((item) => item.title === 'Classic Roman Carbonara');
+    expect(recipe).toBeTruthy();
+    seedRecipeConversation(recipe!, 'stored recipe question', 'stored recipe answer');
+
+    const first = renderApp(false);
+    await openRecipe(recipe!);
+    expect(await screen.findByText('stored recipe question')).toBeTruthy();
+
+    await openFullWorkspace();
+    expect(screen.getByText('stored recipe answer')).toBeTruthy();
+    fireEvent.click(await screen.findByRole('button', { name: /Resume .*Carbonara/ }));
+    expect(await screen.findByText('stored recipe answer')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Return to compact chat' }));
+    expect(await screen.findByText('stored recipe answer')).toBeTruthy();
+    await openFullWorkspace();
+    expect(screen.getByText('stored recipe question')).toBeTruthy();
+
+    first.unmount();
+    renderApp(false);
+    await openRecipe(recipe!);
+    expect(await screen.findByText('stored recipe answer')).toBeTruthy();
+  }, 30000);
+
+  it('H-3A: resolves a recipe history item after returning to the Vault and opening global SHISO', async () => {
+    const recipe = getStarterVaultRecipes().find((item) => item.title === 'Classic Roman Carbonara');
+    expect(recipe).toBeTruthy();
+    seedRecipeConversation(recipe!, 'owner sequence question', 'owner sequence answer');
+
+    const first = renderApp(false);
+    await openGlobalWorkspaceFromVault();
+    await send('owner global conversation');
+    fireEvent.click(screen.getByRole('button', { name: 'Back to My Recipe Vault' }));
+    await waitFor(() => expect(screen.queryByRole('heading', { level: 1, name: 'Chat with SHISO' })).toBeNull());
+    await openRecipe(recipe!);
+    expect(await screen.findByText('owner sequence question')).toBeTruthy();
+    await openFullWorkspace();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to My Recipe Vault' }));
+    await waitFor(() => expect(screen.queryByRole('heading', { level: 1, name: 'Chat with SHISO' })).toBeNull());
+
+    await openGlobalWorkspaceFromVault();
+    fireEvent.click(await screen.findByRole('button', { name: /Resume .*Carbonara/ }));
+    expect(await screen.findByText('owner sequence question')).toBeTruthy();
+    expect(screen.getByText('owner sequence answer')).toBeTruthy();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Resume General conversation' }));
+    await waitFor(() => expect(screen.queryByText('owner sequence question')).toBeNull());
+    fireEvent.click(await screen.findByRole('button', { name: /Resume .*Carbonara/ }));
+    expect(await screen.findByText('owner sequence answer')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to My Recipe Vault' }));
+    await waitFor(() => expect(screen.queryByRole('heading', { level: 1, name: 'Chat with SHISO' })).toBeNull());
+    await openGlobalWorkspaceFromVault();
+    fireEvent.click(await screen.findByRole('button', { name: /Resume .*Carbonara/ }));
+    expect(await screen.findByText('owner sequence answer')).toBeTruthy();
+
+    first.unmount();
+    renderApp(false);
+    await openGlobalWorkspaceFromVault();
+    fireEvent.click(await screen.findByRole('button', { name: /Resume .*Carbonara/ }));
+    expect(await screen.findByText('owner sequence question')).toBeTruthy();
+    expect(screen.getByText('owner sequence answer')).toBeTruthy();
   }, 30000);
 });

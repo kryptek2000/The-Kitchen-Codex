@@ -459,12 +459,43 @@ describe('SINC-3 SHISO complete_nutrition — owner fixture', () => {
   });
 
   it('fails closed for a Basic review with no Advanced nutrition state', async () => {
-    const fixture = ownerFixture({ nutrition: null, runAnalysis: vi.fn(), runAiNutrition: vi.fn() });
+    const fixture = ownerFixture({ session: null, nutrition: null, runAnalysis: vi.fn(), runAiNutrition: vi.fn() });
     const observation = await executeShisoTool({ tool: 'complete_nutrition' }, fixture.ctx);
     expect(observation).toMatchObject({ ok: false, code: 'no_nutrition_review' });
     expect(fixture.ctx.runAnalysis).not.toHaveBeenCalled();
     expect(fixture.ctx.runAiNutrition).not.toHaveBeenCalled();
     expect(fixture.accepted).toHaveLength(0);
+  });
+
+  it('initializes the shared review after USDA loads during the same general-chat turn', async () => {
+    const fixture = ownerFixture();
+    let liveSession: ShisoToolContext['session'] = null;
+    let liveNutrition: ShisoToolContext['nutrition'] = null;
+    const baseRunAnalysis = fixture.ctx.runAnalysis!;
+    const context: ShisoToolContext = {
+      ...fixture.ctx,
+      get session() {
+        return liveSession;
+      },
+      get nutrition() {
+        return liveNutrition;
+      },
+      loadBundle: vi.fn(async () => {
+        liveSession = fixture.ctx.session;
+        return liveSession;
+      }),
+      runAnalysis: vi.fn(async (signal) => {
+        liveNutrition = fixture.ctx.nutrition;
+        return baseRunAnalysis(signal);
+      }),
+    };
+
+    const observation = await executeShisoTool({ tool: 'complete_nutrition' }, context);
+
+    expect(observation.ok).toBe(true);
+    expect(context.loadBundle).toHaveBeenCalledTimes(1);
+    expect(context.runAnalysis).toHaveBeenCalledTimes(1);
+    expect(fixture.accepted).toHaveLength(1);
   });
 
   it('rejects a recipe change during branded lookup before accepting anything', async () => {
