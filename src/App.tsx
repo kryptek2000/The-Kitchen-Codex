@@ -165,6 +165,7 @@ import type { ShisoHistoryRailProps } from './components/ShisoHistoryRail';
 import {
   buildConversationCorpus,
   buildConversationIndex,
+  conversationRecipeIdentity,
   createConversationRecord,
   defaultNewConversationKey,
   deleteConversation,
@@ -964,6 +965,7 @@ export default function App({
   });
   const [conversationCorpus, setConversationCorpus] = useState<readonly ShisoConversationCorpusEntry[]>([]);
   const [activeConversationKeyOverride, setActiveConversationKeyOverride] = useState<string | null>(null);
+  const [conversationReloadToken, setConversationReloadToken] = useState(0);
   const [historySearchQuery, setHistorySearchQuery] = useState('');
   const [isGrabberOpen, setIsGrabberOpen] = useState(false);
   const [isVaultIntelligenceOpen, setIsVaultIntelligenceOpen] = useState(false);
@@ -1047,9 +1049,35 @@ export default function App({
   }, [settingsAdapter, refreshConversations, shisoConversationContextKey, rememberActiveConversation]);
 
   const handleResumeConversation = useCallback((key: string) => {
+    const conversationContext = conversationContextKey(key);
+    if (conversationContext.startsWith('recipe:')) {
+      const recipeIdentity = conversationRecipeIdentity(key);
+      const recipe = recipeIdentity === null
+        ? undefined
+        : recipes.find((candidate) => recipeIdentityOf(candidate) === recipeIdentity);
+      if (recipe === undefined) {
+        setVaultNotice({
+          tone: 'info',
+          message: 'That recipe conversation is unavailable in the currently connected Vault, so it was not opened.',
+        });
+        return;
+      }
+      // A history item is not permission to use another recipe. Resolve the
+      // encoded identity against the live Vault snapshot first, then activate
+      // the normal recipe entry context before the modal receives the key.
+      setSelectedRecipe(recipe);
+      shiso.open('recipe');
+    } else if (conversationContext === 'global') {
+      setSelectedRecipe(null);
+      shiso.open('global');
+    } else if (conversationContext === 'create') {
+      setSelectedRecipe(null);
+      shiso.open('create');
+    }
     setActiveConversationKeyOverride(key);
+    setConversationReloadToken((value) => value + 1);
     rememberActiveConversation(key);
-  }, [rememberActiveConversation]);
+  }, [recipes, rememberActiveConversation, shiso]);
 
   const handleRenameConversation = useCallback(async (key: string, title: string) => {
     try {
@@ -5335,6 +5363,7 @@ export default function App({
         onReturnToCompact={() => setIsShisoWorkspaceOpen(false)}
         onBackToVault={returnToRecipeVault}
         activeConversationKeyOverride={activeConversationKeyForContext}
+        conversationReloadToken={conversationReloadToken}
         onConversationsChanged={handleConversationsChanged}
         conversationHistory={conversationHistoryProps}
         network={networkAdapter}

@@ -338,10 +338,10 @@ describe('SINC-4 — SHISO completes USDA source-backed nutrient gaps', () => {
     expect(focus).toEqual([{ line_ref: REF, unknown_nutrients: ['added_sugars'] }]);
   });
 
-  it('fails closed for a Basic review with no Advanced nutrition state', async () => {
+  it('reports unavailable when the application-owned review cannot initialize', async () => {
     const harness = fixture({ nutrition: null });
     const observation = await executeShisoTool({ tool: 'complete_nutrition' }, harness.ctx);
-    expect(observation).toMatchObject({ ok: false, code: 'no_nutrition_review' });
+    expect(observation).toMatchObject({ ok: false, code: 'analysis_unavailable' });
     expect(harness.runAiNutrition).not.toHaveBeenCalled();
     expect(harness.accepted).toHaveLength(0);
   });

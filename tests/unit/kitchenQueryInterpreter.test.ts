@@ -178,6 +178,26 @@ describe('kitchenQueryInterpreter: deterministic fallback parser', () => {
     expect(deterministicInterpret('What desserts do I have?').courses).toEqual(['Dessert']);
   });
 
+  it('preserves an explicit low-carb cue as a dietary preference', () => {
+    const intent = deterministicKitchenIntent('Something low carb with chicken and cheese.');
+    expect(intent.constraints.includeIngredients).toEqual(['chicken', 'cheese']);
+    expect(intent.preferences.dietary).toEqual(['low-carb']);
+  });
+
+  it('preserves an explicit low-carb cue when an AI intent omits dietary metadata', async () => {
+    const result = await interpretKitchenIntent('Something low carb with chicken and cheese.', {
+      aiInterpret: async () => ({
+        intent: 'find_recipes',
+        source: 'vault',
+        constraints: { includeIngredients: ['chicken', 'cheese'] },
+        preferences: {},
+        requiresClarification: false,
+      }),
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.intent.preferences.dietary).toContain('low-carb');
+  });
+
   it('parses cuisine from "Italian"', () => {
     expect(deterministicInterpret('Which Italian recipes are there?').cuisines).toEqual(['Italian']);
   });

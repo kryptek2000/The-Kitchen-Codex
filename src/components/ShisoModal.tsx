@@ -162,6 +162,8 @@ export interface ShisoModalProps {
   readonly onBackToVault?: () => void;
   /** C1.7 S3: resume a different stored conversation in this same engine. */
   readonly activeConversationKeyOverride?: string | null;
+  /** H-3A: selecting an already-active history item must rehydrate it again. */
+  readonly conversationReloadToken?: number;
   /** C1.7 S3: refresh metadata after a local conversation write. */
   readonly onConversationsChanged?: () => void;
   /** C1.7 S3: history rail state and actions; full-page presentation only. */
@@ -236,6 +238,7 @@ export function ShisoModal({
   onReturnToCompact,
   onBackToVault,
   activeConversationKeyOverride = null,
+  conversationReloadToken = 0,
   onConversationsChanged,
   conversationHistory,
 }: ShisoModalProps) {
@@ -393,20 +396,20 @@ export function ShisoModal({
     return () => {
       cancelled = true;
     };
-  }, [conversationKey, settings]);
+  }, [conversationKey, conversationReloadToken, settings]);
 
   // Persist the visible transcript and model memory locally after each change.
   // This is a best-effort device-local save; it confers no authority and stores
   // no credentials, save grants, or proposal capabilities.
   useEffect(() => {
-    if (settings === undefined || loadedConversationKeyRef.current !== conversationKey) return;
+    if (settings === undefined || conversationLoading || loadedConversationKeyRef.current !== conversationKey) return;
     void saveShisoConversation(settings, conversationKey, {
       messages: conversation.messages,
       entries,
       findings: conversation.findings,
       nextSeq: seqRef.current,
     }).then(() => onConversationsChanged?.());
-  }, [conversation, entries, settings, conversationKey, onConversationsChanged]);
+  }, [conversation, entries, conversationLoading, settings, conversationKey, onConversationsChanged]);
 
   useEffect(() => () => {
     if (settings !== undefined && loadedConversationKeyRef.current === conversationKey) {
@@ -622,9 +625,12 @@ export function ShisoModal({
         });
         if (!checked.ok) return { ok: false, message: 'The AI nutrition response did not match the current recipe.' };
         if (options?.apply !== false) {
-          const accepted = shisoRef.current.canAcceptAiNutrition
-            ? shisoRef.current.acceptAiNutrition(checked.contributions)
-            : acceptIndependentNutrition?.(checked.contributions) ?? false;
+          const independentReview = getIndependentNutritionSnapshot?.();
+          const accepted = independentReview !== null && independentReview !== undefined
+            ? acceptIndependentNutrition?.(checked.contributions) ?? false
+            : shisoRef.current.canAcceptAiNutrition
+              ? shisoRef.current.acceptAiNutrition(checked.contributions)
+              : false;
           if (!accepted) return { ok: false, message: 'The application-owned nutrition review is not available for this recipe; the estimate was not applied.' };
         }
         return { ok: true, contributions: checked.contributions, totals: sumAiNutrientContributions(checked.contributions) };
@@ -657,9 +663,15 @@ export function ShisoModal({
         }
         return { ok: false, code: (result as { code?: string }).code, message: result.message, skipped: result.skipped };
       },
-      acceptNutritionContributions: (contributions, supplements) => shisoRef.current.canAcceptAiNutrition
-        ? shisoRef.current.acceptAiNutrition(contributions, supplements)
-        : acceptIndependentNutrition?.(contributions, supplements) ?? false,
+      acceptNutritionContributions: (contributions, supplements) => {
+        const independentReview = getIndependentNutritionSnapshot?.();
+        if (independentReview !== null && independentReview !== undefined) {
+          return acceptIndependentNutrition?.(contributions, supplements) ?? false;
+        }
+        return shisoRef.current.canAcceptAiNutrition
+          ? shisoRef.current.acceptAiNutrition(contributions, supplements)
+          : false;
+      },
       get researchEligibleRefs() {
         return latest.current.researchEligibleRefs;
       },
