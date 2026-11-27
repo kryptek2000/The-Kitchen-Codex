@@ -689,6 +689,7 @@ const MANUAL_SELECTION_KEYS = new Set([
   'line_ref',
   'review_digest',
   'ai_assisted',
+  'selection_origin',
 ]);
 
 interface ManualFoodSelection {
@@ -706,6 +707,7 @@ interface ManualFoodSelection {
    * yields `user_confirmed`.
    */
   readonly aiAssisted: boolean;
+  readonly selectionOrigin: 'shiso_user_directed' | undefined;
 }
 
 /**
@@ -731,6 +733,7 @@ function sanitizeManualSelection(raw: unknown): ManualFoodSelection | undefined 
   if (typeof value.line_ref !== 'string' || value.line_ref.length === 0) return undefined;
   if (typeof value.review_digest !== 'string' || !SHA256_HEX.test(value.review_digest)) return undefined;
   if (value.ai_assisted !== undefined && typeof value.ai_assisted !== 'boolean') return undefined;
+  if (value.selection_origin !== undefined && value.selection_origin !== 'shiso_user_directed') return undefined;
   return {
     fdc_id: value.fdc_id,
     record_digest: value.record_digest,
@@ -738,6 +741,7 @@ function sanitizeManualSelection(raw: unknown): ManualFoodSelection | undefined 
     line_ref: value.line_ref,
     review_digest: value.review_digest,
     aiAssisted: value.ai_assisted === true,
+    selectionOrigin: value.selection_origin === 'shiso_user_directed' ? 'shiso_user_directed' : undefined,
   };
 }
 
@@ -797,7 +801,11 @@ function evaluateIngredient(
       // PROVENANCE: an AI-assisted deterministic acceptance is an AUTOMATIC
       // match (`auto_confirmed`), never human-reviewed authority. Only an
       // explicit user selection yields `user_confirmed`.
-      matchStatus = manual.aiAssisted ? 'auto_confirmed' : 'user_confirmed';
+      matchStatus = manual.selectionOrigin === 'shiso_user_directed'
+        ? 'assistant_user_directed'
+        : manual.aiAssisted
+          ? 'auto_confirmed'
+          : 'user_confirmed';
       fdcId = manual.fdc_id;
       recordDigest = manualRecord.record_digest;
       confirmationDigest = currentReview.review_digest;
@@ -860,7 +868,7 @@ function evaluateIngredient(
   // path is the existing manual review authority; no new selection mechanism
   // is introduced here.
   const equalAlternative = projectIngredientAlternatives(parsed.original_text)?.primary_index === null;
-  if (equalAlternative && matchStatus !== 'user_confirmed') {
+  if (equalAlternative && matchStatus !== 'user_confirmed' && matchStatus !== 'assistant_user_directed') {
     ambiguous = true;
   }
 
@@ -1397,6 +1405,7 @@ export function runAdvisoryCalculation(inputs: AdvisoryCalculationInputs): Calcu
         qualitative: entry.qualitative,
         match_status: entry.matchStatus,
         user_confirmed: entry.matchStatus === 'user_confirmed',
+        ...(entry.matchStatus === 'assistant_user_directed' ? { selection_origin: 'shiso_user_directed' as const } : {}),
         ...(entry.fdcId !== undefined ? { fdc_id: entry.fdcId } : {}),
         ...(entry.recordDigest !== undefined ? { record_digest: entry.recordDigest } : {}),
         ...(entry.massSource !== undefined ? { mass_source: entry.massSource } : {}),

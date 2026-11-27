@@ -55,7 +55,7 @@ import { requestUsdaBrandedFoodLookup } from '../application/nutritionBrandedFoo
 import { requestNutritionWebResearch } from '../application/nutritionWebResearch';
 
 import { useShisoRecipeContext } from '../application-ui/useShisoRecipeContext';
-import { useShiso, type ShisoNutritionAnalysisOutcome, type ShisoNutritionSnapshot } from '../application-ui/shisoEntryPoints';
+import { useShiso, type ShisoNutritionAnalysisOutcome, type ShisoNutritionSnapshot, type ShisoNutritionReviewApplyResult } from '../application-ui/shisoEntryPoints';
 import type { ShisoBoundProposal } from '../core/shiso/protocol';
 import { buildIdentityDisclosure } from '../core/shiso/disclosure';
 import { classifySaveIntent, recipeIdentityOf } from '../core/shiso/saveAuthorization';
@@ -144,6 +144,11 @@ export interface ShisoModalProps {
     readonly applied: boolean;
     readonly message: string;
   }>;
+  readonly applyIndependentNutritionSourceSelection?: (input: {
+    readonly lineRef: string;
+    readonly fdcId: number;
+    readonly portionIndex: number;
+  }) => import('../core/shiso/protocol').ShisoNutritionSourceSelectionOutcome;
   readonly nutritionRows: readonly LiveRowState[];
   readonly nutritionAiContributions?: readonly AiNutrientContribution[];
   /** The AUTHORITATIVE review rows. Proposals are disclosed from these, never from prose. */
@@ -232,6 +237,7 @@ export function ShisoModal({
   getIndependentNutritionSnapshot,
   acceptIndependentNutrition,
   applyIndependentNutritionReview,
+  applyIndependentNutritionSourceSelection,
   nutritionRows,
   nutritionAiContributions = [],
   nutritionReviewRows,
@@ -293,6 +299,9 @@ export function ShisoModal({
   const entriesRef = useRef(entries);
   entriesRef.current = entries;
   const loadedConversationKeyRef = useRef<string | null>(null);
+  // Only the current trusted user turn may authorize choosing one branch of an
+  // equal authored alternative. Model tool arguments never set this value.
+  const trustedNutritionSelectionMessageRef = useRef('');
   // H-2: the LATEST Shiso port surface. The conversation turn can outlive a
   // render (it awaits tool executions), so tools must never read a stale
   // closure of the ports — an edit applied mid-turn changes the recipe, and the
@@ -504,6 +513,7 @@ export function ShisoModal({
     recipeContext,
     nutritionAvailable,
     nutritionRows,
+    nutritionReviewRows,
     nutritionAiContributions,
     nutritionSummary,
     nutritionUnsaved,
@@ -524,6 +534,7 @@ export function ShisoModal({
     recipeContext,
     nutritionAvailable,
     nutritionRows,
+    nutritionReviewRows,
     nutritionAiContributions,
     nutritionSummary,
     nutritionUnsaved,
@@ -582,6 +593,7 @@ export function ShisoModal({
         return current.nutritionAvailable
           ? {
               rows: current.nutritionRows,
+              reviewRows: current.nutritionReviewRows,
               aiContributions: current.nutritionAiContributions,
               summary: current.nutritionAvailable
                 ? nutritionCoverageSummary(deriveNutritionCoverage(current.nutritionRows, current.nutritionAiContributions))
@@ -706,12 +718,44 @@ export function ShisoModal({
               shisoRef.current.applyNutritionCorrections(lineRefs)
           : undefined;
       },
+      get applyNutritionSourceSelection() {
+        if (shisoRef.current.canApplyNutritionSourceSelection) {
+          return (input: Parameters<NonNullable<ShisoToolContext['applyNutritionSourceSelection']>>[0]) =>
+            shisoRef.current.applyNutritionSourceSelection(input);
+        }
+        return applyIndependentNutritionSourceSelection
+          ? async (input) => applyIndependentNutritionSourceSelection(input)
+          : undefined;
+      },
+      isTrustedNutritionSourceSelection: (lineRef, description) => {
+        const message = trustedNutritionSelectionMessageRef.current.toLocaleLowerCase();
+        if (!/\b(?:pick|choose|select|use)\b/.test(message)) return false;
+        const terms = description
+          .toLocaleLowerCase()
+          .replace(/[^a-z0-9]+/g, ' ')
+          .split(/\s+/)
+          .filter((term) => term.length >= 3 && !['food', 'raw', 'fresh', 'with', 'and', 'from'].includes(term));
+        return terms.some((term) => message.includes(term)) && lineRef.length > 0;
+      },
       get applyNutritionReview() {
-        if (!shisoRef.current.canApplyNutritionReview && applyIndependentNutritionReview === undefined) return undefined;
-        return async () => {
-          const result = shisoRef.current.canApplyNutritionReview
+        const cardOwnerAvailable = shisoRef.current.canApplyNutritionReview;
+        if (!cardOwnerAvailable && applyIndependentNutritionReview === undefined) return undefined;
+        return async (): Promise<ShisoNutritionReviewApplyResult> => {
+          let result: ShisoNutritionReviewApplyResult = cardOwnerAvailable
             ? await shisoRef.current.applyNutritionReview()
             : await applyIndependentNutritionReview!();
+          // The card is mounted for the recipe detail, but its review may not be
+          // the review that this global-chat turn prepared. A card owner that has
+          // no current eligible review must not shadow an eligible independent
+          // owner. Only the explicit ownership signal is retried; a real Apply
+          // failure (stale/versioned/authorization) is never substituted.
+          if (
+            cardOwnerAvailable &&
+            result.code === 'not_eligible' &&
+            applyIndependentNutritionReview !== undefined
+          ) {
+            result = await applyIndependentNutritionReview();
+          }
           if (result.ok && result.applied) {
             const policy = nutritionSavePolicyRef.current;
             nutritionSavePolicyRef.current = { ...policy, applied: true };
@@ -748,7 +792,7 @@ export function ShisoModal({
           : undefined;
       },
     }),
-    [acceptIndependentNutrition, applyIndependentNutritionReview, getIndependentNutritionSnapshot, network, onVaultRecipeSelected, runIndependentNutritionAnalysis, vaultCapabilities],
+    [acceptIndependentNutrition, applyIndependentNutritionReview, applyIndependentNutritionSourceSelection, getIndependentNutritionSnapshot, network, onVaultRecipeSelected, runIndependentNutritionAnalysis, vaultCapabilities],
   );
 
   // Advanced Nutrition can invoke the very same recipe-bound, validated AI
@@ -909,6 +953,7 @@ export function ShisoModal({
     // message that does not ask to save, which clears any previous turn's
     // authorization. The model never sees or influences this decision.
     const saveIntent = classifySaveIntent(message);
+    trustedNutritionSelectionMessageRef.current = message;
     const authorizationRecipe = getSaveAuthorizationRecipe?.() ?? recipe ?? selectedVaultRecipeContext(vaultCapabilities);
     const authorizationRecipeIdentity = recipeIdentityOf(authorizationRecipe);
     nutritionSavePolicyRef.current = {

@@ -374,6 +374,7 @@ function selectionFor(choice: MatchChoice, lineRef: string): unknown {
       // AI-assisted DETERMINISTIC acceptance only. An explicit user choice
       // (manual search / "Use this match") omits this marker.
       ...(choice.aiAccepted === true ? { ai_assisted: true } : {}),
+      ...(choice.selectionOrigin === 'shiso_user_directed' ? { selection_origin: 'shiso_user_directed' } : {}),
     };
   }
   return { kind: 'none', review_digest: choice.review_digest };

@@ -203,6 +203,7 @@ import {
 import type {
   ShisoAnalysisOutcome,
   ShisoIngredientEditArgs,
+  ShisoNutritionSourceSelectionOutcome,
   ShisoRecipeEditOutcome,
   ShisoRecipeSaveOutcome,
 } from './core/shiso/protocol';
@@ -3039,6 +3040,26 @@ export default function App({
       : null;
   }, []);
 
+  const applyIndependentShisoNutritionSourceSelection = useCallback((input: {
+    readonly lineRef: string;
+    readonly fdcId: number;
+    readonly portionIndex: number;
+  }): ShisoNutritionSourceSelectionOutcome => {
+    const controller = shisoNutritionReviewRef.current;
+    const currentRecipe = shisoSelectedRecipeForReviewRef.current;
+    if (controller === null || currentRecipe === null || !sameCanonicalRecipeIdentity(controller.recipe, currentRecipe)) {
+      return {
+        ok: false,
+        line_ref: input.lineRef,
+        summary: 'No current SHISO nutrition review is available for that source selection.',
+        recalculation: 'absent',
+        working_unsaved: false,
+        code: 'no_active_review',
+      };
+    }
+    return controller.selectUsdaNutritionSource(input);
+  }, []);
+
   const acceptIndependentShisoNutrition = useCallback((
     contributions: readonly import('./core/nutritionV2/aiContribution').AiNutrientContribution[],
     supplements?: readonly import('./core/nutritionV2/aiContribution').AiNutrientSupplement[],
@@ -5552,6 +5573,7 @@ export default function App({
         getIndependentNutritionSnapshot={getIndependentShisoNutritionSnapshot}
         acceptIndependentNutrition={acceptIndependentShisoNutrition}
         applyIndependentNutritionReview={applyIndependentShisoNutritionReview}
+        applyIndependentNutritionSourceSelection={applyIndependentShisoNutritionSourceSelection}
         nutritionRows={shiso.snapshot?.rows ?? []}
         nutritionAiContributions={shiso.snapshot?.aiContributions ?? []}
         nutritionReviewRows={shiso.snapshot?.reviewRows ?? []}

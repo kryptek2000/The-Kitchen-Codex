@@ -183,6 +183,7 @@ const EVIDENCE_KEYS_V1 = new Set([
   'match_status',
   'resolved',
   'user_confirmed',
+  'selection_origin',
   'amount',
   'conversion_basis',
 ]);
@@ -621,9 +622,12 @@ function validateInertCodexNutrition(
       ) {
         diag.add('invalid_match_status');
       }
+      if (entry.selection_origin !== undefined && entry.selection_origin !== 'shiso_user_directed') {
+        diag.add('invalid_selection_origin');
+      }
       if (typeof entry.resolved !== 'boolean' || typeof entry.user_confirmed !== 'boolean') {
         diag.add('invalid_ingredient_flags');
-      } else if (entry.resolved !== (matchStatus === 'confirmed' && entry.user_confirmed === true)) {
+      } else if (entry.resolved !== (matchStatus === 'confirmed' && (entry.user_confirmed === true || entry.selection_origin === 'shiso_user_directed'))) {
         diag.add('ingredient_resolution_inconsistent');
       }
       let amount: IngredientEvidence['amount'];
@@ -878,6 +882,7 @@ function validateInertCodexNutrition(
         match_status: matchStatus as IngredientEvidence['match_status'],
         resolved: entry.resolved === true,
         user_confirmed: entry.user_confirmed === true,
+        ...(entry.selection_origin === 'shiso_user_directed' ? { selection_origin: 'shiso_user_directed' as const } : {}),
         ...(amount ? { amount } : {}),
         ...(conversionBasis ? { conversion_basis: conversionBasis } : {}),
         ...(householdPortion ? { household_portion: householdPortion } : {}),

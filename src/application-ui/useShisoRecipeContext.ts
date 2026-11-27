@@ -17,6 +17,7 @@
 
 import { useMemo } from 'react';
 import { adaptRecipe } from '../core/nutritionV2/phase4';
+import { parseIngredient } from '../core/nutritionV2/matching/parse';
 
 export interface ShisoRecipeView {
   readonly title: string;
@@ -24,6 +25,10 @@ export interface ShisoRecipeView {
   readonly ingredients: ReadonlyArray<{
     readonly text: string;
     readonly name: string;
+    /** Canonical authored quantity, retained for nutrition actions. */
+    readonly amount?: number;
+    /** Canonical authored unit, retained for nutrition actions. */
+    readonly unit?: string;
     /** H-2 stable edit handle; null when the recipe cannot be adapted. */
     readonly line_ref?: string | null;
   }>;
@@ -70,14 +75,43 @@ export function toShisoRecipeView(recipe: ShisoRecipeLike | null): ShisoRecipeVi
   const ingredients = rawIngredients.slice(0, 80).map((i, index) => {
     const name = typeof i.name === 'string' ? i.name.slice(0, 160) : '';
     const authored = typeof i.original === 'string' ? i.original.trim() : '';
+    const structuredAmount =
+      typeof i.amount === 'number' && Number.isFinite(i.amount)
+        ? i.amount
+        : typeof i.quantity === 'number' && Number.isFinite(i.quantity)
+          ? i.quantity
+          : undefined;
+    const parsedStructured = parseIngredient({
+      ...(authored.length > 0 ? { original: authored } : {}),
+      ...(structuredAmount !== undefined ? { amount: structuredAmount } : {}),
+      ...(typeof i.unit === 'string' && i.unit.length > 0 ? { unit: i.unit } : {}),
+      ...(name.length > 0 ? { name } : {}),
+    });
+    const parsedAuthored = authored.length > 0 ? parseIngredient(authored) : null;
+    const amount = structuredAmount ?? (
+      parsedAuthored?.ok === true && parsedAuthored.parsed.amount !== null
+        ? parsedAuthored.parsed.amount
+        : parsedStructured.ok && parsedStructured.parsed.amount !== null
+          ? parsedStructured.parsed.amount
+          : undefined
+    );
+    const unit = typeof i.unit === 'string' && i.unit.length > 0
+      ? i.unit
+      : parsedAuthored?.ok === true
+        ? parsedAuthored.parsed.raw_unit
+        : parsedStructured.ok
+          ? parsedStructured.parsed.raw_unit
+          : i.unit;
     const parts: string[] = [];
-    if (typeof i.quantity === 'number' && Number.isFinite(i.quantity)) parts.push(String(i.quantity));
-    if (typeof i.unit === 'string' && i.unit.length > 0) parts.push(i.unit);
+    if (amount !== undefined) parts.push(String(amount));
+    if (typeof unit === 'string' && unit.length > 0) parts.push(unit);
     parts.push(name);
     const text = (authored.length > 0 ? authored : parts.join(' ').trim()).slice(0, 200);
     return {
       text,
       name,
+      ...(amount !== undefined ? { amount } : {}),
+      ...(typeof unit === 'string' && unit.length > 0 ? { unit } : {}),
       line_ref: typeof lineRefs[index] === 'string' ? lineRefs[index] : null,
     };
   });

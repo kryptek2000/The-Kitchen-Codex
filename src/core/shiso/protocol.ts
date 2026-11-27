@@ -113,6 +113,8 @@ export const SHISO_LIMITS = Object.freeze({
   maxIngredientEditPreparationChars: 160,
   /** Line refs accepted by ONE `apply_nutrition_corrections` call (H-2). */
   maxCorrectionLineRefs: 24,
+  /** Bound for one authenticated SHISO-directed USDA source selection. */
+  maxSelectionLineRefChars: 240,
   /** Request body ceiling in bytes. */
   maxRequestBytes: 64 * 1024,
 });
@@ -196,6 +198,7 @@ export const SHISO_TOOL_NAMES = Object.freeze([
   'get_branded_evidence',
   'search_usda_foods',
   'inspect_usda_food',
+  'select_usda_nutrition_source',
   'investigate_ingredient_amount',
   'investigate_unresolved_ingredients',
   'run_nutrition_analysis',
@@ -238,6 +241,17 @@ export type ShisoToolArgs =
   | { readonly tool: 'get_branded_evidence' }
   | { readonly tool: 'search_usda_foods'; readonly query: string; readonly limit?: number }
   | { readonly tool: 'inspect_usda_food'; readonly fdc_id: number }
+  | {
+      /**
+       * Promotes one authenticated USDA food and portion into the current
+       * Phase 4 working review. The application re-authenticates both against
+       * the live recipe/session; the model never supplies grams or evidence.
+       */
+      readonly tool: 'select_usda_nutrition_source';
+      readonly line_ref: string;
+      readonly fdc_id: number;
+      readonly portion_index: number;
+    }
   | {
       readonly tool: 'investigate_ingredient_amount';
       readonly line_ref: string;
@@ -456,6 +470,20 @@ export interface ShisoNutritionCorrectionsOutcome {
   readonly working_unsaved: boolean;
 }
 
+/** Result of one authenticated USDA source/portion promotion. */
+export interface ShisoNutritionSourceSelectionOutcome {
+  readonly ok: boolean;
+  readonly line_ref: string;
+  readonly fdc_id?: number;
+  readonly description?: string;
+  readonly resolved_grams?: number;
+  readonly portion?: string;
+  readonly summary: string;
+  readonly recalculation: 'complete' | 'partial' | 'absent';
+  readonly working_unsaved: boolean;
+  readonly code?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Observations returned to the model. Bounded, verified, and free of authority.
 // ---------------------------------------------------------------------------
@@ -477,6 +505,7 @@ export interface ShisoObservationFail {
 export type ShisoObservation = ShisoObservationOk | ShisoObservationFail;
 
 export type ShisoObservationFailureCode =
+  | 'invalid_request'
   | 'invalid_arguments'
   | 'vault_unavailable'
   | 'vault_recipe_not_found'
@@ -492,6 +521,9 @@ export type ShisoObservationFailureCode =
   | 'analysis_unavailable'
   | 'review_not_initialized'
   | 'stale_recipe'
+  | 'invalid_selection'
+  | 'explicit_choice_required'
+  | 'selection_rejected'
   // H-2 editing capabilities. `no_edit_owner` / `no_save_owner` mean the
   // application surface that owns the working state is not mounted, so Shiso
   // must say so rather than pretend a change happened.

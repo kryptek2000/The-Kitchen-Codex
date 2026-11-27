@@ -163,7 +163,7 @@ export type IngredientOutcome =
   | 'no_mass'
   | 'no_nutrition';
 
-export type MatchStatus = 'unique_exact' | 'user_confirmed' | 'auto_confirmed' | 'none';
+export type MatchStatus = 'unique_exact' | 'user_confirmed' | 'assistant_user_directed' | 'auto_confirmed' | 'none';
 
 /**
  * A BOUNDED AI MASS ESTIMATE selection supplied to the calculator (AI-3).
@@ -217,6 +217,7 @@ export interface IngredientCalculationEvidence {
   readonly match_status: MatchStatus;
   /** True ONLY for an explicitly user-confirmed ambiguous match. */
   readonly user_confirmed: boolean;
+  readonly selection_origin?: 'shiso_user_directed';
   readonly fdc_id?: number;
   readonly record_digest?: string;
   readonly mass_source?: MassSource;

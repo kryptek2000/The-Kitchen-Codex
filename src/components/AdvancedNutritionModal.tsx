@@ -2886,6 +2886,8 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                             ? 'unique-exact food'
                             : live?.food_authority === 'user_confirmed' || entry.user_confirmed
                               ? 'user-confirmed food'
+                              : live?.food_authority === 'assistant_user_directed'
+                                ? 'SHISO-directed food'
                               : undefined;
                       // Mass provenance is INDEPENDENT of food authority.
                       const portionAuthority =
