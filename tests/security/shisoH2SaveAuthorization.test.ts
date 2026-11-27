@@ -253,6 +253,21 @@ describe('H-2 save authorization — grant verification at the save owner', () =
     expect(verdict.ok).toBe(true);
   });
 
+  it('accepts standing nutrition authority only after nutrition Apply and for the exact Vault', () => {
+    const grant = {
+      authorized: true,
+      via: 'standing_nutrition',
+      recipe_identity: 'Recipes/Chicken.md',
+      vault_scope: `vault:${'a'.repeat(64)}`,
+      turn: 9,
+      nutrition_applied: true,
+    } as const;
+    expect(verifySaveGrant(grant, 'Recipes/Chicken.md', `vault:${'a'.repeat(64)}`)).toEqual({ ok: true });
+    expect(verifySaveGrant({ ...grant, nutrition_applied: undefined }, 'Recipes/Chicken.md', grant.vault_scope)).toMatchObject({ ok: false, reason: 'not_authorized' });
+    expect(verifySaveGrant(grant, 'Recipes/Other.md', grant.vault_scope)).toMatchObject({ ok: false, reason: 'stale_recipe' });
+    expect(verifySaveGrant(grant, 'Recipes/Chicken.md', `vault:${'b'.repeat(64)}`)).toMatchObject({ ok: false, reason: 'stale_vault' });
+  });
+
   it('accepts a UI grant (the genuine Save control is its own authorization)', () => {
     const verdict = verifySaveGrant(
       { authorized: true, via: 'ui', recipe_identity: '', turn: 0 },
@@ -364,7 +379,7 @@ describe('H-2 save authorization — structural pins', () => {
 
   it('the persistence owner re-verifies the grant against the recipe being saved', () => {
     const app = read('src/App.tsx');
-    expect(app).toContain('verifySaveGrant(grant, recipeIdentityOf(current.base))');
+    expect(app).toContain('verifySaveGrant(grant, recipeIdentityOf(current.base), nutritionAuthorityScope)');
     // The refusal is before the canonical write on the refuse path.
     const verifyAt = app.indexOf('verifySaveGrant');
     const writeAt = app.indexOf('await commitRecipeWrite(current.working');

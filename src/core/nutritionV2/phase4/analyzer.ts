@@ -291,7 +291,6 @@ export function analyzeRecipeFromRows(
     const measurementKind = parsed && parsed.ok ? parsed.parsed.measurement_kind : 'unknown';
     const originalText = row.original_text || row.query;
     const hasMassRange = hasExplicitMassRange(originalText);
-
     const base = {
       line_ref: row.line_ref,
       original_text: row.original_text,

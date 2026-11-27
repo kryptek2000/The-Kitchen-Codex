@@ -186,6 +186,20 @@ import {
   verifySaveGrant,
   type ShisoSaveGrant,
 } from './core/shiso/saveAuthorization';
+import {
+  SHISO_NUTRITION_AUTHORITY_SETTING,
+  grantNutritionAuthority,
+  nutritionAuthorityEnabled,
+  nutritionAuthorityVaultScope,
+  parseNutritionAuthorityRecord,
+  type ShisoNutritionAuthorityRecord,
+} from './core/shiso/nutritionAuthority';
+import {
+  SHISO_NUTRITION_HISTORY_SETTING,
+  appendNutritionChange,
+  parseNutritionChangeHistory,
+  type ShisoNutritionChangeRecord,
+} from './application/nutritionChangeHistory';
 import type {
   ShisoAnalysisOutcome,
   ShisoIngredientEditArgs,
@@ -879,6 +893,31 @@ export default function App({
 
   // Theme State (persisted via SettingsAdapter; hydrated on mount)
   const [theme, setTheme] = useState<ThemeId>(DEFAULT_THEME_ID);
+  const [nutritionAuthorityRecord, setNutritionAuthorityRecord] = useState<ShisoNutritionAuthorityRecord | null>(null);
+  const [nutritionChangeHistory, setNutritionChangeHistory] = useState<readonly ShisoNutritionChangeRecord[]>([]);
+
+  const nutritionAuthorityScope = useMemo(() => {
+    if (!vaultStatus.isConnected || vaultStatus.accessType !== 'filesystem_api') return '';
+    const handle = vaultStatus.folderHandle as { root?: unknown; name?: unknown } | undefined;
+    const locator = typeof handle?.root === 'string'
+      ? handle.root
+      : typeof handle?.name === 'string'
+        ? handle.name
+        : vaultStatus.vaultPath;
+    return nutritionAuthorityVaultScope({ kind: 'filesystem', locator });
+  }, [vaultStatus.accessType, vaultStatus.folderHandle, vaultStatus.isConnected, vaultStatus.vaultPath]);
+  const nutritionAuthorityActive = nutritionAuthorityEnabled(nutritionAuthorityRecord, nutritionAuthorityScope);
+
+  const setNutritionAuthority = useCallback(async (enabled: boolean) => {
+    if (!enabled) {
+      setNutritionAuthorityRecord(null);
+      await settingsAdapter.remove(SHISO_NUTRITION_AUTHORITY_SETTING);
+      return;
+    }
+    const record = grantNutritionAuthority(nutritionAuthorityScope);
+    await settingsAdapter.set(SHISO_NUTRITION_AUTHORITY_SETTING, record);
+    setNutritionAuthorityRecord(record);
+  }, [nutritionAuthorityScope, settingsAdapter]);
 
   // Navigation & View State (persisted via SettingsAdapter; hydrated on mount)
   const [activeTab, setActiveTab] = useState<'grid' | 'dataview' | 'mealplan' | 'shopping' | 'themes' | 'providers'>('grid');
@@ -1868,10 +1907,12 @@ export default function App({
     let cancelled = false;
     (async () => {
       try {
-        const [savedTheme, savedTab, savedTimers] = await Promise.all([
+        const [savedTheme, savedTab, savedTimers, savedNutritionAuthority, savedNutritionHistory] = await Promise.all([
           settingsAdapter.get<ThemeId>('obsidian_vault_theme'),
           settingsAdapter.get<'grid' | 'dataview' | 'mealplan' | 'shopping' | 'themes' | 'providers'>('obsidian_active_tab'),
           settingsAdapter.get<ActiveTimer[]>('obsidian_active_cooking_timers'),
+          settingsAdapter.get<unknown>(SHISO_NUTRITION_AUTHORITY_SETTING),
+          settingsAdapter.get<unknown>(SHISO_NUTRITION_HISTORY_SETTING),
         ]);
         if (cancelled) return;
         setTheme((cur) =>
@@ -1901,6 +1942,8 @@ export default function App({
             .map((t) => reconcileTimer(t, now).timer);
           return mergeHydratedSetting(cur, migrated, (t) => Array.isArray(t) && t.length === 0, (t) => Array.isArray(t));
         });
+        setNutritionAuthorityRecord(parseNutritionAuthorityRecord(savedNutritionAuthority));
+        setNutritionChangeHistory(parseNutritionChangeHistory(savedNutritionHistory));
       } catch (err) {
         console.warn('Failed to hydrate persisted settings:', err);
       } finally {
@@ -2052,6 +2095,11 @@ export default function App({
   const handleDirectVaultConnected = async (
     folderHandle: any
   ): Promise<{ recipeCount: number; noteCount: number; accepted: boolean; message?: string }> => {
+    // An explicit folder selection is a new authority decision. Revoke the
+    // previous Vault's standing nutrition grant before the new handle can win,
+    // including the browser edge case where two folders share the same name.
+    setNutritionAuthorityRecord(null);
+    await settingsAdapter.remove(SHISO_NUTRITION_AUTHORITY_SETTING).catch(() => undefined);
     const transition = vaultAuthority.beginTransition('filesystem');
     const assetScope = createVaultAssetScope(null, { active: false });
     setVaultHydratedState(false);
@@ -2150,7 +2198,7 @@ export default function App({
   }, []);
 
   const commitRecipeWrite = useCallback(
-    async (savedRecipe: ObsidianRecipe, baseRecipe?: ObsidianRecipe) => {
+    async (savedRecipe: ObsidianRecipe, baseRecipe?: ObsidianRecipe, options?: { readonly useDesiredRawMarkdown?: boolean }) => {
       if (isBuiltInRecipe(savedRecipe) || isBuiltInRecipe(baseRecipe)) {
         throw new Error('Signature Collection originals are read-only. Save this recipe to My Vault first.');
       }
@@ -2169,7 +2217,10 @@ export default function App({
           throw vaultSessionSupersededError();
         }
         const latest = committedRecipesRef.current.find((r) => sameCanonicalRecipeIdentity(r, savedRecipe));
-        const toWrite = rebaseRecipeOntoLatest(latest, base, savedRecipe);
+        const rebased = rebaseRecipeOntoLatest(latest, base, savedRecipe);
+        const toWrite = options?.useDesiredRawMarkdown === true
+          ? { ...rebased, rawMarkdown: savedRecipe.rawMarkdown }
+          : rebased;
         if (requestedAdapter) {
           const lease = vaultAuthority.beginWrite(requestedSession);
           if (!lease) throw vaultSessionSupersededError();
@@ -2607,7 +2658,7 @@ export default function App({
           message: 'There is nothing to save — this recipe has no unsaved changes from Shiso.',
         };
       }
-      const verdict = verifySaveGrant(grant, recipeIdentityOf(current.base));
+      const verdict = verifySaveGrant(grant, recipeIdentityOf(current.base), nutritionAuthorityScope);
       if (verdict.ok !== true) {
         return {
           ok: false,
@@ -2616,9 +2667,12 @@ export default function App({
           message:
             verdict.reason === 'stale_recipe'
               ? 'That save was authorized for a different recipe, so nothing was saved. Ask again for this recipe.'
+              : verdict.reason === 'stale_vault'
+                ? 'The active Vault changed after nutrition authority was granted. Nothing was saved.'
               : 'Saving needs your explicit instruction (for example “save my changes”) or the Save button. Nothing was saved.',
         };
       }
+      const nutritionChanged = JSON.stringify(current.working.codexNutrition ?? null) !== JSON.stringify(current.base.codexNutrition ?? null);
       try {
         await commitRecipeWrite(current.working, current.base);
       } catch (err) {
@@ -2628,14 +2682,41 @@ export default function App({
         reportVaultError('save', current.working.title || 'recipe', err);
         return { ok: false, saved: false, reason_code: 'write_failed', message: 'The recipe could not be saved to the vault.' };
       }
+      let historyRecorded = true;
+      if (nutritionChanged) {
+        const block = current.working.codexNutrition;
+        const sources = block && 'sources' in block && Array.isArray(block.sources)
+          ? block.sources.join(', ')
+          : 'reviewed nutrition evidence';
+        const record: ShisoNutritionChangeRecord = {
+          id: `${nutritionAuthorityScope}:${recipeIdentityOf(current.base)}:${Date.now()}`,
+          vault_scope: nutritionAuthorityScope,
+          recipe_identity: recipeIdentityOf(current.base),
+          recipe_title: current.working.title,
+          changed_at: new Date().toISOString(),
+          reason: grant?.via === 'standing_nutrition'
+            ? 'SHISO applied and saved a reviewed nutrition update under standing Vault authority.'
+            : 'A reviewed Advanced Nutrition update was saved.',
+          evidence: `The saved nutrition block retained its own ingredient provenance and source identifiers (${sources}).`,
+          previous: current.base.codexNutrition,
+          next: current.working.codexNutrition,
+        };
+        const nextHistory = appendNutritionChange(nutritionChangeHistory, record);
+        setNutritionChangeHistory(nextHistory);
+        try {
+          await settingsAdapter.set(SHISO_NUTRITION_HISTORY_SETTING, nextHistory);
+        } catch {
+          historyRecorded = false;
+        }
+      }
       updateShisoWorkingRecipe(null);
       return {
         ok: true,
         saved: true,
-        message: `Saved "${current.working.title}" with ${current.changes.length + Number(JSON.stringify(current.working.codexNutrition ?? null) !== JSON.stringify(current.base.codexNutrition ?? null))} recipe change(s).`,
+        message: `Saved "${current.working.title}" with ${current.changes.length + Number(nutritionChanged)} recipe change(s).${historyRecorded ? '' : ' The recipe was saved, but the local nutrition restore history could not be recorded.'}`,
       };
     },
-    [commitRecipeWrite, updateShisoWorkingRecipe],
+    [commitRecipeWrite, nutritionAuthorityScope, nutritionChangeHistory, settingsAdapter, updateShisoWorkingRecipe],
   );
 
   // SHISO H-2 — register the recipe-edit/save applier with the ONE Shiso entry
@@ -2697,6 +2778,50 @@ export default function App({
    */
   const displayRecipe: ObsidianRecipe | null =
     shisoWorkingForSelected?.working ?? selectedRecipe;
+
+  const restorableNutritionChange = useMemo(() => {
+    if (selectedRecipe === null || nutritionAuthorityScope.length === 0) return null;
+    const identity = recipeIdentityOf(selectedRecipe);
+    return [...nutritionChangeHistory].reverse().find((record) =>
+      record.vault_scope === nutritionAuthorityScope && record.recipe_identity === identity,
+    ) ?? null;
+  }, [nutritionAuthorityScope, nutritionChangeHistory, selectedRecipe]);
+
+  const restorePreviousNutrition = useCallback(async () => {
+    const recipe = selectedRecipe;
+    const record = restorableNutritionChange;
+    if (recipe === null || record === null) return;
+    if (JSON.stringify(recipe.codexNutrition ?? null) !== JSON.stringify(record.next ?? null)) {
+      setVaultNotice({
+        tone: 'error',
+        message: 'Nutrition changed after this history entry was recorded, so Restore stopped without overwriting newer work.',
+      });
+      return;
+    }
+    const restoredBase = { ...recipe, codexNutrition: record.previous, rawMarkdown: '' };
+    const restored = record.previous === undefined
+      ? (() => {
+          const frontmatter = { ...(recipe.frontmatter ?? {}) };
+          delete frontmatter.codex_nutrition;
+          const withoutNutrition = { ...restoredBase, frontmatter };
+          return { ...withoutNutrition, rawMarkdown: serializeRecipeToObsidianMarkdown(withoutNutrition) };
+        })()
+      : restoredBase;
+    try {
+      await commitRecipeWrite(restored, recipe, { useDesiredRawMarkdown: record.previous === undefined });
+      const remaining = nutritionChangeHistory.filter((item) => item.id !== record.id);
+      setNutritionChangeHistory(remaining);
+      await settingsAdapter.set(SHISO_NUTRITION_HISTORY_SETTING, remaining);
+      setVaultNotice({ tone: 'success', message: `Restored the previous nutrition values for "${recipe.title}".` });
+    } catch (error) {
+      setVaultNotice({
+        tone: 'error',
+        message: isVaultSessionSuperseded(error)
+          ? 'The Vault changed before Restore completed. No nutrition was overwritten.'
+          : 'The previous nutrition values could not be restored. The current recipe remains unchanged.',
+      });
+    }
+  }, [commitRecipeWrite, nutritionChangeHistory, restorableNutritionChange, selectedRecipe, settingsAdapter]);
 
   // Create for Me save (generated-save scoped). A same-title file is NEVER
   // overwritten: on a collision this throws GeneratedRecipePathCollisionError
@@ -4704,6 +4829,34 @@ export default function App({
                 </div>
               </div>
             )}
+            {restorableNutritionChange !== null && shisoWorkingForSelected === null && (
+              <div data-testid="shiso-nutrition-change-history" className="mx-auto mt-4 max-w-5xl kc-vault-surface">
+                <details className="rounded-xl border border-amber-500/25 bg-amber-500/8 px-4 py-3 text-[12px] text-[var(--text-secondary,#9CA3AF)]">
+                  <summary className="cursor-pointer font-semibold text-[var(--text-primary,#F3F4F6)]">
+                    SHISO nutrition change · {new Date(restorableNutritionChange.changed_at).toLocaleString()}
+                  </summary>
+                  <div className="mt-3 space-y-2">
+                    <p><strong className="text-[var(--text-primary,#F3F4F6)]">Reason:</strong> {restorableNutritionChange.reason}</p>
+                    <p><strong className="text-[var(--text-primary,#F3F4F6)]">Evidence:</strong> {restorableNutritionChange.evidence}</p>
+                    <p>
+                      <strong className="text-[var(--text-primary,#F3F4F6)]">Previous:</strong>{' '}
+                      {restorableNutritionChange.previous ? `schema ${restorableNutritionChange.previous.schema}, ${'status' in restorableNutritionChange.previous ? restorableNutritionChange.previous.status : 'opaque'}` : 'no Advanced Nutrition block'}
+                      {' → '}
+                      <strong className="text-[var(--text-primary,#F3F4F6)]">Saved:</strong>{' '}
+                      {restorableNutritionChange.next ? `schema ${restorableNutritionChange.next.schema}, ${'status' in restorableNutritionChange.next ? restorableNutritionChange.next.status : 'opaque'}` : 'none'}
+                    </p>
+                    <button
+                      type="button"
+                      data-testid="shiso-nutrition-restore"
+                      onClick={() => { void restorePreviousNutrition(); }}
+                      className="inline-flex min-h-[44px] items-center rounded-lg border border-amber-500/35 px-3 font-semibold text-[var(--text-primary,#F3F4F6)] hover:bg-amber-500/10"
+                    >
+                      Restore previous nutrition
+                    </button>
+                  </div>
+                </details>
+              </div>
+            )}
             <RecipeDetailView
               recipe={displayRecipe}
             allRecipes={recipes}
@@ -4740,6 +4893,13 @@ export default function App({
             advancedNutritionBundleStatus={advancedNutritionBundle.status}
             onLoadAdvancedNutritionBundle={handleLoadAdvancedNutritionBundle}
             onApplyAdvancedNutrition={handleApplyAdvancedNutrition}
+            nutritionAuthority={{
+              enabled: nutritionAuthorityActive,
+              available: nutritionAuthorityScope.length > 0,
+              recipeIdentity: recipeIdentityOf(displayRecipe),
+              vaultScope: nutritionAuthorityScope,
+              onChange: setNutritionAuthority,
+            }}
             onResolveAdvancedNutritionAi={handleResolveAdvancedNutritionAi}
             onResolveAdvancedNutritionAiFirst={
               AI_FIRST_GENERATE_ENABLED ? handleResolveAdvancedNutritionAiFirst : undefined
@@ -5370,6 +5530,10 @@ export default function App({
         vaultCapabilities={shisoVaultCapabilityOverride ?? shisoVaultCapabilities}
         onVaultRecipeSelected={handleShisoVaultRecipeSelected}
         getSaveAuthorizationRecipe={getShisoSaveAuthorizationRecipe}
+        nutritionAuthority={{
+          enabled: nutritionAuthorityActive,
+          vaultScope: nutritionAuthorityScope,
+        }}
         // General SHISO can select a Vault recipe during the same turn. Keep
         // that selection inside the capability/review owner without changing
         // the conversation context key from `global` to `recipe:*` halfway

@@ -13,6 +13,7 @@ import { dirname, join } from 'node:path';
 import App from '../../src/App';
 import { ShisoEntryProvider, useShiso } from '../../src/application-ui/shisoEntryPoints';
 import type { NetworkAdapter } from '../../src/application/adapters/NetworkAdapter';
+import type { SettingsAdapter } from '../../src/application/adapters/SettingsAdapter';
 import { createBrowserVaultAdapter } from '../../src/platform/browser';
 import { loadVaultContent } from '../../src/application/vaultContent';
 import { hydrateAiSelections } from '../../src/application/aiSelection';
@@ -37,10 +38,11 @@ servings: 2
 1. Mix and cook.
 `;
 
-const settings = {
-  get: async () => null,
-  set: async () => {},
-  remove: async () => {},
+const settingsValues = new Map<string, unknown>();
+const settings: SettingsAdapter = {
+  get: async <T = unknown>(key: string) => settingsValues.get(key) as T | undefined,
+  set: async <T = unknown>(key: string, value: T) => { settingsValues.set(key, value); },
+  remove: async (key: string) => { settingsValues.delete(key); },
 };
 
 class DiskFileHandle {
@@ -157,6 +159,7 @@ describe('SHISO agent foundation real App save closure', () => {
   afterEach(async () => {
     cleanup();
     vi.restoreAllMocks();
+    settingsValues.clear();
     delete (window as unknown as { showDirectoryPicker?: unknown }).showDirectoryPicker;
     while (roots.length > 0) await rm(roots.pop()!, { recursive: true, force: true });
   });
@@ -236,4 +239,85 @@ describe('SHISO agent foundation real App save closure', () => {
     expect(saved?.codexNutrition).toMatchObject({ status: 'complete', sources: ['usda_fdc'] });
     expect((saved?.codexNutrition as { readonly ingredients?: readonly unknown[] } | undefined)?.ingredients).toHaveLength(2);
   }, 90000);
+
+  it('persists standing-authority nutrition through the real App, honors do-not-save, and restores the prior value', async () => {
+    await hydrateAiSelections(settings);
+    const rootPath = await mkdtemp(join('/tmp', 'tkc-shiso-authority-app-'));
+    roots.push(rootPath);
+    const recipePath = join(rootPath, 'Recipes', 'Dinner', 'Nutrition Fixture.md');
+    await mkdir(dirname(recipePath), { recursive: true });
+    await writeFile(recipePath, nutritionRecipeMarkdown, 'utf8');
+    const root = new DiskDirectoryHandle('Disposable SHISO Authority Vault', rootPath);
+    (window as unknown as { showDirectoryPicker: () => Promise<DiskDirectoryHandle> }).showDirectoryPicker = async () => root;
+
+    const { manifest, records } = buildMatchingBundle([
+      { fdcId: 7001, dataType: 'foundation', description: 'Butter, unsalted' },
+      { fdcId: 7002, dataType: 'foundation', description: 'Salt, table' },
+    ]);
+    const created = createAdvancedNutritionSession(manifest, records);
+    if (!created.ok) throw new Error('fixture USDA session failed');
+    const loader = vi.fn(async (): Promise<RuntimeBundleResult> => ({
+      ok: true,
+      session: created.session,
+      metadata: created.session.metadata(),
+      attribution: USDA_ATTRIBUTION,
+    }));
+    const network = scriptedNetwork([
+      { ok: true, kind: 'reply', text: 'No provider step was required.', proposals: [] },
+    ], {
+      '/api/nutrition/product-access': { ok: true, version: NUTRITION_PRODUCT_ACCESS_VERSION, tier: 'ai_advanced' },
+      '/api/providers': { providers: [] },
+    });
+
+    render(
+      <ShisoEntryProvider>
+        <App
+          shisoNetworkAdapterOverride={network}
+          shisoNutritionBundleLoaderOverride={loader}
+          shisoSettingsAdapterOverride={settings}
+        />
+      </ShisoEntryProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect Vault' }));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Live Directory Sync' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose Local Obsidian Vault Folder' }));
+    await screen.findByText(/Connected live to vault "Disposable SHISO Authority Vault"/);
+    fireEvent.click(screen.getByRole('button', { name: 'Close Vault settings' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Nutrition Fixture' }));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Generate Nutrition' }));
+    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await waitFor(() => expect(loader).toHaveBeenCalledTimes(1));
+    const authorityToggle = await screen.findByTestId('shiso-nutrition-authority-toggle') as HTMLInputElement;
+    expect(authorityToggle.checked).toBe(false);
+    fireEvent.click(authorityToggle);
+    await waitFor(() => expect(authorityToggle.checked).toBe(true));
+    fireEvent.click(screen.getByRole('button', { name: 'Close Advanced Nutrition' }));
+
+    fireEvent.click(await screen.findByTestId('recipe-shiso-entry'));
+    const composer = await screen.findByPlaceholderText('Ask Shiso…') as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: 'Fix the missing ingredients in this nutrition review.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(document.body.textContent).toContain('Standing nutrition authority applied the reviewed result'));
+
+    let persisted = await loadVaultContent(createBrowserVaultAdapter(root));
+    expect(persisted.recipes.find((recipe) => recipe.title === 'Nutrition Fixture')?.codexNutrition)
+      .toMatchObject({ status: 'complete', sources: ['usda_fdc'] });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close Shiso' }));
+    const restore = await screen.findByRole('button', { name: 'Restore previous nutrition' });
+    fireEvent.click(restore);
+    await screen.findByText(/Restored the previous nutrition values/);
+    persisted = await loadVaultContent(createBrowserVaultAdapter(root));
+    expect(persisted.recipes.find((recipe) => recipe.title === 'Nutrition Fixture')?.codexNutrition).toBeUndefined();
+
+    fireEvent.click(await screen.findByTestId('recipe-shiso-entry'));
+    const noSaveComposer = await screen.findByPlaceholderText('Ask Shiso…') as HTMLTextAreaElement;
+    const beforeNoSave = await readFile(recipePath, 'utf8');
+    fireEvent.change(noSaveComposer, { target: { value: 'Complete the nutrition, but do not save.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(document.body.textContent).toContain('Nothing was applied or saved'));
+    expect(await readFile(recipePath, 'utf8')).toBe(beforeNoSave);
+  }, 120000);
 });

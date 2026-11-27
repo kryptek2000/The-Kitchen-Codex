@@ -117,6 +117,13 @@ interface RecipeDetailViewProps {
   advancedNutritionAiAvailability?: AdvancedNutritionAiAvailability;
   /** Explicit Phase 5B Apply handler (browser shell only). */
   onApplyAdvancedNutrition?: AdvancedNutritionApplyHandler;
+  nutritionAuthority?: {
+    readonly enabled: boolean;
+    readonly available: boolean;
+    readonly recipeIdentity?: string;
+    readonly vaultScope?: string;
+    readonly onChange: (enabled: boolean) => Promise<void> | void;
+  };
   /** Optional AI-assisted USDA resolution port (browser shell only). */
   onResolveAdvancedNutritionAi?: AdvancedNutritionAiResolveHandler;
   /** Optional AI-FIRST Generate resolution port (browser shell only). */
@@ -159,6 +166,7 @@ export function RecipeDetailView({
   onLoadAdvancedNutritionBundle,
   advancedNutritionAiAvailability,
   onApplyAdvancedNutrition,
+  nutritionAuthority,
   onResolveAdvancedNutritionAi,
   onResolveAdvancedNutritionAiFirst,
   onResearchAdvancedNutritionAi,
@@ -1100,6 +1108,7 @@ export function RecipeDetailView({
                 advancedNutritionBundleStatus={advancedNutritionBundleStatus}
                 onLoadAdvancedNutritionBundle={onLoadAdvancedNutritionBundle}
                 onApplyAdvancedNutrition={onApplyAdvancedNutrition}
+                nutritionAuthority={nutritionAuthority}
                 onResolveAdvancedNutritionAi={onResolveAdvancedNutritionAi}
                 onResolveAdvancedNutritionAiFirst={onResolveAdvancedNutritionAiFirst}
                 onResearchAdvancedNutritionAi={onResearchAdvancedNutritionAi}

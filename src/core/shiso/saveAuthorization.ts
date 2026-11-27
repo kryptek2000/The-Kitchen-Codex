@@ -148,15 +148,19 @@ export function recipeIdentityOf(
  */
 export interface ShisoSaveGrant {
   readonly authorized: true;
-  /** 'ui' = a genuine Save control; 'assistant' = a natural-language command. */
-  readonly via: 'ui' | 'assistant';
+  /** Standing authority is restricted to a nutrition Apply in the same turn. */
+  readonly via: 'ui' | 'assistant' | 'standing_nutrition';
   /** Bound at issuance; the recipe being saved must match for 'assistant'. */
   readonly recipe_identity: string;
   /** The user turn that issued the authorization (0 for a UI action). */
   readonly turn: number;
+  /** Required only for standing nutrition authority; never a raw Vault path. */
+  readonly vault_scope?: string;
+  /** Defense in depth: the trusted surface confirms nutrition Apply succeeded first. */
+  readonly nutrition_applied?: true;
 }
 
-export type ShisoSaveGrantRejection = 'not_authorized' | 'stale_recipe';
+export type ShisoSaveGrantRejection = 'not_authorized' | 'stale_recipe' | 'stale_vault';
 
 /**
  * INDEPENDENT re-verification at the persistence owner. A grant that is absent,
@@ -167,18 +171,26 @@ export type ShisoSaveGrantRejection = 'not_authorized' | 'stale_recipe';
 export function verifySaveGrant(
   grant: unknown,
   currentRecipeIdentity: string,
+  currentVaultScope = '',
 ): { readonly ok: true } | { readonly ok: false; readonly reason: ShisoSaveGrantRejection } {
   if (grant === null || typeof grant !== 'object') return { ok: false, reason: 'not_authorized' };
   const record = grant as Record<string, unknown>;
   if (record['authorized'] !== true) return { ok: false, reason: 'not_authorized' };
   const via = record['via'];
-  if (via !== 'ui' && via !== 'assistant') return { ok: false, reason: 'not_authorized' };
+  if (via !== 'ui' && via !== 'assistant' && via !== 'standing_nutrition') return { ok: false, reason: 'not_authorized' };
   if (via === 'ui') return { ok: true };
   const boundIdentity = record['recipe_identity'];
   if (typeof boundIdentity !== 'string' || boundIdentity.length === 0) {
     return { ok: false, reason: 'not_authorized' };
   }
   if (boundIdentity !== currentRecipeIdentity) return { ok: false, reason: 'stale_recipe' };
+  if (via === 'standing_nutrition') {
+    if (record['nutrition_applied'] !== true) return { ok: false, reason: 'not_authorized' };
+    const vaultScope = record['vault_scope'];
+    if (typeof vaultScope !== 'string' || vaultScope.length === 0 || vaultScope !== currentVaultScope) {
+      return { ok: false, reason: 'stale_vault' };
+    }
+  }
   return { ok: true };
 }
 

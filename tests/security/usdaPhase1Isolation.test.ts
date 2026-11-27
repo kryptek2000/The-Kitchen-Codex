@@ -32,6 +32,8 @@ const ADVANCED_NAMESPACE = resolve(ROOT, 'src/core/nutritionV2');
 const PHASE45B_BROWSER_LOADER = resolve(ROOT, 'src/browser/advancedNutritionBundle.ts');
 /** The audited Phase 5B application write coordinator (reuses the canonical digest). */
 const PHASE5B_APPLY_MODULE = resolve(ROOT, 'src/application/advancedNutritionApply.ts');
+/** SHISO's Vault-scoped authority binds only an opaque scope through the pure digest helper. */
+const SHISO_AUTHORITY_MODULE = resolve(ROOT, 'src/core/shiso/nutritionAuthority.ts');
 
 function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
@@ -143,6 +145,7 @@ describe('usda phase 1 — no network, no keys, no persistence', () => {
         if (file.startsWith(ADVANCED_NAMESPACE)) continue; // Phases 1–4 are internal
         if (file === PHASE45B_BROWSER_LOADER) continue; // Phase 4.5B runtime loader (audited)
         if (file === PHASE5B_APPLY_MODULE) continue; // Phase 5B Apply coordinator (audited)
+        if (file === SHISO_AUTHORITY_MODULE) continue; // SHISO authority uses digest only
         const source = readFileSync(file, 'utf8');
         let match: RegExpExecArray | null;
         importRe.lastIndex = 0;
@@ -180,6 +183,8 @@ describe('usda phase 1 — no network, no keys, no persistence', () => {
     // canonical Phase 1 digest (never a private USDA record/store surface).
     expect(readFileSync(PHASE5B_APPLY_MODULE, 'utf8')).toMatch(/nutritionV2\/usda\/digest/);
     expect(readFileSync(PHASE5B_APPLY_MODULE, 'utf8')).not.toMatch(/nutritionV2\/usda\/(store|adapter|record|raw)/);
+    expect(readFileSync(SHISO_AUTHORITY_MODULE, 'utf8')).toMatch(/nutritionV2\/usda\/digest/);
+    expect(readFileSync(SHISO_AUTHORITY_MODULE, 'utf8')).not.toMatch(/nutritionV2\/usda\/(store|adapter|record|raw)/);
   });
 
   it('is not re-exported from the Phase 0 / core barrels', () => {

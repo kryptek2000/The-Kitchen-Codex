@@ -2167,6 +2167,54 @@ export function queryParentheticalIdentityTokens(text: string): ReadonlyArray<st
   return Object.freeze(identity);
 }
 
+export interface IngredientAlternativeProjection {
+  readonly alternatives: ReadonlyArray<string>;
+  /** Index of the as-written primary branch; null means the author gave equal choices. */
+  readonly primary_index: number | null;
+}
+
+/**
+ * Projects an explicitly authored mutually-exclusive food choice without
+ * choosing it. `honey (or brown sugar)` has an as-written primary; `honey or
+ * brown sugar` is an equal choice. Quantities and preparation remain outside
+ * the branch identity and are supplied separately to the calculator.
+ */
+export function projectIngredientAlternatives(text: string): IngredientAlternativeProjection | null {
+  const bounded = String(text).normalize('NFKC').slice(0, 500);
+  const parenthetical = /\(\s*or\s+([^()]{1,160})\)/i.exec(bounded);
+  if (parenthetical) {
+    const primaryText = bounded.replace(parenthetical[0], ' ');
+    const primary = projectQueryText(primaryText).food_identity.trim();
+    const alternate = projectQueryText(parenthetical[1] ?? '').food_identity.trim();
+    if (primary.length > 0 && alternate.length > 0 && primary !== alternate) {
+      return Object.freeze({ alternatives: Object.freeze([primary, alternate]), primary_index: 0 });
+    }
+    return null;
+  }
+  const directParts = bounded.split(/\s+or\s+/i);
+  if (directParts.length >= 2 && directParts.length <= 4) {
+    const stripLeadingMeasure = (value: string): string => value
+      .replace(/^\s*(?:\d+(?:\.\d+)?|\d+\s*\/\s*\d+|\d+\s+\d+\s*\/\s*\d+)\s*/, '')
+      .replace(/^\s*(?:cups?|tablespoons?|tbsp|teaspoons?|tsp|ounces?|oz|pounds?|lbs?|grams?|g|kilograms?|kg|milliliters?|ml|liters?|l)\b\s*/i, '')
+      .trim();
+    const alternatives = directParts
+      .map((part, index) => projectQueryText(index === 0 ? stripLeadingMeasure(part) : part).food_identity.trim())
+      .filter((branch, index, all) => branch.length > 0 && all.indexOf(branch) === index);
+    if (alternatives.length >= 2) {
+      return Object.freeze({ alternatives: Object.freeze(alternatives), primary_index: null });
+    }
+  }
+  const projection = projectQueryText(bounded);
+  if (projection.alternative_groups.length < 2) return null;
+  const alternatives = projection.alternative_groups
+    .map((branch) => branch.join(' ').trim())
+    .filter((branch, index, all) => branch.length > 0 && all.indexOf(branch) === index)
+    .slice(0, 4);
+  return alternatives.length >= 2
+    ? Object.freeze({ alternatives: Object.freeze(alternatives), primary_index: null })
+    : null;
+}
+
 /** True when the query itself explicitly requests a negation/variant qualifier. */
 export function queryRequestsNegation(projection: IngredientQueryProjection): boolean {
   return projection.food_tokens.some((token) => NEGATION_TOKENS.has(token));

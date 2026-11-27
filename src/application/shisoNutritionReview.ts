@@ -120,7 +120,7 @@ export function createShisoNutritionReviewController(
 
   const getLiveRows = (): readonly LiveRowState[] => {
     const analyzedByRef = new Map<string, AnalyzedRow>(analysis.rows.map((row) => [row.line_ref, row]));
-    return projectLiveRows(
+    const rows = projectLiveRows(
       state,
       analyzedByRef,
       adapted,
@@ -129,6 +129,22 @@ export function createShisoNutritionReviewController(
       analysis.portions,
       analysis.countPortions,
     );
+    // The core calculator preserves an automatically discovered equal-
+    // alternative as raw diagnostic evidence, but SHISO's working review must
+    // present that line as unresolved until the user chooses a branch. This is
+    // a presentation-level projection only; Phase 5 independently enforces the
+    // same boundary before Apply/Save.
+    return rows.map((row) => {
+      const evidence = state.preview?.ingredients.find((entry) => entry.line_ref === row.line_ref);
+      if (evidence?.outcome !== 'ambiguous' || evidence.match_status === 'user_confirmed') return row;
+      return {
+        ...row,
+        status: 'needs_match' as const,
+        resolved_grams: undefined,
+        mass_source: undefined,
+        portion_index: undefined,
+      };
+    });
   };
 
   const getSnapshot = (): ShisoNutritionSnapshot => {

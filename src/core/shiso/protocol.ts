@@ -399,6 +399,7 @@ export interface ShisoRecipeSaveOutcome {
   readonly reason_code?:
     | 'not_authorized'
     | 'stale_recipe'
+    | 'stale_vault'
     | 'nothing_unsaved'
     | 'no_owner'
     | 'write_failed';

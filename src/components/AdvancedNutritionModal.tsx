@@ -315,6 +315,11 @@ interface AdvancedNutritionModalProps {
   /** Runs the registered, recipe-bound SHISO structured nutrition request. */
   onAnalyzeRecipe?: () => void;
   shisoAnalysisState?: { readonly kind: 'idle' | 'running' | 'success' | 'error'; readonly message: string | null };
+  nutritionAuthority?: {
+    readonly enabled: boolean;
+    readonly available: boolean;
+    readonly onChange: (enabled: boolean) => Promise<void> | void;
+  };
   /** Number of analyzer runs in this modal session (visible feedback). */
   analysisRuns?: number;
   /** True when the working review diverges from the saved Advanced result. */
@@ -1136,6 +1141,7 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
   onAnalyze,
   onAnalyzeRecipe = () => {},
   shisoAnalysisState = { kind: 'idle', message: null },
+  nutritionAuthority,
   analysisRuns = 0,
   workingDirty = false,
   hydratedFromSaved = false,
@@ -2158,7 +2164,9 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                 <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary,#9CA3AF)]">Intelligent completion</p>
                 <p className="text-[18px] font-serif text-[var(--text-primary,#F3F4F6)]">Analyze with SHISO</p>
                 <p className="text-[14px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
-                  Runs the genuine whole-recipe AI-first workflow only when you explicitly choose it. SHISO proposes; the local USDA catalog and calculator verify; nothing is saved until Apply.
+                  {nutritionAuthority?.enabled
+                    ? 'Runs the verified whole-recipe workflow and saves through the active Vault authority after analysis. Equal ingredient choices still require your selection.'
+                    : 'Runs the genuine whole-recipe AI-first workflow only when you explicitly choose it. SHISO proposes; the local USDA catalog and calculator verify; nothing is saved until Apply.'}
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -2166,7 +2174,7 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                   type="button"
                   data-testid="advanced-nutrition-analyze-with-shiso"
                   onClick={onAnalyzeRecipe}
-                  disabled={shisoAnalysisState.kind === 'running' || (ai !== undefined && ai.available === false)}
+                  disabled={shisoAnalysisState.kind === 'running'}
                   aria-describedby="advanced-nutrition-shiso-status"
                   className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-amber-500 px-4 text-[14px] font-semibold text-black transition-colors hover:bg-amber-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring,#F59E0B)] disabled:cursor-not-allowed disabled:opacity-50"
                 >
@@ -2190,8 +2198,30 @@ export const AdvancedNutritionModal: React.FC<AdvancedNutritionModalProps> = ({
                 aria-live="polite"
                 className={`text-[14px] ${shisoAnalysisState.kind === 'error' ? 'text-[var(--text-primary,#F3F4F6)]' : shisoAnalysisState.kind === 'success' ? 'text-[var(--text-primary,#F3F4F6)]' : 'text-[var(--text-secondary,#9CA3AF)]'}`}
               >
-                {shisoAnalysisState.message ?? (shisoAnalysisState.kind === 'idle' ? 'Analysis creates a review only. Apply and Vault saving are separate steps.' : '')}
+                {shisoAnalysisState.message ?? (shisoAnalysisState.kind === 'idle'
+                  ? nutritionAuthority?.enabled
+                    ? 'SHISO will automatically apply and save eligible nutrition results. Unresolved ingredient choices or failed verification will prevent saving.'
+                    : 'Analysis creates a working review only. Apply and Vault saving are separate steps.'
+                  : '')}
               </p>
+              {nutritionAuthority && (
+                <label className="flex min-h-[44px] items-start gap-3 rounded-lg border border-[var(--border-subtle,rgba(255,255,255,0.08))] bg-[var(--bg-surface,#141414)] p-3">
+                  <input
+                    type="checkbox"
+                    data-testid="shiso-nutrition-authority-toggle"
+                    checked={nutritionAuthority.enabled}
+                    disabled={!nutritionAuthority.available}
+                    onChange={(event) => { void nutritionAuthority.onChange(event.currentTarget.checked); }}
+                    className="mt-1 h-4 w-4 accent-[var(--accent,#F59E0B)]"
+                  />
+                  <span className="space-y-1">
+                    <span className="block text-[14px] font-semibold text-[var(--text-primary,#F3F4F6)]">Allow SHISO to manage and save nutrition automatically</span>
+                    <span className="block text-[12px] leading-relaxed text-[var(--text-secondary,#9CA3AF)]">
+                      Applies only to nutrition in this Vault. Recipe and Vault changes are still conflict-checked, and “don’t save” always wins. You can turn this off at any time.
+                    </span>
+                  </span>
+                </label>
+              )}
             </div>
 
             {analysis && (

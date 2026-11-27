@@ -78,6 +78,7 @@ import type { AdvisoryNutritionPreview } from '../calculation/types';
 import { recomputeReviewedNutrition } from '../phase4/session';
 import { adaptRecipe } from '../phase4/adapt';
 import { ingredientMeasurement } from '../phase4/rows';
+import { projectIngredientAlternatives } from '../phase4';
 import { hasDangerousOwnKey, hasSymbolKeys, materializeNarrow, readOwnDataField } from '../phase4/materialize';
 import {
   PHASE5_AUTHORIZATION_VERSION,
@@ -633,6 +634,21 @@ function authorizeNutritionPersistenceInternal(
       return fail(mapPhase4Failure(failure.code));
     }
     const trusted = recompute.result;
+
+    // Equal authored alternatives are a hard Apply boundary. The Phase 3
+    // calculator may expose both branches for investigation, but only an
+    // explicit user-confirmed review selection can authorize a definitive
+    // persisted result. This is intentionally general and does not identify
+    // individual foods or weights.
+    const adaptedForAlternativeCheck = adaptRecipe(recipeField.value);
+    if (!adaptedForAlternativeCheck.ok) return fail('invalid_request');
+    const equalAlternativeRefs = adaptedForAlternativeCheck.recipe.adapted
+      .filter((entry) => projectIngredientAlternatives(entry.ingredient.original)?.primary_index === null)
+      .map((entry) => entry.line_ref);
+    for (const lineRef of equalAlternativeRefs) {
+      const evidence = trusted.preview.ingredients.find((entry) => entry.line_ref === lineRef);
+      if (evidence?.match_status !== 'user_confirmed') return fail('explicit_choice_required');
+    }
 
     if (rawServings.value !== trusted.servings) return fail('stale_preview');
     let persistencePreview = trusted.preview;

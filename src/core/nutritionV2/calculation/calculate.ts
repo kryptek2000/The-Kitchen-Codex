@@ -24,7 +24,7 @@ import { isNutrientId, NUTRIENT_IDS, NUTRIENT_REGISTRY, type NutrientId } from '
 import { isValidNutrientAmount, MAX_NUTRIENT_AMOUNT, type CanonicalUnit } from '../units';
 import { normalizeQuery } from '../matching/normalize';
 import { parseIngredient } from '../matching/parse';
-import { projectQueryText } from '../matching/query';
+import { projectIngredientAlternatives, projectQueryText } from '../matching/query';
 import { confirmIngredientReview, reviewIngredient } from '../matching/review';
 import { isDeterministicAutomaticSelection } from '../matching/confidence';
 import type { ConfirmationResult, ReviewCatalog } from '../matching/types';
@@ -852,6 +852,18 @@ function evaluateIngredient(
     }
   }
 
+  // Authored equal alternatives are not a deterministic food choice. Preserve
+  // the matcher-selected identity and mass as diagnostic evidence so the
+  // established raw-production benchmark remains truthful, but mark the line
+  // ambiguous so it cannot contribute to definitive totals or Phase 5 until
+  // the user explicitly confirms one branch. The explicit `user_confirmed`
+  // path is the existing manual review authority; no new selection mechanism
+  // is introduced here.
+  const equalAlternative = projectIngredientAlternatives(parsed.original_text)?.primary_index === null;
+  if (equalAlternative && matchStatus !== 'user_confirmed') {
+    ambiguous = true;
+  }
+
   // Resolve the current canonical record for a matched identity.
   let record: CanonicalUsdaFoodRecord | undefined;
   if (matched && fdcId !== undefined) {
@@ -1330,6 +1342,10 @@ export function runAdvisoryCalculation(inputs: AdvisoryCalculationInputs): Calcu
         let covered = 0;
         for (const entry of ordered) {
           if (entry.qualitative) continue;
+          // Keep ambiguous equal-alternative evidence visible on the line, but
+          // exclude it from any definitive recipe total until a user confirms
+          // the authored choice.
+          if (entry.ambiguous) continue;
           const value = entry.contributions[nutrient];
           if (value === undefined) continue;
           covered += 1;

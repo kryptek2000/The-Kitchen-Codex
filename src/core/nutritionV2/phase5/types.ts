@@ -35,6 +35,7 @@ export type Phase5AuthorizationFailureCode =
   | 'unresolved_authority'
   | 'schema_invalid'
   | 'calculation_mismatch'
+  | 'explicit_choice_required'
   | 'applied_line_unresolved'
   | 'unknown_future_schema'
   | 'unsafe_request'
@@ -48,6 +49,7 @@ export const PHASE5_FAILURE_MESSAGE: Readonly<Record<Phase5AuthorizationFailureC
     unresolved_authority: 'phase5_unresolved_authority',
     schema_invalid: 'phase5_schema_invalid',
     calculation_mismatch: 'phase5_calculation_mismatch',
+    explicit_choice_required: 'phase5_explicit_choice_required',
     applied_line_unresolved: 'phase5_applied_line_unresolved',
     unknown_future_schema: 'phase5_unknown_future_schema',
     unsafe_request: 'phase5_unsafe_request',
