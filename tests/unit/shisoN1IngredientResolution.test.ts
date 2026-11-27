@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { executeShisoTool, type ShisoToolContext } from '../../src/application/shisoTools';
+import { createShisoNutritionReviewController } from '../../src/application/shisoNutritionReview';
 import { parseIngredient } from '../../src/core/nutritionV2/matching/parse';
 import { adaptRecipe } from '../../src/core/nutritionV2/phase4/adapt';
 import { analyzeRecipe } from '../../src/core/nutritionV2/phase4/analyzer';
@@ -20,6 +21,7 @@ import { USDA_BUNDLE_RELEASE_LOCK } from '../../src/core/nutritionV2/usda/releas
 import type { AdvancedNutritionSession } from '../../src/core/nutritionV2/phase4';
 import type { AiNutrientContribution } from '../../src/core/nutritionV2/aiContribution';
 import type { LiveRowState } from '../../src/core/nutritionV2/phase4/liveRow';
+import type { ObsidianRecipe } from '../../src/types';
 
 const BUNDLE_DIR = join(
   __dirname,
@@ -72,6 +74,23 @@ describe('N-1 ordinary ingredient resolution', () => {
   });
 
   it('resolves sliced strawberries and toasted pecans with authenticated household portions', () => {
+    const strawberrySearch = session.searchFoods('strawberries', 20);
+    expect(strawberrySearch.ok).toBe(true);
+    if (!strawberrySearch.ok) return;
+    const strawberryRecord = strawberrySearch.results.find((food) => food.description === 'Strawberries, raw' && food.data_type === 'fndds');
+    expect(strawberryRecord).toBeDefined();
+    if (strawberryRecord === undefined) return;
+    const strawberryPortions = session.reviewPortions(strawberryRecord.fdc_id);
+    expect(strawberryPortions.ok).toBe(true);
+    if (!strawberryPortions.ok) return;
+    const oneCupStrawberries = strawberryPortions.review.candidates.find((candidate) =>
+      candidate.kind === 'volume' &&
+      candidate.unit === 'cup' &&
+      candidate.effective_amount === 1 &&
+      candidate.gram_weight === 150
+    );
+    expect(oneCupStrawberries).toBeDefined();
+
     const result = adaptRecipe({
       title: 'Strawberry Spinach Salad',
       servings: 2,
@@ -89,11 +108,118 @@ describe('N-1 ordinary ingredient resolution', () => {
       'Strawberries, raw',
       'Pecans, NFS',
     ]);
+    const automaticStrawberryFdcId = analysis.rows[0]?.selected_fdc_id;
+    expect(automaticStrawberryFdcId).toEqual(expect.any(Number));
+    if (automaticStrawberryFdcId === undefined) return;
+    const automaticStrawberryPortions = session.reviewPortions(automaticStrawberryFdcId);
+    expect(automaticStrawberryPortions.ok).toBe(true);
+    if (!automaticStrawberryPortions.ok) return;
+    expect(automaticStrawberryPortions.review.candidates.some((candidate) =>
+      candidate.kind === 'volume' && candidate.unit === 'cup' && candidate.gram_weight > 0
+    )).toBe(true);
     expect(analysis.preview?.ingredients.map((entry) => entry.outcome)).toEqual(['calculated', 'calculated']);
+    expect(analysis.preview?.ingredients[0]).toMatchObject({
+      mass_source: 'source_portion',
+    });
     expect(analysis.preview?.ingredients.map((entry) => entry.mass_source)).toEqual([
       'source_portion',
       'source_portion',
     ]);
+  });
+
+  it('refreshes completion from the review updated by analysis instead of a stale partial snapshot', async () => {
+    const recipe: ObsidianRecipe = {
+      id: '15-minute-strawberry-spinach-salad',
+      fileName: '15-Minute Strawberry Spinach Salad.md',
+      filePath: 'Recipes/15-Minute Strawberry Spinach Salad.md',
+      rawMarkdown: '',
+      title: '15-Minute Strawberry Spinach Salad',
+      tags: ['food/recipes'],
+      category: 'Salads & Bowls',
+      cuisine: 'American',
+      servings: 2,
+      difficulty: 'Easy',
+      rating: 0,
+      ingredients: [
+        { original: '3 cups sliced strawberries', amount: 3, unit: 'cups', name: 'sliced strawberries' },
+        { original: '1 cup toasted pecans', amount: 1, unit: 'cup', name: 'toasted pecans' },
+        { original: '2 cups sliced strawberries', amount: 2, unit: 'cups', name: 'sliced strawberries' },
+        { original: '1/2 cup toasted pecans', amount: 0.5, unit: 'cup', name: 'toasted pecans' },
+        { original: '1 cup sliced strawberries', amount: 1, unit: 'cup', name: 'sliced strawberries' },
+        { original: '1/2 cup toasted pecans', amount: 0.5, unit: 'cup', name: 'toasted pecans' },
+        { original: '1 cup sliced strawberries', amount: 1, unit: 'cup', name: 'sliced strawberries' },
+      ],
+      instructions: [{ stepNumber: 1, text: 'Toss the salad and serve.' }],
+      callouts: [],
+      dataviewFields: {},
+      wikilinks: [],
+    };
+    const controller = createShisoNutritionReviewController(recipe, session);
+    expect(controller).not.toBeNull();
+    if (controller === null) return;
+    const refreshed = controller.getSnapshot();
+    expect(refreshed.rows).toHaveLength(7);
+    expect(refreshed.rows.filter((row) => row.status === 'matched')).toHaveLength(7);
+
+    // This is the owner's starting state: a previous review still says that the
+    // two strawberry/pecan lines need a match even though a fresh analysis can
+    // now bind the authenticated identities and portions.
+    const stale = {
+      ...refreshed,
+      rows: refreshed.rows.map((row, index) => index < 2
+        ? { ...row, status: 'needs_match' as const, food_authority: 'none' as const, selected_fdc_id: undefined, selected_description: undefined, resolved_grams: undefined, mass_source: undefined }
+        : row),
+    };
+    let liveNutrition: typeof stale | typeof refreshed = stale;
+    const researchNutrition = vi.fn(async () => ({
+      ok: false as const,
+      code: 'WEB_RESEARCH_UNAVAILABLE',
+      message: 'The selected AI provider does not support grounded web research.',
+    }));
+    const runAiNutrition = vi.fn(async () => ({ ok: false as const, message: 'The selected AI connection is unavailable.' }));
+    const result = await executeShisoTool(
+      { tool: 'complete_nutrition' },
+      {
+        session,
+        recipe: {
+          title: recipe.title,
+          servings: recipe.servings ?? null,
+          ingredients: recipe.ingredients.map((ingredient, index) => ({
+            text: ingredient.original,
+            name: ingredient.name,
+            amount: ingredient.amount,
+            unit: ingredient.unit,
+            line_ref: refreshed.rows[index]!.line_ref,
+          })),
+          instructions: recipe.instructions,
+        },
+        get nutrition() {
+          return liveNutrition;
+        },
+        runAnalysis: vi.fn(async () => {
+          const outcome = controller.analyze();
+          liveNutrition = controller.getSnapshot();
+          return outcome;
+        }),
+        researchNutrition,
+        runAiNutrition,
+        acceptNutritionContributions: vi.fn(() => true),
+      } as ShisoToolContext,
+    );
+
+    expect(result).toMatchObject({ ok: true, tool: 'complete_nutrition' });
+    if (!result.ok) return;
+    expect(result.data['accounted']).toBe(7);
+    expect(result.data['remaining']).toBe(0);
+    expect(result.summary).toContain('7 of 7');
+    expect(result.data['breakdown']).toMatchObject({ ai_estimated: 0 });
+    expect(researchNutrition).not.toHaveBeenCalled();
+    // The source records cover every ingredient line. The pinned USDA fixture
+    // still has nutrient-level gaps, so the completion path may ask the
+    // independently authorized estimator about those gaps; an unavailable
+    // estimator must not turn resolved ingredient identities into unresolved
+    // lines or a false success.
+    expect(runAiNutrition).toHaveBeenCalledTimes(1);
   });
 });
 

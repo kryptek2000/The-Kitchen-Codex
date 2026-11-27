@@ -1481,6 +1481,66 @@ function brandedLookupFailureMessage(search: ShisoBrandedSearchOutcome): string 
   }
 }
 
+function nutritionCompletionAlreadyCurrent(
+  nutrition: NonNullable<ShisoToolContext['nutrition']>,
+  coverage: NutritionCoverage,
+): ShisoObservation {
+  const wholeReport = buildWholeRecipeNutrientReport(
+    nutrition.nutrientCoverage ?? [],
+    nutrition.aiContributions ?? [],
+    nutrition.nutrientSupplements ?? [],
+    new Map(),
+  );
+  return ok(
+    'complete_nutrition',
+    `Ingredient coverage is ${coverage.resolved + coverage.excluded} of ${coverage.total} lines. ` +
+      `${wholeRecipeNutrientSummary(wholeReport)} ` +
+      'No new source or estimate request was needed. Existing verified USDA contributions are unchanged. Nothing was applied or saved.',
+    {
+      total_lines: coverage.total,
+      accounted: coverage.resolved + coverage.excluded,
+      remaining: coverage.unresolved,
+      initial_unresolved: 0,
+      resolved_new: 0,
+      ingredient_coverage: {
+        total_lines: coverage.total,
+        accounted: coverage.resolved + coverage.excluded,
+        unresolved: coverage.unresolved,
+        generic_usda: coverage.source_backed,
+        usda_branded: coverage.lines.filter((line) => line.contribution?.source_kind === 'usda_branded').length,
+        external_research: coverage.lines.filter((line) => line.contribution?.classification === 'source_backed' && line.contribution.source_kind !== 'usda_branded').length,
+        ai_estimated: coverage.ai_estimated,
+        excluded: coverage.excluded,
+      },
+      nutrient_coverage: {
+        gap_lines_examined: 0,
+        filled_values: 0,
+        filled_lines: 0,
+        upgraded_to_source: 0,
+        remaining_partial_lines: 0,
+        remaining_partial_line_refs: [],
+        remaining_unknown_nutrients: [],
+        partial_known: 0,
+      },
+      breakdown: {
+        generic_usda: coverage.source_backed,
+        usda_branded: coverage.lines.filter((line) => line.contribution?.source_kind === 'usda_branded').length,
+        external_research: coverage.lines.filter((line) => line.contribution?.classification === 'source_backed' && line.contribution.source_kind !== 'usda_branded').length,
+        ai_estimated: coverage.ai_estimated,
+        excluded: coverage.excluded,
+        qualitative: coverage.qualitative,
+        partial_known: coverage.partial_known,
+      },
+      nutrition_status: 'partial',
+      preview_state: 'partial',
+      whole_recipe_nutrient_coverage: wholeReport,
+      steps: [],
+      notes: [],
+      honesty_note: 'No new provider or source request was made. This confirms only the review-declared nutrient gaps; it does not claim analytically complete nutrition for every USDA record.',
+    },
+  );
+}
+
 async function completeNutrition(ctx: ShisoToolContext, signal?: AbortSignal): Promise<ShisoObservation> {
   const recipe = ctx.recipe;
   if (recipe === null) {
@@ -1562,14 +1622,14 @@ async function completeNutrition(ctx: ShisoToolContext, signal?: AbortSignal): P
   const unchanged = () =>
     completionSnapshotKey(completionRecipeSnapshot(ctx)) === snapshotKey &&
     (digestAtStart === null || (ctx.nutrition?.recipeDigest ?? null) === digestAtStart);
-  const initialCoverage = deriveNutritionCoverage(nutrition.rows, nutrition.aiContributions ?? []);
-  const initialUnresolved = initialCoverage.lines.filter((line) => !line.resolved && line.status !== 'excluded');
+  let initialCoverage = deriveNutritionCoverage(nutrition.rows, nutrition.aiContributions ?? []);
+  let initialUnresolved = initialCoverage.lines.filter((line) => !line.resolved && line.status !== 'excluded');
   const recipeTextByRef = new Map<string, string>();
   for (const ingredient of ctx.recipe.ingredients) {
     if (typeof ingredient.line_ref === 'string') recipeTextByRef.set(ingredient.line_ref, ingredient.text);
   }
 
-  const initialGaps = nutrientGapLines(initialCoverage);
+  let initialGaps = nutrientGapLines(initialCoverage);
   if (initialUnresolved.length === 0 && nutrition.rows.length > 0) {
     // SINC-4: a fully resolved source-backed recipe can still have nutrient
     // gaps that are absent from the verified USDA records. Explicit completion
@@ -1580,60 +1640,7 @@ async function completeNutrition(ctx: ShisoToolContext, signal?: AbortSignal): P
     if (initialGaps.length > 0 || hasSourceBackedGaps) {
       return completeNutrientGaps(ctx, nutrition, initialCoverage, initialGaps, recipeTextByRef, unchanged, signal);
     }
-    const initialWholeReport = buildWholeRecipeNutrientReport(
-      nutrition.nutrientCoverage ?? [],
-      nutrition.aiContributions ?? [],
-      nutrition.nutrientSupplements ?? [],
-      new Map(),
-    );
-    return ok(
-      'complete_nutrition',
-      `Ingredient coverage is ${initialCoverage.resolved + initialCoverage.excluded} of ${initialCoverage.total} lines. ` +
-        `${wholeRecipeNutrientSummary(initialWholeReport)} ` +
-        `No new source or estimate request was needed. Existing verified USDA contributions are unchanged. Nothing was applied or saved.`,
-      {
-        total_lines: initialCoverage.total,
-        accounted: initialCoverage.resolved + initialCoverage.excluded,
-        remaining: initialCoverage.unresolved,
-        initial_unresolved: 0,
-        resolved_new: 0,
-        ingredient_coverage: {
-          total_lines: initialCoverage.total,
-          accounted: initialCoverage.resolved + initialCoverage.excluded,
-          unresolved: initialCoverage.unresolved,
-          generic_usda: initialCoverage.source_backed,
-          usda_branded: initialCoverage.lines.filter((line) => line.contribution?.source_kind === 'usda_branded').length,
-          external_research: initialCoverage.lines.filter((line) => line.contribution?.classification === 'source_backed' && line.contribution.source_kind !== 'usda_branded').length,
-          ai_estimated: initialCoverage.ai_estimated,
-          excluded: initialCoverage.excluded,
-        },
-        nutrient_coverage: {
-          gap_lines_examined: 0,
-          filled_values: 0,
-          filled_lines: 0,
-          upgraded_to_source: 0,
-          remaining_partial_lines: 0,
-          remaining_partial_line_refs: [],
-          remaining_unknown_nutrients: [],
-          partial_known: 0,
-        },
-        breakdown: {
-          generic_usda: initialCoverage.source_backed,
-          usda_branded: initialCoverage.lines.filter((line) => line.contribution?.source_kind === 'usda_branded').length,
-          external_research: initialCoverage.lines.filter((line) => line.contribution?.classification === 'source_backed' && line.contribution.source_kind !== 'usda_branded').length,
-          ai_estimated: initialCoverage.ai_estimated,
-          excluded: initialCoverage.excluded,
-          qualitative: initialCoverage.qualitative,
-          partial_known: initialCoverage.partial_known,
-        },
-        nutrition_status: 'partial',
-        preview_state: 'partial',
-        whole_recipe_nutrient_coverage: initialWholeReport,
-        steps: [],
-        notes: [],
-        honesty_note: 'No new provider or source request was made. This confirms only the review-declared nutrient gaps; it does not claim analytically complete nutrition for every USDA record.',
-      },
-    );
+    return nutritionCompletionAlreadyCurrent(nutrition, initialCoverage);
   }
 
   let analysis = initializedAnalysis;
@@ -1652,6 +1659,35 @@ async function completeNutrition(ctx: ShisoToolContext, signal?: AbortSignal): P
   }
   if (!unchanged()) {
     return fail('complete_nutrition', 'stale_recipe', 'The recipe changed while the source analysis was running. No contribution was accepted.');
+  }
+
+  // `runAnalysis` updates the application-owned review controller. Read that
+  // owner again before deriving completion coverage; the context object that
+  // was captured above may still describe the pre-analysis partial review.
+  const refreshedNutrition = ctx.nutrition;
+  if (refreshedNutrition !== null) nutrition = refreshedNutrition;
+  if (!nutritionMatchesActiveRecipe(ctx)) {
+    return fail(
+      'complete_nutrition',
+      'stale_recipe',
+      'This nutrition review no longer matches the open recipe. No contribution was accepted.',
+    );
+  }
+  initialCoverage = deriveNutritionCoverage(nutrition.rows, nutrition.aiContributions ?? []);
+  initialUnresolved = initialCoverage.lines.filter((line) => !line.resolved && line.status !== 'excluded');
+  initialGaps = nutrientGapLines(initialCoverage);
+
+  // The fresh source analysis may have resolved every line that was unresolved
+  // in the retained review. In that case, do not continue into branded/web/AI
+  // fallbacks merely because the old snapshot was partial.
+  if (initialUnresolved.length === 0 && nutrition.rows.length > 0) {
+    const hasSourceBackedGaps = (nutrition.nutrientCoverage ?? []).some(
+      (entry) => entry.missing_source_lines.length > 0
+    );
+    if (initialGaps.length > 0 || hasSourceBackedGaps) {
+      return completeNutrientGaps(ctx, nutrition, initialCoverage, initialGaps, recipeTextByRef, unchanged, signal);
+    }
+    return nutritionCompletionAlreadyCurrent(nutrition, initialCoverage);
   }
 
   // The review snapshot can be empty when the catalogue has just been loaded.
