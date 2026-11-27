@@ -30,4 +30,9 @@ export * from './aiAmountResolve';
 export * from './aiHouseholdResolve';
 export * from './deterministicAcceptanceView';
 export * from './aiPlanReconcile';
+// Phase 4 is the explicit application review boundary for the pure matching
+// projection. SHISO orchestration and Phase 5 authorization consume this
+// reviewed projection through the boundary rather than reaching into the
+// isolated matching namespace directly.
+export { projectIngredientAlternatives } from '../matching/query';
 export type { AiResolutionIssueKind } from '../aiResolution';

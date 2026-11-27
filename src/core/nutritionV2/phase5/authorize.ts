@@ -78,7 +78,7 @@ import type { AdvisoryNutritionPreview } from '../calculation/types';
 import { recomputeReviewedNutrition } from '../phase4/session';
 import { adaptRecipe } from '../phase4/adapt';
 import { ingredientMeasurement } from '../phase4/rows';
-import { projectIngredientAlternatives } from '../matching/query';
+import { projectIngredientAlternatives } from '../phase4';
 import { hasDangerousOwnKey, hasSymbolKeys, materializeNarrow, readOwnDataField } from '../phase4/materialize';
 import {
   PHASE5_AUTHORIZATION_VERSION,

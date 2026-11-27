@@ -35,9 +35,13 @@ import {
   type ShisoIngredientEditArgs,
 } from '../core/shiso/protocol';
 import { runBatchInvestigation } from '../core/shiso/batchInvestigation';
-import { projectIngredientAlternatives } from '../core/nutritionV2/matching/query';
 
-import { adaptRecipe, analyzeRecipe, type AdvancedNutritionSession } from '../core/nutritionV2/phase4';
+import {
+  adaptRecipe,
+  analyzeRecipe,
+  projectIngredientAlternatives,
+  type AdvancedNutritionSession,
+} from '../core/nutritionV2/phase4';
 import { buildPortionChoice } from '../core/nutritionV2/phase4/portion';
 import {
   buildBrandedContribution,
