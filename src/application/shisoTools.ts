@@ -43,7 +43,7 @@ import {
   type UsdaBrandedFoodCandidate,
 } from '../core/nutritionV2/brandedFoods';
 import type { LiveRowState } from '../core/nutritionV2/phase4/liveRow';
-import { completionLookupTarget } from '../core/nutritionV2/phase4/rows';
+import { bestEffortDiscoveryCandidates, completionLookupTarget } from '../core/nutritionV2/phase4/rows';
 import { sumNutrientSupplements, validateAiNutrientSupplements, type AiNutrientContribution, type AiNutrientSupplement } from '../core/nutritionV2/aiContribution';
 import { NUTRIENT_REGISTRY, type NutrientId } from '../core/nutritionV2/nutrients';
 import { deriveNutritionCoverage, nutritionCoverageSummary, type EffectiveNutritionLine, type NutritionCoverage, type ShisoNutrientCoverageEntry } from '../core/shiso/nutritionCoverage';
@@ -464,14 +464,32 @@ function searchUsdaFoods(ctx: ShisoToolContext, query: string, limit: number): S
   if (ctx.session === null) {
     return fail('search_usda_foods', 'no_nutrition_review', 'The USDA catalogue is not loaded.');
   }
-  const result = ctx.session.searchFoods(query, Math.min(limit, SHISO_LIMITS.maxSearchResults));
-  if (!result.ok) {
+
+  // Manual discovery uses the same identity projection as the Phase 4 analyzer.
+  // Raw token search over-authored wording (for example "toasted pecans") can
+  // miss a valid ordinary food, while broad overlap can surface an unrelated
+  // product that merely contains one word. The review authority separates food
+  // identity from preparation and exposes bounded same-family candidates. This
+  // remains discovery only; any later selection is re-authenticated by the
+  // calculation engine.
+  const boundedLimit = Math.min(limit, SHISO_LIMITS.maxSearchResults);
+  const numericId = /^\d+$/.test(query.trim());
+  const direct = numericId ? ctx.session.searchFoods(query, boundedLimit) : null;
+  const review = numericId ? null : ctx.session.reviewIngredient({ name: query });
+  const candidates = direct?.ok === true
+    ? direct.results
+    : review?.outcome === 'matched_exact'
+      ? review.candidates.filter((candidate) => candidate.fdc_id === review.selected_fdc_id)
+      : review?.outcome === 'review_required'
+        ? bestEffortDiscoveryCandidates(review)
+        : [];
+  if (candidates.length === 0) {
     return fail('search_usda_foods', 'catalog_search_empty', 'No matching USDA record was found.');
   }
-  const rows = result.results.slice(0, SHISO_LIMITS.maxSearchResults);
+  const rows = candidates.slice(0, boundedLimit);
   return ok('search_usda_foods', `${rows.length} matching USDA record(s)`, {
     query,
-    total_matches: result.total,
+    total_matches: direct?.ok === true ? direct.total : candidates.length,
     results: rows.map((r) => ({
       fdc_id: r.fdc_id,
       description: r.description.slice(0, 160),

@@ -419,7 +419,27 @@ describe('SHISO — bounded conversational turn against the real route', () => {
     const sessionStub = {
       searchFoods: () => ({ ok: true, total: 1, results: [{ fdc_id: 2707152, description: 'Egg, whole, raw', data_type: 'sr_legacy', match_class: 'exact', has_portion: true, portion_summary: null, record_digest: 'd' }] }),
       reviewPortions: () => ({ ok: true, review: { fdc_id: 1, record_digest: 'd', candidates: [{ index: 0, measure: '1 tbsp', kind: 'measure', gram_weight: 14, amount: 1, effective_amount: 1 }] } }),
-      reviewIngredient: () => ({ outcome: 'review_required', candidates: [], review_digest: 'r' }),
+      reviewIngredient: () => ({
+        outcome: 'review_required',
+        normalized_query: 'eggs',
+        candidates: [{
+          fdc_id: 2707152,
+          data_type: 'sr_legacy',
+          description: 'Egg, whole, raw',
+          normalized_description: 'egg whole raw',
+          record_digest: 'd',
+          match_class: 'all_query_tokens_present',
+          evidence: {
+            exact_phrase: false,
+            exact_token_multiset: false,
+            matched_query_token_count: 1,
+            missing_query_token_count: 0,
+            extra_candidate_token_count: 2,
+            order_agreement: false,
+          },
+        }],
+        review_digest: 'r',
+      }),
       reviewCountPortions: () => ({ ok: false }),
     };
     return {
@@ -542,7 +562,7 @@ describe('SHISO — bounded conversational turn against the real route', () => {
     prov.script = [
       { kind: 'tool_request', tool: 'get_current_recipe', args: {} },
       { kind: 'tool_request', tool: 'get_nutrition_review', args: {} },
-      { kind: 'tool_request', tool: 'search_usda_foods', args: { query: 'x' } },
+      { kind: 'tool_request', tool: 'search_usda_foods', args: { query: 'eggs' } },
       { kind: 'tool_request', tool: 'inspect_usda_food', args: { fdc_id: 1 } },
       { kind: 'tool_request', tool: 'investigate_ingredient_amount', args: { line_ref: 'x' } },
       { kind: 'tool_request', tool: 'get_current_recipe', args: {} },
