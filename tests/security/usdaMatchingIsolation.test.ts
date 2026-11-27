@@ -167,7 +167,7 @@ describe('phase 2 matching — isolation and purity', () => {
     for (const file of MATCHING_FILES) expect(file.endsWith('.ts')).toBe(true);
   });
 
-  it('is imported ONLY by the explicit Phase 4 review/display boundary', () => {
+  it('is imported only by audited review/display boundaries and SHISO projections', () => {
     const productionRoots = [resolve(ROOT, 'src'), resolve(ROOT, 'server')];
     const offenders: string[] = [];
     const importRe = /(?:from|import)\s*(?:\(\s*)?\s*['"]([^'"]+)['"]/g;
@@ -179,6 +179,13 @@ describe('phase 2 matching — isolation and purity', () => {
         // Basic Nutrition uses the same authenticated analyzer, never a second matcher.
         if (file === resolve(ROOT, 'src/application/catalogBasicNutrition.ts')) continue;
         if (file.startsWith(PHASE5C_DIR)) continue; // Phase 5C presentation selector (audited)
+        // SHISO uses only the canonical parser to retain authored quantity/unit
+        // context for its existing Phase 4 selection authority; it does not
+        // create a second matcher or access the catalog directly.
+        if (
+          file === resolve(ROOT, 'src/application/shisoConversation.ts') ||
+          file === resolve(ROOT, 'src/application-ui/useShisoRecipeContext.ts')
+        ) continue;
         const source = readFileSync(file, 'utf8');
         let match: RegExpExecArray | null;
         importRe.lastIndex = 0;

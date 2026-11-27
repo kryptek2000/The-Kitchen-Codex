@@ -452,9 +452,11 @@ describe('H-1 Scenario F — unsupported requests are refused truthfully', () =>
       expect(SHISO_TOOL_NAMES as readonly string[]).not.toContain(forbidden);
     }
     // Still a small, closed vocabulary (H-2 added the three authorized editing
-    // capabilities; SINC-3 added complete_nutrition, which prepares proposals
-    // only and never applies or saves).
-    expect(SHISO_TOOL_NAMES.length).toBe(19);
+    // capabilities; SINC-3 added complete_nutrition, and Agent Execution added
+    // authenticated USDA source selection; neither bypasses the application
+    // owners or expands access to files, shells, or arbitrary network calls).
+    expect(SHISO_TOOL_NAMES).toContain('select_usda_nutrition_source');
+    expect(SHISO_TOOL_NAMES.length).toBe(20);
   });
 
   it('the tool dispatcher still cannot reach the filesystem or network', () => {

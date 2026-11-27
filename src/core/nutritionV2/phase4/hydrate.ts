@@ -138,6 +138,7 @@ function manualSelectionObject(lineRef: string, match: MatchChoice): unknown {
     catalog_digest: match.catalog_digest,
     line_ref: lineRef,
     review_digest: match.review_digest,
+    ...(match.selectionOrigin === 'shiso_user_directed' ? { selection_origin: 'shiso_user_directed' } : {}),
   };
 }
 
@@ -207,7 +208,7 @@ export function hydrateWorkingReview(
   let hydrated = 0;
 
   /** Re-derives a reviewed manual match for one line from the pinned catalog. */
-  const reviewedMatchFor = (lineRef: string, fdcId: number): MatchChoice | undefined => {
+  const reviewedMatchFor = (lineRef: string, fdcId: number, selectionOrigin?: 'shiso_user_directed'): MatchChoice | undefined => {
     const row = rowByRef.get(lineRef);
     if (!row) return undefined;
     const search = session.searchFoods(String(fdcId), 1);
@@ -220,6 +221,7 @@ export function hydrateWorkingReview(
       review_digest: row.review_digest ?? '',
       record_digest: hit.record_digest,
       catalog_digest: catalogDigest,
+      ...(selectionOrigin === 'shiso_user_directed' ? { selectionOrigin } : {}),
       description: hit.description,
     });
   };
@@ -233,7 +235,7 @@ export function hydrateWorkingReview(
     const fdcId = parseFdcId(evidence.source_food_id);
     if (fdcId === undefined) continue;
 
-    const match = reviewedMatchFor(lineRef, fdcId);
+    const match = reviewedMatchFor(lineRef, fdcId, evidence.selection_origin);
     if (!match || evidence.source_release !== session.metadata().bundle_release) continue;
     matches[lineRef] = match;
     hydrated += 1;

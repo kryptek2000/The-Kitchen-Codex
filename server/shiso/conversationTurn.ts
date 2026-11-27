@@ -132,6 +132,12 @@ const SYSTEM_PROMPT = [
   "  when applied_count is 0, and never claim an ingredient was fixed unless it is in",
   "  `applied`. Never invent authenticated matches or portions — the application decides what",
   "  is supported and reports what is not.",
+  "- select_usda_nutrition_source: after search_usda_foods/inspect_usda_food identifies",
+  "  an authenticated record and portion for an unresolved line, use this capability to",
+  "  place that exact food and portion into the live review. Send the exact line_ref,",
+  "  fdc_id and portion_index returned by tools; the application re-authenticates them",
+  "  and calculates grams. This is a SHISO-directed working-review change, not a human",
+  "  confirmation, and it is never a reason to invent a value or save without authorization.",
   "- apply_nutrition_review: apply the complete application-owned Phase 4 review through",
   "  the same trusted Apply authority used by Advanced Nutrition. It changes only the",
   "  UNSAVED working recipe; it never saves to the Vault. Treat its observation as the",
@@ -246,6 +252,7 @@ const SYSTEM_PROMPT = [
     "get_branded_evidence      read accepted USDA Branded product evidence in the working review",
     "search_usda_foods         search the authenticated pinned USDA catalogue",
     "inspect_usda_food         read one authenticated record and its portions",
+    "select_usda_nutrition_source   place one authenticated food + portion into the working review",
     "investigate_ingredient_amount   diagnose ONE unresolved ingredient line",
     "investigate_unresolved_ingredients   diagnose EVERY unresolved line in one step (use this for 'all'/'investigate these')",
     "run_nutrition_analysis    prepare source-backed and validated AI-estimated nutrition in the unsaved review",
@@ -264,6 +271,7 @@ const SYSTEM_PROMPT = [
   "- {\"tool\":\"investigate_ingredient_amount\",\"line_ref\":\"<from get_current_recipe>\"}",
   "- {\"tool\":\"search_usda_foods\",\"query\":\"...\"}",
   "- {\"tool\":\"inspect_usda_food\",\"fdc_id\":123}",
+  "- {\"tool\":\"select_usda_nutrition_source\",\"line_ref\":\"<ref>\",\"fdc_id\":123,\"portion_index\":0}",
   "- {\"tool\":\"search_vault_recipes\",\"query\":\"chicken\",\"field\":\"ingredient\"}",
   "- {\"tool\":\"get_vault_recipe\",\"recipe_id\":\"<id from search_vault_recipes>\"}",
   "- {\"tool\":\"select_vault_recipe\",\"recipe_id\":\"<id from search_vault_recipes>\"}",
@@ -439,6 +447,8 @@ function salvageToolArgs(tool: ShisoToolName): ShisoToolArgs {
       return { tool, query: '', limit: 1 };
     case 'inspect_usda_food':
       return { tool, fdc_id: 0 };
+    case 'select_usda_nutrition_source':
+      return { tool, line_ref: '', fdc_id: 0, portion_index: -1 };
     case 'investigate_ingredient_amount':
       return { tool, line_ref: '' };
     case 'investigate_unresolved_ingredients':
@@ -549,6 +559,15 @@ function readToolArgs(tool: ShisoToolName, raw: unknown): ShisoToolArgs | null {
       if (typeof fdcId !== 'number' || !Number.isFinite(fdcId) || !Number.isInteger(fdcId)) return null;
       if (fdcId <= 0) return null;
       return { tool, fdc_id: fdcId };
+    }
+    case 'select_usda_nutrition_source': {
+      const lineRef = rec['line_ref'];
+      const fdcId = rec['fdc_id'];
+      const portionIndex = rec['portion_index'];
+      if (typeof lineRef !== 'string' || lineRef.trim().length === 0 || lineRef.trim().length > SHISO_LIMITS.maxSelectionLineRefChars) return null;
+      if (typeof fdcId !== 'number' || !Number.isSafeInteger(fdcId) || fdcId <= 0) return null;
+      if (typeof portionIndex !== 'number' || !Number.isSafeInteger(portionIndex) || portionIndex < 0) return null;
+      return { tool, line_ref: lineRef.trim(), fdc_id: fdcId, portion_index: portionIndex };
     }
     case 'investigate_ingredient_amount': {
       const lineRef = rec['line_ref'];

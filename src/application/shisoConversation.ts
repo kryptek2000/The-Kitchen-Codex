@@ -43,6 +43,11 @@ import { buildAiSelectionRequestOptions } from './aiSelection';
 import { executeShisoTool, type ShisoToolContext } from './shisoTools';
 import { planDeterministicIngredientEdit } from '../core/shiso/deterministicEdit';
 import { classifySaveIntent } from '../core/shiso/saveAuthorization';
+import {
+  projectIngredientAlternatives,
+  selectDeterministicVolumePortionIndex,
+} from '../core/nutritionV2/phase4';
+import { parseIngredient } from '../core/nutritionV2/matching/parse';
 
 /** How many verified findings survive across turns for continuation. */
 const MAX_RETAINED_FINDINGS = 12;
@@ -118,6 +123,87 @@ function requestsNutritionInvestigation(message: string): boolean {
 
 function requestsManualUsdaChoice(message: string): boolean {
   return /\b(?:use|choose|select)\b.{0,45}\bthis\s+(?:usda\s+)?(?:food|match|record)\b/i.test(message);
+}
+
+function normalizedFoodTokens(text: string): ReadonlySet<string> {
+  return new Set(
+    text
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((token) => token.length > 3 && token.endsWith('s') ? token.slice(0, -1) : token),
+  );
+}
+
+function userNamedBranch(userMessage: string, branch: string): boolean {
+  const messageTokens = normalizedFoodTokens(userMessage);
+  return [...normalizedFoodTokens(branch)].every((token) => messageTokens.has(token));
+}
+
+/**
+ * Executes the one safe autonomous-selection step that the owner asked for in
+ * plain language ("pick the honey"). This is intentionally generic: it only
+ * operates on a currently unresolved authored alternative, derives the food
+ * and portion from the authenticated session, and re-enters the normal
+ * `select_usda_nutrition_source` tool. It never invents an FDC id or a weight.
+ */
+async function tryDeterministicNutritionSourceSelection(
+  toolContext: ShisoToolContext,
+  userMessage: string,
+  signal?: AbortSignal,
+): Promise<ShisoObservation | null> {
+  if (signal?.aborted || toolContext.session === null || toolContext.nutrition === null || toolContext.recipe === null) return null;
+  if (toolContext.applyNutritionSourceSelection === undefined) return null;
+  if (!/\b(?:pick|choose|select|use|go\s+with)\b/i.test(userMessage)) return null;
+
+  for (const line of toolContext.recipe.ingredients) {
+    if (typeof line.line_ref !== 'string') continue;
+    const projection = projectIngredientAlternatives(line.text);
+    if (projection === null) continue;
+    const branch = projection.alternatives.find((candidate) => userNamedBranch(userMessage, candidate));
+    if (branch === undefined) continue;
+    const parsed = parseIngredient({
+      original: line.text,
+      name: branch,
+      ...(line.amount !== undefined ? { amount: line.amount } : {}),
+      ...(line.unit !== undefined ? { unit: line.unit } : {}),
+    });
+    if (!parsed.ok || parsed.parsed.measurement_kind !== 'volume' || parsed.parsed.milliliters === undefined) continue;
+
+    const search = toolContext.session.searchFoods(branch, 12);
+    if (!search.ok) continue;
+    const branchTokens = normalizedFoodTokens(branch);
+    for (const candidate of search.results) {
+      const candidateTokens = normalizedFoodTokens(candidate.description);
+      if (![...branchTokens].every((token) => candidateTokens.has(token))) continue;
+      const portionIndex = selectDeterministicVolumePortionIndex(
+        toolContext.session,
+        candidate.fdc_id,
+        parsed.parsed.milliliters,
+        parsed.parsed.raw_unit,
+        branch,
+      );
+      if (portionIndex === undefined) continue;
+      const trustedContext: ShisoToolContext = {
+        ...toolContext,
+        isTrustedNutritionSourceSelection: (lineRef, description) =>
+          (toolContext.isTrustedNutritionSourceSelection?.(lineRef, description) === true) ||
+          (lineRef === line.line_ref && userNamedBranch(userMessage, description)),
+      };
+      return executeShisoTool(
+        {
+          tool: 'select_usda_nutrition_source',
+          line_ref: line.line_ref,
+          fdc_id: candidate.fdc_id,
+          portion_index: portionIndex,
+        },
+        trustedContext,
+        signal,
+      );
+    }
+  }
+  return null;
 }
 
 function requestsVaultCount(message: string): boolean {
@@ -332,6 +418,7 @@ export interface ShisoBlock {
 const USDA_DEPENDENT_TOOLS: ReadonlySet<string> = new Set([
   'search_usda_foods',
   'inspect_usda_food',
+  'select_usda_nutrition_source',
   'investigate_ingredient_amount',
   'investigate_unresolved_ingredients',
   'run_nutrition_analysis',
@@ -562,13 +649,14 @@ export async function runShisoConversationTurn(
     };
   }
 
-  // USDA choices remain an explicit action in the open Advanced Nutrition
-  // review. Explain the scoped control directly instead of sending a selection
-  // request through recipe-edit interpretation or silently choosing a record.
-  if (requestsManualUsdaChoice(trimmed)) {
+  // Compatibility fallback for isolated surfaces that do not expose the new
+  // authenticated selection port. The full App surface takes the normal model
+  // path and can execute select_usda_nutrition_source; a surface without that
+  // owner must still explain the existing manual control honestly.
+  if (requestsManualUsdaChoice(trimmed) && deps.toolContext.applyNutritionSourceSelection === undefined) {
     const message = deps.toolContext.nutrition === null
-      ? 'Open Advanced Nutrition for this recipe, then choose the intended USDA record from that ingredient row. I cannot apply a food choice from chat without the review selection control. Nothing was changed or saved.'
-      : 'In the open Advanced Nutrition review, use the “Use this match” control on the intended ingredient row. That explicit selection is bound to this recipe and its current USDA review. I will not choose or apply a USDA record from chat. Nothing was changed or saved.';
+      ? 'Open Advanced Nutrition for this recipe, then choose the intended USDA record from that ingredient row. The nutrition owner is not mounted here. Nothing was changed or saved.'
+      : 'This nutrition surface does not expose the authenticated source-selection owner yet. Use the “Use this match” control in Advanced Nutrition. Nothing was changed or saved.';
     return {
       ok: true,
       state: appendShisoMessage(working, { role: 'assistant', text: message, proposalCount: 0 }),
@@ -584,6 +672,7 @@ export async function runShisoConversationTurn(
   if (
     requestsNutritionInvestigation(trimmed) &&
     deps.toolContext.nutrition !== null &&
+    !requestsManualUsdaChoice(trimmed) &&
     !classifySaveIntent(trimmed).authorized
   ) {
     if (deps.signal?.aborted) return cancelled(working, toolsUsed);
@@ -656,6 +745,35 @@ export async function runShisoConversationTurn(
     working = recordFinding(working, { tool: next.tool, ok: next.ok, summary });
   };
 
+  // A plain-language branch choice is already a trusted current-user decision.
+  // Execute the authenticated source-selection capability before asking the
+  // model for its next step, so the model cannot burn the turn rediscovering a
+  // record/portion that the application can safely promote itself.
+  const deterministicSelection = await tryDeterministicNutritionSourceSelection(
+    deps.toolContext,
+    trimmed,
+    deps.signal,
+  );
+  if (deterministicSelection !== null) {
+    if (deps.signal?.aborted) return cancelled(working, toolsUsed);
+    observation = deterministicSelection;
+    toolsUsed.push(deterministicSelection.tool);
+    toolCalls = 1;
+    if (deterministicSelection.ok) retain(deterministicSelection);
+    deps.onProgress?.({
+      kind: 'tool',
+      step: toolCalls,
+      tool: deterministicSelection.tool,
+      ok: deterministicSelection.ok,
+    });
+    // A mounted React review owner may commit its dispatch on the next event
+    // loop turn. The following model/tool step reads the same live owner, not a
+    // stale render snapshot.
+    if (deterministicSelection.ok) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
+  }
+
   /**
    * H-2S — REPEATED EQUIVALENT FAILURES ARE TERMINAL.
    *
@@ -718,6 +836,28 @@ export async function runShisoConversationTurn(
    */
   const EDITING_TOOLS: ReadonlySet<string> = new Set([
     'apply_ingredient_edits',
+    'apply_nutrition_corrections',
+    'select_usda_nutrition_source',
+    'apply_nutrition_review',
+    'save_working_recipe',
+  ]);
+  const NON_PROGRESS_REPEAT_TOOLS: ReadonlySet<string> = new Set([
+    'get_vault_status',
+    'search_vault_recipes',
+    'get_vault_recipe',
+    'select_vault_recipe',
+    'load_usda_catalog',
+    'get_current_recipe',
+    'get_nutrition_review',
+    'get_branded_evidence',
+    'search_usda_foods',
+    'inspect_usda_food',
+    'investigate_ingredient_amount',
+    'investigate_unresolved_ingredients',
+    'get_capability_status',
+    'select_usda_nutrition_source',
+    'run_nutrition_analysis',
+    'complete_nutrition',
     'apply_nutrition_corrections',
     'apply_nutrition_review',
     'save_working_recipe',
@@ -935,6 +1075,17 @@ export async function runShisoConversationTurn(
             ok: true,
             state: working,
             message: `I stopped because the same nutrition correction was requested again; it was not applied a second time. The last verified review showed ${resolved === null || total === null ? 'no new coverage count' : `${resolved} of ${total} ingredient lines resolved`}. ${complete ? 'The review already has complete ingredient coverage.' : 'Review the remaining lines in Advanced Nutrition.'} Earlier valid corrections remain in the unsaved review. Nothing was saved.`,
+            status: null,
+            toolsUsed,
+          };
+        }
+        if (cached.ok && NON_PROGRESS_REPEAT_TOOLS.has(turn.tool)) {
+          return {
+            ok: true,
+            state: working,
+            message: deterministicReport(
+              `I already verified the same ${turn.tool} request in this message, so I stopped instead of repeating it.`,
+            ),
             status: null,
             toolsUsed,
           };

@@ -16,6 +16,7 @@ import {
   basisLabel,
   buildCalculationRequest,
   buildReviewRows,
+  buildPortionChoice,
   coverageSummary,
   deriveDisplayNutrients,
   deriveEnergyDisplay,
@@ -83,8 +84,10 @@ import {
 } from '../core/nutritionV2/brandedFoods';
 import { MAX_RESEARCH_TARGETS, type ResearchTarget } from '../core/nutritionV2/aiResearch';
 import type { AiEstimateSelectionEvidence } from '../core/nutritionV2/phase4/aiEstimateSelection';
-import { useShiso } from '../application-ui/shisoEntryPoints';
+import { useShiso, type ShisoNutritionReviewApplyResult } from '../application-ui/shisoEntryPoints';
 import type { ShisoAnalysisOutcome, ShisoNutritionCorrectionsOutcome } from '../core/shiso/protocol';
+import type { ShisoNutritionSourceSelectionOutcome } from '../core/shiso/protocol';
+import { selectionFromMatchChoice } from '../core/nutritionV2/phase4/rows';
 import { buildSupportedNutritionCorrections } from '../core/shiso/nutritionCorrections';
 import { deriveNutritionCoverage, nutritionCoverageSummary } from '../core/shiso/nutritionCoverage';
 import {
@@ -1340,25 +1343,32 @@ onReviewRecipeContextWithAi,
     state,
   };
   const canRegisterNutritionReviewApplier =
-    Boolean(onApplyAdvancedNutrition) && Boolean(session) && adaptation.ok && applyEligibility === true && applyMode !== null;
+    Boolean(onApplyAdvancedNutrition) && Boolean(session) && adaptation.ok && applyMode !== null;
   useEffect(() => {
     if (!canRegisterNutritionReviewApplier) {
       return undefined;
     }
-    return shisoRegisterNutritionReviewApplier(async () => {
+    return shisoRegisterNutritionReviewApplier(async (): Promise<ShisoNutritionReviewApplyResult> => {
     const current = shisoNutritionReviewApplyRef.current;
     const {
       onApplyAdvancedNutrition: apply,
       session: currentSession,
       adaptationOk,
-      applyEligibility: eligible,
       applyMode: mode,
       aiReviews: currentAiReviews,
       recipe: currentRecipe,
       state: currentState,
     } = current;
-    if (!apply || !currentSession || !adaptationOk || eligible !== true || mode === null) {
-      return { ok: false, applied: false, message: 'The current nutrition review is not eligible to apply.' };
+    const currentEligible = currentSession && adaptationOk && currentState.status === 'preview_current' && currentState.preview !== null
+      ? previewNutritionApplyEligibility({ session: currentSession, recipe: currentRecipe, state: currentState })
+      : false;
+    if (!apply || !currentSession || !adaptationOk || currentEligible !== true || mode === null) {
+      return {
+        ok: false,
+        applied: false,
+        message: 'The current nutrition review is not eligible to apply.',
+        code: 'not_eligible',
+      };
     }
     const reviewReasons: Record<string, 'needs_review'> = {};
     for (const [lineRef, review] of Object.entries(currentAiReviews)) {
@@ -1773,6 +1783,106 @@ onReviewRecipeContextWithAi,
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session, adaptation, state, adapted, analyzedByRef, evidence, analysis, workingDispatch, shisoRegisterCorrections, workingDirty]);
+
+  // SHISO source selection uses the same authenticated Phase 4 match/portion
+  // builders as the visible review controls. It never accepts model-supplied
+  // grams or digests and verifies the resulting preview before dispatching.
+  const shisoRegisterSourceSelection = shiso.registerNutritionSourceSelectionApplier;
+  useEffect(() => {
+    return shisoRegisterSourceSelection(async ({ lineRef, fdcId, portionIndex }): Promise<ShisoNutritionSourceSelectionOutcome> => {
+      const currentState = phase4StateRef.current;
+      const fail = (code: string, summary: string): ShisoNutritionSourceSelectionOutcome => ({
+        ok: false,
+        line_ref: lineRef,
+        summary,
+        recalculation: 'absent',
+        working_unsaved: workingDirty,
+        code,
+      });
+      if (!session || !adaptation.ok) return fail('no_nutrition_review', 'Advanced Nutrition is not available for this source selection.');
+      const row = currentState.rows.find((candidate) => candidate.line_ref === lineRef);
+      const entry = adapted.find((candidate) => candidate.line_ref === lineRef);
+      if (!row || !entry || currentState.recipeKey !== adaptation.recipe.recipe_key || currentState.sessionIdentity === null) {
+        return fail('stale_recipe', 'That ingredient line is no longer part of the current authenticated review.');
+      }
+      if (!Number.isSafeInteger(fdcId) || fdcId <= 0 || !Number.isSafeInteger(portionIndex) || portionIndex < 0) {
+        return fail('invalid_request', 'The USDA food or portion selection is invalid.');
+      }
+      const exact = session.searchFoods(String(fdcId), 5);
+      const hit = exact.ok ? exact.results.find((result) => result.fdc_id === fdcId && result.exact_fdc_id) : undefined;
+      if (!hit) return fail('invalid_selection', 'That USDA record is not available in the authenticated catalog.');
+      const match: MatchChoice = Object.freeze({
+        kind: 'manual',
+        fdc_id: fdcId,
+        review_digest: row.review_digest ?? '',
+        record_digest: hit.record_digest,
+        catalog_digest: session.metadata().catalog_digest,
+        selectionOrigin: 'shiso_user_directed',
+        description: hit.description,
+      });
+      const portion = buildPortionChoice(session, {
+        lineRef,
+        ingredient: entry.ingredient,
+        review: row.review,
+        selection: selectionFromMatchChoice(match, lineRef),
+        fdcId,
+        portionIndex,
+      });
+      if (!portion.ok) return fail('invalid_selection', 'That USDA portion could not be authenticated for this ingredient.');
+      let next = phase4Reducer(currentState, { type: 'select_match', lineRef, choice: match });
+      next = phase4Reducer(next, { type: 'select_portion', lineRef, choice: portion.choice });
+      const calculated = session.calculate(buildCalculationRequest(adapted, next));
+      if (!calculated.ok) return fail('invalid_selection', 'The authenticated nutrition review rejected that source selection.');
+      const selected = calculated.preview.ingredients.find((candidate) => candidate.line_ref === lineRef);
+      if (!selected || selected.fdc_id !== fdcId || selected.resolved_grams === undefined) {
+        return fail('invalid_selection', 'The selected USDA source did not produce a verified ingredient amount.');
+      }
+      next = phase4Reducer(next, {
+        type: 'apply_analysis',
+        matches: next.matches,
+        portions: next.portions,
+        countPortions: next.countPortions,
+        householdPortions: next.householdPortions,
+        userMasses: next.userMasses,
+        aiEstimates: next.aiEstimates,
+        preview: calculated.preview,
+      });
+      // React dispatch is asynchronous. Publish the exact verified state to
+      // the synchronous capability owner before dispatching it, so an Apply
+      // requested by the next tool in this same SHISO turn cannot consume the
+      // previous reducer snapshot.
+      phase4StateRef.current = next;
+      shisoNutritionReviewApplyRef.current = {
+        ...shisoNutritionReviewApplyRef.current,
+        state: next,
+      };
+      workingDispatch({
+        type: 'apply_analysis',
+        matches: next.matches,
+        portions: next.portions,
+        countPortions: next.countPortions,
+        householdPortions: next.householdPortions,
+        userMasses: next.userMasses,
+        aiEstimates: next.aiEstimates,
+        preview: calculated.preview,
+      });
+      const portionReview = session.reviewPortions(fdcId);
+      const portionCandidate = portionReview.ok
+        ? portionReview.review.candidates.find((candidate) => candidate.index === portionIndex)
+        : undefined;
+      return {
+        ok: true,
+        line_ref: lineRef,
+        fdc_id: fdcId,
+        description: hit.description,
+        resolved_grams: selected.resolved_grams,
+        ...(portionCandidate ? { portion: portionCandidate.display_label } : {}),
+        summary: `Verified ${hit.description}: ${portionCandidate?.display_label ?? 'authenticated USDA portion'} → ${selected.resolved_grams} g. The working nutrition review was recalculated; nothing was saved.`,
+        recalculation: calculated.preview.status === 'complete' ? 'complete' : 'partial',
+        working_unsaved: true,
+      };
+    });
+  }, [session, adaptation, adapted, workingDispatch, shisoRegisterSourceSelection, workingDirty]);
 
   /** The actionable exception rows derived from the SAME live projection. */
   const actionableRows = useMemo(

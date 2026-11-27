@@ -330,6 +330,12 @@ export interface MatchChoice {
    */
   readonly automatic?: boolean;
   /**
+   * Auditable assistant-directed selection. This is distinct from a human
+   * `user_confirmed` selection and is only issued after the current user turn
+   * authorizes SHISO to choose an authenticated source.
+   */
+  readonly selectionOrigin?: 'shiso_user_directed';
+  /**
    * Present ONLY for a `kind: 'manual'` selection (explicit user-directed manual
    * USDA search). The record digest and catalog digest bind the chosen record to
    * the authenticated pinned bundle; the calculation engine verifies them and

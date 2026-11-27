@@ -450,7 +450,12 @@ function buildPersistenceBlock(
       source_release: preview.bundle_release,
       match_status: 'confirmed',
       resolved: true,
-      user_confirmed: true,
+      // Existing Apply semantics treat every verified calculation entry as
+      // reviewed evidence. SHISO-directed selections are the one explicit
+      // exception: retain their distinct origin without relabeling them as a
+      // human click.
+      user_confirmed: entry.match_status !== 'assistant_user_directed',
+      ...(entry.selection_origin === 'shiso_user_directed' ? { selection_origin: 'shiso_user_directed' as const } : {}),
       amount: { value: canonicalGrams, unit: 'g' },
       ...(conversion ? { conversion_basis: conversion } : {}),
       ...(entry.mass_source === 'count_portion' ? { count_portion: { unit: entry.count_unit ?? null, size: entry.count_size ?? null, quantity: entry.count_ingredient_amount, portion_amount: entry.count_portion_amount, gram_weight: entry.count_gram_weight } } : {}),
@@ -477,8 +482,8 @@ function buildPersistenceBlock(
     const evidence = evidenceByRef.get(entry.line_ref);
     const reviewedFood =
       evidence !== undefined &&
-      evidence.user_confirmed === true &&
-      evidence.match_status === 'user_confirmed' &&
+      (evidence.user_confirmed === true || evidence.selection_origin === 'shiso_user_directed') &&
+      (evidence.match_status === 'user_confirmed' || evidence.match_status === 'assistant_user_directed') &&
       typeof evidence.fdc_id === 'number' &&
       Number.isSafeInteger(evidence.fdc_id) &&
       evidence.fdc_id > 0;
@@ -647,7 +652,7 @@ function authorizeNutritionPersistenceInternal(
       .map((entry) => entry.line_ref);
     for (const lineRef of equalAlternativeRefs) {
       const evidence = trusted.preview.ingredients.find((entry) => entry.line_ref === lineRef);
-      if (evidence?.match_status !== 'user_confirmed') return fail('explicit_choice_required');
+      if (evidence?.match_status !== 'user_confirmed' && evidence?.match_status !== 'assistant_user_directed') return fail('explicit_choice_required');
     }
 
     if (rawServings.value !== trusted.servings) return fail('stale_preview');

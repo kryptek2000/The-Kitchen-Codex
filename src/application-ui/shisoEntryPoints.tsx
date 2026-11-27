@@ -31,6 +31,7 @@ import type {
   ShisoBoundProposal,
   ShisoIngredientEditArgs,
   ShisoNutritionCorrectionsOutcome,
+  ShisoNutritionSourceSelectionOutcome,
   ShisoRecipeEditOutcome,
   ShisoRecipeSaveOutcome,
 } from '../core/shiso/protocol';
@@ -42,6 +43,21 @@ export interface ShisoNutritionAnalysisOutcome {
   readonly ok: boolean;
   readonly contributionCount: number;
   readonly message: string;
+}
+
+/**
+ * Result of an Apply through a nutrition-review owner.
+ *
+ * `not_eligible` is an ownership signal, not a successful Apply: the card owner
+ * has no current eligible review, so SHISO may use the independent review owner
+ * instead. Real Apply failures (stale review, authorization, persistence) do not
+ * carry this code and must not be retried against another review.
+ */
+export interface ShisoNutritionReviewApplyResult {
+  readonly ok: boolean;
+  readonly applied: boolean;
+  readonly message: string;
+  readonly code?: 'not_eligible';
 }
 
 export type ShisoEntrySource = 'global' | 'recipe' | 'nutrition' | 'create';
@@ -159,10 +175,10 @@ export interface ShisoEntryPoints {
   readonly canRunAnalysis: boolean;
   readonly registerAnalysisApplier: (applier: () => Promise<ShisoAnalysisOutcome>) => () => void;
   /** Applies the currently displayed authoritative review through Phase 5. */
-  readonly applyNutritionReview: () => Promise<{ readonly ok: boolean; readonly applied: boolean; readonly message: string }>;
+  readonly applyNutritionReview: () => Promise<ShisoNutritionReviewApplyResult>;
   readonly canApplyNutritionReview: boolean;
   readonly registerNutritionReviewApplier: (
-    applier: () => Promise<{ readonly ok: boolean; readonly applied: boolean; readonly message: string }>,
+    applier: () => Promise<ShisoNutritionReviewApplyResult>,
   ) => () => void;
 
   // -------------------------------------------------------------------------
@@ -212,6 +228,15 @@ export interface ShisoEntryPoints {
   readonly canApplyNutritionCorrections: boolean;
   readonly registerCorrectionsApplier: (
     applier: (lineRefs?: readonly string[]) => Promise<ShisoNutritionCorrectionsOutcome>,
+  ) => () => void;
+  readonly applyNutritionSourceSelection: (input: {
+    readonly lineRef: string;
+    readonly fdcId: number;
+    readonly portionIndex: number;
+  }) => Promise<ShisoNutritionSourceSelectionOutcome>;
+  readonly canApplyNutritionSourceSelection: boolean;
+  readonly registerNutritionSourceSelectionApplier: (
+    applier: (input: { readonly lineRef: string; readonly fdcId: number; readonly portionIndex: number }) => Promise<ShisoNutritionSourceSelectionOutcome>,
   ) => () => void;
   readonly acceptAiNutrition: (contributions: readonly AiNutrientContribution[], supplements?: readonly AiNutrientSupplement[]) => boolean;
   readonly canAcceptAiNutrition: boolean;
@@ -272,6 +297,16 @@ const INERT: ShisoEntryPoints = {
   }),
   canApplyNutritionCorrections: false,
   registerCorrectionsApplier: () => () => {},
+  applyNutritionSourceSelection: async () => ({
+    ok: false,
+    line_ref: '',
+    summary: 'The nutrition review owner is not available.',
+    recalculation: 'absent',
+    working_unsaved: false,
+    code: 'no_active_review',
+  }),
+  canApplyNutritionSourceSelection: false,
+  registerNutritionSourceSelectionApplier: () => () => {},
   acceptAiNutrition: () => false,
   canAcceptAiNutrition: false,
   registerAiNutritionApplier: () => () => {},
@@ -288,11 +323,14 @@ export function ShisoEntryProvider({ children }: { readonly children: ReactNode 
   const [snapshot, setSnapshot] = useState<ShisoNutritionSnapshot | null>(null);
   const [applier, setApplier] = useState<((b: ShisoBoundProposal) => Promise<ShisoApplyResult>) | null>(null);
   const [analysisApplier, setAnalysisApplier] = useState<(() => Promise<ShisoAnalysisOutcome>) | null>(null);
-  const [nutritionReviewApplier, setNutritionReviewApplier] = useState<(() => Promise<{ readonly ok: boolean; readonly applied: boolean; readonly message: string }>) | null>(null);
+  const [nutritionReviewApplier, setNutritionReviewApplier] = useState<(() => Promise<ShisoNutritionReviewApplyResult>) | null>(null);
   const [nutritionAnalysisRunner, setNutritionAnalysisRunner] = useState<(() => Promise<ShisoNutritionAnalysisOutcome>) | null>(null);
   const [recipeEditApplier, setRecipeEditApplier] = useState<ShisoRecipeEditApplier | null>(null);
   const [correctionsApplier, setCorrectionsApplier] = useState<
     ((lineRefs?: readonly string[]) => Promise<ShisoNutritionCorrectionsOutcome>) | null
+  >(null);
+  const [nutritionSourceSelectionApplier, setNutritionSourceSelectionApplier] = useState<
+    ((input: { readonly lineRef: string; readonly fdcId: number; readonly portionIndex: number }) => Promise<ShisoNutritionSourceSelectionOutcome>) | null
   >(null);
   const [aiNutritionApplier, setAiNutritionApplier] = useState<((contributions: readonly AiNutrientContribution[], supplements?: readonly AiNutrientSupplement[]) => boolean) | null>(null);
   const [workingRecipe, setWorkingRecipe] = useState<ShisoWorkingRecipeSummary | null>(null);
@@ -338,7 +376,7 @@ export function ShisoEntryProvider({ children }: { readonly children: ReactNode 
     setNutritionAnalysisRunner(() => next);
     return () => setNutritionAnalysisRunner((current) => current === next ? null : current);
   }, []);
-  const registerNutritionReviewApplier = useCallback((next: () => Promise<{ readonly ok: boolean; readonly applied: boolean; readonly message: string }>) => {
+  const registerNutritionReviewApplier = useCallback((next: () => Promise<ShisoNutritionReviewApplyResult>) => {
     setNutritionReviewApplier(() => next);
     return () => setNutritionReviewApplier((current) => current === next ? null : current);
   }, []);
@@ -362,6 +400,13 @@ export function ShisoEntryProvider({ children }: { readonly children: ReactNode 
     (next: (lineRefs?: readonly string[]) => Promise<ShisoNutritionCorrectionsOutcome>) => {
       setCorrectionsApplier(() => next);
       return () => setCorrectionsApplier(null);
+    },
+    [],
+  );
+  const registerNutritionSourceSelectionApplier = useCallback(
+    (next: (input: { readonly lineRef: string; readonly fdcId: number; readonly portionIndex: number }) => Promise<ShisoNutritionSourceSelectionOutcome>) => {
+      setNutritionSourceSelectionApplier(() => next);
+      return () => setNutritionSourceSelectionApplier((current) => current === next ? null : current);
     },
     [],
   );
@@ -532,6 +577,22 @@ export function ShisoEntryProvider({ children }: { readonly children: ReactNode 
     },
     [correctionsApplier],
   );
+  const applyNutritionSourceSelection = useCallback(
+    async (input: { readonly lineRef: string; readonly fdcId: number; readonly portionIndex: number }) => {
+      if (nutritionSourceSelectionApplier === null) {
+        return {
+          ok: false,
+          line_ref: input.lineRef,
+          summary: 'The nutrition review is not open for this recipe.',
+          recalculation: 'absent',
+          working_unsaved: false,
+          code: 'no_active_review',
+        } as ShisoNutritionSourceSelectionOutcome;
+      }
+      return nutritionSourceSelectionApplier(input);
+    },
+    [nutritionSourceSelectionApplier],
+  );
 
   const value = useMemo<ShisoEntryPoints>(
     () => ({
@@ -567,6 +628,9 @@ export function ShisoEntryProvider({ children }: { readonly children: ReactNode 
       applyNutritionCorrections,
       canApplyNutritionCorrections: correctionsApplier !== null,
       registerCorrectionsApplier,
+      applyNutritionSourceSelection,
+      canApplyNutritionSourceSelection: nutritionSourceSelectionApplier !== null,
+      registerNutritionSourceSelectionApplier,
       acceptAiNutrition,
       canAcceptAiNutrition: aiNutritionApplier !== null,
       registerAiNutritionApplier,
@@ -581,6 +645,7 @@ export function ShisoEntryProvider({ children }: { readonly children: ReactNode 
       clearSaveAuthorizationEntry, discardWorkingRecipe,
       workingRecipe, publishWorkingRecipe, applyNutritionCorrections,
       correctionsApplier, registerCorrectionsApplier,
+      applyNutritionSourceSelection, nutritionSourceSelectionApplier, registerNutritionSourceSelectionApplier,
       acceptAiNutrition, aiNutritionApplier, registerAiNutritionApplier,
     ],
   );

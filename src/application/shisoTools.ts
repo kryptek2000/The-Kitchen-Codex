@@ -28,7 +28,9 @@ import {
   SHISO_LIMITS,
   type ShisoAnalysisOutcome,
   type ShisoNutritionCorrectionsOutcome,
+  type ShisoNutritionSourceSelectionOutcome,
   type ShisoObservation,
+  type ShisoObservationFailureCode,
   type ShisoRecipeEditOutcome,
   type ShisoRecipeSaveOutcome,
   type ShisoToolArgs,
@@ -109,6 +111,8 @@ export interface ShisoToolContext {
   } | null;
   readonly nutrition: {
     readonly rows: ReadonlyArray<LiveRowState>;
+    /** The current Phase 4 review rows, including authenticated review digests. */
+    readonly reviewRows?: ReadonlyArray<import('../core/nutritionV2/phase4').Phase4Row>;
     readonly aiContributions?: ReadonlyArray<AiNutrientContribution>;
     readonly summary: string | null;
     readonly unsaved: boolean;
@@ -182,6 +186,10 @@ export interface ShisoToolContext {
   readonly applyNutritionCorrections?:
     | ((lineRefs: readonly string[] | undefined) => Promise<ShisoNutritionCorrectionsOutcome>)
     | undefined;
+  /** Promotes one authenticated USDA food + portion through the Phase 4 owner. */
+  readonly applyNutritionSourceSelection?:
+    | ((input: { readonly lineRef: string; readonly fdcId: number; readonly portionIndex: number }) => Promise<ShisoNutritionSourceSelectionOutcome>)
+    | undefined;
   /** F3. Applies the application-owned SHISO nutrition review to the unsaved recipe. */
   readonly applyNutritionReview?: (() => Promise<{
     readonly ok: boolean;
@@ -195,6 +203,12 @@ export interface ShisoToolContext {
    * model is allowed to call this.
    */
   readonly saveWorkingRecipe?: (() => Promise<ShisoRecipeSaveOutcome>) | undefined;
+  /**
+   * Trusted current-user directive for an equal authored alternative. The
+   * model cannot set this; the conversation surface derives it from the user
+   * message and the authenticated selected record label.
+   */
+  readonly isTrustedNutritionSourceSelection?: ((lineRef: string, description: string) => boolean) | undefined;
 }
 
 function ok(
@@ -2431,6 +2445,72 @@ async function applyNutritionCorrections(
 }
 
 /**
+ * Promotes one already-investigated USDA record and authenticated portion into
+ * the live Phase 4 review. This is deliberately separate from the batch
+ * correction pass: a source selection is a bounded identity decision, while
+ * correction discovery remains deterministic and conservative.
+ */
+async function selectUsdaNutritionSource(
+  ctx: ShisoToolContext,
+  lineRef: string,
+  fdcId: number,
+  portionIndex: number,
+): Promise<ShisoObservation> {
+  const failSelection = (code: ShisoObservationFailureCode, message: string): ShisoObservation =>
+    fail('select_usda_nutrition_source', code, message);
+  if (!ctx.session || !ctx.recipe || !ctx.nutrition || ctx.applyNutritionSourceSelection === undefined) {
+    return failSelection('no_nutrition_review', 'The authenticated nutrition review is not available for source selection.');
+  }
+  if (typeof lineRef !== 'string' || lineRef.length === 0 || lineRef.length > SHISO_LIMITS.maxSelectionLineRefChars) {
+    return failSelection('invalid_request', 'That ingredient line reference is invalid.');
+  }
+  if (!Number.isSafeInteger(fdcId) || fdcId <= 0 || !Number.isSafeInteger(portionIndex) || portionIndex < 0) {
+    return failSelection('invalid_request', 'The USDA food or portion selection is invalid.');
+  }
+  const row = ctx.nutrition.reviewRows?.find((candidate) => candidate.line_ref === lineRef);
+  const ingredient = ctx.recipe.ingredients.find((candidate) => candidate.line_ref === lineRef);
+  if (!row || !ingredient) {
+    return failSelection('stale_recipe', 'That ingredient line is not part of the current authenticated nutrition review.');
+  }
+
+  // Re-authenticate the record and portion here before the owner is asked to
+  // mutate state. The owner repeats the same checks, so this cannot become a
+  // trust shortcut if the review changes between these two steps.
+  const exact = ctx.session.searchFoods(String(fdcId), 5);
+  if (!exact.ok || !exact.results.some((result) => result.fdc_id === fdcId && result.exact_fdc_id)) {
+    return failSelection('invalid_selection', 'That USDA record is not present in the authenticated catalog.');
+  }
+  const portionReview = ctx.session.reviewPortions(fdcId);
+  if (!portionReview.ok || !portionReview.review.candidates.some((candidate) => candidate.index === portionIndex && candidate.kind !== 'unusable' && candidate.effective_amount !== null && candidate.gram_weight > 0)) {
+    return failSelection('invalid_selection', 'That USDA portion is not available for the authenticated food record.');
+  }
+
+  // Equal authored alternatives remain a hard boundary unless the trusted
+  // current user message explicitly names the selected branch. A model cannot
+  // manufacture that authorization through tool arguments.
+  const alternatives = projectIngredientAlternatives(ingredient.text);
+  const hit = exact.results.find((result) => result.fdc_id === fdcId && result.exact_fdc_id);
+  if (alternatives?.primary_index === null &&
+      (hit === undefined || ctx.isTrustedNutritionSourceSelection?.(lineRef, hit.description) !== true)) {
+    return failSelection('explicit_choice_required', 'This ingredient has equal alternatives. Tell me which food was actually used before I select a definitive source.');
+  }
+
+  const outcome = await ctx.applyNutritionSourceSelection({ lineRef, fdcId, portionIndex });
+  if (!outcome.ok) {
+    return failSelection('selection_rejected', outcome.summary);
+  }
+  return ok('select_usda_nutrition_source', outcome.summary, {
+    line_ref: outcome.line_ref,
+    fdc_id: outcome.fdc_id ?? fdcId,
+    ...(outcome.description ? { description: outcome.description } : {}),
+    ...(outcome.portion ? { portion: outcome.portion } : {}),
+    ...(outcome.resolved_grams !== undefined ? { resolved_grams: outcome.resolved_grams } : {}),
+    recalculation: outcome.recalculation,
+    working_unsaved: outcome.working_unsaved,
+  });
+}
+
+/**
  * F3. Applies the complete general-chat nutrition review through the shell's
  * existing Phase 5B owner. The capability never persists a Vault write.
  */
@@ -2626,6 +2706,8 @@ export function executeShisoTool(
         return searchUsdaFoods(ctx, args.query, args.limit ?? SHISO_LIMITS.maxSearchResults);
       case 'inspect_usda_food':
         return inspectUsdaFood(ctx, args.fdc_id);
+      case 'select_usda_nutrition_source':
+        return selectUsdaNutritionSource(ctx, args.line_ref, args.fdc_id, args.portion_index);
       case 'investigate_ingredient_amount':
         return investigateIngredientAmount(ctx, args.line_ref);
       case 'investigate_unresolved_ingredients':

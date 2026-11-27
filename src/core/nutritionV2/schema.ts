@@ -148,6 +148,8 @@ export interface IngredientEvidence {
   match_status: IngredientMatchStatus;
   resolved: boolean;
   user_confirmed: boolean;
+  /** Distinguishes an authenticated SHISO-directed choice from a human click. */
+  selection_origin?: 'shiso_user_directed';
   amount?: { value: number; unit: CanonicalUnit };
   /**
    * Schema-v1 conversion bases are CLOSED to direct recipe mass and an

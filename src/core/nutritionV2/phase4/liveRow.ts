@@ -67,6 +67,7 @@ export type LiveRowFoodAuthority =
   | 'automatic'
   | 'unique_exact'
   | 'ai_assisted'
+  | 'assistant_user_directed'
   | 'user_confirmed'
   | 'none';
 
@@ -253,6 +254,8 @@ export function projectLiveRow(input: LiveRowProjectionInput): LiveRowState {
       ? 'unique_exact'
       : matchChoice?.aiAccepted === true
         ? 'ai_assisted'
+        : matchChoice?.selectionOrigin === 'shiso_user_directed'
+          ? 'assistant_user_directed'
         : matchChoice?.automatic === true
           ? 'automatic'
           : 'user_confirmed';

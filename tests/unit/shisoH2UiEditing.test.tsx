@@ -329,7 +329,7 @@ describe('SHISO H-2 — ADVERSARIAL save authorization (existing unsaved working
       />,
     );
     await send('save my changes');
-    await waitFor(() => expect(screen.getByText('Saved once.')).toBeTruthy(), { timeout: 15000 });
+    await waitFor(() => expect(screen.getByText(/already verified the same save_working_recipe request/)).toBeTruthy(), { timeout: 15000 });
     expect(saves).toBe(1);
   }, 60000);
 

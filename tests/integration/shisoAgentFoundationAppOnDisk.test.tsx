@@ -6,18 +6,19 @@
  */
 import React, { useEffect } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import App from '../../src/App';
-import { ShisoEntryProvider, useShiso } from '../../src/application-ui/shisoEntryPoints';
+import { ShisoEntryProvider, useShiso, type ShisoEntryPoints } from '../../src/application-ui/shisoEntryPoints';
 import type { NetworkAdapter } from '../../src/application/adapters/NetworkAdapter';
 import type { SettingsAdapter } from '../../src/application/adapters/SettingsAdapter';
 import { createBrowserVaultAdapter } from '../../src/platform/browser';
 import { loadVaultContent } from '../../src/application/vaultContent';
 import { hydrateAiSelections } from '../../src/application/aiSelection';
 import { createAdvancedNutritionSession } from '../../src/core/nutritionV2/phase4/session';
+import { adaptRecipe } from '../../src/core/nutritionV2/phase4';
 import type { RuntimeBundleResult } from '../../src/core/nutritionV2/runtime';
 import { USDA_ATTRIBUTION } from '../../src/core/nutritionV2/usda/types';
 import { NUTRITION_PRODUCT_ACCESS_VERSION } from '../../src/core/nutritionV2/nutritionProductAccess';
@@ -150,6 +151,12 @@ function scriptedNetwork(script: readonly unknown[], otherResponses: Readonly<Re
 function OpenGlobal() {
   const { open } = useShiso();
   useEffect(() => open('global'), [open]);
+  return null;
+}
+
+function CaptureShiso({ onReady }: { readonly onReady: (value: ShisoEntryPoints) => void }) {
+  const shiso = useShiso();
+  useEffect(() => onReady(shiso), [onReady, shiso]);
   return null;
 }
 
@@ -319,5 +326,99 @@ describe('SHISO agent foundation real App save closure', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     await waitFor(() => expect(document.body.textContent).toContain('Nothing was applied or saved'));
     expect(await readFile(recipePath, 'utf8')).toBe(beforeNoSave);
+  }, 120000);
+
+  it('persists an immediate authenticated Honey selection through the real App without a timing delay', async () => {
+    await hydrateAiSelections(settings);
+    const rootPath = await mkdtemp(join('/tmp', 'tkc-shiso-execution-app-'));
+    roots.push(rootPath);
+    const recipePath = join(rootPath, 'Recipes', 'Dinner', 'Honey Selection Fixture.md');
+    await mkdir(dirname(recipePath), { recursive: true });
+    const markdown = [
+      '---', 'title: "Honey Selection Fixture"', 'tags:', '  - food/recipes',
+      'category: Dinner', 'servings: 4', '---', '# Honey Selection Fixture',
+      '## Ingredients', '- 1/4 cup honey (or brown sugar)', '## Instructions', '1. Stir.', '',
+    ].join('\n');
+    await writeFile(recipePath, markdown, 'utf8');
+    const root = new DiskDirectoryHandle('Disposable SHISO Execution Vault', rootPath);
+    (window as unknown as { showDirectoryPicker: () => Promise<DiskDirectoryHandle> }).showDirectoryPicker = async () => root;
+
+    const { manifest, records } = buildMatchingBundle([{
+      fdcId: 169640,
+      dataType: 'sr_legacy',
+      description: 'Honey',
+      portions: [{ amount: 1, measure: 'cup', gram_weight: 339, sequence: 1 }],
+    }]);
+    const created = createAdvancedNutritionSession(manifest, records);
+    if (!created.ok) throw new Error('fixture USDA session failed');
+    const loader = vi.fn(async (): Promise<RuntimeBundleResult> => ({
+      ok: true,
+      session: created.session,
+      metadata: created.session.metadata(),
+      attribution: USDA_ATTRIBUTION,
+    }));
+    const network = scriptedNetwork([
+      { ok: true, kind: 'reply', text: 'Disposable test transport.', proposals: [] },
+    ], {
+      '/api/nutrition/product-access': { ok: true, version: NUTRITION_PRODUCT_ACCESS_VERSION, tier: 'ai_advanced' },
+      '/api/providers': { providers: [] },
+    });
+    let current: ShisoEntryPoints | null = null;
+
+    render(
+      <ShisoEntryProvider>
+        <App
+          shisoNetworkAdapterOverride={network}
+          shisoNutritionBundleLoaderOverride={loader}
+          shisoSettingsAdapterOverride={settings}
+        />
+        <CaptureShiso onReady={(value) => { current = value; }} />
+      </ShisoEntryProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect Vault' }));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Live Directory Sync' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose Local Obsidian Vault Folder' }));
+    await screen.findByText(/Connected live to vault "Disposable SHISO Execution Vault"/);
+    fireEvent.click(screen.getByRole('button', { name: 'Close Vault settings' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Honey Selection Fixture' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Generate Nutrition' }));
+    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await waitFor(() => expect(loader).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(current?.canApplyNutritionSourceSelection).toBe(true);
+      expect(current?.canApplyNutritionReview).toBe(true);
+      expect(current?.snapshot?.reviewRows.length).toBe(1);
+    });
+
+    const recipe = (await loadVaultContent(createBrowserVaultAdapter(root))).recipes.find((entry) => entry.title === 'Honey Selection Fixture');
+    if (!recipe) throw new Error('disposable recipe was not loaded');
+    const adaptation = adaptRecipe(recipe);
+    if (!adaptation.ok) throw new Error('recipe adaptation failed');
+    const lineRef = adaptation.recipe.adapted[0]!.line_ref;
+    const portions = created.session.reviewPortions(169640);
+    if (!portions.ok) throw new Error('Honey portions missing');
+    const honeyCup = portions.review.candidates.find((candidate) => candidate.gram_weight === 339 && /cup/i.test(candidate.display_label));
+    if (!honeyCup) throw new Error('Authenticated Honey cup portion missing');
+
+    let selected!: Awaited<ReturnType<ShisoEntryPoints['applyNutritionSourceSelection']>>;
+    let applied!: Awaited<ReturnType<ShisoEntryPoints['applyNutritionReview']>>;
+    let saved!: Awaited<ReturnType<ShisoEntryPoints['saveWorkingRecipe']>>;
+    await act(async () => {
+      selected = await current!.applyNutritionSourceSelection({ lineRef, fdcId: 169640, portionIndex: honeyCup.index });
+      applied = await current!.applyNutritionReview();
+      saved = await current!.saveWorkingRecipe({ via: 'ui' });
+    });
+    expect(selected.ok).toBe(true);
+    expect(selected).toMatchObject({ fdc_id: 169640, resolved_grams: 84.75 });
+    expect(applied).toMatchObject({ ok: true, applied: true });
+    expect(saved).toMatchObject({ ok: true, saved: true });
+
+    const persisted = await loadVaultContent(createBrowserVaultAdapter(root));
+    const nutrition = persisted.recipes.find((entry) => entry.title === 'Honey Selection Fixture')?.codexNutrition;
+    expect(nutrition).toMatchObject({ status: 'complete', sources: ['usda_fdc'] });
+    const serialized = JSON.stringify(nutrition);
+    expect(serialized).toContain('"source_food_id":"169640"');
+    expect(serialized).toContain('"value":84.75');
   }, 120000);
 });

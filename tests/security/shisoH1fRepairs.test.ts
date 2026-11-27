@@ -451,16 +451,18 @@ describe('H-1F Test C — timeouts and accounting', () => {
 });
 
 // ===========================================================================
-// 18–19. Security invariants
+// 18–20. Security invariants
 // ===========================================================================
 
 describe('H-1F — security invariants', () => {
   it('the vocabulary stays closed and non-mutating', () => {
     // H-2 added three AUTHORIZED EDITING capabilities (apply_ingredient_edits,
-    // apply_nutrition_corrections, save_working_recipe). They still cannot reach
-    // the filesystem, a shell, or the vault directly — every change is performed
+    // apply_nutrition_corrections, save_working_recipe). Agent Execution adds
+    // authenticated USDA source selection. They still cannot reach the
+    // filesystem, a shell, or the vault directly — every change is performed
     // by the application owner of that state.
-    expect(SHISO_TOOL_NAMES.length).toBe(19);
+    expect(SHISO_TOOL_NAMES).toContain('select_usda_nutrition_source');
+    expect(SHISO_TOOL_NAMES.length).toBe(20);
     for (const forbidden of [
       'generate_image', 'create_image', 'edit_image', 'write_vault', 'save_recipe',
       'run_command', 'read_file', 'exec', 'spawn', 'apply_proposal', 'dispatch_action',

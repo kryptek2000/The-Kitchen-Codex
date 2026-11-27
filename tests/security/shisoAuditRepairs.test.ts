@@ -239,7 +239,10 @@ describe('F-1 — the advertised capability surface is truthful', () => {
     // SINC-3 added complete_nutrition: an owner-delegated completion pipeline
     // that prepares proposals in the unsaved review and never applies or saves.
     expect(SHISO_TOOL_NAMES).toContain('complete_nutrition');
-    expect(SHISO_TOOL_NAMES).toHaveLength(19);
+    // Agent execution adds authenticated USDA source selection as the final
+    // owner-delegated capability in this closed vocabulary.
+    expect(SHISO_TOOL_NAMES).toContain('select_usda_nutrition_source');
+    expect(SHISO_TOOL_NAMES).toHaveLength(20);
   });
 });
 
