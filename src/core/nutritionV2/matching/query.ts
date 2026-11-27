@@ -140,6 +140,8 @@ export interface IngredientQueryProjection {
  * salted/unsalted, whole/skim, ...) are deliberately NOT in this set.
  */
 const PREPARATION_QUALIFIERS: ReadonlySet<string> = new Set([
+  'clean',
+  'cleaned',
   'ripe',
   'sliced',
   'slice',
@@ -165,6 +167,8 @@ const PREPARATION_QUALIFIERS: ReadonlySet<string> = new Set([
   'cored',
   'shucked',
   'husked',
+  'hull',
+  'hulled',
   'julienned',
   'cubed',
   'cubing',
@@ -2097,6 +2101,70 @@ export function projectQueryText(
     count_noun: countNoun,
     container,
   });
+}
+
+/**
+ * Returns only closed semantic descriptors from a query and its parenthetical
+ * asides. Parentheticals are normally removed from food identity, but authored
+ * preparation such as `(cleaned and hulled, sliced)` still matters when the
+ * authenticated source exposes distinct portions such as `cup, sliced`.
+ *
+ * Identity words from an aside are deliberately excluded. This helper is
+ * evidence for matching/portion selection, never a synonym or food alias.
+ */
+export function queryDescriptorTokens(text: string): ReadonlyArray<string> {
+  const descriptors: string[] = [];
+  const add = (token: string): void => {
+    if (!descriptors.includes(token)) descriptors.push(token);
+  };
+  const collect = (projection: IngredientQueryProjection): void => {
+    for (const token of projection.preparation_qualifiers) {
+      if (PREPARATION_QUALIFIERS.has(token)) add(token);
+    }
+    for (const token of projection.qualifier_tokens) add(token);
+    for (const token of projection.form_tokens) add(token);
+    for (const token of projection.size_qualifiers) add(token);
+    for (const token of projection.numeric_qualifiers) add(token);
+  };
+
+  collect(projectQueryText(text));
+  for (const match of text.matchAll(/\(([^()]*)\)/g)) {
+    for (const clause of (match[1] ?? '').split(',')) {
+      collect(projectQueryText(clause));
+    }
+  }
+  return Object.freeze(descriptors);
+}
+
+/**
+ * Returns food-identity tokens authored inside parenthetical asides.
+ *
+ * Parentheticals are not uniformly preparation notes: `(thigh)`, `(full fat)`,
+ * and `(80/20)` can distinguish otherwise different foods. Re-project each
+ * aside through the same closed roles used by the main query so preparation
+ * and bounded recipe prose stay out of the identity while meaningful cut,
+ * variety, and composition tokens remain available to review matching.
+ */
+export function queryParentheticalIdentityTokens(text: string): ReadonlyArray<string> {
+  const quantityAside = /^\s*(?:about|approximately|approx\.?|around|roughly|circa|~)?\s*\d+(?:\.\d+)?(?:\s*(?:\/|-|to)\s*\d+(?:\.\d+)?)?\s*(?:g|grams?|kg|kilograms?|mg|milligrams?|oz|ounces?|lb|pounds?|ml|milliliters?|l|liters?|cup(?:s)?|tbsp|tablespoons?|tsp|teaspoons?|slice(?:s)?|clove(?:s)?|piece(?:s)?|can(?:s)?|package(?:s)?|packages?)\b/i;
+  const parentheticalProseTokens = new Set(['some', 'of', 'them']);
+  const nonIdentityAside = (clause: string): boolean =>
+    quantityAside.test(clause) || /%\s*dv\b|\bper\s+serving\b/i.test(clause);
+  const identity: string[] = [];
+  const add = (token: string): void => {
+    if (!identity.includes(token)) identity.push(token);
+  };
+
+  for (const match of text.matchAll(/\(([^()]*)\)/g)) {
+    for (const clause of (match[1] ?? '').split(',')) {
+      if (nonIdentityAside(clause)) continue;
+      const projection = projectQueryText(clause);
+      for (const token of projection.food_identity.split(/\s+/).filter(Boolean)) {
+        if (!parentheticalProseTokens.has(token)) add(token);
+      }
+    }
+  }
+  return Object.freeze(identity);
 }
 
 /** True when the query itself explicitly requests a negation/variant qualifier. */

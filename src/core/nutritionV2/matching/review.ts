@@ -52,7 +52,13 @@ import {
 } from '../usda/types';
 import { normalizeQuery, normalizeQueryChecked } from './normalize';
 import { parseIngredient } from './parse';
-import { QUERY_PROJECTION_VERSION, QUALIFIER_TOKENS } from './query';
+import {
+  QUERY_PROJECTION_VERSION,
+  QUALIFIER_TOKENS,
+  projectQueryText,
+  queryDescriptorTokens,
+  queryParentheticalIdentityTokens,
+} from './query';
 import { searchManualCatalog, createManualSearchIndex, type ManualSearchIndex } from './manualSearch';
 import {
   ELIGIBILITY_POLICY_VERSION,
@@ -138,6 +144,32 @@ function deepFreeze<T>(value: T): T {
     Object.freeze(value);
   }
   return value;
+}
+
+/**
+ * Preserve the query-projection boundary before punctuation normalization.
+ *
+ * A structured recipe ingredient can carry either authored preparation prose
+ * or food identity in its parenthetical, for example
+ * `strawberries (cleaned and hulled, sliced)` versus `chicken (thigh)`. If that
+ * text is normalized first, the parentheses disappear and preparation words
+ * can become mandatory food identity. Re-projecting both roles keeps
+ * preparation evidence available for portion selection while retaining cuts,
+ * varieties, fat content, and ratios for food matching.
+ */
+function queryForReview(parsedQuery: string, originalText: string): string {
+  if (!/\([^()]*[A-Za-z][^()]*\)/.test(originalText)) return parsedQuery;
+  const projectedIdentity = projectQueryText(parsedQuery).food_identity.trim();
+  const parentheticalIdentity = queryParentheticalIdentityTokens(originalText || parsedQuery);
+  const descriptors = queryDescriptorTokens(parsedQuery);
+  const tokens = [...projectedIdentity.split(/\s+/).filter(Boolean)];
+  for (const identity of parentheticalIdentity) {
+    if (!tokens.includes(identity)) tokens.push(identity);
+  }
+  for (const descriptor of descriptors) {
+    if (!tokens.includes(descriptor)) tokens.push(descriptor);
+  }
+  return tokens.length > 0 ? tokens.join(' ') : parsedQuery;
 }
 
 /**
@@ -431,7 +463,11 @@ export function reviewIngredient(
   }
   const parsed = parsedResult.parsed;
 
-  const normalizedResult = normalizeQueryChecked(parsed.query);
+  // Project descriptive parentheticals before normalization so preparation
+  // words cannot become mandatory food identity. The original authored line is
+  // still retained in `original_text` for evidence and explanation.
+  const reviewQuery = queryForReview(parsed.query, parsed.original_text);
+  const normalizedResult = normalizeQueryChecked(reviewQuery);
   if (!normalizedResult.ok) {
     const code = (normalizedResult as { ok: false; code: 'empty_query' | 'invalid_query' }).code;
     return invalidReview(catalog, phase2Failure(code), limit, parsed);
@@ -463,7 +499,7 @@ export function reviewIngredient(
   const reviewDigest = computeReviewDigest({
     line_ref: parsed.line_ref,
     original_text: parsed.original_text,
-    query: parsed.query,
+    query: reviewQuery,
     normalized_query: normalized.text,
     query_tokens: normalized.tokens,
     bundle_release: metadata.bundle_release,
@@ -477,7 +513,7 @@ export function reviewIngredient(
   const common = {
     line_ref: parsed.line_ref,
     original_text: parsed.original_text,
-    query: parsed.query,
+    query: reviewQuery,
     ...(parsed.count_noun !== undefined ? { count_noun: parsed.count_noun } : {}),
     ...(parsed.container !== undefined ? { container: parsed.container } : {}),
     normalized_query: normalized.text,

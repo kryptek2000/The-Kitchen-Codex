@@ -73,7 +73,41 @@ describe('N-1 ordinary ingredient resolution', () => {
     expect(strawberryRows.some((row) => /hemp|barley/i.test(String(row['description'])))).toBe(false);
   });
 
-  it('resolves sliced strawberries and toasted pecans with authenticated household portions', () => {
+  it('preserves meaningful parenthetical food identity without promoting preparation prose', () => {
+    const record = (name: string): Record<string, unknown> =>
+      session.reviewIngredient(name) as unknown as Record<string, unknown>;
+    const descriptions = (review: Record<string, unknown>): string[] =>
+      Array.isArray(review['candidates'])
+        ? (review['candidates'] as Array<Record<string, unknown>>).map((candidate) => String(candidate['description']))
+        : [];
+
+    const thigh = record('chicken (thigh)');
+    const breast = record('chicken (breast)');
+    expect(thigh['query']).toBe('chicken thigh');
+    expect(breast['query']).toBe('chicken breast');
+    expect(descriptions(thigh).some((description) => /chicken.*thigh|thigh.*chicken/i.test(description))).toBe(true);
+    expect(descriptions(breast).some((description) => /chicken.*breast|breast.*chicken/i.test(description))).toBe(true);
+    expect(descriptions(thigh)).not.toEqual(descriptions(breast));
+
+    const coconut = record('coconut milk (full fat)');
+    expect(coconut['query']).toBe('coconut milk full fat');
+    // The pinned bundle has no authoritative full-fat coconut record. Preserve
+    // the requested identity and leave it reviewable/unmatched rather than
+    // auto-selecting an unrelated full-fat food.
+    expect(['review_required', 'unmatched']).toContain(coconut['outcome']);
+    expect(coconut['selected_fdc_id']).toBeUndefined();
+
+    const beef = record('beef (80/20)');
+    expect(beef['normalized_query']).toBe('beef 80 20');
+    expect(descriptions(beef).some((description) => /80%.*20%|80.*20/i.test(description))).toBe(true);
+
+    expect(record('milk (whole)')['query']).toBe('milk whole');
+    expect(record('milk (skim)')['query']).toBe('milk skim');
+    expect(record('butter (salted)')['query']).toBe('butter salted');
+    expect(record('butter (unsalted)')['query']).toBe('butter unsalted');
+  });
+
+  it('resolves the authored strawberry and pecan preparation parentheticals with authenticated portions', () => {
     const strawberrySearch = session.searchFoods('strawberries', 20);
     expect(strawberrySearch.ok).toBe(true);
     if (!strawberrySearch.ok) return;
@@ -95,8 +129,8 @@ describe('N-1 ordinary ingredient resolution', () => {
       title: 'Strawberry Spinach Salad',
       servings: 2,
       ingredients: [
-        structuredIngredient('3 cups sliced strawberries'),
-        structuredIngredient('1 cup toasted pecans'),
+        structuredIngredient('3 cups strawberries (cleaned and hulled, sliced)'),
+        structuredIngredient('1 cup pecans (toasted, some of them chopped)'),
       ],
     });
     expect(result.ok).toBe(true);
@@ -108,6 +142,7 @@ describe('N-1 ordinary ingredient resolution', () => {
       'Strawberries, raw',
       'Pecans, NFS',
     ]);
+    expect(analysis.rows.map((row) => row.auto_portion)).toEqual([true, true]);
     const automaticStrawberryFdcId = analysis.rows[0]?.selected_fdc_id;
     expect(automaticStrawberryFdcId).toEqual(expect.any(Number));
     if (automaticStrawberryFdcId === undefined) return;
@@ -115,7 +150,7 @@ describe('N-1 ordinary ingredient resolution', () => {
     expect(automaticStrawberryPortions.ok).toBe(true);
     if (!automaticStrawberryPortions.ok) return;
     expect(automaticStrawberryPortions.review.candidates.some((candidate) =>
-      candidate.kind === 'volume' && candidate.unit === 'cup' && candidate.gram_weight > 0
+      candidate.kind === 'volume' && candidate.unit === 'cup' && candidate.descriptor === 'sliced' && candidate.gram_weight > 0
     )).toBe(true);
     expect(analysis.preview?.ingredients.map((entry) => entry.outcome)).toEqual(['calculated', 'calculated']);
     expect(analysis.preview?.ingredients[0]).toMatchObject({
@@ -220,6 +255,136 @@ describe('N-1 ordinary ingredient resolution', () => {
     // estimator must not turn resolved ingredient identities into unresolved
     // lines or a false success.
     expect(runAiNutrition).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps run analysis, completion, and review coverage on one real tool-path result', async () => {
+    const ingredientLines = [
+      '3 cups strawberries (cleaned and hulled, sliced)',
+      '1 cup pecans (toasted, some of them chopped)',
+      '100 g baby spinach',
+      '75 g feta cheese',
+      '50 g red onion',
+      '28 g olive oil',
+      '16 g balsamic vinegar',
+    ];
+    const recipe: ObsidianRecipe = {
+      id: '15-minute-strawberry-spinach-salad-real-wording',
+      fileName: '15-Minute Strawberry Spinach Salad.md',
+      filePath: 'Recipes/15-Minute Strawberry Spinach Salad.md',
+      rawMarkdown: '',
+      title: '15-Minute Strawberry Spinach Salad',
+      tags: ['food/recipes'],
+      category: 'Salads & Bowls',
+      cuisine: 'American',
+      servings: 2,
+      difficulty: 'Easy',
+      rating: 0,
+      ingredients: ingredientLines.map(structuredIngredient) as unknown as ObsidianRecipe['ingredients'],
+      instructions: [{ stepNumber: 1, text: 'Toss the salad and serve.' }],
+      callouts: [],
+      dataviewFields: {},
+      wikilinks: [],
+    };
+    const controller = createShisoNutritionReviewController(recipe, session);
+    expect(controller).not.toBeNull();
+    if (controller === null) return;
+    const fresh = controller.getSnapshot();
+    expect(fresh).not.toBeNull();
+    if (fresh === null) return;
+
+    const stale = {
+      ...fresh,
+      rows: fresh.rows.map((row, index) => index < 2
+        ? {
+            ...row,
+            status: 'needs_match' as const,
+            food_authority: 'none' as const,
+            selected_fdc_id: undefined,
+            selected_description: undefined,
+            resolved_grams: undefined,
+            mass_source: undefined,
+          }
+        : row),
+    };
+    let liveNutrition: typeof stale | typeof fresh = stale;
+    const contextRecipe = {
+      title: recipe.title,
+      servings: recipe.servings ?? null,
+      ingredients: recipe.ingredients.map((ingredient, index) => ({
+        text: ingredient.original,
+        name: ingredient.name,
+        amount: ingredient.amount,
+        unit: ingredient.unit,
+        line_ref: fresh.rows[index]!.line_ref,
+      })),
+      instructions: recipe.instructions,
+    };
+    const runAiNutrition = vi.fn(async () => ({
+      ok: false as const,
+      message: 'The selected AI connection is unavailable.',
+    }));
+    const ctx: ShisoToolContext = {
+      session,
+      recipe: contextRecipe,
+      get nutrition() {
+        return liveNutrition;
+      },
+      runAnalysis: vi.fn(async () => {
+        const outcome = controller.analyze();
+        const next = controller.getSnapshot();
+        if (next !== null) liveNutrition = next;
+        return outcome;
+      }),
+      runAiNutrition,
+      researchNutrition: vi.fn(async () => ({
+        ok: false as const,
+        code: 'WEB_RESEARCH_UNAVAILABLE',
+        message: 'The selected AI provider does not support grounded web research.',
+      })),
+      acceptNutritionContributions: vi.fn(() => true),
+    };
+
+    const analyzed = await executeShisoTool({ tool: 'run_nutrition_analysis' }, ctx);
+    expect(analyzed).toMatchObject({ ok: true, tool: 'run_nutrition_analysis' });
+    if (!analyzed.ok) return;
+    expect(analyzed.summary).toContain('7 of 7 ingredient lines covered');
+    expect(analyzed.summary).toContain('0 still require attention');
+    // USDA-backed rows are sufficient here; an unavailable AI connection must
+    // not block ordinary offline source resolution or be invoked unnecessarily.
+    expect(runAiNutrition).not.toHaveBeenCalled();
+
+    const review = await executeShisoTool({ tool: 'get_nutrition_review', include_ingredients: true }, ctx);
+    expect(review).toMatchObject({ ok: true, tool: 'get_nutrition_review' });
+    if (!review.ok) return;
+    expect(review.data['resolved']).toBe(7);
+    expect(review.data['unresolved_count']).toBe(0);
+    const reviewedIngredients = review.data['ingredients'] as Array<Record<string, unknown>>;
+    expect(reviewedIngredients[0]).toMatchObject({
+      label: ingredientLines[0],
+      status: 'source_backed',
+      food: 'Strawberries, raw',
+      mass_source: 'source_portion',
+    });
+    expect(reviewedIngredients[1]).toMatchObject({
+      label: ingredientLines[1],
+      status: 'source_backed',
+      food: 'Pecans, NFS',
+      mass_source: 'source_portion',
+    });
+
+    const completed = await executeShisoTool({ tool: 'complete_nutrition' }, ctx);
+    expect(completed).toMatchObject({ ok: true, tool: 'complete_nutrition' });
+    if (!completed.ok) return;
+    expect(completed.data['accounted']).toBe(7);
+    expect(completed.data['remaining']).toBe(0);
+    expect(completed.summary).toContain('Nothing was applied or saved');
+
+    const finalReview = await executeShisoTool({ tool: 'get_nutrition_review', include_ingredients: true }, ctx);
+    expect(finalReview).toMatchObject({ ok: true, tool: 'get_nutrition_review' });
+    if (finalReview.ok) {
+      expect(finalReview.data['resolved']).toBe(7);
+      expect(finalReview.data['unresolved_count']).toBe(0);
+    }
   });
 });
 
