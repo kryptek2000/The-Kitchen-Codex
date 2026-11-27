@@ -196,6 +196,10 @@ export interface ShisoTurnDeps {
   readonly retry?: boolean;
   /** Application-produced note about unsaved working changes. */
   readonly workingStateNote?: string;
+  /** Trusted UI policy; model prose cannot enable or override it. */
+  readonly nutritionAuthority?: {
+    readonly enabled: boolean;
+  };
   /**
    * C1.7 S5: optional, read-only progress notifications for REAL engine steps.
    * No token-level or speculative updates; the UI must not imply streaming.
@@ -462,6 +466,22 @@ export async function runShisoConversationTurn(
     const notes = Array.isArray(data['notes'])
       ? data['notes'].filter((note): note is string => typeof note === 'string').slice(0, 3)
       : [];
+    const alternativeSummary = Array.isArray(data['alternative_scenarios'])
+      ? data['alternative_scenarios'].slice(0, 3).flatMap((scenario) => {
+          if (scenario === null || typeof scenario !== 'object' || Array.isArray(scenario)) return [];
+          const branches = (scenario as Record<string, unknown>)['branches'];
+          if (!Array.isArray(branches)) return [];
+          const labels = branches.slice(0, 4).flatMap((branch) => {
+            if (branch === null || typeof branch !== 'object' || Array.isArray(branch)) return [];
+            const value = branch as Record<string, unknown>;
+            if (typeof value['name'] !== 'string') return [];
+            const grams = typeof value['resolved_grams'] === 'number' ? `, ${value['resolved_grams']} g` : ', unresolved';
+            const fdc = typeof value['fdc_id'] === 'number' ? `, FDC ${value['fdc_id']}` : '';
+            return [`${value['name']}${fdc}${grams}`];
+          });
+          return labels.length > 0 ? [`Alternative scenarios (not combined): ${labels.join(' versus ')}.`] : [];
+        }).join(' ')
+      : '';
     const steps = Array.isArray(data['steps']) ? data['steps'] : [];
     const aiStep = steps.find((step) => step !== null && typeof step === 'object' && !Array.isArray(step) && (step as Record<string, unknown>)['stage'] === 'ai_estimate') as Record<string, unknown> | undefined;
     const aiFailed = aiStep?.['attempted'] === true && (aiStep?.['selected'] ?? 0) === 0;
@@ -478,26 +498,67 @@ export async function runShisoConversationTurn(
       typeof nutrientCoverage === 'object' &&
       !Array.isArray(nutrientCoverage) &&
       typeof (nutrientCoverage as Record<string, unknown>)['gap_lines_examined'] === 'number';
+    const requiresAlternativeChoice = Array.isArray(data['alternative_scenarios']) &&
+      data['alternative_scenarios'].some((scenario) =>
+        scenario !== null && typeof scenario === 'object' && !Array.isArray(scenario) &&
+        (scenario as Record<string, unknown>)['definitive_choice_required'] === true
+      );
+    // `complete_nutrition` is deliberately honest about its own unsaved stage,
+    // but that sentence must not survive into a final response after a later
+    // Apply/Save transaction succeeds. The transaction outcome below is the
+    // sole persistence claim in the delivered message.
+    const calculatedSummary = summary.replace(/\s*Nothing was applied or saved\.\s*$/i, '').trim();
+    let persistenceMessage = requiresAlternativeChoice
+      ? 'An equal ingredient alternative still needs your choice. Select the branch actually used before Apply or Save. Nothing was applied or saved.'
+      : 'Calculated only: the prepared contributions remain in the UNSAVED Advanced Nutrition review. Nothing was applied or saved.';
+    const shortcutTools = ['complete_nutrition'];
+    let shortcutState = working;
+    if (!requiresAlternativeChoice && result.ok && deps.nutritionAuthority?.enabled === true && classifySaveIntent(trimmed).reason !== 'save_negated') {
+      shortcutTools.push('apply_nutrition_review');
+      const applied = await executeShisoTool({ tool: 'apply_nutrition_review' }, deps.toolContext, deps.signal);
+      const appliedSummary = applied.ok ? applied.summary : (applied as Extract<ShisoObservation, { ok: false }>).message;
+      shortcutState = recordFinding(shortcutState, {
+        tool: applied.tool,
+        ok: applied.ok,
+        summary: appliedSummary,
+      });
+      if (applied.ok) {
+        shortcutTools.push('save_working_recipe');
+        const saved = await executeShisoTool({ tool: 'save_working_recipe' }, deps.toolContext, deps.signal);
+        const savedSummary = saved.ok ? saved.summary : (saved as Extract<ShisoObservation, { ok: false }>).message;
+        shortcutState = recordFinding(shortcutState, {
+          tool: saved.tool,
+          ok: saved.ok,
+          summary: savedSummary,
+        });
+        persistenceMessage = saved.ok && saved.data['saved'] === true
+          ? 'Standing nutrition authority applied the reviewed result and the canonical Vault save confirmed persistence.'
+          : `The review was applied to the working recipe, but Vault persistence was not confirmed: ${savedSummary}`;
+      } else {
+        persistenceMessage = `Standing nutrition authority could not apply this review: ${appliedSummary} Nothing was saved.`;
+      }
+    }
     const message = result.ok
       ? isNutrientGapPass
-        ? `${summary}${notes.length > 0 ? ` Notes: ${notes.join(' ')}` : ''}`
+        ? `${calculatedSummary}${notes.length > 0 ? ` Notes: ${notes.join(' ')}` : ''}${alternativeSummary.length > 0 ? ` ${alternativeSummary}` : ''} ${persistenceMessage}`
         : `I completed a bounded source-first pass: ${resolvedNew} of ${initialUnresolved} previously unresolved line(s) resolved; ` +
           `${accounted} of ${total} ingredient lines covered (${sourceBreakdown}). ` +
           `${remaining > 0 ? `${remaining} still need attention. ` : 'Every ingredient line is accounted for. '}` +
           `${partialKnown > 0 ? `${partialKnown} line(s) retain unknown nutrients. ` : ''}` +
           `${aiFailed && aiFailureNote ? `No AI nutrition estimate was confirmed. ${aiFailureNote} ` : ''}` +
           `${notes.length > 0 && !aiFailed ? `Source notes: ${notes.join(' ')} ` : ''}` +
-          `The prepared contributions are in the UNSAVED Advanced Nutrition review; inspect assumptions and unknown values before Apply. Nothing was applied or saved.`
+          `${alternativeSummary.length > 0 ? `${alternativeSummary} ` : ''}` +
+          persistenceMessage
       : `${summary} No ingredient edits or saves were made.`;
     const nextState = result.ok
-      ? recordFinding(appendShisoMessage(working, { role: 'assistant', text: message, proposalCount: 0 }), { tool: result.tool, ok: true, summary: result.summary })
-      : appendShisoMessage(working, { role: 'assistant', text: message, proposalCount: 0 });
+      ? recordFinding(appendShisoMessage(shortcutState, { role: 'assistant', text: message, proposalCount: 0 }), { tool: result.tool, ok: true, summary: result.summary })
+      : appendShisoMessage(shortcutState, { role: 'assistant', text: message, proposalCount: 0 });
     return {
       ok: true,
       state: nextState,
       message,
       status: null,
-      toolsUsed: Object.freeze(['complete_nutrition']) as readonly string[],
+      toolsUsed: Object.freeze(shortcutTools) as readonly string[],
     };
   }
 

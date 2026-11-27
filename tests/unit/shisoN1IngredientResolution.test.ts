@@ -16,6 +16,7 @@ import { createShisoNutritionReviewController } from '../../src/application/shis
 import { parseIngredient } from '../../src/core/nutritionV2/matching/parse';
 import { adaptRecipe } from '../../src/core/nutritionV2/phase4/adapt';
 import { analyzeRecipe } from '../../src/core/nutritionV2/phase4/analyzer';
+import { previewNutritionApplyEligibility } from '../../src/core/nutritionV2/phase5/authorize';
 import { composeAdvancedNutritionSessionFromBundle } from '../../src/core/nutritionV2/runtime';
 import { USDA_BUNDLE_RELEASE_LOCK } from '../../src/core/nutritionV2/usda/releaseLock';
 import type { AdvancedNutritionSession } from '../../src/core/nutritionV2/phase4';
@@ -53,6 +54,91 @@ function structuredIngredient(original: string): Record<string, unknown> {
 }
 
 describe('N-1 ordinary ingredient resolution', () => {
+  it('withholds equal authored alternatives from definitive Apply/Save until a user chooses', () => {
+    const recipe = {
+      id: 'equal-alternative',
+      fileName: 'Equal Alternative.md',
+      filePath: 'Recipes/Equal Alternative.md',
+      rawMarkdown: '',
+      title: 'Equal Alternative',
+      tags: ['food/recipes'],
+      category: 'Test',
+      cuisine: 'Test',
+      difficulty: 'Easy',
+      rating: 0,
+      servings: 1,
+      ingredients: [structuredIngredient('1/4 cup honey or brown sugar')],
+      instructions: [],
+      callouts: [],
+      dataviewFields: {},
+      wikilinks: [],
+      frontmatter: {},
+    } as unknown as ObsidianRecipe;
+    const controller = createShisoNutritionReviewController(recipe, session);
+    expect(controller).not.toBeNull();
+    if (controller === null) return;
+    const state = controller.getState();
+    const snapshot = controller.getSnapshot();
+    expect(snapshot?.rows[0]?.status).toBe('needs_match');
+    expect(state.preview?.ingredients[0]?.outcome).not.toBe('calculated');
+    expect(previewNutritionApplyEligibility({ session, recipe, state })).toBe(false);
+  });
+
+  it('calculates authenticated mutually exclusive sweetener scenarios without combining them', async () => {
+    const recipe = {
+      id: 'alternative-sweetener',
+      fileName: 'Alternative Sweetener.md',
+      filePath: 'Recipes/Alternative Sweetener.md',
+      rawMarkdown: '',
+      title: 'Alternative Sweetener',
+      tags: ['food/recipes'],
+      category: 'Test',
+      cuisine: 'Test',
+      difficulty: 'Easy',
+      rating: 0,
+      servings: 1,
+      ingredients: [structuredIngredient('1/4 cup honey (or brown sugar)')],
+      instructions: [],
+      callouts: [],
+      dataviewFields: {},
+      wikilinks: [],
+      frontmatter: {},
+    } as unknown as ObsidianRecipe;
+    const controller = createShisoNutritionReviewController(recipe, session);
+    if (controller === null) throw new Error('controller failed');
+    const snapshot = controller.getSnapshot();
+    const lineRef = snapshot.rows[0]?.line_ref;
+    if (lineRef === undefined) throw new Error('line ref missing');
+    const ctx: ShisoToolContext = {
+      session,
+      recipe: {
+        title: recipe.title,
+        servings: 1,
+        ingredients: [{
+          text: '1/4 cup honey (or brown sugar)',
+          name: 'honey',
+          amount: 0.25,
+          unit: 'cup',
+          line_ref: lineRef,
+        }],
+        instructions: [],
+      },
+      nutrition: snapshot,
+    };
+    const review = await executeShisoTool({ tool: 'get_nutrition_review', include_ingredients: true }, ctx);
+    expect(review.ok).toBe(true);
+    if (!review.ok) return;
+    const scenarios = review.data['alternative_scenarios'] as Array<Record<string, unknown>>;
+    expect(scenarios).toHaveLength(1);
+    expect(scenarios[0]).toMatchObject({ mutually_exclusive: true, primary_index: 0, definitive_choice_required: false });
+    const branches = scenarios[0].branches as Array<Record<string, unknown>>;
+    expect(branches).toHaveLength(2);
+    expect(branches[0]).toMatchObject({ name: 'honey', fdc_id: 169640, resolved: true, provenance: 'authenticated_usda_scenario' });
+    expect(branches[0].resolved_grams).toBeCloseTo(84.75, 4);
+    expect(branches[1]).toMatchObject({ name: 'brown sugar', fdc_id: 168833, resolved: true, provenance: 'authenticated_usda_scenario' });
+    expect(branches[1].resolved_grams).toBeCloseTo(55, 4);
+  });
+
   it('uses food identity rather than preparation wording for SHISO USDA discovery', async () => {
     const ctx = { session, recipe: null, nutrition: null } as unknown as ShisoToolContext;
 

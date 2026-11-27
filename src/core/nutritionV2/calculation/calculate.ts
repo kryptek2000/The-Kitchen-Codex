@@ -24,7 +24,7 @@ import { isNutrientId, NUTRIENT_IDS, NUTRIENT_REGISTRY, type NutrientId } from '
 import { isValidNutrientAmount, MAX_NUTRIENT_AMOUNT, type CanonicalUnit } from '../units';
 import { normalizeQuery } from '../matching/normalize';
 import { parseIngredient } from '../matching/parse';
-import { projectQueryText } from '../matching/query';
+import { projectIngredientAlternatives, projectQueryText } from '../matching/query';
 import { confirmIngredientReview, reviewIngredient } from '../matching/review';
 import { isDeterministicAutomaticSelection } from '../matching/confidence';
 import type { ConfirmationResult, ReviewCatalog } from '../matching/types';
@@ -850,6 +850,24 @@ function evaluateIngredient(
         }
       }
     }
+  }
+
+  // Authored equal alternatives are not a deterministic food choice. A
+  // matcher-selected candidate (including an automatic-selection claim) may
+  // be useful for investigation, but it must never enter definitive totals or
+  // Phase 5 until the user explicitly confirms one branch. The explicit
+  // `user_confirmed` path is the existing manual review authority; no new
+  // selection mechanism is introduced here.
+  const equalAlternative = projectIngredientAlternatives(parsed.original_text)?.primary_index === null;
+  if (equalAlternative && matchStatus !== 'user_confirmed') {
+    matched = false;
+    ambiguous = true;
+    fdcId = undefined;
+    recordDigest = undefined;
+    confirmationDigest = undefined;
+    manualRecordId = undefined;
+    manualRecordDigest = undefined;
+    matchStatus = 'none';
   }
 
   // Resolve the current canonical record for a matched identity.

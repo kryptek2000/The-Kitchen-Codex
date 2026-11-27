@@ -15,9 +15,10 @@
 
 import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react';
-import { useState, type ComponentProps } from 'react';
+import { useEffect, useState, type ComponentProps } from 'react';
 
 import { AdvancedNutritionCard } from '../../src/components/AdvancedNutritionCard';
+import { ShisoEntryProvider, useShiso } from '../../src/application-ui/shisoEntryPoints';
 import { createAdvancedNutritionSession } from '../../src/core/nutritionV2/phase4/session';
 import { parseIngredient } from '../../src/core/nutritionV2/matching/parse';
 import { resolveAmountsFromAiSuggestions } from '../../src/core/nutritionV2/phase4/aiAmountResolve';
@@ -149,6 +150,52 @@ async function analyzeWithShiso(): Promise<void> {
   )) as HTMLButtonElement;
   await waitFor(() => expect(button.disabled).toBe(false));
   fireEvent.click(button);
+}
+
+function StandingAuthorityHarness({
+  target,
+  apply,
+  save,
+}: {
+  readonly target: ObsidianRecipe;
+  readonly apply: ComponentProps<typeof AdvancedNutritionCard>['onApplyAdvancedNutrition'];
+  readonly save: (grant: unknown) => Promise<{ ok: boolean; saved: boolean; message: string }>;
+}) {
+  const shiso = useShiso();
+  const registerRecipeEditApplier = shiso.registerRecipeEditApplier;
+  useEffect(() => registerRecipeEditApplier({
+    applyEdits: async () => ({
+      ok: false,
+      applied: [],
+      refused: [],
+      summary: 'No recipe edit was requested.',
+      working_unsaved: false,
+      note: '',
+    }),
+    save: async (grant) => save(grant),
+    discard: () => {},
+  }), [registerRecipeEditApplier, save]);
+  return (
+    <AdvancedNutritionCard
+      recipe={target}
+      session={session}
+      onApplyAdvancedNutrition={apply}
+      nutritionAuthority={{
+        enabled: true,
+        available: true,
+        recipeIdentity: 'Recipes/authority.md',
+        vaultScope: 'disposable-vault',
+        onChange: () => {},
+      }}
+      advancedNutritionAiAvailability={{
+        available: false,
+        reason: 'The selected AI connection is unavailable.',
+        refreshing: false,
+        canRetry: false,
+        advancedEditingAccess: 'entitled',
+      }}
+    />
+  );
 }
 
 function summaryText(): string {
@@ -939,6 +986,77 @@ describe('Generate — deterministic first, AI only on explicit SHISO action', (
     expect(args.issueKinds[args.rows[0].line_ref]).toBe('review_suggested');
     expect(args.recipe).toBeDefined();
     expect(args.orchestration).toBe('generate');
+  });
+
+  it('runs an observable authenticated USDA-only fallback when AI is unavailable', async () => {
+    const aiFirst = vi.fn();
+    render(
+      <AdvancedNutritionCard
+        recipe={recipe('1 cup berries')}
+        session={session}
+        onResolveWithAiFirst={aiFirst}
+        advancedNutritionAiAvailability={{
+          available: false,
+          reason: 'The selected AI connection is unavailable.',
+          refreshing: false,
+          canRetry: true,
+          advancedEditingAccess: 'entitled',
+        }}
+      />
+    );
+    await openAndAnalyze();
+    const button = await screen.findByTestId('advanced-nutrition-analyze-with-shiso') as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    fireEvent.click(button);
+    await waitFor(() => expect(screen.getByTestId('advanced-nutrition-shiso-status').textContent).toMatch(/completed the authenticated USDA-only analysis/i));
+    expect(aiFirst).not.toHaveBeenCalled();
+    expect(screen.getByTestId('advanced-nutrition-live-summary')).toBeTruthy();
+  });
+
+  it('runs the authenticated USDA-only fallback through Apply and Save when standing authority is enabled', async () => {
+    const apply = vi.fn(async () => ({ ok: true, mode: 'create' as const, message: 'Applied through the canonical review owner.' }));
+    const save = vi.fn(async (_grant: unknown) => ({ ok: true, saved: true, message: 'Saved through the canonical Vault owner.' }));
+    render(
+      <ShisoEntryProvider>
+        <StandingAuthorityHarness target={recipe('1 cup Mystery, raw', 'standing-authority')} apply={apply} save={save} />
+      </ShisoEntryProvider>
+    );
+    await openAndAnalyze();
+    fireEvent.click(await screen.findByTestId('advanced-nutrition-analyze-with-shiso'));
+    await waitFor(() => expect(screen.getByTestId('advanced-nutrition-shiso-status').textContent).toMatch(/saved it to the active Vault/i));
+    expect(apply).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save.mock.calls[0]?.[0]).toMatchObject({
+      authorized: true,
+      via: 'standing_nutrition',
+      recipe_identity: 'Recipes/authority.md',
+      vault_scope: 'disposable-vault',
+      nutrition_applied: true,
+    });
+    expect(screen.getByTestId('advanced-nutrition-shiso-status').textContent).not.toMatch(/nothing was applied or saved/i);
+  });
+
+  it('announces the correct idle Analyze with SHISO policy for both authority states', async () => {
+    const authority = (enabled: boolean) => ({
+      enabled,
+      available: true,
+      recipeIdentity: 'Recipes/idle-wording.md',
+      vaultScope: 'disposable-vault',
+      onChange: () => {},
+    });
+
+    render(<AdvancedNutritionCard recipe={recipe('1 cup Mystery, raw', 'idle-off')} session={session} nutritionAuthority={authority(false)} />);
+    await openAndAnalyze();
+    expect(screen.getByTestId('advanced-nutrition-shiso-status').textContent).toContain(
+      'Analysis creates a working review only. Apply and Vault saving are separate steps.'
+    );
+
+    cleanup();
+    render(<AdvancedNutritionCard recipe={recipe('1 cup Mystery, raw', 'idle-on')} session={session} nutritionAuthority={authority(true)} />);
+    await openAndAnalyze();
+    expect(screen.getByTestId('advanced-nutrition-shiso-status').textContent).toContain(
+      'SHISO will automatically apply and save eligible nutrition results. Unresolved ingredient choices or failed verification will prevent saving.'
+    );
   });
 
   it('does not ask AI when the deterministic baseline already resolved every line', async () => {

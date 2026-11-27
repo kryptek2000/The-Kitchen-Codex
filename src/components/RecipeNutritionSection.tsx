@@ -32,6 +32,13 @@ interface RecipeNutritionSectionProps {
   /** AI-5C bounded AI presentation state; passed straight through to the card. */
   advancedNutritionAiAvailability?: AdvancedNutritionAiAvailability;
   onApplyAdvancedNutrition?: AdvancedNutritionApplyHandler;
+  nutritionAuthority?: {
+    readonly enabled: boolean;
+    readonly available: boolean;
+    readonly recipeIdentity?: string;
+    readonly vaultScope?: string;
+    readonly onChange: (enabled: boolean) => Promise<void> | void;
+  };
   /** Optional AI-assisted USDA resolution port (injected by the shell). */
   onResolveAdvancedNutritionAi?: AdvancedNutritionAiResolveHandler;
   /** Optional AI-FIRST Generate resolution port (injected by the shell). */
@@ -80,6 +87,7 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
   onLoadAdvancedNutritionBundle,
   advancedNutritionAiAvailability,
   onApplyAdvancedNutrition,
+  nutritionAuthority,
   onResolveAdvancedNutritionAi,
   onResolveAdvancedNutritionAiFirst,
   onResearchAdvancedNutritionAi,
@@ -249,6 +257,7 @@ export const RecipeNutritionSection: React.FC<RecipeNutritionSectionProps> = ({
         onLoadBundle={onLoadAdvancedNutritionBundle}
         advancedNutritionAiAvailability={advancedNutritionAiAvailability}
         onApplyAdvancedNutrition={onApplyAdvancedNutrition}
+        nutritionAuthority={nutritionAuthority}
         savedAdvancedBlock={presentation.advanced}
         onResolveWithAi={onResolveAdvancedNutritionAi}
         onResolveWithAiFirst={onResolveAdvancedNutritionAiFirst}

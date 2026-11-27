@@ -543,6 +543,71 @@ describe('SINC-3 end-to-end conversational command', () => {
     expect(network.post).not.toHaveBeenCalled();
   });
 
+  it('reports the canonical persistence outcome without retaining the unsaved claim', async () => {
+    const applyNutritionReview = vi.fn(async () => ({
+      ok: true,
+      applied: true,
+      message: 'The verified review is in the working recipe.',
+    }));
+    const saveWorkingRecipe = vi.fn(async () => ({
+      ok: true,
+      saved: true,
+      message: 'The canonical Vault write completed.',
+    }));
+    const fixture = ownerFixture({ applyNutritionReview, saveWorkingRecipe });
+    const outcome = await runShisoConversationTurn({
+      network: noProviderNetwork(),
+      toolContext: fixture.ctx,
+      nutritionAuthority: { enabled: true },
+      context: {
+        recipe: { title: 'Gochujang Chicken Rice Bowls', servings: 4, ingredientCount: 18, stepCount: 6 },
+        nutrition: { available: true, summary: null, unresolvedCount: 2, needsAmountCount: 0, needsMatchCount: 2, unsavedWorkingReview: true },
+        recipeKey: 'gochujang-bowls',
+        sessionIdentity: 'session-sinc3',
+      },
+    }, initialShisoConversation(), 'Complete nutrition.');
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.toolsUsed).toEqual(['complete_nutrition', 'apply_nutrition_review', 'save_working_recipe']);
+    expect(applyNutritionReview).toHaveBeenCalledTimes(1);
+    expect(saveWorkingRecipe).toHaveBeenCalledTimes(1);
+    expect(outcome.message).toContain('canonical Vault save confirmed persistence');
+    expect(outcome.message).not.toContain('Nothing was applied or saved');
+    expect(outcome.message).not.toMatch(/unsaved.*saved/i);
+  });
+
+  it('reports an Apply failure as unsaved and never claims persistence', async () => {
+    const applyNutritionReview = vi.fn(async () => ({
+      ok: false,
+      applied: false,
+      message: 'The authoritative review was stale.',
+    }));
+    const saveWorkingRecipe = vi.fn(async () => ({
+      ok: true,
+      saved: true,
+      message: 'Unexpected save.',
+    }));
+    const fixture = ownerFixture({ applyNutritionReview, saveWorkingRecipe });
+    const outcome = await runShisoConversationTurn({
+      network: noProviderNetwork(),
+      toolContext: fixture.ctx,
+      nutritionAuthority: { enabled: true },
+      context: {
+        recipe: { title: 'Gochujang Chicken Rice Bowls', servings: 4, ingredientCount: 18, stepCount: 6 },
+        nutrition: { available: true, summary: null, unresolvedCount: 2, needsAmountCount: 0, needsMatchCount: 2, unsavedWorkingReview: true },
+        recipeKey: 'gochujang-bowls',
+        sessionIdentity: 'session-sinc3',
+      },
+    }, initialShisoConversation(), 'Complete nutrition.');
+
+    expect(outcome.ok).toBe(true);
+    expect(applyNutritionReview).toHaveBeenCalledTimes(1);
+    expect(saveWorkingRecipe).not.toHaveBeenCalled();
+    expect(outcome.message).toContain('could not apply this review');
+    expect(outcome.message).toContain('Nothing was saved');
+    expect(outcome.message).not.toContain('canonical Vault save confirmed persistence');
+  });
+
   it('executes a model-requested complete_nutrition tool call', async () => {
     const fixture = ownerFixture();
     const replies = [

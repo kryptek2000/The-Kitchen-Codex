@@ -114,7 +114,11 @@ export interface ShisoRecipeEditApplier {
  *     when the CURRENT user turn issued a save authorization at send time.
  */
 export interface ShisoSaveRequest {
-  readonly via?: 'ui' | 'assistant';
+  readonly via?: 'ui' | 'assistant' | 'standing_nutrition';
+  readonly recipe_identity?: string;
+  readonly vault_scope?: string;
+  readonly turn?: number;
+  readonly nutrition_applied?: true;
 }
 
 export interface ShisoEntryPoints {
@@ -154,6 +158,12 @@ export interface ShisoEntryPoints {
   readonly runAnalysis: (() => Promise<ShisoAnalysisOutcome>) | null;
   readonly canRunAnalysis: boolean;
   readonly registerAnalysisApplier: (applier: () => Promise<ShisoAnalysisOutcome>) => () => void;
+  /** Applies the currently displayed authoritative review through Phase 5. */
+  readonly applyNutritionReview: () => Promise<{ readonly ok: boolean; readonly applied: boolean; readonly message: string }>;
+  readonly canApplyNutritionReview: boolean;
+  readonly registerNutritionReviewApplier: (
+    applier: () => Promise<{ readonly ok: boolean; readonly applied: boolean; readonly message: string }>,
+  ) => () => void;
 
   // -------------------------------------------------------------------------
   // H-2 — authorized editing ports
@@ -225,6 +235,9 @@ const INERT: ShisoEntryPoints = {
   runAnalysis: null,
   canRunAnalysis: false,
   registerAnalysisApplier: () => () => {},
+  applyNutritionReview: async () => ({ ok: false, applied: false, message: 'No current nutrition review is available to apply.' }),
+  canApplyNutritionReview: false,
+  registerNutritionReviewApplier: () => () => {},
   applyIngredientEdits: async () => ({
     ok: false,
     applied: [],
@@ -275,6 +288,7 @@ export function ShisoEntryProvider({ children }: { readonly children: ReactNode 
   const [snapshot, setSnapshot] = useState<ShisoNutritionSnapshot | null>(null);
   const [applier, setApplier] = useState<((b: ShisoBoundProposal) => Promise<ShisoApplyResult>) | null>(null);
   const [analysisApplier, setAnalysisApplier] = useState<(() => Promise<ShisoAnalysisOutcome>) | null>(null);
+  const [nutritionReviewApplier, setNutritionReviewApplier] = useState<(() => Promise<{ readonly ok: boolean; readonly applied: boolean; readonly message: string }>) | null>(null);
   const [nutritionAnalysisRunner, setNutritionAnalysisRunner] = useState<(() => Promise<ShisoNutritionAnalysisOutcome>) | null>(null);
   const [recipeEditApplier, setRecipeEditApplier] = useState<ShisoRecipeEditApplier | null>(null);
   const [correctionsApplier, setCorrectionsApplier] = useState<
@@ -324,6 +338,16 @@ export function ShisoEntryProvider({ children }: { readonly children: ReactNode 
     setNutritionAnalysisRunner(() => next);
     return () => setNutritionAnalysisRunner((current) => current === next ? null : current);
   }, []);
+  const registerNutritionReviewApplier = useCallback((next: () => Promise<{ readonly ok: boolean; readonly applied: boolean; readonly message: string }>) => {
+    setNutritionReviewApplier(() => next);
+    return () => setNutritionReviewApplier((current) => current === next ? null : current);
+  }, []);
+  const applyNutritionReview = useCallback(async () => {
+    if (nutritionReviewApplier === null) {
+      return { ok: false, applied: false, message: 'No current nutrition review is available to apply.' };
+    }
+    return nutritionReviewApplier();
+  }, [nutritionReviewApplier]);
   const runNutritionAnalysis = useCallback(async (): Promise<ShisoNutritionAnalysisOutcome> => {
     if (nutritionAnalysisRunner === null) {
       return { ok: false, contributionCount: 0, message: 'SHISO nutrition analysis is not available right now. You can calculate without AI.' };
@@ -417,6 +441,32 @@ export function ShisoEntryProvider({ children }: { readonly children: ReactNode 
           turn: 0,
         });
       }
+      if (via === 'standing_nutrition') {
+        if (
+          typeof request?.recipe_identity !== 'string' || request.recipe_identity.length === 0 ||
+          typeof request.vault_scope !== 'string' || request.vault_scope.length === 0 ||
+          request.nutrition_applied !== true
+        ) {
+          return {
+            ok: false,
+            saved: false,
+            reason_code: 'not_authorized',
+            message: 'Standing nutrition authority was not valid for this recipe and Vault. Nothing was saved.',
+          };
+        }
+        try {
+          return await recipeEditApplier.save({
+            authorized: true,
+            via: 'standing_nutrition',
+            recipe_identity: request.recipe_identity,
+            vault_scope: request.vault_scope,
+            turn: request.turn ?? 0,
+            nutrition_applied: true,
+          });
+        } catch {
+          return { ok: false, saved: false, reason_code: 'write_failed', message: 'The recipe could not be saved.' };
+        }
+      }
       // Assistant path: require a CURRENT, unconsumed authorization issued from
       // THE USER'S OWN MESSAGE of this turn. No authorization means no write.
       const decision = beginSaveAuthorization(saveAuthorizationRef.current);
@@ -501,6 +551,9 @@ export function ShisoEntryProvider({ children }: { readonly children: ReactNode 
       runAnalysis,
       canRunAnalysis: analysisApplier !== null,
       registerAnalysisApplier,
+      applyNutritionReview,
+      canApplyNutritionReview: nutritionReviewApplier !== null,
+      registerNutritionReviewApplier,
       applyIngredientEdits,
       canApplyIngredientEdits: recipeEditApplier !== null,
       registerRecipeEditApplier,
@@ -522,7 +575,8 @@ export function ShisoEntryProvider({ children }: { readonly children: ReactNode 
       open, openForNutritionAnalysis, state.nutritionAnalysisRequest, runNutritionAnalysis, registerNutritionAnalysisRunner,
       close, state.open, state.source, publishNutrition, snapshot,
       applyProposal, applier, registerApplier, runAnalysis, analysisApplier,
-      registerAnalysisApplier, applyIngredientEdits, recipeEditApplier,
+      registerAnalysisApplier, applyNutritionReview, nutritionReviewApplier, registerNutritionReviewApplier,
+      applyIngredientEdits, recipeEditApplier,
       registerRecipeEditApplier, saveWorkingRecipe, issueSaveAuthorizationEntry,
       clearSaveAuthorizationEntry, discardWorkingRecipe,
       workingRecipe, publishWorkingRecipe, applyNutritionCorrections,

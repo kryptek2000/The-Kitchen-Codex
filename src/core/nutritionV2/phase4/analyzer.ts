@@ -17,6 +17,7 @@
  */
 
 import { parseIngredient } from '../matching/parse';
+import { projectIngredientAlternatives } from '../matching/query';
 import {
   bestEffortPortionTieCandidates,
   classifyReviewConfidence,
@@ -291,6 +292,8 @@ export function analyzeRecipeFromRows(
     const measurementKind = parsed && parsed.ok ? parsed.parsed.measurement_kind : 'unknown';
     const originalText = row.original_text || row.query;
     const hasMassRange = hasExplicitMassRange(originalText);
+    const requiresExplicitAlternativeChoice =
+      projectIngredientAlternatives(originalText)?.primary_index === null;
 
     const base = {
       line_ref: row.line_ref,
@@ -325,6 +328,20 @@ export function analyzeRecipeFromRows(
         match_class: undefined,
         auto_portion: false,
         reason: row.outcome,
+      });
+      continue;
+    }
+
+    if (requiresExplicitAlternativeChoice) {
+      analyzed.push({
+        ...base,
+        status: 'needs_match',
+        confidence: 'unresolved',
+        selected_fdc_id: undefined,
+        selected_description: undefined,
+        match_class: undefined,
+        auto_portion: false,
+        reason: 'explicit_alternative_choice_required',
       });
       continue;
     }

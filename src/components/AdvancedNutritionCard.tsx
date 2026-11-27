@@ -162,6 +162,15 @@ interface AdvancedNutritionCardProps {
   onLoadBundle?: () => void;
   /** Explicit Phase 5B Apply handler. Absent when no write path is wired. */
   onApplyAdvancedNutrition?: AdvancedNutritionApplyHandler;
+  /** Vault-scoped, persistent opt-in. It authorizes nutrition Apply+Save only. */
+  nutritionAuthority?: {
+    readonly enabled: boolean;
+    readonly available: boolean;
+    /** Exact active recipe/Vault bindings used by the existing standing save grant. */
+    readonly recipeIdentity?: string;
+    readonly vaultScope?: string;
+    readonly onChange: (enabled: boolean) => Promise<void> | void;
+  };
   /**
    * The ALREADY-VALIDATED saved Advanced block, supplied by the consolidated
    * nutrition section. The saved report renders from this alone; no USDA
@@ -570,6 +579,7 @@ export const AdvancedNutritionCard: React.FC<AdvancedNutritionCardProps> = ({
   bundleStatus,
   onLoadBundle,
   onApplyAdvancedNutrition,
+  nutritionAuthority,
   savedAdvancedBlock,
   onResolveWithAi,
   onResolveWithAiFirst,
@@ -582,6 +592,9 @@ onReviewRecipeContextWithAi,
 }) => {
   const servingBasisAssumed = !(typeof recipe.servings === 'number' && Number.isFinite(recipe.servings) && recipe.servings > 0);
   const shiso = useShiso();
+  const standingNutritionEnabled = nutritionAuthority?.enabled === true;
+  const standingNutritionRecipeIdentity = nutritionAuthority?.recipeIdentity ?? '';
+  const standingNutritionVaultScope = nutritionAuthority?.vaultScope ?? '';
   const nutritionUnsaved = shiso.workingRecipe?.nutrition_unsaved === true;
   // Product entitlement is independent of provider readiness. `unknown` fails
   // closed until the server-owned product read completes.
@@ -611,6 +624,8 @@ onReviewRecipeContextWithAi,
   const [appliedNutritionSaved, setAppliedNutritionSaved] = useState(false);
   const [analysisRuns, setAnalysisRuns] = useState(0);
   const [shisoNutritionState, setShisoNutritionState] = useState<ShisoNutritionUiState>({ kind: 'idle', message: null });
+  const [standingTransactionPending, setStandingTransactionPending] = useState(false);
+  const standingTransactionSeq = useRef(0);
   const shisoNutritionRunningRef = useRef(false);
   const [state, dispatch] = useReducer(phase4Reducer, INITIAL_PHASE4_STATE);
   /**
@@ -1300,6 +1315,66 @@ onReviewRecipeContextWithAi,
       : { kind: 'error', message: result.message });
   };
 
+  // The always-mounted card owns the live Phase 4 reducer. Register its exact
+  // Phase 5 Apply operation so SHISO cannot observe this review and then try to
+  // apply a separate or absent application-controller snapshot.
+  const shisoRegisterNutritionReviewApplier = shiso.registerNutritionReviewApplier;
+  const shisoNutritionReviewApplyRef = useRef({
+    onApplyAdvancedNutrition,
+    session,
+    adaptationOk: adaptation.ok,
+    applyEligibility,
+    applyMode,
+    aiReviews,
+    recipe,
+    state,
+  });
+  shisoNutritionReviewApplyRef.current = {
+    onApplyAdvancedNutrition,
+    session,
+    adaptationOk: adaptation.ok,
+    applyEligibility,
+    applyMode,
+    aiReviews,
+    recipe,
+    state,
+  };
+  const canRegisterNutritionReviewApplier =
+    Boolean(onApplyAdvancedNutrition) && Boolean(session) && adaptation.ok && applyEligibility === true && applyMode !== null;
+  useEffect(() => {
+    if (!canRegisterNutritionReviewApplier) {
+      return undefined;
+    }
+    return shisoRegisterNutritionReviewApplier(async () => {
+    const current = shisoNutritionReviewApplyRef.current;
+    const {
+      onApplyAdvancedNutrition: apply,
+      session: currentSession,
+      adaptationOk,
+      applyEligibility: eligible,
+      applyMode: mode,
+      aiReviews: currentAiReviews,
+      recipe: currentRecipe,
+      state: currentState,
+    } = current;
+    if (!apply || !currentSession || !adaptationOk || eligible !== true || mode === null) {
+      return { ok: false, applied: false, message: 'The current nutrition review is not eligible to apply.' };
+    }
+    const reviewReasons: Record<string, 'needs_review'> = {};
+    for (const [lineRef, review] of Object.entries(currentAiReviews)) {
+      if (review.decision === 'needs_review') reviewReasons[lineRef] = 'needs_review';
+    }
+    const result = await apply({
+      session: currentSession,
+      recipe: currentRecipe,
+      state: currentState,
+      expectedMode: mode,
+      ...(Object.keys(reviewReasons).length > 0 ? { reviewReasons } : {}),
+    });
+    return { ok: result.ok, applied: result.ok, message: result.message };
+    });
+  }, [canRegisterNutritionReviewApplier, shisoRegisterNutritionReviewApplier]);
+
   const applyUi: AdvancedNutritionApplyUi | undefined = onApplyAdvancedNutrition
     ? {
         eligible: applyEligibility,
@@ -1819,14 +1894,14 @@ onReviewRecipeContextWithAi,
     return map;
   }, [liveRows]);
 
-  const handleAnalyze = () => {
-    if (!session || !adaptation.ok) return;
+  const handleAnalyze = (): RecipeAnalysis | null => {
+    if (!session || !adaptation.ok) return null;
     // Always execute a fresh analysis on click. Fall back to an on-demand
     // computation if the memoized analysis is unavailable, so the control can
     // never become a dead button after a saved-state reopen.
     const current =
       analysis ?? analyzeRecipeFromRows(session, adapted, rows, adaptation.recipe.base_servings);
-    if (!current) return;
+    if (!current) return null;
 
     // REVIEWED-DECISION PRESERVATION. Re-analysis is a gap-filling pass, never a
     // destructive reset: every explicit user choice (a manual/USDA-search
@@ -1932,6 +2007,7 @@ onReviewRecipeContextWithAi,
     setAiEstimateEvidence({});
     setGenerateAiFeedback(null);
     setAiMessage(null);
+    return current;
   };
 
   const compact = display
@@ -2500,28 +2576,28 @@ onReviewRecipeContextWithAi,
       });
       return;
     }
-    if (onResolveWithAiFirst === undefined) {
-      setGenerateAiFeedback({
-        kind: 'unavailable',
-        message: 'SHISO whole-recipe analysis is unavailable in this build. Deterministic review remains available.',
-      });
-      return;
-    }
-    if (!aiAvailabilityAvailable) {
-      setGenerateAiFeedback({
-        kind: 'unavailable',
-        message:
-          aiAvailabilityReason ??
-          'AI Advanced Nutrition is unavailable. Deterministic analysis is ready without AI.',
-      });
+    if (onResolveWithAiFirst === undefined || !aiAvailabilityAvailable) {
+      if (shisoNutritionRunningRef.current) return;
+      shisoNutritionRunningRef.current = true;
+      setShisoNutritionState({ kind: 'running', message: 'SHISO is running the authenticated USDA-only review…' });
+      const local = handleAnalyze();
+      const limitation = aiAvailabilityReason ?? (onResolveWithAiFirst === undefined
+        ? 'AI whole-recipe interpretation is not available in this build.'
+        : 'The selected AI connection is unavailable.');
+      const message = local
+        ? `${limitation} SHISO completed the authenticated USDA-only analysis instead. Review the source matches and unresolved lines below; nothing was applied or saved.`
+        : `${limitation} The USDA-only analysis could not initialize. Load the authenticated USDA catalog and retry.`;
+      setGenerateAiFeedback({ kind: local ? 'partial' : 'error', message });
+      setShisoNutritionState({ kind: local ? 'success' : 'error', message });
+      if (local && standingNutritionEnabled) setStandingTransactionPending(true);
+      shisoNutritionRunningRef.current = false;
       return;
     }
     if (shisoNutritionRunningRef.current) return;
     if (actionableRows.length === 0) {
-      setGenerateAiFeedback({
-        kind: 'success',
-        message: 'The deterministic review resolved every ingredient. No AI interpretation was needed.',
-      });
+      const message = 'The deterministic review resolved every ingredient. No AI interpretation was needed.';
+      setGenerateAiFeedback({ kind: 'success', message });
+      if (standingNutritionEnabled) setStandingTransactionPending(true);
       return;
     }
     shisoNutritionRunningRef.current = true;
@@ -2559,6 +2635,7 @@ onReviewRecipeContextWithAi,
           ? { kind: 'success', message: `${outcome.message} Review before Apply. Nothing was saved.` }
           : { kind: 'error', message: outcome.message }
       );
+      if (outcome.ok && standingNutritionEnabled) setStandingTransactionPending(true);
     } catch {
       if (identityRef.current.recipeKey === recipeKey && isOpenRef.current) {
         setGenerateAiFeedback({
@@ -2583,7 +2660,67 @@ onReviewRecipeContextWithAi,
     aiAvailabilityReason,
     actionableRows.length,
     handleResolveWithAi,
+    handleAnalyze,
+    standingNutritionEnabled,
   ]);
+
+  // With standing nutrition authority enabled, the Analyze button owns the
+  // complete authorized transaction. This effect waits for the same reducer
+  // state and Phase 5 Apply owner used by the visible Apply control to publish
+  // after analysis has committed. Equal authored alternatives leave
+  // applyEligibility false and stop here, asking for the real user choice.
+  useEffect(() => {
+    if (!standingTransactionPending || !standingNutritionEnabled) return undefined;
+    if (!session || !adaptation.ok || applyEligibility === null) return undefined;
+    if (applyEligibility !== true) {
+      setStandingTransactionPending(false);
+      const message = 'Standing nutrition authority is enabled, but an equal ingredient alternative still needs your choice. Nothing was applied or saved.';
+      setShisoNutritionState({ kind: 'error', message });
+      setGenerateAiFeedback({ kind: 'partial', message });
+      return undefined;
+    }
+    if (!shiso.canApplyNutritionReview) return undefined;
+    const seq = standingTransactionSeq.current + 1;
+    standingTransactionSeq.current = seq;
+    setStandingTransactionPending(false);
+    void (async () => {
+      setShisoNutritionState({ kind: 'running', message: 'SHISO is applying the verified review and saving it to the active Vault…' });
+      const applied = await shiso.applyNutritionReview();
+      if (standingTransactionSeq.current !== seq) return;
+      if (!applied.ok || !applied.applied) {
+        const message = `Standing nutrition authority could not Apply this review: ${applied.message} Nothing was saved.`;
+        setShisoNutritionState({ kind: 'error', message });
+        setGenerateAiFeedback({ kind: 'error', message });
+        return;
+      }
+      const recipeIdentity = standingNutritionRecipeIdentity;
+      const vaultScope = standingNutritionVaultScope;
+      if (recipeIdentity.length === 0 || vaultScope.length === 0) {
+        const message = 'The review was applied, but the exact recipe/Vault save binding was unavailable. Nothing was saved.';
+        setShisoNutritionState({ kind: 'error', message });
+        setGenerateAiFeedback({ kind: 'error', message });
+        return;
+      }
+      const saved = await shiso.saveWorkingRecipe({
+        via: 'standing_nutrition',
+        recipe_identity: recipeIdentity,
+        vault_scope: vaultScope,
+        nutrition_applied: true,
+      });
+      if (standingTransactionSeq.current !== seq) return;
+      const message = saved.ok && saved.saved
+        ? `SHISO applied the verified nutrition review and saved it to the active Vault. ${saved.message}`
+        : `SHISO applied the verified nutrition review, but it was not saved: ${saved.message}`;
+      setShisoNutritionState({ kind: saved.ok && saved.saved ? 'success' : 'error', message });
+      setGenerateAiFeedback({ kind: saved.ok && saved.saved ? 'success' : 'error', message });
+    })().catch(() => {
+      if (standingTransactionSeq.current !== seq) return;
+      const message = 'SHISO applied no persistent nutrition change because the authorized save failed. Nothing was saved.';
+      setShisoNutritionState({ kind: 'error', message });
+      setGenerateAiFeedback({ kind: 'error', message });
+    });
+    return undefined;
+  }, [adaptation, applyEligibility, session, shiso, standingNutritionEnabled, standingNutritionRecipeIdentity, standingNutritionVaultScope, standingTransactionPending]);
 
   /**
    * AN-WEB-1 — explicit external research for locally unresolved, non-ambiguous
@@ -3783,6 +3920,7 @@ onReviewRecipeContextWithAi,
           analysis={analysis}
           onAnalyze={handleAnalyze}
           onAnalyzeRecipe={() => { void handleAnalyzeNutritionWithShiso(); }}
+          nutritionAuthority={nutritionAuthority}
           shisoAnalysisState={shisoNutritionState}
           analysisRuns={analysisRuns}
           apply={applyUi}

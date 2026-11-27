@@ -35,8 +35,10 @@ import {
   type ShisoIngredientEditArgs,
 } from '../core/shiso/protocol';
 import { runBatchInvestigation } from '../core/shiso/batchInvestigation';
+import { projectIngredientAlternatives } from '../core/nutritionV2/matching/query';
 
-import type { AdvancedNutritionSession } from '../core/nutritionV2/phase4';
+import { adaptRecipe, analyzeRecipe, type AdvancedNutritionSession } from '../core/nutritionV2/phase4';
+import { buildPortionChoice } from '../core/nutritionV2/phase4/portion';
 import {
   buildBrandedContribution,
   type BrandedLookupTarget,
@@ -310,6 +312,152 @@ function nutritionMatchesActiveRecipe(ctx: ShisoToolContext): boolean {
   return recipeSet.size === recipeRefs.length && ctx.nutrition.rows.every((row) => recipeSet.has(row.line_ref));
 }
 
+function authenticatedAlternativeScenarios(ctx: ShisoToolContext): readonly Record<string, unknown>[] {
+  if (ctx.session === null || ctx.recipe === null) return [];
+  const scenarios: Record<string, unknown>[] = [];
+  for (const line of ctx.recipe.ingredients) {
+    if (typeof line.line_ref !== 'string') continue;
+    const projected = projectIngredientAlternatives(line.text);
+    if (projected === null) continue;
+    const branches = projected.alternatives.slice(0, 4).map((name, index) => {
+      const branchReview = ctx.session!.reviewIngredient({ name });
+      const queryTokens = new Set(name.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).map((token) => token.replace(/s$/, '')));
+      const requestedUnit = (line.unit ?? '').toLowerCase().replace(/s$/, '');
+      const rankedSearch = ctx.session!.searchFoods(name, 12);
+      const portionCompatible = (rankedSearch.ok ? rankedSearch.results : branchReview.candidates).find((candidate) => {
+        const candidateTokens = candidate.description.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).map((token) => token.replace(/s$/, ''));
+        if (candidateTokens.length > queryTokens.size + 1 || ![...queryTokens].every((token) => candidateTokens.includes(token))) return false;
+        const portions = ctx.session!.reviewPortions(candidate.fdc_id);
+        return portions.ok && portions.review.candidates.some((portion) =>
+          portion.kind !== 'unusable' &&
+          portion.gram_weight > 0 &&
+          (requestedUnit.length === 0 || portion.unit?.replace(/s$/, '') === requestedUnit),
+        );
+      });
+      // Once the bounded identity + requested-portion policy has selected a
+      // genuine catalogue candidate, re-enter it through the existing exact
+      // FDC lookup authority.  A `manual` selection would falsely describe an
+      // autonomous choice as user-confirmed, while `ai_assisted` is reserved
+      // for the base matcher's own unique deterministic acceptance.
+      const scenarioQuery = portionCompatible === undefined
+        ? name
+        : String(portionCompatible.fdc_id);
+      const ingredient = {
+        original: `${line.amount ?? ''} ${line.unit ?? ''} ${name}`.trim(),
+        amount: line.amount ?? null,
+        unit: line.unit ?? '',
+        name,
+      };
+      const review = ctx.session!.reviewIngredient(ingredient);
+      const scenarioLineRef = `${line.line_ref}:alternative:${index}`;
+      const exactPortions = portionCompatible === undefined
+        ? []
+        : ctx.session!.reviewPortions(portionCompatible.fdc_id);
+      const portionIndex = exactPortions && 'ok' in exactPortions && exactPortions.ok
+        ? exactPortions.review.candidates.find((portion) =>
+            portion.kind !== 'unusable' &&
+            portion.gram_weight > 0 &&
+            (requestedUnit.length === 0 || portion.unit?.replace(/s$/, '') === requestedUnit),
+          )?.index
+        : undefined;
+      const selection = portionCompatible === undefined
+        ? undefined
+        : {
+            kind: 'manual' as const,
+            fdc_id: portionCompatible.fdc_id,
+            record_digest: portionCompatible.record_digest,
+            catalog_digest: ctx.session!.metadata().catalog_digest,
+            line_ref: scenarioLineRef,
+            review_digest: review.review_digest,
+            ai_assisted: true,
+          };
+      const portionChoice = selection !== undefined && portionIndex !== undefined
+        ? buildPortionChoice(ctx.session!, {
+            lineRef: scenarioLineRef,
+            ingredient,
+            review,
+            selection,
+            fdcId: portionCompatible!.fdc_id,
+            portionIndex,
+          })
+        : null;
+      const selectedCalculation = portionChoice?.ok
+        ? ctx.session!.calculate({
+            servings: ctx.recipe!.servings ?? 1,
+            nutrient_scope: Object.keys(NUTRIENT_REGISTRY) as NutrientId[],
+            ingredients: [{
+              line_ref: scenarioLineRef,
+              ingredient,
+              selection,
+              portion_selection: portionChoice.choice.selection,
+            }],
+          })
+        : null;
+      const adaptation = selectedCalculation?.ok ? null : adaptRecipe({
+        title: `Alternative scenario: ${scenarioQuery}`,
+        servings: ctx.recipe!.servings ?? 1,
+        ingredients: [{ ...ingredient, name: scenarioQuery, original: `${line.amount ?? ''} ${line.unit ?? ''} ${scenarioQuery}`.trim() }],
+      });
+      const analysis = adaptation?.ok
+        ? analyzeRecipe(ctx.session!, adaptation.recipe.adapted, adaptation.recipe.base_servings)
+        : null;
+      const preview = selectedCalculation?.ok ? selectedCalculation.preview : analysis?.preview;
+      if (preview === undefined) {
+        return {
+          name,
+          primary: projected.primary_index === index,
+          resolved: false,
+          reason: 'The authenticated calculator could not resolve this branch without an unsupported assumption.',
+          diagnostic: portionChoice === null
+            ? 'no_compatible_source_portion'
+            : 'failure' in portionChoice
+              ? portionChoice.failure.code
+              : selectedCalculation !== null && 'failure' in selectedCalculation
+                ? selectedCalculation.failure.code
+                : 'analysis_unresolved',
+          candidates: review.outcome === 'review_required'
+            ? review.candidates.slice(0, 4).map((candidate) => ({ fdc_id: candidate.fdc_id, description: candidate.description }))
+            : [],
+        };
+      }
+      const evidence = preview.ingredients[0];
+      const source = portionCompatible ?? (review.outcome === 'matched_exact'
+        ? review.candidates.find((candidate) => candidate.fdc_id === review.selected_fdc_id)
+        : undefined);
+      const resolved = evidence?.outcome === 'calculated' && evidence.fdc_id !== undefined && evidence.resolved_grams !== undefined;
+      return {
+        name,
+        primary: projected.primary_index === index,
+        resolved,
+        fdc_id: evidence?.fdc_id ?? null,
+        source_description: source?.description ?? null,
+        resolved_grams: evidence?.resolved_grams ?? null,
+        mass_source: evidence?.mass_source ?? null,
+        provenance: resolved ? 'authenticated_usda_scenario' : 'unresolved',
+        totals: Object.fromEntries(Object.entries(preview.totals).map(([nutrient, total]) => [nutrient, total === undefined ? null : {
+          amount: total.amount,
+          unit: total.unit,
+          status: total.status,
+          coverage: total.coverage,
+        }])),
+        reason: resolved ? null : 'This branch remains unresolved; it is not included in a definitive recipe total.',
+      };
+    });
+    scenarios.push({
+      line_ref: line.line_ref,
+      ingredient: line.text.slice(0, 200),
+      mutually_exclusive: true,
+      primary_index: projected.primary_index,
+      definitive_choice_required: projected.primary_index === null,
+      branches,
+      note: projected.primary_index === null
+        ? 'These alternatives are equal authored choices. Select one before saving definitive nutrition.'
+        : 'The first branch is the as-written primary scenario; alternate totals remain separate.',
+    });
+  }
+  return Object.freeze(scenarios.slice(0, 8));
+}
+
 function getNutritionReview(ctx: ShisoToolContext, includeIngredients: boolean): ShisoObservation {
   const n = ctx.nutrition;
   if (n === null) {
@@ -346,6 +494,7 @@ function getNutritionReview(ctx: ShisoToolContext, includeIngredients: boolean):
     review_suggested: coverage.review_suggested,
     counts_reconcile: coverage.reconciled,
     coverage_summary: nutritionCoverageSummary(coverage),
+    alternative_scenarios: authenticatedAlternativeScenarios(ctx),
   };
   if (includeIngredients) {
     data['ingredients'] = n.rows.slice(0, 60).map((r) => {
@@ -2484,7 +2633,16 @@ export function executeShisoTool(
       case 'run_nutrition_analysis':
         return runNutritionAnalysis(ctx, signal);
       case 'complete_nutrition':
-        return completeNutrition(ctx, signal);
+        return completeNutrition(ctx, signal).then((completed) => {
+          if (!completed.ok) return completed;
+          const alternativeScenarios = authenticatedAlternativeScenarios(ctx);
+          if (alternativeScenarios.length === 0) return completed;
+          return ok(
+            'complete_nutrition',
+            `${completed.summary} ${alternativeScenarios.length} mutually exclusive ingredient comparison(s) were calculated separately; alternatives were not combined.`,
+            { ...completed.data, alternative_scenarios: alternativeScenarios },
+          );
+        });
       case 'get_capability_status':
         return getCapabilityStatus(ctx);
       case 'apply_ingredient_edits':

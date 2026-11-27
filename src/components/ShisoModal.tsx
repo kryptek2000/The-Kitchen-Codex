@@ -110,6 +110,11 @@ export interface ShisoModalProps {
     readonly fileName?: unknown;
     readonly title?: unknown;
   } | null;
+  /** Persistent, user-controlled nutrition-only authority for the active Vault. */
+  readonly nutritionAuthority?: {
+    readonly enabled: boolean;
+    readonly vaultScope: string;
+  };
   readonly nutritionSession: AdvancedNutritionSession | null;
   readonly nutritionBundleStatus?: 'idle' | 'loading' | 'ready' | 'failed' | 'unsupported';
   /**
@@ -219,6 +224,7 @@ export function ShisoModal({
   onVaultRecipeSelected,
   recipe,
   getSaveAuthorizationRecipe,
+  nutritionAuthority = { enabled: false, vaultScope: '' },
   nutritionSession,
   nutritionBundleStatus,
   loadNutritionBundle,
@@ -274,6 +280,13 @@ export function ShisoModal({
   const shiso = useShiso();
   const creationMode = shiso.source === 'create';
   const seqRef = useRef(0);
+  const nutritionSavePolicyRef = useRef({
+    turn: 0,
+    allowed: false,
+    applied: false,
+    recipeIdentity: '',
+    vaultScope: '',
+  });
   const activeTurnControllerRef = useRef<AbortController | null>(null);
   const conversationRef = useRef(conversation);
   conversationRef.current = conversation;
@@ -694,12 +707,33 @@ export function ShisoModal({
           : undefined;
       },
       get applyNutritionReview() {
-        return applyIndependentNutritionReview;
+        if (!shisoRef.current.canApplyNutritionReview && applyIndependentNutritionReview === undefined) return undefined;
+        return async () => {
+          const result = shisoRef.current.canApplyNutritionReview
+            ? await shisoRef.current.applyNutritionReview()
+            : await applyIndependentNutritionReview!();
+          if (result.ok && result.applied) {
+            const policy = nutritionSavePolicyRef.current;
+            nutritionSavePolicyRef.current = { ...policy, applied: true };
+          }
+          return result;
+        };
       },
       get saveWorkingRecipe() {
-        return shisoRef.current.canSaveWorkingRecipe
-          ? () => shisoRef.current.saveWorkingRecipe({ via: 'assistant' })
-          : undefined;
+        if (!shisoRef.current.canSaveWorkingRecipe) return undefined;
+        return () => {
+          const policy = nutritionSavePolicyRef.current;
+          if (policy.allowed && policy.applied) {
+            return shisoRef.current.saveWorkingRecipe({
+              via: 'standing_nutrition',
+              recipe_identity: policy.recipeIdentity,
+              vault_scope: policy.vaultScope,
+              turn: policy.turn,
+              nutrition_applied: true,
+            });
+          }
+          return shisoRef.current.saveWorkingRecipe({ via: 'assistant' });
+        };
       },
       // Lets Shiso clear the one genuine prerequisite itself, using the same
       // controller the user's own Load USDA data button calls.
@@ -876,9 +910,20 @@ export function ShisoModal({
     // authorization. The model never sees or influences this decision.
     const saveIntent = classifySaveIntent(message);
     const authorizationRecipe = getSaveAuthorizationRecipe?.() ?? recipe ?? selectedVaultRecipeContext(vaultCapabilities);
+    const authorizationRecipeIdentity = recipeIdentityOf(authorizationRecipe);
+    nutritionSavePolicyRef.current = {
+      turn: seq,
+      allowed:
+        nutritionAuthority.enabled &&
+        nutritionAuthority.vaultScope.length > 0 &&
+        saveIntent.reason !== 'save_negated',
+      applied: false,
+      recipeIdentity: authorizationRecipeIdentity,
+      vaultScope: nutritionAuthority.vaultScope,
+    };
     shisoRef.current.issueSaveAuthorization({
       authorized: saveIntent.authorized,
-      recipe_identity: recipeIdentityOf(authorizationRecipe),
+      recipe_identity: authorizationRecipeIdentity,
       turn: seq,
     });
 
@@ -910,6 +955,7 @@ export function ShisoModal({
         signal: controller.signal,
         retry,
         ...(workingStateNote.length > 0 ? { workingStateNote } : {}),
+        nutritionAuthority: { enabled: nutritionAuthority.enabled },
         // Read-only, real-step notifications. A superseded turn's steps are
         // ignored so a late callback cannot paint over the active turn.
         onProgress: (progress) => {
@@ -976,6 +1022,7 @@ export function ShisoModal({
     editableCreatedDraft, saveCreatedDraftNow,
     nutritionCoverage, effectiveNutritionSummary, workingStateNote, conversationLoading,
     getSaveAuthorizationRecipe,
+    nutritionAuthority.enabled, nutritionAuthority.vaultScope,
   ]);
 
   /**
