@@ -8,7 +8,8 @@
  */
 
 import { parseIngredient } from '../matching/parse';
-import type { RangeRepresentative } from '../matching/types';
+import { bestEffortDefaultCandidates } from '../matching/confidence';
+import type { IngredientReviewResult, RangeRepresentative, RankedCandidate } from '../matching/types';
 import { projectQueryText } from '../matching/query';
 import { candidatePortionCompatibility } from '../calculation/portionSemantics';
 export { candidatePortionCompatibility };
@@ -213,7 +214,16 @@ export function completionLookupTarget(text: string): {
   // context, not part of the product name, and would weaken an otherwise
   // strong branded lookup.
   const withoutParenthetical = measurement.query.replace(/\s*\([^()]*\)\s*/g, ' ').trim();
-  const query = withoutParenthetical.length >= 2 ? withoutParenthetical : measurement.query;
+  // Reuse the canonical query projection so preparation words such as
+  // "sliced" and "toasted" remain evidence but do not become the food identity
+  // sent to a source lookup. Qualifiers that materially affect identity remain
+  // in `food_identity`; no food alias or source record is invented here.
+  const projectedIdentity = projectQueryText(withoutParenthetical).food_identity.trim();
+  const query = projectedIdentity.length >= 2
+    ? projectedIdentity
+    : withoutParenthetical.length >= 2
+      ? withoutParenthetical
+      : measurement.query;
   return Object.freeze({
     query,
     amount: measurement.amount,
@@ -485,4 +495,16 @@ export function buildCalculationRequest(
     nutrient_scope: [...NUTRIENT_IDS],
     ingredients: adapted.map((entry) => lineCalculationInput(entry, state, rowByRef.get(entry.line_ref))),
   };
+}
+
+/**
+ * The application-facing discovery boundary for bounded same-family USDA
+ * candidates. Keeping this projection in Phase 4 preserves the matching
+ * module's isolation contract while allowing SHISO discovery to reuse the
+ * authenticated confidence authority.
+ */
+export function bestEffortDiscoveryCandidates(
+  review: IngredientReviewResult,
+): ReadonlyArray<RankedCandidate> {
+  return bestEffortDefaultCandidates(review);
 }
