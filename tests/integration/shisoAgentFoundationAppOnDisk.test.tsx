@@ -578,7 +578,7 @@ describe('SHISO agent foundation real App save closure', () => {
     expect(persisted.recipes.find((entry) => entry.title === 'Chef Pagination Fixture')?.codexNutrition).toBeUndefined();
   }, 120000);
 
-  it('AUDIT Phase 1 continues after a user choice and persists the completed review', async () => {
+  it('AUDIT Phase 1 self-initializes, continues after a user choice, and persists the completed review without opening Advanced Nutrition', async () => {
     await hydrateAiSelections(settings);
     const rootPath = await mkdtemp(join('/tmp', 'tkc-phase1-continuation-'));
     roots.push(rootPath);
@@ -605,6 +605,7 @@ describe('SHISO agent foundation real App save closure', () => {
     }));
     const captured = capturingNetwork([
       { ok: true, kind: 'tool_request', tool: 'apply_nutrition_review', args: { tool: 'apply_nutrition_review' } },
+      { ok: true, kind: 'reply', text: 'Chicken breast was applied to the working recipe. It is not saved.', proposals: [] },
       { ok: true, kind: 'tool_request', tool: 'save_working_recipe', args: { tool: 'save_working_recipe' } },
       { ok: true, kind: 'reply', text: 'Chicken breast was applied and saved to the Vault.', proposals: [] },
     ], {
@@ -624,25 +625,24 @@ describe('SHISO agent foundation real App save closure', () => {
     await screen.findByText(/Connected live to vault "Disposable Phase 1 Continuation Vault"/);
     fireEvent.click(screen.getByRole('button', { name: 'Close Vault settings' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Continuation Chicken Fixture' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Generate Nutrition' }));
-    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
-    await waitFor(() => expect(loader).toHaveBeenCalledTimes(1));
-    const authorityToggle = await screen.findByTestId('shiso-nutrition-authority-toggle') as HTMLInputElement;
-    expect(authorityToggle.checked).toBe(false);
-    fireEvent.click(authorityToggle);
-    await waitFor(() => expect(authorityToggle.checked).toBe(true));
-    fireEvent.click(screen.getByRole('button', { name: 'Close Advanced Nutrition' }));
 
+    // Deliberately do NOT open Advanced Nutrition. Chat must initialize the
+    // application-owned review, ask its one genuine choice, then continue.
     fireEvent.click(await screen.findByTestId('recipe-shiso-entry'));
     const composer = await screen.findByPlaceholderText('Ask Shiso…') as HTMLTextAreaElement;
     fireEvent.change(composer, { target: { value: 'SHISO, resolve the remaining nutrition for this recipe.' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(loader).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(document.body.textContent).toMatch(/which did you actually use|chicken breast or turkey breast/i), { timeout: 20000 });
     expect(captured.turns).toHaveLength(0);
 
-    fireEvent.change(composer, { target: { value: 'Use chicken breast. Apply and save the nutrition.' } });
+    fireEvent.change(composer, { target: { value: 'Use chicken breast. Apply the nutrition.' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-    await waitFor(() => expect(document.body.textContent).toContain('Chicken breast was applied and saved to the Vault.'), { timeout: 20000 });
+    await waitFor(() => expect(document.body.textContent).toContain('Nutrition was applied to the working recipe. It is not saved'), { timeout: 20000 });
+
+    fireEvent.change(composer, { target: { value: 'Save my changes.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(document.body.textContent).toMatch(/saved to the Vault|canonical Vault save confirmed persistence|Chicken breast was applied and saved/i), { timeout: 20000 });
 
     expect(captured.turns.length).toBeGreaterThan(0);
     expect(JSON.stringify(captured.turns[0]?.['observation'] ?? {})).toContain('select_usda_nutrition_source');
@@ -656,7 +656,83 @@ describe('SHISO agent foundation real App save closure', () => {
       selection_origin: 'shiso_user_directed',
       amount: { value: 280, unit: 'g' },
     });
-    expect(JSON.stringify(block)).not.toContain('42');
+    // Assert the rejected food structurally: a raw substring match against the
+    // whole block would also catch the ISO timestamp.
+    expect((block.ingredients as Array<{ source_food_id?: string }>).map((entry) => entry.source_food_id)).not.toContain('42');
+  }, 120000);
+
+  it('AUDIT Phase 1 self-initializes nutrition from Chat and resolves defensible lines without opening Advanced Nutrition', async () => {
+    await hydrateAiSelections(settings);
+    const rootPath = await mkdtemp(join('/tmp', 'tkc-live-selfinit-'));
+    roots.push(rootPath);
+    const recipePath = join(rootPath, 'Recipes', 'Dinner', 'Live Acceptance Breakfast.md');
+    await mkdir(dirname(recipePath), { recursive: true });
+    const markdown = [
+      '---', 'title: "Live Acceptance Breakfast"', 'tags:', '  - food/recipes',
+      'category: Breakfast', 'servings: 4', '---', '# Live Acceptance Breakfast',
+      '## Ingredients',
+      '- 2 cups chopped vegetables (such as red onion, bell pepper, mushrooms or broccoli)',
+      '- 1 pound breakfast sausage or Italian sausage',
+      '- 2 pinches salt',
+      '- 2 teaspoons unsalted butter',
+      '- 8 burrito-size tortillas',
+      '- 2 cups shredded cheddar cheese (or Monterey Jack)',
+      '- 8 large eggs',
+      '- 1 cup milk',
+      '## Instructions', '1. Cook the filling.', '2. Fill and roll.', '',
+    ].join('\n');
+    await writeFile(recipePath, markdown, 'utf8');
+    const root = new DiskDirectoryHandle('Disposable Live Acceptance Vault', rootPath);
+    (window as unknown as { showDirectoryPicker: () => Promise<DiskDirectoryHandle> }).showDirectoryPicker = async () => root;
+
+    const { manifest, records } = buildMatchingBundle([
+      { fdcId: 51, dataType: 'sr_legacy', description: 'Butter, without salt', portions: [{ amount: 1, measure: 'tbsp', gram_weight: 14.2, sequence: 1 }, { amount: 1, measure: 'cup', gram_weight: 227, sequence: 2 }] },
+      { fdcId: 52, dataType: 'sr_legacy', description: 'Cheese, cheddar', portions: [{ amount: 1, measure: 'slice', gram_weight: 17, sequence: 1 }, { amount: 1, measure: 'cup', gram_weight: 105, sequence: 2 }] },
+      { fdcId: 53, dataType: 'sr_legacy', description: 'Egg, whole, raw', portions: [{ amount: 1, measure: 'egg', gram_weight: 50, sequence: 1 }] },
+      { fdcId: 54, dataType: 'sr_legacy', description: 'Milk, whole', portions: [{ amount: 1, measure: 'cup', gram_weight: 244, sequence: 1 }] },
+      { fdcId: 55, dataType: 'sr_legacy', description: 'Tortilla, flour', portions: [{ amount: 1, measure: 'tortilla', gram_weight: 45, sequence: 1 }] },
+      { fdcId: 56, dataType: 'sr_legacy', description: 'Sausage, turkey, breakfast links, mild, raw', portions: [{ amount: 1, measure: 'link', gram_weight: 28, sequence: 1 }] },
+      { fdcId: 57, dataType: 'sr_legacy', description: 'Salt, table', portions: [{ amount: 1, measure: 'tsp', gram_weight: 6, sequence: 1 }] },
+      { fdcId: 58, dataType: 'sr_legacy', description: 'Raw vegetable, NFS', portions: [{ amount: 1, measure: 'cup', gram_weight: 120, sequence: 1 }] },
+    ]);
+    const created = createAdvancedNutritionSession(manifest, records);
+    if (!created.ok) throw new Error('fixture USDA session failed');
+    const loader = vi.fn(async (): Promise<RuntimeBundleResult> => ({
+      ok: true, session: created.session, metadata: created.session.metadata(), attribution: USDA_ATTRIBUTION,
+    }));
+    const captured = capturingNetwork([
+      { ok: true, kind: 'reply', text: 'No provider step was required.', proposals: [] },
+    ], {
+      '/api/nutrition/product-access': { ok: true, version: NUTRITION_PRODUCT_ACCESS_VERSION, tier: 'ai_advanced' },
+      '/api/providers': { providers: [] },
+    });
+
+    render(
+      <ShisoEntryProvider>
+        <App shisoNetworkAdapterOverride={captured.network} shisoNutritionBundleLoaderOverride={loader} shisoSettingsAdapterOverride={settings} />
+      </ShisoEntryProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect Vault' }));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Live Directory Sync' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose Local Obsidian Vault Folder' }));
+    await screen.findByText(/Connected live to vault "Disposable Live Acceptance Vault"/);
+    fireEvent.click(screen.getByRole('button', { name: 'Close Vault settings' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Live Acceptance Breakfast' }));
+
+    // Deliberately do NOT open Advanced Nutrition.
+    fireEvent.click(await screen.findByTestId('recipe-shiso-entry'));
+    const composer = await screen.findByPlaceholderText('Ask Shiso…') as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: "SHISO, investigate the unresolved nutrition for my Breakfast Burritos recipe. Use your available tools to identify the correct ingredients, find authenticated USDA sources, and resolve everything you can confidently resolve. Reject inappropriate food matches. Don't guess which ingredient alternatives I used. If you need information from me, ask one consolidated question covering all outstanding choices. Show me exactly what you've accomplished and what remains unresolved. Do not Apply or Save anything yet." } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(document.body.textContent).toMatch(/Selected .*authenticated source.*\(.*g\)/i), { timeout: 25000 });
+    await waitFor(() => expect(document.body.textContent).toMatch(/consolidated choice|which did you actually use|what measured amount/i), { timeout: 15000 });
+
+    expect(loader).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog', { name: 'Advanced Nutrition' })).toBeNull();
+    expect(captured.turns).toHaveLength(0);
+    const persisted = await loadVaultContent(createBrowserVaultAdapter(root));
+    expect(persisted.recipes.find((entry) => entry.title === 'Live Acceptance Breakfast')?.codexNutrition).toBeUndefined();
   }, 120000);
 
 });

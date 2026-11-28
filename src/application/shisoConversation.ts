@@ -125,6 +125,20 @@ function requestsManualUsdaChoice(message: string): boolean {
   return /\b(?:use|choose|select)\b.{0,45}\bthis\s+(?:usda\s+)?(?:food|match|record)\b/i.test(message);
 }
 
+/**
+ * Self-initializing a review is a write to the unsaved working state, so it is
+ * narrower than the read-only investigation of an OPEN review. A generic
+ * "find a recipe" request must never start a nutrition analysis. Explicit
+ * repair commands ("resolve/match/investigate ...") may, as may any request
+ * that names nutrition, an ingredient, USDA evidence, or food.
+ */
+function requestsNutritionSelfInitialization(message: string): boolean {
+  if (!requestsNutritionInvestigation(message)) return false;
+  const text = message.toLowerCase().replace(/[’']/g, '');
+  if (/\b(?:nutrition|nutrient|calories?|ingredients?|usda|foods?)\b/.test(text)) return true;
+  return /^\s*(?:please\s+)?(?:resolve|match|investigate)\b/.test(text);
+}
+
 function normalizedFoodTokens(text: string): ReadonlySet<string> {
   return new Set(
     text
@@ -215,12 +229,73 @@ function requestsVaultCount(message: string): boolean {
 }
 
 
+interface NutritionInitResult {
+  readonly ok: boolean;
+  readonly tools: readonly string[];
+  readonly message: string | null;
+}
+
+/**
+ * The application already owns a review initializer. A SHISO investigation may
+ * use it when the user explicitly asked SHISO to investigate/resolve nutrition;
+ * this is the same loader and analyzer the visible Generate Nutrition action
+ * uses, and it changes only the UNSAVED working review.
+ */
+async function ensureNutritionReviewForInvestigation(
+  toolContext: ShisoToolContext,
+  signal?: AbortSignal,
+): Promise<NutritionInitResult> {
+  if (toolContext.nutrition !== null) return { ok: true, tools: [], message: null };
+  const tools: string[] = [];
+  if (toolContext.session === null) {
+    if (toolContext.loadBundle === undefined) {
+      return { ok: false, tools, message: 'The authenticated USDA catalogue is not available in this deployment.' };
+    }
+    try {
+      await toolContext.loadBundle();
+    } catch {
+      return { ok: false, tools, message: 'The authenticated USDA catalogue could not be loaded.' };
+    }
+    tools.push('load_usda_catalog');
+  }
+  if (signal?.aborted) return { ok: false, tools, message: 'The nutrition investigation was cancelled.' };
+  if (toolContext.session === null) {
+    return { ok: false, tools, message: 'The authenticated USDA catalogue is not available.' };
+  }
+  if (toolContext.runAnalysis === undefined) {
+    return { ok: false, tools, message: 'The application-owned nutrition analysis is not available for this recipe.' };
+  }
+  let outcome;
+  try {
+    outcome = await toolContext.runAnalysis(signal);
+  } catch {
+    return { ok: false, tools, message: 'The application-owned nutrition analysis could not be initialized.' };
+  }
+  tools.push('run_nutrition_analysis');
+  if (signal?.aborted) return { ok: false, tools, message: 'The nutrition investigation was cancelled.' };
+  if (!outcome.ok) {
+    return { ok: false, tools, message: outcome.message ?? 'The application-owned nutrition analysis could not be initialized.' };
+  }
+  // The owner may publish the review from a React effect. Wait one event-loop
+  // turn, exactly as the existing post-selection handoff does.
+  if (toolContext.nutrition === null) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
+  if (toolContext.nutrition === null) {
+    return { ok: false, tools, message: 'The nutrition analysis ran, but its review was not published to SHISO.' };
+  }
+  return { ok: true, tools, message: null };
+}
+
 interface CulinaryProgress {
   readonly tools: readonly string[];
   readonly pending: readonly Record<string, unknown>[];
   readonly question: string | null;
   readonly selected: number;
   readonly selectedSources: readonly string[];
+  readonly selectedLineRefs: readonly string[];
+  readonly investigation: ShisoObservation | null;
+  readonly error: string | null;
 }
 
 /**
@@ -234,26 +309,34 @@ async function tryCulinaryIdentityProgress(
   toolContext: ShisoToolContext,
   signal?: AbortSignal,
 ): Promise<CulinaryProgress> {
-  if (signal?.aborted || toolContext.nutrition === null || toolContext.session === null) {
-    return { tools: [], pending: [], question: null, selected: 0, selectedSources: [] };
+  if (signal?.aborted) {
+    return { tools: [], pending: [], question: null, selected: 0, selectedSources: [], selectedLineRefs: [], investigation: null, error: 'The nutrition investigation was cancelled.' };
+  }
+  const initialized = await ensureNutritionReviewForInvestigation(toolContext, signal);
+  if (!initialized.ok) {
+    return { tools: initialized.tools, pending: [], question: null, selected: 0, selectedSources: [], selectedLineRefs: [], investigation: null, error: initialized.message };
   }
   let investigation: ShisoObservation;
   try {
     investigation = await executeShisoTool({ tool: 'investigate_unresolved_ingredients' }, toolContext, signal);
   } catch {
-    return { tools: [], pending: [], question: null, selected: 0, selectedSources: [] };
+    return { tools: initialized.tools, pending: [], question: null, selected: 0, selectedSources: [], selectedLineRefs: [], investigation: null, error: 'The nutrition review could not be investigated.' };
   }
-  if (signal?.aborted || !investigation.ok) {
-    return { tools: [], pending: [], question: null, selected: 0, selectedSources: [] };
+  if (signal?.aborted) {
+    return { tools: initialized.tools, pending: [], question: null, selected: 0, selectedSources: [], selectedLineRefs: [], investigation: null, error: 'The nutrition investigation was cancelled.' };
+  }
+  if (!investigation.ok) {
+    return { tools: [...initialized.tools, investigation.tool], pending: [], question: null, selected: 0, selectedSources: [], selectedLineRefs: [], investigation: null, error: (investigation as { message: string }).message };
   }
   const data = investigation.data;
-  const tools: string[] = ['investigate_unresolved_ingredients'];
+  const tools: string[] = [...initialized.tools, 'investigate_unresolved_ingredients'];
   const actions = Array.isArray(data['next_actions'])
     ? data['next_actions'].filter((entry): entry is Record<string, unknown> =>
         entry !== null && typeof entry === 'object' && !Array.isArray(entry))
     : [];
   let selected = 0;
   const selectedSources: string[] = [];
+  const selectedLineRefs: string[] = [];
   for (const action of actions.slice(0, 8)) {
     if (action['kind'] !== 'select_source') continue;
     const lineRef = action['line_ref'];
@@ -276,7 +359,9 @@ async function tryCulinaryIdentityProgress(
       selected += 1;
       const description = typeof selection.data['description'] === 'string' ? selection.data['description'] : null;
       const grams = typeof selection.data['resolved_grams'] === 'number' ? selection.data['resolved_grams'] : null;
-      if (description !== null) selectedSources.push(`${description}${grams !== null ? ` (${grams} g)` : ''}`);
+      const roundedGrams = grams === null ? null : Math.round(grams * 100) / 100;
+      if (description !== null) selectedSources.push(`${description}${roundedGrams !== null ? ` (${roundedGrams} g)` : ''}`);
+      selectedLineRefs.push(lineRef);
       // The owning review dispatches asynchronously; let it commit before the
       // next selection/completion reads the same live owner.
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -287,7 +372,7 @@ async function tryCulinaryIdentityProgress(
         entry !== null && typeof entry === 'object' && !Array.isArray(entry))
     : [];
   const question = typeof data['consolidated_question'] === 'string' ? data['consolidated_question'] : null;
-  return { tools, pending, question, selected, selectedSources };
+  return { tools, pending, question, selected, selectedSources, selectedLineRefs, investigation, error: null };
 }
 
 export interface ShisoConversationState {
@@ -610,7 +695,7 @@ export async function runShisoConversationTurn(
     const identityFirst = /\b(?:remaining|unresolved)\b/i.test(trimmed) && /\bnutrition\b/i.test(trimmed);
     const culinaryProgress = identityFirst
       ? await tryCulinaryIdentityProgress(deps.toolContext, deps.signal)
-      : { tools: [] as readonly string[], pending: [] as readonly Record<string, unknown>[], question: null as string | null, selected: 0, selectedSources: [] as readonly string[] };
+      : { tools: [] as readonly string[], pending: [] as readonly Record<string, unknown>[], question: null as string | null, selected: 0, selectedSources: [] as readonly string[], selectedLineRefs: [] as readonly string[], investigation: null, error: null };
     if (deps.signal?.aborted) return cancelled(working, toolsUsed);
     let result: ShisoObservation;
     try {
@@ -759,40 +844,73 @@ export async function runShisoConversationTurn(
   // returns the real alternatives and leaves any choice to the established UI.
   if (
     requestsNutritionInvestigation(trimmed) &&
-    deps.toolContext.nutrition !== null &&
+    (
+      deps.toolContext.nutrition !== null ||
+      (deps.toolContext.runAnalysis !== undefined && requestsNutritionSelfInitialization(trimmed))
+    ) &&
     !requestsManualUsdaChoice(trimmed) &&
     !classifySaveIntent(trimmed).authorized
   ) {
     if (deps.signal?.aborted) return cancelled(working, toolsUsed);
-    let result: ShisoObservation;
-    try {
-      result = await executeShisoTool({ tool: 'investigate_unresolved_ingredients' }, deps.toolContext, deps.signal);
-    } catch {
-      result = { ok: false, tool: 'investigate_unresolved_ingredients', code: 'unsupported', message: 'The nutrition review could not be investigated.' };
-    }
+    const progress = await tryCulinaryIdentityProgress(deps.toolContext, deps.signal);
     if (deps.signal?.aborted) return cancelled(working, toolsUsed);
-    const lineNotes = result.ok && Array.isArray(result.data['lines'])
-      ? result.data['lines'].slice(0, 6).flatMap((rawLine) => {
+    const result = progress.investigation;
+    if (result === null) {
+      const message = `${progress.error ?? 'The relevant nutrition review could not be initialized or investigated.'} Nothing was applied or saved.`;
+      return {
+        ok: true,
+        state: appendShisoMessage(working, { role: 'assistant', text: message, proposalCount: 0 }),
+        message,
+        status: null,
+        toolsUsed: Object.freeze([...progress.tools]) as readonly string[],
+      };
+    }
+    const selectedSet = new Set(progress.selectedLineRefs);
+    const pendingSet = new Set(progress.pending.flatMap((choice) =>
+      typeof choice['line_ref'] === 'string' ? [choice['line_ref']] : []));
+    const data = result.ok ? result.data : {};
+    const lineNotes = result.ok && Array.isArray(data['lines'])
+      ? data['lines'].slice(0, 12).flatMap((rawLine) => {
           if (rawLine === null || typeof rawLine !== 'object' || Array.isArray(rawLine)) return [];
           const line = rawLine as Record<string, unknown>;
           if (typeof line['label'] !== 'string') return [];
+          const lineRef = typeof line['line_ref'] === 'string' ? line['line_ref'] : null;
+          if (lineRef !== null && (selectedSet.has(lineRef) || pendingSet.has(lineRef))) return [];
           const label = line['label'].slice(0, 200);
-          const reason = typeof line['reason'] === 'string' ? ` — ${line['reason'].slice(0, 180)}` : '';
-          const alternatives = Array.isArray(line['alternatives'])
-            ? line['alternatives'].slice(0, 2).flatMap((candidate) =>
-                candidate !== null && typeof candidate === 'object' && !Array.isArray(candidate) && typeof (candidate as Record<string, unknown>)['description'] === 'string'
-                  ? [(candidate as Record<string, string>)['description'].slice(0, 160)]
-                  : [])
-            : [];
-          return [`${label}${reason}${alternatives.length ? ` · USDA options: ${alternatives.join('; ')}` : ''}`];
+          const culinary = line['culinary'] !== null && typeof line['culinary'] === 'object' && !Array.isArray(line['culinary'])
+            ? line['culinary'] as Record<string, unknown>
+            : {};
+          const nextAction = culinary['next_action'] !== null && typeof culinary['next_action'] === 'object' && !Array.isArray(culinary['next_action'])
+            ? culinary['next_action'] as Record<string, unknown>
+            : {};
+          const note = typeof nextAction['note'] === 'string'
+            ? nextAction['note'].slice(0, 220)
+            : typeof line['reason'] === 'string'
+              ? line['reason'].slice(0, 220)
+              : null;
+          return [note === null ? label : `${label} — ${note}`];
         }).join('\n')
       : '';
+    const initialized = progress.tools.includes('run_nutrition_analysis');
+    const examined = typeof data['examined'] === 'number' ? data['examined'] : progress.selectedLineRefs.length;
+    const leader = `I ${initialized ? 'initialized the unsaved nutrition review and ' : ''}examined ${examined} unresolved ingredient line(s).`;
+    const selectedProgress = progress.selectedSources.length > 0
+      ? ` Selected ${progress.selectedSources.length} authenticated source(s): ${progress.selectedSources.slice(0, 6).join('; ')}${progress.selectedSources.length > 6 ? `; and ${progress.selectedSources.length - 6} more` : ''}.`
+      : ' No authenticated source could be selected without guessing.';
+    const remainingNotes = lineNotes.length > 0
+      ? ` Still unresolved:\n${lineNotes}`
+      : '';
+    const question = progress.question !== null
+      ? ` ${progress.question}`
+      : data['remaining']
+        ? ' The remaining lines need a specific food or a measured amount that I cannot infer.'
+        : '';
     const message = result.ok
-      ? `${result.summary}${lineNotes ? `\n${lineNotes}` : ''} ${result.data['remaining'] ? 'Open Advanced Nutrition to review candidate records and choose “Use this match” where appropriate.' : 'No food was changed.'} Nothing was saved.`
-      : `${(result as { message: string }).message} No recipe edit or save was made.`;
+      ? `${leader}${selectedProgress}${remainingNotes}${question} Nothing was applied or saved.`
+      : `${(result as { message: string }).message} Nothing was applied or saved.`;
     let next = appendShisoMessage(working, { role: 'assistant', text: message, proposalCount: 0 });
     if (result.ok) next = recordFinding(next, { tool: result.tool, ok: true, summary: result.summary });
-    return { ok: true, state: next, message, status: null, toolsUsed: Object.freeze(['investigate_unresolved_ingredients']) };
+    return { ok: true, state: next, message, status: null, toolsUsed: Object.freeze([...progress.tools]) as readonly string[] };
   }
 
   /**

@@ -37,9 +37,17 @@ export interface CulinaryIngredientProjection {
   readonly identity: string;
   /** Every identity branch that may be investigated (primary/equal/mixture). */
   readonly identities: readonly string[];
+  /** Safe head-noun fallbacks tried only when the full identity has no candidates. */
+  readonly fallback_identities: readonly string[];
   readonly amount: number | null;
   readonly unit: string | null;
+  readonly normalized_unit: string | null;
   readonly measurement_kind: CulinaryMeasurementKind;
+  /** Canonical millilitres/mass from the authored quantity, when parsed. */
+  readonly milliliters: number | null;
+  readonly grams: number | null;
+  /** The authored count noun (`clove`, `slice`), never an inferred substitute. */
+  readonly count_noun: string | null;
   readonly alternatives: readonly CulinaryAlternative[];
   readonly primary_index: number | null;
   /** Authored flexible mixture such as `(such as red onion, pepper or broccoli)`. */
@@ -156,9 +164,21 @@ export function projectCulinaryIngredient(text: string): CulinaryIngredientProje
         ? alternatives.map((entry) => entry.label)
         : [alternatives.find((entry) => entry.primary)?.label ?? identity]
       : [identity];
+  const identityTokens = projected.food_tokens;
+  // A compound size/format descriptor (for example `burrito-size tortillas`)
+  // can hide the food head even though the head itself is an exact identity.
+  // Restrict the fallback to that shape: dropping a varietal adjective from
+  // `cheddar cheese` to generic `cheese` would be a broader substitution than
+  // the user asked for.
+  const hasCompositeDescriptor = identityTokens.length > 1
+    && identityTokens.some((token) => COMPOSITE_DISH_TOKENS.has(token));
+  const fallbackIdentities = !flexibleMixture && !equalChoice && hasCompositeDescriptor
+    ? [identityTokens[identityTokens.length - 1]!]
+    : [];
 
-  const amount = parsed.ok ? parsed.parsed.amount : null;
-  const unit = parsed.ok ? parsed.parsed.raw_unit ?? null : null;
+  const facts = parsed.ok ? parsed.parsed : null;
+  const amount = facts?.amount ?? null;
+  const unit = facts?.raw_unit ?? null;
   const measurementKind: CulinaryMeasurementKind = parsed.ok
     ? parsed.parsed.measurement_kind === 'mass'
       ? 'mass'
@@ -179,9 +199,14 @@ export function projectCulinaryIngredient(text: string): CulinaryIngredientProje
     original,
     identity,
     identities: Object.freeze(identities.filter((entry) => entry.length > 0)),
+    fallback_identities: Object.freeze(fallbackIdentities.filter((entry) => entry.length >= 3)),
     amount,
     unit,
+    normalized_unit: facts?.normalized_unit ?? null,
     measurement_kind: measurementKind,
+    milliliters: facts?.milliliters ?? null,
+    grams: facts?.grams ?? null,
+    count_noun: facts?.count_noun ?? null,
     alternatives: Object.freeze(alternatives),
     primary_index: primaryIndex,
     flexible_mixture: flexibleMixture,

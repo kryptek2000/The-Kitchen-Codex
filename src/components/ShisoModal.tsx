@@ -719,13 +719,26 @@ export function ShisoModal({
           : undefined;
       },
       get applyNutritionSourceSelection() {
-        if (shisoRef.current.canApplyNutritionSourceSelection) {
-          return (input: Parameters<NonNullable<ShisoToolContext['applyNutritionSourceSelection']>>[0]) =>
-            shisoRef.current.applyNutritionSourceSelection(input);
-        }
-        return applyIndependentNutritionSourceSelection
-          ? async (input) => applyIndependentNutritionSourceSelection(input)
-          : undefined;
+        const cardOwnerAvailable = shisoRef.current.canApplyNutritionSourceSelection;
+        if (!cardOwnerAvailable && applyIndependentNutritionSourceSelection === undefined) return undefined;
+        return async (input: Parameters<NonNullable<ShisoToolContext['applyNutritionSourceSelection']>>[0]) => {
+          let result = cardOwnerAvailable
+            ? await shisoRef.current.applyNutritionSourceSelection(input)
+            : await applyIndependentNutritionSourceSelection!(input);
+          // A mounted recipe card can be registered while its own review has
+          // never been initialized (for example, a Chat-driven self-init). Its
+          // ownership failure must not hide the independent review the current
+          // turn just created. Real selection rejections are not retried.
+          if (
+            cardOwnerAvailable &&
+            applyIndependentNutritionSourceSelection !== undefined &&
+            !result.ok &&
+            (result.code === 'no_active_review' || result.code === 'no_nutrition_review' || result.code === 'stale_recipe')
+          ) {
+            result = await applyIndependentNutritionSourceSelection(input);
+          }
+          return result;
+        };
       },
       isTrustedNutritionSourceSelection: (lineRef, description) => {
         const message = trustedNutritionSelectionMessageRef.current.toLocaleLowerCase();

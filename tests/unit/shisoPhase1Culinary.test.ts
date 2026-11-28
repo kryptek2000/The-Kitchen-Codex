@@ -50,6 +50,11 @@ describe('SHISO Phase 1 culinary identity projection', () => {
     expect(cheese.equal_choice).toBe(false);
     expect(cheese.identities).toEqual(['cheddar cheese']);
     expect(cheese.alternatives.map((entry) => entry.label)).toEqual(['cheddar cheese', 'Monterey Jack']);
+    expect(cheese.fallback_identities).toEqual([]);
+
+    const tortillas = projectCulinaryIngredient('8 burrito-size tortillas');
+    expect(tortillas.identity).toBe('burrito tortillas');
+    expect(tortillas.fallback_identities).toEqual(['tortillas']);
 
     const salt = projectCulinaryIngredient('2 pinches salt');
     expect(salt.identity).toBe('salt');
