@@ -148,6 +148,32 @@ function scriptedNetwork(script: readonly unknown[], otherResponses: Readonly<Re
   };
 }
 
+
+function capturingNetwork(
+  script: readonly unknown[],
+  otherResponses: Readonly<Record<string, unknown>>,
+): { readonly network: NetworkAdapter; readonly turns: Array<Record<string, unknown>> } {
+  let index = 0;
+  const turns: Array<Record<string, unknown>> = [];
+  const response = async (path: string, body?: unknown) => {
+    if (path === '/api/shiso/turn') {
+      turns.push((body ?? {}) as Record<string, unknown>);
+      const data = script[Math.min(index, script.length - 1)];
+      index += 1;
+      return { status: 200, ok: true, data };
+    }
+    return { status: 200, ok: true, data: otherResponses[path] ?? { ok: true, access: 'entitled', available: true } };
+  };
+  return {
+    network: {
+      post: response as NetworkAdapter['post'],
+      get: response as NetworkAdapter['get'],
+      request: async (request) => response(request.path, request.body) as never,
+    },
+    turns,
+  };
+}
+
 function OpenGlobal() {
   const { open } = useShiso();
   useEffect(() => open('global'), [open]);
@@ -421,4 +447,216 @@ describe('SHISO agent foundation real App save closure', () => {
     expect(serialized).toContain('"source_food_id":"169640"');
     expect(serialized).toContain('"value":84.75');
   }, 120000);
+  it('AUDIT Phase 1 Breakfast Burritos makes identity-first progress and asks one consolidated choice set', async () => {
+    await hydrateAiSelections(settings);
+    const rootPath = await mkdtemp(join('/tmp', 'tkc-phase1-breakfast-'));
+    roots.push(rootPath);
+    const recipePath = join(rootPath, 'Recipes', 'Dinner', 'Breakfast Burritos Phase 1.md');
+    await mkdir(dirname(recipePath), { recursive: true });
+    const markdown = [
+      '---', 'title: "Breakfast Burritos Phase 1"', 'tags:', '  - food/recipes',
+      'category: Breakfast', 'servings: 4', '---', '# Breakfast Burritos Phase 1',
+      '## Ingredients',
+      '- 2 cups chopped vegetables (such as red onion, bell pepper, mushrooms or broccoli)',
+      '- 1 pound breakfast sausage or Italian sausage',
+      '- 2 pinches salt',
+      '- 2 teaspoons unsalted butter',
+      '- 8 burrito-size tortillas',
+      '- 2 cups shredded cheddar cheese (or Monterey Jack)',
+      '- 8 large eggs',
+      '- 1 cup milk',
+      '## Instructions', '1. Cook the filling.', '2. Fill and roll the tortillas.', '',
+    ].join('\n');
+    await writeFile(recipePath, markdown, 'utf8');
+    const root = new DiskDirectoryHandle('Disposable Phase 1 Breakfast Vault', rootPath);
+    (window as unknown as { showDirectoryPicker: () => Promise<DiskDirectoryHandle> }).showDirectoryPicker = async () => root;
+
+    const { manifest, records } = buildMatchingBundle([
+      { fdcId: 31, dataType: 'sr_legacy', description: 'Butter, without salt', portions: [{ amount: 1, measure: 'tsp', gram_weight: 4.7, sequence: 1 }] },
+      { fdcId: 32, dataType: 'sr_legacy', description: 'Cheese, cheddar', portions: [{ amount: 1, measure: 'cup', gram_weight: 105, sequence: 1 }] },
+      { fdcId: 33, dataType: 'sr_legacy', description: 'Tortilla, flour', portions: [{ amount: 1, measure: 'tortilla', gram_weight: 45, sequence: 1 }] },
+      { fdcId: 34, dataType: 'sr_legacy', description: 'Sausage, turkey, breakfast links, mild, raw', portions: [{ amount: 1, measure: 'link', gram_weight: 28, sequence: 1 }] },
+      { fdcId: 35, dataType: 'sr_legacy', description: 'Salt, table', portions: [{ amount: 1, measure: 'tsp', gram_weight: 6, sequence: 1 }] },
+      { fdcId: 36, dataType: 'sr_legacy', description: 'Raw vegetable, NFS', portions: [{ amount: 1, measure: 'cup', gram_weight: 120, sequence: 1 }] },
+      { fdcId: 37, dataType: 'sr_legacy', description: 'Egg, whole, raw', portions: [{ amount: 1, measure: 'egg', gram_weight: 50, sequence: 1 }] },
+      { fdcId: 38, dataType: 'sr_legacy', description: 'Milk, whole', portions: [{ amount: 1, measure: 'cup', gram_weight: 244, sequence: 1 }] },
+    ]);
+    const created = createAdvancedNutritionSession(manifest, records);
+    if (!created.ok) throw new Error('fixture USDA session failed');
+    const loader = vi.fn(async (): Promise<RuntimeBundleResult> => ({
+      ok: true, session: created.session, metadata: created.session.metadata(), attribution: USDA_ATTRIBUTION,
+    }));
+    const captured = capturingNetwork([
+      { ok: true, kind: 'reply', text: 'No provider step was required.', proposals: [] },
+    ], {
+      '/api/nutrition/product-access': { ok: true, version: NUTRITION_PRODUCT_ACCESS_VERSION, tier: 'ai_advanced' },
+      '/api/providers': { providers: [] },
+    });
+
+    render(
+      <ShisoEntryProvider>
+        <App shisoNetworkAdapterOverride={captured.network} shisoNutritionBundleLoaderOverride={loader} shisoSettingsAdapterOverride={settings} />
+      </ShisoEntryProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect Vault' }));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Live Directory Sync' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose Local Obsidian Vault Folder' }));
+    await screen.findByText(/Connected live to vault "Disposable Phase 1 Breakfast Vault"/);
+    fireEvent.click(screen.getByRole('button', { name: 'Close Vault settings' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Breakfast Burritos Phase 1' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Generate Nutrition' }));
+    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await waitFor(() => expect(loader).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Close Advanced Nutrition' }));
+
+    fireEvent.click(await screen.findByTestId('recipe-shiso-entry'));
+    const composer = await screen.findByPlaceholderText('Ask Shiso…') as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: 'SHISO, resolve the remaining nutrition for this recipe.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(document.body.textContent).toMatch(/which did you actually use|what measured amount|consolidated choice/i), { timeout: 20000 });
+    expect(document.body.textContent).toMatch(/I selected .*(?:authenticated source| g\))/i);
+
+    expect(captured.turns).toHaveLength(0);
+    const persisted = await loadVaultContent(createBrowserVaultAdapter(root));
+    expect(persisted.recipes.find((entry) => entry.title === 'Breakfast Burritos Phase 1')?.codexNutrition).toBeUndefined();
+  }, 120000);
+
+  it('AUDIT Phase 1 reads complete paged instructions for a chef critique', async () => {
+    await hydrateAiSelections(settings);
+    const rootPath = await mkdtemp(join('/tmp', 'tkc-phase1-chef-'));
+    roots.push(rootPath);
+    const recipePath = join(rootPath, 'Recipes', 'Dinner', 'Chef Pagination Fixture.md');
+    await mkdir(dirname(recipePath), { recursive: true });
+    const steps = Array.from({ length: 25 }, (_, index) => `${index + 1}. Step ${index + 1}: ${index === 22 ? 'Final sear and rest before serving. ' + 'Detail '.repeat(120) : `Cook stage ${index + 1}.`}`).join('\n');
+    const markdown = [
+      '---', 'title: "Chef Pagination Fixture"', 'tags:', '  - food/recipes',
+      'category: Dinner', 'servings: 2', '---', '# Chef Pagination Fixture',
+      '## Ingredients', '- 2 cups chopped vegetables (such as red onion, bell pepper, mushrooms or broccoli)',
+      '## Instructions', steps, '',
+    ].join('\n');
+    await writeFile(recipePath, markdown, 'utf8');
+    const root = new DiskDirectoryHandle('Disposable Phase 1 Chef Vault', rootPath);
+    (window as unknown as { showDirectoryPicker: () => Promise<DiskDirectoryHandle> }).showDirectoryPicker = async () => root;
+    const bundle = buildMatchingBundle([{ fdcId: 1, dataType: 'sr_legacy', description: 'Raw vegetable, NFS', portions: [{ amount: 1, measure: 'cup', gram_weight: 120, sequence: 1 }] }]);
+    const created = createAdvancedNutritionSession(bundle.manifest, bundle.records);
+    if (!created.ok) throw new Error('fixture USDA session failed');
+    const loader = vi.fn(async (): Promise<RuntimeBundleResult> => ({
+      ok: true, session: created.session, metadata: created.session.metadata(), attribution: USDA_ATTRIBUTION,
+    }));
+    const captured = capturingNetwork([
+      { ok: true, kind: 'tool_request', tool: 'get_current_recipe', args: { tool: 'get_current_recipe', instruction_offset: 0, instruction_limit: 20 } },
+      { ok: true, kind: 'tool_request', tool: 'get_current_recipe', args: { tool: 'get_current_recipe', instruction_offset: 20, instruction_limit: 20 } },
+      { ok: true, kind: 'reply', text: 'Executive critique: the final sear and rest in Step 23 is the critical finish; do not rush it.', proposals: [] },
+    ], {
+      '/api/nutrition/product-access': { ok: true, version: NUTRITION_PRODUCT_ACCESS_VERSION, tier: 'ai_advanced' },
+      '/api/providers': { providers: [] },
+    });
+
+    render(
+      <ShisoEntryProvider>
+        <App shisoNetworkAdapterOverride={captured.network} shisoNutritionBundleLoaderOverride={loader} shisoSettingsAdapterOverride={settings} />
+      </ShisoEntryProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect Vault' }));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Live Directory Sync' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose Local Obsidian Vault Folder' }));
+    await screen.findByText(/Connected live to vault "Disposable Phase 1 Chef Vault"/);
+    fireEvent.click(screen.getByRole('button', { name: 'Close Vault settings' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Chef Pagination Fixture' }));
+    fireEvent.click(await screen.findByTestId('recipe-shiso-entry'));
+    const composer = await screen.findByPlaceholderText('Ask Shiso…') as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: 'Give me an executive-chef critique of this recipe.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(document.body.textContent).toContain('Step 23 is the critical finish'), { timeout: 20000 });
+
+    const secondPageObservation = JSON.stringify(captured.turns[2]?.['observation'] ?? {});
+    expect(secondPageObservation).toContain('Step 23');
+    expect(secondPageObservation).toContain('Final sear and rest before serving');
+    const persisted = await loadVaultContent(createBrowserVaultAdapter(root));
+    expect(persisted.recipes.find((entry) => entry.title === 'Chef Pagination Fixture')?.codexNutrition).toBeUndefined();
+  }, 120000);
+
+  it('AUDIT Phase 1 continues after a user choice and persists the completed review', async () => {
+    await hydrateAiSelections(settings);
+    const rootPath = await mkdtemp(join('/tmp', 'tkc-phase1-continuation-'));
+    roots.push(rootPath);
+    const recipePath = join(rootPath, 'Recipes', 'Dinner', 'Continuation Chicken Fixture.md');
+    await mkdir(dirname(recipePath), { recursive: true });
+    const markdown = [
+      '---', 'title: "Continuation Chicken Fixture"', 'tags:', '  - food/recipes',
+      'category: Dinner', 'servings: 2', '---', '# Continuation Chicken Fixture',
+      '## Ingredients', '- 2 cups shredded chicken breast or turkey breast',
+      '## Instructions', '1. Warm and serve.', '',
+    ].join('\n');
+    await writeFile(recipePath, markdown, 'utf8');
+    const root = new DiskDirectoryHandle('Disposable Phase 1 Continuation Vault', rootPath);
+    (window as unknown as { showDirectoryPicker: () => Promise<DiskDirectoryHandle> }).showDirectoryPicker = async () => root;
+
+    const { manifest, records } = buildMatchingBundle([
+      { fdcId: 41, dataType: 'sr_legacy', description: 'Chicken, breast, meat only, cooked, roasted', portions: [{ amount: 1, measure: 'cup', gram_weight: 140, sequence: 1 }] },
+      { fdcId: 42, dataType: 'sr_legacy', description: 'Turkey, breast, meat only, cooked, roasted', portions: [{ amount: 1, measure: 'cup', gram_weight: 140, sequence: 1 }] },
+    ]);
+    const created = createAdvancedNutritionSession(manifest, records);
+    if (!created.ok) throw new Error('fixture USDA session failed');
+    const loader = vi.fn(async (): Promise<RuntimeBundleResult> => ({
+      ok: true, session: created.session, metadata: created.session.metadata(), attribution: USDA_ATTRIBUTION,
+    }));
+    const captured = capturingNetwork([
+      { ok: true, kind: 'tool_request', tool: 'apply_nutrition_review', args: { tool: 'apply_nutrition_review' } },
+      { ok: true, kind: 'tool_request', tool: 'save_working_recipe', args: { tool: 'save_working_recipe' } },
+      { ok: true, kind: 'reply', text: 'Chicken breast was applied and saved to the Vault.', proposals: [] },
+    ], {
+      '/api/nutrition/product-access': { ok: true, version: NUTRITION_PRODUCT_ACCESS_VERSION, tier: 'ai_advanced' },
+      '/api/providers': { providers: [] },
+    });
+
+    render(
+      <ShisoEntryProvider>
+        <App shisoNetworkAdapterOverride={captured.network} shisoNutritionBundleLoaderOverride={loader} shisoSettingsAdapterOverride={settings} />
+      </ShisoEntryProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect Vault' }));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Live Directory Sync' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose Local Obsidian Vault Folder' }));
+    await screen.findByText(/Connected live to vault "Disposable Phase 1 Continuation Vault"/);
+    fireEvent.click(screen.getByRole('button', { name: 'Close Vault settings' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Continuation Chicken Fixture' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Generate Nutrition' }));
+    await screen.findByRole('dialog', { name: 'Advanced Nutrition' });
+    await waitFor(() => expect(loader).toHaveBeenCalledTimes(1));
+    const authorityToggle = await screen.findByTestId('shiso-nutrition-authority-toggle') as HTMLInputElement;
+    expect(authorityToggle.checked).toBe(false);
+    fireEvent.click(authorityToggle);
+    await waitFor(() => expect(authorityToggle.checked).toBe(true));
+    fireEvent.click(screen.getByRole('button', { name: 'Close Advanced Nutrition' }));
+
+    fireEvent.click(await screen.findByTestId('recipe-shiso-entry'));
+    const composer = await screen.findByPlaceholderText('Ask Shiso…') as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: 'SHISO, resolve the remaining nutrition for this recipe.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(document.body.textContent).toMatch(/which did you actually use|chicken breast or turkey breast/i), { timeout: 20000 });
+    expect(captured.turns).toHaveLength(0);
+
+    fireEvent.change(composer, { target: { value: 'Use chicken breast. Apply and save the nutrition.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(document.body.textContent).toContain('Chicken breast was applied and saved to the Vault.'), { timeout: 20000 });
+
+    expect(captured.turns.length).toBeGreaterThan(0);
+    expect(JSON.stringify(captured.turns[0]?.['observation'] ?? {})).toContain('select_usda_nutrition_source');
+    const persisted = await loadVaultContent(createBrowserVaultAdapter(root));
+    const block = persisted.recipes.find((entry) => entry.title === 'Continuation Chicken Fixture')?.codexNutrition as any;
+    expect(block).toMatchObject({ status: 'complete', sources: ['usda_fdc'] });
+    expect(block.ingredients).toHaveLength(1);
+    expect(block.ingredients[0]).toMatchObject({
+      source_food_id: '41',
+      match_status: 'confirmed',
+      selection_origin: 'shiso_user_directed',
+      amount: { value: 280, unit: 'g' },
+    });
+    expect(JSON.stringify(block)).not.toContain('42');
+  }, 120000);
+
 });

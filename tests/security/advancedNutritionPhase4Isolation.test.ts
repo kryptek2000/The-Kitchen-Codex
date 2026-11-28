@@ -160,6 +160,7 @@ describe('phase 4 isolation — source purity', () => {
         'householdPortion.ts',
         'hydrate.ts',
         'index.ts',
+        'ingredientInvestigation.ts',
         'liveRow.ts',
         'materialize.ts',
         'portion.ts',

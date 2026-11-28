@@ -41,6 +41,8 @@ import { runBatchInvestigation } from '../core/shiso/batchInvestigation';
 import {
   adaptRecipe,
   analyzeRecipe,
+  candidateIdentityVerdict,
+  projectCulinaryIngredient,
   projectIngredientAlternatives,
   type AdvancedNutritionSession,
 } from '../core/nutritionV2/phase4';
@@ -97,7 +99,15 @@ export interface ShisoToolContext {
   readonly session: AdvancedNutritionSession | null;
   readonly recipe: {
     readonly title: string;
+    readonly description?: string;
     readonly servings: number | null;
+    readonly category?: string;
+    readonly cuisine?: string;
+    readonly difficulty?: string;
+    readonly tags?: readonly string[];
+    readonly prepTime?: string;
+    readonly cookTime?: string;
+    readonly totalTime?: string;
     readonly ingredients: ReadonlyArray<{
       readonly text: string;
       readonly name: string;
@@ -107,7 +117,7 @@ export interface ShisoToolContext {
       /** H-2 stable handle for edits; null when the recipe cannot be adapted. */
       readonly line_ref?: string | null;
     }>;
-    readonly instructions: ReadonlyArray<{ readonly text: string }>;
+    readonly instructions: ReadonlyArray<{ readonly text: string; readonly step_ref?: string }>;
   } | null;
   readonly nutrition: {
     readonly rows: ReadonlyArray<LiveRowState>;
@@ -229,23 +239,58 @@ function fail(
 
 // ---------------------------------------------------------------------------
 
-function getCurrentRecipe(ctx: ShisoToolContext): ShisoObservation {
+function getCurrentRecipe(
+  ctx: ShisoToolContext,
+  instructionOffset = 0,
+  instructionLimit = 12,
+): ShisoObservation {
   const recipe = ctx.recipe ?? ctx.vault?.getSelectedRecipe();
   if (recipe === null || recipe === undefined) {
     return fail('get_current_recipe', 'no_active_recipe', 'No recipe is currently open.');
   }
-  return ok('get_current_recipe', `${recipe.title} — ${recipe.ingredients.length} ingredients`, {
+  const totalSteps = recipe.instructions.length;
+  const offset = Math.max(0, Math.min(totalSteps, Math.floor(instructionOffset)));
+  const limit = Math.max(1, Math.min(SHISO_LIMITS.maxInstructionPage, Math.floor(instructionLimit)));
+  const page = recipe.instructions.slice(offset, offset + limit).map((step, index) => ({
+    index: offset + index,
+    text: step.text.slice(0, SHISO_LIMITS.maxInstructionTextChars),
+    step_ref: typeof step.step_ref === 'string' ? step.step_ref : `step:${offset + index}`,
+    text_truncated: step.text.length > SHISO_LIMITS.maxInstructionTextChars,
+  }));
+  const returned = page.length;
+  const nextOffset = offset + returned;
+  const instructionsComplete = nextOffset >= totalSteps;
+  return ok('get_current_recipe', `${recipe.title} — ${recipe.ingredients.length} ingredients, ${totalSteps} step(s)`, {
     title: recipe.title,
+    ...(recipe.description !== undefined ? { description: recipe.description } : {}),
     servings: recipe.servings,
-    ingredients: recipe.ingredients.slice(0, 60).map((i) => ({
-      text: i.text.slice(0, 200),
-      name: i.name.slice(0, 120),
+    ...(recipe.category !== undefined ? { category: recipe.category } : {}),
+    ...(recipe.cuisine !== undefined ? { cuisine: recipe.cuisine } : {}),
+    ...(recipe.difficulty !== undefined ? { difficulty: recipe.difficulty } : {}),
+    ...(recipe.tags !== undefined ? { tags: recipe.tags } : {}),
+    ...(recipe.prepTime !== undefined ? { prep_time: recipe.prepTime } : {}),
+    ...(recipe.cookTime !== undefined ? { cook_time: recipe.cookTime } : {}),
+    ...(recipe.totalTime !== undefined ? { total_time: recipe.totalTime } : {}),
+    ingredients: recipe.ingredients.slice(0, 80).map((i) => ({
+      text: i.text.slice(0, 300),
+      name: i.name.slice(0, 160),
+      ...(i.amount !== undefined ? { amount: i.amount } : {}),
+      ...(i.unit !== undefined ? { unit: i.unit } : {}),
+      ...(i.preparation !== undefined ? { preparation: i.preparation } : {}),
       // H-2: the stable handle an edit is addressed by. It is INTERNAL plumbing
       // (like the review line_ref) and is revalidated against live recipe state
       // before any edit is applied; it is never shown to the user.
       line_ref: typeof i.line_ref === 'string' ? i.line_ref : null,
     })),
-    instructions: recipe.instructions.slice(0, 40).map((s) => ({ text: s.text.slice(0, 400) })),
+    ingredients_total: recipe.ingredients.length,
+    ingredients_truncated: recipe.ingredients.length > 80,
+    instructions: page,
+    instructions_total: totalSteps,
+    instructions_offset: offset,
+    instructions_returned: returned,
+    instructions_complete: instructionsComplete,
+    next_instruction_offset: instructionsComplete ? null : nextOffset,
+    instructions_page_truncated: !instructionsComplete,
   });
 }
 
@@ -632,40 +677,91 @@ function searchUsdaFoods(ctx: ShisoToolContext, query: string, limit: number): S
     return fail('search_usda_foods', 'no_nutrition_review', 'The USDA catalogue is not loaded.');
   }
 
-  // Manual discovery uses the same identity projection as the Phase 4 analyzer.
-  // Raw token search over-authored wording (for example "toasted pecans") can
-  // miss a valid ordinary food, while broad overlap can surface an unrelated
-  // product that merely contains one word. The review authority separates food
-  // identity from preparation and exposes bounded same-family candidates. This
-  // remains discovery only; any later selection is re-authenticated by the
-  // calculation engine.
   const boundedLimit = Math.min(limit, SHISO_LIMITS.maxSearchResults);
   const numericId = /^\d+$/.test(query.trim());
-  const direct = numericId ? ctx.session.searchFoods(query, boundedLimit) : null;
-  const review = numericId ? null : ctx.session.reviewIngredient({ name: query });
-  const candidates = direct?.ok === true
-    ? direct.results
-    : review?.outcome === 'matched_exact'
+  if (numericId) {
+    const direct = ctx.session.searchFoods(query, boundedLimit);
+    if (!direct.ok || direct.results.length === 0) {
+      return fail('search_usda_foods', 'catalog_search_empty', 'No matching USDA record was found.');
+    }
+    return ok('search_usda_foods', `${direct.results.length} matching USDA record(s)`, {
+      query,
+      identity: query,
+      total_matches: direct.total,
+      results: direct.results.map((result) => ({
+        fdc_id: result.fdc_id,
+        description: result.description.slice(0, 160),
+        data_type: result.data_type,
+        match_class: result.match_class,
+        has_portion: result.has_portion,
+        portion_summary: result.portion_summary ?? null,
+        record_digest: result.record_digest,
+      })),
+    });
+  }
+
+  // The model may pass an authored phrase or a whole ingredient line. Project
+  // the culinary identity first so preparation/quantity words never become
+  // mandatory search tokens. The authenticated review still ranks; this layer
+  // only rejects a different food head or a composite dish before the model sees
+  // it. Exact authority results are never filtered.
+  const projection = projectCulinaryIngredient(query);
+  const results: Array<Record<string, unknown>> = [];
+  const seen = new Set<number>();
+  let rejected = 0;
+  for (const identity of projection.identities.slice(0, 4)) {
+    const review = ctx.session.reviewIngredient({ name: identity });
+    const exact = review.outcome === 'matched_exact';
+    const candidates = exact
       ? review.candidates.filter((candidate) => candidate.fdc_id === review.selected_fdc_id)
-      : review?.outcome === 'review_required'
+      : review.outcome === 'review_required'
         ? bestEffortDiscoveryCandidates(review)
         : [];
-  if (candidates.length === 0) {
-    return fail('search_usda_foods', 'catalog_search_empty', 'No matching USDA record was found.');
+    for (const candidate of candidates) {
+      const verdict = exact ? { compatible: true, reason: null } : candidateIdentityVerdict(identity, candidate.description);
+      if (!verdict.compatible) {
+        rejected += 1;
+        continue;
+      }
+      if (seen.has(candidate.fdc_id)) continue;
+      seen.add(candidate.fdc_id);
+      const portions = ctx.session.reviewPortions(candidate.fdc_id);
+      const usable = portions.ok
+        ? portions.review.candidates.filter((portion) => portion.kind !== 'unusable' && portion.gram_weight > 0)
+        : [];
+      results.push({
+        fdc_id: candidate.fdc_id,
+        description: candidate.description.slice(0, 160),
+        data_type: candidate.data_type,
+        match_class: candidate.match_class,
+        has_portion: usable.length > 0,
+        portion_summary: usable[0]?.display_label ?? null,
+        record_digest: candidate.record_digest,
+        branch: identity,
+        authority_exact: exact,
+        compatible: true,
+      });
+    }
   }
-  const rows = candidates.slice(0, boundedLimit);
-  return ok('search_usda_foods', `${rows.length} matching USDA record(s)`, {
+  if (results.length === 0) {
+    return fail(
+      'search_usda_foods',
+      'catalog_search_empty',
+      `No identity-compatible USDA record was found for “${projection.identity.slice(0, 100)}”. Do not substitute an unrelated record; ask for a more specific ingredient or use a measured amount.`,
+    );
+  }
+  return ok('search_usda_foods', `${results.length} matching USDA record(s) — identity-compatible`, {
     query,
-    total_matches: direct?.ok === true ? direct.total : candidates.length,
-    results: rows.map((r) => ({
-      fdc_id: r.fdc_id,
-      description: r.description.slice(0, 160),
-      data_type: r.data_type,
-      match_class: r.match_class,
-      has_portion: r.has_portion,
-      portion_summary: r.portion_summary ?? null,
-      record_digest: r.record_digest,
-    })),
+    identity: projection.identity,
+    identities: projection.identities,
+    alternatives: projection.alternatives,
+    flexible_mixture: projection.flexible_mixture,
+    equal_choice: projection.equal_choice,
+    choice_required: projection.choice_required,
+    measurement_note: projection.measurement_note,
+    total_matches: results.length,
+    rejected_matches: rejected,
+    results: results.slice(0, boundedLimit),
   });
 }
 
@@ -889,6 +985,184 @@ function investigateIngredientAmount(ctx: ShisoToolContext, lineRef: string): Sh
  * authenticated session; when it cannot cover every line it reports exactly how
  * many it examined and hands back a cursor so the user can continue.
  */
+
+/**
+ * One culinary investigation for an unresolved line. Pure/read-only; it
+ * separates identity, quantity, authored alternatives, flexible composition,
+ * and measurable evidence before the model sees candidates. It never selects a
+ * source or returns a gram weight that is not an authenticated portion.
+ */
+function culinaryLineInvestigation(
+  ctx: ShisoToolContext,
+  row: LiveRowState,
+): Record<string, unknown> {
+  if (ctx.session === null) {
+    return { identity: null, candidates: [], next_action: { kind: 'no_source', reason: 'catalogue_unavailable' } };
+  }
+  const authored = ctx.recipe?.ingredients.find((entry) => entry.line_ref === row.line_ref);
+  const original = authored?.text ?? row.original_text;
+  const projection = projectCulinaryIngredient(original);
+  const candidates: Array<Record<string, unknown>> = [];
+  const seen = new Set<string>();
+  let rejected = 0;
+  const branchReports: Array<Record<string, unknown>> = [];
+
+  for (const identity of projection.identities.slice(0, 4)) {
+    const review = ctx.session.reviewIngredient({ name: identity });
+    const exact = review.outcome === 'matched_exact';
+    const ranked = exact
+      ? review.candidates.filter((candidate) => candidate.fdc_id === review.selected_fdc_id)
+      : review.outcome === 'review_required'
+        ? bestEffortDiscoveryCandidates(review)
+        : [];
+    const branchCandidates: Array<Record<string, unknown>> = [];
+    for (const candidate of ranked.slice(0, 12)) {
+      const verdict = exact
+        ? { compatible: true, reason: null }
+        : candidateIdentityVerdict(identity, candidate.description);
+      if (!verdict.compatible) {
+        rejected += 1;
+        continue;
+      }
+      const portions = ctx.session.reviewPortions(candidate.fdc_id);
+      const usable = portions.ok
+        ? portions.review.candidates.filter((portion) => portion.kind !== 'unusable' && portion.gram_weight > 0 && portion.gram_weight < 100000)
+        : [];
+      const record = {
+        branch: identity,
+        fdc_id: candidate.fdc_id,
+        description: candidate.description.slice(0, 160),
+        match_class: candidate.match_class,
+        record_digest: candidate.record_digest,
+        review_digest: review.review_digest ?? null,
+        authority_exact: exact,
+        usable_portions: usable.slice(0, 6).map((portion) => ({
+          index: portion.index,
+          measure: portion.display_label.slice(0, 120),
+          gram_weight: portion.gram_weight,
+        })),
+        preferred_portion_index: usable[0]?.index ?? null,
+        preferred_grams: usable[0]?.gram_weight ?? null,
+      };
+      const key = `${identity}:${candidate.fdc_id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      branchCandidates.push(record);
+      candidates.push(record);
+    }
+    branchReports.push({
+      identity,
+      authority_exact: exact,
+      compatible_candidates: branchCandidates,
+    });
+  }
+
+  const primaryIdentity = projection.identities[0] ?? projection.identity;
+  const primaryCandidates = candidates.filter((candidate) => candidate['branch'] === primaryIdentity);
+  const selectable = primaryCandidates.find((candidate) => candidate['preferred_portion_index'] !== null);
+  let nextAction: Record<string, unknown>;
+  let pendingChoice: Record<string, unknown> | null = null;
+  if (projection.measurement_note !== null) {
+    nextAction = {
+      kind: 'needs_measurement',
+      line_ref: row.line_ref,
+      note: projection.measurement_note,
+      candidates,
+    };
+    pendingChoice = {
+      kind: 'measurement',
+      line_ref: row.line_ref,
+      label: original.slice(0, 160),
+      note: projection.measurement_note,
+    };
+  } else if (projection.flexible_mixture) {
+    nextAction = {
+      kind: 'composition_choice',
+      line_ref: row.line_ref,
+      options: projection.identities,
+      candidates,
+      note: 'This line is a flexible mixture. A precise composition and proportions require the user’s choice; do not present an invented mixture as verified.',
+    };
+    pendingChoice = {
+      kind: 'composition',
+      line_ref: row.line_ref,
+      label: original.slice(0, 160),
+      options: projection.identities,
+    };
+  } else if (projection.equal_choice) {
+    nextAction = {
+      kind: 'ingredient_choice',
+      line_ref: row.line_ref,
+      options: projection.identities,
+      candidates,
+      note: 'These are equal authored alternatives. Ask which one was actually used; do not choose one silently.',
+    };
+    pendingChoice = {
+      kind: 'ingredient',
+      line_ref: row.line_ref,
+      label: original.slice(0, 160),
+      options: projection.identities,
+    };
+  } else if (selectable !== undefined) {
+    nextAction = {
+      kind: 'select_source',
+      line_ref: row.line_ref,
+      fdc_id: selectable['fdc_id'],
+      portion_index: selectable['preferred_portion_index'],
+      gram_weight: selectable['preferred_grams'],
+      description: selectable['description'],
+      note: 'Select this authenticated source through select_usda_nutrition_source, then continue the task.',
+    };
+  } else if (primaryCandidates.length > 0) {
+    nextAction = {
+      kind: 'choose_candidate',
+      line_ref: row.line_ref,
+      candidates: primaryCandidates.slice(0, 3),
+      note: 'Compatible candidates exist but none has a usable authenticated portion. Ask for a measured amount or inspect a candidate; do not invent a weight.',
+    };
+    pendingChoice = {
+      kind: 'candidate',
+      line_ref: row.line_ref,
+      label: original.slice(0, 160),
+      options: primaryCandidates.slice(0, 3).map((candidate) => candidate['description']),
+    };
+  } else {
+    nextAction = {
+      kind: 'no_compatible_source',
+      line_ref: row.line_ref,
+      note: 'No identity-compatible authenticated record was found. Do not substitute an unrelated food; ask for a more specific ingredient or a measured amount.',
+    };
+  }
+
+  return {
+    line_ref: row.line_ref,
+    label: original.slice(0, 160),
+    identity: projection.identity,
+    identities: projection.identities,
+    quantity: {
+      amount: projection.amount,
+      unit: projection.unit,
+      measurement_kind: projection.measurement_kind,
+    },
+    preparation: authored?.preparation ?? null,
+    alternatives: projection.alternatives,
+    primary_index: projection.primary_index,
+    flexible_mixture: projection.flexible_mixture,
+    equal_choice: projection.equal_choice,
+    choice_required: projection.choice_required,
+    measurement_note: projection.measurement_note,
+    current_food: row.selected_description ?? null,
+    current_fdc_id: row.selected_fdc_id ?? null,
+    resolved_grams: row.resolved_grams ?? null,
+    status: row.status,
+    compatible_candidates: candidates.slice(0, 8),
+    rejected_candidates: rejected,
+    branches: branchReports,
+    next_action: nextAction,
+    pending_choice: pendingChoice,
+  };
+}
+
 function investigateUnresolvedIngredients(
   ctx: ShisoToolContext,
   cursor: string | undefined,
@@ -936,19 +1210,19 @@ function investigateUnresolvedIngredients(
         : `Investigated ${report.examined} of ${report.total_unresolved} unresolved ingredient(s) — ` +
           `${report.remaining} ingredient(s) are still to investigate.`;
 
-  return ok('investigate_unresolved_ingredients', summary, {
-    ai_estimated: acceptedAi.size,
-    source_backed_contributions: acceptedSource.size,
-    partial_known: coverage.partial_known,
-    source_backed: coverage.source_backed,
-    needs_attention: report.total_unresolved,
-    examined: report.examined,
-    total_unresolved: report.total_unresolved,
-    remaining: report.remaining,
-    complete: report.complete,
-    next_cursor: report.next_cursor,
-    classification_counts: report.counts,
-    lines: report.lines.map((l) => ({
+  const lineReports = report.lines.map((l) => {
+    const row = findRow(ctx, l.line_ref);
+    // Culinary enrichment is additive. A minimal/injected surface that cannot
+    // support it must still receive the existing authoritative batch report.
+    let culinary: Record<string, unknown> | null = null;
+    if (row !== undefined) {
+      try {
+        culinary = culinaryLineInvestigation(ctx, row);
+      } catch {
+        culinary = null;
+      }
+    }
+    return {
       // Internal handle, for binding and staleness only. NEVER printed to the
       // user — `label` is the ingredient's own text and is what may be shown.
       line_ref: l.line_ref,
@@ -975,7 +1249,53 @@ function investigateUnresolvedIngredients(
         usable_portions: a.usable_portions,
       })),
       candidates: l.candidates,
-    })),
+      // The model should reason from this culinary projection, not from raw
+      // token-overlap candidates above.
+      culinary,
+      compatible_candidates: culinary?.['compatible_candidates'] ?? [],
+      next_action: culinary?.['next_action'] ?? null,
+      pending_choice: culinary?.['pending_choice'] ?? null,
+    };
+  });
+  const pendingChoices = lineReports
+    .map((line) => line.pending_choice)
+    .filter((choice): choice is Record<string, unknown> => choice !== null && choice !== undefined);
+  const nextActions = lineReports
+    .map((line) => line.next_action)
+    .filter((action): action is Record<string, unknown> => action !== null && action !== undefined);
+  const questionParts = pendingChoices.slice(0, 6).map((choice, index) => {
+    const label = typeof choice['label'] === 'string' ? choice['label'] : 'an ingredient';
+    const options = Array.isArray(choice['options'])
+      ? choice['options'].filter((option): option is string => typeof option === 'string')
+      : [];
+    if (choice['kind'] === 'measurement') {
+      return `${index + 1}) For “${label}”, what measured amount was used?`;
+    }
+    if (choice['kind'] === 'composition') {
+      return `${index + 1}) For “${label}”, which vegetables and roughly what proportions were used${options.length > 0 ? ` (for example ${options.slice(0, 4).join(', ')})` : ''}?`;
+    }
+    return `${index + 1}) For “${label}”, which did you actually use${options.length > 0 ? `: ${options.join(' or ')}` : ''}?`;
+  });
+  const consolidatedQuestion = questionParts.length === 0
+    ? null
+    : `I can finish more of the nutrition after one consolidated choice set: ${questionParts.join(' ')}`;
+
+  return ok('investigate_unresolved_ingredients', summary, {
+    ai_estimated: acceptedAi.size,
+    source_backed_contributions: acceptedSource.size,
+    partial_known: coverage.partial_known,
+    source_backed: coverage.source_backed,
+    needs_attention: report.total_unresolved,
+    examined: report.examined,
+    total_unresolved: report.total_unresolved,
+    remaining: report.remaining,
+    complete: report.complete,
+    next_cursor: report.next_cursor,
+    classification_counts: report.counts,
+    lines: lineReports,
+    next_actions: nextActions,
+    pending_user_choices: pendingChoices,
+    consolidated_question: consolidatedQuestion,
     continuation_hint: report.complete
       ? null
       : `${report.remaining} ingredient(s) remain. Ask me to continue and I will investigate the rest without repeating this work.`,
@@ -2687,7 +3007,7 @@ export function executeShisoTool(
   try {
     switch (args.tool) {
       case 'get_current_recipe':
-        return getCurrentRecipe(ctx);
+        return getCurrentRecipe(ctx, args.instruction_offset ?? 0, args.instruction_limit ?? 12);
       case 'get_vault_status':
         return getVaultStatus(ctx);
       case 'search_vault_recipes':

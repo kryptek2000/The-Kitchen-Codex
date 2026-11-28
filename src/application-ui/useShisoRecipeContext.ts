@@ -21,7 +21,15 @@ import { parseIngredient } from '../core/nutritionV2/matching/parse';
 
 export interface ShisoRecipeView {
   readonly title: string;
+  readonly description?: string;
   readonly servings: number | null;
+  readonly category?: string;
+  readonly cuisine?: string;
+  readonly difficulty?: string;
+  readonly tags?: readonly string[];
+  readonly prepTime?: string;
+  readonly cookTime?: string;
+  readonly totalTime?: string;
   readonly ingredients: ReadonlyArray<{
     readonly text: string;
     readonly name: string;
@@ -29,18 +37,33 @@ export interface ShisoRecipeView {
     readonly amount?: number;
     /** Canonical authored unit, retained for nutrition actions. */
     readonly unit?: string;
+    /** Authored preparation after the first comma, when present. */
+    readonly preparation?: string;
     /** H-2 stable edit handle; null when the recipe cannot be adapted. */
     readonly line_ref?: string | null;
   }>;
-  readonly instructions: ReadonlyArray<{ readonly text: string }>;
+  readonly instructions: ReadonlyArray<{
+    readonly text: string;
+    /** Stable, non-secret step handle used by instruction reads. */
+    readonly step_ref: string;
+  }>;
 }
 
 export interface ShisoRecipeLike {
   readonly title: string;
+  readonly description?: string;
   readonly servings?: number | string;
+  readonly category?: string;
+  readonly cuisine?: string;
+  readonly difficulty?: string;
+  readonly tags?: readonly string[];
+  readonly prepTime?: string;
+  readonly cookTime?: string;
+  readonly totalTime?: string;
   readonly ingredients: ReadonlyArray<{
     readonly name: string;
     readonly original?: string;
+    readonly note?: string;
     readonly quantity?: number;
     readonly amount?: number | null;
     readonly unit?: string;
@@ -112,14 +135,36 @@ export function toShisoRecipeView(recipe: ShisoRecipeLike | null): ShisoRecipeVi
       name,
       ...(amount !== undefined ? { amount } : {}),
       ...(typeof unit === 'string' && unit.length > 0 ? { unit } : {}),
+      ...(typeof i.note === 'string' && i.note.trim().length > 0 ? { preparation: i.note.trim().slice(0, 240) } : {}),
       line_ref: typeof lineRefs[index] === 'string' ? lineRefs[index] : null,
     };
   });
   return {
     title: String(recipe.title ?? '').slice(0, 200),
+    ...(typeof recipe.description === 'string' && recipe.description.trim().length > 0
+      ? { description: recipe.description.trim().slice(0, 1200) }
+      : {}),
     servings: parseServings(recipe.servings),
+    ...(typeof recipe.category === 'string' && recipe.category.trim().length > 0
+      ? { category: recipe.category.trim().slice(0, 120) }
+      : {}),
+    ...(typeof recipe.cuisine === 'string' && recipe.cuisine.trim().length > 0
+      ? { cuisine: recipe.cuisine.trim().slice(0, 120) }
+      : {}),
+    ...(typeof recipe.difficulty === 'string' && recipe.difficulty.trim().length > 0
+      ? { difficulty: recipe.difficulty.trim().slice(0, 40) }
+      : {}),
+    ...(Array.isArray(recipe.tags) ? { tags: recipe.tags.slice(0, 30).map((tag) => String(tag).slice(0, 60)) } : {}),
+    ...(typeof recipe.prepTime === 'string' && recipe.prepTime.trim().length > 0 ? { prepTime: recipe.prepTime.trim().slice(0, 40) } : {}),
+    ...(typeof recipe.cookTime === 'string' && recipe.cookTime.trim().length > 0 ? { cookTime: recipe.cookTime.trim().slice(0, 40) } : {}),
+    ...(typeof recipe.totalTime === 'string' && recipe.totalTime.trim().length > 0 ? { totalTime: recipe.totalTime.trim().slice(0, 40) } : {}),
     ingredients,
-    instructions: rawInstructions.slice(0, 60).map((s) => ({ text: String(s.text ?? '').slice(0, 400) })),
+    // Instructions stay available for bounded retrieval. They are NEVER sent in
+    // the conversation context automatically; the read capability pages them.
+    instructions: rawInstructions.slice(0, 200).map((step, index) => ({
+      text: String(step.text ?? '').slice(0, 4000),
+      step_ref: `step:${index}`,
+    })),
   };
 }
 
