@@ -44,6 +44,7 @@ import {
   candidateIdentityVerdict,
   projectCulinaryIngredient,
   projectIngredientAlternatives,
+  selectDeterministicVolumePortionIndex,
   type AdvancedNutritionSession,
 } from '../core/nutritionV2/phase4';
 import { buildPortionChoice } from '../core/nutritionV2/phase4/portion';
@@ -1006,9 +1007,9 @@ function culinaryLineInvestigation(
   const seen = new Set<string>();
   let rejected = 0;
   const branchReports: Array<Record<string, unknown>> = [];
-
-  for (const identity of projection.identities.slice(0, 4)) {
-    const review = ctx.session.reviewIngredient({ name: identity });
+  const branchIdentities = [...projection.identities];
+  const searchBranch = (identity: string): void => {
+    const review = ctx.session!.reviewIngredient({ name: identity });
     const exact = review.outcome === 'matched_exact';
     const ranked = exact
       ? review.candidates.filter((candidate) => candidate.fdc_id === review.selected_fdc_id)
@@ -1024,10 +1025,67 @@ function culinaryLineInvestigation(
         rejected += 1;
         continue;
       }
-      const portions = ctx.session.reviewPortions(candidate.fdc_id);
+      const portions = ctx.session!.reviewPortions(candidate.fdc_id);
       const usable = portions.ok
         ? portions.review.candidates.filter((portion) => portion.kind !== 'unusable' && portion.gram_weight > 0 && portion.gram_weight < 100000)
         : [];
+      // Match the authored measurement, not merely the first portion on the
+      // record. Density makes any compatible volume portion equivalent for a
+      // volume line and any mass portion equivalent for a mass line, but a
+      // count must name the same thing ("tortilla" is not "slice" or "package").
+      let preferred: (typeof usable)[number] | undefined;
+      const singularTokens = (value: string): readonly string[] =>
+        value
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, ' ')
+          .split(/\s+/)
+          .filter((token) => token.length >= 3)
+          .map((token) => token.replace(/s$/, ''));
+      if (projection.measurement_kind === 'volume' && projection.milliliters !== null) {
+        const milliliters = projection.milliliters;
+        const index = selectDeterministicVolumePortionIndex(
+          ctx.session!,
+          candidate.fdc_id,
+          milliliters,
+          projection.normalized_unit ?? projection.unit ?? undefined,
+          identity,
+        );
+        const volumePortions = usable.filter((portion) => portion.kind === 'volume');
+        const gramsFor = (portion: (typeof volumePortions)[number]): number | undefined => {
+          if (portion.volume_ml === null || !(portion.volume_ml > 0) || !(portion.gram_weight > 0)) return undefined;
+          const grams = (milliliters / portion.volume_ml) * portion.gram_weight;
+          return Number.isFinite(grams) && grams > 0 ? grams : undefined;
+        };
+        const first = volumePortions[0];
+        const firstGrams = first === undefined ? undefined : gramsFor(first);
+        // Only use a different volume portion when every usable volume portion
+        // resolves to the same weight within portion-rounding tolerance. This
+        // keeps a tablespoon of butter honest while refusing to guess between
+        // genuinely different preparations of the same food.
+        const equivalent = firstGrams !== undefined && volumePortions.every((portion) => {
+          const grams = gramsFor(portion);
+          return grams !== undefined && Math.abs(grams - firstGrams) <= Math.max(0.1, firstGrams * 0.01);
+        });
+        preferred = index === undefined
+          ? equivalent ? first : undefined
+          : usable.find((portion) => portion.index === index) ?? (equivalent ? first : undefined);
+      } else if (projection.measurement_kind === 'mass' && projection.grams !== null) {
+        preferred = usable.find((portion) => portion.kind === 'mass');
+      } else {
+        // Count-like lines (including lines whose authored count unit did not
+        // parse, such as "8 burrito-size tortillas") may use a count portion
+        // only when its measure names the same item. The authored unit wins when
+        // present, so "1 can tomatoes" can never fall through to "1 tomato".
+        const unitTokens = projection.unit !== null ? singularTokens(projection.unit) : [];
+        const nounTokens = singularTokens(projection.count_noun ?? projection.identity);
+        const requested = new Set(unitTokens.length > 0 ? unitTokens : nounTokens);
+        if (projection.amount !== null && requested.size > 0) {
+          preferred = usable.find((portion) => {
+            if (portion.kind !== 'count') return false;
+            return singularTokens(portion.measure).some((token) => requested.has(token));
+          });
+        }
+      }
       const record = {
         branch: identity,
         fdc_id: candidate.fdc_id,
@@ -1041,8 +1099,8 @@ function culinaryLineInvestigation(
           measure: portion.display_label.slice(0, 120),
           gram_weight: portion.gram_weight,
         })),
-        preferred_portion_index: usable[0]?.index ?? null,
-        preferred_grams: usable[0]?.gram_weight ?? null,
+        preferred_portion_index: preferred?.index ?? null,
+        preferred_grams: preferred?.gram_weight ?? null,
       };
       const key = `${identity}:${candidate.fdc_id}`;
       if (seen.has(key)) continue;
@@ -1055,10 +1113,23 @@ function culinaryLineInvestigation(
       authority_exact: exact,
       compatible_candidates: branchCandidates,
     });
+  };
+
+  for (const identity of branchIdentities.slice(0, 4)) searchBranch(identity);
+  // Compound size/format descriptors can hide an otherwise exact food head
+  // ("burrito tortillas" -> "tortillas"). Only try the head after the full
+  // identity produced no candidate at all; never broaden a line that already
+  // has evidence.
+  if (candidates.length === 0 && branchIdentities.length === 1) {
+    for (const identity of projection.fallback_identities) {
+      if (!branchIdentities.includes(identity)) searchBranch(identity);
+    }
   }
 
   const primaryIdentity = projection.identities[0] ?? projection.identity;
-  const primaryCandidates = candidates.filter((candidate) => candidate['branch'] === primaryIdentity);
+  const primaryCandidates = (projection.equal_choice || projection.flexible_mixture)
+    ? candidates.filter((candidate) => candidate['branch'] === primaryIdentity)
+    : candidates;
   const selectable = primaryCandidates.find((candidate) => candidate['preferred_portion_index'] !== null);
   let nextAction: Record<string, unknown>;
   let pendingChoice: Record<string, unknown> | null = null;
@@ -1118,13 +1189,13 @@ function culinaryLineInvestigation(
       kind: 'choose_candidate',
       line_ref: row.line_ref,
       candidates: primaryCandidates.slice(0, 3),
-      note: 'Compatible candidates exist but none has a usable authenticated portion. Ask for a measured amount or inspect a candidate; do not invent a weight.',
+      note: 'Compatible candidates exist, but none has an authenticated portion that matches the authored measurement without guessing. Ask for the measured weight actually used; do not substitute a package, slice, or different preparation.',
     };
     pendingChoice = {
-      kind: 'candidate',
+      kind: 'measurement',
       line_ref: row.line_ref,
       label: original.slice(0, 160),
-      options: primaryCandidates.slice(0, 3).map((candidate) => candidate['description']),
+      note: 'A compatible authenticated record exists, but its portions do not match the authored measurement. Only a measured weight from the user can resolve it.',
     };
   } else {
     nextAction = {

@@ -186,10 +186,51 @@ describe('SHISO AI-estimated nutrition resolution', () => {
         recipeKey: 'oatmeal-bars', sessionIdentity: 'session' },
     }, initialShisoConversation(), 'Resolve the light brown sugar.');
     expect(result.toolsUsed).toEqual(['investigate_unresolved_ingredients']);
-    expect(result.message).toContain('Investigated all 1 unresolved ingredient');
+    expect(result.message).toContain('I examined 1 unresolved ingredient line');
+    expect(result.message).toContain('1/2 white onion, finely diced');
     expect(tools.runAnalysis).not.toHaveBeenCalled();
     expect(tools.runAiNutrition).not.toHaveBeenCalled();
     expect(tools.applyIngredientEdits).not.toHaveBeenCalled();
+  });
+
+  it('does not initialize a review for a nutrition question that did not request investigation', async () => {
+    const runAnalysis = vi.fn(async () => ({
+      ok: true, analyzed: true, summary: 'must not run', matched: 0,
+      needs_amount: 0, needs_match: 0, total_lines: 0,
+      unresolved_line_refs: [], preview_state: 'absent' as const,
+    }));
+    const tools = { ...context(), nutrition: null, runAnalysis } as unknown as ShisoToolContext;
+    const network = { ...noProviderNetwork, post: vi.fn(async () => ({ ok: true, status: 200, data: {
+      ok: true, kind: 'reply', text: 'Two ingredient lines remain unresolved.', proposals: [], model_invocations_used: 1, tool_calls_used: 0,
+    } })) } as unknown as NetworkAdapter;
+    const result = await runShisoConversationTurn({ network, toolContext: tools,
+      context: { recipe: { title: 'Oatmeal Bars', servings: 8, ingredientCount: 2, stepCount: 0 },
+        nutrition: { available: false, summary: null, unresolvedCount: 2, needsAmountCount: 0, needsMatchCount: 2, unsavedWorkingReview: false },
+        recipeKey: 'oatmeal-bars', sessionIdentity: 'session' },
+    }, initialShisoConversation(), 'Which nutrition values are still unresolved?');
+    expect(runAnalysis).not.toHaveBeenCalled();
+    expect(result.toolsUsed).not.toContain('run_nutrition_analysis');
+    expect(result.message).toContain('Two ingredient lines remain unresolved.');
+  });
+
+  it('does not self-initialize nutrition for a generic find-a-recipe request', async () => {
+    const runAnalysis = vi.fn(async () => ({
+      ok: true, analyzed: true, summary: 'must not run', matched: 0,
+      needs_amount: 0, needs_match: 0, total_lines: 0,
+      unresolved_line_refs: [], preview_state: 'absent' as const,
+    }));
+    const tools = { ...context(), nutrition: null, runAnalysis } as unknown as ShisoToolContext;
+    const network = { ...noProviderNetwork, post: vi.fn(async () => ({ ok: true, status: 200, data: {
+      ok: true, kind: 'reply', text: 'Here are three dinner recipes.', proposals: [], model_invocations_used: 1, tool_calls_used: 0,
+    } })) } as unknown as NetworkAdapter;
+    const result = await runShisoConversationTurn({ network, toolContext: tools,
+      context: { recipe: { title: 'Guacamole', servings: 4, ingredientCount: 1, stepCount: 0 },
+        nutrition: { available: false, summary: null, unresolvedCount: 1, needsAmountCount: 0, needsMatchCount: 1, unsavedWorkingReview: false },
+        recipeKey: 'guacamole', sessionIdentity: 'session' },
+    }, initialShisoConversation(), 'Find a recipe for dinner.');
+    expect(runAnalysis).not.toHaveBeenCalled();
+    expect(result.toolsUsed).not.toContain('run_nutrition_analysis');
+    expect(result.message).toContain('Here are three dinner recipes.');
   });
 
   it('directs USDA food choices to the explicit Advanced Nutrition control', async () => {
