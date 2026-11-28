@@ -1409,9 +1409,9 @@ export function ShisoModal({
                 {entry.role === 'assistant' ? <ShisoMarkdown text={entry.text} /> : entry.text}
                 {entry.tools.length > 0 && (
                   <div className="mt-2 pt-2 border-t border-white/10 flex flex-wrap gap-1.5">
-                    {entry.tools.map((tool) => (
+                    {entry.tools.map((tool, toolIndex) => (
                       <span
-                        key={tool}
+                        key={`${tool}:${toolIndex}`}
                         className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-md bg-white/5 text-gray-400"
                       >
                         <Wrench className="w-2.5 h-2.5" />

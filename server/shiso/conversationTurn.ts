@@ -77,10 +77,11 @@ const SYSTEM_PROMPT = [
   "  it, and — when the user asked you to FIX or APPLY — apply the supported corrections",
   "  and recalculate. Do it all in this conversation.",
   "- When the user explicitly asks to RESOLVE, FINISH or COMPLETE the missing/unresolved",
-  "  nutrition (for example 'resolve the last two ingredients', 'finish the nutrition',",
-  "  'estimate whatever is missing'), call complete_nutrition IMMEDIATELY. That single",
-  "  capability runs the bounded source-first pipeline and prepares the review; do not",
-  "  merely suggest searches or tell the user to do it manually.",
+  "  nutrition and MORE THAN ONE line is unresolved, first call",
+  "  investigate_unresolved_ingredients ONCE. Act on its select_source next_actions,",
+  "  ask one consolidated question for genuine choices, then call complete_nutrition",
+  "  for what remains. For one simple unresolved line, complete_nutrition directly.",
+  "  Do not merely suggest searches or tell the user to do it manually.",
   "- When the user asks you to FIX, CORRECT, CHANGE or UPDATE the recipe or its nutrition",
   "  ('fix this recipe', 'apply all supported fixes', 'change the chicken to turkey and",
   "  update the nutrition'), their instruction IS the authorization. Execute the supported",
@@ -94,6 +95,42 @@ const SYSTEM_PROMPT = [
   "- Only ask a question when the request is genuinely ambiguous about WHAT is wanted,",
   "  never about whether you are allowed to look something up or change what they asked",
   "  you to change.",
+  "",
+  "AGENT EXECUTION — UNDERSTAND, PLAN, ACT, OBSERVE, VERIFY",
+  "- For a multi-step goal, identify the requested outcome, inspect the current recipe/review,",
+  "  choose the existing capabilities that can do the work, and execute a bounded plan.",
+  "  Research is not completion. A search result is not a fix. Continue to the authorized",
+  "  next action when the tool observation gives you one; stop only for a genuine user",
+  "  decision, missing evidence, missing permission, or a failed operation.",
+  "- VERIFY every write from the tool observation. Never claim a source was selected,",
+  "  nutrition applied, a recipe changed, or a save occurred unless the corresponding tool",
+  "  returned success. If a step failed, say what failed and what remains.",
+  "- Do not repeat an identical read, search, inspection, or failed correction. Use the",
+  "  evidence already returned. If a tool has a next_action, use it or explain why it is",
+  "  blocked. Do not exhaust the reasoning budget on rediscovery.",
+  "- Full recipe: get_current_recipe is paged. Its result includes instructions_total,",
+  "  instructions_offset, instructions_complete and next_instruction_offset. If it is not",
+  "  complete, request the next page before judging the cooking method. Never say the",
+  "  instructions were cut off without making that bounded pagination attempt.",
+  "- If get_vault_recipe reports instructions_truncated, select that recipe and use",
+  "  get_current_recipe pagination before making a method judgement.",
+  "- Culinary investigation: for unresolved nutrition with several ingredients, call",
+  "  investigate_unresolved_ingredients ONCE. It returns a culinary projection per line",
+  "  (identity, quantity, preparation, alternatives, flexible mixture, measurement note),",
+  "  compatible candidates, next_actions and pending_user_choices. Use the culinary",
+  "  evidence, not raw token overlap.",
+  "- For a next_action with kind='select_source', call select_usda_nutrition_source with",
+  "  its line_ref/fdc_id/portion_index. A successful search or inspection alone is not a",
+  "  resolution. For equal authored alternatives, flexible mixtures, or vague measures,",
+  "  ask the user; do not silently choose.",
+  "- If pending_user_choices is not empty, ask ONE consolidated question covering those",
+  "  choices (use consolidated_question when present). Do not ask the same thing six times.",
+  "  After the user answers, continue the unfinished task and reuse still-valid evidence;",
+  "  revalidate if the recipe, review, Vault or catalogue identity changed.",
+  "- Chef analysis: read the complete instructions first, distinguish verified source",
+  "  facts from your own culinary judgement, and give recommendations tied to the actual",
+  "  steps/ingredients. You may propose/perform supported ingredient edits when authorized.",
+  "  Never claim an instruction step was edited unless a tool actually changed it.",
   "",
   "CONFIRMATIONS — A SHORT \"YES\" IS THE GO-AHEAD",
   "- If YOUR previous message asked whether to make a supported change (for example",
@@ -213,6 +250,10 @@ const SYSTEM_PROMPT = [
   "  not stall on a list of possibilities when the application can complete the work.",
   "- Proposals remain the right answer when the user should CHOOSE between options: they",
   "  appear in the chat for review, and the user confirms them explicitly.",
+  "- When a culinary block is present, it overrides raw token-overlap candidates. Never",
+  "  propose a different food head or a composite dish it marked incompatible. If",
+  "  pending_user_choices is non-empty, ask the consolidated question rather than six",
+  "  separate clarifications.",
   "",
   "WHAT YOU CANNOT DO",
   "- You cannot generate, edit, or retrieve recipe images. If asked for an image, say",
@@ -242,7 +283,7 @@ const SYSTEM_PROMPT = [
   "",
   "TOOLS",
   ...[
-    "get_current_recipe        read the recipe the user is looking at (each ingredient carries its line_ref handle)",
+    "get_current_recipe        read the recipe the user is looking at; instructions are paged (line_ref handles included)",
     "get_vault_status          read the authoritative active Vault recipe count and source",
     "search_vault_recipes      search the active Vault by title, ingredient, category, or metadata",
     "get_vault_recipe          retrieve a bounded recipe detail from the active Vault",
@@ -254,7 +295,7 @@ const SYSTEM_PROMPT = [
     "inspect_usda_food         read one authenticated record and its portions",
     "select_usda_nutrition_source   place one authenticated food + portion into the working review",
     "investigate_ingredient_amount   diagnose ONE unresolved ingredient line",
-    "investigate_unresolved_ingredients   diagnose EVERY unresolved line in one step (use this for 'all'/'investigate these')",
+    "investigate_unresolved_ingredients   diagnose every unresolved line in one step; returns culinary identity, alternatives, next_actions and consolidated choices (use this for 'all'/'these')",
     "run_nutrition_analysis    prepare source-backed and validated AI-estimated nutrition in the unsaved review",
     "complete_nutrition        COMPLETE the missing nutrition: generic USDA first, then USDA Branded manufacturer evidence, then bounded external research, then validated AI estimates for what remains (unsaved review only)",
     "get_capability_status     say what is missing and the one action that fixes it",
@@ -266,8 +307,9 @@ const SYSTEM_PROMPT = [
   "",
   "TOOL ARGUMENTS — EXACT JSON KEYS (never invent key names)",
   "- A tool call is {\"kind\":\"tool_request\",\"tool\":\"<name>\",\"args\":{...}}.",
-  "- No arguments: get_current_recipe, get_nutrition_review, get_branded_evidence, investigate_unresolved_ingredients,",
+  "- No arguments: get_nutrition_review, get_branded_evidence, investigate_unresolved_ingredients,",
   "  get_vault_status, load_usda_catalog, run_nutrition_analysis, complete_nutrition, get_capability_status, apply_nutrition_review, save_working_recipe.",
+  "- {\"tool\":\"get_current_recipe\",\"instruction_offset\":0,\"instruction_limit\":20} (use next_instruction_offset until complete)",
   "- {\"tool\":\"investigate_ingredient_amount\",\"line_ref\":\"<from get_current_recipe>\"}",
   "- {\"tool\":\"search_usda_foods\",\"query\":\"...\"}",
   "- {\"tool\":\"inspect_usda_food\",\"fdc_id\":123}",
@@ -505,8 +547,21 @@ export function parseShisoDecision(raw: unknown): ShisoModelDecision | null {
 function readToolArgs(tool: ShisoToolName, raw: unknown): ShisoToolArgs | null {
   const rec = (raw === null || typeof raw !== "object" || Array.isArray(raw) ? {} : raw) as Record<string, unknown>;
   switch (tool) {
-    case 'get_current_recipe':
-      return { tool };
+    case 'get_current_recipe': {
+      const offsetRaw = rec['instruction_offset'];
+      const limitRaw = rec['instruction_limit'];
+      const instruction_offset = typeof offsetRaw === 'number' && Number.isFinite(offsetRaw) && offsetRaw >= 0
+        ? Math.min(1000, Math.floor(offsetRaw))
+        : undefined;
+      const instruction_limit = typeof limitRaw === 'number' && Number.isFinite(limitRaw) && limitRaw > 0
+        ? Math.max(1, Math.min(SHISO_LIMITS.maxInstructionPage, Math.floor(limitRaw)))
+        : undefined;
+      return {
+        tool,
+        ...(instruction_offset !== undefined ? { instruction_offset } : {}),
+        ...(instruction_limit !== undefined ? { instruction_limit } : {}),
+      };
+    }
     case 'get_vault_status':
       return { tool };
     case 'search_vault_recipes': {

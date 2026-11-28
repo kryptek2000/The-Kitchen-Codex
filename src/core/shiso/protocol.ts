@@ -115,6 +115,10 @@ export const SHISO_LIMITS = Object.freeze({
   maxCorrectionLineRefs: 24,
   /** Bound for one authenticated SHISO-directed USDA source selection. */
   maxSelectionLineRefChars: 240,
+  /** Instruction steps returned by one bounded recipe read. */
+  maxInstructionPage: 20,
+  /** Characters retained for one instruction step. */
+  maxInstructionTextChars: 4000,
   /** Request body ceiling in bytes. */
   maxRequestBytes: 64 * 1024,
 });
@@ -225,7 +229,12 @@ export function isShisoToolName(value: unknown): value is ShisoToolName {
 
 /** Arguments are a closed per-tool union; unknown keys are refused whole. */
 export type ShisoToolArgs =
-  | { readonly tool: 'get_current_recipe' }
+  | {
+      /** Bounded recipe read; instructions are paged rather than silently cut. */
+      readonly tool: 'get_current_recipe';
+      readonly instruction_offset?: number;
+      readonly instruction_limit?: number;
+    }
   | { readonly tool: 'get_vault_status' }
   | {
       /** Bounded read-only search over the active application's Vault snapshot. */

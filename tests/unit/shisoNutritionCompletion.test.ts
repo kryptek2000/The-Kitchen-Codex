@@ -670,7 +670,9 @@ describe('SINC-3 end-to-end conversational command', () => {
       },
     }, initialShisoConversation(), message);
     expect(outcome.ok).toBe(true);
-    expect(outcome.toolsUsed).toEqual(['complete_nutrition']);
+    const identityFirst = /\b(?:remaining|unresolved)\b/i.test(message) && /\b(?:nutrition|foods?)\b/i.test(message);
+    expect(outcome.toolsUsed).toContain('complete_nutrition');
+    if (identityFirst) expect(outcome.toolsUsed).toContain('investigate_unresolved_ingredients');
     expect(fixture.ctx.runAnalysis).toHaveBeenCalledTimes(1);
     expect(fixture.accepted[0]).toHaveLength(2);
   });

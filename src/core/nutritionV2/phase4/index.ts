@@ -35,4 +35,5 @@ export * from './aiPlanReconcile';
 // reviewed projection through the boundary rather than reaching into the
 // isolated matching namespace directly.
 export { projectIngredientAlternatives } from '../matching/query';
+export * from './ingredientInvestigation';
 export type { AiResolutionIssueKind } from '../aiResolution';

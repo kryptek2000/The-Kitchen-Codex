@@ -214,6 +214,82 @@ function requestsVaultCount(message: string): boolean {
   );
 }
 
+
+interface CulinaryProgress {
+  readonly tools: readonly string[];
+  readonly pending: readonly Record<string, unknown>[];
+  readonly question: string | null;
+  readonly selected: number;
+  readonly selectedSources: readonly string[];
+}
+
+/**
+ * Deterministic identity-first progress for an explicitly broad "resolve the
+ * remaining nutrition" request. It asks the existing batch investigation what
+ * is genuinely selectable, promotes only candidates the application already
+ * authenticated, and leaves authored choices/mixtures/measurements to the user.
+ * It never invents a food, portion, gram, or nutrient.
+ */
+async function tryCulinaryIdentityProgress(
+  toolContext: ShisoToolContext,
+  signal?: AbortSignal,
+): Promise<CulinaryProgress> {
+  if (signal?.aborted || toolContext.nutrition === null || toolContext.session === null) {
+    return { tools: [], pending: [], question: null, selected: 0, selectedSources: [] };
+  }
+  let investigation: ShisoObservation;
+  try {
+    investigation = await executeShisoTool({ tool: 'investigate_unresolved_ingredients' }, toolContext, signal);
+  } catch {
+    return { tools: [], pending: [], question: null, selected: 0, selectedSources: [] };
+  }
+  if (signal?.aborted || !investigation.ok) {
+    return { tools: [], pending: [], question: null, selected: 0, selectedSources: [] };
+  }
+  const data = investigation.data;
+  const tools: string[] = ['investigate_unresolved_ingredients'];
+  const actions = Array.isArray(data['next_actions'])
+    ? data['next_actions'].filter((entry): entry is Record<string, unknown> =>
+        entry !== null && typeof entry === 'object' && !Array.isArray(entry))
+    : [];
+  let selected = 0;
+  const selectedSources: string[] = [];
+  for (const action of actions.slice(0, 8)) {
+    if (action['kind'] !== 'select_source') continue;
+    const lineRef = action['line_ref'];
+    const fdcId = action['fdc_id'];
+    const portionIndex = action['portion_index'];
+    if (typeof lineRef !== 'string' || typeof fdcId !== 'number' || typeof portionIndex !== 'number') continue;
+    let selection: ShisoObservation;
+    try {
+      selection = await executeShisoTool({
+        tool: 'select_usda_nutrition_source',
+        line_ref: lineRef,
+        fdc_id: fdcId,
+        portion_index: portionIndex,
+      }, toolContext, signal);
+    } catch {
+      continue;
+    }
+    tools.push('select_usda_nutrition_source');
+    if (selection.ok) {
+      selected += 1;
+      const description = typeof selection.data['description'] === 'string' ? selection.data['description'] : null;
+      const grams = typeof selection.data['resolved_grams'] === 'number' ? selection.data['resolved_grams'] : null;
+      if (description !== null) selectedSources.push(`${description}${grams !== null ? ` (${grams} g)` : ''}`);
+      // The owning review dispatches asynchronously; let it commit before the
+      // next selection/completion reads the same live owner.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
+  }
+  const pending = Array.isArray(data['pending_user_choices'])
+    ? data['pending_user_choices'].filter((entry): entry is Record<string, unknown> =>
+        entry !== null && typeof entry === 'object' && !Array.isArray(entry))
+    : [];
+  const question = typeof data['consolidated_question'] === 'string' ? data['consolidated_question'] : null;
+  return { tools, pending, question, selected, selectedSources };
+}
+
 export interface ShisoConversationState {
   readonly messages: readonly ShisoConversationMessage[];
   readonly proposals: readonly ShisoBoundProposal[];
@@ -531,6 +607,11 @@ export async function runShisoConversationTurn(
     !classifySaveIntent(trimmed).authorized
   ) {
     if (deps.signal?.aborted) return cancelled(working, toolsUsed);
+    const identityFirst = /\b(?:remaining|unresolved)\b/i.test(trimmed) && /\bnutrition\b/i.test(trimmed);
+    const culinaryProgress = identityFirst
+      ? await tryCulinaryIdentityProgress(deps.toolContext, deps.signal)
+      : { tools: [] as readonly string[], pending: [] as readonly Record<string, unknown>[], question: null as string | null, selected: 0, selectedSources: [] as readonly string[] };
+    if (deps.signal?.aborted) return cancelled(working, toolsUsed);
     let result: ShisoObservation;
     try {
       result = await executeShisoTool({ tool: 'complete_nutrition' }, deps.toolContext, deps.signal);
@@ -585,20 +666,27 @@ export async function runShisoConversationTurn(
       typeof nutrientCoverage === 'object' &&
       !Array.isArray(nutrientCoverage) &&
       typeof (nutrientCoverage as Record<string, unknown>)['gap_lines_examined'] === 'number';
-    const requiresAlternativeChoice = Array.isArray(data['alternative_scenarios']) &&
+    const requiresAlternativeChoice = (Array.isArray(data['alternative_scenarios']) &&
       data['alternative_scenarios'].some((scenario) =>
         scenario !== null && typeof scenario === 'object' && !Array.isArray(scenario) &&
         (scenario as Record<string, unknown>)['definitive_choice_required'] === true
-      );
+      )) || culinaryProgress.pending.length > 0;
     // `complete_nutrition` is deliberately honest about its own unsaved stage,
     // but that sentence must not survive into a final response after a later
     // Apply/Save transaction succeeds. The transaction outcome below is the
     // sole persistence claim in the delivered message.
     const calculatedSummary = summary.replace(/\s*Nothing was applied or saved\.\s*$/i, '').trim();
+    const selectedProgress = culinaryProgress.selectedSources.length > 0
+      ? `I selected ${culinaryProgress.selectedSources.slice(0, 4).join('; ')}${culinaryProgress.selectedSources.length > 4 ? `; and ${culinaryProgress.selectedSources.length - 4} more` : ''} before completing the review. `
+      : culinaryProgress.selected > 0
+        ? `I selected ${culinaryProgress.selected} authenticated source${culinaryProgress.selected === 1 ? '' : 's'} before completing the review. `
+        : '';
     let persistenceMessage = requiresAlternativeChoice
-      ? 'An equal ingredient alternative still needs your choice. Select the branch actually used before Apply or Save. Nothing was applied or saved.'
-      : 'Calculated only: the prepared contributions remain in the UNSAVED Advanced Nutrition review. Nothing was applied or saved.';
-    const shortcutTools = ['complete_nutrition'];
+      ? `${selectedProgress}${culinaryProgress.question ?? 'I still need one or more ingredient choices.'} Nothing was applied or saved.`
+      : culinaryProgress.selected > 0
+        ? `${selectedProgress}The prepared contributions remain in the UNSAVED Advanced Nutrition review. Nothing was applied or saved.`
+        : 'Calculated only: the prepared contributions remain in the UNSAVED Advanced Nutrition review. Nothing was applied or saved.';
+    const shortcutTools = [...culinaryProgress.tools, 'complete_nutrition'];
     let shortcutState = working;
     if (!requiresAlternativeChoice && result.ok && deps.nutritionAuthority?.enabled === true && classifySaveIntent(trimmed).reason !== 'save_negated') {
       shortcutTools.push('apply_nutrition_review');

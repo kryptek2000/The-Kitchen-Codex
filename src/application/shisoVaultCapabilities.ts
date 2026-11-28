@@ -48,8 +48,13 @@ export interface ShisoVaultRecipeDetail extends ShisoVaultRecipeSummary {
     readonly preparation?: string;
     readonly line_ref?: string;
   }[];
-  readonly instructions: readonly { readonly text: string }[];
+  readonly instructions: readonly { readonly text: string; readonly step_ref: string }[];
+  readonly instructions_total: number;
+  readonly instructions_truncated: boolean;
   readonly metadata: Readonly<Record<string, string>>;
+  readonly prepTime?: string;
+  readonly cookTime?: string;
+  readonly totalTime?: string;
 }
 
 export interface ShisoVaultSearchRequest {
@@ -154,10 +159,16 @@ function detailOf(recipe: ObsidianRecipe, matchedFields: readonly string[] = [])
       ...(typeof ingredient.note === 'string' && ingredient.note.trim() ? { preparation: boundedText(ingredient.note, 160) } : {}),
       ...(typeof lineRefs[index] === 'string' ? { line_ref: lineRefs[index] } : {}),
     }))),
-    instructions: Object.freeze(recipe.instructions.slice(0, MAX_INSTRUCTIONS).map((step) => Object.freeze({
+    instructions: Object.freeze(recipe.instructions.slice(0, MAX_INSTRUCTIONS).map((step, index) => Object.freeze({
       text: boundedText(step.text, MAX_TEXT_CHARS),
+      step_ref: `step:${index}`,
     }))),
+    instructions_total: recipe.instructions.length,
+    instructions_truncated: recipe.instructions.length > MAX_INSTRUCTIONS || recipe.instructions.some((step) => step.text.length > MAX_TEXT_CHARS),
     metadata: recipeMetadata(recipe),
+    ...(boundedText(recipe.prepTime, 40) ? { prepTime: boundedText(recipe.prepTime, 40) } : {}),
+    ...(boundedText(recipe.cookTime, 40) ? { cookTime: boundedText(recipe.cookTime, 40) } : {}),
+    ...(boundedText(recipe.totalTime, 40) ? { totalTime: boundedText(recipe.totalTime, 40) } : {}),
   });
 }
 
